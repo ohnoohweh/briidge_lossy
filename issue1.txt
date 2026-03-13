@@ -1,0 +1,32 @@
+ohnoohweh@localhost:~/quic_br$ python --version
+Python 3.13.12
+ohnoohweh@localhost:~/quic_br$ su
+Password: 
+root@localhost:/home/ohnoohweh/quic_br# python udp_bidirectional_main.py --bind443 0.0.0.0 --peer 38.180.143.5 --peer-port 443 --port443 0 --own-servers "udp,16666,127.0.0.1,udp,127.0.0.1,16666 tcp,3128,127.0.0.1,tcp,127.0.0.1,3128"
+Traceback (most recent call last):
+  File "/home/ohnoohweh/quic_br/udp_bidirectional_main.py", line 2882, in <module>
+    class ChannelMux:
+    ...<1068 lines>...
+            )
+  File "/home/ohnoohweh/quic_br/udp_bidirectional_main.py", line 2957, in ChannelMux
+    def _parse_own_servers(specs: Optional[list[str]]) -> list[ChannelMux.ServiceSpec]:
+                                                               ^^^^^^^^^^
+NameError: name 'ChannelMux' is not defined
+root@localhost:/home/ohnoohweh/quic_br# 
+
+
+
+root@a329708796:~/quicbr# ./bin/python3 udp_bidirectional_main.py  --bind443 0.0.0.0 --port443 443 &
+[1] 1067891
+root@a329708796:~/quicbr# Traceback (most recent call last):
+  File "/root/quicbr/udp_bidirectional_main.py", line 2882, in <module>
+    class ChannelMux:
+  File "/root/quicbr/udp_bidirectional_main.py", line 2957, in ChannelMux
+    def _parse_own_servers(specs: Optional[list[str]]) -> list[ChannelMux.ServiceSpec]:
+                                                               ^^^^^^^^^^
+NameError: name 'ChannelMux' is not defined
+
+[1]+  Exit 1                  ./bin/python3 udp_bidirectional_main.py --bind443 0.0.0.0 --port443 443
+root@a329708796:~/quicbr# ./bin/python3 --version
+Python 3.12.3
+

@@ -1,0 +1,29 @@
+Traceback (most recent call last):
+  File "/home/ohnoohweh/quic_br/udp_bidirectional_main.py", line 246, in <module>
+    main()
+    ~~~~^^
+  File "/home/ohnoohweh/quic_br/udp_bidirectional_main.py", line 241, in main
+    asyncio.run(r.run())
+    ~~~~~~~~~~~^^^^^^^^^
+  File "/usr/lib64/python3.13/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/usr/lib64/python3.13/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/lib64/python3.13/asyncio/base_events.py", line 725, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/home/ohnoohweh/quic_br/udp_bidirectional_main.py", line 182, in run
+    await self.start()
+  File "/home/ohnoohweh/quic_br/udp_bidirectional_main.py", line 108, in start
+    transport, protocol = await loop.create_datagram_endpoint(
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+    )
+    ^
+  File "/usr/lib64/python3.13/asyncio/base_events.py", line 1440, in create_datagram_endpoint
+    raise ValueError('can not get address information')
+ValueError: can not get address information
+root@localhost:/home/ohnoohweh/quic_br# python udp_bidirectional_main.py --peer 38.180.143.5 --peer-port 443 --port443 4443 --local-mode server --local-port 16666
+
