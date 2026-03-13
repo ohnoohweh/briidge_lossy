@@ -6698,9 +6698,10 @@ class AdminWebUI:
             if auth != expected:
                 await self._send(writer, 403, b"Forbidden", "text/plain; charset=utf-8")
                 return
-        
+
+        payload = {"ok": True, "restarting": True}
         self._log_api_response("/api/restart", 200, payload)
-        await self._send_json(writer, 200, {"ok": True, "restarting": True})
+        await self._send_json(writer, 200, payload)
         self.runner.request_restart()
 
     async def _handle_shutdown(self, writer, method, headers):
