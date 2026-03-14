@@ -526,6 +526,36 @@ def wait_admin_up(admin_port: int, timeout: float = 10.0) -> dict:
     raise RuntimeError(f'Admin endpoint not ready on port {admin_port}: {last_exc}')
 
 
+def _conn_rows_with_traffic(doc: dict) -> list[dict]:
+    rows = []
+    for key in ('udp', 'tcp'):
+        for row in doc.get(key, []) or []:
+            stats = row.get('stats') or {}
+            if (
+                int(stats.get('rx_msgs', 0)) > 0
+                and int(stats.get('tx_msgs', 0)) > 0
+                and int(stats.get('rx_bytes', 0)) > 0
+                and int(stats.get('tx_bytes', 0)) > 0
+            ):
+                rows.append(row)
+    return rows
+
+
+def wait_connections_metrics_updated(admin_port: int, timeout: float = 8.0, label: str = '') -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/connections', timeout=1.5)
+        last_doc = doc
+        rows = _conn_rows_with_traffic(doc)
+        if rows:
+            who = f' {label}' if label else ''
+            log.info(f'[METRICS]{who} port={admin_port} traffic rows={len(rows)}')
+            return doc
+        time.sleep(0.25)
+    raise RuntimeError(f'/api/connections metrics not updated on port {admin_port}; last={last_doc!r}')
+
+
 def status_state(doc: dict) -> str:
     return str(doc.get('peer_state', '')).strip().upper()
 
@@ -780,8 +810,12 @@ def run_case_reconnect(case: Case, log_dir: Path, case_index: int, settle_s: Opt
             )
 
         phase('12. Send probe 01 34 and expect 02 34')
-        log.info('[PROBE] send=0134 expect=0234')        
+        log.info('[PROBE] send=0134 expect=0234')
         wait_probe(case, payload=b'\x01\x34', timeout=8.0)
+
+        phase('13. Verify per-connection metrics updated after 01 34 / 02 34 exchange')
+        wait_connections_metrics_updated(server_proc.admin_port or 0, timeout=8.0, label='server')
+        wait_connections_metrics_updated(client_proc.admin_port or 0, timeout=8.0, label='client')
     finally:
         if client_proc is not None:
             stop_proc(client_proc)
