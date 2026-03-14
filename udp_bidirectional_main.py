@@ -2928,14 +2928,39 @@ import time
 import logging
 from typing import Optional, Callable, Tuple
 
-from aioquic.asyncio import serve as quic_serve, connect as quic_connect, QuicConnectionProtocol
-from aioquic.quic.configuration import QuicConfiguration
-from aioquic.quic.events import (
-    StreamDataReceived,
-    HandshakeCompleted,
-    ConnectionTerminated,
-    ProtocolNegotiated,
-)
+try:
+    from aioquic.asyncio import serve as quic_serve, connect as quic_connect, QuicConnectionProtocol
+    from aioquic.quic.configuration import QuicConfiguration
+    from aioquic.quic.events import (
+        StreamDataReceived,
+        HandshakeCompleted,
+        ConnectionTerminated,
+        ProtocolNegotiated,
+    )
+    _AIOQUIC_IMPORT_ERROR: Optional[Exception] = None
+except Exception as _aioquic_import_err:
+    quic_serve = None
+    quic_connect = None
+
+    class QuicConnectionProtocol:  # type: ignore[no-redef]
+        pass
+
+    class QuicConfiguration:  # type: ignore[no-redef]
+        pass
+
+    class StreamDataReceived:  # type: ignore[no-redef]
+        pass
+
+    class HandshakeCompleted:  # type: ignore[no-redef]
+        pass
+
+    class ConnectionTerminated:  # type: ignore[no-redef]
+        pass
+
+    class ProtocolNegotiated:  # type: ignore[no-redef]
+        pass
+
+    _AIOQUIC_IMPORT_ERROR = _aioquic_import_err
 
 class QuicSession(ISession):
     """
@@ -2988,6 +3013,12 @@ class QuicSession(ISession):
         return QuicSession(args)
 
     def __init__(self, args: argparse.Namespace):
+        if _AIOQUIC_IMPORT_ERROR is not None:
+            raise RuntimeError(
+                "overlay_transport=quic requires optional dependency 'aioquic'. "
+                "Install it with: pip install aioquic"
+            ) from _AIOQUIC_IMPORT_ERROR
+
         import zlib as _z
         self._args = args
         self._log  = logging.getLogger("quic_session")
@@ -5036,6 +5067,8 @@ class ChannelMux:
             srv_tr = self._svc_udp_servers.get(svc_id)
             if srv_tr:
                 try:
+                    ctr.msgs_out += 1
+                    ctr.bytes_out += len(data)
                     srv_tr.sendto(data, addr)
                     # Touch activity
                     key = (svc_id, addr)
@@ -5070,6 +5103,8 @@ class ChannelMux:
 
         # We have a transport: send and log
         try:
+            ctr.msgs_out += 1
+            ctr.bytes_out += len(data)
             tr.sendto(data)
             self._udp_client_last_ts[chan] = time.time()
         except Exception as e:
@@ -5690,10 +5725,10 @@ class ChannelMux:
                 "tx_bytes": 0,
             }
         return {
-            "rx_msgs": int(getattr(c, "rx_msgs", 0)),
-            "tx_msgs": int(getattr(c, "tx_msgs", 0)),
-            "rx_bytes": int(getattr(c, "rx_bytes", 0)),
-            "tx_bytes": int(getattr(c, "tx_bytes", 0)),
+            "rx_msgs": int(getattr(c, "msgs_in", 0)),
+            "tx_msgs": int(getattr(c, "msgs_out", 0)),
+            "rx_bytes": int(getattr(c, "bytes_in", 0)),
+            "tx_bytes": int(getattr(c, "bytes_out", 0)),
         }
 
     def snapshot_udp_connections(self) -> list[dict]:
