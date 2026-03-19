@@ -37,6 +37,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import enum
+import importlib.util
+import ipaddress
 import logging
 import socket
 import struct
@@ -1828,6 +1830,13 @@ class UdpSession(ISession):
                            help="peer IP/FQDN (IPv4 or IPv6 literal; IPv6 may be in [brackets])")
         if not _has('--peer-port'):
             p.add_argument('--peer-port', type=int, default=443, help='peer overlay port')
+        if not _has('--peer-resolve-family'):
+            p.add_argument(
+                '--peer-resolve-family',
+                choices=['prefer-ipv6', 'ipv4', 'ipv6'],
+                default='prefer-ipv6',
+                help='Peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.'
+            )
 
         # Session window
         if not _has('--max-inflight'):
@@ -1892,12 +1901,25 @@ class UdpSession(ISession):
     # ---- ISession: lifecycle ----
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
+        listen_host = _strip_brackets(self._args.bind443)
+        listen_port = int(self._args.port443)
+        peer_info = _resolve_cli_peer(
+            self._args,
+            bind_host=listen_host,
+            socktype=socket.SOCK_DGRAM,
+        )
+        peer = None
+        peer_family = socket.AF_UNSPEC
+        if peer_info is not None:
+            peer_host, peer_port, peer_family = peer_info
+            peer = (peer_host, peer_port)
 
-        listen = (_strip_brackets(self._args.bind443), self._args.port443)
-        peer_host = _strip_brackets(self._args.peer) if self._args.peer else None
-        peer = (peer_host, self._args.peer_port) if peer_host else None
-
-        family = socket.AF_INET6 if ":" in _strip_brackets(self._args.bind443) else socket.AF_INET
+        if listen_host in ('::', '0.0.0.0') and peer_family in (socket.AF_INET, socket.AF_INET6):
+            family = peer_family
+            listen_host = _wildcard_host_for_family(peer_family)
+        else:
+            family = socket.AF_INET6 if ":" in listen_host else socket.AF_INET
+        listen = (listen_host, listen_port)
 
         def _factory():
             self._log.debug(f"[UDP/SESSION] Initiate Peerprotocol with peer {peer}")
@@ -1968,10 +1990,9 @@ class UdpSession(ISession):
 
         # Model B:
         # Seed only the protocol-layer peer. The UDP socket itself stays unconnected.
-        if self._args.peer:
+        if peer is not None:
             try:
-                host = _strip_brackets(self._args.peer)
-                port = int(self._args.peer_port)
+                host, port = peer
                 self._on_peer_set(host, port)
                 sp = getattr(self._proto, "send_port", None)
                 if sp:
@@ -2342,9 +2363,9 @@ class TcpStreamSession(ISession):
 
         # peer endpoints (client/server)
         self._listen_host, self._listen_port = _strip_brackets(self._args.bind443), int(self._args.port443)
+        peer_info = _resolve_cli_peer(self._args, bind_host=self._listen_host, socktype=socket.SOCK_STREAM)
         self._peer_tuple: Optional[Tuple[str, int]] = (
-            (_strip_brackets(self._args.peer), int(self._args.peer_port))
-            if getattr(self._args, "peer", None) else None
+            (peer_info[0], peer_info[1]) if peer_info is not None else None
         )
         self._peer_host, self._peer_port = "", 0
 
@@ -2928,7 +2949,8 @@ import time
 import logging
 from typing import Optional, Callable, Tuple
 
-try:
+
+def _load_aioquic_symbols() -> Dict[str, Any]:
     from aioquic.asyncio import serve as quic_serve, connect as quic_connect, QuicConnectionProtocol
     from aioquic.quic.configuration import QuicConfiguration
     from aioquic.quic.events import (
@@ -2937,30 +2959,16 @@ try:
         ConnectionTerminated,
         ProtocolNegotiated,
     )
-    _AIOQUIC_IMPORT_ERROR: Optional[Exception] = None
-except Exception as _aioquic_import_err:
-    quic_serve = None
-    quic_connect = None
-
-    class QuicConnectionProtocol:  # type: ignore[no-redef]
-        pass
-
-    class QuicConfiguration:  # type: ignore[no-redef]
-        pass
-
-    class StreamDataReceived:  # type: ignore[no-redef]
-        pass
-
-    class HandshakeCompleted:  # type: ignore[no-redef]
-        pass
-
-    class ConnectionTerminated:  # type: ignore[no-redef]
-        pass
-
-    class ProtocolNegotiated:  # type: ignore[no-redef]
-        pass
-
-    _AIOQUIC_IMPORT_ERROR = _aioquic_import_err
+    return {
+        "quic_serve": quic_serve,
+        "quic_connect": quic_connect,
+        "QuicConnectionProtocol": QuicConnectionProtocol,
+        "QuicConfiguration": QuicConfiguration,
+        "StreamDataReceived": StreamDataReceived,
+        "HandshakeCompleted": HandshakeCompleted,
+        "ConnectionTerminated": ConnectionTerminated,
+        "ProtocolNegotiated": ProtocolNegotiated,
+    }
 
 class QuicSession(ISession):
     """
@@ -3013,11 +3021,12 @@ class QuicSession(ISession):
         return QuicSession(args)
 
     def __init__(self, args: argparse.Namespace):
-        if _AIOQUIC_IMPORT_ERROR is not None:
+        if importlib.util.find_spec("aioquic") is None:
             raise RuntimeError(
                 "overlay_transport=quic requires optional dependency 'aioquic'. "
                 "Install it with: pip install aioquic"
-            ) from _AIOQUIC_IMPORT_ERROR
+            )
+        aioquic = _load_aioquic_symbols()
 
         import zlib as _z
         self._args = args
@@ -3034,21 +3043,29 @@ class QuicSession(ISession):
 
         # Addressing / role
         self._listen_host, self._listen_port = _strip_brackets(args.bind443), int(args.port443)
+        peer_info = _resolve_cli_peer(args, bind_host=self._listen_host, socktype=socket.SOCK_DGRAM)
         self._peer_tuple: Optional[Tuple[str, int]] = (
-            (_strip_brackets(args.peer), int(args.peer_port))
-            if getattr(args, "peer", None) else None
+            (peer_info[0], peer_info[1]) if peer_info is not None else None
         )
         self._peer_host, self._peer_port = "", 0
 
         # AIOQUIC handles
         self._server = None
-        self._proto: Optional[QuicConnectionProtocol] = None
+        self._proto: Optional[Any] = None
         self._quic = None
         self._stream_id: Optional[int] = None
         self._rx_task: Optional[asyncio.Task] = None
         self._connecting_task: Optional[asyncio.Task] = None
         self._reconnect_task: Optional[asyncio.Task] = None
         self._run_flag: bool = False
+        self._quic_serve = aioquic["quic_serve"]
+        self._quic_connect = aioquic["quic_connect"]
+        self._quic_protocol_cls = aioquic["QuicConnectionProtocol"]
+        self._quic_configuration_cls = aioquic["QuicConfiguration"]
+        self._quic_event_stream_data = aioquic["StreamDataReceived"]
+        self._quic_event_handshake = aioquic["HandshakeCompleted"]
+        self._quic_event_terminated = aioquic["ConnectionTerminated"]
+        self._quic_event_negotiated = aioquic["ProtocolNegotiated"]
 
         # Framing / buffers
         self._LEN = struct.Struct(">I")
@@ -3194,12 +3211,12 @@ class QuicSession(ISession):
         if not self._server_cert or not self._server_key:
             raise RuntimeError("QUIC server requires --quic-cert and --quic-key (PEM files)")
 
-        cfg = QuicConfiguration(is_client=False, alpn_protocols=[self._alpn])
+        cfg = self._quic_configuration_cls(is_client=False, alpn_protocols=[self._alpn])
         cfg.load_cert_chain(self._server_cert, self._server_key)
 
         parent = self
 
-        class _Proto(QuicConnectionProtocol):
+        class _Proto(self._quic_protocol_cls):
             def __init__(self, *a, **kw):
                 super().__init__(*a, **kw)
                 self._parent = parent
@@ -3207,14 +3224,14 @@ class QuicSession(ISession):
 
             def quic_event_received(self, event):
                 # On first completed TLS handshake, adopt this connection at the session layer.
-                if isinstance(event, HandshakeCompleted) and not self._accepted:
+                if isinstance(event, self._parent._quic_event_handshake) and not self._accepted:
                     self._accepted = True
                     self._parent._on_accept(self)
                 # Forward all events to the session’s demux
                 self._parent._on_quic_event(self, event)
 
         # Start listening
-        self._server = await quic_serve(
+        self._server = await self._quic_serve(
             self._listen_host,
             self._listen_port,
             configuration=cfg,
@@ -3282,7 +3299,7 @@ class QuicSession(ISession):
             return
 
         # Prepare client configuration
-        cfg = QuicConfiguration(is_client=True, alpn_protocols=[self._alpn])
+        cfg = self._quic_configuration_cls(is_client=True, alpn_protocols=[self._alpn])
         if self._client_insecure:
             cfg.verify_mode = ssl.CERT_NONE  # TEST ONLY
         # SNI for server name indication (works across aioquic versions)
@@ -3291,7 +3308,7 @@ class QuicSession(ISession):
         # Lightweight protocol wrapper that forwards events back to the session
         parent = self
 
-        class _Proto(QuicConnectionProtocol):
+        class _Proto(self._quic_protocol_cls):
             def __init__(self, *a, **kw):
                 super().__init__(*a, **kw)
                 self._parent = parent
@@ -3305,7 +3322,7 @@ class QuicSession(ISession):
         t0 = time.perf_counter()
         try:
             # NOTE: do NOT pass 'server_name=' kwarg (older aioquic will raise TypeError)
-            async with quic_connect(host, port, configuration=cfg, create_protocol=_Proto) as proto:
+            async with self._quic_connect(host, port, configuration=cfg, create_protocol=_Proto) as proto:
                 # Adopt this live connection and keep the context open until it closes.
                 self._connecting_task = None
                 self._on_accept(proto)
@@ -3334,7 +3351,7 @@ class QuicSession(ISession):
        """
  
     # ---- accept / on-connection ----
-    def _on_accept(self, proto: QuicConnectionProtocol) -> None:
+    def _on_accept(self, proto: Any) -> None:
         """
         Adopt the live QUIC connection. Only the CLIENT proactively opens a stream;
         the SERVER waits and adopts the first incoming stream id.
@@ -3398,7 +3415,7 @@ class QuicSession(ISession):
             return
 
     # ---- QUIC event demux ----
-    def _on_quic_event(self, proto: QuicConnectionProtocol, event) -> None:
+    def _on_quic_event(self, proto: Any, event) -> None:
         """
         Handle QUIC events. On first StreamDataReceived, adopt that stream id if we
         don't have one yet; if we already picked a different id, switch to the incoming
@@ -3407,15 +3424,15 @@ class QuicSession(ISession):
         if self._proto is not proto:
             return
 
-        if isinstance(event, ProtocolNegotiated):
+        if isinstance(event, self._quic_event_negotiated):
             self._log.info(f"[QUIC/RX] ({self._probe_id}) ALPN negotiated: {getattr(event, 'alpn_protocol', '?')}")
             return
 
-        if isinstance(event, HandshakeCompleted):
+        if isinstance(event, self._quic_event_handshake):
             self._log.debug(f"[QUIC/RX] ({self._probe_id}) handshake completed")
             return
 
-        if isinstance(event, StreamDataReceived):
+        if isinstance(event, self._quic_event_stream_data):
             sid = event.stream_id
 
             # If we don't have a stream, adopt the incoming one.
@@ -3436,7 +3453,7 @@ class QuicSession(ISession):
             self._on_stream_bytes(event.data)
             return
 
-        if isinstance(event, ConnectionTerminated):
+        if isinstance(event, self._quic_event_terminated):
             self._log.info(f"[QUIC/RX] ({self._probe_id}) connection terminated: {event.error_code} {event.reason_phrase!r}")
             self._cleanup_after_close()
             return
@@ -3706,9 +3723,9 @@ class WebSocketSession(ISession):
 
         # Mode / addressing (parity with TCP)
         self._listen_host, self._listen_port = _strip_brackets(self._args.bind443), int(self._args.port443)
+        peer_info = _resolve_cli_peer(self._args, bind_host=self._listen_host, socktype=socket.SOCK_STREAM)
         self._peer_tuple: Optional[Tuple[str, int]] = (
-            (_strip_brackets(self._args.peer), int(self._args.peer_port))
-            if getattr(self._args, "peer", None) else None
+            (peer_info[0], peer_info[1]) if peer_info is not None else None
         )
         self._peer_host, self._peer_port = "", 0
         self._ws_path: str = getattr(self._args, "ws_path", "/") or "/"
@@ -4407,6 +4424,111 @@ def _strip_brackets(host: str) -> str:
     if host and host.startswith('[') and host.endswith(']'):
         return host[1:-1]
     return host
+
+
+def _peer_resolve_mode(args: argparse.Namespace) -> str:
+    return str(getattr(args, "peer_resolve_family", "prefer-ipv6") or "prefer-ipv6")
+
+
+def _host_ip_family(host: Optional[str]) -> int:
+    host = _strip_brackets(host or "")
+    if not host:
+        return socket.AF_UNSPEC
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return socket.AF_UNSPEC
+    return socket.AF_INET6 if addr.version == 6 else socket.AF_INET
+
+
+def _bind_family_constraint(bind_host: Optional[str]) -> Optional[int]:
+    host = _strip_brackets(bind_host or "")
+    if not host or host == "::":
+        return None
+    fam = _host_ip_family(host)
+    return fam if fam != socket.AF_UNSPEC else None
+
+
+def _wildcard_host_for_family(family: int) -> str:
+    return "::" if family == socket.AF_INET6 else "0.0.0.0"
+
+
+def _resolve_peer_endpoint(
+    host: str,
+    port: int,
+    *,
+    resolve_mode: str = "prefer-ipv6",
+    bind_host: Optional[str] = None,
+    socktype: int = 0,
+) -> Tuple[str, int, int]:
+    host = _strip_brackets(host)
+    if not host:
+        raise RuntimeError("--peer requires a non-empty host name")
+
+    family = _host_ip_family(host)
+    if family != socket.AF_UNSPEC:
+        if resolve_mode == "ipv4" and family != socket.AF_INET:
+            raise RuntimeError(f"--peer {host!r} is not an IPv4 address")
+        if resolve_mode == "ipv6" and family != socket.AF_INET6:
+            raise RuntimeError(f"--peer {host!r} is not an IPv6 address")
+        bind_family = _bind_family_constraint(bind_host)
+        if bind_family is not None and bind_family != family:
+            raise RuntimeError(
+                f"--peer {host!r} resolves to family {family}, incompatible with --bind443 {bind_host!r}"
+            )
+        return host, int(port), family
+
+    lookup_family = socket.AF_UNSPEC
+    if resolve_mode == "ipv4":
+        lookup_family = socket.AF_INET
+    elif resolve_mode == "ipv6":
+        lookup_family = socket.AF_INET6
+
+    infos = socket.getaddrinfo(host, int(port), family=lookup_family, type=socktype)
+    candidates: List[Tuple[str, int, int]] = []
+    for fam, _socktype, _proto, _canonname, sockaddr in infos:
+        if fam not in (socket.AF_INET, socket.AF_INET6):
+            continue
+        if not isinstance(sockaddr, tuple) or len(sockaddr) < 2:
+            continue
+        candidates.append((str(sockaddr[0]), int(sockaddr[1]), fam))
+
+    if resolve_mode == "prefer-ipv6":
+        candidates.sort(key=lambda item: 0 if item[2] == socket.AF_INET6 else 1)
+
+    bind_family = _bind_family_constraint(bind_host)
+    if bind_family is not None:
+        matching = [item for item in candidates if item[2] == bind_family]
+        if matching:
+            candidates = matching
+        else:
+            fam_name = "IPv6" if bind_family == socket.AF_INET6 else "IPv4"
+            raise RuntimeError(
+                f"--peer {host!r} resolved, but no {fam_name} address is compatible with --bind443 {bind_host!r}"
+            )
+
+    if not candidates:
+        raise RuntimeError(f"Could not resolve --peer {host!r}")
+
+    return candidates[0]
+
+
+def _resolve_cli_peer(
+    args: argparse.Namespace,
+    *,
+    bind_host: Optional[str] = None,
+    socktype: int = 0,
+) -> Optional[Tuple[str, int, int]]:
+    peer = getattr(args, "peer", None)
+    if not peer:
+        return None
+    return _resolve_peer_endpoint(
+        str(peer),
+        int(getattr(args, "peer_port", 443)),
+        resolve_mode=_peer_resolve_mode(args),
+        bind_host=bind_host,
+        socktype=socktype,
+    )
 
 
 # ============================================================================
