@@ -3043,6 +3043,8 @@ class QuicSession(ISession):
 
         # Addressing / role
         self._listen_host, self._listen_port = _strip_brackets(args.bind443), int(args.port443)
+        self._peer_name_host = _strip_brackets(getattr(args, "peer", None) or "")
+        self._peer_name_port = int(getattr(args, "peer_port", 0) or 0)
         peer_info = _resolve_cli_peer(args, bind_host=self._listen_host, socktype=socket.SOCK_DGRAM)
         self._peer_tuple: Optional[Tuple[str, int]] = (
             (peer_info[0], peer_info[1]) if peer_info is not None else None
@@ -3113,8 +3115,13 @@ class QuicSession(ISession):
 
         if self._peer_tuple:
             # CLIENT
-            self._peer_host, self._peer_port = self._peer_tuple
-            self._log.info(f"[QUIC-SESSION] ({self._probe_id}) start; CLIENT -> {self._peer_host}:{self._peer_port} alpn={self._alpn} insecure={self._client_insecure}")
+            self._peer_host = self._peer_name_host or self._peer_tuple[0]
+            self._peer_port = self._peer_name_port or self._peer_tuple[1]
+            self._log.info(
+                f"[QUIC-SESSION] ({self._probe_id}) start; CLIENT -> "
+                f"{self._peer_host}:{self._peer_port} resolved={self._peer_tuple} "
+                f"alpn={self._alpn} insecure={self._client_insecure}"
+            )
             self._ensure_connect_once()
         else:
             # SERVER
@@ -3303,7 +3310,7 @@ class QuicSession(ISession):
         if self._client_insecure:
             cfg.verify_mode = ssl.CERT_NONE  # TEST ONLY
         # SNI for server name indication (works across aioquic versions)
-        cfg.server_name = host
+        cfg.server_name = self._peer_name_host or host
 
         # Lightweight protocol wrapper that forwards events back to the session
         parent = self
@@ -3316,7 +3323,8 @@ class QuicSession(ISession):
                 self._parent._on_quic_event(self, event)
 
         self._log.info(
-            f"[QUIC-SESSION] ({self._probe_id}) connecting to {host}:{port} "
+            f"[QUIC-SESSION] ({self._probe_id}) connecting to "
+            f"{self._peer_name_host or host}:{self._peer_name_port or port} via {host}:{port} "
             f"alpn={self._alpn} insecure={self._client_insecure}"
         )
         t0 = time.perf_counter()
@@ -3326,6 +3334,12 @@ class QuicSession(ISession):
                 # Adopt this live connection and keep the context open until it closes.
                 self._connecting_task = None
                 self._on_accept(proto)
+                if self._peer_name_host:
+                    self._peer_host = self._peer_name_host
+                    self._peer_port = self._peer_name_port or int(port)
+                    if callable(self._on_peer_set_cb):
+                        try: self._on_peer_set_cb(self._peer_host, self._peer_port)
+                        except Exception: pass
 
                 dt = (time.perf_counter() - t0) * 1000.0
                 local = getattr(proto._transport, "getsockname", lambda: None)()
@@ -3723,6 +3737,8 @@ class WebSocketSession(ISession):
 
         # Mode / addressing (parity with TCP)
         self._listen_host, self._listen_port = _strip_brackets(self._args.bind443), int(self._args.port443)
+        self._peer_name_host = _strip_brackets(getattr(self._args, "peer", None) or "")
+        self._peer_name_port = int(getattr(self._args, "peer_port", 0) or 0)
         peer_info = _resolve_cli_peer(self._args, bind_host=self._listen_host, socktype=socket.SOCK_STREAM)
         self._peer_tuple: Optional[Tuple[str, int]] = (
             (peer_info[0], peer_info[1]) if peer_info is not None else None
@@ -3785,8 +3801,13 @@ class WebSocketSession(ISession):
 
         if self._peer_tuple:
             # CLIENT
-            self._peer_host, self._peer_port = self._peer_tuple
-            self._log.info(f"[WS-SESSION] ({self._probe_id}) start; CLIENT -> {self._peer_host}:{self._peer_port}{self._ws_path} tls={self._use_tls}")
+            self._peer_host = self._peer_name_host or self._peer_tuple[0]
+            self._peer_port = self._peer_name_port or self._peer_tuple[1]
+            self._log.info(
+                f"[WS-SESSION] ({self._probe_id}) start; CLIENT -> "
+                f"{self._peer_host}:{self._peer_port}{self._ws_path} "
+                f"resolved={self._peer_tuple} tls={self._use_tls}"
+            )
             self._ensure_connect_once()
         else:
             # SERVER
@@ -4175,14 +4196,24 @@ class WebSocketSession(ISession):
             import ssl
             ssl_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
 
-        uri_host = _strip_brackets(host)
+        uri_host = _strip_brackets(self._peer_name_host or host)
         if ":" in uri_host:
             uri_host = f"[{uri_host}]"
-        uri = f"{scheme}://{uri_host}:{int(port)}{self._ws_path}"
+        uri_port = int(self._peer_name_port or port)
+        uri = f"{scheme}://{uri_host}:{uri_port}{self._ws_path}"
         subprotocols = [self._ws_subprotocol] if self._ws_subprotocol else None
+        connect_kwargs = {}
+        if self._peer_name_host and (self._peer_name_host != host or uri_port != int(port)):
+            connect_kwargs["host"] = host
+            connect_kwargs["port"] = int(port)
+            if ssl_ctx is not None:
+                connect_kwargs["server_hostname"] = self._peer_name_host
 
         try:
-            self._log.info(f"[WS-SESSION] ({self._probe_id}) connecting to {uri}")
+            if connect_kwargs:
+                self._log.info(f"[WS-SESSION] ({self._probe_id}) connecting to {uri} via {host}:{int(port)}")
+            else:
+                self._log.info(f"[WS-SESSION] ({self._probe_id}) connecting to {uri}")
             t0 = time.perf_counter()
             ws = await websockets.connect(
                 uri,
@@ -4191,12 +4222,19 @@ class WebSocketSession(ISession):
                 max_size=self._ws_max_size,
                 ping_interval=None,    # we run our own RTT ping
                 ping_timeout=None,
+                **connect_kwargs,
             )
             dt = (time.perf_counter() - t0) * 1000.0
             local = getattr(ws, "local_address", None)
             remote = getattr(ws, "remote_address", None)
             self._log.info(f"[WS-SESSION] ({self._probe_id}) connected in {dt:.1f} ms local={local} peer={remote}")
             await self._on_accept(ws)
+            if self._peer_name_host:
+                self._peer_host = self._peer_name_host
+                self._peer_port = self._peer_name_port or int(port)
+                if callable(self._on_peer_set_cb):
+                    try: self._on_peer_set_cb(self._peer_host, self._peer_port)
+                    except Exception: pass
         except Exception as e:
             self._log.warning(f"[WS-SESSION] ({self._probe_id}) connect failed to {uri}: {e!r}")
         finally:
