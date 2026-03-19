@@ -3831,11 +3831,14 @@ class WebSocketSession(ISession):
         self._ws = None                           # type: ignore
         self._server = None                       # websockets.server.Serve or similar
         self._rx_task: Optional[asyncio.Task] = None
+        self._tx_task: Optional[asyncio.Task] = None
         self._connecting_task: Optional[asyncio.Task] = None
         self._reconnect_task: Optional[asyncio.Task] = None
+        self._tx_queue: "asyncio.Queue[bytes]" = asyncio.Queue()
 
-        # Early buffer (APP frames as fully-framed KIND+payload)
-        self._early_buf = bytearray()
+        # Early buffer (APP/CTRL frames preserved as individual WS messages)
+        self._early_buf: Deque[bytes] = deque()
+        self._early_buf_bytes = 0
         self._early_max = 1 * 1024 * 1024
         self._early_ttl = 3.0
         self._early_deadline = 0.0
@@ -3899,11 +3902,14 @@ class WebSocketSession(ISession):
         self._connecting_task = None
         self._reconnect_task = None
 
-        try:
-            if self._rx_task: self._rx_task.cancel()
-        except Exception:
-            pass
-        self._rx_task = None
+        for attr in ("_rx_task", "_tx_task"):
+            try:
+                task = getattr(self, attr)
+                if task:
+                    task.cancel()
+            except Exception:
+                pass
+            setattr(self, attr, None)
 
         try:
             if self._ws:
@@ -4247,6 +4253,7 @@ class WebSocketSession(ISession):
         self._reset_counters()
         self._rtt_rt.attach(self._send_ping_frame, on_state_change=self._on_rtt_state_change)
         self._log.debug(f"[WS/GUARD] ({self._probe_id}) on_accept ready; starting RX pump and RTT runtime")
+        self._ensure_tx_task()
         self._rx_task = self._loop.create_task(self._rx_pump())      # type: ignore
         self._flush_early()
 
@@ -4349,44 +4356,127 @@ class WebSocketSession(ISession):
     def _buffer_early(self, wire: bytes) -> None:
         now = time.time()
         if self._early_deadline and now > self._early_deadline:
-            self._log.info(f"[WS/TX] ({self._probe_id}) early-buf TTL expired; discarding {len(self._early_buf)}B")
+            self._log.info(f"[WS/TX] ({self._probe_id}) early-buf TTL expired; discarding {self._early_buf_bytes}B")
             self._early_buf.clear()
+            self._early_buf_bytes = 0
         self._early_deadline = now + self._early_ttl
 
-        over = (len(self._early_buf) + len(wire)) - self._early_max
-        if over > 0:
-            drop = min(over, len(self._early_buf))
-            if drop:
-                del self._early_buf[:drop]
-                self._log.info(
-                    f"[WS/TX] ({self._probe_id}) early-buf capped: dropped={drop} keep={len(self._early_buf)} cap={self._early_max}"
-                )
-        self._early_buf += wire
+        self._early_buf.append(bytes(wire))
+        self._early_buf_bytes += len(wire)
+        while self._early_buf_bytes > self._early_max and self._early_buf:
+            dropped = self._early_buf.popleft()
+            self._early_buf_bytes -= len(dropped)
+            self._log.info(
+                f"[WS/TX] ({self._probe_id}) early-buf capped: dropped={len(dropped)} keep={self._early_buf_bytes} cap={self._early_max}"
+            )
 
     def _flush_early(self) -> None:
         if not self._early_buf or not self._ws:
             return
         try:
-            n = len(self._early_buf)
-            self._log.info(f"[WS/TX] ({self._probe_id}) flushing early-buf bytes={n}")
-            self._schedule_send(bytes(self._early_buf))
-            self._bump_tx(self._early_buf)
+            pending = list(self._early_buf)
+            self._log.info(
+                f"[WS/TX] ({self._probe_id}) flushing early-buf frames={len(pending)} bytes={self._early_buf_bytes}"
+            )
+            for wire in pending:
+                self._schedule_send(wire)
+                self._bump_tx(wire)
         except Exception as e:
             self._log.info(f"[WS/TX] ({self._probe_id}) flush error: {e!r}")
         finally:
             self._early_buf.clear()
+            self._early_buf_bytes = 0
             self._early_deadline = 0.0
 
     # --- sending helpers -------------------------------------------------------
+    def _ensure_tx_task(self) -> None:
+        if self._tx_task is not None or not self._ws:
+            return
+
+        async def _tx_loop():
+            try:
+                while True:
+                    wire = await self._tx_queue.get()
+                    try:
+                        if not self._ws:
+                            continue
+                        await self._ws.send(self._ws_payload_codec.encode(wire))
+                    except Exception as e:
+                        self._log.info(f"[WS/TX] ({self._probe_id}) send error: {e!r}")
+                    finally:
+                        self._tx_queue.task_done()
+            except asyncio.CancelledError:
+                return
+
+        self._tx_task = self._loop.create_task(_tx_loop())  # type: ignore
+
     def _schedule_send(self, wire: bytes) -> None:
         if not self._ws:
             return
-        async def _send():
+        self._ensure_tx_task()
+        self._tx_queue.put_nowait(bytes(wire))
+
+    def _decode_ws_message(self, msg) -> Optional[bytes]:
+        if isinstance(msg, str):
             try:
-                await self._ws.send(self._ws_payload_codec.encode(wire))
+                return self._ws_payload_codec.decode(msg)
             except Exception as e:
-                self._log.info(f"[WS/TX] ({self._probe_id}) send error: {e!r}")
-        self._loop.create_task(_send())  # type: ignore
+                self._log.debug(f"[WS/RX] ({self._probe_id}) invalid {self._ws_payload_mode} text frame: {e!r}")
+                return None
+        try:
+            return self._ws_payload_codec.decode(msg)
+        except Exception as e:
+            self._log.debug(f"[WS/RX] ({self._probe_id}) invalid {self._ws_payload_mode} frame: {e!r}")
+            return None
+
+    async def _load_default_http_page(
+        self,
+        *,
+        host: str,
+        port: int,
+        ssl_ctx=None,
+        server_hostname: Optional[str] = None,
+        host_header: Optional[str] = None,
+    ) -> None:
+        request_host = host_header or server_hostname or host
+        reader = None
+        writer = None
+        try:
+            open_kwargs = {}
+            if ssl_ctx is not None:
+                open_kwargs["ssl"] = ssl_ctx
+                open_kwargs["server_hostname"] = server_hostname or request_host
+            reader, writer = await asyncio.open_connection(host=host, port=port, **open_kwargs)
+            request = (
+                "GET / HTTP/1.1\r\n"
+                f"Host: {request_host}\r\n"
+                "Connection: close\r\n"
+                "Accept: text/html,application/xhtml+xml\r\n"
+                "User-Agent: briidge-lossy-ws-preflight/1.0\r\n"
+                "\r\n"
+            ).encode("ascii")
+            writer.write(request)
+            await writer.drain()
+            status_line = await reader.readline()
+            if not status_line:
+                raise RuntimeError("empty HTTP response")
+            parts = status_line.decode("iso-8859-1", "replace").strip().split(" ", 2)
+            status_code = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 0
+            if status_code != 200:
+                raise RuntimeError(f"unexpected HTTP status {status_code}")
+            while True:
+                line = await reader.readline()
+                if not line or line in (b"\r\n", b"\n"):
+                    break
+            body = await reader.read(1)
+            self._log.debug(
+                f"[WS-SESSION] ({self._probe_id}) HTTP preflight GET / ok status={status_code} body_present={bool(body)}"
+            )
+        finally:
+            if writer is not None:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
 
     def _decode_ws_message(self, msg) -> Optional[bytes]:
         if isinstance(msg, str):

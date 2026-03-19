@@ -89,6 +89,21 @@ class WebSocketPayloadModeTests(unittest.TestCase):
             wire = b"\x02pong"
             self.assertEqual(session._decode_ws_message(wire), wire)
 
+    def test_early_flush_preserves_websocket_message_boundaries(self):
+        session = WebSocketSession(_args("binary"))
+        session._ws = object()
+        sent = []
+        session._schedule_send = sent.append
+        session._bump_tx = lambda wire: None
+        session._buffer_early(b"\x01first")
+        session._buffer_early(b"\x02second")
+
+        session._flush_early()
+
+        self.assertEqual(sent, [b"\x01first", b"\x02second"])
+        self.assertEqual(len(session._early_buf), 0)
+        self.assertEqual(session._early_buf_bytes, 0)
+
 
 class WebSocketHttpPreflightTests(unittest.IsolatedAsyncioTestCase):
     async def test_http_preflight_requests_default_page(self):
