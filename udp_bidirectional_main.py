@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import enum
 import importlib.util
 import ipaddress
@@ -3673,7 +3674,7 @@ class QuicSession(ISession):
 # Requires: pip install websockets
 class WebSocketSession(ISession):
     """
-    Overlay over one WebSocket (binary messages):
+    Overlay over one WebSocket (binary messages by default, optional base64 text frames):
       wire := KIND(1) + BYTES...
       KIND=0x00 -> APP (to upper layer)
       KIND=0x01 -> PING (payload: Q tx_ns, Q echo_ns)
@@ -3710,6 +3711,13 @@ class WebSocketSession(ISession):
         if not _has('--ws-max-size'):
             p.add_argument('--ws-max-size', type=int, default=65535,
                            help='Maximum binary message size to accept/send (default 65535).')
+        if not _has('--ws-payload-mode'):
+            p.add_argument(
+                '--ws-payload-mode',
+                choices=['binary', 'base64'],
+                default='binary',
+                help='WebSocket payload transfer mode: raw binary frames (default) or base64-encoded text frames.'
+            )
         if not _has('--ws-static-dir'):
             p.add_argument(
                 '--ws-static-dir',
@@ -3748,6 +3756,7 @@ class WebSocketSession(ISession):
         self._ws_subprotocol: Optional[str] = getattr(self._args, "ws_subprotocol", None)
         self._use_tls: bool = bool(getattr(self._args, "ws_tls", False))
         self._ws_max_size: int = int(getattr(self._args, "ws_max_size", 65535))
+        self._ws_payload_mode: str = str(getattr(self._args, "ws_payload_mode", "binary") or "binary").lower()
 
         # Runtime
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -4302,10 +4311,26 @@ class WebSocketSession(ISession):
             return
         async def _send():
             try:
-                await self._ws.send(wire)  # binary
+                await self._ws.send(self._encode_ws_message(wire))
             except Exception as e:
                 self._log.info(f"[WS/TX] ({self._probe_id}) send error: {e!r}")
         self._loop.create_task(_send())  # type: ignore
+
+    def _encode_ws_message(self, wire: bytes):
+        if self._ws_payload_mode == "base64":
+            return base64.b64encode(wire).decode("ascii")
+        return wire
+
+    def _decode_ws_message(self, msg) -> Optional[bytes]:
+        if isinstance(msg, (bytes, bytearray)):
+            return bytes(msg)
+        if isinstance(msg, str):
+            try:
+                return base64.b64decode(msg.encode("ascii"), validate=True)
+            except Exception as e:
+                self._log.debug(f"[WS/RX] ({self._probe_id}) invalid base64 text frame: {e!r}")
+                return None
+        return None
 
     def _send_ping_frame(self, ping_payload: bytes) -> None:
         """
@@ -4357,9 +4382,9 @@ class WebSocketSession(ISession):
         try:
             while True:
                 msg = await self._ws.recv()  # type: ignore
-                if not isinstance(msg, (bytes, bytearray)):
-                    continue  # ignore text frames
-                b = bytes(msg)
+                b = self._decode_ws_message(msg)
+                if b is None:
+                    continue
                 if not b:
                     continue
 
