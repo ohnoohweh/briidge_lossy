@@ -3672,9 +3672,65 @@ class QuicSession(ISession):
 
 # --- WebSocket overlay ---------------------------------------------------------
 # Requires: pip install websockets
+class WebSocketPayloadCodec:
+    mode = "binary"
+
+    def encode(self, wire: bytes):
+        raise NotImplementedError
+
+    def decode(self, msg) -> Optional[bytes]:
+        raise NotImplementedError
+
+
+class WebSocketBinaryPayloadCodec(WebSocketPayloadCodec):
+    mode = "binary"
+
+    def encode(self, wire: bytes):
+        return wire
+
+    def decode(self, msg) -> Optional[bytes]:
+        if isinstance(msg, (bytes, bytearray)):
+            return bytes(msg)
+        return None
+
+
+class WebSocketBase64PayloadCodec(WebSocketPayloadCodec):
+    mode = "base64"
+
+    def encode(self, wire: bytes):
+        return base64.b64encode(wire).decode("ascii")
+
+    def decode(self, msg) -> Optional[bytes]:
+        if isinstance(msg, (bytes, bytearray)):
+            return bytes(msg)
+        if isinstance(msg, str):
+            return base64.b64decode(msg.encode("ascii"), validate=True)
+        return None
+
+
+class WebSocketJsonBase64PayloadCodec(WebSocketPayloadCodec):
+    mode = "json-base64"
+
+    def encode(self, wire: bytes):
+        return json.dumps({"data": base64.b64encode(wire).decode("ascii")}, separators=(",", ":"))
+
+    def decode(self, msg) -> Optional[bytes]:
+        if isinstance(msg, (bytes, bytearray)):
+            return bytes(msg)
+        if not isinstance(msg, str):
+            return None
+        payload = json.loads(msg)
+        if not isinstance(payload, dict):
+            raise ValueError("JSON payload must be an object")
+        data = payload.get("data")
+        if not isinstance(data, str):
+            raise ValueError("JSON payload must contain string field 'data'")
+        return base64.b64decode(data.encode("ascii"), validate=True)
+
+
 class WebSocketSession(ISession):
     """
-    Overlay over one WebSocket (binary messages by default, optional base64 text frames):
+    Overlay over one WebSocket (binary messages by default, optional base64 or JSON+base64 text frames):
       wire := KIND(1) + BYTES...
       KIND=0x00 -> APP (to upper layer)
       KIND=0x01 -> PING (payload: Q tx_ns, Q echo_ns)
@@ -3691,6 +3747,11 @@ class WebSocketSession(ISession):
     _K_APP  = 0x00
     _K_PING = 0x01
     _K_PONG = 0x02
+    _PAYLOAD_CODECS = {
+        WebSocketBinaryPayloadCodec.mode: WebSocketBinaryPayloadCodec,
+        WebSocketBase64PayloadCodec.mode: WebSocketBase64PayloadCodec,
+        WebSocketJsonBase64PayloadCodec.mode: WebSocketJsonBase64PayloadCodec,
+    }
 
     @staticmethod
     def register_cli(p: argparse.ArgumentParser) -> None:
@@ -3714,9 +3775,9 @@ class WebSocketSession(ISession):
         if not _has('--ws-payload-mode'):
             p.add_argument(
                 '--ws-payload-mode',
-                choices=['binary', 'base64'],
+                choices=sorted(WebSocketSession._PAYLOAD_CODECS.keys()),
                 default='binary',
-                help='WebSocket payload transfer mode: raw binary frames (default) or base64-encoded text frames.'
+                help='WebSocket payload transfer mode: raw binary frames (default), base64 text frames, or JSON text frames with the base64 payload in the data field.'
             )
         if not _has('--ws-static-dir'):
             p.add_argument(
@@ -3757,6 +3818,10 @@ class WebSocketSession(ISession):
         self._use_tls: bool = bool(getattr(self._args, "ws_tls", False))
         self._ws_max_size: int = int(getattr(self._args, "ws_max_size", 65535))
         self._ws_payload_mode: str = str(getattr(self._args, "ws_payload_mode", "binary") or "binary").lower()
+        codec_cls = self._PAYLOAD_CODECS.get(self._ws_payload_mode)
+        if codec_cls is None:
+            raise ValueError(f"Unsupported --ws-payload-mode: {self._ws_payload_mode}")
+        self._ws_payload_codec: WebSocketPayloadCodec = codec_cls()
 
         # Runtime
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -4223,6 +4288,13 @@ class WebSocketSession(ISession):
                 self._log.info(f"[WS-SESSION] ({self._probe_id}) connecting to {uri} via {host}:{int(port)}")
             else:
                 self._log.info(f"[WS-SESSION] ({self._probe_id}) connecting to {uri}")
+            await self._load_default_http_page(
+                host=host,
+                port=int(port),
+                ssl_ctx=ssl_ctx,
+                server_hostname=connect_kwargs.get("server_hostname", self._peer_name_host or None),
+                host_header=uri_host.strip("[]"),
+            )
             t0 = time.perf_counter()
             ws = await websockets.connect(
                 uri,
@@ -4311,26 +4383,72 @@ class WebSocketSession(ISession):
             return
         async def _send():
             try:
-                await self._ws.send(self._encode_ws_message(wire))
+                await self._ws.send(self._ws_payload_codec.encode(wire))
             except Exception as e:
                 self._log.info(f"[WS/TX] ({self._probe_id}) send error: {e!r}")
         self._loop.create_task(_send())  # type: ignore
 
-    def _encode_ws_message(self, wire: bytes):
-        if self._ws_payload_mode == "base64":
-            return base64.b64encode(wire).decode("ascii")
-        return wire
-
     def _decode_ws_message(self, msg) -> Optional[bytes]:
-        if isinstance(msg, (bytes, bytearray)):
-            return bytes(msg)
         if isinstance(msg, str):
             try:
-                return base64.b64decode(msg.encode("ascii"), validate=True)
+                return self._ws_payload_codec.decode(msg)
             except Exception as e:
-                self._log.debug(f"[WS/RX] ({self._probe_id}) invalid base64 text frame: {e!r}")
+                self._log.debug(f"[WS/RX] ({self._probe_id}) invalid {self._ws_payload_mode} text frame: {e!r}")
                 return None
-        return None
+        try:
+            return self._ws_payload_codec.decode(msg)
+        except Exception as e:
+            self._log.debug(f"[WS/RX] ({self._probe_id}) invalid {self._ws_payload_mode} frame: {e!r}")
+            return None
+
+    async def _load_default_http_page(
+        self,
+        *,
+        host: str,
+        port: int,
+        ssl_ctx=None,
+        server_hostname: Optional[str] = None,
+        host_header: Optional[str] = None,
+    ) -> None:
+        request_host = host_header or server_hostname or host
+        reader = None
+        writer = None
+        try:
+            open_kwargs = {}
+            if ssl_ctx is not None:
+                open_kwargs["ssl"] = ssl_ctx
+                open_kwargs["server_hostname"] = server_hostname or request_host
+            reader, writer = await asyncio.open_connection(host=host, port=port, **open_kwargs)
+            request = (
+                "GET / HTTP/1.1\r\n"
+                f"Host: {request_host}\r\n"
+                "Connection: close\r\n"
+                "Accept: text/html,application/xhtml+xml\r\n"
+                "User-Agent: briidge-lossy-ws-preflight/1.0\r\n"
+                "\r\n"
+            ).encode("ascii")
+            writer.write(request)
+            await writer.drain()
+            status_line = await reader.readline()
+            if not status_line:
+                raise RuntimeError("empty HTTP response")
+            parts = status_line.decode("iso-8859-1", "replace").strip().split(" ", 2)
+            status_code = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 0
+            if status_code != 200:
+                raise RuntimeError(f"unexpected HTTP status {status_code}")
+            while True:
+                line = await reader.readline()
+                if not line or line in (b"\r\n", b"\n"):
+                    break
+            body = await reader.read(1)
+            self._log.debug(
+                f"[WS-SESSION] ({self._probe_id}) HTTP preflight GET / ok status={status_code} body_present={bool(body)}"
+            )
+        finally:
+            if writer is not None:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
 
     def _send_ping_frame(self, ping_payload: bytes) -> None:
         """

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import unittest
+from unittest import mock
 
 from udp_bidirectional_main import WebSocketSession
 
@@ -20,27 +21,106 @@ def _args(ws_payload_mode: str) -> argparse.Namespace:
     )
 
 
+class _FakeReader:
+    def __init__(self, lines, body=b""):
+        self._lines = list(lines)
+        self._body = body
+
+    async def readline(self):
+        if self._lines:
+            return self._lines.pop(0)
+        return b""
+
+    async def read(self, n=-1):
+        if n < 0:
+            out, self._body = self._body, b""
+            return out
+        out = self._body[:n]
+        self._body = self._body[n:]
+        return out
+
+
+class _FakeWriter:
+    def __init__(self):
+        self.buffer = bytearray()
+        self.closed = False
+        self.wait_closed_called = False
+
+    def write(self, data):
+        self.buffer.extend(data)
+
+    async def drain(self):
+        return None
+
+    def close(self):
+        self.closed = True
+
+    async def wait_closed(self):
+        self.wait_closed_called = True
+
+
 class WebSocketPayloadModeTests(unittest.TestCase):
     def test_binary_mode_keeps_bytes_on_send(self):
         session = WebSocketSession(_args("binary"))
         wire = b"\x00hello"
-        self.assertEqual(session._encode_ws_message(wire), wire)
+        self.assertEqual(session._ws_payload_codec.encode(wire), wire)
 
     def test_base64_mode_encodes_and_decodes_text_frames(self):
         session = WebSocketSession(_args("base64"))
         wire = b"\x01hello\x00world"
-        encoded = session._encode_ws_message(wire)
+        encoded = session._ws_payload_codec.encode(wire)
         self.assertIsInstance(encoded, str)
         self.assertEqual(session._decode_ws_message(encoded), wire)
 
-    def test_text_frames_must_be_valid_base64(self):
-        session = WebSocketSession(_args("binary"))
-        self.assertIsNone(session._decode_ws_message("not base64 !!!"))
-
-    def test_binary_frames_are_still_accepted_in_base64_mode(self):
-        session = WebSocketSession(_args("base64"))
+    def test_json_base64_mode_encodes_and_decodes_text_frames(self):
+        session = WebSocketSession(_args("json-base64"))
         wire = b"\x02pong"
-        self.assertEqual(session._decode_ws_message(wire), wire)
+        encoded = session._ws_payload_codec.encode(wire)
+        self.assertEqual(encoded, '{"data":"AnBvbmc="}')
+        self.assertEqual(session._decode_ws_message(encoded), wire)
+
+    def test_invalid_text_frames_are_rejected(self):
+        session = WebSocketSession(_args("json-base64"))
+        self.assertIsNone(session._decode_ws_message("not json"))
+
+    def test_binary_frames_are_still_accepted_in_text_modes(self):
+        for mode in ("base64", "json-base64"):
+            session = WebSocketSession(_args(mode))
+            wire = b"\x02pong"
+            self.assertEqual(session._decode_ws_message(wire), wire)
+
+
+class WebSocketHttpPreflightTests(unittest.IsolatedAsyncioTestCase):
+    async def test_http_preflight_requests_default_page(self):
+        session = WebSocketSession(_args("binary"))
+        reader = _FakeReader(
+            [
+                b"HTTP/1.1 200 OK\r\n",
+                b"Content-Type: text/html\r\n",
+                b"\r\n",
+            ],
+            body=b"<html></html>",
+        )
+        writer = _FakeWriter()
+
+        with mock.patch("udp_bidirectional_main.asyncio.open_connection", mock.AsyncMock(return_value=(reader, writer))) as open_conn:
+            await session._load_default_http_page(host="127.0.0.1", port=54321, host_header="example.test")
+
+        open_conn.assert_awaited_once_with(host="127.0.0.1", port=54321)
+        request = writer.buffer.decode("ascii")
+        self.assertIn("GET / HTTP/1.1\r\n", request)
+        self.assertIn("Host: example.test\r\n", request)
+        self.assertTrue(writer.closed)
+        self.assertTrue(writer.wait_closed_called)
+
+    async def test_http_preflight_requires_success_status(self):
+        session = WebSocketSession(_args("binary"))
+        reader = _FakeReader([b"HTTP/1.1 404 Not Found\r\n", b"\r\n"])
+        writer = _FakeWriter()
+
+        with mock.patch("udp_bidirectional_main.asyncio.open_connection", mock.AsyncMock(return_value=(reader, writer))):
+            with self.assertRaisesRegex(RuntimeError, "unexpected HTTP status 404"):
+                await session._load_default_http_page(host="127.0.0.1", port=54321)
 
 
 if __name__ == "__main__":
