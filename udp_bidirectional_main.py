@@ -4478,6 +4478,68 @@ class WebSocketSession(ISession):
                 with contextlib.suppress(Exception):
                     await writer.wait_closed()
 
+    def _decode_ws_message(self, msg) -> Optional[bytes]:
+        if isinstance(msg, str):
+            try:
+                return self._ws_payload_codec.decode(msg)
+            except Exception as e:
+                self._log.debug(f"[WS/RX] ({self._probe_id}) invalid {self._ws_payload_mode} text frame: {e!r}")
+                return None
+        try:
+            return self._ws_payload_codec.decode(msg)
+        except Exception as e:
+            self._log.debug(f"[WS/RX] ({self._probe_id}) invalid {self._ws_payload_mode} frame: {e!r}")
+            return None
+
+    async def _load_default_http_page(
+        self,
+        *,
+        host: str,
+        port: int,
+        ssl_ctx=None,
+        server_hostname: Optional[str] = None,
+        host_header: Optional[str] = None,
+    ) -> None:
+        request_host = host_header or server_hostname or host
+        reader = None
+        writer = None
+        try:
+            open_kwargs = {}
+            if ssl_ctx is not None:
+                open_kwargs["ssl"] = ssl_ctx
+                open_kwargs["server_hostname"] = server_hostname or request_host
+            reader, writer = await asyncio.open_connection(host=host, port=port, **open_kwargs)
+            request = (
+                "GET / HTTP/1.1\r\n"
+                f"Host: {request_host}\r\n"
+                "Connection: close\r\n"
+                "Accept: text/html,application/xhtml+xml\r\n"
+                "User-Agent: briidge-lossy-ws-preflight/1.0\r\n"
+                "\r\n"
+            ).encode("ascii")
+            writer.write(request)
+            await writer.drain()
+            status_line = await reader.readline()
+            if not status_line:
+                raise RuntimeError("empty HTTP response")
+            parts = status_line.decode("iso-8859-1", "replace").strip().split(" ", 2)
+            status_code = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 0
+            if status_code != 200:
+                raise RuntimeError(f"unexpected HTTP status {status_code}")
+            while True:
+                line = await reader.readline()
+                if not line or line in (b"\r\n", b"\n"):
+                    break
+            body = await reader.read(1)
+            self._log.debug(
+                f"[WS-SESSION] ({self._probe_id}) HTTP preflight GET / ok status={status_code} body_present={bool(body)}"
+            )
+        finally:
+            if writer is not None:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+
     def _send_ping_frame(self, ping_payload: bytes) -> None:
         """
         Called by StreamRTTRuntime. Sends a PING control frame if WS exists.
