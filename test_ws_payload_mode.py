@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import socket
 import sys
 import types
 import unittest
@@ -21,6 +22,9 @@ def _args(ws_payload_mode: str) -> argparse.Namespace:
         ws_max_size=65535,
         ws_payload_mode=ws_payload_mode,
         ws_static_dir="",
+        ws_send_timeout=3.0,
+        ws_tcp_user_timeout_ms=10000,
+        ws_reconnect_grace=3.0,
     )
 
 
@@ -61,6 +65,54 @@ class _FakeWriter:
     async def wait_closed(self):
         self.wait_closed_called = True
 
+
+
+
+class _FakeWs:
+    def __init__(self):
+        self.sent = []
+        self.close_calls = 0
+
+    async def send(self, payload):
+        self.sent.append(payload)
+
+    async def close(self):
+        self.close_calls += 1
+
+    async def recv(self):
+        await asyncio.Future()
+
+    async def wait_closed(self):
+        return None
+
+
+class _HangingWs(_FakeWs):
+    async def send(self, payload):
+        await asyncio.Future()
+
+
+class _FakeSocket:
+    def __init__(self):
+        self.calls = []
+
+    def setsockopt(self, level, optname, value):
+        self.calls.append((level, optname, value))
+
+
+class _FakeTransport:
+    def __init__(self, sock):
+        self._sock = sock
+
+    def get_extra_info(self, name):
+        if name == "socket":
+            return self._sock
+        return None
+
+
+class _SockoptWs(_FakeWs):
+    def __init__(self, sock):
+        super().__init__()
+        self.transport = _FakeTransport(sock)
 
 class WebSocketPayloadModeTests(unittest.TestCase):
     def test_binary_mode_keeps_bytes_on_send(self):
@@ -106,6 +158,99 @@ class WebSocketPayloadModeTests(unittest.TestCase):
         self.assertEqual(sent, [b"\x01first", b"\x02second"])
         self.assertEqual(len(session._early_buf), 0)
         self.assertEqual(session._early_buf_bytes, 0)
+
+
+class WebSocketTxLoopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tx_accounting_happens_after_successful_send(self):
+        session = WebSocketSession(_args("binary"))
+        session._loop = asyncio.get_running_loop()
+        session._ws = _FakeWs()
+        sent_sizes = []
+        session.set_on_peer_tx(sent_sizes.append)
+
+        session.send_app(b"hello")
+        await asyncio.wait_for(session._tx_queue.join(), timeout=1.0)
+
+        self.assertEqual(session._tx_bytes, 6)
+        self.assertEqual(sent_sizes, [6])
+        self.assertEqual(session._ws.sent, [b"\x00hello"])
+
+        session._tx_task.cancel()
+        await session._tx_task
+
+    async def test_tx_timeout_forces_websocket_close(self):
+        args = _args("binary")
+        args.ws_send_timeout = 0.01
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        hanging = _HangingWs()
+        session._ws = hanging
+
+        session.send_app(b"hello")
+        await asyncio.sleep(0.05)
+        await asyncio.wait_for(session._tx_queue.join(), timeout=1.0)
+
+        self.assertEqual(session._tx_bytes, 0)
+        self.assertEqual(hanging.close_calls, 1)
+
+        session._tx_task.cancel()
+        await session._tx_task
+
+
+class WebSocketSocketConfigTests(unittest.TestCase):
+    def test_configure_ws_socket_sets_keepalive_and_tcp_user_timeout(self):
+        session = WebSocketSession(_args("binary"))
+        sock = _FakeSocket()
+        session._configure_ws_socket(_SockoptWs(sock))
+
+        self.assertIn((socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1), sock.calls)
+        tcp_user_timeout = getattr(socket, "TCP_USER_TIMEOUT", None)
+        if tcp_user_timeout is not None:
+            self.assertIn((socket.IPPROTO_TCP, tcp_user_timeout, 10000), sock.calls)
+
+    def test_configure_ws_socket_skips_missing_socket(self):
+        session = WebSocketSession(_args("binary"))
+        ws = type("NoSockWs", (), {"transport": None})()
+        session._configure_ws_socket(ws)
+
+
+class WebSocketReconnectGraceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_quick_reconnect_cancels_pending_disconnect(self):
+        args = _args("binary")
+        args.ws_reconnect_grace = 0.05
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+        session._overlay_connected = True
+        session._schedule_overlay_disconnect()
+
+        self.assertIsNotNone(session._disconnect_task)
+
+        session._ws = object()
+        await session._on_accept(_SockoptWs(_FakeSocket()))
+        await asyncio.sleep(0.08)
+
+        self.assertTrue(session._overlay_connected)
+        self.assertIsNone(session._disconnect_task)
+
+        session._rx_task.cancel()
+        await session._rx_task
+        session._tx_task.cancel()
+        await session._tx_task
+
+    async def test_disconnect_fires_after_grace_when_not_reconnected(self):
+        args = _args("binary")
+        args.ws_reconnect_grace = 0.05
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+        session._overlay_connected = True
+        session._schedule_overlay_disconnect()
+
+        await asyncio.sleep(0.08)
+
+        self.assertFalse(session._overlay_connected)
+        self.assertIsNone(session._disconnect_task)
 
 
 class WebSocketHttpPreflightTests(unittest.IsolatedAsyncioTestCase):
