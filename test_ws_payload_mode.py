@@ -62,6 +62,24 @@ class _FakeWriter:
         self.wait_closed_called = True
 
 
+
+
+class _FakeWs:
+    def __init__(self):
+        self.sent = []
+        self.close_calls = 0
+
+    async def send(self, payload):
+        self.sent.append(payload)
+
+    async def close(self):
+        self.close_calls += 1
+
+
+class _HangingWs(_FakeWs):
+    async def send(self, payload):
+        await asyncio.Future()
+
 class WebSocketPayloadModeTests(unittest.TestCase):
     def test_binary_mode_keeps_bytes_on_send(self):
         session = WebSocketSession(_args("binary"))
@@ -106,6 +124,43 @@ class WebSocketPayloadModeTests(unittest.TestCase):
         self.assertEqual(sent, [b"\x01first", b"\x02second"])
         self.assertEqual(len(session._early_buf), 0)
         self.assertEqual(session._early_buf_bytes, 0)
+
+
+class WebSocketTxLoopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tx_accounting_happens_after_successful_send(self):
+        session = WebSocketSession(_args("binary"))
+        session._loop = asyncio.get_running_loop()
+        session._ws = _FakeWs()
+        sent_sizes = []
+        session.set_on_peer_tx(sent_sizes.append)
+
+        session.send_app(b"hello")
+        await asyncio.wait_for(session._tx_queue.join(), timeout=1.0)
+
+        self.assertEqual(session._tx_bytes, 6)
+        self.assertEqual(sent_sizes, [6])
+        self.assertEqual(session._ws.sent, [b"\x00hello"])
+
+        session._tx_task.cancel()
+        await session._tx_task
+
+    async def test_tx_timeout_forces_websocket_close(self):
+        args = _args("binary")
+        args.ws_send_timeout = 0.01
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        hanging = _HangingWs()
+        session._ws = hanging
+
+        session.send_app(b"hello")
+        await asyncio.sleep(0.05)
+        await asyncio.wait_for(session._tx_queue.join(), timeout=1.0)
+
+        self.assertEqual(session._tx_bytes, 0)
+        self.assertEqual(hanging.close_calls, 1)
+
+        session._tx_task.cancel()
+        await session._tx_task
 
 
 class WebSocketHttpPreflightTests(unittest.IsolatedAsyncioTestCase):
