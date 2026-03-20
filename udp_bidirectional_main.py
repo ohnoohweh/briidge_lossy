@@ -3822,6 +3822,9 @@ class WebSocketSession(ISession):
         if codec_cls is None:
             raise ValueError(f"Unsupported --ws-payload-mode: {self._ws_payload_mode}")
         self._ws_payload_codec: WebSocketPayloadCodec = codec_cls()
+        # Reverse proxies can negotiate permessage-deflate but then stall or drop
+        # tiny control messages. Keep overlay framing simple and deterministic.
+        self._ws_compression = None
 
         # Runtime
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -4194,6 +4197,7 @@ class WebSocketSession(ISession):
             ssl=ssl_ctx,
             subprotocols=subprotocols,
             max_size=self._ws_max_size,
+            compression=self._ws_compression,
             ping_interval=None,  # we run our own RTT ping
             ping_timeout=None,
             process_request=_process_request,  # <-- key: serve static before WS
@@ -4308,6 +4312,7 @@ class WebSocketSession(ISession):
                 ssl=ssl_ctx,
                 subprotocols=subprotocols,
                 max_size=self._ws_max_size,
+                compression=self._ws_compression,
                 ping_interval=None,    # we run our own RTT ping
                 ping_timeout=None,
                 **connect_kwargs,
