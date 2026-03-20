@@ -24,6 +24,7 @@ def _args(ws_payload_mode: str) -> argparse.Namespace:
         ws_static_dir="",
         ws_send_timeout=3.0,
         ws_tcp_user_timeout_ms=10000,
+        ws_reconnect_grace=3.0,
     )
 
 
@@ -77,6 +78,12 @@ class _FakeWs:
 
     async def close(self):
         self.close_calls += 1
+
+    async def recv(self):
+        await asyncio.Future()
+
+    async def wait_closed(self):
+        return None
 
 
 class _HangingWs(_FakeWs):
@@ -205,6 +212,45 @@ class WebSocketSocketConfigTests(unittest.TestCase):
         session = WebSocketSession(_args("binary"))
         ws = type("NoSockWs", (), {"transport": None})()
         session._configure_ws_socket(ws)
+
+
+class WebSocketReconnectGraceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_quick_reconnect_cancels_pending_disconnect(self):
+        args = _args("binary")
+        args.ws_reconnect_grace = 0.05
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+        session._overlay_connected = True
+        session._schedule_overlay_disconnect()
+
+        self.assertIsNotNone(session._disconnect_task)
+
+        session._ws = object()
+        await session._on_accept(_SockoptWs(_FakeSocket()))
+        await asyncio.sleep(0.08)
+
+        self.assertTrue(session._overlay_connected)
+        self.assertIsNone(session._disconnect_task)
+
+        session._rx_task.cancel()
+        await session._rx_task
+        session._tx_task.cancel()
+        await session._tx_task
+
+    async def test_disconnect_fires_after_grace_when_not_reconnected(self):
+        args = _args("binary")
+        args.ws_reconnect_grace = 0.05
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+        session._overlay_connected = True
+        session._schedule_overlay_disconnect()
+
+        await asyncio.sleep(0.08)
+
+        self.assertFalse(session._overlay_connected)
+        self.assertIsNone(session._disconnect_task)
 
 
 class WebSocketHttpPreflightTests(unittest.IsolatedAsyncioTestCase):

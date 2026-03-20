@@ -3800,6 +3800,13 @@ class WebSocketSession(ISession):
                 default=10000,
                 help='TCP_USER_TIMEOUT in milliseconds for WebSocket sockets (default 10000, 0 disables).',
             )
+        if not _has('--ws-reconnect-grace'):
+            p.add_argument(
+                '--ws-reconnect-grace',
+                type=float,
+                default=3.0,
+                help='Seconds to wait before reporting DISCONNECTED after WS transport loss (default 3.0).',
+            )
 
 
     @staticmethod
@@ -3838,6 +3845,7 @@ class WebSocketSession(ISession):
         self._ws_payload_codec: WebSocketPayloadCodec = codec_cls()
         self._ws_send_timeout_s: float = max(0.0, float(getattr(self._args, "ws_send_timeout", 3.0) or 0.0))
         self._ws_tcp_user_timeout_ms: int = max(0, int(getattr(self._args, "ws_tcp_user_timeout_ms", 10000) or 0))
+        self._ws_reconnect_grace_s: float = max(0.0, float(getattr(self._args, "ws_reconnect_grace", 3.0) or 0.0))
         # Reverse proxies can negotiate permessage-deflate but then stall or drop
         # tiny control messages. Keep overlay framing simple and deterministic.
         self._ws_compression = None
@@ -3853,6 +3861,7 @@ class WebSocketSession(ISession):
         self._tx_task: Optional[asyncio.Task] = None
         self._connecting_task: Optional[asyncio.Task] = None
         self._reconnect_task: Optional[asyncio.Task] = None
+        self._disconnect_task: Optional[asyncio.Task] = None
         self._tx_queue: "asyncio.Queue[tuple[bytes, Optional[Callable[[], None]]]]" = asyncio.Queue()
 
         # Early buffer (APP/CTRL frames preserved as individual WS messages)
@@ -3920,6 +3929,9 @@ class WebSocketSession(ISession):
             if t: t.cancel()
         self._connecting_task = None
         self._reconnect_task = None
+        if self._disconnect_task:
+            self._disconnect_task.cancel()
+            self._disconnect_task = None
 
         for attr in ("_rx_task", "_tx_task"):
             try:
@@ -4256,6 +4268,9 @@ class WebSocketSession(ISession):
             pass
 
         self._ws = ws
+        if self._disconnect_task:
+            self._disconnect_task.cancel()
+            self._disconnect_task = None
         self._configure_ws_socket(ws)
         peer = getattr(ws, "remote_address", None)
         sockname = getattr(ws, "local_address", None)
@@ -4476,6 +4491,25 @@ class WebSocketSession(ISession):
                 self._on_peer_tx(nbytes)
             except Exception:
                 pass
+
+    def _schedule_overlay_disconnect(self) -> None:
+        if self._disconnect_task or not self._run_flag:
+            return
+        if self._ws_reconnect_grace_s <= 0:
+            self._set_overlay_connected(False)
+            return
+
+        async def _delayed_disconnect():
+            try:
+                await asyncio.sleep(self._ws_reconnect_grace_s)
+                if self._ws is None:
+                    self._set_overlay_connected(False)
+            except asyncio.CancelledError:
+                return
+            finally:
+                self._disconnect_task = None
+
+        self._disconnect_task = self._loop.create_task(_delayed_disconnect())  # type: ignore
 
     def _decode_ws_message(self, msg) -> Optional[bytes]:
         if isinstance(msg, str):
@@ -4712,7 +4746,7 @@ class WebSocketSession(ISession):
             except Exception:
                 pass
             self._ws = None
-            self._set_overlay_connected(False)
+            self._schedule_overlay_disconnect()
             if self._peer_tuple:
                 self._start_reconnect_loop()
             self._log.debug(f"[WS/RX] ({self._probe_id}) pump stop")
