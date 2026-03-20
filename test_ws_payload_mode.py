@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 import argparse
+import asyncio
+import sys
+import types
 import unittest
 from unittest import mock
 
@@ -136,6 +139,61 @@ class WebSocketHttpPreflightTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch("udp_bidirectional_main.asyncio.open_connection", mock.AsyncMock(return_value=(reader, writer))):
             with self.assertRaisesRegex(RuntimeError, "unexpected HTTP status 404"):
                 await session._load_default_http_page(host="127.0.0.1", port=54321)
+
+
+class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
+    async def test_start_server_disables_websocket_compression(self):
+        session = WebSocketSession(_args("binary"))
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+
+        fake_server = types.SimpleNamespace(
+            sockets=[types.SimpleNamespace(getsockname=lambda: ("127.0.0.1", 54321))]
+        )
+        serve = mock.AsyncMock(return_value=fake_server)
+        fake_websockets = types.SimpleNamespace(serve=serve)
+        fake_http11 = types.SimpleNamespace(Response=object)
+        fake_ds = types.SimpleNamespace(Headers=lambda items: items)
+
+        with mock.patch.dict(
+            sys.modules,
+            {
+                "websockets": fake_websockets,
+                "websockets.http11": fake_http11,
+                "websockets.datastructures": fake_ds,
+            },
+        ):
+            await session._start_server()
+
+        self.assertIs(session._server, fake_server)
+        self.assertEqual(serve.await_args.kwargs["compression"], None)
+
+    async def test_connect_disables_websocket_compression(self):
+        args = _args("binary")
+        args.peer = "127.0.0.1"
+        args.peer_port = 54321
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+        session._peer_tuple = ("127.0.0.1", 54321)
+        session._peer_name_host = "overlay.example"
+        session._peer_name_port = 54321
+
+        fake_ws = types.SimpleNamespace(
+            local_address=("127.0.0.1", 40000),
+            remote_address=("127.0.0.1", 54321),
+        )
+        connect = mock.AsyncMock(return_value=fake_ws)
+        fake_websockets = types.SimpleNamespace(connect=connect)
+
+        with mock.patch.dict(sys.modules, {"websockets": fake_websockets}):
+            with mock.patch.object(session, "_load_default_http_page", mock.AsyncMock()) as preflight:
+                with mock.patch.object(session, "_on_accept", mock.AsyncMock()) as on_accept:
+                    await session._connect_to("127.0.0.1", 54321)
+
+        preflight.assert_awaited_once()
+        on_accept.assert_awaited_once_with(fake_ws)
+        self.assertEqual(connect.await_args.kwargs["compression"], None)
 
 
 if __name__ == "__main__":
