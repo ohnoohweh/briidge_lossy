@@ -3786,6 +3786,20 @@ class WebSocketSession(ISession):
                 help="Directory to serve as a static web root on the WS port (default ./web). "
                     "Set to '' to disable."
         )
+        if not _has('--ws-send-timeout'):
+            p.add_argument(
+                '--ws-send-timeout',
+                type=float,
+                default=3.0,
+                help='Seconds to wait for a WebSocket frame send before forcing reconnect (default 3.0).',
+            )
+        if not _has('--ws-tcp-user-timeout-ms'):
+            p.add_argument(
+                '--ws-tcp-user-timeout-ms',
+                type=int,
+                default=10000,
+                help='TCP_USER_TIMEOUT in milliseconds for WebSocket sockets (default 10000, 0 disables).',
+            )
 
 
     @staticmethod
@@ -3822,6 +3836,8 @@ class WebSocketSession(ISession):
         if codec_cls is None:
             raise ValueError(f"Unsupported --ws-payload-mode: {self._ws_payload_mode}")
         self._ws_payload_codec: WebSocketPayloadCodec = codec_cls()
+        self._ws_send_timeout_s: float = max(0.0, float(getattr(self._args, "ws_send_timeout", 3.0) or 0.0))
+        self._ws_tcp_user_timeout_ms: int = max(0, int(getattr(self._args, "ws_tcp_user_timeout_ms", 10000) or 0))
         # Reverse proxies can negotiate permessage-deflate but then stall or drop
         # tiny control messages. Keep overlay framing simple and deterministic.
         self._ws_compression = None
@@ -3837,7 +3853,7 @@ class WebSocketSession(ISession):
         self._tx_task: Optional[asyncio.Task] = None
         self._connecting_task: Optional[asyncio.Task] = None
         self._reconnect_task: Optional[asyncio.Task] = None
-        self._tx_queue: "asyncio.Queue[bytes]" = asyncio.Queue()
+        self._tx_queue: "asyncio.Queue[tuple[bytes, Optional[Callable[[], None]]]]" = asyncio.Queue()
 
         # Early buffer (APP/CTRL frames preserved as individual WS messages)
         self._early_buf: Deque[bytes] = deque()
@@ -3961,11 +3977,7 @@ class WebSocketSession(ISession):
                 self._ensure_connect_once()
             return len(payload)
 
-        self._schedule_send(wire)
-        self._bump_tx(wire)
-        if self._on_peer_tx:
-            try: self._on_peer_tx(len(wire))
-            except Exception: pass
+        self._schedule_send(wire, on_sent=lambda: self._notify_peer_tx(len(wire)))
         return len(payload)
 
     # ---- Internals ------------------------------------------------------------
@@ -4244,6 +4256,7 @@ class WebSocketSession(ISession):
             pass
 
         self._ws = ws
+        self._configure_ws_socket(ws)
         peer = getattr(ws, "remote_address", None)
         sockname = getattr(ws, "local_address", None)
         self._log.info(f"[WS-SESSION] ({self._probe_id}) accept: local={sockname} peer={peer}")
@@ -4385,7 +4398,6 @@ class WebSocketSession(ISession):
             )
             for wire in pending:
                 self._schedule_send(wire)
-                self._bump_tx(wire)
         except Exception as e:
             self._log.info(f"[WS/TX] ({self._probe_id}) flush error: {e!r}")
         finally:
@@ -4401,11 +4413,29 @@ class WebSocketSession(ISession):
         async def _tx_loop():
             try:
                 while True:
-                    wire = await self._tx_queue.get()
+                    wire, on_sent = await self._tx_queue.get()
                     try:
                         if not self._ws:
                             continue
-                        await self._ws.send(self._ws_payload_codec.encode(wire))
+                        send_coro = self._ws.send(self._ws_payload_codec.encode(wire))
+                        if self._ws_send_timeout_s > 0:
+                            await asyncio.wait_for(send_coro, timeout=self._ws_send_timeout_s)
+                        else:
+                            await send_coro
+                        self._bump_tx(wire)
+                        if callable(on_sent):
+                            try:
+                                on_sent()
+                            except Exception:
+                                pass
+                    except asyncio.TimeoutError:
+                        self._log.warning(
+                            f"[WS/TX] ({self._probe_id}) send timeout after {self._ws_send_timeout_s:.3f}s; forcing reconnect"
+                        )
+                        try:
+                            await asyncio.wait_for(self._ws.close(), timeout=1.0)
+                        except Exception:
+                            pass
                     except Exception as e:
                         self._log.info(f"[WS/TX] ({self._probe_id}) send error: {e!r}")
                     finally:
@@ -4415,11 +4445,37 @@ class WebSocketSession(ISession):
 
         self._tx_task = self._loop.create_task(_tx_loop())  # type: ignore
 
-    def _schedule_send(self, wire: bytes) -> None:
+    def _schedule_send(self, wire: bytes, on_sent: Optional[Callable[[], None]] = None) -> None:
         if not self._ws:
             return
         self._ensure_tx_task()
-        self._tx_queue.put_nowait(bytes(wire))
+        self._tx_queue.put_nowait((bytes(wire), on_sent))
+
+    def _configure_ws_socket(self, ws) -> None:
+        try:
+            transport = getattr(ws, "transport", None)
+            sock = transport.get_extra_info("socket") if transport else None
+            if not sock:
+                return
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            self._log.info(f"[WS-SESSION] ({self._probe_id}) SO_KEEPALIVE=1 set")
+            user_timeout = self._ws_tcp_user_timeout_ms
+            tcp_user_timeout = getattr(socket, "TCP_USER_TIMEOUT", None)
+            if user_timeout > 0 and tcp_user_timeout is not None:
+                sock.setsockopt(socket.IPPROTO_TCP, tcp_user_timeout, user_timeout)
+                self._log.info(
+                    f"[WS-SESSION] ({self._probe_id}) TCP_USER_TIMEOUT={user_timeout}ms set"
+                )
+        except Exception as e:
+            self._log.debug(f"[WS-SESSION] ({self._probe_id}) socket sockopt failed: {e!r}")
+
+
+    def _notify_peer_tx(self, nbytes: int) -> None:
+        if self._on_peer_tx:
+            try:
+                self._on_peer_tx(nbytes)
+            except Exception:
+                pass
 
     def _decode_ws_message(self, msg) -> Optional[bytes]:
         if isinstance(msg, str):
@@ -4562,14 +4618,8 @@ class WebSocketSession(ISession):
         except Exception:
             pass
 
-        self._schedule_send(body)
-        self._bump_tx(body)
-        if self._on_peer_tx:
-            try:
-                self._on_peer_tx(len(body))
-            except Exception:
-                pass
-        self._log.debug(f"[WS/TX] ({self._probe_id}) PING")
+        self._schedule_send(body, on_sent=lambda: self._notify_peer_tx(len(body)))
+        self._log.debug(f"[WS/TX] ({self._probe_id}) PING queued")
             
     def _send_pong_frame(self, echo_tx_ns: int) -> None:
         if not self._ws:
@@ -4580,14 +4630,8 @@ class WebSocketSession(ISession):
         # Guard log
         self._log.debug(f"[WS/GUARD] ({self._probe_id}) PONG tx: echo_tx_ns={echo_tx_ns}")
 
-        self._schedule_send(body)
-        self._bump_tx(body)
-        if self._on_peer_tx:
-            try:
-                self._on_peer_tx(len(body))
-            except Exception:
-                pass
-        self._log.debug(f"[WS/TX] ({self._probe_id}) PONG")
+        self._schedule_send(body, on_sent=lambda: self._notify_peer_tx(len(body)))
+        self._log.debug(f"[WS/TX] ({self._probe_id}) PONG queued")
 
     # --- RX pump ---------------------------------------------------------------
     async def _rx_pump(self) -> None:
