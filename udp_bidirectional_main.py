@@ -3793,6 +3793,13 @@ class WebSocketSession(ISession):
                 default=3.0,
                 help='Seconds to wait for a WebSocket frame send before forcing reconnect (default 3.0).',
             )
+        if not _has('--ws-tcp-user-timeout-ms'):
+            p.add_argument(
+                '--ws-tcp-user-timeout-ms',
+                type=int,
+                default=10000,
+                help='TCP_USER_TIMEOUT in milliseconds for WebSocket sockets (default 10000, 0 disables).',
+            )
 
 
     @staticmethod
@@ -3830,6 +3837,7 @@ class WebSocketSession(ISession):
             raise ValueError(f"Unsupported --ws-payload-mode: {self._ws_payload_mode}")
         self._ws_payload_codec: WebSocketPayloadCodec = codec_cls()
         self._ws_send_timeout_s: float = max(0.0, float(getattr(self._args, "ws_send_timeout", 3.0) or 0.0))
+        self._ws_tcp_user_timeout_ms: int = max(0, int(getattr(self._args, "ws_tcp_user_timeout_ms", 10000) or 0))
         # Reverse proxies can negotiate permessage-deflate but then stall or drop
         # tiny control messages. Keep overlay framing simple and deterministic.
         self._ws_compression = None
@@ -4248,6 +4256,7 @@ class WebSocketSession(ISession):
             pass
 
         self._ws = ws
+        self._configure_ws_socket(ws)
         peer = getattr(ws, "remote_address", None)
         sockname = getattr(ws, "local_address", None)
         self._log.info(f"[WS-SESSION] ({self._probe_id}) accept: local={sockname} peer={peer}")
@@ -4441,6 +4450,24 @@ class WebSocketSession(ISession):
             return
         self._ensure_tx_task()
         self._tx_queue.put_nowait((bytes(wire), on_sent))
+
+    def _configure_ws_socket(self, ws) -> None:
+        try:
+            transport = getattr(ws, "transport", None)
+            sock = transport.get_extra_info("socket") if transport else None
+            if not sock:
+                return
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            self._log.info(f"[WS-SESSION] ({self._probe_id}) SO_KEEPALIVE=1 set")
+            user_timeout = self._ws_tcp_user_timeout_ms
+            tcp_user_timeout = getattr(socket, "TCP_USER_TIMEOUT", None)
+            if user_timeout > 0 and tcp_user_timeout is not None:
+                sock.setsockopt(socket.IPPROTO_TCP, tcp_user_timeout, user_timeout)
+                self._log.info(
+                    f"[WS-SESSION] ({self._probe_id}) TCP_USER_TIMEOUT={user_timeout}ms set"
+                )
+        except Exception as e:
+            self._log.debug(f"[WS-SESSION] ({self._probe_id}) socket sockopt failed: {e!r}")
 
 
     def _notify_peer_tx(self, nbytes: int) -> None:

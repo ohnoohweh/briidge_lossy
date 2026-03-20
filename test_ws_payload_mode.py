@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import socket
 import sys
 import types
 import unittest
@@ -21,6 +22,8 @@ def _args(ws_payload_mode: str) -> argparse.Namespace:
         ws_max_size=65535,
         ws_payload_mode=ws_payload_mode,
         ws_static_dir="",
+        ws_send_timeout=3.0,
+        ws_tcp_user_timeout_ms=10000,
     )
 
 
@@ -79,6 +82,30 @@ class _FakeWs:
 class _HangingWs(_FakeWs):
     async def send(self, payload):
         await asyncio.Future()
+
+
+class _FakeSocket:
+    def __init__(self):
+        self.calls = []
+
+    def setsockopt(self, level, optname, value):
+        self.calls.append((level, optname, value))
+
+
+class _FakeTransport:
+    def __init__(self, sock):
+        self._sock = sock
+
+    def get_extra_info(self, name):
+        if name == "socket":
+            return self._sock
+        return None
+
+
+class _SockoptWs(_FakeWs):
+    def __init__(self, sock):
+        super().__init__()
+        self.transport = _FakeTransport(sock)
 
 class WebSocketPayloadModeTests(unittest.TestCase):
     def test_binary_mode_keeps_bytes_on_send(self):
@@ -161,6 +188,23 @@ class WebSocketTxLoopTests(unittest.IsolatedAsyncioTestCase):
 
         session._tx_task.cancel()
         await session._tx_task
+
+
+class WebSocketSocketConfigTests(unittest.TestCase):
+    def test_configure_ws_socket_sets_keepalive_and_tcp_user_timeout(self):
+        session = WebSocketSession(_args("binary"))
+        sock = _FakeSocket()
+        session._configure_ws_socket(_SockoptWs(sock))
+
+        self.assertIn((socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1), sock.calls)
+        tcp_user_timeout = getattr(socket, "TCP_USER_TIMEOUT", None)
+        if tcp_user_timeout is not None:
+            self.assertIn((socket.IPPROTO_TCP, tcp_user_timeout, 10000), sock.calls)
+
+    def test_configure_ws_socket_skips_missing_socket(self):
+        session = WebSocketSession(_args("binary"))
+        ws = type("NoSockWs", (), {"transport": None})()
+        session._configure_ws_socket(ws)
 
 
 class WebSocketHttpPreflightTests(unittest.IsolatedAsyncioTestCase):
