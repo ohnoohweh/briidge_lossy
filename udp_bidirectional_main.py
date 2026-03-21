@@ -4222,8 +4222,10 @@ class WebSocketSession(ISession):
             subprotocols=subprotocols,
             max_size=self._ws_max_size,
             compression=self._ws_compression,
+            open_timeout=None,  # static HTTP requests may stay non-WS during asset transfer
             ping_interval=None,  # we run our own RTT ping
             ping_timeout=None,
+            write_limit=max(131072, self._ws_max_size or 0),  # allow larger HTTP responses to flush before close
             process_request=_process_request,  # <-- key: serve static before WS
         )
 

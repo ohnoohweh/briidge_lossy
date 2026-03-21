@@ -312,6 +312,8 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(session._server, fake_server)
         self.assertEqual(serve.await_args.kwargs["compression"], None)
+        self.assertIsNone(serve.await_args.kwargs["open_timeout"])
+        self.assertEqual(serve.await_args.kwargs["write_limit"], 131072)
 
     async def test_connect_disables_websocket_compression(self):
         args = _args("binary")
