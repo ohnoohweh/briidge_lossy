@@ -3888,6 +3888,7 @@ class WebSocketSession(ISession):
 
         # Static HTTP root
         self._ws_static_dir: Optional[str] = getattr(self._args, "ws_static_dir", "./web") or None
+        self._static_http_probe_delays_s: tuple[float, ...] = (0.0, 0.05, 0.25, 1.0)
 
     # ---- ISession wiring ------------------------------------------------------
     def set_on_app_payload(self, cb): self._on_app = cb
@@ -3993,6 +3994,94 @@ class WebSocketSession(ISession):
         return len(payload)
 
     # ---- Internals ------------------------------------------------------------
+
+    def _describe_transport_state(self, connection) -> str:
+        transport = getattr(connection, "transport", None)
+        if transport is None:
+            return "transport=missing"
+
+        parts: list[str] = []
+        try:
+            parts.append(f"wbuf={transport.get_write_buffer_size()}")
+        except Exception as e:
+            parts.append(f"wbuf=?({e!r})")
+        try:
+            parts.append(f"closing={bool(transport.is_closing())}")
+        except Exception as e:
+            parts.append(f"closing=?({e!r})")
+
+        try:
+            sockname = transport.get_extra_info("sockname")
+            if sockname is not None:
+                parts.append(f"sockname={sockname}")
+        except Exception:
+            pass
+        try:
+            peername = transport.get_extra_info("peername")
+            if peername is not None:
+                parts.append(f"peer={peername}")
+        except Exception:
+            pass
+        return " ".join(parts)
+
+    def _log_static_http_decision(
+        self,
+        *,
+        method: str,
+        req_path: str,
+        status: int,
+        target,
+        ctype: str,
+        content_length: int,
+        body_length: int,
+        note: str = "",
+    ) -> None:
+        target_txt = "-" if target is None else str(target)
+        suffix = f" note={note}" if note else ""
+        self._log.debug(
+            f"[WS/HTTP] ({self._probe_id}) method={method} path={req_path} status={status} "
+            f"target={target_txt} ctype={ctype} content_length={content_length} body_length={body_length}{suffix}"
+        )
+
+    def _schedule_static_http_debug_probes(
+        self,
+        connection,
+        *,
+        method: str,
+        req_path: str,
+        status: int,
+        target,
+        body_length: int,
+    ) -> None:
+        loop = self._loop
+        if loop is None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+        if loop is None:
+            return
+
+        target_txt = "-" if target is None else str(target)
+
+        def _emit_probe(delay_s: float) -> None:
+            self._log.debug(
+                f"[WS/HTTP] ({self._probe_id}) probe dt={delay_s:.3f}s method={method} "
+                f"path={req_path} status={status} body_length={body_length} target={target_txt} "
+                f"{self._describe_transport_state(connection)}"
+            )
+
+        for delay_s in self._static_http_probe_delays_s:
+            try:
+                if delay_s <= 0:
+                    loop.call_soon(_emit_probe, delay_s)
+                else:
+                    loop.call_later(delay_s, _emit_probe, delay_s)
+            except Exception as e:
+                self._log.debug(
+                    f"[WS/HTTP] ({self._probe_id}) failed to schedule probe delay={delay_s:.3f}s "
+                    f"path={req_path}: {e!r}"
+                )
 
     async def _start_server(self) -> None:
         """
@@ -4114,25 +4203,65 @@ class WebSocketSession(ISession):
                 pass
 
             method = getattr(request, "method", "GET") or "GET"
+            req_path = getattr(request, "path", "/") or "/"
             if method not in ("GET", "HEAD"):
                 body = b"Method Not Allowed\n"
+                self._log_static_http_decision(
+                    method=method,
+                    req_path=req_path,
+                    status=405,
+                    target=None,
+                    ctype="text/plain",
+                    content_length=len(body),
+                    body_length=len(body),
+                    note="method-not-allowed",
+                )
                 return _mk_response(405, [("Allow", "GET, HEAD")] + _http_headers(405, len(body), "text/plain"), body)
 
-            req_path = getattr(request, "path", "/") or "/"
             target = _safe_join(static_root, req_path)
             if target is None:
                 body = b"Forbidden\n"
+                self._log_static_http_decision(
+                    method=method,
+                    req_path=req_path,
+                    status=403,
+                    target=None,
+                    ctype="text/plain",
+                    content_length=len(body),
+                    body_length=len(body),
+                    note="safe-join-rejected",
+                )
                 return _mk_response(403, _http_headers(403, len(body), "text/plain"), body)
 
             if target.is_dir():
                 index = target / "index.html"
                 if not (index.exists() and index.is_file()):
                     body = b"Not Found\n"
+                    self._log_static_http_decision(
+                        method=method,
+                        req_path=req_path,
+                        status=404,
+                        target=target,
+                        ctype="text/plain",
+                        content_length=len(body),
+                        body_length=len(body),
+                        note="directory-without-index",
+                    )
                     return _mk_response(404, _http_headers(404, len(body), "text/plain"), body)
                 target = index
 
             if not target.exists() or not target.is_file():
                 body = b"Not Found\n"
+                self._log_static_http_decision(
+                    method=method,
+                    req_path=req_path,
+                    status=404,
+                    target=target,
+                    ctype="text/plain",
+                    content_length=len(body),
+                    body_length=len(body),
+                    note="missing-file",
+                )
                 return _mk_response(404, _http_headers(404, len(body), "text/plain"), body)
 
             ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
@@ -4141,10 +4270,56 @@ class WebSocketSession(ISession):
             except Exception as e:
                 self._log.debug(f"[WS-SESSION] ({self._probe_id}) static read error: {e!r}")
                 body = b"Internal Server Error\n"
+                self._log_static_http_decision(
+                    method=method,
+                    req_path=req_path,
+                    status=500,
+                    target=target,
+                    ctype="text/plain",
+                    content_length=len(body),
+                    body_length=len(body),
+                    note=f"read-error={e!r}",
+                )
                 return _mk_response(500, _http_headers(500, len(body), "text/plain"), body)
 
             if method == "HEAD":
+                self._log_static_http_decision(
+                    method=method,
+                    req_path=req_path,
+                    status=200,
+                    target=target,
+                    ctype=ctype,
+                    content_length=len(data),
+                    body_length=0,
+                    note="head-response",
+                )
+                self._schedule_static_http_debug_probes(
+                    connection,
+                    method=method,
+                    req_path=req_path,
+                    status=200,
+                    target=target,
+                    body_length=0,
+                )
                 return _mk_response(200, _http_headers(200, len(data), ctype), b"")
+            self._log_static_http_decision(
+                method=method,
+                req_path=req_path,
+                status=200,
+                target=target,
+                ctype=ctype,
+                content_length=len(data),
+                body_length=len(data),
+                note="static-hit",
+            )
+            self._schedule_static_http_debug_probes(
+                connection,
+                method=method,
+                req_path=req_path,
+                status=200,
+                target=target,
+                body_length=len(data),
+            )
             return _mk_response(200, _http_headers(200, len(data), ctype), data)
 
         # --- Legacy handler: (path, request_headers) -> (status, headers, body)|None ---
@@ -4165,17 +4340,47 @@ class WebSocketSession(ISession):
             target = _safe_join(static_root, path or "/")
             if target is None:
                 body = b"Forbidden\n"
+                self._log_static_http_decision(
+                    method=method,
+                    req_path=path or "/",
+                    status=403,
+                    target=None,
+                    ctype="text/plain",
+                    content_length=len(body),
+                    body_length=len(body),
+                    note="safe-join-rejected",
+                )
                 return 403, _http_headers(403, len(body), "text/plain"), body
 
             if target.is_dir():
                 index = target / "index.html"
                 if not (index.exists() and index.is_file()):
                     body = b"Not Found\n"
+                    self._log_static_http_decision(
+                        method=method,
+                        req_path=path or "/",
+                        status=404,
+                        target=target,
+                        ctype="text/plain",
+                        content_length=len(body),
+                        body_length=len(body),
+                        note="directory-without-index",
+                    )
                     return 404, _http_headers(404, len(body), "text/plain"), body
                 target = index
 
             if not target.exists() or not target.is_file():
                 body = b"Not Found\n"
+                self._log_static_http_decision(
+                    method=method,
+                    req_path=path or "/",
+                    status=404,
+                    target=target,
+                    ctype="text/plain",
+                    content_length=len(body),
+                    body_length=len(body),
+                    note="missing-file",
+                )
                 return 404, _http_headers(404, len(body), "text/plain"), body
 
             ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
@@ -4184,8 +4389,28 @@ class WebSocketSession(ISession):
             except Exception as e:
                 self._log.debug(f"[WS-SESSION] ({self._probe_id}) static read error: {e!r}")
                 body = b"Internal Server Error\n"
+                self._log_static_http_decision(
+                    method=method,
+                    req_path=path or "/",
+                    status=500,
+                    target=target,
+                    ctype="text/plain",
+                    content_length=len(body),
+                    body_length=len(body),
+                    note=f"read-error={e!r}",
+                )
                 return 500, _http_headers(500, len(body), "text/plain"), body
 
+            self._log_static_http_decision(
+                method=method,
+                req_path=path or "/",
+                status=200,
+                target=target,
+                ctype=ctype,
+                content_length=len(data),
+                body_length=len(data),
+                note="static-hit",
+            )
             return 200, _http_headers(200, len(data), ctype), data
 
         # --- One wrapper that adapts to either signature ---
