@@ -19,7 +19,7 @@ python overlay_tty.py --proto udp --role client --host ::1 --bind :: --connect-p
 python overlay_tty.py --proto tcp --role server --listen-bind :: --port 3128
 python overlay_tty.py --proto tcp --role client --host ::1 --bind :: --connect-port 3129
 
-python udp_bidirectional_main.py  --bind443 0.0.0.0 --port443 443 --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_server_ipv4.txt --admin-web
+python ObstacleBridge.py  --bind443 0.0.0.0 --port443 443 --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_server_ipv4.txt --admin-web
 
 
 #
@@ -30,32 +30,32 @@ python udp_bidirectional_main.py  --bind443 0.0.0.0 --port443 443 --log INFO --l
 # 1. Instanciate a bounce back server, overlay_tty.py. It bounces back received payload with a modified content to clearly trace it along the path
 #    on incomming payload 01 30 it responds with outgoing payload 02 30
 #
-# 2. Instanciate python udp_bidirectional_main.py as an outgoing connection server
+# 2. Instanciate python ObstacleBridge.py as an outgoing connection server
 #
-# 3. Instanciate python udp_bidirectional_main.py as an incomming connection server
+# 3. Instanciate python ObstacleBridge.py as an incomming connection server
 #
 # wait for 2 service to allow udp_bidirectional_main to connect
 #
-# 4. Instanciate a outgoing connection server to udp_bidirectional_main.py as an incomming connection server
+# 4. Instanciate a outgoing connection server to ObstacleBridge.py as an incomming connection server
 #    Send payload as 01 30
 #    Within 1s expect incomming payload 02 30
 #
-# 5. Kill udp_bidirectional_main.py as an outgoing connection server
+# 5. Kill ObstacleBridge.py as an outgoing connection server
 #
 # 6. Expect within 30s switch to disconnected
 #
-# 7. Instanciate python udp_bidirectional_main.py as an outgoing connection server
+# 7. Instanciate python ObstacleBridge.py as an outgoing connection server
 #
 # wait for 2 service to allow udp_bidirectional_main to connect
 # 
 # 8. Send payload as 01 31
 #    Within 1s expect incomming payload 02 31
 # 
-# 9. Kill udp_bidirectional_main.py as an incomming connection server
+# 9. Kill ObstacleBridge.py as an incomming connection server
 # 
 # 10. Expect within 30s switch to disconnected
 #
-# 11. Instanciate python udp_bidirectional_main.py as an incomming connection server
+# 11. Instanciate python ObstacleBridge.py as an incomming connection server
 #
 # wait for 2 service to allow udp_bidirectional_main to connect
 #
@@ -63,8 +63,8 @@ python udp_bidirectional_main.py  --bind443 0.0.0.0 --port443 443 --log INFO --l
 #    Within 1s expect incomming payload 02 32
 #
 # Disconnect can be tested using --admin-web 
-# for python udp_bidirectional_main.py as an outgoing connection server -admin-web-port 18080
-# for python udp_bidirectional_main.py as an outgoing connection server -admin-web-port 18090
+# for python ObstacleBridge.py as an outgoing connection server -admin-web-port 18080
+# for python ObstacleBridge.py as an outgoing connection server -admin-web-port 18090
 #
 # GET /api/meta 
 # property "overlay_transport"
@@ -77,11 +77,11 @@ python overlay_tty.py --proto udp --role server --port 16666
 #
 # Bridge server
 #
-python udp_bidirectional_main.py  --bind443 0.0.0.0 --port443 443 --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_server_ipv4.txt
+python ObstacleBridge.py  --bind443 0.0.0.0 --port443 443 --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_server_ipv4.txt
 #
 # Bridge client
 #
-python udp_bidirectional_main.py --bind443 0.0.0.0 --peer 127.0.0.1 --peer-port 443 --port443 0 --own-servers "udp,16667,0.0.0.0,udp,127.0.0.1,16666" --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_client_ipv4.txt
+python ObstacleBridge.py --bind443 0.0.0.0 --peer 127.0.0.1 --peer-port 443 --port443 0 --own-servers "udp,16667,0.0.0.0,udp,127.0.0.1,16666" --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_client_ipv4.txt
 #
 # terminal clients
 #
@@ -96,11 +96,11 @@ python overlay_tty.py --proto udp --role server --port 16666
 #
 # Bridge server
 #
-python udp_bidirectional_main.py --bind443 :: --port443 443 --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_server_ipv6.txt
+python ObstacleBridge.py --bind443 :: --port443 443 --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_server_ipv6.txt
 #
 # Bridge client
 #
-python udp_bidirectional_main.py --bind443 :: --peer ::1 --peer-port 443 --port443 0 --own-servers "udp,16667,0.0.0.0,udp,127.0.0.1,16666" --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_client_ipv6.txt
+python ObstacleBridge.py --bind443 :: --peer ::1 --peer-port 443 --port443 0 --own-servers "udp,16667,0.0.0.0,udp,127.0.0.1,16666" --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_client_ipv6.txt
 #
 # terminal clients
 #
@@ -115,11 +115,11 @@ python overlay_tty.py --proto udp --role server --listen-bind :: --port 16666
 #
 # Bridge server
 #
-python udp_bidirectional_main.py --bind443 :: --port443 443 --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_server_ipv6.txt
+python ObstacleBridge.py --bind443 :: --port443 443 --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_server_ipv6.txt
 #
 # Bridge client
 #
-python udp_bidirectional_main.py --bind443 :: --peer ::1 --peer-port 443 --port443 0 --own-servers "udp,16667,::,udp,::1,16666" --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_client_ipv6.txt
+python ObstacleBridge.py --bind443 :: --peer ::1 --peer-port 443 --port443 0 --own-servers "udp,16667,::,udp,::1,16666" --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_client_ipv6.txt
 #
 # terminal clients
 #
@@ -136,11 +136,11 @@ python overlay_tty.py --proto tcp --role server --port 3128
 #
 # Bridge server
 #
-python udp_bidirectional_main.py  --bind443 0.0.0.0 --port443 443  --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_server.txt
+python ObstacleBridge.py  --bind443 0.0.0.0 --port443 443  --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_server.txt
 #
 # Bridge client
 #
-python udp_bidirectional_main.py --bind443 0.0.0.0 --peer 127.0.0.1 --peer-port 443 --port443 0 --own-servers "tcp,3129,0.0.0.0,tcp,127.0.0.1,3128"  --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_client.txt
+python ObstacleBridge.py --bind443 0.0.0.0 --peer 127.0.0.1 --peer-port 443 --port443 0 --own-servers "tcp,3129,0.0.0.0,tcp,127.0.0.1,3128"  --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_client.txt
 #
 # terminal clients
 #
@@ -154,11 +154,11 @@ python overlay_tty.py --proto tcp --role server --listen-bind :: --port 3128
 #
 # Bridge server
 #
-python udp_bidirectional_main.py  --bind443 0.0.0.0 --port443 443  --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_server.txt
+python ObstacleBridge.py  --bind443 0.0.0.0 --port443 443  --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_server.txt
 #
 # Bridge client
 #
-python udp_bidirectional_main.py --bind443 0.0.0.0 --peer 127.0.0.1 --peer-port 443 --port443 0 --own-servers "tcp,3129,::,tcp,::1,3128"  --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_client.txt
+python ObstacleBridge.py --bind443 0.0.0.0 --peer 127.0.0.1 --peer-port 443 --port443 0 --own-servers "tcp,3129,::,tcp,::1,3128"  --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_client.txt
 #
 # terminal clients
 #
@@ -167,9 +167,9 @@ python overlay_tty.py --proto tcp --role client --host ::1 --bind :: --connect-p
 
 
 
-python udp_bidirectional_main.py  --bind443 0.0.0.0 --port443 443  --log INFO --log-channel-mux DEBUG --log-udp-session INFO --console-level INFO --file-level DEBUG --log-file br_server.txt
+python ObstacleBridge.py  --bind443 0.0.0.0 --port443 443  --log INFO --log-channel-mux DEBUG --log-udp-session INFO --console-level INFO --file-level DEBUG --log-file br_server.txt
 
-python udp_bidirectional_main.py --bind443 0.0.0.0 --peer 127.0.0.1 --peer-port 443 --port443 0 --own-servers "udp,16667,0.0.0.0,udp,127.0.0.1,16666"  --log INFO --log-channel-mux DEBUG --log-udp-session INFO --console-level INFO --file-level DEBUG --log-file br_client.txt
+python ObstacleBridge.py --bind443 0.0.0.0 --peer 127.0.0.1 --peer-port 443 --port443 0 --own-servers "udp,16667,0.0.0.0,udp,127.0.0.1,16666"  --log INFO --log-channel-mux DEBUG --log-udp-session INFO --console-level INFO --file-level DEBUG --log-file br_client.txt
 
 
 
@@ -182,11 +182,11 @@ python overlay_tty.py --proto udp --role server --port 16666
 #
 # Bridge server
 #
-python udp_bidirectional_main.py --overlay-transport tcp --bind443 0.0.0.0 --port443 12345 --udp-role client --udp-target-host 127.0.0.1 --udp-target-port 16666 --tcp-role client --tcp-target-host 127.0.0.1 --tcp-target-port 3128 --debug-session-udp --debug-peer-udp  --log DEBUG --log-file br_server.txt
+python ObstacleBridge.py --overlay-transport tcp --bind443 0.0.0.0 --port443 12345 --udp-role client --udp-target-host 127.0.0.1 --udp-target-port 16666 --tcp-role client --tcp-target-host 127.0.0.1 --tcp-target-port 3128 --debug-session-udp --debug-peer-udp  --log DEBUG --log-file br_server.txt
 #
 # Bridge client
 #
-python udp_bidirectional_main.py --overlay-transport tcp --peer 127.0.0.1 --peer-port 12345 --bind443 0.0.0.0 --port443 0 --udp-role server --udp-listen-bind 0.0.0.0 --udp-listen-port 16667 --tcp-role server --tcp-listen-bind 0.0.0.0 --tcp-listen-port 3129 --debug-session-udp --debug-peer-udp --debug-session-out-port 41000 --debug-session-in-port 41001 --debug-peer-out-port 41002 --debug-peer-in-port 41003 --log DEBUG --log-file br_client.txt
+python ObstacleBridge.py --overlay-transport tcp --peer 127.0.0.1 --peer-port 12345 --bind443 0.0.0.0 --port443 0 --udp-role server --udp-listen-bind 0.0.0.0 --udp-listen-port 16667 --tcp-role server --tcp-listen-bind 0.0.0.0 --tcp-listen-port 3129 --debug-session-udp --debug-peer-udp --debug-session-out-port 41000 --debug-session-in-port 41001 --debug-peer-out-port 41002 --debug-peer-in-port 41003 --log DEBUG --log-file br_client.txt
 #
 # terminal clients
 #
@@ -203,12 +203,12 @@ python overlay_tty.py --proto udp --role server --port 16666
 # Bridge server
 #
 set NO_PROXY=127.0.0.1,%NO_PROXY%
-python udp_bidirectional_main.py --overlay-transport ws --bind443 0.0.0.0 --port443 54321 --udp-role client --udp-target-host 127.0.0.1 --udp-target-port 16666 --tcp-role client --tcp-target-host 127.0.0.1 --tcp-target-port 3128 --debug-session-udp --debug-peer-udp  --log DEBUG --log-file br_server.txt
+python ObstacleBridge.py --overlay-transport ws --bind443 0.0.0.0 --port443 54321 --udp-role client --udp-target-host 127.0.0.1 --udp-target-port 16666 --tcp-role client --tcp-target-host 127.0.0.1 --tcp-target-port 3128 --debug-session-udp --debug-peer-udp  --log DEBUG --log-file br_server.txt
 #
 # Bridge client
 #
 set NO_PROXY=127.0.0.1,%NO_PROXY%
-python udp_bidirectional_main.py --overlay-transport ws --peer 127.0.0.1 --peer-port 54321 --bind443 0.0.0.0 --port443 0 --udp-role server --udp-listen-bind 0.0.0.0 --udp-listen-port 16667 --tcp-role server --tcp-listen-bind 0.0.0.0 --tcp-listen-port 3129 --debug-session-udp --debug-peer-udp --debug-session-out-port 41000 --debug-session-in-port 41001 --debug-peer-out-port 41002 --debug-peer-in-port 41003 --log DEBUG --log-file br_client.txt
+python ObstacleBridge.py --overlay-transport ws --peer 127.0.0.1 --peer-port 54321 --bind443 0.0.0.0 --port443 0 --udp-role server --udp-listen-bind 0.0.0.0 --udp-listen-port 16667 --tcp-role server --tcp-listen-bind 0.0.0.0 --tcp-listen-port 3129 --debug-session-udp --debug-peer-udp --debug-session-out-port 41000 --debug-session-in-port 41001 --debug-peer-out-port 41002 --debug-peer-in-port 41003 --log DEBUG --log-file br_client.txt
 #
 # terminal clients
 #
@@ -225,11 +225,11 @@ python overlay_tty.py --proto udp --role server --port 16666
 #
 # Bridge server
 #
-python udp_bidirectional_main.py --overlay-transport quic --bind443 0.0.0.0 --port443 4443 --quic-cert cert.pem --quic-key key.pem --udp-role client --udp-target-host 127.0.0.1 --udp-target-port 16666 --tcp-role client --tcp-target-host 127.0.0.1 --tcp-target-port 3128 --debug-session-udp --debug-peer-udp  --log DEBUG --log-file br_server.txt
+python ObstacleBridge.py --overlay-transport quic --bind443 0.0.0.0 --port443 4443 --quic-cert cert.pem --quic-key key.pem --udp-role client --udp-target-host 127.0.0.1 --udp-target-port 16666 --tcp-role client --tcp-target-host 127.0.0.1 --tcp-target-port 3128 --debug-session-udp --debug-peer-udp  --log DEBUG --log-file br_server.txt
 #
 # Bridge client
 #
-python udp_bidirectional_main.py --overlay-transport quic --peer 127.0.0.1 --peer-port 4443 --bind443 0.0.0.0 --port443 0 --quic-insecure --udp-role server --udp-listen-bind 0.0.0.0 --udp-listen-port 16667 --tcp-role server --tcp-listen-bind 0.0.0.0 --tcp-listen-port 3129 --debug-session-udp --debug-peer-udp --debug-session-out-port 41000 --debug-session-in-port 41001 --debug-peer-out-port 41002 --debug-peer-in-port 41003 --log DEBUG --log-file br_client.txt
+python ObstacleBridge.py --overlay-transport quic --peer 127.0.0.1 --peer-port 4443 --bind443 0.0.0.0 --port443 0 --quic-insecure --udp-role server --udp-listen-bind 0.0.0.0 --udp-listen-port 16667 --tcp-role server --tcp-listen-bind 0.0.0.0 --tcp-listen-port 3129 --debug-session-udp --debug-peer-udp --debug-session-out-port 41000 --debug-session-in-port 41001 --debug-peer-out-port 41002 --debug-peer-in-port 41003 --log DEBUG --log-file br_client.txt
 #
 # terminal clients
 #
@@ -264,6 +264,6 @@ openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -node
 # Real life Production 
 #
 
-python3 udp_bidirectional_main.py  --bind443 0.0.0.0 --port443 443 --udp-role client --udp-target-host 127.0.0.1 --udp-target-port 16666 --tcp-role client --tcp-target-host 127.0.0.1 --tcp-target-port 3128 --debug-session-udp --debug-peer-udp
+python3 ObstacleBridge.py  --bind443 0.0.0.0 --port443 443 --udp-role client --udp-target-host 127.0.0.1 --udp-target-port 16666 --tcp-role client --tcp-target-host 127.0.0.1 --tcp-target-port 3128 --debug-session-udp --debug-peer-udp
 
-python udp_bidirectional_main.py --bind443 0.0.0.0 --peer 127.0.0.1 --peer-port 443 --port443 0 --udp-role server --udp-listen-bind 0.0.0.0 --udp-listen-port 16666 --tcp-role server --tcp-listen-bind 0.0.0.0 --tcp-listen-port 3128 --debug-session-udp --debug-peer-udp
+python ObstacleBridge.py --bind443 0.0.0.0 --peer 127.0.0.1 --peer-port 443 --port443 0 --udp-role server --udp-listen-bind 0.0.0.0 --udp-listen-port 16666 --tcp-role server --tcp-listen-bind 0.0.0.0 --tcp-listen-port 3128 --debug-session-udp --debug-peer-udp

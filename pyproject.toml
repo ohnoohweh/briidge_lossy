@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ObstacleBridge"
+version = "0.1.0"
+description = "Lossy overlay bridge utilities and test tooling"
+requires-python = ">=3.9"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+ObstacleBridge = "obstacle_bridge.bridge:main"
+ObstacleBridge-overlay-tty = "obstacle_bridge.tools.overlay_tty:main"
+ObstacleBridge-extract-udp-debug = "obstacle_bridge.tools.extract_udp_debug:main"
