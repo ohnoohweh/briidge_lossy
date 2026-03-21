@@ -3,6 +3,7 @@ import argparse
 import asyncio
 import socket
 import sys
+import tempfile
 import types
 import unittest
 from unittest import mock
@@ -113,6 +114,46 @@ class _SockoptWs(_FakeWs):
     def __init__(self, sock):
         super().__init__()
         self.transport = _FakeTransport(sock)
+
+
+class _ProbeTransport:
+    def __init__(self):
+        self._sockname = ("127.0.0.1", 8080)
+        self._peername = ("127.0.0.1", 40000)
+
+    def get_write_buffer_size(self):
+        return 0
+
+    def is_closing(self):
+        return False
+
+    def get_extra_info(self, name):
+        if name == "sockname":
+            return self._sockname
+        if name == "peername":
+            return self._peername
+        return None
+
+
+class _ProbeConnection:
+    def __init__(self):
+        self.transport = _ProbeTransport()
+
+
+class _FakeLoop:
+    def __init__(self):
+        self.calls = []
+
+    def call_soon(self, cb, *args):
+        self.calls.append(("soon", 0.0, cb, args))
+
+    def call_later(self, delay, cb, *args):
+        self.calls.append(("later", delay, cb, args))
+
+
+class _FakeResponse:
+    def __init__(self, *args):
+        self.args = args
 
 class WebSocketPayloadModeTests(unittest.TestCase):
     def test_binary_mode_keeps_bytes_on_send(self):
@@ -341,6 +382,59 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
         preflight.assert_awaited_once()
         on_accept.assert_awaited_once_with(fake_ws)
         self.assertEqual(connect.await_args.kwargs["compression"], None)
+
+
+class WebSocketStaticHttpDebugTests(unittest.IsolatedAsyncioTestCase):
+    async def test_start_server_schedules_static_http_probes_for_modern_requests(self):
+        args = _args("binary")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            icon_path = f"{tmpdir}/icon.png"
+            with open(icon_path, "wb") as fh:
+                fh.write(b"\x89PNG" + b"x" * 32)
+
+            args.ws_static_dir = tmpdir
+            session = WebSocketSession(args)
+            session._loop = _FakeLoop()
+            session._run_flag = True
+            session._log = mock.Mock()
+
+            fake_server = types.SimpleNamespace(
+                sockets=[types.SimpleNamespace(getsockname=lambda: ("127.0.0.1", 54321))]
+            )
+            serve = mock.AsyncMock(return_value=fake_server)
+            fake_websockets = types.SimpleNamespace(serve=serve)
+            fake_http11 = types.SimpleNamespace(Response=_FakeResponse)
+            fake_ds = types.SimpleNamespace(Headers=lambda items: items)
+
+            with mock.patch.dict(
+                sys.modules,
+                {
+                    "websockets": fake_websockets,
+                    "websockets.http11": fake_http11,
+                    "websockets.datastructures": fake_ds,
+                },
+            ):
+                await session._start_server()
+
+            process_request = serve.await_args.kwargs["process_request"]
+            request = types.SimpleNamespace(method="GET", path="/icon.png", headers={})
+            response = process_request(_ProbeConnection(), request)
+
+            self.assertIsInstance(response, _FakeResponse)
+            self.assertEqual(
+                [kind for kind, *_ in session._loop.calls],
+                ["soon", "later", "later", "later"],
+            )
+            self.assertEqual(
+                [delay for _, delay, _, _ in session._loop.calls],
+                [0.0, 0.05, 0.25, 1.0],
+            )
+            debug_messages = [
+                call.args[0]
+                for call in session._log.debug.call_args_list
+                if call.args
+            ]
+            self.assertTrue(any("[WS/HTTP]" in msg and "static-hit" in msg for msg in debug_messages))
 
 
 if __name__ == "__main__":
