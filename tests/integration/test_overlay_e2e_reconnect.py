@@ -16,8 +16,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-ROOT = Path(__file__).resolve().parent
-BRIDGE = ROOT / 'udp_bidirectional_main.py'
+ROOT = Path(__file__).resolve().parents[2]
+BRIDGE = ROOT / 'ObstacleBridge.py'
 PAYLOAD_IN = b'\x01\x30'
 PAYLOAD_OUT = b'\x02\x30'
 
@@ -993,7 +993,7 @@ def main() -> int:
     log_dir.mkdir(parents=True, exist_ok=True)
 
     log.info(f'Using log dir: {log_dir}')
-    log.info(f'udp_bidirectional_main.py: {BRIDGE}')
+    log.info(f'ObstacleBridge.py: {BRIDGE}')
     log.info('Bounce-back server: built into this harness')
     log.info(f'Mode: {"reconnect" if args.reconnect else "smoke"}')
 

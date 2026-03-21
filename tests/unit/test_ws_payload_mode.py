@@ -8,7 +8,7 @@ import types
 import unittest
 from unittest import mock
 
-from udp_bidirectional_main import WebSocketSession
+from obstacle_bridge.bridge import WebSocketSession
 
 
 def _args(ws_payload_mode: str) -> argparse.Namespace:
@@ -307,7 +307,7 @@ class WebSocketHttpPreflightTests(unittest.IsolatedAsyncioTestCase):
         )
         writer = _FakeWriter()
 
-        with mock.patch("udp_bidirectional_main.asyncio.open_connection", mock.AsyncMock(return_value=(reader, writer))) as open_conn:
+        with mock.patch("obstacle_bridge.bridge.asyncio.open_connection", mock.AsyncMock(return_value=(reader, writer))) as open_conn:
             await session._load_default_http_page(host="127.0.0.1", port=54321, host_header="example.test")
 
         open_conn.assert_awaited_once_with(host="127.0.0.1", port=54321)
@@ -322,7 +322,7 @@ class WebSocketHttpPreflightTests(unittest.IsolatedAsyncioTestCase):
         reader = _FakeReader([b"HTTP/1.1 404 Not Found\r\n", b"\r\n"])
         writer = _FakeWriter()
 
-        with mock.patch("udp_bidirectional_main.asyncio.open_connection", mock.AsyncMock(return_value=(reader, writer))):
+        with mock.patch("obstacle_bridge.bridge.asyncio.open_connection", mock.AsyncMock(return_value=(reader, writer))):
             with self.assertRaisesRegex(RuntimeError, "unexpected HTTP status 404"):
                 await session._load_default_http_page(host="127.0.0.1", port=54321)
 
