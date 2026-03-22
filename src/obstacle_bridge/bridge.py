@@ -3737,7 +3737,7 @@ class WebSocketSession(ISession):
       KIND=0x02 -> PONG (payload: Q echo_tx_ns)
 
     Features:
-      - Client mode (proactive connect) and Server mode (accept exactly one overlay peer)
+      - Client mode (proactive connect) and Server mode (accept multiple overlay peers)
       - Auto-reconnect (client) with backoff
       - RTT estimation via StreamRTT/StreamRTTRuntime (drives overlay 'connected')
       - Per-connection counters + running CRC32 over wire bytes (KIND+payload)
@@ -3747,6 +3747,7 @@ class WebSocketSession(ISession):
     _K_APP  = 0x00
     _K_PING = 0x01
     _K_PONG = 0x02
+    _MUX_HDR = struct.Struct(">HBHBH")
     _PAYLOAD_CODECS = {
         WebSocketBinaryPayloadCodec.mode: WebSocketBinaryPayloadCodec,
         WebSocketBase64PayloadCodec.mode: WebSocketBase64PayloadCodec,
@@ -3863,6 +3864,13 @@ class WebSocketSession(ISession):
         self._reconnect_task: Optional[asyncio.Task] = None
         self._disconnect_task: Optional[asyncio.Task] = None
         self._tx_queue: "asyncio.Queue[tuple[bytes, Optional[Callable[[], None]]]]" = asyncio.Queue()
+        self._server_connected_evt = asyncio.Event()
+        self._server_peers: Dict[int, dict] = {}
+        self._server_peer_by_ws_id: Dict[int, int] = {}
+        self._server_next_peer_id: int = 1
+        self._server_chan_to_peer: Dict[int, Tuple[int, int]] = {}
+        self._server_peer_chan_to_mux: Dict[Tuple[int, int], int] = {}
+        self._server_next_mux_chan: int = 1
 
         # Early buffer (APP/CTRL frames preserved as individual WS messages)
         self._early_buf: Deque[bytes] = deque()
@@ -3903,7 +3911,8 @@ class WebSocketSession(ISession):
         self._run_flag = True
 
         # Attach RTT driver (send function gets attached when WS is up)
-        self._rtt_rt.attach(send_ping_fn=None, on_state_change=self._on_rtt_state_change)
+        if self._peer_tuple:
+            self._rtt_rt.attach(send_ping_fn=None, on_state_change=self._on_rtt_state_change)
 
         if self._peer_tuple:
             # CLIENT
@@ -3924,7 +3933,8 @@ class WebSocketSession(ISession):
         self._log.info(f"[WS-SESSION] ({self._probe_id}) stopping")
         self._run_flag = False
 
-        self._rtt_rt.detach()
+        if self._peer_tuple:
+            self._rtt_rt.detach()
 
         for t in (self._connecting_task, self._reconnect_task):
             if t: t.cancel()
@@ -3950,6 +3960,10 @@ class WebSocketSession(ISession):
             pass
         self._ws = None
 
+        for peer_id in list(self._server_peers.keys()):
+            await self._close_server_peer(peer_id)
+        self._server_connected_evt.clear()
+
         try:
             if self._server:
                 self._server.close()             # type: ignore
@@ -3961,9 +3975,19 @@ class WebSocketSession(ISession):
         self._set_overlay_connected(False)
 
     async def wait_connected(self, timeout: Optional[float] = None) -> bool:
+        if not self._peer_tuple:
+            if self._server_peers:
+                return True
+            try:
+                await asyncio.wait_for(self._server_connected_evt.wait(), timeout)
+                return True
+            except asyncio.TimeoutError:
+                return False
         return await self._rtt_rt.wait_connected(timeout)
 
     def is_connected(self) -> bool:
+        if not self._peer_tuple:
+            return bool(self._server_peers)
         return self._rtt.is_connected()
 
     def get_metrics(self) -> SessionMetrics:
@@ -3983,6 +4007,22 @@ class WebSocketSession(ISession):
             return 0
         wire = bytes([self._K_APP]) + payload
 
+        if not self._peer_tuple:
+            if not self._server_peers and self._ws is not None:
+                self._schedule_send(wire, on_sent=lambda: self._notify_peer_tx(len(wire)))
+                return len(payload)
+            routed = self._server_rewrite_outbound_app(payload)
+            if routed is None:
+                self._log.debug(f"[WS/TX] ({self._probe_id}) drop unroutable server APP len={len(payload)}")
+                return 0
+            peer_id, payload = routed
+            ctx = self._server_peers.get(peer_id)
+            if not ctx:
+                self._log.debug(f"[WS/TX] ({self._probe_id}) drop APP for missing peer_id={peer_id}")
+                return 0
+            self._schedule_server_send(ctx, bytes([self._K_APP]) + payload, on_sent=lambda: self._notify_peer_tx(len(payload) + 1))
+            return len(payload)
+
         if self._ws is None:
             self._buffer_early(wire)
             self._log.debug(f"[WS/TX] ({self._probe_id}) early-buffer APP bytes={len(wire)} buf={len(self._early_buf)}")
@@ -3992,6 +4032,79 @@ class WebSocketSession(ISession):
 
         self._schedule_send(wire, on_sent=lambda: self._notify_peer_tx(len(wire)))
         return len(payload)
+
+    def _alloc_server_peer_id(self) -> int:
+        peer_id = self._server_next_peer_id
+        while peer_id in self._server_peers:
+            peer_id += 1
+            if peer_id > 0xFFFF:
+                peer_id = 1
+        self._server_next_peer_id = 1 if peer_id >= 0xFFFF else (peer_id + 1)
+        return peer_id
+
+    def _alloc_server_mux_chan(self) -> int:
+        chan = self._server_next_mux_chan
+        while chan in self._server_chan_to_peer:
+            chan += 1
+            if chan > 0xFFFF:
+                chan = 1
+        self._server_next_mux_chan = 1 if chan >= 0xFFFF else (chan + 1)
+        return chan
+
+    def _rewrite_mux_chan_id(self, payload: bytes, new_chan: int) -> bytes:
+        if len(payload) < self._MUX_HDR.size:
+            return payload
+        _, proto, counter, mtype, dlen = self._MUX_HDR.unpack(payload[:self._MUX_HDR.size])
+        if len(payload) < self._MUX_HDR.size + dlen:
+            return payload
+        return self._MUX_HDR.pack(new_chan, proto, counter, mtype, dlen) + payload[self._MUX_HDR.size:self._MUX_HDR.size + dlen]
+
+    def _server_rewrite_inbound_app(self, peer_id: int, payload: bytes) -> bytes:
+        if len(payload) < self._MUX_HDR.size:
+            return payload
+        try:
+            peer_chan, _proto, _counter, _mtype, dlen = self._MUX_HDR.unpack(payload[:self._MUX_HDR.size])
+        except Exception:
+            return payload
+        if len(payload) < self._MUX_HDR.size + dlen:
+            return payload
+        key = (peer_id, peer_chan)
+        mux_chan = self._server_peer_chan_to_mux.get(key)
+        if mux_chan is None:
+            mux_chan = self._alloc_server_mux_chan()
+            self._server_peer_chan_to_mux[key] = mux_chan
+            self._server_chan_to_peer[mux_chan] = key
+        return self._rewrite_mux_chan_id(payload, mux_chan)
+
+    def _server_rewrite_outbound_app(self, payload: bytes) -> Optional[Tuple[int, bytes]]:
+        if len(payload) < self._MUX_HDR.size:
+            return None
+        try:
+            mux_chan, _proto, _counter, _mtype, dlen = self._MUX_HDR.unpack(payload[:self._MUX_HDR.size])
+        except Exception:
+            return None
+        if len(payload) < self._MUX_HDR.size + dlen:
+            return None
+        mapped = self._server_chan_to_peer.get(mux_chan)
+        if mapped is None:
+            return None
+        peer_id, peer_chan = mapped
+        return peer_id, self._rewrite_mux_chan_id(payload, peer_chan)
+
+    def _server_unregister_peer_channels(self, peer_id: int) -> None:
+        for key, mux_chan in list(self._server_peer_chan_to_mux.items()):
+            if key[0] != peer_id:
+                continue
+            self._server_peer_chan_to_mux.pop(key, None)
+            self._server_chan_to_peer.pop(mux_chan, None)
+
+    def _update_server_overlay_connected(self) -> None:
+        connected = bool(self._server_peers)
+        if connected:
+            self._server_connected_evt.set()
+        else:
+            self._server_connected_evt.clear()
+        self._set_overlay_connected(connected)
 
     # ---- Internals ------------------------------------------------------------
 
@@ -4430,7 +4543,6 @@ class WebSocketSession(ISession):
             path = getattr(ws, "path", getattr(getattr(ws, "request", None), "path", self._ws_path))
             self._log.debug(f"[WS-SESSION] ({self._probe_id}) HTTP path={path}")
 
-            # Only one overlay peer at a time: replace previous if any
             await self._on_accept(ws)
             # IMPORTANT: keep handler alive; otherwise server will close with 1000
             try:
@@ -4487,7 +4599,39 @@ class WebSocketSession(ISession):
                 delay = min(delay * 2.0, 10.0)
         self._reconnect_task = self._loop.create_task(_reconnect())  # type: ignore
 
-    async def _on_accept(self, ws) -> None:        
+    async def _on_accept(self, ws) -> None:
+        if not self._peer_tuple:
+            peer_id = self._alloc_server_peer_id()
+            ctx = {
+                "peer_id": peer_id,
+                "ws": ws,
+                "tx_queue": asyncio.Queue(),
+                "tx_task": None,
+                "rx_task": None,
+            }
+            self._server_peers[peer_id] = ctx
+            self._server_peer_by_ws_id[id(ws)] = peer_id
+            self._configure_ws_socket(ws)
+            peer = getattr(ws, "remote_address", None)
+            sockname = getattr(ws, "local_address", None)
+            self._log.info(f"[WS-SESSION] ({self._probe_id}) accept: peer_id={peer_id} local={sockname} peer={peer}")
+            try:
+                if isinstance(peer, tuple) and len(peer) >= 2:
+                    self._peer_host, self._peer_port = peer[0], int(peer[1])
+            except Exception:
+                pass
+            self._reset_counters()
+            self._ensure_server_tx_task(ctx)
+            ctx["rx_task"] = self._loop.create_task(self._rx_pump(ws=ws, peer_id=peer_id))  # type: ignore
+            self._ws = ws
+            self._rx_task = ctx["rx_task"]
+            self._tx_task = ctx.get("tx_task")
+            self._update_server_overlay_connected()
+            if callable(self._on_peer_set_cb):
+                try: self._on_peer_set_cb(self._peer_host, self._peer_port)
+                except Exception: pass
+            return
+
         try:
             if self._ws:
                 await self._ws.close()
@@ -4519,6 +4663,28 @@ class WebSocketSession(ISession):
         if callable(self._on_peer_set_cb):
             try: self._on_peer_set_cb(self._peer_host, self._peer_port)
             except Exception: pass
+
+    async def _close_server_peer(self, peer_id: int) -> None:
+        ctx = self._server_peers.pop(peer_id, None)
+        if not ctx:
+            return
+        self._server_peer_by_ws_id.pop(id(ctx.get("ws")), None)
+        self._server_unregister_peer_channels(peer_id)
+        tx_task = ctx.get("tx_task")
+        if tx_task:
+            tx_task.cancel()
+        rx_task = ctx.get("rx_task")
+        if rx_task and rx_task is not asyncio.current_task():
+            rx_task.cancel()
+        ws = ctx.get("ws")
+        if self._ws is ws:
+            self._ws = None
+        if ws is not None:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+        self._update_server_overlay_connected()
 
     async def _connect_to(self, host: str, port: int) -> None:
         if not self._run_flag:
@@ -4687,11 +4853,56 @@ class WebSocketSession(ISession):
 
         self._tx_task = self._loop.create_task(_tx_loop())  # type: ignore
 
+    def _ensure_server_tx_task(self, ctx: dict) -> None:
+        if ctx.get("tx_task") is not None or not ctx.get("ws"):
+            return
+
+        async def _tx_loop():
+            q = ctx["tx_queue"]
+            try:
+                while True:
+                    wire, on_sent = await q.get()
+                    ws = ctx.get("ws")
+                    try:
+                        if ws is None:
+                            continue
+                        send_coro = ws.send(self._ws_payload_codec.encode(wire))
+                        if self._ws_send_timeout_s > 0:
+                            await asyncio.wait_for(send_coro, timeout=self._ws_send_timeout_s)
+                        else:
+                            await send_coro
+                        self._bump_tx(wire)
+                        if callable(on_sent):
+                            try:
+                                on_sent()
+                            except Exception:
+                                pass
+                    except asyncio.TimeoutError:
+                        self._log.warning(
+                            f"[WS/TX] ({self._probe_id}) server peer_id={ctx['peer_id']} send timeout after {self._ws_send_timeout_s:.3f}s; closing peer"
+                        )
+                        await self._close_server_peer(ctx["peer_id"])
+                        return
+                    except Exception as e:
+                        self._log.info(f"[WS/TX] ({self._probe_id}) server peer_id={ctx['peer_id']} send error: {e!r}")
+                    finally:
+                        q.task_done()
+            except asyncio.CancelledError:
+                return
+
+        ctx["tx_task"] = self._loop.create_task(_tx_loop())  # type: ignore
+
     def _schedule_send(self, wire: bytes, on_sent: Optional[Callable[[], None]] = None) -> None:
         if not self._ws:
             return
         self._ensure_tx_task()
         self._tx_queue.put_nowait((bytes(wire), on_sent))
+
+    def _schedule_server_send(self, ctx: dict, wire: bytes, on_sent: Optional[Callable[[], None]] = None) -> None:
+        if not ctx.get("ws"):
+            return
+        self._ensure_server_tx_task(ctx)
+        ctx["tx_queue"].put_nowait((bytes(wire), on_sent))
 
     def _configure_ws_socket(self, ws) -> None:
         try:
@@ -4866,6 +5077,8 @@ class WebSocketSession(ISession):
         """
         Called by StreamRTTRuntime. Sends a PING control frame if WS exists.
         """
+        if not self._peer_tuple:
+            return
         if not self._ws:
             return
 
@@ -4894,12 +5107,23 @@ class WebSocketSession(ISession):
         self._schedule_send(body, on_sent=lambda: self._notify_peer_tx(len(body)))
         self._log.debug(f"[WS/TX] ({self._probe_id}) PONG queued")
 
+    def _send_pong_frame_server(self, ctx: dict, echo_tx_ns: int) -> None:
+        body = bytes([self._K_PONG]) + self._rtt.build_pong_bytes(echo_tx_ns)
+        self._log.debug(f"[WS/GUARD] ({self._probe_id}) PONG tx peer_id={ctx['peer_id']}: echo_tx_ns={echo_tx_ns}")
+        self._schedule_server_send(ctx, body, on_sent=lambda: self._notify_peer_tx(len(body)))
+
     # --- RX pump ---------------------------------------------------------------
-    async def _rx_pump(self) -> None:
-        self._log.debug(f"[WS/RX] ({self._probe_id}) pump start")
+    async def _rx_pump(self, ws=None, peer_id: Optional[int] = None) -> None:
+        client_mode = self._peer_tuple is not None
+        active_ws = self._ws if ws is None else ws
+        ctx = self._server_peers.get(peer_id) if (not client_mode and peer_id is not None) else None
+        suffix = "" if peer_id is None else f" peer_id={peer_id}"
+        self._log.debug(f"[WS/RX] ({self._probe_id}) pump start{suffix}")
         try:
             while True:
-                msg = await self._ws.recv()  # type: ignore
+                if active_ws is None:
+                    return
+                msg = await active_ws.recv()  # type: ignore
                 b = self._decode_ws_message(msg)
                 if b is None:
                     continue
@@ -4915,6 +5139,8 @@ class WebSocketSession(ISession):
                 payload = b[1:]
 
                 if kind == self._K_APP:
+                    if not client_mode and peer_id is not None:
+                        payload = self._server_rewrite_inbound_app(peer_id, payload)
                     if self._on_app_from_peer_bytes:
                         try: self._on_app_from_peer_bytes(len(payload))
                         except Exception: pass
@@ -4930,16 +5156,19 @@ class WebSocketSession(ISession):
                         # Guard log: we received PING (both original tx_ns and echo_ns)
                         self._log.debug(f"[WS/GUARD] ({self._probe_id}) PING rx: tx_ns={tx_ns} echo_ns={echo_ns}")
 
-                        self._rtt.on_ping_received(tx_ns)
-                        if echo_ns:
-                            # Courtesy update
-                            self._rtt.on_pong_received(echo_ns)
-                        self._send_pong_frame(tx_ns)
+                        if client_mode:
+                            self._rtt.on_ping_received(tx_ns)
+                            if echo_ns:
+                                # Courtesy update
+                                self._rtt.on_pong_received(echo_ns)
+                            self._send_pong_frame(tx_ns)
+                        elif ctx is not None:
+                            self._send_pong_frame_server(ctx, tx_ns)
                     else:
                         self._log.debug(f"[WS/RX] ({self._probe_id}) malformed PING len={len(payload)}")
 
                 elif kind == self._K_PONG:
-                    if len(payload) >= 8:
+                    if client_mode and len(payload) >= 8:
                         (echo_tx_ns,) = struct.unpack(">Q", payload[:8])
 
                         # Take the sample before state flip for better logging
@@ -4956,7 +5185,8 @@ class WebSocketSession(ISession):
                         if now != was:
                             self._set_overlay_connected(now)
                     else:
-                        self._log.debug(f"[WS/RX] ({self._probe_id}) malformed PONG len={len(payload)}")
+                        if client_mode:
+                            self._log.debug(f"[WS/RX] ({self._probe_id}) malformed PONG len={len(payload)}")
 
                 else:
                     self._log.debug(f"[WS/RX] ({self._probe_id}) unknown KIND=0x{kind:02x} n={len(b)}")
@@ -4965,18 +5195,21 @@ class WebSocketSession(ISession):
             self._log.debug(f"[WS/RX] ({self._probe_id}) cancelled")
             return
         except Exception as e:
-            self._log.info(f"[WS/RX] ({self._probe_id}) pump error/close: {e!r}")
+            self._log.info(f"[WS/RX] ({self._probe_id}) pump error/close{suffix}: {e!r}")
         finally:
-            try:
-                if self._ws:
-                    await self._ws.close()   # type: ignore
-            except Exception:
-                pass
-            self._ws = None
-            self._schedule_overlay_disconnect()
-            if self._peer_tuple:
-                self._start_reconnect_loop()
-            self._log.debug(f"[WS/RX] ({self._probe_id}) pump stop")
+            if client_mode:
+                try:
+                    if self._ws:
+                        await self._ws.close()   # type: ignore
+                except Exception:
+                    pass
+                self._ws = None
+                self._schedule_overlay_disconnect()
+                if self._peer_tuple:
+                    self._start_reconnect_loop()
+            elif peer_id is not None:
+                await self._close_server_peer(peer_id)
+            self._log.debug(f"[WS/RX] ({self._probe_id}) pump stop{suffix}")
 
     # --- overlay state (RTT-driven) -------------------------------------------
     def _on_rtt_state_change(self, connected: bool) -> None:
@@ -4986,7 +5219,8 @@ class WebSocketSession(ISession):
         if self._overlay_connected == v:
             return
         self._overlay_connected = v
-        self._log.info(f"[WS-SESSION] ({self._probe_id}) overlay -> {'CONNECTED' if v else 'DISCONNECTED'} (RTT)")
+        mode = "RTT" if self._peer_tuple else "peer-count"
+        self._log.info(f"[WS-SESSION] ({self._probe_id}) overlay -> {'CONNECTED' if v else 'DISCONNECTED'} ({mode})")
         if v and callable(self._on_peer_set_cb):
             try: self._on_peer_set_cb(self._peer_host, self._peer_port)
             except Exception: pass
@@ -5198,8 +5432,9 @@ class ChannelMux:
         if not _has('--own-servers'):
             p.add_argument(
                 '--own-servers', nargs='*', default=None,
-                help=("Space-separated service specs: "
+                help=("Space-separated service specs (client mode only): "
                       "'proto,listen_port,listen_bind,proto,host,port' (quoted). "
+                      "Listener instances ignore --own-servers because multiple overlay peers make the target ambiguous. "
                       "Example: \"tcp,80,0.0.0.0,tcp,127.0.0.1,88 udp,16666,::,udp,127.0.0.1,16666\"")
             )
         # Keep backpressure knobs (apply to local TCP writers we own)
@@ -5220,6 +5455,14 @@ class ChannelMux:
         mux = ChannelMux(session, loop, on_local_rx_bytes, on_local_tx_bytes)
         # Parse catalog
         services = ChannelMux._parse_own_servers(getattr(args, 'own_servers', None))
+        listener_mode = not bool(getattr(args, 'peer', None))
+        if listener_mode and services:
+            mux.log.info(
+                "[MUX] listener mode detected: ignoring %d --own-servers entries; "
+                "the listening peer must not expose ambiguous local services when multiple overlay peers connect",
+                len(services),
+            )
+            services = []
         #if not services:
          #   raise ValueError("No services defined. Provide --own-servers \"proto,port,bind,proto,host,port ...\"")
         for s in services:
@@ -6978,6 +7221,33 @@ class StatsBoard:
         )
 
 # ============================================================================
+class RunnerMuxAggregate:
+    def __init__(self, muxes: List["ChannelMux"]):
+        self._muxes = list(muxes)
+
+    def udp_open_count(self) -> int:
+        return sum(m.udp_open_count() for m in self._muxes)
+
+    def tcp_open_count(self) -> int:
+        return sum(m.tcp_open_count() for m in self._muxes)
+
+    def snapshot_connections(self) -> dict:
+        udp_rows: list[dict] = []
+        tcp_rows: list[dict] = []
+        for mux in self._muxes:
+            snap = mux.snapshot_connections()
+            udp_rows.extend(snap.get("udp", []))
+            tcp_rows.extend(snap.get("tcp", []))
+        return {
+            "udp": udp_rows,
+            "tcp": tcp_rows,
+            "counts": {
+                "udp": len(udp_rows),
+                "tcp": len(tcp_rows),
+            },
+        }
+
+
 class Runner:
     """
     Thin orchestrator: wires ISession + ChannelMux + StatsBoard and manages lifecycle.
@@ -6990,6 +7260,8 @@ class Runner:
         self._stop = asyncio.Event()
         self._session_obj: Optional[ISession] = None
         self.mux: Optional["ChannelMux"] = None
+        self._sessions: List[ISession] = []
+        self._muxes: List["ChannelMux"] = []
         self.stats = StatsBoard(args )
         self.admin_web = None
         self._restart_requested = asyncio.Event()
@@ -7003,29 +7275,34 @@ class Runner:
         self.log.debug("[SERVER] Runner start on session id=%x", id(self))
 
         loop = asyncio.get_running_loop()
-        # 1) Build overlay session (myudp/tcp/quic/ws) and connect StatsBoard events
-        session = Runner.build_session_from_overlay(self.args)
-        session.set_on_state_change(self._on_state_change)
-        session.set_on_peer_rx(self.stats.on_peer_rx_bytes)
-        session.set_on_peer_tx(self.stats.on_peer_tx_bytes)
-        session.set_on_peer_set(self.stats.on_peer_set)
-        # Count peer->local bytes when app payload arrives from overlay
-        session.set_on_app_from_peer_bytes(self.stats.on_app_tx_bytes)
-        self._session_obj = session
-        self.stats.bind_session(self._session_obj)
-        
-        # 2) Create ChannelMux with local metering (local->peer)
-        self.mux = ChannelMux.from_args(
-            self._session_obj, 
-            loop, 
-            self.args,
-            on_local_rx_bytes=self.stats.on_app_rx_bytes,
-            on_local_tx_bytes=self.stats.on_app_tx_bytes
-        )
+        transport_sessions = Runner.build_sessions_from_overlay(self.args)
+        self._sessions = []
+        self._muxes = []
+        for transport_name, session in transport_sessions:
+            session.set_on_state_change(lambda connected, transport_name=transport_name, session=session: self._on_state_change(transport_name, session, connected))
+            session.set_on_peer_rx(self.stats.on_peer_rx_bytes)
+            session.set_on_peer_tx(self.stats.on_peer_tx_bytes)
+            session.set_on_peer_set(self.stats.on_peer_set)
+            session.set_on_app_from_peer_bytes(self.stats.on_app_tx_bytes)
 
-        # 3) Start session first, then mux
-        await self._session_obj.start()
-        await self.mux.start()
+            mux = ChannelMux.from_args(
+                session,
+                loop,
+                self.args,
+                on_local_rx_bytes=self.stats.on_app_rx_bytes,
+                on_local_tx_bytes=self.stats.on_app_tx_bytes
+            )
+            self._sessions.append(session)
+            self._muxes.append(mux)
+            await session.start()
+            await mux.start()
+
+        self._session_obj = self._sessions[0] if self._sessions else None
+        self.stats.bind_session(self._session_obj)
+        if self._muxes:
+            self.mux = RunnerMuxAggregate(self._muxes)
+        else:
+            self.mux = None
 
         
         # 4) Provide references to StatsBoard and start it
@@ -7115,42 +7392,49 @@ class Runner:
 
         self.log.debug("[RUNNER] stop: entering mux.stop")
         try:
-            if self.mux:
-                await self.mux.stop()
+            for mux in reversed(self._muxes):
+                await mux.stop()
         except Exception:
             pass
 
         self.log.debug("[RUNNER] stop: entering _session_obj")
         try:
-            if self._session_obj:
-                await self._session_obj.stop()
+            for session in reversed(self._sessions):
+                await session.stop()
         except Exception:
             pass
         self.log.debug("[RUNNER] stop leaving")
 
 
     # ---- overlay state propagation (unchanged behavior) -----------------------
-    def _on_state_change(self, connected: bool):
-        self.log.debug(f"[SERVER] _on_state_change {connected}")
+    def _on_state_change(self, transport_name: str, session: ISession, connected: bool):
+        self.log.debug(f"[SERVER] _on_state_change transport={transport_name} connected={connected}")
 
         now_mono = time.monotonic()
-        if connected:
+        aggregate_connected = any(s.is_connected() for s in self._sessions) if self._sessions else connected
+        if aggregate_connected:
             self._last_connected_monotonic = now_mono
             self._last_disconnected_monotonic = None
         else:
             if self._last_disconnected_monotonic is None:
                 self._last_disconnected_monotonic = now_mono        
         # Update board
-        self.stats.on_state_change(connected)
+        self.stats.on_state_change(aggregate_connected)
         # Inform mux
-        if self.mux:
+        mux = None
+        try:
+            idx = self._sessions.index(session)
+            mux = self._muxes[idx]
+        except Exception:
+            mux = None
+        if mux:
             try:
-                asyncio.get_running_loop().create_task(self.mux.on_overlay_state(connected))
+                asyncio.get_running_loop().create_task(mux.on_overlay_state(connected))
             except RuntimeError:
                 pass
         # Keep old behavior: reset sender on disconnect
         s = self.stats.session
-        if not connected and s:
+        if not aggregate_connected and s:
             try:
                 s.reset_sender()
             except Exception:
@@ -7237,11 +7521,20 @@ class Runner:
         if not _has('--overlay-transport'):
             p.add_argument(
                 '--overlay-transport',
-                choices=['myudp', 'tcp', 'quic', 'ws'],
                 default='myudp',
                 help="Overlay transport between peers: "
-                     "myudp (current reliable UDP), tcp (single stream), quic (future), ws (future)."
+                     "comma-separated list from myudp,tcp,quic,ws. "
+                     "Multiple transports are supported simultaneously for listening instances."
             )
+        for proto in ("myudp", "tcp", "quic", "ws"):
+            opt = f'--overlay-port-{proto}'
+            if not _has(opt):
+                p.add_argument(
+                    opt,
+                    type=int,
+                    default=None,
+                    help=f'Optional listen port override for overlay transport {proto}. Defaults to --port443 or a deterministic offset when multiple transports are active.'
+                )
         if not _has('--client-restart-if-disconnected'):
             p.add_argument(
                 '--client-restart-if-disconnected',
@@ -7249,21 +7542,55 @@ class Runner:
                 default=0.0,
                 help='If configured as a peer client (--peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables.'
             )            
-    # ---------- NEW: Runner-scoped factory ----------
     @staticmethod
-    def build_session_from_overlay(args: argparse.Namespace) -> ISession:
+    def _parse_overlay_transports(args: argparse.Namespace) -> List[str]:
+        raw = str(getattr(args, "overlay_transport", "myudp") or "myudp")
+        parts = [p.strip().lower() for p in raw.split(",") if p.strip()]
+        if not parts:
+            parts = ["myudp"]
+        allowed = {"myudp", "tcp", "quic", "ws"}
+        bad = [p for p in parts if p not in allowed]
+        if bad:
+            raise ValueError(f"Unsupported overlay transport(s): {', '.join(sorted(set(bad)))}")
+        seen: List[str] = []
+        for part in parts:
+            if part not in seen:
+                seen.append(part)
+        if len(seen) > 1 and getattr(args, "peer", None):
+            raise ValueError("Multiple --overlay-transport values are currently supported only for listening instances without --peer.")
+        return seen
+
+    @staticmethod
+    def _overlay_port_for(args: argparse.Namespace, transport: str, multi_count: int) -> int:
+        explicit = getattr(args, f"overlay_port_{transport}", None)
+        if explicit:
+            return int(explicit)
+        base = int(getattr(args, "port443", 443))
+        if multi_count <= 1:
+            return base
+        offsets = {"myudp": 0, "tcp": 1, "quic": 2, "ws": 3}
+        return base + offsets[transport]
+
+    @staticmethod
+    def build_sessions_from_overlay(args: argparse.Namespace) -> List[Tuple[str, ISession]]:
         """
-        Return the ISession that implements the chosen overlay transport.
+        Return the ISession(s) that implement the chosen overlay transport(s).
         """
-        choice = getattr(args, "overlay_transport", "myudp")
-        if choice == "tcp":
-            return TcpStreamSession.from_args(args)
-        if choice == "quic":
-            return QuicSession.from_args(args)
-        if choice == "ws":
-            return WebSocketSession.from_args(args)
-        # default: your existing reliable UDP overlay
-        return UdpSession.from_args(args)
+        out: List[Tuple[str, ISession]] = []
+        choices = Runner._parse_overlay_transports(args)
+        for choice in choices:
+            session_args = argparse.Namespace(**vars(args))
+            session_args.overlay_transport = choice
+            session_args.port443 = Runner._overlay_port_for(args, choice, len(choices))
+            if choice == "tcp":
+                out.append((choice, TcpStreamSession.from_args(session_args)))
+            elif choice == "quic":
+                out.append((choice, QuicSession.from_args(session_args)))
+            elif choice == "ws":
+                out.append((choice, WebSocketSession.from_args(session_args)))
+            else:
+                out.append((choice, UdpSession.from_args(session_args)))
+        return out
 
 # ------------ Admin Webinterface ------------
 
