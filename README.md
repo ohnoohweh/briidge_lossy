@@ -9,7 +9,9 @@ ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for ba
 ## Entry points
 - `python -m obstacle_bridge --help`
 - `ObstacleBridge.py`
-- Compatibility wrappers: `udp_bidirectional_main.py`, `udp_bidirectional_transfer.py`, `overlay_tty.py`, `extract_udp_debug.py`, `run_udp_bidir_tests.py`.
+- `overlay_tty.py`
+- `extract_udp_debug.py`
+- `python scripts/run_udp_bidir_tests.py --help`
 ## Quick-start examples
 ### 1) Single overlay transport listener
 ```bash

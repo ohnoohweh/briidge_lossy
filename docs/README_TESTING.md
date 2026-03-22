@@ -14,5 +14,5 @@
 
 **Run**
 ```bash
-python run_udp_bidir_tests.py
+python scripts/run_udp_bidir_tests.py
 ```

@@ -19,9 +19,9 @@ docs/
   README_TESTING.md
 ```
 
-Compatibility wrapper scripts remain at the repository root, so existing commands such as
-`python ObstacleBridge.py` still work while the real implementation now lives under
-`src/obstacle_bridge/`.
+The supported entry points now use the packaged implementation directly, with
+`ObstacleBridge.py` retained as the repository-root launcher for the bridge
+itself while tooling is invoked from its maintained location under `scripts/`.
 
 I like to change the way how ChannelMux is controlled in terms of the UDP/TCP servers and clients.
 

@@ -9,7 +9,7 @@
 --   * CONTROL payload: last(2) | highest(2) | num_missed(2) | missed[num_missed]*u16
 --
 -- This file matches the Python BaseFrame implementation and the Protocol header
--- defined in udp_bidirectional_transfer.py (BaseFrame). Offsets below are
+-- defined in obstacle_bridge.transfer (BaseFrame). Offsets below are
 -- absolute from the start of the UDP payload.
 
 local p = Proto("udp_biditransfer", "UDP Bidirectional Transfer Protocol (BaseFrame)")

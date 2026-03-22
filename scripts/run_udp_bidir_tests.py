@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Virtual test harness for udp_bidirectional_transfer (v1.4 on-wire) with
+Virtual test harness for obstacle_bridge.transfer (v1.4 on-wire) with
 connectivity handshake and loss injection.
 
 Changes for "idle DATA has counter=0":
@@ -9,16 +9,24 @@ Changes for "idle DATA has counter=0":
 - No other test logic changes required.
 
 Usage:
- python run_udp_bidir_tests.py --tests all
- python run_udp_bidir_tests.py --tests tc1,tc1a,tc6
- python run_udp_bidir_tests.py --list
+ python scripts/run_udp_bidir_tests.py --tests all
+ python scripts/run_udp_bidir_tests.py --tests tc1,tc1a,tc6
+ python scripts/run_udp_bidir_tests.py --list
 """
 from __future__ import annotations
 import argparse
 import asyncio
 import struct
 import time
+from pathlib import Path
+import sys
 from typing import Callable, Optional, Tuple, List, Set, Dict
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
 from obstacle_bridge import transfer as mod
 
 # Propagation delay (ms) applied when delivering overlay frames across the virtual link

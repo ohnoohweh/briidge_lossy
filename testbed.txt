@@ -34,7 +34,7 @@ python ObstacleBridge.py  --bind443 0.0.0.0 --port443 443 --log INFO --log-chann
 #
 # 3. Instanciate python ObstacleBridge.py as an incomming connection server
 #
-# wait for 2 service to allow udp_bidirectional_main to connect
+# wait for 2 service to allow ObstacleBridge.py to connect
 #
 # 4. Instanciate a outgoing connection server to ObstacleBridge.py as an incomming connection server
 #    Send payload as 01 30
@@ -46,7 +46,7 @@ python ObstacleBridge.py  --bind443 0.0.0.0 --port443 443 --log INFO --log-chann
 #
 # 7. Instanciate python ObstacleBridge.py as an outgoing connection server
 #
-# wait for 2 service to allow udp_bidirectional_main to connect
+# wait for 2 service to allow ObstacleBridge.py to connect
 # 
 # 8. Send payload as 01 31
 #    Within 1s expect incomming payload 02 31
@@ -57,7 +57,7 @@ python ObstacleBridge.py  --bind443 0.0.0.0 --port443 443 --log INFO --log-chann
 #
 # 11. Instanciate python ObstacleBridge.py as an incomming connection server
 #
-# wait for 2 service to allow udp_bidirectional_main to connect
+# wait for 2 service to allow ObstacleBridge.py to connect
 #
 # 12. Send payload as 01 32
 #    Within 1s expect incomming payload 02 32
