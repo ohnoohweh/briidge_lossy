@@ -6,6 +6,7 @@ ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for ba
 - `tests/integration/` — end-to-end and subprocess tests.
 - `scripts/` — development helpers.
 - `docs/WHITEPAPER.html` — full whitepaper requested for this repository update.
+- `wireshark/` — Wireshark dissectors grouped by framing/version.
 ## Entry points
 - `python -m obstacle_bridge --help`
 - `ObstacleBridge.py`
