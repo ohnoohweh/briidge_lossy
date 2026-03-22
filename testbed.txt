@@ -3,21 +3,21 @@
 #
 ## Ipv4
 # TCP input/output
-python overlay_tty.py --proto tcp --role server --port 3128
-python overlay_tty.py --proto tcp --role client --host 127.0.0.1 --connect-port 3129
+python -m obstacle_bridge.tools.overlay_tty --proto tcp --role server --port 3128
+python -m obstacle_bridge.tools.overlay_tty --proto tcp --role client --host 127.0.0.1 --connect-port 3129
 
 # UDP input/output
-python overlay_tty.py --proto udp --role server --port 16666
-python overlay_tty.py --proto udp --role client --host 127.0.0.1 --connect-port 16667
+python -m obstacle_bridge.tools.overlay_tty --proto udp --role server --port 16666
+python -m obstacle_bridge.tools.overlay_tty --proto udp --role client --host 127.0.0.1 --connect-port 16667
 
 ##Ipv6
 # UDP input/output
-python overlay_tty.py --proto udp --role server --listen-bind :: --port 16666
-python overlay_tty.py --proto udp --role client --host ::1 --bind :: --connect-port 16667
+python -m obstacle_bridge.tools.overlay_tty --proto udp --role server --listen-bind :: --port 16666
+python -m obstacle_bridge.tools.overlay_tty --proto udp --role client --host ::1 --bind :: --connect-port 16667
 
 # TCP input/output
-python overlay_tty.py --proto tcp --role server --listen-bind :: --port 3128
-python overlay_tty.py --proto tcp --role client --host ::1 --bind :: --connect-port 3129
+python -m obstacle_bridge.tools.overlay_tty --proto tcp --role server --listen-bind :: --port 3128
+python -m obstacle_bridge.tools.overlay_tty --proto tcp --role client --host ::1 --bind :: --connect-port 3129
 
 python ObstacleBridge.py  --bind443 0.0.0.0 --port443 443 --log INFO --log-channel-mux DEBUG --log-udp-session DEBUG --log-file br_server_ipv4.txt --admin-web
 
@@ -73,7 +73,7 @@ python ObstacleBridge.py  --bind443 0.0.0.0 --port443 443 --log INFO --log-chann
 #
 # Terminal servers
 #
-python overlay_tty.py --proto udp --role server --port 16666
+python -m obstacle_bridge.tools.overlay_tty --proto udp --role server --port 16666
 #
 # Bridge server
 #
@@ -85,14 +85,14 @@ python ObstacleBridge.py --bind443 0.0.0.0 --peer 127.0.0.1 --peer-port 443 --po
 #
 # terminal clients
 #
-python overlay_tty.py --proto udp --role client --host 127.0.0.1 --connect-port 16667
+python -m obstacle_bridge.tools.overlay_tty --proto udp --role client --host 127.0.0.1 --connect-port 16667
 
 
 # Test case:  UDP over own UDP peer communication protocol IPv4 (clients connect IPv4)
 #
 # Terminal servers
 #
-python overlay_tty.py --proto udp --role server --port 16666
+python -m obstacle_bridge.tools.overlay_tty --proto udp --role server --port 16666
 #
 # Bridge server
 #
@@ -104,14 +104,14 @@ python ObstacleBridge.py --bind443 :: --peer ::1 --peer-port 443 --port443 0 --o
 #
 # terminal clients
 #
-python overlay_tty.py --proto udp --role client --host 127.0.0.1 --connect-port 16667
+python -m obstacle_bridge.tools.overlay_tty --proto udp --role client --host 127.0.0.1 --connect-port 16667
 
 
 # Test case:  UDP over own UDP peer communication protocol IPv6 (clients connect IPv6)
 #
 # Terminal servers
 #
-python overlay_tty.py --proto udp --role server --listen-bind :: --port 16666
+python -m obstacle_bridge.tools.overlay_tty --proto udp --role server --listen-bind :: --port 16666
 #
 # Bridge server
 #
@@ -123,7 +123,7 @@ python ObstacleBridge.py --bind443 :: --peer ::1 --peer-port 443 --port443 0 --o
 #
 # terminal clients
 #
-python overlay_tty.py --proto udp --role client --host ::1 --bind :: --connect-port 16667
+python -m obstacle_bridge.tools.overlay_tty --proto udp --role client --host ::1 --bind :: --connect-port 16667
 
 
 
@@ -132,7 +132,7 @@ python overlay_tty.py --proto udp --role client --host ::1 --bind :: --connect-p
 #
 # Terminal servers
 #
-python overlay_tty.py --proto tcp --role server --port 3128
+python -m obstacle_bridge.tools.overlay_tty --proto tcp --role server --port 3128
 #
 # Bridge server
 #
@@ -144,13 +144,13 @@ python ObstacleBridge.py --bind443 0.0.0.0 --peer 127.0.0.1 --peer-port 443 --po
 #
 # terminal clients
 #
-python overlay_tty.py --proto tcp --role client --host 127.0.0.1 --connect-port 3129
+python -m obstacle_bridge.tools.overlay_tty --proto tcp --role client --host 127.0.0.1 --connect-port 3129
 
 # Test case: TCP over own UDP protocol (clients connect IPv6)
 #
 # Terminal servers
 #
-python overlay_tty.py --proto tcp --role server --listen-bind :: --port 3128
+python -m obstacle_bridge.tools.overlay_tty --proto tcp --role server --listen-bind :: --port 3128
 #
 # Bridge server
 #
@@ -162,7 +162,7 @@ python ObstacleBridge.py --bind443 0.0.0.0 --peer 127.0.0.1 --peer-port 443 --po
 #
 # terminal clients
 #
-python overlay_tty.py --proto tcp --role client --host ::1 --bind :: --connect-port 3129
+python -m obstacle_bridge.tools.overlay_tty --proto tcp --role client --host ::1 --bind :: --connect-port 3129
 
 
 
@@ -178,7 +178,7 @@ python ObstacleBridge.py --bind443 0.0.0.0 --peer 127.0.0.1 --peer-port 443 --po
 #
 # Terminal servers
 #
-python overlay_tty.py --proto udp --role server --port 16666
+python -m obstacle_bridge.tools.overlay_tty --proto udp --role server --port 16666
 #
 # Bridge server
 #
@@ -190,7 +190,7 @@ python ObstacleBridge.py --overlay-transport tcp --peer 127.0.0.1 --peer-port 12
 #
 # terminal clients
 #
-python overlay_tty.py --proto udp --role client --host 127.0.0.1 --connect-port 16667
+python -m obstacle_bridge.tools.overlay_tty --proto udp --role client --host 127.0.0.1 --connect-port 16667
 
 
 # Websocket over HTTP
@@ -198,7 +198,7 @@ python overlay_tty.py --proto udp --role client --host 127.0.0.1 --connect-port 
 #
 # Terminal servers
 #
-python overlay_tty.py --proto udp --role server --port 16666
+python -m obstacle_bridge.tools.overlay_tty --proto udp --role server --port 16666
 #
 # Bridge server
 #
@@ -212,7 +212,7 @@ python ObstacleBridge.py --overlay-transport ws --peer 127.0.0.1 --peer-port 543
 #
 # terminal clients
 #
-python overlay_tty.py --proto udp --role client --host 127.0.0.1 --connect-port 16667
+python -m obstacle_bridge.tools.overlay_tty --proto udp --role client --host 127.0.0.1 --connect-port 16667
 
 
 
@@ -221,7 +221,7 @@ python overlay_tty.py --proto udp --role client --host 127.0.0.1 --connect-port 
 #
 # Terminal servers
 #
-python overlay_tty.py --proto udp --role server --port 16666
+python -m obstacle_bridge.tools.overlay_tty --proto udp --role server --port 16666
 #
 # Bridge server
 #
@@ -233,7 +233,7 @@ python ObstacleBridge.py --overlay-transport quic --peer 127.0.0.1 --peer-port 4
 #
 # terminal clients
 #
-python overlay_tty.py --proto udp --role client --host 127.0.0.1 --connect-port 16667
+python -m obstacle_bridge.tools.overlay_tty --proto udp --role client --host 127.0.0.1 --connect-port 16667
 
 
 "C:\Program Files\Git\usr\bin\openssl.exe"
