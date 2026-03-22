@@ -30,7 +30,7 @@ Instructions to AI for changes:
 - Only replace Python >3.9 syntax with 3.9-safe equivalents.
 - Return a patch or only the exact modified lines.
 
-Reliability/RTT is handled in udp_bidirectional_transfer.Session/PeerProtocol.
+Reliability/RTT is handled in obstacle_bridge.transfer.Session/PeerProtocol.
 """
 from __future__ import annotations
 
