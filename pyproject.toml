@@ -7,6 +7,10 @@ name = "ObstacleBridge"
 version = "0.1.0"
 description = "Lossy overlay bridge utilities and test tooling"
 requires-python = ">=3.9"
+dependencies = [
+    "aioquic",
+    "websockets",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -16,5 +20,3 @@ where = ["src"]
 
 [project.scripts]
 ObstacleBridge = "obstacle_bridge.bridge:main"
-ObstacleBridge-overlay-tty = "obstacle_bridge.tools.overlay_tty:main"
-ObstacleBridge-extract-udp-debug = "obstacle_bridge.tools.extract_udp_debug:main"
