@@ -7257,22 +7257,35 @@ class Runner:
         self.args = args
         self.log = logging.getLogger("runner")
         DebugLoggingConfigurator.debug_logger_status(self.log)
-        self._stop = asyncio.Event()
+        self._stop: Optional[asyncio.Event] = None
+        self._stop_requested = False
         self._session_obj: Optional[ISession] = None
         self.mux: Optional["ChannelMux"] = None
         self._sessions: List[ISession] = []
         self._muxes: List["ChannelMux"] = []
         self.stats = StatsBoard(args )
         self.admin_web = None
-        self._restart_requested = asyncio.Event()
+        self._restart_requested: Optional[asyncio.Event] = None
+        self._restart_requested_flag = False
         self._last_connected_monotonic: Optional[float] = None
         self._last_disconnected_monotonic: Optional[float] = None
         self._client_restart_watchdog_task: Optional[asyncio.Task] = None        
+
+    def _ensure_runtime_events(self) -> None:
+        if self._stop is None:
+            self._stop = asyncio.Event()
+        if self._stop_requested:
+            self._stop.set()
+        if self._restart_requested is None:
+            self._restart_requested = asyncio.Event()
+        if self._restart_requested_flag:
+            self._restart_requested.set()
 
     async def start(self) -> None:
 
         
         self.log.debug("[SERVER] Runner start on session id=%x", id(self))
+        self._ensure_runtime_events()
 
         loop = asyncio.get_running_loop()
         transport_sessions = Runner.build_sessions_from_overlay(self.args)
@@ -7342,6 +7355,8 @@ class Runner:
         await self.start()
         self.log.debug("[SERVER] Run after start")
 
+        assert self._stop is not None
+        assert self._restart_requested is not None
         stop_task = asyncio.create_task(self._stop.wait())
         restart_task = asyncio.create_task(self._restart_requested.wait())
 
@@ -7365,7 +7380,7 @@ class Runner:
             except Exception:
                 self.log.debug("[RUNNER] stop timed out during restart")
 
-        if self._restart_requested.is_set():
+        if self._restart_requested is not None and self._restart_requested.is_set():
             self.log.warning("[RUNNER] exiting rc=75")
             raise SystemExit(75)
 
@@ -7442,7 +7457,9 @@ class Runner:
 
     def request_restart(self) -> None:
         self.log.debug("[SERVER] Runner restart requested")
-        self._restart_requested.set()
+        self._restart_requested_flag = True
+        if self._restart_requested is not None:
+            self._restart_requested.set()
 
     def get_status_snapshot(self) -> dict:
         return self.stats.snapshot_status()
@@ -7454,9 +7471,13 @@ class Runner:
 
     def request_shutdown(self) -> None:
         self.log.debug("[SERVER] Runner shutdown requested")
-        self._stop.set()
+        self._stop_requested = True
+        if self._stop is not None:
+            self._stop.set()
 
     async def _client_restart_watchdog(self) -> None:
+        assert self._stop is not None
+        assert self._restart_requested is not None
         try:
             while not self._stop.is_set():
                 await asyncio.sleep(1.0)
