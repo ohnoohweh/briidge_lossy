@@ -9,16 +9,36 @@ ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for ba
 - `wireshark/` — Wireshark dissectors grouped by framing/version.
 ## Entry points
 - `python -m obstacle_bridge --help`
-- `ObstacleBridge.py`
-- `python -m obstacle_bridge.tools.overlay_tty`
-- `python -m obstacle_bridge.tools.extract_udp_debug`
-- `python scripts/run_udp_bidir_tests.py --help`
+
 ## Quick-start examples
-### 1) Single overlay transport listener
+### 1) WireGuard bridge setup
+This example assumes the bridge **server** can already reach a local WireGuard UDP service on `127.0.0.1:16666`. The **peer** connects to that bridge server and recreates the same UDP port locally on `127.0.0.1:16666`, so a WireGuard client on the peer machine can point at `localhost:16666`.
+
+**Bridge server**
+```bash
+python -m obstacle_bridge \
+  --bind443 0.0.0.0 \
+  --port443 443 \
+  --log INFO
+```
+
+**Peer that recreates the WireGuard UDP port locally**
+```bash
+python -m obstacle_bridge \
+  --peer bridge.example.com \
+  --peer-port 443 \
+  --port443 0 \
+  --own-servers "udp,16666,127.0.0.1,udp,127.0.0.1,16666" \
+  --log INFO
+```
+
+With that peer command running, a local WireGuard client can use `127.0.0.1:16666` as its endpoint; ObstacleBridge forwards the traffic over the overlay to the bridge server, which then sends it to the WireGuard service on its own `127.0.0.1:16666`.
+
+### 2) Single overlay transport listener
 ```bash
 python -m obstacle_bridge --overlay-transport ws --bind443 0.0.0.0 --port443 54321
 ```
-### 2) Multi-transport listening instance
+### 3) Multi-transport listening instance
 ```bash
 python -m obstacle_bridge \
   --overlay-transport "myudp,tcp,quic,ws" \
@@ -30,7 +50,7 @@ python -m obstacle_bridge \
   --quic-key key.pem
 ```
 If explicit per-transport ports are omitted in multi-transport listener mode, ObstacleBridge derives deterministic offsets from `--port443`: `myudp:+0`, `tcp:+1`, `quic:+2`, `ws:+3`.
-### 3) Peer client exposing local services
+### 4) Peer client exposing local services
 ```bash
 python -m obstacle_bridge \
   --overlay-transport ws \
