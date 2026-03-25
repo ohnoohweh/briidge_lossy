@@ -5371,6 +5371,15 @@ def _wildcard_host_for_family(family: int) -> str:
     return "::" if family == socket.AF_INET6 else "0.0.0.0"
 
 
+def _localhost_fallback(resolve_mode: str) -> Optional[Tuple[str, int]]:
+    mode = (resolve_mode or "").strip().lower()
+    if mode == "ipv4":
+        return ("127.0.0.1", socket.AF_INET)
+    if mode == "ipv6":
+        return ("::1", socket.AF_INET6)
+    return None
+
+
 def _prefer_unspec_listener_family() -> bool:
     """
     Python 3.9 needs explicit AF_INET/AF_INET6 in several asyncio listener paths.
@@ -5417,7 +5426,14 @@ def _resolve_peer_endpoint(
     elif resolve_mode == "ipv6":
         lookup_family = socket.AF_INET6
 
-    infos = socket.getaddrinfo(host, int(port), family=lookup_family, type=socktype)
+    try:
+        infos = socket.getaddrinfo(host, int(port), family=lookup_family, type=socktype)
+    except socket.gaierror as exc:
+        localhost_fallback = _localhost_fallback(resolve_mode)
+        if localhost_fallback and host.lower() == "localhost":
+            fallback_host, fallback_family = localhost_fallback
+            return fallback_host, int(port), fallback_family
+        raise RuntimeError(f"Could not resolve overlay peer {host!r}: {exc}") from exc
     candidates: List[Tuple[str, int, int]] = []
     for fam, _socktype, _proto, _canonname, sockaddr in infos:
         if fam not in (socket.AF_INET, socket.AF_INET6):
