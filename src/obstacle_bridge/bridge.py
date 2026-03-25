@@ -4129,6 +4129,60 @@ class WebSocketSession(ISession):
             self._server_connected_evt.clear()
         self._set_overlay_connected(connected)
 
+    def get_overlay_peers_snapshot(self) -> list[dict]:
+        """
+        Return per-overlay-peer rows for admin diagnostics.
+
+        For WS server mode this returns one row per connected websocket peer and
+        includes the mux channels owned by that peer, allowing higher layers to
+        split UDP/TCP counters by peer.
+        """
+        rows: list[dict] = []
+        if self._peer_tuple:
+            peer_label = None
+            if self._peer_host:
+                peer_label = (
+                    f"[{self._peer_host}]:{self._peer_port}"
+                    if ":" in self._peer_host and not self._peer_host.startswith("[")
+                    else f"{self._peer_host}:{self._peer_port}"
+                )
+            rows.append(
+                {
+                    "peer_id": 0,
+                    "connected": bool(self.is_connected()),
+                    "peer": peer_label,
+                    "mux_chans": [],
+                }
+            )
+            return rows
+
+        mux_by_peer: Dict[int, list[int]] = {}
+        for mux_chan, mapped in self._server_chan_to_peer.items():
+            try:
+                peer_id, _peer_chan = mapped
+                mux_by_peer.setdefault(int(peer_id), []).append(int(mux_chan))
+            except Exception:
+                continue
+
+        for peer_id, ctx in list(self._server_peers.items()):
+            ws = ctx.get("ws")
+            remote = getattr(ws, "remote_address", None) if ws is not None else None
+            peer_label = None
+            if isinstance(remote, tuple) and len(remote) >= 2:
+                host, port = str(remote[0]), int(remote[1])
+                peer_label = f"[{host}]:{port}" if ":" in host and not host.startswith("[") else f"{host}:{port}"
+            rows.append(
+                {
+                    "peer_id": int(peer_id),
+                    "connected": True,
+                    "peer": peer_label,
+                    "mux_chans": sorted(mux_by_peer.get(int(peer_id), [])),
+                }
+            )
+
+        rows.sort(key=lambda r: int(r.get("peer_id", 0)))
+        return rows
+
     # ---- Internals ------------------------------------------------------------
 
     def _describe_transport_state(self, connection) -> str:
@@ -7590,6 +7644,55 @@ class Runner:
                 snap = mux.snapshot_connections()
                 udp_rows = list(snap.get("udp", []))
                 tcp_rows = list(snap.get("tcp", []))
+            overlay_rows = []
+            with contextlib.suppress(Exception):
+                getter = getattr(session, "get_overlay_peers_snapshot", None)
+                if callable(getter):
+                    overlay_rows = list(getter() or [])
+
+            if overlay_rows:
+                for p in overlay_rows:
+                    mux_chans = set(int(c) for c in (p.get("mux_chans") or []))
+                    p_rx = 0
+                    p_tx = 0
+                    udp_open = 0
+                    tcp_open = 0
+                    for row in udp_rows:
+                        chan_id = row.get("chan_id")
+                        if mux_chans and chan_id not in mux_chans:
+                            continue
+                        st = row.get("stats", {})
+                        p_rx += int(st.get("rx_bytes", 0) or 0)
+                        p_tx += int(st.get("tx_bytes", 0) or 0)
+                        udp_open += 1
+                    for row in tcp_rows:
+                        chan_id = row.get("chan_id")
+                        if mux_chans and chan_id not in mux_chans:
+                            continue
+                        st = row.get("stats", {})
+                        p_rx += int(st.get("rx_bytes", 0) or 0)
+                        p_tx += int(st.get("tx_bytes", 0) or 0)
+                        tcp_open += 1
+
+                    peers.append({
+                        "id": f"{idx}:{p.get('peer_id', 0)}",
+                        "transport": label,
+                        "connected": bool(p.get("connected", session.is_connected())),
+                        "peer": p.get("peer"),
+                        "rtt_est_ms": m.rtt_est_ms,
+                        "inflight": m.inflight,
+                        "decode_errors": 0,
+                        "open_connections": {
+                            "udp": udp_open,
+                            "tcp": tcp_open,
+                        },
+                        "traffic": {
+                            "rx_bytes": p_rx,
+                            "tx_bytes": p_tx,
+                        },
+                    })
+                continue
+
             rx_bytes = 0
             tx_bytes = 0
             for row in udp_rows + tcp_rows:
@@ -7602,6 +7705,12 @@ class Runner:
                     pa = getattr(getattr(session, "peer_proto"), "send_port").peer_addr
                     if pa:
                         peer_label = f"{pa[0]}:{pa[1]}"
+            with contextlib.suppress(Exception):
+                if not peer_label and hasattr(session, "_peer_host") and hasattr(session, "_peer_port"):
+                    host = str(getattr(session, "_peer_host") or "")
+                    port = int(getattr(session, "_peer_port") or 0)
+                    if host and port > 0:
+                        peer_label = f"[{host}]:{port}" if ":" in host and not host.startswith("[") else f"{host}:{port}"
             decode_errors = 0
             with contextlib.suppress(Exception):
                 pp = getattr(session, "peer_proto", None)
