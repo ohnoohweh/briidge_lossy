@@ -17,7 +17,7 @@ This example assumes the bridge **server** can already reach a local WireGuard U
 **Bridge server**
 ```bash
 python -m obstacle_bridge \
-  --bind443 0.0.0.0 \
+  --udp-bind 0.0.0.0 \
   --port443 443 \
   --log INFO
 ```
@@ -25,8 +25,8 @@ python -m obstacle_bridge \
 **Peer that recreates the WireGuard UDP port locally**
 ```bash
 python -m obstacle_bridge \
-  --peer bridge.example.com \
-  --peer-port 443 \
+  --udp-peer bridge.example.com \
+  --udp-peer-port 443 \
   --port443 0 \
   --own-servers "udp,16666,127.0.0.1,udp,127.0.0.1,16666" \
   --log INFO
@@ -36,25 +36,26 @@ With that peer command running, a local WireGuard client can use `127.0.0.1:1666
 
 ### 2) Single overlay transport listener
 ```bash
-python -m obstacle_bridge --overlay-transport ws --bind443 0.0.0.0 --port443 54321
+python -m obstacle_bridge --overlay-transport ws --ws-bind 0.0.0.0 --port443 54321
 ```
 ### 3) Multi-transport listening instance
 ```bash
 python -m obstacle_bridge \
   --overlay-transport "myudp,tcp,quic,ws" \
   --port443 443 \
-  --overlay-port-tcp 444 \
-  --overlay-port-quic 445 \
-  --overlay-port-ws 446 \
+  --udp-bind 0.0.0.0 \
+  --tcp-bind 0.0.0.0 \
+  --quic-bind 0.0.0.0 \
+  --ws-bind 0.0.0.0 \
   --quic-cert cert.pem \
   --quic-key key.pem
 ```
-If explicit per-transport ports are omitted in multi-transport listener mode, ObstacleBridge derives deterministic offsets from `--port443`: `myudp:+0`, `tcp:+1`, `quic:+2`, `ws:+3`.
+In multi-transport listener mode, ObstacleBridge derives deterministic listen-port offsets from `--port443`: `myudp:+0`, `tcp:+1`, `quic:+2`, `ws:+3`.
 ### 4) Peer client exposing local services
 ```bash
 python -m obstacle_bridge \
   --overlay-transport ws \
-  --peer 203.0.113.10 --peer-port 446 \
+  --ws-peer 203.0.113.10 --ws-peer-port 446 \
   --own-servers "udp,16667,0.0.0.0,udp,127.0.0.1,16666 tcp,3129,0.0.0.0,tcp,127.0.0.1,3128"
 ```
 ## CLI parameter reference
@@ -68,17 +69,23 @@ The tables below are generated from the current parser registrations in `bridge.
 ### UDP overlay
 | Option(s) | Default | Description |
 |---|---:|---|
-| `--bind443` | `::` | overlay bind address (IPv4 '0.0.0.0' or IPv6 '::') |
+| `--udp-bind` | `::` | overlay bind address (IPv4 '0.0.0.0' or IPv6 '::') |
 | `--port443` | `443` | overlay listen port |
-| `--peer` | `None` | peer IP/FQDN (IPv4 or IPv6 literal; IPv6 may be in [brackets]) |
-| `--peer-port` | `443` | peer overlay port |
+| `--udp-peer` | `None` | peer IP/FQDN (IPv4 or IPv6 literal; IPv6 may be in [brackets]) |
+| `--udp-peer-port` | `443` | peer overlay port |
 | `--peer-resolve-family` | `prefer-ipv6` | Peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only. |
 | `--max-inflight` | `32767` | max DATA frames allowed in flight (1..32767). Excess frames are queued. |
+| `--bind443` | alias of `--udp-bind` | backwards-compatible alias |
+| `--peer` | alias of `--udp-peer` | backwards-compatible alias |
+| `--peer-port` | alias of `--udp-peer-port` | backwards-compatible alias |
 
 ### WebSocket overlay
 | Option(s) | Default | Description |
 |---|---:|---|
 | `--ws-path` | `/` | WebSocket HTTP path (default /) |
+| `--ws-bind` | `::` | WS overlay bind address |
+| `--ws-peer` | `None` | WS peer IP/FQDN |
+| `--ws-peer-port` | `443` | WS peer overlay port |
 | `--ws-subprotocol` | `None` | Optional WebSocket subprotocol (e.g. mux2) |
 | `--ws-tls` | `False` | Use TLS (wss://). Provide cert/key via your deployment. |
 | `--ws-max-size` | `65535` | Maximum binary message size to accept/send (default 65535). |
@@ -92,6 +99,9 @@ The tables below are generated from the current parser registrations in `bridge.
 | Option(s) | Default | Description |
 |---|---:|---|
 | `--tcp-bp-wbuf-threshold` | `131072` | TCP overlay: write() buffer size threshold in bytes to signal drain (default 131072). |
+| `--tcp-bind` | `::` | TCP overlay bind address |
+| `--tcp-peer` | `None` | TCP peer IP/FQDN |
+| `--tcp-peer-port` | `443` | TCP peer overlay port |
 | `--tcp-bp-latency-ms` | `300` | TCP overlay: if > 0, trigger drain after this latency (ms) whenever pending bytes exist. |
 | `--tcp-bp-poll-interval-ms` | `50` | TCP overlay: polling interval for time-based backpressure checks (ms; default 50). |
 
@@ -99,6 +109,9 @@ The tables below are generated from the current parser registrations in `bridge.
 | Option(s) | Default | Description |
 |---|---:|---|
 | `--quic-alpn` | `hq-29` | ALPN protocol ID (default hq-29) |
+| `--quic-bind` | `::` | QUIC overlay bind address |
+| `--quic-peer` | `None` | QUIC peer IP/FQDN |
+| `--quic-peer-port` | `443` | QUIC peer overlay port |
 | `--quic-cert` | `None` | Server certificate file (PEM) |
 | `--quic-key` | `None` | Server private key file (PEM) |
 | `--quic-insecure` | `False` | Client: disable certificate verification (TEST ONLY) |
@@ -135,11 +148,7 @@ The tables below are generated from the current parser registrations in `bridge.
 | Option(s) | Default | Description |
 |---|---:|---|
 | `--overlay-transport` | `myudp` | Overlay transport between peers: comma-separated list from myudp,tcp,quic,ws. Multiple transports are supported simultaneously for listening instances. |
-| `--overlay-port-myudp` | `None` | Optional listen port override for overlay transport myudp. Defaults to --port443 or a deterministic offset when multiple transports are active. |
-| `--overlay-port-tcp` | `None` | Optional listen port override for overlay transport tcp. Defaults to --port443 or a deterministic offset when multiple transports are active. |
-| `--overlay-port-quic` | `None` | Optional listen port override for overlay transport quic. Defaults to --port443 or a deterministic offset when multiple transports are active. |
-| `--overlay-port-ws` | `None` | Optional listen port override for overlay transport ws. Defaults to --port443 or a deterministic offset when multiple transports are active. |
-| `--client-restart-if-disconnected` | `0.0` | If configured as a peer client (--peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables. |
+| `--client-restart-if-disconnected` | `0.0` | If configured as a peer client (for example --udp-peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables. |
 
 ## Whitepaper
 The complete whitepaper requested for this project update is included verbatim in [`docs/WHITEPAPER.html`](docs/WHITEPAPER.html). It covers:
@@ -181,5 +190,5 @@ The complete whitepaper requested for this project update is included verbatim i
 References
 ## Notes
 - Listener mode intentionally ignores `--own-servers`, because a multi-peer listener cannot unambiguously bind one local listener to one remote peer.
-- Multi-transport mode is currently intended for listening instances without `--peer`.
+- Multi-transport mode is currently intended for listening instances without configured transport peers (for example no `--udp-peer`, `--tcp-peer`, `--quic-peer`, or `--ws-peer`).
 - WebSocket listener mode supports multiple simultaneous peers with per-peer mux-channel rewriting so that peer-local channel IDs do not collide inside the shared mux logic.
