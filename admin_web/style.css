@@ -359,28 +359,27 @@ h1 {
   border: 1px solid var(--border);
 }
 
-.config-form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr auto;
-  gap: 12px;
-  margin: 14px 0 10px;
-  align-items: end;
+.config-actions {
+  display: flex;
+  gap: 10px;
 }
 
-.config-field {
+.config-sections {
   display: grid;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--muted);
+  gap: 14px;
 }
 
-.config-field input {
+.config-section {
+  padding: 14px;
+}
+
+.config-editor {
   width: 100%;
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
   border-radius: 10px;
-  padding: 10px 12px;
+  padding: 8px 10px;
 }
 
 .config-message {
@@ -435,10 +434,6 @@ h1 {
   .summary-grid,
   .traffic-grid,
   .two-col {
-    grid-template-columns: 1fr;
-  }
-
-  .config-form-grid {
     grid-template-columns: 1fr;
   }
 

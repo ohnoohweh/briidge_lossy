@@ -7517,6 +7517,26 @@ class Runner:
                 data[k] = str(v)
         return data
 
+    def get_config_schema_snapshot(self) -> dict:
+        sections = getattr(self.args, "_config_sections", {}) or {}
+        defaults = getattr(self.args, "_config_defaults", {}) or {}
+        descriptions = getattr(self.args, "_config_help", {}) or {}
+
+        schema: dict = {}
+        for section in sorted(sections.keys()):
+            items = []
+            for key in sorted(sections.get(section, [])):
+                if not hasattr(self.args, key):
+                    continue
+                items.append({
+                    "key": key,
+                    "description": descriptions.get(key, "(no description)"),
+                    "default": defaults.get(key, None),
+                })
+            if items:
+                schema[section] = items
+        return schema
+
     def get_debug_logs(self, limit: int = 400) -> list:
         lim = max(1, min(int(limit), 1000))
         if not DEBUG_LOG_RING:
@@ -7930,6 +7950,7 @@ class AdminWebUI:
             payload = {
                 "ok": True,
                 "config": self.runner.get_config_snapshot(),
+                "schema": self.runner.get_config_schema_snapshot(),
             }
             self._log_api_response("/api/config", 200, payload, summary="config snapshot")
             await self._send_json(writer, 200, payload)
@@ -8552,6 +8573,9 @@ def main(argv: Optional[List[str]] = None) -> None:
         ("runner",             Runner.register_overlay_cli),
     ]
     args = cli.parse_args(argv, registrars)
+    args._config_sections = {k: sorted(v) for k, v in cli.sections.items()}
+    args._config_defaults = dict(cli._baseline_defaults)
+    args._config_help = dict(cli._action_help)
 
     # Apply logging in one line (behavior unchanged)
     DebugLoggingConfigurator.from_args(args).apply()

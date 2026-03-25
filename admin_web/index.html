@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Router Admin</title>
+  <title>ObstacleBridge</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -11,7 +11,7 @@
     <header class="topbar">
       <div>
         <div class="eyebrow">Network Appliance</div>
-        <h1>Router Admin</h1>
+        <h1>ObstacleBridge</h1>
       </div>
       <div class="topbar-right">
         <div class="status-cluster">
@@ -32,29 +32,9 @@
         </nav>
 
         <section class="sidebar-section">
-          <div class="sidebar-title">Overlay</div>
+          <div class="sidebar-title">Runtime</div>
           <div class="kv-list">
-            <div class="kv-row"><span>Bind</span><strong id="overlayBind">n/a</strong></div>
-            <div class="kv-row"><span>Peer</span><strong id="overlayPeer">n/a</strong></div>
             <div class="kv-row"><span>Uptime</span><strong id="uptimeSec">n/a</strong></div>
-          </div>
-        </section>
-
-        <section class="sidebar-section">
-          <div class="sidebar-title">Quick Health</div>
-          <div class="health-stack">
-            <div class="health-item">
-              <span class="health-label">RTT Estimate</span>
-              <strong id="sidebarRtt">n/a</strong>
-            </div>
-            <div class="health-item">
-              <span class="health-label">Inflight</span>
-              <strong id="sidebarInflight">n/a</strong>
-            </div>
-            <div class="health-item">
-              <span class="health-label">Decode Errors</span>
-              <strong id="sidebarErrors">0</strong>
-            </div>
           </div>
         </section>
       </aside>
@@ -158,19 +138,6 @@
                 <div class="detail-row"><span>Peer State</span><strong id="peerState">n/a</strong></div>
                 <div class="detail-row"><span>Overlay Bind</span><strong id="detailOverlayBind">n/a</strong></div>
                 <div class="detail-row"><span>Overlay Peer</span><strong id="detailOverlayPeer">n/a</strong></div>
-              </div>
-            </section>
-
-            <section class="section-block card warning-card">
-              <div class="section-header compact">
-                <div>
-                  <h2>Errors</h2>
-                  <p>Decoder and protocol error counters</p>
-                </div>
-              </div>
-              <div class="error-main">
-                <span class="error-label">Decode Errors</span>
-                <span id="decodeErrors" class="error-value">0</span>
               </div>
             </section>
           </div>
@@ -284,23 +251,15 @@
             <div class="section-header compact">
               <div>
                 <h2>Configuration</h2>
-                <p>View and modify runtime configuration values exposed by the admin API.</p>
+                <p>Configuration is organized by section (for example: admin_web and ws_session), with description and built-in default value.</p>
               </div>
-              <button id="configReloadBtn" class="btn btn-secondary" type="button">Reload</button>
-            </div>
-            <div class="config-form-grid">
-              <label class="config-field">
-                <span>Key</span>
-                <input id="configKey" type="text" placeholder="example: udp_idle_timeout_sec" />
-              </label>
-              <label class="config-field">
-                <span>Value (JSON)</span>
-                <input id="configValue" type="text" placeholder="example: 30 or \"127.0.0.1\"" />
-              </label>
-              <button id="configSaveBtn" class="btn btn-secondary" type="button">Apply</button>
+              <div class="config-actions">
+                <button id="configReloadBtn" class="btn btn-secondary" type="button">Reload</button>
+                <button id="configSaveBtn" class="btn btn-secondary" type="button">Save Configuration</button>
+              </div>
             </div>
             <p id="configMessage" class="config-message"></p>
-            <pre id="configJson" class="meta-box"></pre>
+            <div id="configSections" class="config-sections"></div>
           </section>
         </section>
 
