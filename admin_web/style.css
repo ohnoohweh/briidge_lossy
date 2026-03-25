@@ -207,6 +207,10 @@ h1 {
   margin-bottom: 22px;
 }
 
+.myudp-grid {
+  margin-top: -8px;
+}
+
 .metric-card {
   padding: 20px;
 }
@@ -355,6 +359,37 @@ h1 {
   border: 1px solid var(--border);
 }
 
+.config-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 12px;
+  margin: 14px 0 10px;
+  align-items: end;
+}
+
+.config-field {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.config-field input {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.config-message {
+  min-height: 20px;
+  margin: 0 0 10px;
+  color: #b8d3ff;
+  font-size: 13px;
+}
+
 .meta-box {
   margin-top: 0;
   overflow: auto;
@@ -400,6 +435,10 @@ h1 {
   .summary-grid,
   .traffic-grid,
   .two-col {
+    grid-template-columns: 1fr;
+  }
+
+  .config-form-grid {
     grid-template-columns: 1fr;
   }
 

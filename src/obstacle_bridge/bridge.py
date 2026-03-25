@@ -59,6 +59,7 @@ from typing import Dict, Optional, Tuple, List, Set, Deque, Any, Callable
 ANSI_HIDE_CURSOR = "\x1b[?25l"
 ANSI_SHOW_CURSOR = "\x1b[?25h"
 ANSI_HOME_CLEAR = "\x1b[H\x1b[J"
+DEBUG_LOG_RING: Deque[str] = deque(maxlen=1200)
 
 # ============================== Logging / Debug Config ===============================
 def debug_print(msg: str):
@@ -85,6 +86,15 @@ class DebugToStderrHandler(logging.Handler):
             if record.levelno <= logging.DEBUG:
                 msg = self.format(record)
                 debug_print(msg)
+        except Exception:
+            pass
+
+
+class InMemoryDebugLogHandler(logging.Handler):
+    """Capture formatted log lines in a ring buffer for admin web debug tab."""
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            DEBUG_LOG_RING.append(self.format(record))
         except Exception:
             pass
 
@@ -218,6 +228,12 @@ class DebugLoggingConfigurator:
         ch.setLevel(console_level)
         ch.setFormatter(fmt)
         root.addHandler(ch)
+
+        # In-memory ring used by admin web /api/logs.
+        mem = InMemoryDebugLogHandler()
+        mem.setLevel(logging.DEBUG)
+        mem.setFormatter(fmt)
+        root.addHandler(mem)
 
 
         # Optional: route DEBUG to stderr without affecting global level
@@ -7156,6 +7172,9 @@ class StatsBoard:
         def _num(v):
             return None if v is None else v
 
+        hist = dict(getattr(self.session, "stats_hist", {}) or {})
+        repeated_multiple = int(hist.get("thrice", 0)) + int(hist.get("gt3", 0))
+
         return {
             "updated_unix_ts": now_wall,
             "peer_state": self._conn_state,
@@ -7205,6 +7224,17 @@ class StatsBoard:
                 "unidentified_frames": int(
                     getattr(self.peer_proto, "unidentified_frames", 0) if self.peer_proto else 0
                 ),
+            },
+            "myudp": {
+                "retransmit": {
+                    "created_total": int(hist.get("created_total", 0)),
+                    "confirmed_total": int(hist.get("confirmed_total", 0)),
+                    "first_pass": int(hist.get("once", 0)),
+                    "repeated_once": int(hist.get("twice", 0)),
+                    "repeated_multiple": repeated_multiple,
+                    "repeated_three_times": int(hist.get("thrice", 0)),
+                    "repeated_over_three_times": int(hist.get("gt3", 0)),
+                },
             },
         }
         
@@ -7263,6 +7293,7 @@ class Runner:
         self.mux: Optional["ChannelMux"] = None
         self._sessions: List[ISession] = []
         self._muxes: List["ChannelMux"] = []
+        self._session_labels: List[str] = []
         self.stats = StatsBoard(args )
         self.admin_web = None
         self._restart_requested: Optional[asyncio.Event] = None
@@ -7291,6 +7322,7 @@ class Runner:
         transport_sessions = Runner.build_sessions_from_overlay(self.args)
         self._sessions = []
         self._muxes = []
+        self._session_labels = []
         for transport_name, session in transport_sessions:
             session.set_on_state_change(lambda connected, transport_name=transport_name, session=session: self._on_state_change(transport_name, session, connected))
             session.set_on_peer_rx(self.stats.on_peer_rx_bytes)
@@ -7307,6 +7339,7 @@ class Runner:
             )
             self._sessions.append(session)
             self._muxes.append(mux)
+            self._session_labels.append(transport_name)
             await session.start()
             await mux.start()
 
@@ -7468,6 +7501,104 @@ class Runner:
         if self.mux is None:
             return {"udp": [], "tcp": [], "counts": {"udp": 0, "tcp": 0}}
         return self.mux.snapshot_connections()
+
+    def get_config_snapshot(self) -> dict:
+        blocked = {
+            "config", "dump_config", "save_config", "save_format", "force",
+            "help",
+        }
+        data = {}
+        for k, v in vars(self.args).items():
+            if k.startswith("_") or k in blocked:
+                continue
+            if isinstance(v, (str, int, float, bool, list, dict)) or v is None:
+                data[k] = v
+            else:
+                data[k] = str(v)
+        return data
+
+    def get_debug_logs(self, limit: int = 400) -> list:
+        lim = max(1, min(int(limit), 1000))
+        if not DEBUG_LOG_RING:
+            return []
+        return list(DEBUG_LOG_RING)[-lim:]
+
+    def get_peer_connections_snapshot(self) -> dict:
+        peers: list = []
+        for idx, session in enumerate(self._sessions):
+            mux = self._muxes[idx] if idx < len(self._muxes) else None
+            label = self._session_labels[idx] if idx < len(self._session_labels) else f"session-{idx}"
+            m = session.get_metrics()
+            udp_rows: list = []
+            tcp_rows: list = []
+            if mux is not None:
+                snap = mux.snapshot_connections()
+                udp_rows = list(snap.get("udp", []))
+                tcp_rows = list(snap.get("tcp", []))
+            rx_bytes = 0
+            tx_bytes = 0
+            for row in udp_rows + tcp_rows:
+                st = row.get("stats", {})
+                rx_bytes += int(st.get("rx_bytes", 0) or 0)
+                tx_bytes += int(st.get("tx_bytes", 0) or 0)
+            peer_label = None
+            with contextlib.suppress(Exception):
+                if hasattr(session, "peer_proto") and getattr(session, "peer_proto"):
+                    pa = getattr(getattr(session, "peer_proto"), "send_port").peer_addr
+                    if pa:
+                        peer_label = f"{pa[0]}:{pa[1]}"
+            decode_errors = 0
+            with contextlib.suppress(Exception):
+                pp = getattr(session, "peer_proto", None)
+                if pp is not None:
+                    decode_errors = int(getattr(pp, "unidentified_frames", 0) or 0)
+            peers.append({
+                "id": idx,
+                "transport": label,
+                "connected": bool(session.is_connected()),
+                "peer": peer_label,
+                "rtt_est_ms": m.rtt_est_ms,
+                "inflight": m.inflight,
+                "decode_errors": decode_errors,
+                "open_connections": {
+                    "udp": len(udp_rows),
+                    "tcp": len(tcp_rows),
+                },
+                "traffic": {
+                    "rx_bytes": rx_bytes,
+                    "tx_bytes": tx_bytes,
+                },
+            })
+        return {"peers": peers, "count": len(peers)}
+
+    def update_config(self, updates: dict) -> tuple[bool, str]:
+        if not isinstance(updates, dict):
+            return (False, "updates must be an object")
+        for key, value in updates.items():
+            if not hasattr(self.args, key):
+                return (False, f"unknown config key: {key}")
+            cur = getattr(self.args, key)
+            if isinstance(cur, bool):
+                if not isinstance(value, bool):
+                    return (False, f"{key} expects boolean")
+            elif isinstance(cur, int) and not isinstance(cur, bool):
+                if not isinstance(value, int):
+                    return (False, f"{key} expects integer")
+            elif isinstance(cur, float):
+                if not isinstance(value, (int, float)):
+                    return (False, f"{key} expects number")
+                value = float(value)
+            elif isinstance(cur, str):
+                if not isinstance(value, str):
+                    return (False, f"{key} expects string")
+            elif isinstance(cur, list):
+                if not isinstance(value, list):
+                    return (False, f"{key} expects list")
+            elif cur is None:
+                if not isinstance(value, (str, int, float, bool, list, dict)) and value is not None:
+                    return (False, f"{key} has unsupported type")
+            setattr(self.args, key, value)
+        return (True, "")
 
     def request_shutdown(self) -> None:
         self.log.debug("[SERVER] Runner shutdown requested")
@@ -7704,6 +7835,7 @@ class AdminWebUI:
             method, raw_path, _httpver = parts
             headers = {}
 
+            content_length = 0
             while True:
                 line = await reader.readline()
                 if not line or line in (b"\r\n", b"\n"):
@@ -7711,7 +7843,16 @@ class AdminWebUI:
                 text = line.decode("utf-8", "replace")
                 if ":" in text:
                     k, v = text.split(":", 1)
-                    headers[k.strip().lower()] = v.strip()
+                    hk = k.strip().lower()
+                    hv = v.strip()
+                    headers[hk] = hv
+                    if hk == "content-length":
+                        with contextlib.suppress(Exception):
+                            content_length = max(0, int(hv))
+
+            body = b""
+            if content_length > 0:
+                body = await reader.readexactly(content_length)
 
             path = raw_path.split("?", 1)[0]
             self.log.info("ADMIN REQUEST method=%s path=%s", method, path)
@@ -7742,6 +7883,18 @@ class AdminWebUI:
                 await self._handle_connections(writer)
                 return
 
+            if path == "/api/config":
+                await self._handle_config(writer, method, body)
+                return
+
+            if path == "/api/logs":
+                await self._handle_logs(writer, raw_path)
+                return
+
+            if path == "/api/peers":
+                await self._handle_peers(writer)
+                return
+
             await self._handle_static(writer, path)
 
         except Exception:            
@@ -7770,6 +7923,57 @@ class AdminWebUI:
             "milestone": "C",
         }
         self._log_api_response("/api/meta", 200, payload)
+        await self._send_json(writer, 200, payload)
+
+    async def _handle_config(self, writer, method: str, body: bytes):
+        if method == "GET":
+            payload = {
+                "ok": True,
+                "config": self.runner.get_config_snapshot(),
+            }
+            self._log_api_response("/api/config", 200, payload, summary="config snapshot")
+            await self._send_json(writer, 200, payload)
+            return
+
+        if method != "POST":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+
+        try:
+            req = json.loads((body or b"{}").decode("utf-8"))
+        except Exception:
+            await self._send_json(writer, 400, {"ok": False, "error": "invalid JSON body"})
+            return
+        updates = req.get("updates", {})
+        ok, err = self.runner.update_config(updates)
+        if not ok:
+            await self._send_json(writer, 400, {"ok": False, "error": err})
+            return
+        payload = {"ok": True, "config": self.runner.get_config_snapshot()}
+        self._log_api_response("/api/config", 200, payload, summary=f"updated keys={list(updates.keys())}")
+        await self._send_json(writer, 200, payload)
+
+    async def _handle_logs(self, writer, raw_path: str):
+        limit = 400
+        with contextlib.suppress(Exception):
+            if "?" in raw_path:
+                query = raw_path.split("?", 1)[1]
+                for pair in query.split("&"):
+                    if not pair:
+                        continue
+                    k, _, v = pair.partition("=")
+                    if k == "limit":
+                        limit = int(v)
+                        break
+        lines = self.runner.get_debug_logs(limit=limit)
+        payload = {"ok": True, "lines": lines, "count": len(lines)}
+        self._log_api_response("/api/logs", 200, payload, summary=f"count={len(lines)}")
+        await self._send_json(writer, 200, payload)
+
+    async def _handle_peers(self, writer):
+        payload = self.runner.get_peer_connections_snapshot()
+        payload["ok"] = True
+        self._log_api_response("/api/peers", 200, payload, summary=f"count={payload.get('count', 0)}")
         await self._send_json(writer, 200, payload)
 
     async def _handle_restart(self, writer, method, headers):

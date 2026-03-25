@@ -27,6 +27,7 @@
         <nav class="nav-tabs" aria-label="Main navigation">
           <button class="nav-tab active" data-tab="status" type="button">Status</button>
           <button class="nav-tab" data-tab="configuration" type="button">Configuration</button>
+          <button class="nav-tab" data-tab="logs" type="button">Debug Logs</button>
           <button class="nav-tab" data-tab="misc" type="button">Misc</button>
         </nav>
 
@@ -80,6 +81,29 @@
               <div class="metric-label">Inflight</div>
               <div class="metric-value" id="inflight">n/a</div>
               <div class="metric-note">frames currently in flight</div>
+            </article>
+          </section>
+
+          <section class="summary-grid myudp-grid">
+            <article class="metric-card card">
+              <div class="metric-label">myUDP First Pass</div>
+              <div class="metric-value" id="myudpFirstPass">0</div>
+              <div class="metric-note">frames ACKed without resend</div>
+            </article>
+            <article class="metric-card card">
+              <div class="metric-label">myUDP Repeated Once</div>
+              <div class="metric-value" id="myudpRepeatedOnce">0</div>
+              <div class="metric-note">frames resent exactly one time</div>
+            </article>
+            <article class="metric-card card">
+              <div class="metric-label">myUDP Repeated Multiple</div>
+              <div class="metric-value" id="myudpRepeatedMultiple">0</div>
+              <div class="metric-note">frames resent multiple times</div>
+            </article>
+            <article class="metric-card card">
+              <div class="metric-label">myUDP Confirmed Total</div>
+              <div class="metric-value" id="myudpConfirmedTotal">0</div>
+              <div class="metric-note">total app frames confirmed</div>
             </article>
           </section>
 
@@ -154,6 +178,39 @@
           <section class="section-block">
             <div class="section-header">
               <div>
+                <h2>Peer Connections</h2>
+                <p>All active overlay peer sessions and per-peer health metrics</p>
+              </div>
+            </div>
+            <div class="table-card card">
+              <div class="table-wrap">
+                <table class="conn-table">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Transport</th>
+                      <th>Connected</th>
+                      <th>Peer</th>
+                      <th>RTT Est (ms)</th>
+                      <th>Inflight</th>
+                      <th>UDP Open</th>
+                      <th>TCP Open</th>
+                      <th>RX Bytes</th>
+                      <th>TX Bytes</th>
+                      <th>Decode Errors</th>
+                    </tr>
+                  </thead>
+                  <tbody id="peerConnectionsBody">
+                    <tr class="empty-row"><td colspan="11">No peer sessions</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <section class="section-block">
+            <div class="section-header">
+              <div>
                 <h2>UDP Connections</h2>
                 <p>Current UDP mappings and client transports</p>
               </div>
@@ -223,9 +280,40 @@
         </section>
 
         <section id="tab-configuration" class="tab-panel">
-          <section class="section-block card empty-state">
-            <h2>Configuration</h2>
-            <p>Grouped configuration editing will land in a later milestone. The page shell is ready so the tab structure already matches the planned router-style layout.</p>
+          <section class="section-block card">
+            <div class="section-header compact">
+              <div>
+                <h2>Configuration</h2>
+                <p>View and modify runtime configuration values exposed by the admin API.</p>
+              </div>
+              <button id="configReloadBtn" class="btn btn-secondary" type="button">Reload</button>
+            </div>
+            <div class="config-form-grid">
+              <label class="config-field">
+                <span>Key</span>
+                <input id="configKey" type="text" placeholder="example: udp_idle_timeout_sec" />
+              </label>
+              <label class="config-field">
+                <span>Value (JSON)</span>
+                <input id="configValue" type="text" placeholder="example: 30 or \"127.0.0.1\"" />
+              </label>
+              <button id="configSaveBtn" class="btn btn-secondary" type="button">Apply</button>
+            </div>
+            <p id="configMessage" class="config-message"></p>
+            <pre id="configJson" class="meta-box"></pre>
+          </section>
+        </section>
+
+        <section id="tab-logs" class="tab-panel">
+          <section class="section-block card">
+            <div class="section-header compact">
+              <div>
+                <h2>Debug Logs</h2>
+                <p>Latest in-memory debug/application logs captured from runtime.</p>
+              </div>
+              <button id="logsReloadBtn" class="btn btn-secondary" type="button">Reload</button>
+            </div>
+            <pre id="debugLogs" class="meta-box"></pre>
           </section>
         </section>
 
