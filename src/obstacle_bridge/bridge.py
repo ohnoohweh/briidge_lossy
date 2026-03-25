@@ -7591,6 +7591,45 @@ class Runner:
             })
         return {"peers": peers, "count": len(peers)}
 
+    def _group_config_snapshot(self, config: dict) -> dict:
+        sections = getattr(self.args, "_config_sections", {}) or {}
+        if not isinstance(sections, dict) or not sections:
+            return dict(config)
+        grouped: dict = {}
+        assigned: set = set()
+        for section in sorted(sections.keys()):
+            keys = sections.get(section, []) or []
+            block = {}
+            for key in keys:
+                if key in config:
+                    block[key] = config[key]
+            if block:
+                grouped[section] = block
+                assigned.update(block.keys())
+        misc = {k: v for k, v in config.items() if k not in assigned}
+        if misc:
+            grouped["misc"] = misc
+        return grouped
+
+    def save_runtime_config(self) -> tuple[bool, str]:
+        cfg_path = getattr(self.args, "config", None)
+        if not cfg_path:
+            return (True, "")
+        try:
+            path = pathlib.Path(str(cfg_path))
+            payload = self._group_config_snapshot(self.get_config_snapshot())
+            parent = path.parent
+            if parent and str(parent) not in ("", "."):
+                parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + ".tmp")
+            with tmp.open("w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+            tmp.replace(path)
+        except Exception as e:
+            return (False, f"failed to persist config to {cfg_path}: {e}")
+        return (True, "")
+
     def update_config(self, updates: dict) -> tuple[bool, str]:
         if not isinstance(updates, dict):
             return (False, "updates must be an object")
@@ -7618,7 +7657,7 @@ class Runner:
                 if not isinstance(value, (str, int, float, bool, list, dict)) and value is not None:
                     return (False, f"{key} has unsupported type")
             setattr(self.args, key, value)
-        return (True, "")
+        return self.save_runtime_config()
 
     def request_shutdown(self) -> None:
         self.log.debug("[SERVER] Runner shutdown requested")
