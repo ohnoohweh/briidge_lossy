@@ -7773,6 +7773,7 @@ class AdminWebUI:
         g.add_argument(
             "--admin-web",
             action="store_true",
+            default=True,
             help="Enable admin web interface",
         )
         g.add_argument(
@@ -8161,15 +8162,19 @@ class ConfigAwareCLI:
     ) -> argparse.Namespace:
         # Phase 0: bootstrap to get config & dump/save wants
         boot_args, remaining = self._parse_bootstrap(argv)
+        argv_list = list(argv) if argv is not None else sys.argv[1:]
+        explicit_config_flag = any(a in ("-c", "--config") for a in argv_list)
 
         # Phase 1: build full parser and register CLI from single source of truth
         parser = self._build_full_parser(registrars)
 
         # Phase 2: apply JSON config as defaults (if provided)
         if boot_args.config:
-            cfg = self._load_json_config(boot_args.config)
-            self._raw_config = cfg
-            self._apply_config_defaults_from_json(parser, cfg)
+            config_path = pathlib.Path(boot_args.config)
+            if explicit_config_flag or config_path.exists():
+                cfg = self._load_json_config(boot_args.config)
+                self._raw_config = cfg
+                self._apply_config_defaults_from_json(parser, cfg)
 
         # Phase 3: final parse; CLI overrides config/defaults
         args = parser.parse_args(remaining)
@@ -8204,7 +8209,7 @@ class ConfigAwareCLI:
     # ---------- internal: bootstrap / build ----------
     def _parse_bootstrap(self, argv: Optional[List[str]]):
         p = argparse.ArgumentParser(add_help=False)
-        p.add_argument("--config", "-c", default=None,
+        p.add_argument("--config", "-c", default="ObstacleBridge.cfg",
                        help="Path to a JSON config file. Values become defaults that CLI can override.")
         # Optional argument: if omitted -> const="human"
         p.add_argument("--dump-config", nargs="?", const="human",

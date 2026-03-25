@@ -115,7 +115,7 @@ The tables below are generated from the current parser registrations in `bridge.
 ### Admin web
 | Option(s) | Default | Description |
 |---|---:|---|
-| `--admin-web` | `False` | Enable admin web interface |
+| `--admin-web` | `True` | Enable admin web interface |
 | `--admin-web-bind` | `127.0.0.1` | Bind address for admin web interface |
 | `--admin-web-port` | `18080` | Port for admin web interface |
 | `--admin-web-path` | `/` | Base path for admin web interface |
