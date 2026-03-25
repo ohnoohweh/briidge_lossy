@@ -8509,6 +8509,8 @@ class ConfigAwareCLI:
 
         def apply_type(x: Any) -> Any:
             t = getattr(action, "type", None)
+            if x is None:
+                return None
             return x if t is None else t(x)
 
         # nargs / append list semantics
@@ -8524,6 +8526,8 @@ class ConfigAwareCLI:
             coerced = [apply_type(v) for v in items]
             if choices is not None:
                 for v in coerced:
+                    if v is None:
+                        continue
                     if v not in choices:
                         raise ValueError(f"Invalid value {v!r}; expected one of {sorted(choices)}")
             return coerced
@@ -8534,7 +8538,7 @@ class ConfigAwareCLI:
 
         # scalar
         v = apply_type(val)
-        if choices is not None and v not in choices:
+        if choices is not None and v is not None and v not in choices:
             raise ValueError(f"Invalid value {v!r}; expected one of {sorted(choices)}")
         return v
 
