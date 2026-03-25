@@ -197,8 +197,8 @@ function renderPeerTable(rows) {
       <td class="mono">${fmtInteger(row.inflight)}</td>
       <td class="mono">${fmtInteger(row.open_connections?.udp ?? 0)}</td>
       <td class="mono">${fmtInteger(row.open_connections?.tcp ?? 0)}</td>
-      <td class="mono">${fmtInteger(row.traffic?.rx_bytes ?? 0)}</td>
-      <td class="mono">${fmtInteger(row.traffic?.tx_bytes ?? 0)}</td>
+      <td class="mono">${fmtBytes(row.traffic?.rx_bytes ?? 0)}</td>
+      <td class="mono">${fmtBytes(row.traffic?.tx_bytes ?? 0)}</td>
       <td class="mono">${fmtInteger(row.decode_errors ?? 0)}</td>
     </tr>
   `).join('');
