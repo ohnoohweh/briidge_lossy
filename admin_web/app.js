@@ -296,6 +296,48 @@ function configValueToEditor(value) {
   return JSON.stringify(value);
 }
 
+function renderConfigRows(items, config) {
+  return (items || []).map((item) => {
+    const key = item.key;
+    const current = Object.prototype.hasOwnProperty.call(config, key) ? config[key] : null;
+    const currentRaw = configValueToEditor(current);
+    const defaultRaw = configValueToEditor(item.default);
+    return `
+      <tr>
+        <td class="mono">${key}</td>
+        <td>${item.description || '(no description)'}</td>
+        <td class="mono">${defaultRaw}</td>
+        <td><input class="config-editor mono" data-config-key="${key}" value="${currentRaw.replace(/"/g, '&quot;')}" /></td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderConfigCard(title, rowsHtml) {
+  return `
+    <section class="config-section card">
+      <div class="section-header compact">
+        <div>
+          <h3>${title}</h3>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="conn-table">
+          <thead>
+            <tr>
+              <th>Key</th>
+              <th>Description</th>
+              <th>Default</th>
+              <th>Current (JSON)</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
 function renderConfigSections(schema, config) {
   const root = document.getElementById('configSections');
   if (!root) return;
@@ -305,45 +347,27 @@ function renderConfigSections(schema, config) {
     return;
   }
 
-  root.innerHTML = sectionNames.map((section) => {
+  const debugLogItems = [];
+  const cards = [];
+
+  sectionNames.forEach((section) => {
     const items = schema[section] || [];
-    const rows = items.map((item) => {
-      const key = item.key;
-      const current = Object.prototype.hasOwnProperty.call(config, key) ? config[key] : null;
-      const currentRaw = configValueToEditor(current);
-      const defaultRaw = configValueToEditor(item.default);
-      return `
-        <tr>
-          <td class="mono">${key}</td>
-          <td>${item.description || '(no description)'}</td>
-          <td class="mono">${defaultRaw}</td>
-          <td><input class="config-editor mono" data-config-key="${key}" value="${currentRaw.replace(/"/g, '&quot;')}" /></td>
-        </tr>
-      `;
-    }).join('');
-    return `
-      <section class="config-section card">
-        <div class="section-header compact">
-          <div>
-            <h3>${section}</h3>
-          </div>
-        </div>
-        <div class="table-wrap">
-          <table class="conn-table">
-            <thead>
-              <tr>
-                <th>Key</th>
-                <th>Description</th>
-                <th>Default</th>
-                <th>Current (JSON)</th>
-              </tr>
-            </thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </div>
-      </section>
-    `;
-  }).join('');
+    const sectionDebugItems = items.filter((item) => String(item.key || '').startsWith('log_'));
+    const sectionRegularItems = items.filter((item) => !String(item.key || '').startsWith('log_'));
+
+    if (sectionDebugItems.length > 0) {
+      debugLogItems.push(...sectionDebugItems);
+    }
+    if (sectionRegularItems.length > 0) {
+      cards.push(renderConfigCard(section, renderConfigRows(sectionRegularItems, config)));
+    }
+  });
+
+  if (debugLogItems.length > 0) {
+    cards.unshift(renderConfigCard('Debug logging (per class/section)', renderConfigRows(debugLogItems, config)));
+  }
+
+  root.innerHTML = cards.join('');
 }
 
 async function loadLogs() {
