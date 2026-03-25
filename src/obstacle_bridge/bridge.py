@@ -3663,7 +3663,7 @@ class QuicSession(ISession):
         self._log_counters("UPDATE")
 
     # ---- early buffer ----
-    def _buffer_early(self, wire: bytes) -> None:
+    def _buffer_early(self, wire: bytes, on_sent: Optional[Callable[[], None]] = None) -> None:
         now = time.time()
         if self._early_deadline and now > self._early_deadline:
             self._log.info(f"[QUIC/TX] ({self._probe_id}) early-buf TTL expired; discarding {len(self._early_buf)}B")
@@ -3919,7 +3919,7 @@ class WebSocketSession(ISession):
         self._server_next_mux_chan: int = 1
 
         # Early buffer (APP/CTRL frames preserved as individual WS messages)
-        self._early_buf: Deque[bytes] = deque()
+        self._early_buf: Deque[tuple[bytes, Optional[Callable[[], None]]]] = deque()
         self._early_buf_bytes = 0
         self._early_max = 1 * 1024 * 1024
         self._early_ttl = 3.0
@@ -4070,7 +4070,7 @@ class WebSocketSession(ISession):
             return len(payload)
 
         if self._ws is None:
-            self._buffer_early(wire)
+            self._buffer_early(wire, on_sent=lambda: self._notify_peer_tx(len(wire)))
             self._log.debug(f"[WS/TX] ({self._probe_id}) early-buffer APP bytes={len(wire)} buf={len(self._early_buf)}")
             if self._peer_tuple:
                 self._ensure_connect_once()
@@ -4882,7 +4882,7 @@ class WebSocketSession(ISession):
         self._log_counters("UPDATE")
 
     # --- early buffer ----------------------------------------------------------
-    def _buffer_early(self, wire: bytes) -> None:
+    def _buffer_early(self, wire: bytes, on_sent: Optional[Callable[[], None]] = None) -> None:
         now = time.time()
         if self._early_deadline and now > self._early_deadline:
             self._log.info(f"[WS/TX] ({self._probe_id}) early-buf TTL expired; discarding {self._early_buf_bytes}B")
@@ -4890,10 +4890,10 @@ class WebSocketSession(ISession):
             self._early_buf_bytes = 0
         self._early_deadline = now + self._early_ttl
 
-        self._early_buf.append(bytes(wire))
+        self._early_buf.append((bytes(wire), on_sent))
         self._early_buf_bytes += len(wire)
         while self._early_buf_bytes > self._early_max and self._early_buf:
-            dropped = self._early_buf.popleft()
+            dropped, _ = self._early_buf.popleft()
             self._early_buf_bytes -= len(dropped)
             self._log.info(
                 f"[WS/TX] ({self._probe_id}) early-buf capped: dropped={len(dropped)} keep={self._early_buf_bytes} cap={self._early_max}"
@@ -4907,8 +4907,8 @@ class WebSocketSession(ISession):
             self._log.info(
                 f"[WS/TX] ({self._probe_id}) flushing early-buf frames={len(pending)} bytes={self._early_buf_bytes}"
             )
-            for wire in pending:
-                self._schedule_send(wire)
+            for wire, on_sent in pending:
+                self._schedule_send(wire, on_sent=on_sent)
         except Exception as e:
             self._log.info(f"[WS/TX] ({self._probe_id}) flush error: {e!r}")
         finally:
