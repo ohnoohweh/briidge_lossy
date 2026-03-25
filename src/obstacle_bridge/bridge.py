@@ -1837,16 +1837,16 @@ class UdpSession(ISession):
             except Exception: return False
 
         # Overlay (peer) side
-        if not _has('--bind443'):
-            p.add_argument('--bind443', default='::',
+        if not _has('--udp-bind'):
+            p.add_argument('--udp-bind', '--bind443', dest='udp_bind', default='::',
                            help="overlay bind address (IPv4 '0.0.0.0' or IPv6 '::')")
         if not _has('--port443'):
             p.add_argument('--port443', type=int, default=443, help='overlay listen port')
-        if not _has('--peer'):
-            p.add_argument('--peer', default=None,
+        if not _has('--udp-peer'):
+            p.add_argument('--udp-peer', '--peer', dest='udp_peer', default=None,
                            help="peer IP/FQDN (IPv4 or IPv6 literal; IPv6 may be in [brackets])")
-        if not _has('--peer-port'):
-            p.add_argument('--peer-port', type=int, default=443, help='peer overlay port')
+        if not _has('--udp-peer-port'):
+            p.add_argument('--udp-peer-port', '--peer-port', dest='udp_peer_port', type=int, default=443, help='peer overlay port')
         if not _has('--peer-resolve-family'):
             p.add_argument(
                 '--peer-resolve-family',
@@ -1918,10 +1918,12 @@ class UdpSession(ISession):
     # ---- ISession: lifecycle ----
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
-        listen_host = _strip_brackets(self._args.bind443)
+        listen_host = _strip_brackets(getattr(self._args, "udp_bind", getattr(self._args, "bind443", "::")))
         listen_port = int(self._args.port443)
         peer_info = _resolve_cli_peer(
             self._args,
+            peer_attr="udp_peer",
+            peer_port_attr="udp_peer_port",
             bind_host=listen_host,
             socktype=socket.SOCK_DGRAM,
         )
@@ -5370,18 +5372,18 @@ def _resolve_peer_endpoint(
 ) -> Tuple[str, int, int]:
     host = _strip_brackets(host)
     if not host:
-        raise RuntimeError("--peer requires a non-empty host name")
+        raise RuntimeError("overlay peer requires a non-empty host name")
 
     family = _host_ip_family(host)
     if family != socket.AF_UNSPEC:
         if resolve_mode == "ipv4" and family != socket.AF_INET:
-            raise RuntimeError(f"--peer {host!r} is not an IPv4 address")
+            raise RuntimeError(f"overlay peer {host!r} is not an IPv4 address")
         if resolve_mode == "ipv6" and family != socket.AF_INET6:
-            raise RuntimeError(f"--peer {host!r} is not an IPv6 address")
+            raise RuntimeError(f"overlay peer {host!r} is not an IPv6 address")
         bind_family = _bind_family_constraint(bind_host)
         if bind_family is not None and bind_family != family:
             raise RuntimeError(
-                f"--peer {host!r} resolves to family {family}, incompatible with --bind443 {bind_host!r}"
+                f"overlay peer {host!r} resolves to family {family}, incompatible with bind {bind_host!r}"
             )
         return host, int(port), family
 
@@ -5411,11 +5413,11 @@ def _resolve_peer_endpoint(
         else:
             fam_name = "IPv6" if bind_family == socket.AF_INET6 else "IPv4"
             raise RuntimeError(
-                f"--peer {host!r} resolved, but no {fam_name} address is compatible with --bind443 {bind_host!r}"
+                f"overlay peer {host!r} resolved, but no {fam_name} address is compatible with bind {bind_host!r}"
             )
 
     if not candidates:
-        raise RuntimeError(f"Could not resolve --peer {host!r}")
+        raise RuntimeError(f"Could not resolve overlay peer {host!r}")
 
     return candidates[0]
 
@@ -5423,19 +5425,50 @@ def _resolve_peer_endpoint(
 def _resolve_cli_peer(
     args: argparse.Namespace,
     *,
+    peer_attr: str = "peer",
+    peer_port_attr: str = "peer_port",
     bind_host: Optional[str] = None,
     socktype: int = 0,
 ) -> Optional[Tuple[str, int, int]]:
-    peer = getattr(args, "peer", None)
+    peer = getattr(args, peer_attr, None)
+    if not peer and peer_attr != "peer":
+        peer = getattr(args, "peer", None)
     if not peer:
         return None
+    peer_port = getattr(args, peer_port_attr, None)
+    if (peer_port is None) and peer_port_attr != "peer_port":
+        peer_port = getattr(args, "peer_port", 443)
     return _resolve_peer_endpoint(
         str(peer),
-        int(getattr(args, "peer_port", 443)),
+        int(peer_port if peer_port is not None else 443),
         resolve_mode=_peer_resolve_mode(args),
         bind_host=bind_host,
         socktype=socktype,
     )
+
+
+def _overlay_cli_attrs(transport: str) -> Tuple[str, str, str]:
+    transport = (transport or "myudp").strip().lower()
+    if transport == "myudp":
+        return ("udp_bind", "udp_peer", "udp_peer_port")
+    if transport == "tcp":
+        return ("tcp_bind", "tcp_peer", "tcp_peer_port")
+    if transport == "quic":
+        return ("quic_bind", "quic_peer", "quic_peer_port")
+    if transport == "ws":
+        return ("ws_bind", "ws_peer", "ws_peer_port")
+    return ("udp_bind", "udp_peer", "udp_peer_port")
+
+
+def _has_configured_overlay_peer(args: argparse.Namespace, transport: Optional[str] = None) -> bool:
+    if transport:
+        _, peer_attr, _ = _overlay_cli_attrs(transport)
+        return bool(getattr(args, peer_attr, None) or getattr(args, "peer", None))
+    for proto in ("myudp", "tcp", "quic", "ws"):
+        _, peer_attr, _ = _overlay_cli_attrs(proto)
+        if getattr(args, peer_attr, None):
+            return True
+    return bool(getattr(args, "peer", None))
 
 
 # ============================================================================
@@ -5547,7 +5580,8 @@ class ChannelMux:
         mux = ChannelMux(session, loop, on_local_rx_bytes, on_local_tx_bytes)
         # Parse catalog
         services = ChannelMux._parse_own_servers(getattr(args, 'own_servers', None))
-        listener_mode = not bool(getattr(args, 'peer', None))
+        active_transport = str(getattr(args, "overlay_transport", "myudp") or "myudp").split(",", 1)[0].strip().lower()
+        listener_mode = not _has_configured_overlay_peer(args, active_transport)
         if listener_mode and services:
             mux.log.info(
                 "[MUX] listener mode detected: ignoring %d --own-servers entries; "
@@ -6965,7 +6999,12 @@ class StatsBoard:
         # UI cosmetics
         self._dashboard_enabled = not args.no_dashboard
         self._overlay_peer_str = "—"
-        self._overlay_bind_str = f"{args.bind443}:{args.port443}"
+        first_transport = str(getattr(args, "overlay_transport", "myudp") or "myudp").split(",", 1)[0].strip().lower()
+        bind_attr, _, _ = _overlay_cli_attrs(first_transport)
+        bind_val = getattr(args, bind_attr, None)
+        if bind_val is None:
+            bind_val = getattr(args, "bind443", "::")
+        self._overlay_bind_str = f"{bind_val}:{args.port443}"
         self._local_side_str = self._summarize_local_sides(args)
 
         # Connection state
@@ -7822,8 +7861,7 @@ class Runner:
                     continue
 
                 # Only for configured peer clients
-                peer = getattr(self.args, "peer", None)
-                if not peer:
+                if not _has_configured_overlay_peer(self.args):
                     continue
 
                 # Need a live session object
@@ -7881,21 +7919,22 @@ class Runner:
                      "comma-separated list from myudp,tcp,quic,ws. "
                      "Multiple transports are supported simultaneously for listening instances."
             )
-        for proto in ("myudp", "tcp", "quic", "ws"):
-            opt = f'--overlay-port-{proto}'
-            if not _has(opt):
-                p.add_argument(
-                    opt,
-                    type=int,
-                    default=None,
-                    help=f'Optional listen port override for overlay transport {proto}. Defaults to --port443 or a deterministic offset when multiple transports are active.'
-                )
+        for proto in ("tcp", "quic", "ws"):
+            bind_opt = f"--{proto}-bind"
+            peer_opt = f"--{proto}-peer"
+            peer_port_opt = f"--{proto}-peer-port"
+            if not _has(bind_opt):
+                p.add_argument(bind_opt, default='::', help=f'{proto.upper()} overlay bind address')
+            if not _has(peer_opt):
+                p.add_argument(peer_opt, default=None, help=f'{proto.upper()} peer IP/FQDN')
+            if not _has(peer_port_opt):
+                p.add_argument(peer_port_opt, type=int, default=443, help=f'{proto.upper()} peer overlay port')
         if not _has('--client-restart-if-disconnected'):
             p.add_argument(
                 '--client-restart-if-disconnected',
                 type=float,
                 default=0.0,
-                help='If configured as a peer client (--peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables.'
+                help='If configured as a peer client (for example --udp-peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables.'
             )            
     @staticmethod
     def _parse_overlay_transports(args: argparse.Namespace) -> List[str]:
@@ -7911,15 +7950,12 @@ class Runner:
         for part in parts:
             if part not in seen:
                 seen.append(part)
-        if len(seen) > 1 and getattr(args, "peer", None):
-            raise ValueError("Multiple --overlay-transport values are currently supported only for listening instances without --peer.")
+        if len(seen) > 1 and any(_has_configured_overlay_peer(args, transport=t) for t in seen):
+            raise ValueError("Multiple --overlay-transport values are currently supported only for listening instances without configured transport peers.")
         return seen
 
     @staticmethod
     def _overlay_port_for(args: argparse.Namespace, transport: str, multi_count: int) -> int:
-        explicit = getattr(args, f"overlay_port_{transport}", None)
-        if explicit:
-            return int(explicit)
         base = int(getattr(args, "port443", 443))
         if multi_count <= 1:
             return base
@@ -7937,6 +7973,10 @@ class Runner:
             session_args = argparse.Namespace(**vars(args))
             session_args.overlay_transport = choice
             session_args.port443 = Runner._overlay_port_for(args, choice, len(choices))
+            bind_attr, peer_attr, peer_port_attr = _overlay_cli_attrs(choice)
+            session_args.bind443 = getattr(session_args, bind_attr, getattr(session_args, "bind443", "::"))
+            session_args.peer = getattr(session_args, peer_attr, getattr(session_args, "peer", None))
+            session_args.peer_port = int(getattr(session_args, peer_port_attr, getattr(session_args, "peer_port", 443)) or 443)
             if choice == "tcp":
                 out.append((choice, TcpStreamSession.from_args(session_args)))
             elif choice == "quic":
