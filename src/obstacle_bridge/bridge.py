@@ -2335,6 +2335,13 @@ class TcpStreamSession(ISession):
             except Exception:
                 return False
 
+        if not _has('--tcp-bind'):
+            p.add_argument('--tcp-bind', default='::', help='TCP overlay bind address')
+        if not _has('--tcp-peer'):
+            p.add_argument('--tcp-peer', default=None, help='TCP peer IP/FQDN')
+        if not _has('--tcp-peer-port'):
+            p.add_argument('--tcp-peer-port', type=int, default=443, help='TCP peer overlay port')
+
         if not _has('--tcp-bp-wbuf-threshold'):
             p.add_argument('--tcp-bp-wbuf-threshold', type=int, default=128 * 1024,
                         help='TCP overlay: write() buffer size threshold in bytes to signal drain (default 131072).')
@@ -3025,6 +3032,13 @@ class QuicSession(ISession):
         def _has(opt: str) -> bool:
             try: return any(opt in a.option_strings for a in p._actions)
             except Exception: return False
+
+        if not _has('--quic-bind'):
+            p.add_argument('--quic-bind', default='::', help='QUIC overlay bind address')
+        if not _has('--quic-peer'):
+            p.add_argument('--quic-peer', default=None, help='QUIC peer IP/FQDN')
+        if not _has('--quic-peer-port'):
+            p.add_argument('--quic-peer-port', type=int, default=443, help='QUIC peer overlay port')
 
         if not _has('--quic-alpn'):
             p.add_argument('--quic-alpn', default='hq-29',
@@ -3786,6 +3800,13 @@ class WebSocketSession(ISession):
         def _has(opt: str) -> bool:
             try: return any(opt in a.option_strings for a in p._actions)
             except Exception: return False
+
+        if not _has('--ws-bind'):
+            p.add_argument('--ws-bind', default='::', help='WebSocket overlay bind address')
+        if not _has('--ws-peer'):
+            p.add_argument('--ws-peer', default=None, help='WebSocket peer IP/FQDN')
+        if not _has('--ws-peer-port'):
+            p.add_argument('--ws-peer-port', type=int, default=443, help='WebSocket peer overlay port')
 
         if not _has('--ws-path'):
             p.add_argument('--ws-path', default='/', help='WebSocket HTTP path (default /)')
@@ -7638,10 +7659,34 @@ class Runner:
         return data
 
     def get_config_schema_snapshot(self) -> dict:
-        sections = getattr(self.args, "_config_sections", {}) or {}
+        sections = {k: set(v) for k, v in (getattr(self.args, "_config_sections", {}) or {}).items()}
         defaults = getattr(self.args, "_config_defaults", {}) or {}
         descriptions = getattr(self.args, "_config_help", {}) or {}
         choices = getattr(self.args, "_config_choices", {}) or {}
+
+        # Keep transport endpoint knobs grouped with their transport sessions in the
+        # admin UI, even when those options were originally registered elsewhere.
+        transport_key_targets = {
+            "udp_bind": "udp_session",
+            "udp_peer": "udp_session",
+            "udp_peer_port": "udp_session",
+            "port443": "udp_session",
+            "tcp_bind": "tcp_session",
+            "tcp_peer": "tcp_session",
+            "tcp_peer_port": "tcp_session",
+            "quic_bind": "quic_session",
+            "quic_peer": "quic_session",
+            "quic_peer_port": "quic_session",
+            "ws_bind": "ws_session",
+            "ws_peer": "ws_session",
+            "ws_peer_port": "ws_session",
+        }
+        for key, target_section in transport_key_targets.items():
+            if not hasattr(self.args, key):
+                continue
+            for section_keys in sections.values():
+                section_keys.discard(key)
+            sections.setdefault(target_section, set()).add(key)
 
         schema: dict = {}
         for section in sorted(sections.keys()):
