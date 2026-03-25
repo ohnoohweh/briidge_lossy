@@ -331,7 +331,7 @@ function renderConfigCard(title, rowsHtml) {
           <h3>${title}</h3>
         </div>
       </div>
-      <div class="table-wrap">
+      <div class="table-wrap config-table-wrap">
         <table class="conn-table">
           <thead>
             <tr>

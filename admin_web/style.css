@@ -531,6 +531,11 @@ h1 {
   overflow-y: auto;
 }
 
+.config-table-wrap {
+  max-height: none;
+  overflow-y: visible;
+}
+
 .conn-table thead th {
   position: sticky;
   top: 0;
