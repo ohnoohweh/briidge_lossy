@@ -302,12 +302,16 @@ function renderConfigRows(items, config) {
     const current = Object.prototype.hasOwnProperty.call(config, key) ? config[key] : null;
     const currentRaw = configValueToEditor(current);
     const defaultRaw = configValueToEditor(item.default);
+    const isLevelSetting = isLoggingLevelSetting(key, current, item.default);
+    const editorHtml = isLevelSetting
+      ? renderLogLevelSelect(key, current)
+      : `<input class="config-editor mono" data-config-key="${key}" value="${currentRaw.replace(/"/g, '&quot;')}" />`;
     return `
       <tr>
         <td class="mono">${key}</td>
         <td>${item.description || '(no description)'}</td>
         <td class="mono">${defaultRaw}</td>
-        <td><input class="config-editor mono" data-config-key="${key}" value="${currentRaw.replace(/"/g, '&quot;')}" /></td>
+        <td>${editorHtml}</td>
       </tr>
     `;
   }).join('');
@@ -347,27 +351,39 @@ function renderConfigSections(schema, config) {
     return;
   }
 
-  const debugLogItems = [];
   const cards = [];
 
   sectionNames.forEach((section) => {
     const items = schema[section] || [];
-    const sectionDebugItems = items.filter((item) => String(item.key || '').startsWith('log_'));
-    const sectionRegularItems = items.filter((item) => !String(item.key || '').startsWith('log_'));
-
-    if (sectionDebugItems.length > 0) {
-      debugLogItems.push(...sectionDebugItems);
-    }
-    if (sectionRegularItems.length > 0) {
-      cards.push(renderConfigCard(section, renderConfigRows(sectionRegularItems, config)));
+    if (items.length > 0) {
+      cards.push(renderConfigCard(section, renderConfigRows(items, config)));
     }
   });
 
-  if (debugLogItems.length > 0) {
-    cards.unshift(renderConfigCard('Debug logging (per class/section)', renderConfigRows(debugLogItems, config)));
-  }
-
   root.innerHTML = cards.join('');
+}
+
+const LOG_LEVEL_OPTIONS = ['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG', 'NOTSET'];
+
+function isLoggingLevelSetting(key, currentValue, defaultValue) {
+  const normalizedKey = String(key || '').toLowerCase();
+  const byName = normalizedKey === 'log'
+    || normalizedKey.startsWith('log_')
+    || normalizedKey.endsWith('_level');
+  if (byName) return true;
+
+  const c = typeof currentValue === 'string' ? currentValue.toUpperCase() : '';
+  const d = typeof defaultValue === 'string' ? defaultValue.toUpperCase() : '';
+  return LOG_LEVEL_OPTIONS.includes(c) || LOG_LEVEL_OPTIONS.includes(d);
+}
+
+function renderLogLevelSelect(key, currentValue) {
+  const normalizedCurrent = String(currentValue ?? '').toUpperCase();
+  const options = LOG_LEVEL_OPTIONS.map((level) => {
+    const selected = level === normalizedCurrent ? ' selected' : '';
+    return `<option value="${JSON.stringify(level).replace(/"/g, '&quot;')}"${selected}>${level}</option>`;
+  }).join('');
+  return `<select class="config-editor mono" data-config-key="${key}">${options}</select>`;
 }
 
 async function loadLogs() {
@@ -421,5 +437,4 @@ setInterval(loadStatus, 1000);
 setInterval(loadConnections, 1000);
 setInterval(loadPeers, 1000);
 setInterval(loadMeta, 5000);
-setInterval(loadConfig, 5000);
 setInterval(loadLogs, 2000);
