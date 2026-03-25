@@ -154,6 +154,8 @@ async function loadStatus() {
     const rtt = j.transport?.rtt_est_ms;
     const inflight = j.transport?.inflight;
     const errors = j.decode_errors?.unidentified_frames ?? 0;
+    const myudp = j.myudp || {};
+    const retransmit = myudp.retransmit || {};
 
     setText('rttEst', fmtNumber(rtt));
     setText('inflight', fmtInteger(inflight));
@@ -161,9 +163,37 @@ async function loadStatus() {
     setText('sidebarInflight', fmtInteger(inflight));
     setText('decodeErrors', fmtInteger(errors));
     setText('sidebarErrors', fmtInteger(errors));
+    setText('myudpFirstPass', fmtInteger(retransmit.first_pass));
+    setText('myudpRepeatedOnce', fmtInteger(retransmit.repeated_once));
+    setText('myudpRepeatedMultiple', fmtInteger(retransmit.repeated_multiple));
+    setText('myudpConfirmedTotal', fmtInteger(retransmit.confirmed_total));
   } catch (e) {
     console.error('status load failed', e);
   }
+}
+
+function renderPeerTable(rows) {
+  const tbody = document.getElementById('peerConnectionsBody');
+  if (!tbody) return;
+  if (!rows || rows.length === 0) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="11">No peer sessions</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((row) => `
+    <tr>
+      <td class="mono">${fmtInteger(row.id)}</td>
+      <td class="mono">${row.transport || 'n/a'}</td>
+      <td><span class="${(row.connected ? 'role-pill role-server' : 'role-pill role-unknown')}">${row.connected ? 'yes' : 'no'}</span></td>
+      <td class="mono">${row.peer || 'n/a'}</td>
+      <td class="mono">${fmtNumber(row.rtt_est_ms)}</td>
+      <td class="mono">${fmtInteger(row.inflight)}</td>
+      <td class="mono">${fmtInteger(row.open_connections?.udp ?? 0)}</td>
+      <td class="mono">${fmtInteger(row.open_connections?.tcp ?? 0)}</td>
+      <td class="mono">${fmtInteger(row.traffic?.rx_bytes ?? 0)}</td>
+      <td class="mono">${fmtInteger(row.traffic?.tx_bytes ?? 0)}</td>
+      <td class="mono">${fmtInteger(row.decode_errors ?? 0)}</td>
+    </tr>
+  `).join('');
 }
 
 async function loadConnections() {
@@ -174,13 +204,84 @@ async function loadConnections() {
 
     renderConnectionTable('udpConnectionsBody', j.udp || []);
     renderConnectionTable('tcpConnectionsBody', j.tcp || []);
-    document.getElementById('udpOpen').textContent = fmtInteger(j.counts?.udp ?? (j.udp || []).length);
-    document.getElementById('tcpOpen').textContent = fmtInteger(j.counts?.tcp ?? (j.tcp || []).length);
-    const ts = new Date();
-    document.getElementById('connectionsUpdatedAt').textContent =
-      `updated ${ts.toLocaleTimeString()}`;
+    setText('udpOpen', fmtInteger(j.counts?.udp ?? (j.udp || []).length));
+    setText('tcpOpen', fmtInteger(j.counts?.tcp ?? (j.tcp || []).length));
   } catch (e) {
     console.error('connections load failed', e);
+  }
+}
+
+async function loadPeers() {
+  try {
+    const r = await fetch('/api/peers', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    renderPeerTable(j.peers || []);
+  } catch (e) {
+    console.error('peers load failed', e);
+  }
+}
+
+async function loadConfig() {
+  try {
+    const r = await fetch('/api/config', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    const el = document.getElementById('configJson');
+    if (el) el.textContent = JSON.stringify(j, null, 2);
+  } catch (e) {
+    const el = document.getElementById('configJson');
+    if (el) el.textContent = 'config load failed: ' + e;
+  }
+}
+
+async function saveConfig() {
+  const key = (document.getElementById('configKey')?.value || '').trim();
+  const raw = (document.getElementById('configValue')?.value || '').trim();
+  if (!key) {
+    setText('configMessage', 'Please enter a configuration key.');
+    return;
+  }
+  if (!raw) {
+    setText('configMessage', 'Please enter a value in JSON format.');
+    return;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    setText('configMessage', `Invalid JSON value: ${e}`);
+    return;
+  }
+
+  try {
+    const r = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ updates: { [key]: parsed } }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || `HTTP ${r.status}`);
+    }
+    setText('configMessage', `Applied ${key}=${JSON.stringify(parsed)}`);
+    await loadConfig();
+  } catch (e) {
+    setText('configMessage', `Apply failed: ${e}`);
+  }
+}
+
+async function loadLogs() {
+  try {
+    const r = await fetch('/api/logs?limit=500', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    const lines = Array.isArray(j.lines) ? j.lines : [];
+    const box = document.getElementById('debugLogs');
+    if (box) box.textContent = lines.join('\n');
+  } catch (e) {
+    const box = document.getElementById('debugLogs');
+    if (box) box.textContent = 'debug logs load failed: ' + e;
   }
 }
 
@@ -206,11 +307,20 @@ function initMetaToggle() {
 }
 
 document.getElementById('restartBtn').addEventListener('click', restart);
+document.getElementById('configReloadBtn')?.addEventListener('click', loadConfig);
+document.getElementById('configSaveBtn')?.addEventListener('click', saveConfig);
+document.getElementById('logsReloadBtn')?.addEventListener('click', loadLogs);
 initTabs();
 initMetaToggle();
 loadMeta();
 loadStatus();
 loadConnections();
+loadPeers();
+loadConfig();
+loadLogs();
 setInterval(loadStatus, 1000);
 setInterval(loadConnections, 1000);
+setInterval(loadPeers, 1000);
 setInterval(loadMeta, 5000);
+setInterval(loadConfig, 5000);
+setInterval(loadLogs, 2000);
