@@ -189,19 +189,45 @@ class WebSocketPayloadModeTests(unittest.TestCase):
         session = WebSocketSession(_args("binary"))
         session._ws = object()
         sent = []
-        session._schedule_send = sent.append
+        session._schedule_send = lambda wire, on_sent=None: sent.append((wire, on_sent))
         session._bump_tx = lambda wire: None
         session._buffer_early(b"\x01first")
         session._buffer_early(b"\x02second")
 
         session._flush_early()
 
-        self.assertEqual(sent, [b"\x01first", b"\x02second"])
+        self.assertEqual([wire for wire, _ in sent], [b"\x01first", b"\x02second"])
+        self.assertEqual([on_sent for _, on_sent in sent], [None, None])
         self.assertEqual(len(session._early_buf), 0)
         self.assertEqual(session._early_buf_bytes, 0)
 
 
 class WebSocketTxLoopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_early_buffered_send_notifies_peer_tx_after_flush(self):
+        args = _args("binary")
+        args.peer = "127.0.0.1"
+        args.peer_port = 54321
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        session._peer_tuple = ("127.0.0.1", 54321)
+        sent_sizes = []
+        session.set_on_peer_tx(sent_sizes.append)
+
+        session._ws = None
+        session.send_app(b"hello")
+        self.assertEqual(session._early_buf_bytes, 6)
+
+        session._ws = _FakeWs()
+        session._flush_early()
+        await asyncio.wait_for(session._tx_queue.join(), timeout=1.0)
+
+        self.assertEqual(session._tx_bytes, 6)
+        self.assertEqual(sent_sizes, [6])
+        self.assertEqual(session._ws.sent, [b"\x00hello"])
+
+        session._tx_task.cancel()
+        await session._tx_task
+
     async def test_tx_accounting_happens_after_successful_send(self):
         session = WebSocketSession(_args("binary"))
         session._loop = asyncio.get_running_loop()
