@@ -8,6 +8,19 @@ function fmtInteger(value) {
   return String(value);
 }
 
+function fmtBytes(value) {
+  if (value == null || Number.isNaN(value)) return 'n/a';
+  const bytes = Math.max(0, Number(value));
+  const KB = 1024;
+  const MB = KB * 1024;
+  const GB = MB * 1024;
+
+  if (bytes < KB) return `${Math.floor(bytes)} B`;
+  if (bytes < MB) return `${(bytes / KB).toFixed(1)} kB`;
+  if (bytes < GB) return `${(bytes / MB).toFixed(1)} MB`;
+  return `${(bytes / GB).toFixed(1)} GB`;
+}
+
 function fmtUptime(sec) {
   if (sec == null || Number.isNaN(sec)) return 'n/a';
   const s = Math.max(0, Math.floor(sec));
@@ -73,8 +86,8 @@ function renderConnectionTable(tbodyId, rows) {
         <td class="mono">${fmtEndpoint(row.source)}</td>
         <td class="mono">${fmtInteger(row.local_port)}</td>
         <td class="mono">${fmtDestination(row.remote_destination)}</td>
-        <td class="mono">${fmtInteger(rxBytes)}</td>
-        <td class="mono">${fmtInteger(txBytes)}</td>
+        <td class="mono">${fmtBytes(rxBytes)}</td>
+        <td class="mono">${fmtBytes(txBytes)}</td>
         <td class="mono">${fmtInteger(rxMsgs)}</td>
         <td class="mono">${fmtInteger(txMsgs)}</td>        
       </tr>
