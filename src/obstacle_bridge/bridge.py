@@ -8313,6 +8313,13 @@ class ConfigAwareCLI:
         self._log_object_attributes(args)
         self._log_registered_loggers()
 
+        # Keep third-party library logger names aligned with our section names.
+        # Example: "log_ws_session" should also control websockets' own logger
+        # hierarchy so the admin debug ring doesn't get flooded by frame dumps.
+        logger_aliases = {
+            "ws_session": ("websockets", "websockets.client", "websockets.server"),
+        }
+
         # Automatic section → logger name mapping
         # All section loggers become: runner.<section>
         for key, val in vars(args).items():
@@ -8333,6 +8340,11 @@ class ConfigAwareCLI:
             lg.setLevel(level)
 
             DebugLoggingConfigurator.debug_logger_status(lg)
+
+            for alias_name in logger_aliases.get(section, ()):
+                alias_logger = logging.getLogger(alias_name)
+                alias_logger.setLevel(level)
+                DebugLoggingConfigurator.debug_logger_status(alias_logger)
 
 
     def _log_registered_loggers(self)  -> None:
