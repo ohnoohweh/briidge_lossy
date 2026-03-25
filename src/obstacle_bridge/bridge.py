@@ -4152,6 +4152,19 @@ class WebSocketSession(ISession):
             self._server_connected_evt.clear()
         self._set_overlay_connected(connected)
 
+    @staticmethod
+    def _format_peer_label(host: Optional[object], port: Optional[object]) -> Optional[str]:
+        try:
+            if host is None or port is None:
+                return None
+            host_s = str(host)
+            port_i = int(port)
+            if not host_s:
+                return None
+            return f"[{host_s}]:{port_i}" if ":" in host_s and not host_s.startswith("[") else f"{host_s}:{port_i}"
+        except Exception:
+            return None
+
     def get_overlay_peers_snapshot(self) -> list[dict]:
         """
         Return per-overlay-peer rows for admin diagnostics.
@@ -4162,13 +4175,7 @@ class WebSocketSession(ISession):
         """
         rows: list[dict] = []
         if self._peer_tuple:
-            peer_label = None
-            if self._peer_host:
-                peer_label = (
-                    f"[{self._peer_host}]:{self._peer_port}"
-                    if ":" in self._peer_host and not self._peer_host.startswith("[")
-                    else f"{self._peer_host}:{self._peer_port}"
-                )
+            peer_label = self._format_peer_label(self._peer_host, self._peer_port)
             rows.append(
                 {
                     "peer_id": 0,
@@ -4187,26 +4194,25 @@ class WebSocketSession(ISession):
             except Exception:
                 continue
 
-        for peer_id, ctx in list(self._server_peers.items()):
-            ws = ctx.get("ws")
+        peer_ids: set[int] = set(int(p) for p in self._server_peers.keys())
+        peer_ids.update(int(p) for p in mux_by_peer.keys())
+
+        for peer_id in sorted(peer_ids):
+            ctx = self._server_peers.get(peer_id, {})
+            ws = ctx.get("ws") if isinstance(ctx, dict) else None
             remote = getattr(ws, "remote_address", None) if ws is not None else None
-            peer_label = None
-            try:
-                if isinstance(remote, tuple) and len(remote) >= 2 and remote[0] is not None and remote[1] is not None:
-                    host, port = str(remote[0]), int(remote[1])
-                    peer_label = f"[{host}]:{port}" if ":" in host and not host.startswith("[") else f"{host}:{port}"
-            except Exception:
-                peer_label = None
+            host = remote[0] if isinstance(remote, tuple) and len(remote) >= 2 else None
+            port = remote[1] if isinstance(remote, tuple) and len(remote) >= 2 else None
+            peer_label = self._format_peer_label(host, port)
             rows.append(
                 {
-                    "peer_id": int(peer_id),
-                    "connected": True,
+                    "peer_id": peer_id,
+                    "connected": bool(peer_id in self._server_peers),
                     "peer": peer_label,
-                    "mux_chans": sorted(mux_by_peer.get(int(peer_id), [])),
+                    "mux_chans": sorted(mux_by_peer.get(peer_id, [])),
                 }
             )
 
-        rows.sort(key=lambda r: int(r.get("peer_id", 0)))
         return rows
 
     # ---- Internals ------------------------------------------------------------
