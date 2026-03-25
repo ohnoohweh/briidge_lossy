@@ -303,9 +303,15 @@ function renderConfigRows(items, config) {
     const currentRaw = configValueToEditor(current);
     const defaultRaw = configValueToEditor(item.default);
     const isLevelSetting = isLoggingLevelSetting(key, current, item.default);
-    const editorHtml = isLevelSetting
-      ? renderLogLevelSelect(key, current)
-      : `<input class="config-editor mono" data-config-key="${key}" value="${currentRaw.replace(/"/g, '&quot;')}" />`;
+    const isBooleanSetting = isBooleanConfigSetting(current, item.default);
+    const hasChoices = Array.isArray(item.choices) && item.choices.length > 0;
+    const editorHtml = hasChoices
+      ? renderChoiceSelect(key, current, item.choices)
+      : (isBooleanSetting
+        ? renderBooleanSelect(key, current)
+        : (isLevelSetting
+          ? renderLogLevelSelect(key, current)
+          : `<input class="config-editor mono" data-config-key="${key}" value="${currentRaw.replace(/"/g, '&quot;')}" />`));
     return `
       <tr>
         <td class="mono">${key}</td>
@@ -382,6 +388,33 @@ function renderLogLevelSelect(key, currentValue) {
   const options = LOG_LEVEL_OPTIONS.map((level) => {
     const selected = level === normalizedCurrent ? ' selected' : '';
     return `<option value="${JSON.stringify(level).replace(/"/g, '&quot;')}"${selected}>${level}</option>`;
+  }).join('');
+  return `<select class="config-editor mono" data-config-key="${key}">${options}</select>`;
+}
+
+function isBooleanConfigSetting(currentValue, defaultValue) {
+  return typeof currentValue === 'boolean' || typeof defaultValue === 'boolean';
+}
+
+function renderBooleanSelect(key, currentValue) {
+  const normalizedCurrent = Boolean(currentValue);
+  const options = [true, false].map((value) => {
+    const selected = value === normalizedCurrent ? ' selected' : '';
+    return `<option value="${JSON.stringify(value)}"${selected}>${value}</option>`;
+  }).join('');
+  return `<select class="config-editor mono" data-config-key="${key}">${options}</select>`;
+}
+
+function renderChoiceSelect(key, currentValue, choices) {
+  const allowed = Array.isArray(choices) ? choices : [];
+  const fallbackChoices = allowed.some((choice) => JSON.stringify(choice) === JSON.stringify(currentValue))
+    ? allowed
+    : [...allowed, currentValue];
+  const options = fallbackChoices.map((choice) => {
+    const selected = JSON.stringify(choice) === JSON.stringify(currentValue) ? ' selected' : '';
+    const value = JSON.stringify(choice).replace(/"/g, '&quot;');
+    const label = typeof choice === 'string' ? choice : JSON.stringify(choice);
+    return `<option value="${value}"${selected}>${label}</option>`;
   }).join('');
   return `<select class="config-editor mono" data-config-key="${key}">${options}</select>`;
 }
