@@ -4191,9 +4191,12 @@ class WebSocketSession(ISession):
             ws = ctx.get("ws")
             remote = getattr(ws, "remote_address", None) if ws is not None else None
             peer_label = None
-            if isinstance(remote, tuple) and len(remote) >= 2:
-                host, port = str(remote[0]), int(remote[1])
-                peer_label = f"[{host}]:{port}" if ":" in host and not host.startswith("[") else f"{host}:{port}"
+            try:
+                if isinstance(remote, tuple) and len(remote) >= 2 and remote[0] is not None and remote[1] is not None:
+                    host, port = str(remote[0]), int(remote[1])
+                    peer_label = f"[{host}]:{port}" if ":" in host and not host.startswith("[") else f"{host}:{port}"
+            except Exception:
+                peer_label = None
             rows.append(
                 {
                     "peer_id": int(peer_id),
@@ -7019,13 +7022,16 @@ class StatsBoard:
 
         # UI cosmetics
         self._dashboard_enabled = not args.no_dashboard
-        self._overlay_peer_str = "—"
+        self._overlay_peer_str = "n/a"
         first_transport = str(getattr(args, "overlay_transport", "myudp") or "myudp").split(",", 1)[0].strip().lower()
+        self._has_fixed_overlay_peer = _has_configured_overlay_peer(args, first_transport)
         bind_attr, _, _ = _overlay_cli_attrs(first_transport)
         bind_val = getattr(args, bind_attr, None)
         if bind_val is None:
             bind_val = getattr(args, "bind443", "::")
         self._overlay_bind_str = f"{bind_val}:{args.port443}"
+        if self._has_fixed_overlay_peer:
+            self._overlay_peer_str = "—"
         self._local_side_str = self._summarize_local_sides(args)
 
         # Connection state
@@ -7047,6 +7053,9 @@ class StatsBoard:
 
     # ---- event sinks (Runner calls these) -------------------------------------
     def on_peer_set(self, host: str, port: int) -> None:
+        if not self._has_fixed_overlay_peer:
+            self._overlay_peer_str = "n/a"
+            return
         self._overlay_peer_str = f"[{host}]:{port}" if ':' in host and not host.startswith('[') else f"{host}:{port}"
         self.log.debug(f"on_peer_set({host} {port} )")
 

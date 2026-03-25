@@ -63,15 +63,15 @@ CASES: Dict[str, Case] = {
         name='case06_overlay_tcp_ipv4',
         bounce_proto='udp', bounce_bind='0.0.0.0', bounce_port=16666,
         probe_proto='udp', probe_host='127.0.0.1', probe_port=16667, probe_bind='0.0.0.0',
-        bridge_server_args=['--overlay-transport', 'tcp', '--bind443', '0.0.0.0', '--port443', '12345', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server.txt'],
-        bridge_client_args=['--overlay-transport', 'tcp', '--peer', '127.0.0.1', '--peer-port', '12345', '--bind443', '0.0.0.0', '--port443', '0', '--own-servers', 'udp,16667,0.0.0.0,udp,127.0.0.1,16666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_ipv6.txt'],
+        bridge_server_args=['--overlay-transport', 'tcp', '--tcp-bind', '0.0.0.0', '--port443', '12345', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server.txt'],
+        bridge_client_args=['--overlay-transport', 'tcp', '--tcp-peer', '127.0.0.1', '--tcp-peer-port', '12345', '--tcp-bind', '0.0.0.0', '--port443', '0', '--own-servers', 'udp,16667,0.0.0.0,udp,127.0.0.1,16666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_ipv6.txt'],
     ),
     'case08_overlay_ws_ipv4': Case(
         name='case08_overlay_ws_ipv4',
         bounce_proto='udp', bounce_bind='0.0.0.0', bounce_port=16666,
         probe_proto='udp', probe_host='127.0.0.1', probe_port=16667, probe_bind='0.0.0.0',
-        bridge_server_args=['--overlay-transport', 'ws', '--bind443', '0.0.0.0', '--port443', '54321', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server.txt'],
-        bridge_client_args=['--overlay-transport', 'ws', '--peer', '127.0.0.1', '--peer-port', '54321', '--bind443', '0.0.0.0', '--port443', '0', '--own-servers', 'udp,16667,0.0.0.0,udp,127.0.0.1,16666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_ipv6.txt'],
+        bridge_server_args=['--overlay-transport', 'ws', '--ws-bind', '0.0.0.0', '--port443', '54321', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server.txt'],
+        bridge_client_args=['--overlay-transport', 'ws', '--ws-peer', '127.0.0.1', '--ws-peer-port', '54321', '--ws-bind', '0.0.0.0', '--port443', '0', '--own-servers', 'udp,16667,0.0.0.0,udp,127.0.0.1,16666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_ipv6.txt'],
         server_env={'NO_PROXY': '127.0.0.1'},
         client_env={'NO_PROXY': '127.0.0.1'},
     ),
@@ -79,8 +79,17 @@ CASES: Dict[str, Case] = {
         name='case10_overlay_quic_ipv4',
         bounce_proto='udp', bounce_bind='0.0.0.0', bounce_port=16666,
         probe_proto='udp', probe_host='127.0.0.1', probe_port=16667, probe_bind='0.0.0.0',
-        bridge_server_args=['--overlay-transport', 'quic', '--bind443', '0.0.0.0', '--port443', '4443', '--quic-cert', 'cert.pem', '--quic-key', 'key.pem', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server.txt'],
-        bridge_client_args=['--overlay-transport', 'quic', '--peer', '127.0.0.1', '--peer-port', '4443', '--bind443', '0.0.0.0', '--port443', '0', '--quic-insecure', '--own-servers', 'udp,16667,0.0.0.0,udp,127.0.0.1,16666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_ipv6.txt'],
+        bridge_server_args=['--overlay-transport', 'quic', '--quic-bind', '0.0.0.0', '--port443', '4443', '--quic-cert', 'cert.pem', '--quic-key', 'key.pem', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server.txt'],
+        bridge_client_args=['--overlay-transport', 'quic', '--quic-peer', '127.0.0.1', '--quic-peer-port', '4443', '--quic-bind', '0.0.0.0', '--port443', '0', '--quic-insecure', '--own-servers', 'udp,16667,0.0.0.0,udp,127.0.0.1,16666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_ipv6.txt'],
+    ),
+    'case12_overlay_ws_ipv4_listener_two_clients': Case(
+        name='case12_overlay_ws_ipv4_listener_two_clients',
+        bounce_proto='udp', bounce_bind='0.0.0.0', bounce_port=16666,
+        probe_proto='udp', probe_host='127.0.0.1', probe_port=16667, probe_bind='0.0.0.0',
+        bridge_server_args=['--overlay-transport', 'ws', '--ws-bind', '0.0.0.0', '--port443', '54331', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server_two_clients.txt'],
+        bridge_client_args=['--overlay-transport', 'ws', '--ws-peer', '127.0.0.1', '--ws-peer-port', '54331', '--ws-bind', '0.0.0.0', '--port443', '0', '--own-servers', 'udp,16667,0.0.0.0,udp,127.0.0.1,16666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_two_clients.txt'],
+        server_env={'NO_PROXY': '127.0.0.1'},
+        client_env={'NO_PROXY': '127.0.0.1'},
     ),
 }
 
@@ -96,10 +105,38 @@ def _append_args(args: List[str], extra: List[str]) -> List[str]:
     return list(args) + list(extra)
 
 
+def _replace_own_servers_local_port(args: List[str], local_port: int) -> List[str]:
+    out = list(args)
+    if '--own-servers' not in out:
+        raise ValueError('missing --own-servers option')
+    idx = out.index('--own-servers')
+    if idx + 1 >= len(out):
+        raise ValueError('missing --own-servers value')
+    raw = out[idx + 1]
+    parts = [p.strip() for p in raw.split(',')]
+    if len(parts) < 6:
+        raise ValueError(f'unsupported --own-servers format: {raw!r}')
+    parts[1] = str(local_port)
+    out[idx + 1] = ','.join(parts)
+    return out
+
+
 def _with_localhost_peer(case: Case, name: str, bind_host: str, resolve_family: str) -> Case:
-    server_args = _replace_arg(case.bridge_server_args, '--bind443', bind_host)
-    client_args = _replace_arg(case.bridge_client_args, '--peer', 'localhost')
-    client_args = _replace_arg(client_args, '--bind443', bind_host)
+    transport = 'myudp'
+    if '--overlay-transport' in case.bridge_client_args:
+        t_idx = case.bridge_client_args.index('--overlay-transport')
+        if t_idx + 1 < len(case.bridge_client_args):
+            transport = str(case.bridge_client_args[t_idx + 1]).strip().lower()
+
+    bind_opt = '--bind443'
+    peer_opt = '--peer'
+    if transport in ('tcp', 'quic', 'ws'):
+        bind_opt = f'--{transport}-bind'
+        peer_opt = f'--{transport}-peer'
+
+    server_args = _replace_arg(case.bridge_server_args, bind_opt, bind_host)
+    client_args = _replace_arg(case.bridge_client_args, peer_opt, 'localhost')
+    client_args = _replace_arg(client_args, bind_opt, bind_host)
     client_args = _append_args(client_args, ['--peer-resolve-family', resolve_family])
 
     server_env = dict(case.server_env)
@@ -528,6 +565,9 @@ def build_commands(case: Case, log_dir: Path, case_index: int, enable_admin: boo
     server_admin, client_admin = alloc_admin_ports(case_index)
     server_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_server_args, log_dir, case.name, 'bridge_server')
     client_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_client_args, log_dir, case.name, 'bridge_client')
+    # Prevent accidental fixed-port collisions from external config defaults.
+    server_cmd += ['--admin-web-port', '0']
+    client_cmd += ['--admin-web-port', '0']
     client_cmd += ['--client-restart-if-disconnected', '5']
     if enable_admin:
         server_cmd += admin_args(server_admin)
@@ -639,6 +679,21 @@ def wait_connections_metrics_updated(admin_port: int, timeout: float = 8.0, labe
             return doc
         time.sleep(0.25)
     raise RuntimeError(f'/api/connections metrics not updated on port {admin_port}; last={last_doc!r}')
+
+
+def wait_peers_count(admin_port: int, minimum_count: int, timeout: float = 12.0, label: str = '') -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
+        last_doc = doc
+        rows = list(doc.get('peers') or [])
+        if len(rows) >= minimum_count:
+            who = f' {label}' if label else ''
+            log.info(f'[PEERS]{who} port={admin_port} count={len(rows)}')
+            return doc
+        time.sleep(0.25)
+    raise RuntimeError(f'/api/peers did not reach {minimum_count} rows on port {admin_port}; last={last_doc!r}')
 
 
 def status_state(doc: dict) -> str:
@@ -909,6 +964,77 @@ def run_case_reconnect(case: Case, log_dir: Path, case_index: int, settle_s: Opt
         bounce.stop()
 
 
+def run_case_two_peer_clients_listener(case: Case, log_dir: Path, case_index: int, settle_s: Optional[float] = None) -> None:
+    bounce = BounceBackServer(
+        name=f'{case.name}_bounce',
+        proto=case.bounce_proto,
+        bind_host=case.bounce_bind,
+        port=case.bounce_port,
+        log_path=log_dir / f'{case.name}_bounce.log',
+    )
+    server_proc: Optional[Proc] = None
+    client1_proc: Optional[Proc] = None
+    client2_proc: Optional[Proc] = None
+    server_spec, client_spec = build_commands(case, log_dir, case_index, enable_admin=True)
+
+    try:
+        phase('1. Start bounce-back server')
+        bounce.start()
+
+        phase('2. Start listener/server bridge')
+        name, cmd, env, admin_port = server_spec
+        server_proc = start_proc(f'{case.name}_{name}', cmd, log_dir, env_extra=env, admin_port=admin_port)
+        time.sleep(0.5)
+        assert_running(server_proc)
+        wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+
+        phase('3. Start client #1 bridge')
+        c_name, c_cmd, c_env, c_admin_port = client_spec
+        client1_proc = start_proc(f'{case.name}_{c_name}_1', c_cmd, log_dir, env_extra=c_env, admin_port=c_admin_port)
+        time.sleep(0.5)
+        assert_running(client1_proc)
+        wait_admin_up(client1_proc.admin_port or 0, timeout=10.0)
+
+        phase('4. Start client #2 bridge with a different local UDP service port')
+        client2_cmd = _replace_own_servers_local_port(c_cmd, 16668)
+        client2_cmd += ['--admin-web-port', '0']
+        client2_proc = start_proc(f'{case.name}_{c_name}_2', client2_cmd, log_dir, env_extra=c_env, admin_port=None)
+        time.sleep(0.5)
+        assert_running(client2_proc)
+
+        time.sleep(case.settle_seconds if settle_s is None else settle_s)
+        assert_running(server_proc)
+        assert_running(client1_proc)
+        assert_running(client2_proc)
+
+        phase('5. Verify both client-side UDP service ports are reachable through the listener')
+        wait_probe(case, payload=b'\x01\x41', timeout=8.0)
+        second_reply = probe_udp(case.probe_host, 16668, case.probe_bind, b'\x01\x42', timeout=2.0)
+        if second_reply != b'\x02\x42':
+            raise RuntimeError(f'Unexpected second client probe response: {second_reply!r}')
+
+        phase('6. Verify listener admin status keeps Overlay Peer as n/a')
+        status_doc = wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+        overlay_peer = str((status_doc.get('overlay') or {}).get('peer') or '').strip().lower()
+        if overlay_peer != 'n/a':
+            raise RuntimeError(f'Expected server overlay.peer to be n/a with two clients, got {overlay_peer!r}')
+
+        phase('7. Verify listener admin peers API shows two peer sessions')
+        peers_doc = wait_peers_count(server_proc.admin_port or 0, minimum_count=2, timeout=12.0, label='server')
+        rows = list(peers_doc.get('peers') or [])
+        with_ip = [row for row in rows if row.get('peer') not in (None, '', 'n/a')]
+        if len(with_ip) < 2:
+            raise RuntimeError(f'Expected >=2 peer rows with endpoint labels, got rows={rows!r}')
+    finally:
+        if client2_proc is not None:
+            stop_proc(client2_proc)
+        if client1_proc is not None:
+            stop_proc(client1_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+        bounce.stop()
+
+
 def wait_both_connected(
     server_proc: Proc,
     client_proc: Proc,
@@ -1011,6 +1137,8 @@ def main() -> int:
         try:
             if args.reconnect:
                 run_case_reconnect(case, log_dir, idx, settle_s=args.settle_seconds, reconnect_timeout=args.reconnect_timeout)
+            elif name == 'case12_overlay_ws_ipv4_listener_two_clients':
+                run_case_two_peer_clients_listener(case, log_dir, idx, settle_s=args.settle_seconds)
             else:
                 run_case(case, log_dir, idx, settle_s=args.settle_seconds)
             log.info(f'PASS {case.name}')
