@@ -7521,18 +7521,26 @@ class Runner:
         sections = getattr(self.args, "_config_sections", {}) or {}
         defaults = getattr(self.args, "_config_defaults", {}) or {}
         descriptions = getattr(self.args, "_config_help", {}) or {}
+        choices = getattr(self.args, "_config_choices", {}) or {}
 
         schema: dict = {}
         for section in sorted(sections.keys()):
+            section_keys = set(sections.get(section, []))
+            section_log_key = f"log_{section}"
+            if hasattr(self.args, section_log_key):
+                section_keys.add(section_log_key)
             items = []
-            for key in sorted(sections.get(section, [])):
+            for key in sorted(section_keys):
                 if not hasattr(self.args, key):
                     continue
-                items.append({
+                row = {
                     "key": key,
                     "description": descriptions.get(key, "(no description)"),
                     "default": defaults.get(key, None),
-                })
+                }
+                if key in choices:
+                    row["choices"] = list(choices.get(key, []))
+                items.append(row)
             if items:
                 schema[section] = items
         return schema
@@ -8192,6 +8200,7 @@ class ConfigAwareCLI:
         # and BEFORE we apply any JSON config.
         self._baseline_defaults: Dict[str, Any] = {}
         self._action_help: Dict[str, str] = {}
+        self._action_choices: Dict[str, List[Any]] = {}
 
     # ---------- public surface ----------
     def parse_args(
@@ -8295,12 +8304,16 @@ class ConfigAwareCLI:
         # 4) Snapshot defaults + help text (now that all options exist)
         self._baseline_defaults = {}
         self._action_help = {}
+        self._action_choices = {}
         for a in p._actions:
             d = getattr(a, "dest", None)
             if not d or d == "help":
                 continue
             self._baseline_defaults[d] = getattr(a, "default", None)
             self._action_help[d] = getattr(a, "help", "") or "(no description)"
+            choices = getattr(a, "choices", None)
+            if choices is not None:
+                self._action_choices[d] = list(choices)
 
         self._sections = sections
         self._parser = p
@@ -8636,6 +8649,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     args._config_sections = {k: sorted(v) for k, v in cli.sections.items()}
     args._config_defaults = dict(cli._baseline_defaults)
     args._config_help = dict(cli._action_help)
+    args._config_choices = dict(cli._action_choices)
 
     # Apply logging in one line (behavior unchanged)
     DebugLoggingConfigurator.from_args(args).apply()
