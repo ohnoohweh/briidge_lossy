@@ -128,8 +128,6 @@ async function loadStatus() {
     const j = await r.json();
 
     applyPeerState(j.peer_state);
-    setText('overlayBind', j.overlay?.bind ?? 'n/a');
-    setText('overlayPeer', j.overlay?.peer ?? 'n/a');
     setText('detailOverlayBind', j.overlay?.bind ?? 'n/a');
     setText('detailOverlayPeer', j.overlay?.peer ?? 'n/a');
 
@@ -159,10 +157,7 @@ async function loadStatus() {
 
     setText('rttEst', fmtNumber(rtt));
     setText('inflight', fmtInteger(inflight));
-    setText('sidebarRtt', rtt == null ? 'n/a' : `${fmtNumber(rtt)} ms`);
-    setText('sidebarInflight', fmtInteger(inflight));
     setText('decodeErrors', fmtInteger(errors));
-    setText('sidebarErrors', fmtInteger(errors));
     setText('myudpFirstPass', fmtInteger(retransmit.first_pass));
     setText('myudpRepeatedOnce', fmtInteger(retransmit.repeated_once));
     setText('myudpRepeatedMultiple', fmtInteger(retransmit.repeated_multiple));
@@ -227,30 +222,38 @@ async function loadConfig() {
     const r = await fetch('/api/config', { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
-    const el = document.getElementById('configJson');
-    if (el) el.textContent = JSON.stringify(j, null, 2);
+    configState = {
+      config: j.config || {},
+      schema: j.schema || {},
+    };
+    renderConfigSections(configState.schema, configState.config);
+    setText('configMessage', '');
   } catch (e) {
-    const el = document.getElementById('configJson');
-    if (el) el.textContent = 'config load failed: ' + e;
+    setText('configMessage', 'config load failed: ' + e);
   }
 }
 
 async function saveConfig() {
-  const key = (document.getElementById('configKey')?.value || '').trim();
-  const raw = (document.getElementById('configValue')?.value || '').trim();
-  if (!key) {
-    setText('configMessage', 'Please enter a configuration key.');
-    return;
+  const editors = Array.from(document.querySelectorAll('.config-editor[data-config-key]'));
+  if (editors.length === 0) return;
+
+  const updates = {};
+  for (const input of editors) {
+    const key = input.getAttribute('data-config-key');
+    const raw = (input.value || '').trim();
+    try {
+      const parsed = JSON.parse(raw);
+      const current = configState.config ? configState.config[key] : undefined;
+      if (JSON.stringify(parsed) !== JSON.stringify(current)) {
+        updates[key] = parsed;
+      }
+    } catch (e) {
+      setText('configMessage', `Invalid JSON for ${key}: ${e}`);
+      return;
+    }
   }
-  if (!raw) {
-    setText('configMessage', 'Please enter a value in JSON format.');
-    return;
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (e) {
-    setText('configMessage', `Invalid JSON value: ${e}`);
+  if (Object.keys(updates).length === 0) {
+    setText('configMessage', 'No configuration changes to save.');
     return;
   }
 
@@ -258,17 +261,76 @@ async function saveConfig() {
     const r = await fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ updates: { [key]: parsed } }),
+      body: JSON.stringify({ updates }),
     });
     const j = await r.json();
     if (!r.ok || !j.ok) {
       throw new Error(j.error || `HTTP ${r.status}`);
     }
-    setText('configMessage', `Applied ${key}=${JSON.stringify(parsed)}`);
+    setText('configMessage', `Saved ${Object.keys(updates).length} configuration value(s).`);
     await loadConfig();
   } catch (e) {
-    setText('configMessage', `Apply failed: ${e}`);
+    setText('configMessage', `Save failed: ${e}`);
   }
+}
+
+let configState = {
+  config: {},
+  schema: {},
+};
+
+function configValueToEditor(value) {
+  return JSON.stringify(value);
+}
+
+function renderConfigSections(schema, config) {
+  const root = document.getElementById('configSections');
+  if (!root) return;
+  const sectionNames = Object.keys(schema || {});
+  if (sectionNames.length === 0) {
+    root.innerHTML = '<div class="empty-state card"><p>No configuration schema available.</p></div>';
+    return;
+  }
+
+  root.innerHTML = sectionNames.map((section) => {
+    const items = schema[section] || [];
+    const rows = items.map((item) => {
+      const key = item.key;
+      const current = Object.prototype.hasOwnProperty.call(config, key) ? config[key] : null;
+      const currentRaw = configValueToEditor(current);
+      const defaultRaw = configValueToEditor(item.default);
+      return `
+        <tr>
+          <td class="mono">${key}</td>
+          <td>${item.description || '(no description)'}</td>
+          <td class="mono">${defaultRaw}</td>
+          <td><input class="config-editor mono" data-config-key="${key}" value="${currentRaw.replace(/"/g, '&quot;')}" /></td>
+        </tr>
+      `;
+    }).join('');
+    return `
+      <section class="config-section card">
+        <div class="section-header compact">
+          <div>
+            <h3>${section}</h3>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="conn-table">
+            <thead>
+              <tr>
+                <th>Key</th>
+                <th>Description</th>
+                <th>Default</th>
+                <th>Current (JSON)</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </section>
+    `;
+  }).join('');
 }
 
 async function loadLogs() {
