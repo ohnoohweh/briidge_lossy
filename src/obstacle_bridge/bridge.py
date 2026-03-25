@@ -1931,11 +1931,15 @@ class UdpSession(ISession):
             peer_host, peer_port, peer_family = peer_info
             peer = (peer_host, peer_port)
 
-        if listen_host in ('::', '0.0.0.0') and peer_family in (socket.AF_INET, socket.AF_INET6):
+        if (
+            not _prefer_unspec_listener_family()
+            and listen_host in ('::', '0.0.0.0')
+            and peer_family in (socket.AF_INET, socket.AF_INET6)
+        ):
             family = peer_family
             listen_host = _wildcard_host_for_family(peer_family)
         else:
-            family = socket.AF_INET6 if ":" in listen_host else socket.AF_INET
+            family = _listener_family_for_host(listen_host)
         listen = (listen_host, listen_port)
 
         def _factory():
@@ -1960,7 +1964,10 @@ class UdpSession(ISession):
             # On Windows, prepare the socket manually so we can disable
             # UDP connreset / ICMP port unreachable poisoning.
             if os.name == "nt":
-                sock = socket.socket(family, socket.SOCK_DGRAM)
+                win_family = family if family != socket.AF_UNSPEC else (
+                    socket.AF_INET6 if ":" in listen_host else socket.AF_INET
+                )
+                sock = socket.socket(win_family, socket.SOCK_DGRAM)
                 sock.setblocking(False)
                 sock.bind(listen)
                 try:
@@ -2450,7 +2457,7 @@ class TcpStreamSession(ISession):
                 await self._on_accept(reader, writer)
 
             try:
-                family = socket.AF_INET6 if ":" in self._listen_host else socket.AF_INET
+                family = _listener_family_for_host(self._listen_host)
                 self._server = await asyncio.start_server(_handle, host=self._listen_host, port=self._listen_port, family=family)
             except TypeError:
                 self._server = await asyncio.start_server(_handle, host=self._listen_host, port=self._listen_port)
@@ -5284,6 +5291,21 @@ def _wildcard_host_for_family(family: int) -> str:
     return "::" if family == socket.AF_INET6 else "0.0.0.0"
 
 
+def _prefer_unspec_listener_family() -> bool:
+    """
+    Python 3.9 needs explicit AF_INET/AF_INET6 in several asyncio listener paths.
+    Newer runtimes handle AF_UNSPEC correctly, so we can let the stack decide.
+    """
+    return sys.version_info >= (3, 10)
+
+
+def _listener_family_for_host(host: str) -> int:
+    host = _strip_brackets(host or "")
+    if _prefer_unspec_listener_family():
+        return socket.AF_UNSPEC
+    return socket.AF_INET6 if ":" in host else socket.AF_INET
+
+
 def _resolve_peer_endpoint(
     host: str,
     port: int,
@@ -5763,7 +5785,7 @@ class ChannelMux:
                 # Remove so _ensure_servers_task will respawn
                 parent._svc_udp_servers.pop(spec.svc_id, None)
 
-        family = socket.AF_INET6 if ":" in spec.l_bind else socket.AF_INET
+        family = _listener_family_for_host(spec.l_bind)
         await self.loop.create_datagram_endpoint(
             lambda: _UDPServer(),
             local_addr=(spec.l_bind, spec.l_port),
@@ -5960,8 +5982,13 @@ class ChannelMux:
             return
         async def _mk():
             try:
-                family = socket.AF_INET6 if ":" in _strip_brackets(host) else socket.AF_INET
-                local_addr = ("::", 0) if family == socket.AF_INET6 else ("0.0.0.0", 0)
+                family = _listener_family_for_host(host)
+                if family == socket.AF_INET6:
+                    local_addr = ("::", 0)
+                elif family == socket.AF_INET:
+                    local_addr = ("0.0.0.0", 0)
+                else:
+                    local_addr = None
                 tr, _ = await self.loop.create_datagram_endpoint(
                     lambda: self._UDPClientProtocol(self, chan),
                     local_addr=local_addr,
@@ -6202,7 +6229,7 @@ class ChannelMux:
 
             self.loop.create_task(_pump())
         try:
-            family = socket.AF_INET6 if ":" in spec.l_bind else socket.AF_INET
+            family = _listener_family_for_host(spec.l_bind)
             srv = await asyncio.start_server(_handle, host=spec.l_bind, port=spec.l_port, family=family)
         except TypeError:
             srv = await asyncio.start_server(_handle, host=spec.l_bind, port=spec.l_port)
