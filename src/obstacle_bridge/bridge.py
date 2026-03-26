@@ -5608,6 +5608,7 @@ class ChannelMux:
         DATA = 0
         OPEN = 1  # TCP only
         CLOSE = 2  # TCP only
+        REMOTE_SERVICES_SET_V1 = 3  # control plane: peer installs listener catalog
 
     @dataclass(frozen=True)
     class ServiceSpec:
@@ -5765,6 +5766,7 @@ class ChannelMux:
         # Services
         self._services: dict[int, ChannelMux.ServiceSpec] = {}
         self._remote_services_requested: list[ChannelMux.ServiceSpec] = []
+        self._peer_installed_services: dict[int, ChannelMux.ServiceSpec] = {}
         self._svc_tcp_servers: dict[int, asyncio.base_events.Server] = {}
         self._svc_udp_servers: dict[int, asyncio.DatagramTransport] = {}
 
@@ -5884,17 +5886,88 @@ class ChannelMux:
         (r_port,) = struct.unpack(">H", buf[6+hlen:8+hlen])
         return svc_id, r_proto, host, r_port
 
+    # ---------- REMOTE_SERVICES_SET v1 payload ----------
+    # b"RS1" + u16 count + repeated:
+    #   u16 svc_id + u8 l_proto + u8 l_bind_len + l_bind + u16 l_port
+    #             + u8 r_proto + u8 r_host_len + r_host + u16 r_port
+    def _encode_remote_services_set_v1(self, services: list["ChannelMux.ServiceSpec"]) -> bytes:
+        out = bytearray(b"RS1")
+        out += struct.pack(">H", len(services))
+        for s in services:
+            lb = s.l_bind.encode("utf-8", "ignore")
+            rh = s.r_host.encode("utf-8", "ignore")
+            if len(lb) > 255 or len(rh) > 255:
+                raise ValueError("REMOTE_SERVICES_SET_V1 host/bind too long")
+            out += struct.pack(
+                ">HBB",
+                int(s.svc_id),
+                1 if s.l_proto == "tcp" else 0,
+                len(lb),
+            )
+            out += lb
+            out += struct.pack(">HB", int(s.l_port), 1 if s.r_proto == "tcp" else 0)
+            out += struct.pack(">B", len(rh))
+            out += rh
+            out += struct.pack(">H", int(s.r_port))
+        return bytes(out)
+
+    def _decode_remote_services_set_v1(self, payload: bytes) -> Optional[list["ChannelMux.ServiceSpec"]]:
+        if len(payload) < 5 or payload[:3] != b"RS1":
+            return None
+        try:
+            off = 3
+            (count,) = struct.unpack(">H", payload[off:off + 2])
+            off += 2
+            out: list[ChannelMux.ServiceSpec] = []
+            for _ in range(int(count)):
+                if off + 5 > len(payload):
+                    return None
+                svc_id, l_proto_i, l_len = struct.unpack(">HBB", payload[off:off + 4])
+                off += 4
+                if off + l_len + 4 > len(payload):
+                    return None
+                l_bind = payload[off:off + l_len].decode("utf-8", "ignore")
+                off += l_len
+                l_port, r_proto_i = struct.unpack(">HB", payload[off:off + 3])
+                off += 3
+                (r_len,) = struct.unpack(">B", payload[off:off + 1])
+                off += 1
+                if off + r_len + 2 > len(payload):
+                    return None
+                r_host = payload[off:off + r_len].decode("utf-8", "ignore")
+                off += r_len
+                (r_port,) = struct.unpack(">H", payload[off:off + 2])
+                off += 2
+                l_proto = "tcp" if int(l_proto_i) == 1 else "udp"
+                r_proto = "tcp" if int(r_proto_i) == 1 else "udp"
+                out.append(ChannelMux.ServiceSpec(
+                    svc_id=int(svc_id),
+                    l_proto=l_proto,
+                    l_bind=l_bind,
+                    l_port=int(l_port),
+                    r_proto=r_proto,
+                    r_host=r_host,
+                    r_port=int(r_port),
+                ))
+            if off != len(payload):
+                return None
+            return out
+        except Exception:
+            return None
+
     # ---------- start/stop ----------
     async def start(self) -> None:
         self.log.info("[MUX] start; overlay_connected=%s accepting=%s", self._overlay_connected, self._accepting_enabled)
-        if self._services:
-            specs = "; ".join(f"{s.svc_id}:{s.l_proto} {s.l_bind}:{s.l_port} -> {s.r_proto} {s.r_host}:{s.r_port}" for s in self._services.values())
+        effective_services = self._effective_services_by_id()
+        if effective_services:
+            specs = "; ".join(f"{s.svc_id}:{s.l_proto} {s.l_bind}:{s.l_port} -> {s.r_proto} {s.r_host}:{s.r_port}" for s in effective_services.values())
             self.log.info("[MUX] services: %s", specs)
         else:
             self.log.info("[MUX] services: (none)")
         self.log.info("[MUX] start; overlay_connected=%s accepting=%s", self._overlay_connected, self._accepting_enabled)
         if self._overlay_connected and self._accepting_enabled:
             await self._start_all_services()
+            self._send_remote_services_catalog_if_any()
         self._sweeper_task = self.loop.create_task(self._udp_idle_sweeper())
         self._ensure_task = self.loop.create_task(self._ensure_servers_task())
 
@@ -5920,10 +5993,11 @@ class ChannelMux:
         # Re-enable and (re)start
         self._accepting_enabled = True
         await self._start_all_services()
+        self._send_remote_services_catalog_if_any()
 
     # ---------- service lifecycle ----------
     async def _start_all_services(self):
-        for svc in self._services.values():
+        for svc in self._effective_services_by_id().values():
             try:
                 if svc.l_proto == "tcp" and svc.svc_id not in self._svc_tcp_servers:
                     await self._start_tcp_server_for(svc)
@@ -6080,7 +6154,7 @@ class ChannelMux:
                 await asyncio.sleep(1.0)
                 if not (self._overlay_connected and self._accepting_enabled):
                     continue
-                for spec in self._services.values():
+                for spec in self._effective_services_by_id().values():
                     if spec.l_proto == "tcp":
                         srv = self._svc_tcp_servers.get(spec.svc_id)
                         if srv is None or getattr(srv, "sockets", None) in (None, []):
@@ -6099,6 +6173,76 @@ class ChannelMux:
                                 self.log.info("[MUX] UDP service %s restart failed: %r", spec.svc_id, e)
         except asyncio.CancelledError:
             return
+
+    def _effective_services_by_id(self) -> dict[int, "ChannelMux.ServiceSpec"]:
+        out: dict[int, ChannelMux.ServiceSpec] = {}
+        out.update(self._services)
+        for sid, spec in self._peer_installed_services.items():
+            if sid not in out:
+                out[sid] = spec
+        return out
+
+    def _send_remote_services_catalog_if_any(self) -> None:
+        if not self._remote_services_requested:
+            return
+        try:
+            payload = self._encode_remote_services_set_v1(self._remote_services_requested)
+            self._send_mux(0, ChannelMux.Proto.UDP, ChannelMux.MType.REMOTE_SERVICES_SET_V1, payload)
+            self.log.info("[MUX/CTRL] sent REMOTE_SERVICES_SET_V1 with %d service(s)", len(self._remote_services_requested))
+        except Exception as e:
+            self.log.warning("[MUX/CTRL] failed sending REMOTE_SERVICES_SET_V1: %r", e)
+
+    async def _stop_listener_for_service_id(self, svc_id: int, proto_name: str) -> None:
+        if proto_name == "udp":
+            tr = self._svc_udp_servers.pop(svc_id, None)
+            if tr:
+                try:
+                    tr.close()
+                except Exception:
+                    pass
+            return
+        srv = self._svc_tcp_servers.pop(svc_id, None)
+        if srv:
+            try:
+                srv.close()
+                await srv.wait_closed()
+            except Exception:
+                pass
+
+    async def _apply_peer_installed_services(self, services: list["ChannelMux.ServiceSpec"]) -> None:
+        new_map: dict[int, ChannelMux.ServiceSpec] = {int(s.svc_id): s for s in services}
+        old_map = dict(self._peer_installed_services)
+        to_stop: set[int] = set()
+        to_start: set[int] = set()
+
+        for sid in set(old_map.keys()) - set(new_map.keys()):
+            to_stop.add(sid)
+        for sid in set(new_map.keys()) - set(old_map.keys()):
+            to_start.add(sid)
+        for sid in set(new_map.keys()) & set(old_map.keys()):
+            if new_map[sid] != old_map[sid]:
+                to_stop.add(sid)
+                to_start.add(sid)
+
+        self._peer_installed_services = new_map
+
+        for sid in sorted(to_stop):
+            old = old_map.get(sid)
+            if old:
+                await self._stop_listener_for_service_id(sid, old.l_proto)
+
+        if self._overlay_connected and self._accepting_enabled:
+            for sid in sorted(to_start):
+                spec = new_map.get(sid)
+                if not spec:
+                    continue
+                try:
+                    if spec.l_proto == "tcp" and sid not in self._svc_tcp_servers:
+                        await self._start_tcp_server_for(spec)
+                    elif spec.l_proto == "udp" and sid not in self._svc_udp_servers:
+                        await self._start_udp_server_for(spec)
+                except Exception as e:
+                    self.log.warning("[MUX/CTRL] peer-installed service %s start failed: %r", sid, e)
 
     # ---------- MUX send ----------
     def _send_mux(self, chan_id: int, proto: ChannelMux.Proto, mtype: ChannelMux.MType, data: bytes) -> None:
@@ -6152,6 +6296,15 @@ class ChannelMux:
         if mtype == ChannelMux.MType.DATA and self._on_local_tx:
             try: self._on_local_tx(len(payload))
             except Exception: pass
+
+        if mtype == ChannelMux.MType.REMOTE_SERVICES_SET_V1:
+            services = self._decode_remote_services_set_v1(payload)
+            if services is None:
+                self.log.warning("[MUX/CTRL] invalid REMOTE_SERVICES_SET_V1 payload (%d bytes)", len(payload))
+                return False
+            self.loop.create_task(self._apply_peer_installed_services(services))
+            self.log.info("[MUX/CTRL] received REMOTE_SERVICES_SET_V1 with %d service(s)", len(services))
+            return True
 
         if proto == ChannelMux.Proto.UDP:
             self._rx_udp(chan_id, mtype, payload)
@@ -6767,7 +6920,8 @@ class ChannelMux:
 
     def _svc_spec_or_none(self, svc_id: int):
         try:
-            return self._services.get(int(svc_id))
+            i = int(svc_id)
+            return self._services.get(i) or self._peer_installed_services.get(i)
         except Exception:
             return None
 
@@ -6907,7 +7061,8 @@ class ChannelMux:
     
     def _svc_spec_or_none(self, svc_id: int):
         try:
-            return self._services.get(int(svc_id))
+            i = int(svc_id)
+            return self._services.get(i) or self._peer_installed_services.get(i)
         except Exception:
             return None
 
