@@ -55,6 +55,19 @@ class WebSocketMultiPeerMuxRewriteTests(unittest.TestCase):
         self.assertEqual((proto, counter, mtype, dlen), (0, 5, 0, 3))
         self.assertIn(mux_chan, session._server_chan_to_peer)
 
+    def test_unregister_peer_channels_only_removes_target_peer(self):
+        session = WebSocketSession(_server_args())
+        payload = session._MUX_HDR.pack(7, 0, 1, 0, 4) + b'test'
+        rewritten1 = session._server_rewrite_inbound_app(1, payload)
+        rewritten2 = session._server_rewrite_inbound_app(2, payload)
+        chan1 = session._MUX_HDR.unpack(rewritten1[:session._MUX_HDR.size])[0]
+        chan2 = session._MUX_HDR.unpack(rewritten2[:session._MUX_HDR.size])[0]
+
+        session._server_unregister_peer_channels(1)
+
+        self.assertNotIn(chan1, session._server_chan_to_peer)
+        self.assertIn(chan2, session._server_chan_to_peer)
+
 
 class WebSocketMultiPeerSendTests(unittest.IsolatedAsyncioTestCase):
     async def test_send_app_routes_to_matching_server_peer_queue(self):
