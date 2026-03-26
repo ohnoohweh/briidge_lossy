@@ -14,7 +14,7 @@ from obstacle_bridge.bridge import WebSocketSession
 def _args(ws_payload_mode: str) -> argparse.Namespace:
     return argparse.Namespace(
         ws_bind="0.0.0.0",
-        ws_listen_port=0,
+        ws_own_port=0,
         ws_peer=None,
         ws_peer_port=0,
         ws_path="/",

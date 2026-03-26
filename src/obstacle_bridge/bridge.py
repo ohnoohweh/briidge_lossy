@@ -1840,8 +1840,8 @@ class UdpSession(ISession):
         if not _has('--udp-bind'):
             p.add_argument('--udp-bind', dest='udp_bind', default='::',
                            help="overlay bind address (IPv4 '0.0.0.0' or IPv6 '::')")
-        if not _has('--udp-listen-port'):
-            p.add_argument('--udp-listen-port', dest='udp_listen_port', type=int, default=4433, help='overlay listen port')
+        if not _has('--udp-own-port'):
+            p.add_argument('--udp-own-port', dest='udp_own_port', type=int, default=4433, help='overlay own port')
         if not _has('--udp-peer'):
             p.add_argument('--udp-peer', '--peer', dest='udp_peer', default=None,
                            help="peer IP/FQDN (IPv4 or IPv6 literal; IPv6 may be in [brackets])")
@@ -1919,7 +1919,7 @@ class UdpSession(ISession):
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         listen_host = _strip_brackets(getattr(self._args, "udp_bind", "::"))
-        listen_port = int(getattr(self._args, "udp_listen_port", 4433))
+        listen_port = int(getattr(self._args, "udp_own_port", 4433))
         peer_info = _resolve_cli_peer(
             self._args,
             peer_attr="udp_peer",
@@ -2337,8 +2337,8 @@ class TcpStreamSession(ISession):
 
         if not _has('--tcp-bind'):
             p.add_argument('--tcp-bind', default='::', help='TCP overlay bind address')
-        if not _has('--tcp-listen-port'):
-            p.add_argument('--tcp-listen-port', type=int, default=8081, help='TCP overlay listen port')
+        if not _has('--tcp-own-port'):
+            p.add_argument('--tcp-own-port', dest='tcp_own_port', type=int, default=8081, help='TCP overlay own port')
         if not _has('--tcp-peer'):
             p.add_argument('--tcp-peer', default=None, help='TCP peer IP/FQDN')
         if not _has('--tcp-peer-port'):
@@ -2397,7 +2397,7 @@ class TcpStreamSession(ISession):
         self._run_flag: bool = False
 
         # peer endpoints (client/server)
-        self._listen_host, self._listen_port = _strip_brackets(self._args.tcp_bind), int(self._args.tcp_listen_port)
+        self._listen_host, self._listen_port = _strip_brackets(self._args.tcp_bind), int(self._args.tcp_own_port)
         peer_info = _resolve_cli_peer(
             self._args,
             peer_attr="tcp_peer",
@@ -3022,7 +3022,7 @@ class QuicSession(ISession):
         KIND=0x02 -> PONG (payload: Q echo_tx_ns)
 
     Features:
-      - Server & client roles via --quic-bind/--quic-listen-port and --quic-peer/--quic-peer-port
+      - Server & client roles via --quic-bind/--quic-own-port and --quic-peer/--quic-peer-port
       - TLS via aioquic (server: --quic-cert/--quic-key; client: --quic-insecure for labs)
       - Auto-reconnect (client) with backoff
       - RTT estimation (StreamRTT/StreamRTTRuntime) drives overlay 'connected'
@@ -3043,8 +3043,8 @@ class QuicSession(ISession):
 
         if not _has('--quic-bind'):
             p.add_argument('--quic-bind', default='::', help='QUIC overlay bind address')
-        if not _has('--quic-listen-port'):
-            p.add_argument('--quic-listen-port', type=int, default=443, help='QUIC overlay listen port')
+        if not _has('--quic-own-port'):
+            p.add_argument('--quic-own-port', dest='quic_own_port', type=int, default=443, help='QUIC overlay own port')
         if not _has('--quic-peer'):
             p.add_argument('--quic-peer', default=None, help='QUIC peer IP/FQDN')
         if not _has('--quic-peer-port'):
@@ -3092,7 +3092,7 @@ class QuicSession(ISession):
         self._on_app_from_peer_bytes: Optional[Callable[[int], None]] = None
 
         # Addressing / role
-        self._listen_host, self._listen_port = _strip_brackets(args.quic_bind), int(args.quic_listen_port)
+        self._listen_host, self._listen_port = _strip_brackets(args.quic_bind), int(args.quic_own_port)
         self._peer_name_host = _strip_brackets(getattr(args, "quic_peer", None) or "")
         self._peer_name_port = int(getattr(args, "quic_peer_port", 0) or 0)
         peer_info = _resolve_cli_peer(
@@ -3818,8 +3818,8 @@ class WebSocketSession(ISession):
 
         if not _has('--ws-bind'):
             p.add_argument('--ws-bind', default='::', help='WebSocket overlay bind address')
-        if not _has('--ws-listen-port'):
-            p.add_argument('--ws-listen-port', type=int, default=8080, help='WebSocket overlay listen port')
+        if not _has('--ws-own-port'):
+            p.add_argument('--ws-own-port', dest='ws_own_port', type=int, default=8080, help='WebSocket overlay own port')
         if not _has('--ws-peer'):
             p.add_argument('--ws-peer', default=None, help='WebSocket peer IP/FQDN')
         if not _has('--ws-peer-port'):
@@ -3890,7 +3890,7 @@ class WebSocketSession(ISession):
         self._on_app_from_peer_bytes: Optional[Callable[[int], None]] = None
 
         # Mode / addressing (parity with TCP)
-        self._listen_host, self._listen_port = _strip_brackets(self._args.ws_bind), int(self._args.ws_listen_port)
+        self._listen_host, self._listen_port = _strip_brackets(self._args.ws_bind), int(self._args.ws_own_port)
         self._peer_name_host = _strip_brackets(getattr(self._args, "ws_peer", None) or "")
         self._peer_name_port = int(getattr(self._args, "ws_peer_port", 0) or 0)
         peer_info = _resolve_cli_peer(
@@ -5528,14 +5528,14 @@ def _resolve_cli_peer(
 def _overlay_cli_attrs(transport: str) -> Tuple[str, str, str, str]:
     transport = (transport or "myudp").strip().lower()
     if transport == "myudp":
-        return ("udp_bind", "udp_peer", "udp_peer_port", "udp_listen_port")
+        return ("udp_bind", "udp_peer", "udp_peer_port", "udp_own_port")
     if transport == "tcp":
-        return ("tcp_bind", "tcp_peer", "tcp_peer_port", "tcp_listen_port")
+        return ("tcp_bind", "tcp_peer", "tcp_peer_port", "tcp_own_port")
     if transport == "quic":
-        return ("quic_bind", "quic_peer", "quic_peer_port", "quic_listen_port")
+        return ("quic_bind", "quic_peer", "quic_peer_port", "quic_own_port")
     if transport == "ws":
-        return ("ws_bind", "ws_peer", "ws_peer_port", "ws_listen_port")
-    return ("udp_bind", "udp_peer", "udp_peer_port", "udp_listen_port")
+        return ("ws_bind", "ws_peer", "ws_peer_port", "ws_own_port")
+    return ("udp_bind", "udp_peer", "udp_peer_port", "udp_own_port")
 
 
 def _has_configured_overlay_peer(args: argparse.Namespace, transport: Optional[str] = None) -> bool:
@@ -7168,11 +7168,11 @@ class StatsBoard:
     # ---- helpers moved from Runner (unchanged strings) ------------------------
     def _summarize_local_sides(self, a: argparse.Namespace) -> str:
 #        if a.udp_role == 'server':
-#            udp = f"UDP srv {a.udp_listen_bind}:{a.udp_listen_port}"
+#            udp = f"UDP srv {a.udp_listen_bind}:{a.udp_own_port}"
 #        else:
 #            udp = f"UDP cli -> {a.udp_target_host}:{a.udp_target_port} (bind {a.udp_bind}:ephem)"
 #        if a.tcp_role == 'server':
-#            tcp = f"TCP srv {a.tcp_listen_bind}:{a.tcp_listen_port}"
+#            tcp = f"TCP srv {a.tcp_listen_bind}:{a.tcp_own_port}"
 #        else:
 #            tcp = f"TCP cli -> {a.tcp_target_host}:{a.tcp_target_port} (bind {a.tcp_bind}:ephem)"
 #        return f"{udp}\n {tcp}"
@@ -7731,19 +7731,19 @@ class Runner:
         # admin UI, even when those options were originally registered elsewhere.
         transport_key_targets = {
             "udp_bind": "udp_session",
-            "udp_listen_port": "udp_session",
+            "udp_own_port": "udp_session",
             "udp_peer": "udp_session",
             "udp_peer_port": "udp_session",
             "tcp_bind": "tcp_session",
-            "tcp_listen_port": "tcp_session",
+            "tcp_own_port": "tcp_session",
             "tcp_peer": "tcp_session",
             "tcp_peer_port": "tcp_session",
             "quic_bind": "quic_session",
-            "quic_listen_port": "quic_session",
+            "quic_own_port": "quic_session",
             "quic_peer": "quic_session",
             "quic_peer_port": "quic_session",
             "ws_bind": "ws_session",
-            "ws_listen_port": "ws_session",
+            "ws_own_port": "ws_session",
             "ws_peer": "ws_session",
             "ws_peer_port": "ws_session",
         }
@@ -8046,14 +8046,14 @@ class Runner:
             )
         for proto in ("tcp", "quic", "ws"):
             bind_opt = f"--{proto}-bind"
-            listen_port_opt = f"--{proto}-listen-port"
+            listen_port_opt = f"--{proto}-own-port"
             peer_opt = f"--{proto}-peer"
             peer_port_opt = f"--{proto}-peer-port"
             if not _has(bind_opt):
                 p.add_argument(bind_opt, default='::', help=f'{proto.upper()} overlay bind address')
             if not _has(listen_port_opt):
                 default_port = {"tcp": 8081, "quic": 443, "ws": 8080}[proto]
-                p.add_argument(listen_port_opt, type=int, default=default_port, help=f'{proto.upper()} overlay listen port')
+                p.add_argument(listen_port_opt, dest=f"{proto}_own_port", type=int, default=default_port, help=f'{proto.upper()} overlay own port')
             if not _has(peer_opt):
                 p.add_argument(peer_opt, default=None, help=f'{proto.upper()} peer IP/FQDN')
             if not _has(peer_port_opt):
