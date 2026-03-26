@@ -220,6 +220,8 @@ class WebSocketTxLoopTests(unittest.IsolatedAsyncioTestCase):
         session._ws = _FakeWs()
         session._flush_early()
         await asyncio.wait_for(session._tx_queue.join(), timeout=1.0)
+        session._flush_early()
+        await asyncio.wait_for(session._tx_queue.join(), timeout=1.0)
 
         self.assertEqual(session._tx_bytes, 6)
         self.assertEqual(sent_sizes, [6])
