@@ -284,6 +284,19 @@ class WebSocketSocketConfigTests(unittest.TestCase):
 
 
 class WebSocketReconnectGraceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_zero_grace_disconnects_immediately(self):
+        args = _args("binary")
+        args.ws_reconnect_grace = 0.0
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+        session._overlay_connected = True
+
+        session._schedule_overlay_disconnect()
+
+        self.assertFalse(session._overlay_connected)
+        self.assertIsNone(session._disconnect_task)
+
     async def test_quick_reconnect_cancels_pending_disconnect(self):
         args = _args("binary")
         args.ws_reconnect_grace = 0.05
