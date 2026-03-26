@@ -53,7 +53,7 @@ import os
 import pathlib
 from dataclasses import dataclass
 from collections import deque
-from typing import Dict, Optional, Tuple, List, Set, Deque, Any, Callable
+from typing import Dict, Optional, Tuple, List, Set, Deque, Any, Callable, Literal
 
 # ===== ANSI sequences (dashboard) =====
 ANSI_HIDE_CURSOR = "\x1b[?25l"
@@ -5599,6 +5599,8 @@ class _ChanCtr:
 class ChannelMux:
     """Catalog-based multiplexer with multiple TCP/UDP servers and peer-side dynamic dialers."""
     ProtoName = Literal["tcp", "udp"]
+    ServiceOrigin = Literal["local", "peer"]
+    ServiceKey = Tuple[ServiceOrigin, int]
 
     class Proto(enum.IntEnum):
         UDP = 0
@@ -5687,7 +5689,7 @@ class ChannelMux:
         #if not services:
          #   raise ValueError("No services defined. Provide --own-servers \"proto,port,bind,proto,host,port ...\"")
         for s in services:
-            mux._services[s.svc_id] = s
+            mux._local_services[("local", s.svc_id)] = s
         mux._remote_services_requested = remote_services
         # Backpressure knobs
         try: mux._tcp_drain_threshold = int(getattr(args, 'mux_tcp_bp_threshold', 1))
@@ -5764,11 +5766,11 @@ class ChannelMux:
         self._accepting_enabled: bool = self._overlay_connected
 
         # Services
-        self._services: dict[int, ChannelMux.ServiceSpec] = {}
+        self._local_services: dict[ChannelMux.ServiceKey, ChannelMux.ServiceSpec] = {}
         self._remote_services_requested: list[ChannelMux.ServiceSpec] = []
-        self._peer_installed_services: dict[int, ChannelMux.ServiceSpec] = {}
-        self._svc_tcp_servers: dict[int, asyncio.base_events.Server] = {}
-        self._svc_udp_servers: dict[int, asyncio.DatagramTransport] = {}
+        self._peer_installed_services: dict[ChannelMux.ServiceKey, ChannelMux.ServiceSpec] = {}
+        self._svc_tcp_servers: dict[ChannelMux.ServiceKey, asyncio.base_events.Server] = {}
+        self._svc_udp_servers: dict[ChannelMux.ServiceKey, asyncio.DatagramTransport] = {}
 
         # Channel id allocators
         self._next_udp_id: int = self.UDP_MIN_ID
@@ -5776,9 +5778,9 @@ class ChannelMux:
 
         # UDP server-side maps
         # (svc_id, (host,port)) -> (chan, last_ts)
-        self._udp_by_client: dict[tuple[int, tuple[str,int]], tuple[int,float]] = {}
-        # chan -> (svc_id, (host,port))
-        self._udp_by_chan: dict[int, tuple[int, tuple[str,int]]] = {}
+        self._udp_by_client: dict[tuple[ChannelMux.ServiceKey, tuple[str,int]], tuple[int,float]] = {}
+        # chan -> (svc_key, (host,port))
+        self._udp_by_chan: dict[int, tuple[ChannelMux.ServiceKey, tuple[str,int]]] = {}
 
         # UDP peer client-side transports
         self._udp_client_transports: dict[int, asyncio.DatagramTransport] = {}
@@ -5997,14 +5999,14 @@ class ChannelMux:
 
     # ---------- service lifecycle ----------
     async def _start_all_services(self):
-        for svc in self._effective_services_by_id().values():
+        for svc_key, svc in self._effective_services_by_id().items():
             try:
-                if svc.l_proto == "tcp" and svc.svc_id not in self._svc_tcp_servers:
-                    await self._start_tcp_server_for(svc)
-                elif svc.l_proto == "udp" and svc.svc_id not in self._svc_udp_servers:
-                    await self._start_udp_server_for(svc)
+                if svc.l_proto == "tcp" and svc_key not in self._svc_tcp_servers:
+                    await self._start_tcp_server_for(svc, svc_key)
+                elif svc.l_proto == "udp" and svc_key not in self._svc_udp_servers:
+                    await self._start_udp_server_for(svc, svc_key)
             except Exception as e:
-                self.log.warning("[MUX] service %s start failed: %r", svc.svc_id, e)
+                self.log.warning("[MUX] service %s:%s start failed: %r", svc_key[0], svc.svc_id, e)
 
     async def _stop_all_services(self):
         # UDP first
@@ -6051,20 +6053,20 @@ class ChannelMux:
         self._tcp_backpressure_evt.clear()
 
     # ---------- UDP server (unconnected; multi-origin) ----------
-    async def _start_udp_server_for(self, spec: ChannelMux.ServiceSpec):
+    async def _start_udp_server_for(self, spec: ChannelMux.ServiceSpec, svc_key: "ChannelMux.ServiceKey"):
         parent = self
         class _UDPServer(asyncio.DatagramProtocol):
             def connection_made(self, transport):
-                parent._svc_udp_servers[spec.svc_id] = transport
-                parent.log.info("[UDP/SRV] service=%s listening on %s:%s", spec.svc_id, spec.l_bind, spec.l_port)
+                parent._svc_udp_servers[svc_key] = transport
+                parent.log.info("[UDP/SRV] service=%s:%s listening on %s:%s", svc_key[0], spec.svc_id, spec.l_bind, spec.l_port)
             def datagram_received(self, data: bytes, addr):
-                parent._on_local_udp_datagram(spec, data, addr)
+                parent._on_local_udp_datagram(spec, svc_key, data, addr)
             def error_received(self, exc):
-                parent.log.info("[UDP/SRV] service=%s transport error: %r", spec.svc_id, exc)
+                parent.log.info("[UDP/SRV] service=%s:%s transport error: %r", svc_key[0], spec.svc_id, exc)
             def connection_lost(self, exc):
-                parent.log.info("[UDP/SRV] service=%s transport lost: %r", spec.svc_id, exc)
+                parent.log.info("[UDP/SRV] service=%s:%s transport lost: %r", svc_key[0], spec.svc_id, exc)
                 # Remove so _ensure_servers_task will respawn
-                parent._svc_udp_servers.pop(spec.svc_id, None)
+                parent._svc_udp_servers.pop(svc_key, None)
 
         family = _listener_family_for_host(spec.l_bind)
         await self.loop.create_datagram_endpoint(
@@ -6073,15 +6075,15 @@ class ChannelMux:
             family=family
         )
 
-    def _on_local_udp_datagram(self, spec: ChannelMux.ServiceSpec, data: bytes, addr: tuple[str,int]) -> None:
+    def _on_local_udp_datagram(self, spec: ChannelMux.ServiceSpec, svc_key: "ChannelMux.ServiceKey", data: bytes, addr: tuple[str,int]) -> None:
         if not (self._overlay_connected and self._accepting_enabled):
             self.log.debug(f"[NET] package dropping  : ")
             return
         now = time.time()
-        key = (spec.svc_id, addr)
+        key = (svc_key, addr)
 
         # --- NEW: resolve local server socket address once for this service ---
-        srv_tr = self._svc_udp_servers.get(spec.svc_id)
+        srv_tr = self._svc_udp_servers.get(svc_key)
         l_sock = srv_tr.get_extra_info("sockname") if srv_tr else None
         l_ep = (l_sock[0], int(l_sock[1])) if isinstance(l_sock, tuple) and len(l_sock) >= 2 else (spec.l_bind, int(spec.l_port))
         src = (addr[0], int(addr[1]))
@@ -6090,8 +6092,8 @@ class ChannelMux:
         if key not in self._udp_by_client:
             chan = self._alloc_udp_id()
             self._udp_by_client[key] = (chan, now)
-            self._udp_by_chan[chan] = (spec.svc_id, addr)
-            self.log.debug("[UDP/SRV] learn %s -> chan=%s svc=%s", addr, chan, spec.svc_id)
+            self._udp_by_chan[chan] = (svc_key, addr)
+            self.log.debug("[UDP/SRV] learn %s -> chan=%s svc=%s:%s", addr, chan, svc_key[0], spec.svc_id)
             try:
                 self._send_mux(chan, ChannelMux.Proto.UDP, ChannelMux.MType.OPEN, self._build_open_v2(spec))
             except Exception:
@@ -6154,32 +6156,30 @@ class ChannelMux:
                 await asyncio.sleep(1.0)
                 if not (self._overlay_connected and self._accepting_enabled):
                     continue
-                for spec in self._effective_services_by_id().values():
+                for svc_key, spec in self._effective_services_by_id().items():
                     if spec.l_proto == "tcp":
-                        srv = self._svc_tcp_servers.get(spec.svc_id)
+                        srv = self._svc_tcp_servers.get(svc_key)
                         if srv is None or getattr(srv, "sockets", None) in (None, []):
-                            self.log.info("[MUX] TCP service %s ensure-listen (re)start", spec.svc_id)
+                            self.log.info("[MUX] TCP service %s:%s ensure-listen (re)start", svc_key[0], spec.svc_id)
                             try:
-                                await self._start_tcp_server_for(spec)
+                                await self._start_tcp_server_for(spec, svc_key)
                             except Exception as e:
-                                self.log.info("[MUX] TCP service %s restart failed: %r", spec.svc_id, e)
+                                self.log.info("[MUX] TCP service %s:%s restart failed: %r", svc_key[0], spec.svc_id, e)
                     else:
-                        tr = self._svc_udp_servers.get(spec.svc_id)
+                        tr = self._svc_udp_servers.get(svc_key)
                         if tr is None:
-                            self.log.info("[MUX] UDP service %s ensure-listen (re)start", spec.svc_id)
+                            self.log.info("[MUX] UDP service %s:%s ensure-listen (re)start", svc_key[0], spec.svc_id)
                             try:
-                                await self._start_udp_server_for(spec)
+                                await self._start_udp_server_for(spec, svc_key)
                             except Exception as e:
-                                self.log.info("[MUX] UDP service %s restart failed: %r", spec.svc_id, e)
+                                self.log.info("[MUX] UDP service %s:%s restart failed: %r", svc_key[0], spec.svc_id, e)
         except asyncio.CancelledError:
             return
 
-    def _effective_services_by_id(self) -> dict[int, "ChannelMux.ServiceSpec"]:
-        out: dict[int, ChannelMux.ServiceSpec] = {}
-        out.update(self._services)
-        for sid, spec in self._peer_installed_services.items():
-            if sid not in out:
-                out[sid] = spec
+    def _effective_services_by_id(self) -> dict["ChannelMux.ServiceKey", "ChannelMux.ServiceSpec"]:
+        out: dict[ChannelMux.ServiceKey, ChannelMux.ServiceSpec] = {}
+        out.update(self._local_services)
+        out.update(self._peer_installed_services)
         return out
 
     def _send_remote_services_catalog_if_any(self) -> None:
@@ -6192,16 +6192,16 @@ class ChannelMux:
         except Exception as e:
             self.log.warning("[MUX/CTRL] failed sending REMOTE_SERVICES_SET_V1: %r", e)
 
-    async def _stop_listener_for_service_id(self, svc_id: int, proto_name: str) -> None:
+    async def _stop_listener_for_service_id(self, svc_key: "ChannelMux.ServiceKey", proto_name: str) -> None:
         if proto_name == "udp":
-            tr = self._svc_udp_servers.pop(svc_id, None)
+            tr = self._svc_udp_servers.pop(svc_key, None)
             if tr:
                 try:
                     tr.close()
                 except Exception:
                     pass
             return
-        srv = self._svc_tcp_servers.pop(svc_id, None)
+        srv = self._svc_tcp_servers.pop(svc_key, None)
         if srv:
             try:
                 srv.close()
@@ -6210,10 +6210,10 @@ class ChannelMux:
                 pass
 
     async def _apply_peer_installed_services(self, services: list["ChannelMux.ServiceSpec"]) -> None:
-        new_map: dict[int, ChannelMux.ServiceSpec] = {int(s.svc_id): s for s in services}
+        new_map: dict[ChannelMux.ServiceKey, ChannelMux.ServiceSpec] = {("peer", int(s.svc_id)): s for s in services}
         old_map = dict(self._peer_installed_services)
-        to_stop: set[int] = set()
-        to_start: set[int] = set()
+        to_stop: set[ChannelMux.ServiceKey] = set()
+        to_start: set[ChannelMux.ServiceKey] = set()
 
         for sid in set(old_map.keys()) - set(new_map.keys()):
             to_stop.add(sid)
@@ -6226,23 +6226,23 @@ class ChannelMux:
 
         self._peer_installed_services = new_map
 
-        for sid in sorted(to_stop):
-            old = old_map.get(sid)
+        for svc_key in sorted(to_stop):
+            old = old_map.get(svc_key)
             if old:
-                await self._stop_listener_for_service_id(sid, old.l_proto)
+                await self._stop_listener_for_service_id(svc_key, old.l_proto)
 
         if self._overlay_connected and self._accepting_enabled:
-            for sid in sorted(to_start):
-                spec = new_map.get(sid)
+            for svc_key in sorted(to_start):
+                spec = new_map.get(svc_key)
                 if not spec:
                     continue
                 try:
-                    if spec.l_proto == "tcp" and sid not in self._svc_tcp_servers:
-                        await self._start_tcp_server_for(spec)
-                    elif spec.l_proto == "udp" and sid not in self._svc_udp_servers:
-                        await self._start_udp_server_for(spec)
+                    if spec.l_proto == "tcp" and svc_key not in self._svc_tcp_servers:
+                        await self._start_tcp_server_for(spec, svc_key)
+                    elif spec.l_proto == "udp" and svc_key not in self._svc_udp_servers:
+                        await self._start_udp_server_for(spec, svc_key)
                 except Exception as e:
-                    self.log.warning("[MUX/CTRL] peer-installed service %s start failed: %r", sid, e)
+                    self.log.warning("[MUX/CTRL] peer-installed service %s:%s start failed: %r", svc_key[0], spec.svc_id, e)
 
     # ---------- MUX send ----------
     def _send_mux(self, chan_id: int, proto: ChannelMux.Proto, mtype: ChannelMux.MType, data: bytes) -> None:
@@ -6412,15 +6412,15 @@ class ChannelMux:
         # --- 1) Server-side mapping: remote -> original local sender
         svc = self._udp_by_chan.get(chan)
         if svc is not None:
-            svc_id, addr = svc
-            srv_tr = self._svc_udp_servers.get(svc_id)
+            svc_key, addr = svc
+            srv_tr = self._svc_udp_servers.get(svc_key)
             if srv_tr:
                 try:
                     ctr.msgs_out += 1
                     ctr.bytes_out += len(data)
                     srv_tr.sendto(data, addr)
                     # Touch activity
-                    key = (svc_id, addr)
+                    key = (svc_key, addr)
                     if key in self._udp_by_client:
                         self._udp_by_client[key] = (chan, time.time())
                 except Exception as e:
@@ -6483,8 +6483,8 @@ class ChannelMux:
         self._udp_client_svc_id.pop(chan, None)
         svc_addr = self._udp_by_chan.pop(chan, None)
         if svc_addr:
-            svc_id, addr = svc_addr
-            self._udp_by_client.pop((svc_id, addr), None)        
+            svc_key, addr = svc_addr
+            self._udp_by_client.pop((svc_key, addr), None)        
         self.log.info("[UDP] chan=%s CLOSE => local teardown", chan)
 
     class _UDPClientProtocol(asyncio.DatagramProtocol):
@@ -6525,7 +6525,7 @@ class ChannelMux:
             self.parent._udp_client_last_ts.pop(self.chan, None)
 
     # ---------- TCP server ----------
-    async def _start_tcp_server_for(self, spec: ChannelMux.ServiceSpec):
+    async def _start_tcp_server_for(self, spec: ChannelMux.ServiceSpec, svc_key: "ChannelMux.ServiceKey"):
         async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
             if not self._overlay_connected or not self._accepting_enabled:
                 try:
@@ -6594,9 +6594,9 @@ class ChannelMux:
         except TypeError:
             srv = await asyncio.start_server(_handle, host=spec.l_bind, port=spec.l_port)
 
-        self._svc_tcp_servers[spec.svc_id] = srv
+        self._svc_tcp_servers[svc_key] = srv
         sockets = ", ".join(str(s.getsockname()) for s in (srv.sockets or []))
-        self.log.info("[TCP/SRV] service=%s listening on %s", spec.svc_id, sockets)
+        self.log.info("[TCP/SRV] service=%s:%s listening on %s", svc_key[0], spec.svc_id, sockets)
 
 
     # ---------- TCP RX path ----------
@@ -6921,7 +6921,7 @@ class ChannelMux:
     def _svc_spec_or_none(self, svc_id: int):
         try:
             i = int(svc_id)
-            return self._services.get(i) or self._peer_installed_services.get(i)
+            return self._local_services.get(("local", i)) or self._peer_installed_services.get(("peer", i))
         except Exception:
             return None
 
@@ -6947,12 +6947,13 @@ class ChannelMux:
         # Server-side UDP mappings: local client addr -> local listening port -> configured remote destination
         for chan, tup in list(self._udp_by_chan.items()):
             try:
-                svc_id, src_addr = tup
+                svc_key, src_addr = tup
             except Exception:
                 continue
 
+            svc_id = int(svc_key[1])
             spec = self._svc_spec_or_none(svc_id)
-            srv_tr = self._svc_udp_servers.get(svc_id)
+            srv_tr = self._svc_udp_servers.get(svc_key)
             sockname = srv_tr.get_extra_info("sockname") if srv_tr else None
             local_ep = (sockname[0], int(sockname[1])) if isinstance(sockname, tuple) and len(sockname) >= 2 else None
 
@@ -7062,7 +7063,7 @@ class ChannelMux:
     def _svc_spec_or_none(self, svc_id: int):
         try:
             i = int(svc_id)
-            return self._services.get(i) or self._peer_installed_services.get(i)
+            return self._local_services.get(("local", i)) or self._peer_installed_services.get(("peer", i))
         except Exception:
             return None
 
@@ -7088,12 +7089,13 @@ class ChannelMux:
         # Server-side UDP mappings: local client addr -> local listening port -> configured remote destination
         for chan, tup in list(self._udp_by_chan.items()):
             try:
-                svc_id, src_addr = tup
+                svc_key, src_addr = tup
             except Exception:
                 continue
 
+            svc_id = int(svc_key[1])
             spec = self._svc_spec_or_none(svc_id)
-            srv_tr = self._svc_udp_servers.get(svc_id)
+            srv_tr = self._svc_udp_servers.get(svc_key)
             sockname = srv_tr.get_extra_info("sockname") if srv_tr else None
             local_ep = (sockname[0], int(sockname[1])) if isinstance(sockname, tuple) and len(sockname) >= 2 else None
 
