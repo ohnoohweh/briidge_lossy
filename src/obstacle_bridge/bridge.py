@@ -4205,6 +4205,7 @@ class WebSocketSession(ISession):
                     "connected": bool(self.is_connected()),
                     "peer": peer_label,
                     "mux_chans": [],
+                    "rtt_est_ms": getattr(self._rtt, "rtt_est_ms", None),
                 }
             )
             return rows
@@ -4227,12 +4228,14 @@ class WebSocketSession(ISession):
             host = remote[0] if isinstance(remote, tuple) and len(remote) >= 2 else None
             port = remote[1] if isinstance(remote, tuple) and len(remote) >= 2 else None
             peer_label = self._format_peer_label(host, port)
+            rtt = ctx.get("rtt") if isinstance(ctx, dict) else None
             rows.append(
                 {
                     "peer_id": peer_id,
                     "connected": bool(peer_id in self._server_peers),
                     "peer": peer_label,
                     "mux_chans": sorted(mux_by_peer.get(peer_id, [])),
+                    "rtt_est_ms": getattr(rtt, "rtt_est_ms", None),
                 }
             )
 
@@ -4740,6 +4743,7 @@ class WebSocketSession(ISession):
                 "tx_queue": asyncio.Queue(),
                 "tx_task": None,
                 "rx_task": None,
+                "rtt": StreamRTT(log=self._log),
             }
             self._server_peers[peer_id] = ctx
             self._server_peer_by_ws_id[id(ws)] = peer_id
@@ -5295,6 +5299,11 @@ class WebSocketSession(ISession):
                                 self._rtt.on_pong_received(echo_ns)
                             self._send_pong_frame(tx_ns)
                         elif ctx is not None:
+                            ctx_rtt = ctx.get("rtt")
+                            if ctx_rtt is not None:
+                                ctx_rtt.on_ping_received(tx_ns)
+                                if echo_ns:
+                                    ctx_rtt.on_pong_received(echo_ns)
                             self._send_pong_frame_server(ctx, tx_ns)
                     else:
                         self._log.debug(f"[WS/RX] ({self._probe_id}) malformed PING len={len(payload)}")
@@ -7773,6 +7782,18 @@ class Runner:
             return []
         return list(DEBUG_LOG_RING)[-lim:]
 
+    def _session_retransmit_stats(self, session: ISession) -> dict:
+        hist: dict = {}
+        with contextlib.suppress(Exception):
+            if isinstance(session, UdpSession):
+                hist = dict(getattr(session.inner_session, "stats_hist", {}) or {})
+        return {
+            "first_pass": int(hist.get("once", 0)),
+            "repeated_once": int(hist.get("twice", 0)),
+            "repeated_multiple": int(hist.get("thrice", 0)) + int(hist.get("gt3", 0)),
+            "confirmed_total": int(hist.get("confirmed_total", 0)),
+        }
+
     def get_peer_connections_snapshot(self) -> dict:
         peers: list = []
         for idx, session in enumerate(self._sessions):
@@ -7820,7 +7841,7 @@ class Runner:
                         "transport": label,
                         "connected": bool(p.get("connected", session.is_connected())),
                         "peer": p.get("peer"),
-                        "rtt_est_ms": m.rtt_est_ms,
+                        "rtt_est_ms": p.get("rtt_est_ms", m.rtt_est_ms),
                         "inflight": m.inflight,
                         "decode_errors": 0,
                         "open_connections": {
@@ -7831,6 +7852,7 @@ class Runner:
                             "rx_bytes": p_rx,
                             "tx_bytes": p_tx,
                         },
+                        "myudp": self._session_retransmit_stats(session),
                     })
                 continue
 
@@ -7873,6 +7895,7 @@ class Runner:
                     "rx_bytes": rx_bytes,
                     "tx_bytes": tx_bytes,
                 },
+                "myudp": self._session_retransmit_stats(session),
             })
         return {"peers": peers, "count": len(peers)}
 

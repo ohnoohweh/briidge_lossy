@@ -52,40 +52,9 @@
               <div class="metric-value" id="tcpOpen">0</div>
               <div class="metric-note">active TCP mappings</div>
             </article>
-            <article class="metric-card card">
-              <div class="metric-label">RTT Est</div>
-              <div class="metric-value"><span id="rttEst">n/a</span><span class="metric-unit">ms</span></div>
-              <div class="metric-note">transport round-trip estimate</div>
-            </article>
-            <article class="metric-card card">
-              <div class="metric-label">Inflight</div>
-              <div class="metric-value" id="inflight">n/a</div>
-              <div class="metric-note">frames currently in flight</div>
-            </article>
           </section>
 
-          <section class="summary-grid myudp-grid">
-            <article class="metric-card card">
-              <div class="metric-label">myUDP First Pass</div>
-              <div class="metric-value" id="myudpFirstPass">0</div>
-              <div class="metric-note">frames ACKed without resend</div>
-            </article>
-            <article class="metric-card card">
-              <div class="metric-label">myUDP Repeated Once</div>
-              <div class="metric-value" id="myudpRepeatedOnce">0</div>
-              <div class="metric-note">frames resent exactly one time</div>
-            </article>
-            <article class="metric-card card">
-              <div class="metric-label">myUDP Repeated Multiple</div>
-              <div class="metric-value" id="myudpRepeatedMultiple">0</div>
-              <div class="metric-note">frames resent multiple times</div>
-            </article>
-            <article class="metric-card card">
-              <div class="metric-label">myUDP Confirmed Total</div>
-              <div class="metric-value" id="myudpConfirmedTotal">0</div>
-              <div class="metric-note">total app frames confirmed</div>
-            </article>
-          </section>
+          
 
           <section class="section-block">
             <div class="section-header">
@@ -111,17 +80,17 @@
               </article>
               <article class="traffic-card card">
                 <div class="traffic-top">
-                  <span class="traffic-title">Peer RX</span>
-                  <span class="traffic-value"><span id="peerRxRate">0.0</span> <small>kB/s</small></span>
-                </div>
-                <div class="progress"><div id="barPeerRx" class="progress-fill"></div></div>
-              </article>
-              <article class="traffic-card card">
-                <div class="traffic-top">
                   <span class="traffic-title">Peer TX</span>
                   <span class="traffic-value"><span id="peerTxRate">0.0</span> <small>kB/s</small></span>
                 </div>
                 <div class="progress"><div id="barPeerTx" class="progress-fill"></div></div>
+              </article>
+              <article class="traffic-card card">
+                <div class="traffic-top">
+                  <span class="traffic-title">Peer RX</span>
+                  <span class="traffic-value"><span id="peerRxRate">0.0</span> <small>kB/s</small></span>
+                </div>
+                <div class="progress"><div id="barPeerRx" class="progress-fill"></div></div>
               </article>
             </div>
           </section>
@@ -164,11 +133,15 @@
                       <th>TCP Open</th>
                       <th>RX Bytes</th>
                       <th>TX Bytes</th>
+                      <th>myUDP First Pass</th>
+                      <th>myUDP Repeated Once</th>
+                      <th>myUDP Repeated Multiple</th>
+                      <th>myUDP Confirmed Total</th>
                       <th>Decode Errors</th>
                     </tr>
                   </thead>
                   <tbody id="peerConnectionsBody">
-                    <tr class="empty-row"><td colspan="11">No peer sessions</td></tr>
+                    <tr class="empty-row"><td colspan="15">No peer sessions</td></tr>
                   </tbody>
                 </table>
               </div>
