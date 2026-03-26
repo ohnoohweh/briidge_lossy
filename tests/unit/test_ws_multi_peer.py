@@ -8,10 +8,10 @@ from obstacle_bridge.bridge import WebSocketSession
 
 def _server_args() -> argparse.Namespace:
     return argparse.Namespace(
-        bind443='0.0.0.0',
-        port443=0,
-        peer=None,
-        peer_port=0,
+        ws_bind='0.0.0.0',
+        ws_listen_port=0,
+        ws_peer=None,
+        ws_peer_port=0,
         ws_path='/',
         ws_subprotocol=None,
         ws_tls=False,

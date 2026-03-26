@@ -10,8 +10,8 @@ class RunnerEventBindingTests(unittest.IsolatedAsyncioTestCase):
     def _make_args(self):
         return argparse.Namespace(
             no_dashboard=True,
-            bind443='0.0.0.0',
-            port443=443,
+            udp_bind='0.0.0.0',
+            udp_listen_port=4433,
             status=False,
         )
 

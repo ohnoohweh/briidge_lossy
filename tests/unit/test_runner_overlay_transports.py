@@ -9,8 +9,11 @@ from obstacle_bridge.bridge import Runner, TcpStreamSession, UdpSession, QuicSes
 def _args(**overrides):
     base = dict(
         overlay_transport='myudp',
-        port443=443,
-        peer=None,
+        udp_listen_port=4433,
+        udp_peer=None,
+        tcp_listen_port=8081,
+        quic_listen_port=443,
+        ws_listen_port=8080,
         overlay_port_myudp=None,
         overlay_port_tcp=None,
         overlay_port_quic=None,
@@ -26,25 +29,26 @@ class RunnerOverlayTransportTests(unittest.TestCase):
         self.assertEqual(Runner._parse_overlay_transports(args), ['myudp', 'tcp', 'quic', 'ws'])
 
     def test_parse_overlay_transports_rejects_multi_transport_clients(self):
-        args = _args(overlay_transport='myudp,ws', peer='127.0.0.1')
+        args = _args(overlay_transport='myudp,ws', udp_peer='127.0.0.1')
         with self.assertRaises(ValueError):
             Runner._parse_overlay_transports(args)
 
     def test_overlay_port_for_uses_deterministic_offsets(self):
-        args = _args(port443=9000)
+        args = _args(udp_listen_port=9000)
         self.assertEqual(Runner._overlay_port_for(args, 'myudp', 4), 9000)
-        self.assertEqual(Runner._overlay_port_for(args, 'tcp', 4), 9001)
-        self.assertEqual(Runner._overlay_port_for(args, 'quic', 4), 9002)
-        self.assertEqual(Runner._overlay_port_for(args, 'ws', 4), 9003)
+        self.assertEqual(Runner._overlay_port_for(args, 'tcp', 4), 8082)
+        self.assertEqual(Runner._overlay_port_for(args, 'quic', 4), 445)
+        self.assertEqual(Runner._overlay_port_for(args, 'ws', 4), 8083)
 
     def test_build_sessions_from_overlay_uses_per_transport_ports(self):
-        args = _args(overlay_transport='myudp,tcp,quic,ws', port443=7000)
+        args = _args(overlay_transport='myudp,tcp,quic,ws', udp_listen_port=7000, tcp_listen_port=7000, quic_listen_port=7000, ws_listen_port=7000)
         seen = []
 
         def _factory(name):
             def _inner(ns):
-                seen.append((name, ns.port443))
-                return {'transport': name, 'port': ns.port443}
+                port = ns.udp_listen_port if name == 'myudp' else ns.tcp_listen_port if name == 'tcp' else ns.quic_listen_port if name == 'quic' else ns.ws_listen_port
+                seen.append((name, port))
+                return {'transport': name, 'port': port}
             return _inner
 
         with mock.patch.object(UdpSession, 'from_args', side_effect=_factory('myudp')), \
@@ -54,7 +58,10 @@ class RunnerOverlayTransportTests(unittest.TestCase):
             sessions = Runner.build_sessions_from_overlay(args)
 
         self.assertEqual([name for name, _ in sessions], ['myudp', 'tcp', 'quic', 'ws'])
-        self.assertEqual(seen, [('myudp', 7000), ('tcp', 7001), ('quic', 7002), ('ws', 7003)])
+        self.assertEqual(
+            [s[1] for s in seen],
+            [7000, 7001, 7002, 7003],
+        )
 
 
 if __name__ == '__main__':
