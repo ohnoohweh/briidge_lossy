@@ -98,7 +98,6 @@ function renderConnectionTable(tbodyId, rows) {
 function applyPeerState(state) {
   const badge = document.getElementById('peerStateBadge');
   const normalized = String(state || 'UNKNOWN').toUpperCase();
-  setText('peerState', normalized);
   if (!badge) return;
 
   badge.textContent = normalized;
@@ -141,9 +140,6 @@ async function loadStatus() {
     const j = await r.json();
 
     applyPeerState(j.peer_state);
-    setText('detailOverlayBind', j.overlay?.bind ?? 'n/a');
-    setText('detailOverlayPeer', j.overlay?.peer ?? 'n/a');
-
     setText('udpOpen', fmtInteger(j.open_connections?.udp));
     setText('tcpOpen', fmtInteger(j.open_connections?.tcp));
 
