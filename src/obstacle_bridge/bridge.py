@@ -5640,6 +5640,14 @@ class ChannelMux:
                       "Listener instances ignore --own-servers because multiple overlay peers make the target ambiguous. "
                       "Example: \"tcp,80,0.0.0.0,tcp,127.0.0.1,88 udp,16666,::,udp,127.0.0.1,16666\"")
             )
+        if not _has('--remote-servers'):
+            p.add_argument(
+                '--remote-servers', nargs='*', default=None,
+                help=("Space-separated service specs (client mode only, applied on connected peer): "
+                      "'proto,listen_port,listen_bind,proto,host,port' (quoted). "
+                      "Listener instances ignore --remote-servers because multiple overlay peers make the target ambiguous. "
+                      "Example: \"tcp,80,0.0.0.0,tcp,127.0.0.1,88 udp,16666,::,udp,127.0.0.1,16666\"")
+            )
         # Keep backpressure knobs (apply to local TCP writers we own)
         if not _has('--mux-tcp-bp-threshold'):
             p.add_argument('--mux-tcp-bp-threshold', type=int, default=1,
@@ -5658,6 +5666,7 @@ class ChannelMux:
         mux = ChannelMux(session, loop, on_local_rx_bytes, on_local_tx_bytes)
         # Parse catalog
         services = ChannelMux._parse_own_servers(getattr(args, 'own_servers', None))
+        remote_services = ChannelMux._parse_remote_servers(getattr(args, 'remote_servers', None))
         active_transport = str(getattr(args, "overlay_transport", "myudp") or "myudp").split(",", 1)[0].strip().lower()
         listener_mode = not _has_configured_overlay_peer(args, active_transport)
         if listener_mode and services:
@@ -5667,10 +5676,18 @@ class ChannelMux:
                 len(services),
             )
             services = []
+        if listener_mode and remote_services:
+            mux.log.info(
+                "[MUX] listener mode detected: ignoring %d --remote-servers entries; "
+                "the listening peer must not expose ambiguous local services when multiple overlay peers connect",
+                len(remote_services),
+            )
+            remote_services = []
         #if not services:
          #   raise ValueError("No services defined. Provide --own-servers \"proto,port,bind,proto,host,port ...\"")
         for s in services:
             mux._services[s.svc_id] = s
+        mux._remote_services_requested = remote_services
         # Backpressure knobs
         try: mux._tcp_drain_threshold = int(getattr(args, 'mux_tcp_bp_threshold', 1))
         except Exception: pass
@@ -5683,6 +5700,16 @@ class ChannelMux:
     @staticmethod
     def _parse_own_servers(specs: Optional[list[str]]) -> list[ChannelMux.ServiceSpec]:
         """Parse --own-servers spec(s) into ServiceSpec list."""
+        return ChannelMux._parse_service_specs(specs, "--own-servers")
+
+    @staticmethod
+    def _parse_remote_servers(specs: Optional[list[str]]) -> list[ChannelMux.ServiceSpec]:
+        """Parse --remote-servers spec(s) into ServiceSpec list."""
+        return ChannelMux._parse_service_specs(specs, "--remote-servers")
+
+    @staticmethod
+    def _parse_service_specs(specs: Optional[list[str]], arg_name: str) -> list[ChannelMux.ServiceSpec]:
+        """Parse service spec(s) into ServiceSpec list."""
         import shlex
         if not specs:
             return []
@@ -5693,16 +5720,29 @@ class ChannelMux:
         for tok in tokens:
             parts = [p.strip() for p in tok.split(",")]
             if len(parts) != 6:
-                raise ValueError(f"--own-servers item must have 6 comma-separated fields: {tok}")
+                raise ValueError(f"{arg_name} item must have 6 comma-separated fields: {tok}")
             l_proto, l_port, l_bind, r_proto, r_host, r_port = parts
+            l_proto = l_proto.lower()
+            r_proto = r_proto.lower()
+            if l_proto not in {"udp", "tcp"}:
+                raise ValueError(f"{arg_name} local protocol must be udp or tcp: {tok}")
+            if r_proto not in {"udp", "tcp"}:
+                raise ValueError(f"{arg_name} remote protocol must be udp or tcp: {tok}")
+            try:
+                l_port_i = int(l_port)
+                r_port_i = int(r_port)
+            except Exception:
+                raise ValueError(f"{arg_name} ports must be integers in 1..65535: {tok}")
+            if not (1 <= l_port_i <= 65535) or not (1 <= r_port_i <= 65535):
+                raise ValueError(f"{arg_name} ports must be integers in 1..65535: {tok}")
             out.append(ChannelMux.ServiceSpec(
                 svc_id=sid,
-                l_proto=l_proto.lower(),
+                l_proto=l_proto,
                 l_bind=l_bind,
-                l_port=int(l_port),
-                r_proto=r_proto.lower(),
+                l_port=l_port_i,
+                r_proto=r_proto,
                 r_host=r_host.strip("[]"),
-                r_port=int(r_port),
+                r_port=r_port_i,
             ))
             sid += 1
         return out
@@ -5724,6 +5764,7 @@ class ChannelMux:
 
         # Services
         self._services: dict[int, ChannelMux.ServiceSpec] = {}
+        self._remote_services_requested: list[ChannelMux.ServiceSpec] = []
         self._svc_tcp_servers: dict[int, asyncio.base_events.Server] = {}
         self._svc_udp_servers: dict[int, asyncio.DatagramTransport] = {}
 
