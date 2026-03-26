@@ -162,19 +162,9 @@ async function loadStatus() {
     setProgress('barPeerRx', peerRx);
     setProgress('barPeerTx', peerTx);
 
-    const rtt = j.transport?.rtt_est_ms;
-    const inflight = j.transport?.inflight;
     const errors = j.decode_errors?.unidentified_frames ?? 0;
-    const myudp = j.myudp || {};
-    const retransmit = myudp.retransmit || {};
 
-    setText('rttEst', fmtNumber(rtt));
-    setText('inflight', fmtInteger(inflight));
     setText('decodeErrors', fmtInteger(errors));
-    setText('myudpFirstPass', fmtInteger(retransmit.first_pass));
-    setText('myudpRepeatedOnce', fmtInteger(retransmit.repeated_once));
-    setText('myudpRepeatedMultiple', fmtInteger(retransmit.repeated_multiple));
-    setText('myudpConfirmedTotal', fmtInteger(retransmit.confirmed_total));
   } catch (e) {
     console.error('status load failed', e);
   }
@@ -184,7 +174,7 @@ function renderPeerTable(rows) {
   const tbody = document.getElementById('peerConnectionsBody');
   if (!tbody) return;
   if (!rows || rows.length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="11">No peer sessions</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="15">No peer sessions</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map((row) => `
@@ -199,6 +189,10 @@ function renderPeerTable(rows) {
       <td class="mono">${fmtInteger(row.open_connections?.tcp ?? 0)}</td>
       <td class="mono">${fmtBytes(row.traffic?.rx_bytes ?? 0)}</td>
       <td class="mono">${fmtBytes(row.traffic?.tx_bytes ?? 0)}</td>
+      <td class="mono">${fmtInteger(row.myudp?.first_pass)}</td>
+      <td class="mono">${fmtInteger(row.myudp?.repeated_once)}</td>
+      <td class="mono">${fmtInteger(row.myudp?.repeated_multiple)}</td>
+      <td class="mono">${fmtInteger(row.myudp?.confirmed_total)}</td>
       <td class="mono">${fmtInteger(row.decode_errors ?? 0)}</td>
     </tr>
   `).join('');
