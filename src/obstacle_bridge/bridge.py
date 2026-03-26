@@ -1841,7 +1841,7 @@ class UdpSession(ISession):
             p.add_argument('--udp-bind', dest='udp_bind', default='::',
                            help="overlay bind address (IPv4 '0.0.0.0' or IPv6 '::')")
         if not _has('--udp-own-port'):
-            p.add_argument('--udp-own-port', '--udp-listen-port', dest='udp_own_port', type=int, default=4433, help='overlay own port')
+            p.add_argument('--udp-own-port', dest='udp_own_port', type=int, default=4433, help='overlay own port')
         if not _has('--udp-peer'):
             p.add_argument('--udp-peer', '--peer', dest='udp_peer', default=None,
                            help="peer IP/FQDN (IPv4 or IPv6 literal; IPv6 may be in [brackets])")
@@ -2338,7 +2338,7 @@ class TcpStreamSession(ISession):
         if not _has('--tcp-bind'):
             p.add_argument('--tcp-bind', default='::', help='TCP overlay bind address')
         if not _has('--tcp-own-port'):
-            p.add_argument('--tcp-own-port', '--tcp-listen-port', dest='tcp_own_port', type=int, default=8081, help='TCP overlay own port')
+            p.add_argument('--tcp-own-port', dest='tcp_own_port', type=int, default=8081, help='TCP overlay own port')
         if not _has('--tcp-peer'):
             p.add_argument('--tcp-peer', default=None, help='TCP peer IP/FQDN')
         if not _has('--tcp-peer-port'):
@@ -3044,7 +3044,7 @@ class QuicSession(ISession):
         if not _has('--quic-bind'):
             p.add_argument('--quic-bind', default='::', help='QUIC overlay bind address')
         if not _has('--quic-own-port'):
-            p.add_argument('--quic-own-port', '--quic-listen-port', dest='quic_own_port', type=int, default=443, help='QUIC overlay own port')
+            p.add_argument('--quic-own-port', dest='quic_own_port', type=int, default=443, help='QUIC overlay own port')
         if not _has('--quic-peer'):
             p.add_argument('--quic-peer', default=None, help='QUIC peer IP/FQDN')
         if not _has('--quic-peer-port'):
@@ -3819,7 +3819,7 @@ class WebSocketSession(ISession):
         if not _has('--ws-bind'):
             p.add_argument('--ws-bind', default='::', help='WebSocket overlay bind address')
         if not _has('--ws-own-port'):
-            p.add_argument('--ws-own-port', '--ws-listen-port', dest='ws_own_port', type=int, default=8080, help='WebSocket overlay own port')
+            p.add_argument('--ws-own-port', dest='ws_own_port', type=int, default=8080, help='WebSocket overlay own port')
         if not _has('--ws-peer'):
             p.add_argument('--ws-peer', default=None, help='WebSocket peer IP/FQDN')
         if not _has('--ws-peer-port'):
@@ -8053,8 +8053,7 @@ class Runner:
                 p.add_argument(bind_opt, default='::', help=f'{proto.upper()} overlay bind address')
             if not _has(listen_port_opt):
                 default_port = {"tcp": 8081, "quic": 443, "ws": 8080}[proto]
-                legacy_opt = f"--{proto}-listen-port"
-                p.add_argument(listen_port_opt, legacy_opt, dest=f"{proto}_own_port", type=int, default=default_port, help=f'{proto.upper()} overlay own port')
+                p.add_argument(listen_port_opt, dest=f"{proto}_own_port", type=int, default=default_port, help=f'{proto.upper()} overlay own port')
             if not _has(peer_opt):
                 p.add_argument(peer_opt, default=None, help=f'{proto.upper()} peer IP/FQDN')
             if not _has(peer_port_opt):
