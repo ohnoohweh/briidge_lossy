@@ -3887,6 +3887,7 @@ class WebSocketSession(ISession):
         self._on_peer_rx: Optional[Callable[[int], None]] = None
         self._on_peer_tx: Optional[Callable[[int], None]] = None
         self._on_peer_set_cb: Optional[Callable[[str, int], None]] = None
+        self._on_peer_disconnect_cb: Optional[Callable[[int], None]] = None
         self._on_app_from_peer_bytes: Optional[Callable[[int], None]] = None
 
         # Mode / addressing (parity with TCP)
@@ -3973,6 +3974,7 @@ class WebSocketSession(ISession):
     def set_on_peer_rx(self, cb): self._on_peer_rx = cb
     def set_on_peer_tx(self, cb): self._on_peer_tx = cb
     def set_on_peer_set(self, cb): self._on_peer_set_cb = cb
+    def set_on_peer_disconnect(self, cb): self._on_peer_disconnect_cb = cb
     def set_on_app_from_peer_bytes(self, cb): self._on_app_from_peer_bytes = cb
 
     async def start(self) -> None:
@@ -4806,6 +4808,11 @@ class WebSocketSession(ISession):
             return
         self._server_peer_by_ws_id.pop(id(ctx.get("ws")), None)
         self._server_unregister_peer_channels(peer_id)
+        if callable(self._on_peer_disconnect_cb):
+            try:
+                self._on_peer_disconnect_cb(peer_id)
+            except Exception as e:
+                self._log.debug(f"[WS-SESSION] ({self._probe_id}) peer_disconnect callback err: {e!r}")
         tx_task = ctx.get("tx_task")
         if tx_task:
             tx_task.cancel()
@@ -5281,7 +5288,13 @@ class WebSocketSession(ISession):
                         try: self._on_app_from_peer_bytes(len(payload))
                         except Exception: pass
                     if callable(self._on_app):
-                        try: self._on_app(payload)
+                        try:
+                            self._on_app(payload, peer_id=peer_id)
+                        except TypeError:
+                            try:
+                                self._on_app(payload)
+                            except Exception as e:
+                                self._log.debug(f"[WS/RX] ({self._probe_id}) app callback err: {e!r}")
                         except Exception as e:
                             self._log.debug(f"[WS/RX] ({self._probe_id}) app callback err: {e!r}")
 
@@ -5600,7 +5613,7 @@ class ChannelMux:
     """Catalog-based multiplexer with multiple TCP/UDP servers and peer-side dynamic dialers."""
     ProtoName = Literal["tcp", "udp"]
     ServiceOrigin = Literal["local", "peer"]
-    ServiceKey = Tuple[ServiceOrigin, int]
+    ServiceKey = Tuple[ServiceOrigin, int, int]  # (origin, peer_id, svc_id)
 
     class Proto(enum.IntEnum):
         UDP = 0
@@ -5689,7 +5702,7 @@ class ChannelMux:
         #if not services:
          #   raise ValueError("No services defined. Provide --own-servers \"proto,port,bind,proto,host,port ...\"")
         for s in services:
-            mux._local_services[("local", s.svc_id)] = s
+            mux._local_services[("local", 0, s.svc_id)] = s
         mux._remote_services_requested = remote_services
         # Backpressure knobs
         try: mux._tcp_drain_threshold = int(getattr(args, 'mux_tcp_bp_threshold', 1))
@@ -5827,6 +5840,11 @@ class ChannelMux:
             self.log.debug("[MUX] on_app_payload_from_peer wired")
         except Exception as e:
             self.log.error("[MUX] failed to wire on_app_payload_from_peer: %r", e)
+        try:
+            self.session.set_on_peer_disconnect(self.on_peer_disconnected)
+            self.log.debug("[MUX] on_peer_disconnected wired")
+        except Exception:
+            pass
 
     # ---------- public counters ----------
     def udp_open_count(self) -> int:
@@ -5982,6 +6000,7 @@ class ChannelMux:
         self._ensure_task = self._sweeper_task = None
         await self._stop_all_services()
         await self._close_all_channels()
+        await self._drop_peer_installed_services(peer_id=None)
 
     # ---------- overlay state ----------
     async def on_overlay_state(self, connected: bool):
@@ -6209,9 +6228,12 @@ class ChannelMux:
             except Exception:
                 pass
 
-    async def _apply_peer_installed_services(self, services: list["ChannelMux.ServiceSpec"]) -> None:
-        new_map: dict[ChannelMux.ServiceKey, ChannelMux.ServiceSpec] = {("peer", int(s.svc_id)): s for s in services}
-        old_map = dict(self._peer_installed_services)
+    async def _apply_peer_installed_services(self, services: list["ChannelMux.ServiceSpec"], peer_id: Optional[int]) -> None:
+        owner_peer_id = int(peer_id or 0)
+        new_map: dict[ChannelMux.ServiceKey, ChannelMux.ServiceSpec] = {
+            ("peer", owner_peer_id, int(s.svc_id)): s for s in services
+        }
+        old_map = {k: v for k, v in self._peer_installed_services.items() if k[0] == "peer" and int(k[1]) == owner_peer_id}
         to_stop: set[ChannelMux.ServiceKey] = set()
         to_start: set[ChannelMux.ServiceKey] = set()
 
@@ -6224,7 +6246,10 @@ class ChannelMux:
                 to_stop.add(sid)
                 to_start.add(sid)
 
-        self._peer_installed_services = new_map
+        for svc_key in set(old_map.keys()) - set(new_map.keys()):
+            self._peer_installed_services.pop(svc_key, None)
+        for svc_key, spec in new_map.items():
+            self._peer_installed_services[svc_key] = spec
 
         for svc_key in sorted(to_stop):
             old = old_map.get(svc_key)
@@ -6243,6 +6268,25 @@ class ChannelMux:
                         await self._start_udp_server_for(spec, svc_key)
                 except Exception as e:
                     self.log.warning("[MUX/CTRL] peer-installed service %s:%s start failed: %r", svc_key[0], spec.svc_id, e)
+
+    async def _drop_peer_installed_services(self, peer_id: Optional[int]) -> None:
+        if peer_id is None:
+            to_stop = {k: v for k, v in self._peer_installed_services.items() if k[0] == "peer"}
+        else:
+            owner_peer_id = int(peer_id)
+            to_stop = {
+                k: v for k, v in self._peer_installed_services.items()
+                if k[0] == "peer" and int(k[1]) == owner_peer_id
+            }
+        for svc_key, spec in list(to_stop.items()):
+            self._peer_installed_services.pop(svc_key, None)
+            await self._stop_listener_for_service_id(svc_key, spec.l_proto)
+
+    def on_peer_disconnected(self, peer_id: int) -> None:
+        try:
+            self.loop.create_task(self._drop_peer_installed_services(peer_id=peer_id))
+        except Exception as e:
+            self.log.debug("[MUX/CTRL] failed scheduling peer disconnect cleanup for peer_id=%s: %r", peer_id, e)
 
     # ---------- MUX send ----------
     def _send_mux(self, chan_id: int, proto: ChannelMux.Proto, mtype: ChannelMux.MType, data: bytes) -> None:
@@ -6279,7 +6323,7 @@ class ChannelMux:
         return nxt
 
     # ---------- MUX RX demux ----------
-    def on_app_payload_from_peer(self, buf: bytes) -> bool:
+    def on_app_payload_from_peer(self, buf: bytes, peer_id: Optional[int] = None) -> bool:
         self.log.debug(f"[MUX] APP data receiving on session id=%x", id(self))
         try:
             self._log_app_msg("<-",buf)
@@ -6302,8 +6346,12 @@ class ChannelMux:
             if services is None:
                 self.log.warning("[MUX/CTRL] invalid REMOTE_SERVICES_SET_V1 payload (%d bytes)", len(payload))
                 return False
-            self.loop.create_task(self._apply_peer_installed_services(services))
-            self.log.info("[MUX/CTRL] received REMOTE_SERVICES_SET_V1 with %d service(s)", len(services))
+            self.loop.create_task(self._apply_peer_installed_services(services, peer_id=peer_id))
+            self.log.info(
+                "[MUX/CTRL] received REMOTE_SERVICES_SET_V1 with %d service(s) from peer_id=%s",
+                len(services),
+                int(peer_id or 0),
+            )
             return True
 
         if proto == ChannelMux.Proto.UDP:
@@ -6921,7 +6969,13 @@ class ChannelMux:
     def _svc_spec_or_none(self, svc_id: int):
         try:
             i = int(svc_id)
-            return self._local_services.get(("local", i)) or self._peer_installed_services.get(("peer", i))
+            local = self._local_services.get(("local", 0, i))
+            if local is not None:
+                return local
+            for key, spec in self._peer_installed_services.items():
+                if key[0] == "peer" and int(key[2]) == i:
+                    return spec
+            return None
         except Exception:
             return None
 
@@ -6951,7 +7005,7 @@ class ChannelMux:
             except Exception:
                 continue
 
-            svc_id = int(svc_key[1])
+            svc_id = int(svc_key[2])
             spec = self._svc_spec_or_none(svc_id)
             srv_tr = self._svc_udp_servers.get(svc_key)
             sockname = srv_tr.get_extra_info("sockname") if srv_tr else None
@@ -7063,7 +7117,13 @@ class ChannelMux:
     def _svc_spec_or_none(self, svc_id: int):
         try:
             i = int(svc_id)
-            return self._local_services.get(("local", i)) or self._peer_installed_services.get(("peer", i))
+            local = self._local_services.get(("local", 0, i))
+            if local is not None:
+                return local
+            for key, spec in self._peer_installed_services.items():
+                if key[0] == "peer" and int(key[2]) == i:
+                    return spec
+            return None
         except Exception:
             return None
 
@@ -7093,7 +7153,7 @@ class ChannelMux:
             except Exception:
                 continue
 
-            svc_id = int(svc_key[1])
+            svc_id = int(svc_key[2])
             spec = self._svc_spec_or_none(svc_id)
             srv_tr = self._svc_udp_servers.get(svc_key)
             sockname = srv_tr.get_extra_info("sockname") if srv_tr else None
