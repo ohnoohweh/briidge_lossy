@@ -18,16 +18,17 @@ This example assumes the bridge **server** can already reach a local WireGuard U
 ```bash
 python -m obstacle_bridge \
   --udp-bind 0.0.0.0 \
-  --port443 443 \
+  --udp-own-port 443 \
   --log INFO
 ```
+This bridge server must be reachable by clients at DNS name `bridge.example.com` (for example via public DNS A/AAAA records and firewall/NAT rules).
 
 **Peer that recreates the WireGuard UDP port locally**
 ```bash
 python -m obstacle_bridge \
   --udp-peer bridge.example.com \
   --udp-peer-port 443 \
-  --port443 0 \
+  --udp-own-port 0 \
   --own-servers "udp,16666,127.0.0.1,udp,127.0.0.1,16666" \
   --log INFO
 ```
@@ -36,13 +37,13 @@ With that peer command running, a local WireGuard client can use `127.0.0.1:1666
 
 ### 2) Single overlay transport listener
 ```bash
-python -m obstacle_bridge --overlay-transport ws --ws-bind 0.0.0.0 --port443 54321
+python -m obstacle_bridge --overlay-transport ws --ws-bind 0.0.0.0 --ws-own-port 54321
 ```
 ### 3) Multi-transport listening instance
 ```bash
 python -m obstacle_bridge \
   --overlay-transport "myudp,tcp,quic,ws" \
-  --port443 443 \
+  --udp-own-port 443 \
   --udp-bind 0.0.0.0 \
   --tcp-bind 0.0.0.0 \
   --quic-bind 0.0.0.0 \
@@ -50,14 +51,16 @@ python -m obstacle_bridge \
   --quic-cert cert.pem \
   --quic-key key.pem
 ```
-In multi-transport listener mode, ObstacleBridge derives deterministic listen-port offsets from `--port443`: `myudp:+0`, `tcp:+1`, `quic:+2`, `ws:+3`.
+In multi-transport listener mode, ObstacleBridge derives deterministic own-port offsets from `--udp-own-port`: `myudp:+0`, `tcp:+1`, `quic:+2`, `ws:+3`.
 ### 4) Peer client exposing local services
 ```bash
 python -m obstacle_bridge \
   --overlay-transport ws \
   --ws-peer 203.0.113.10 --ws-peer-port 446 \
+  --ws-own-port 0 \
   --own-servers "udp,16667,0.0.0.0,udp,127.0.0.1,16666 tcp,3129,0.0.0.0,tcp,127.0.0.1,3128"
 ```
+Using `--ws-own-port 0` requests dynamic local source-port assignment by the OS. If a specific outgoing local WebSocket port is required by your network policy, set that exact value with `--ws-own-port`.
 ## CLI parameter reference
 The tables below are generated from the current parser registrations in `bridge.py`, so the defaults and descriptions match the live code.
 ### General / status
@@ -70,12 +73,11 @@ The tables below are generated from the current parser registrations in `bridge.
 | Option(s) | Default | Description |
 |---|---:|---|
 | `--udp-bind` | `::` | overlay bind address (IPv4 '0.0.0.0' or IPv6 '::') |
-| `--port443` | `443` | overlay listen port |
+| `--udp-own-port` | `4433` | UDP overlay own port |
 | `--udp-peer` | `None` | peer IP/FQDN (IPv4 or IPv6 literal; IPv6 may be in [brackets]) |
 | `--udp-peer-port` | `443` | peer overlay port |
 | `--peer-resolve-family` | `prefer-ipv6` | Peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only. |
 | `--max-inflight` | `32767` | max DATA frames allowed in flight (1..32767). Excess frames are queued. |
-| `--bind443` | alias of `--udp-bind` | backwards-compatible alias |
 | `--peer` | alias of `--udp-peer` | backwards-compatible alias |
 | `--peer-port` | alias of `--udp-peer-port` | backwards-compatible alias |
 
@@ -84,8 +86,9 @@ The tables below are generated from the current parser registrations in `bridge.
 |---|---:|---|
 | `--ws-path` | `/` | WebSocket HTTP path (default /) |
 | `--ws-bind` | `::` | WS overlay bind address |
+| `--ws-own-port` | `8080` | WS overlay own port |
 | `--ws-peer` | `None` | WS peer IP/FQDN |
-| `--ws-peer-port` | `443` | WS peer overlay port |
+| `--ws-peer-port` | `8080` | WS peer overlay port |
 | `--ws-subprotocol` | `None` | Optional WebSocket subprotocol (e.g. mux2) |
 | `--ws-tls` | `False` | Use TLS (wss://). Provide cert/key via your deployment. |
 | `--ws-max-size` | `65535` | Maximum binary message size to accept/send (default 65535). |
@@ -100,8 +103,9 @@ The tables below are generated from the current parser registrations in `bridge.
 |---|---:|---|
 | `--tcp-bp-wbuf-threshold` | `131072` | TCP overlay: write() buffer size threshold in bytes to signal drain (default 131072). |
 | `--tcp-bind` | `::` | TCP overlay bind address |
+| `--tcp-own-port` | `8081` | TCP overlay own port |
 | `--tcp-peer` | `None` | TCP peer IP/FQDN |
-| `--tcp-peer-port` | `443` | TCP peer overlay port |
+| `--tcp-peer-port` | `8081` | TCP peer overlay port |
 | `--tcp-bp-latency-ms` | `300` | TCP overlay: if > 0, trigger drain after this latency (ms) whenever pending bytes exist. |
 | `--tcp-bp-poll-interval-ms` | `50` | TCP overlay: polling interval for time-based backpressure checks (ms; default 50). |
 
@@ -110,6 +114,7 @@ The tables below are generated from the current parser registrations in `bridge.
 |---|---:|---|
 | `--quic-alpn` | `hq-29` | ALPN protocol ID (default hq-29) |
 | `--quic-bind` | `::` | QUIC overlay bind address |
+| `--quic-own-port` | `443` | QUIC overlay own port |
 | `--quic-peer` | `None` | QUIC peer IP/FQDN |
 | `--quic-peer-port` | `443` | QUIC peer overlay port |
 | `--quic-cert` | `None` | Server certificate file (PEM) |
