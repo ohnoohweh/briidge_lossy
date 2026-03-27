@@ -8052,11 +8052,30 @@ class Runner:
             "confirmed_total": int(hist.get("confirmed_total", 0)),
         }
 
+    def _overlay_listen_label(self, transport: str, session: ISession) -> Optional[str]:
+        t = str(transport or "myudp").strip().lower()
+        bind_attr, _, _, listen_port_attr = _overlay_cli_attrs(t)
+        source_args = getattr(session, "_args", None) or self.args
+        bind_host = str(getattr(source_args, bind_attr, "") or "")
+        raw_port = getattr(source_args, listen_port_attr, None)
+        if raw_port is None:
+            return None
+        with contextlib.suppress(Exception):
+            listen_port = int(raw_port)
+            if listen_port <= 0:
+                return None
+            host = bind_host or "0.0.0.0"
+            if ":" in host and not host.startswith("["):
+                host = f"[{host}]"
+            return f"{host}:{listen_port}"
+        return None
+
     def get_peer_connections_snapshot(self) -> dict:
         peers: list = []
         for idx, session in enumerate(self._sessions):
             mux = self._muxes[idx] if idx < len(self._muxes) else None
             label = self._session_labels[idx] if idx < len(self._session_labels) else f"session-{idx}"
+            listen_endpoint = self._overlay_listen_label(label, session)
             m = session.get_metrics()
             udp_rows: list = []
             tcp_rows: list = []
@@ -8098,6 +8117,7 @@ class Runner:
                         "id": f"{idx}:{p.get('peer_id', 0)}",
                         "transport": label,
                         "connected": bool(p.get("connected", session.is_connected())),
+                        "listen": listen_endpoint,
                         "peer": p.get("peer"),
                         "rtt_est_ms": p.get("rtt_est_ms", m.rtt_est_ms),
                         "inflight": m.inflight,
@@ -8141,6 +8161,7 @@ class Runner:
                 "id": idx,
                 "transport": label,
                 "connected": bool(session.is_connected()),
+                "listen": listen_endpoint,
                 "peer": peer_label,
                 "rtt_est_ms": m.rtt_est_ms,
                 "inflight": m.inflight,
