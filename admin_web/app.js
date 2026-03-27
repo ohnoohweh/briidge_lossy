@@ -170,13 +170,14 @@ function renderPeerTable(rows) {
   const tbody = document.getElementById('peerConnectionsBody');
   if (!tbody) return;
   if (!rows || rows.length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="15">No peer sessions</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="16">No peer sessions</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map((row) => `
     <tr>
       <td class="mono">${fmtInteger(row.id)}</td>
       <td class="mono">${row.transport || 'n/a'}</td>
+      <td class="mono">${row.listen || 'n/a'}</td>
       <td><span class="${(row.connected ? 'role-pill role-server' : 'role-pill role-unknown')}">${row.connected ? 'yes' : 'no'}</span></td>
       <td class="mono">${row.peer || 'n/a'}</td>
       <td class="mono">${fmtNumber(row.rtt_est_ms)}</td>
