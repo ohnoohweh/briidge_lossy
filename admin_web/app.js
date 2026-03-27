@@ -7,6 +7,10 @@ function fmtInteger(value) {
   if (value == null || Number.isNaN(value)) return 'n/a';
   return String(value);
 }
+function fmtChan(value) {
+  if (value == null || Number.isNaN(value)) return '-';
+  return String(value);
+}
 
 function fmtBytes(value) {
   if (value == null || Number.isNaN(value)) return 'n/a';
@@ -69,7 +73,7 @@ function renderConnectionTable(tbodyId, rows) {
   if (!tbody) return;
 
   if (!rows || rows.length === 0) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="10">No ${tbodyId.startsWith('udp') ? 'UDP' : 'TCP'} connections</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="11">No ${tbodyId.startsWith('udp') ? 'UDP' : 'TCP'} connections</td></tr>`;
     return;
   }
 
@@ -78,12 +82,15 @@ function renderConnectionTable(tbodyId, rows) {
     const txBytes = row.stats?.tx_bytes ?? 0;
     const rxMsgs = row.stats?.rx_msgs ?? 0;
     const txMsgs = row.stats?.tx_msgs ?? 0;
+    const state = String(row.state || 'connected').toLowerCase();
+    const isListening = state === 'listening';
     return `
       <tr>
-        <td class="mono">${fmtInteger(row.chan_id)}</td>
+        <td class="mono">${fmtChan(row.chan_id)}</td>
         <td class="mono">${fmtInteger(row.svc_id)}</td>
+        <td><span class="${isListening ? 'role-pill role-unknown' : 'role-pill role-client'}">${state}</span></td>
         <td><span class="${roleClass(row.role)}">${row.role || 'unknown'}</span></td>
-        <td class="mono">${fmtEndpoint(row.source)}</td>
+        <td class="mono">${isListening ? 'n/a' : fmtEndpoint(row.source)}</td>
         <td class="mono">${fmtInteger(row.local_port)}</td>
         <td class="mono">${fmtDestination(row.remote_destination)}</td>
         <td class="mono">${fmtBytes(rxBytes)}</td>
@@ -204,6 +211,8 @@ async function loadConnections() {
     renderConnectionTable('tcpConnectionsBody', j.tcp || []);
     setText('udpOpen', fmtInteger(j.counts?.udp ?? (j.udp || []).length));
     setText('tcpOpen', fmtInteger(j.counts?.tcp ?? (j.tcp || []).length));
+    setText('udpListening', fmtInteger(j.counts?.udp_listening ?? 0));
+    setText('tcpListening', fmtInteger(j.counts?.tcp_listening ?? 0));
   } catch (e) {
     console.error('connections load failed', e);
   }

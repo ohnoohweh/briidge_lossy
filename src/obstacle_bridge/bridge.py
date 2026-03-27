@@ -7017,6 +7017,7 @@ class ChannelMux:
             rows.append({
                 "protocol": "udp",
                 "role": "server",
+                "state": "connected",
                 "chan_id": int(chan),
                 "svc_id": int(svc_id),
                 "source": src_ep,
@@ -7026,6 +7027,35 @@ class ChannelMux:
                     {"host": spec.r_host, "port": int(spec.r_port)} if spec else None
                 ),
                 "stats": stats,
+            })
+
+        # UDP listeners: bound sockets waiting for first client/channel mapping.
+        for svc_key, srv_tr in list(self._svc_udp_servers.items()):
+            try:
+                svc_id = int(svc_key[2])
+            except Exception:
+                continue
+            spec = self._svc_spec_or_none(svc_id)
+            sockname = srv_tr.get_extra_info("sockname") if srv_tr else None
+            local_ep = (sockname[0], int(sockname[1])) if isinstance(sockname, tuple) and len(sockname) >= 2 else None
+            rows.append({
+                "protocol": "udp",
+                "role": "server",
+                "state": "listening",
+                "chan_id": None,
+                "svc_id": svc_id,
+                "source": None,
+                "local": local_ep,
+                "local_port": int(local_ep[1]) if local_ep else (int(spec.l_port) if spec else None),
+                "remote_destination": (
+                    {"host": spec.r_host, "port": int(spec.r_port)} if spec else None
+                ),
+                "stats": {
+                    "rx_msgs": 0,
+                    "tx_msgs": 0,
+                    "rx_bytes": 0,
+                    "tx_bytes": 0,
+                },
             })
 
         # Client-side UDP transports: locally created connected UDP socket to remote destination
@@ -7042,6 +7072,7 @@ class ChannelMux:
                 rows.append({
                     "protocol": "udp",
                     "role": "client",
+                    "state": "connected",
                     "chan_id": int(chan),
                     "svc_id": int(svc_id) if svc_id is not None else None,
                     "source": local_ep,
@@ -7056,7 +7087,14 @@ class ChannelMux:
             except Exception:
                 continue
 
-        rows.sort(key=lambda x: (x["protocol"], x["role"], x["chan_id"]))
+        rows.sort(
+            key=lambda x: (
+                x["protocol"],
+                x["role"],
+                str(x.get("state") or ""),
+                -1 if x["chan_id"] is None else int(x["chan_id"]),
+            )
+        )
         return rows
 
     def snapshot_tcp_connections(self) -> list[dict]:
@@ -7090,6 +7128,7 @@ class ChannelMux:
             rows.append({
                 "protocol": "tcp",
                 "role": role,
+                "state": "connected",
                 "chan_id": int(chan),
                 "svc_id": int(svc_id),
                 "source": source,
@@ -7165,6 +7204,7 @@ class ChannelMux:
             rows.append({
                 "protocol": "udp",
                 "role": "server",
+                "state": "connected",
                 "chan_id": int(chan),
                 "svc_id": int(svc_id),
                 "source": src_ep,
@@ -7174,6 +7214,35 @@ class ChannelMux:
                     {"host": spec.r_host, "port": int(spec.r_port)} if spec else None
                 ),
                 "stats": stats,
+            })
+
+        # UDP listeners: bound sockets waiting for first client/channel mapping.
+        for svc_key, srv_tr in list(self._svc_udp_servers.items()):
+            try:
+                svc_id = int(svc_key[2])
+            except Exception:
+                continue
+            spec = self._svc_spec_or_none(svc_id)
+            sockname = srv_tr.get_extra_info("sockname") if srv_tr else None
+            local_ep = (sockname[0], int(sockname[1])) if isinstance(sockname, tuple) and len(sockname) >= 2 else None
+            rows.append({
+                "protocol": "udp",
+                "role": "server",
+                "state": "listening",
+                "chan_id": None,
+                "svc_id": svc_id,
+                "source": None,
+                "local": local_ep,
+                "local_port": int(local_ep[1]) if local_ep else (int(spec.l_port) if spec else None),
+                "remote_destination": (
+                    {"host": spec.r_host, "port": int(spec.r_port)} if spec else None
+                ),
+                "stats": {
+                    "rx_msgs": 0,
+                    "tx_msgs": 0,
+                    "rx_bytes": 0,
+                    "tx_bytes": 0,
+                },
             })
 
         # Client-side UDP transports: locally created connected UDP socket to remote destination
@@ -7190,6 +7259,7 @@ class ChannelMux:
                 rows.append({
                     "protocol": "udp",
                     "role": "client",
+                    "state": "connected",
                     "chan_id": int(chan),
                     "svc_id": int(svc_id) if svc_id is not None else None,
                     "source": local_ep,
@@ -7204,7 +7274,14 @@ class ChannelMux:
             except Exception:
                 continue
 
-        rows.sort(key=lambda x: (x["protocol"], x["role"], x["chan_id"]))
+        rows.sort(
+            key=lambda x: (
+                x["protocol"],
+                x["role"],
+                str(x.get("state") or ""),
+                -1 if x["chan_id"] is None else int(x["chan_id"]),
+            )
+        )
         return rows
 
     def snapshot_tcp_connections(self) -> list[dict]:
@@ -7238,6 +7315,7 @@ class ChannelMux:
             rows.append({
                 "protocol": "tcp",
                 "role": role,
+                "state": "connected",
                 "chan_id": int(chan),
                 "svc_id": int(svc_id),
                 "source": source,
@@ -7247,18 +7325,65 @@ class ChannelMux:
                 "stats": stats,
             })
 
-        rows.sort(key=lambda x: (x["protocol"], x["role"], x["chan_id"]))
+        # TCP listeners: bound server sockets waiting for incoming channels.
+        for svc_key, srv in list(self._svc_tcp_servers.items()):
+            try:
+                svc_id = int(svc_key[2])
+            except Exception:
+                continue
+            spec = self._svc_spec_or_none(svc_id)
+            sockets = list((getattr(srv, "sockets", None) or []))
+            if not sockets:
+                sockets = [None]
+            for sock in sockets:
+                try:
+                    sockname = sock.getsockname() if sock is not None else None
+                except Exception:
+                    sockname = None
+                local_ep = (sockname[0], int(sockname[1])) if isinstance(sockname, tuple) and len(sockname) >= 2 else None
+                rows.append({
+                    "protocol": "tcp",
+                    "role": "server",
+                    "state": "listening",
+                    "chan_id": None,
+                    "svc_id": svc_id,
+                    "source": None,
+                    "local": local_ep,
+                    "local_port": int(local_ep[1]) if local_ep else (int(spec.l_port) if spec else None),
+                    "remote_destination": (
+                        {"host": spec.r_host, "port": int(spec.r_port)} if spec else None
+                    ),
+                    "stats": {
+                        "rx_msgs": 0,
+                        "tx_msgs": 0,
+                        "rx_bytes": 0,
+                        "tx_bytes": 0,
+                    },
+                })
+
+        rows.sort(
+            key=lambda x: (
+                x["protocol"],
+                x["role"],
+                str(x.get("state") or ""),
+                -1 if x["chan_id"] is None else int(x["chan_id"]),
+            )
+        )
         return rows
 
     def snapshot_connections(self) -> dict:
         udp_rows = self.snapshot_udp_connections()
         tcp_rows = self.snapshot_tcp_connections()
+        udp_listening = sum(1 for row in udp_rows if str(row.get("state", "connected")).lower() == "listening")
+        tcp_listening = sum(1 for row in tcp_rows if str(row.get("state", "connected")).lower() == "listening")
         return {
             "udp": udp_rows,
             "tcp": tcp_rows,
             "counts": {
-                "udp": len(udp_rows),
-                "tcp": len(tcp_rows),
+                "udp": len(udp_rows) - udp_listening,
+                "tcp": len(tcp_rows) - tcp_listening,
+                "udp_listening": udp_listening,
+                "tcp_listening": tcp_listening,
             },
         }
 
@@ -7726,16 +7851,23 @@ class RunnerMuxAggregate:
     def snapshot_connections(self) -> dict:
         udp_rows: list[dict] = []
         tcp_rows: list[dict] = []
+        udp_listening = 0
+        tcp_listening = 0
         for mux in self._muxes:
             snap = mux.snapshot_connections()
             udp_rows.extend(snap.get("udp", []))
             tcp_rows.extend(snap.get("tcp", []))
+            counts = snap.get("counts", {}) or {}
+            udp_listening += int(counts.get("udp_listening", 0) or 0)
+            tcp_listening += int(counts.get("tcp_listening", 0) or 0)
         return {
             "udp": udp_rows,
             "tcp": tcp_rows,
             "counts": {
-                "udp": len(udp_rows),
-                "tcp": len(tcp_rows),
+                "udp": len(udp_rows) - udp_listening,
+                "tcp": len(tcp_rows) - tcp_listening,
+                "udp_listening": udp_listening,
+                "tcp_listening": tcp_listening,
             },
         }
 
@@ -7961,7 +8093,11 @@ class Runner:
 
     def get_connections_snapshot(self) -> dict:
         if self.mux is None:
-            return {"udp": [], "tcp": [], "counts": {"udp": 0, "tcp": 0}}
+            return {
+                "udp": [],
+                "tcp": [],
+                "counts": {"udp": 0, "tcp": 0, "udp_listening": 0, "tcp_listening": 0},
+            }
         return self.mux.snapshot_connections()
 
     def get_config_snapshot(self) -> dict:
@@ -8079,6 +8215,10 @@ class Runner:
                     tcp_open = 0
                     for row in udp_rows:
                         chan_id = row.get("chan_id")
+                        if chan_id is None:
+                            continue
+                        if str(row.get("state", "connected")).lower() == "listening":
+                            continue
                         if mux_chans and chan_id not in mux_chans:
                             continue
                         st = row.get("stats", {})
@@ -8087,6 +8227,10 @@ class Runner:
                         udp_open += 1
                     for row in tcp_rows:
                         chan_id = row.get("chan_id")
+                        if chan_id is None:
+                            continue
+                        if str(row.get("state", "connected")).lower() == "listening":
+                            continue
                         if mux_chans and chan_id not in mux_chans:
                             continue
                         st = row.get("stats", {})
