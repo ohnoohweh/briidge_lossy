@@ -8092,13 +8092,60 @@ class Runner:
         return self.stats.snapshot_status()
 
     def get_connections_snapshot(self) -> dict:
-        if self.mux is None:
+        if not self._muxes:
             return {
                 "udp": [],
                 "tcp": [],
                 "counts": {"udp": 0, "tcp": 0, "udp_listening": 0, "tcp_listening": 0},
             }
-        return self.mux.snapshot_connections()
+
+        udp_rows: list[dict] = []
+        tcp_rows: list[dict] = []
+        udp_listening = 0
+        tcp_listening = 0
+
+        for idx, mux in enumerate(self._muxes):
+            snap = mux.snapshot_connections()
+            mux_udp_rows = list(snap.get("udp", []))
+            mux_tcp_rows = list(snap.get("tcp", []))
+
+            chan_to_peer_id: dict[int, str] = {}
+            with contextlib.suppress(Exception):
+                session = self._sessions[idx] if idx < len(self._sessions) else None
+                getter = getattr(session, "get_overlay_peers_snapshot", None) if session is not None else None
+                overlay_rows = list(getter() or []) if callable(getter) else []
+                for p in overlay_rows:
+                    peer_label = f"{idx}:{p.get('peer_id', 0)}"
+                    for chan in (p.get("mux_chans") or []):
+                        with contextlib.suppress(Exception):
+                            chan_to_peer_id[int(chan)] = peer_label
+
+            for row in mux_udp_rows:
+                r = dict(row)
+                chan = r.get("chan_id")
+                r["peer_id"] = chan_to_peer_id.get(int(chan), str(idx)) if chan is not None else "-"
+                udp_rows.append(r)
+
+            for row in mux_tcp_rows:
+                r = dict(row)
+                chan = r.get("chan_id")
+                r["peer_id"] = chan_to_peer_id.get(int(chan), str(idx)) if chan is not None else "-"
+                tcp_rows.append(r)
+
+            counts = snap.get("counts", {}) or {}
+            udp_listening += int(counts.get("udp_listening", 0) or 0)
+            tcp_listening += int(counts.get("tcp_listening", 0) or 0)
+
+        return {
+            "udp": udp_rows,
+            "tcp": tcp_rows,
+            "counts": {
+                "udp": len(udp_rows) - udp_listening,
+                "tcp": len(tcp_rows) - tcp_listening,
+                "udp_listening": udp_listening,
+                "tcp_listening": tcp_listening,
+            },
+        }
 
     def get_config_snapshot(self) -> dict:
         blocked = {

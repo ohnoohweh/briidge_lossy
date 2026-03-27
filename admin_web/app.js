@@ -11,6 +11,10 @@ function fmtChan(value) {
   if (value == null || Number.isNaN(value)) return '-';
   return String(value);
 }
+function fmtConnectionId(value) {
+  if (value == null || value === '' || Number.isNaN(value)) return '-';
+  return String(value);
+}
 
 function fmtBytes(value) {
   if (value == null || Number.isNaN(value)) return 'n/a';
@@ -73,7 +77,7 @@ function renderConnectionTable(tbodyId, rows) {
   if (!tbody) return;
 
   if (!rows || rows.length === 0) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="11">No ${tbodyId.startsWith('udp') ? 'UDP' : 'TCP'} connections</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="12">No ${tbodyId.startsWith('udp') ? 'UDP' : 'TCP'} connections</td></tr>`;
     return;
   }
 
@@ -86,6 +90,7 @@ function renderConnectionTable(tbodyId, rows) {
     const isListening = state === 'listening';
     return `
       <tr>
+        <td class="mono">${fmtConnectionId(row.peer_id)}</td>
         <td class="mono">${fmtChan(row.chan_id)}</td>
         <td class="mono">${fmtInteger(row.svc_id)}</td>
         <td><span class="${isListening ? 'role-pill role-unknown' : 'role-pill role-client'}">${state}</span></td>
