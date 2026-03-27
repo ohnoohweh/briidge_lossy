@@ -188,16 +188,16 @@ function renderPeerTable(rows) {
       <td><span class="${(row.connected ? 'role-pill role-server' : 'role-pill role-unknown')}">${row.connected ? 'yes' : 'no'}</span></td>
       <td class="mono">${row.peer || 'n/a'}</td>
       <td class="mono">${fmtNumber(row.rtt_est_ms)}</td>
-      <td class="mono">${fmtInteger(row.inflight)}</td>
       <td class="mono">${fmtInteger(row.open_connections?.udp ?? 0)}</td>
       <td class="mono">${fmtInteger(row.open_connections?.tcp ?? 0)}</td>
       <td class="mono">${fmtBytes(row.traffic?.rx_bytes ?? 0)}</td>
       <td class="mono">${fmtBytes(row.traffic?.tx_bytes ?? 0)}</td>
+      <td class="mono">${fmtInteger(row.decode_errors ?? 0)}</td>
+      <td class="mono">${fmtInteger(row.inflight)}</td>
+      <td class="mono">${fmtInteger(row.myudp?.confirmed_total)}</td>
       <td class="mono">${fmtInteger(row.myudp?.first_pass)}</td>
       <td class="mono">${fmtInteger(row.myudp?.repeated_once)}</td>
       <td class="mono">${fmtInteger(row.myudp?.repeated_multiple)}</td>
-      <td class="mono">${fmtInteger(row.myudp?.confirmed_total)}</td>
-      <td class="mono">${fmtInteger(row.decode_errors ?? 0)}</td>
     </tr>
   `).join('');
 }
@@ -303,8 +303,9 @@ function renderConfigRows(items, config) {
     const currentRaw = configValueToEditor(current);
     const defaultRaw = configValueToEditor(item.default);
     const isLevelSetting = isLoggingLevelSetting(key, current, item.default);
+    const isLogFileSetting = isLogFileConfigSetting(key);
     const isBooleanSetting = isBooleanConfigSetting(current, item.default);
-    const hasChoices = Array.isArray(item.choices) && item.choices.length > 0;
+    const hasChoices = !isLogFileSetting && Array.isArray(item.choices) && item.choices.length > 0;
     const editorHtml = hasChoices
       ? renderChoiceSelect(key, current, item.choices)
       : (isBooleanSetting
@@ -371,8 +372,17 @@ function renderConfigSections(schema, config) {
 
 const LOG_LEVEL_OPTIONS = ['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG', 'NOTSET'];
 
+function isLogFileConfigSetting(key) {
+  const normalizedKey = String(key || '').toLowerCase();
+  return normalizedKey === '--log-file'
+    || normalizedKey === 'log_file'
+    || normalizedKey.endsWith('.--log-file')
+    || normalizedKey.endsWith('.log_file');
+}
+
 function isLoggingLevelSetting(key, currentValue, defaultValue) {
   const normalizedKey = String(key || '').toLowerCase();
+  if (isLogFileConfigSetting(normalizedKey)) return false;
   const byName = normalizedKey === 'log'
     || normalizedKey.startsWith('log_')
     || normalizedKey.endsWith('_level');
