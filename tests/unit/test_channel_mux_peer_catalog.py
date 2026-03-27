@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import unittest
+from unittest import mock
 
 from obstacle_bridge.bridge import ChannelMux
 
@@ -45,6 +46,31 @@ class ChannelMuxPeerCatalogTests(unittest.IsolatedAsyncioTestCase):
 
         await mux._drop_peer_installed_services(peer_id=11)
         self.assertNotIn(("peer", 11, 1), mux._peer_installed_services)
+        self.assertIn(("peer", 22, 1), mux._peer_installed_services)
+
+    async def test_peer_disconnect_closes_tcp_udp_listeners_for_that_peer(self):
+        session = _FakeSession()
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux._peer_installed_services = {
+            ("peer", 11, 1): ChannelMux.ServiceSpec(1, "udp", "127.0.0.1", 10001, "udp", "127.0.0.1", 20001),
+            ("peer", 11, 2): ChannelMux.ServiceSpec(2, "tcp", "127.0.0.1", 10002, "tcp", "127.0.0.1", 20002),
+            ("peer", 22, 1): ChannelMux.ServiceSpec(1, "udp", "127.0.0.1", 10003, "udp", "127.0.0.1", 20003),
+        }
+
+        with mock.patch.object(mux, "_stop_listener_for_service_id", new=mock.AsyncMock()) as stop_listener:
+            mux.on_peer_disconnected(11)
+            await asyncio.sleep(0)
+
+        self.assertEqual(stop_listener.await_count, 2)
+        stop_listener.assert_has_awaits(
+            [
+                mock.call(("peer", 11, 1), "udp"),
+                mock.call(("peer", 11, 2), "tcp"),
+            ],
+            any_order=True,
+        )
+        self.assertNotIn(("peer", 11, 1), mux._peer_installed_services)
+        self.assertNotIn(("peer", 11, 2), mux._peer_installed_services)
         self.assertIn(("peer", 22, 1), mux._peer_installed_services)
 
 
