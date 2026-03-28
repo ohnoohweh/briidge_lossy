@@ -8134,7 +8134,10 @@ class Runner:
                 else:
                     owner_peer_id = r.get("svc_owner_peer_id")
                     if owner_peer_id is None:
-                        r["peer_id"] = "-"
+                        # Locally owned listening services are still tied to this
+                        # mux/peer slot; once traffic arrives the resulting channel
+                        # will use the same slot-derived peer label fallback.
+                        r["peer_id"] = str(idx)
                     else:
                         with contextlib.suppress(Exception):
                             owner_peer_id = int(owner_peer_id)
@@ -8149,7 +8152,10 @@ class Runner:
                 else:
                     owner_peer_id = r.get("svc_owner_peer_id")
                     if owner_peer_id is None:
-                        r["peer_id"] = "-"
+                        # Locally owned listening services are still tied to this
+                        # mux/peer slot; once traffic arrives the resulting channel
+                        # will use the same slot-derived peer label fallback.
+                        r["peer_id"] = str(idx)
                     else:
                         with contextlib.suppress(Exception):
                             owner_peer_id = int(owner_peer_id)
