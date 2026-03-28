@@ -7043,6 +7043,7 @@ class ChannelMux:
                 "role": "server",
                 "state": "listening",
                 "chan_id": None,
+                "svc_owner_peer_id": int(svc_key[1]) if len(svc_key) >= 2 and str(svc_key[0]) == "peer" else None,
                 "svc_id": svc_id,
                 "source": None,
                 "local": local_ep,
@@ -7230,6 +7231,7 @@ class ChannelMux:
                 "role": "server",
                 "state": "listening",
                 "chan_id": None,
+                "svc_owner_peer_id": int(svc_key[1]) if len(svc_key) >= 2 and str(svc_key[0]) == "peer" else None,
                 "svc_id": svc_id,
                 "source": None,
                 "local": local_ep,
@@ -7346,6 +7348,7 @@ class ChannelMux:
                     "role": "server",
                     "state": "listening",
                     "chan_id": None,
+                    "svc_owner_peer_id": int(svc_key[1]) if len(svc_key) >= 2 and str(svc_key[0]) == "peer" else None,
                     "svc_id": svc_id,
                     "source": None,
                     "local": local_ep,
@@ -8110,12 +8113,15 @@ class Runner:
             mux_tcp_rows = list(snap.get("tcp", []))
 
             chan_to_peer_id: dict[int, str] = {}
+            owner_peer_to_label: dict[int, str] = {}
             with contextlib.suppress(Exception):
                 session = self._sessions[idx] if idx < len(self._sessions) else None
                 getter = getattr(session, "get_overlay_peers_snapshot", None) if session is not None else None
                 overlay_rows = list(getter() or []) if callable(getter) else []
                 for p in overlay_rows:
                     peer_label = f"{idx}:{p.get('peer_id', 0)}"
+                    with contextlib.suppress(Exception):
+                        owner_peer_to_label[int(p.get("peer_id", 0))] = peer_label
                     for chan in (p.get("mux_chans") or []):
                         with contextlib.suppress(Exception):
                             chan_to_peer_id[int(chan)] = peer_label
@@ -8123,13 +8129,31 @@ class Runner:
             for row in mux_udp_rows:
                 r = dict(row)
                 chan = r.get("chan_id")
-                r["peer_id"] = chan_to_peer_id.get(int(chan), str(idx)) if chan is not None else "-"
+                if chan is not None:
+                    r["peer_id"] = chan_to_peer_id.get(int(chan), str(idx))
+                else:
+                    owner_peer_id = r.get("svc_owner_peer_id")
+                    if owner_peer_id is None:
+                        r["peer_id"] = "-"
+                    else:
+                        with contextlib.suppress(Exception):
+                            owner_peer_id = int(owner_peer_id)
+                        r["peer_id"] = owner_peer_to_label.get(owner_peer_id, f"{idx}:{owner_peer_id}")
                 udp_rows.append(r)
 
             for row in mux_tcp_rows:
                 r = dict(row)
                 chan = r.get("chan_id")
-                r["peer_id"] = chan_to_peer_id.get(int(chan), str(idx)) if chan is not None else "-"
+                if chan is not None:
+                    r["peer_id"] = chan_to_peer_id.get(int(chan), str(idx))
+                else:
+                    owner_peer_id = r.get("svc_owner_peer_id")
+                    if owner_peer_id is None:
+                        r["peer_id"] = "-"
+                    else:
+                        with contextlib.suppress(Exception):
+                            owner_peer_id = int(owner_peer_id)
+                        r["peer_id"] = owner_peer_to_label.get(owner_peer_id, f"{idx}:{owner_peer_id}")
                 tcp_rows.append(r)
 
             counts = snap.get("counts", {}) or {}
