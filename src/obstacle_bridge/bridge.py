@@ -1791,6 +1791,7 @@ class ISession(Protocol):
 
     # (Milestone A helper so Runner can keep its meters identical)
     def set_on_app_from_peer_bytes(self, cb: Callable[[int], None]) -> None: ...
+    def set_on_transport_epoch_change(self, cb: Callable[[int], None]) -> None: ...
 
     def get_metrics(self) -> SessionMetrics: ...
 
@@ -1820,6 +1821,7 @@ class UdpSession(ISession):
         self._on_peer_tx: Optional[Callable[[int], None]] = None
         self._on_peer_set_cb: Optional[Callable[[str, int], None]] = None
         self._on_app_from_peer_bytes: Optional[Callable[[int], None]] = None
+        self._on_transport_epoch_change: Optional[Callable[[int], None]] = None
 
         # Optional peer-frame mirror (debug) — installed by Runner when flags are set
         self._peer_mirror_out: Optional[Callable[[bytes], None]] = None
@@ -1892,6 +1894,9 @@ class UdpSession(ISession):
     def set_on_app_from_peer_bytes(self, cb: Callable[[int], None]) -> None:
         self._log.debug("[UDP/SESSION] set_on_app_from_peer_bytes wired: cb=%r on session id=%x", cb, id(self))
         self._on_app_from_peer_bytes = cb
+
+    def set_on_transport_epoch_change(self, cb: Callable[[int], None]) -> None:
+        self._on_transport_epoch_change = cb
 
 
     def get_metrics(self) -> SessionMetrics:
@@ -2388,6 +2393,7 @@ class TcpStreamSession(ISession):
         self._on_peer_tx: Optional[Callable[[int], None]] = None
         self._on_peer_set_cb: Optional[Callable[[str, int], None]] = None
         self._on_app_from_peer_bytes: Optional[Callable[[int], None]] = None
+        self._on_transport_epoch_change: Optional[Callable[[int], None]] = None
 
         # tcp state
         self._server: Optional[asyncio.base_events.Server] = None
@@ -2453,6 +2459,7 @@ class TcpStreamSession(ISession):
     def set_on_peer_tx(self, cb): self._on_peer_tx = cb
     def set_on_peer_set(self, cb): self._on_peer_set_cb = cb
     def set_on_app_from_peer_bytes(self, cb): self._on_app_from_peer_bytes = cb
+    def set_on_transport_epoch_change(self, cb): self._on_transport_epoch_change = cb
 
     # ---- ISession: lifecycle ----
     async def start(self) -> None:
@@ -3090,6 +3097,7 @@ class QuicSession(ISession):
         self._on_peer_tx: Optional[Callable[[int], None]] = None
         self._on_peer_set_cb: Optional[Callable[[str, int], None]] = None
         self._on_app_from_peer_bytes: Optional[Callable[[int], None]] = None
+        self._on_transport_epoch_change: Optional[Callable[[int], None]] = None
 
         # Addressing / role
         self._listen_host, self._listen_port = _strip_brackets(args.quic_bind), int(args.quic_own_port)
@@ -3161,6 +3169,7 @@ class QuicSession(ISession):
     def set_on_peer_tx(self, cb): self._on_peer_tx = cb
     def set_on_peer_set(self, cb): self._on_peer_set_cb = cb
     def set_on_app_from_peer_bytes(self, cb): self._on_app_from_peer_bytes = cb
+    def set_on_transport_epoch_change(self, cb): self._on_transport_epoch_change = cb
 
     # ---- lifecycle ----
     async def start(self) -> None:
@@ -3889,6 +3898,7 @@ class WebSocketSession(ISession):
         self._on_peer_set_cb: Optional[Callable[[str, int], None]] = None
         self._on_peer_disconnect_cb: Optional[Callable[[int], None]] = None
         self._on_app_from_peer_bytes: Optional[Callable[[int], None]] = None
+        self._on_transport_epoch_change: Optional[Callable[[int], None]] = None
 
         # Mode / addressing (parity with TCP)
         self._listen_host, self._listen_port = _strip_brackets(self._args.ws_bind), int(self._args.ws_own_port)
@@ -3963,6 +3973,7 @@ class WebSocketSession(ISession):
         self._rtt = StreamRTT(log=self._log.getChild("rtt"))
         self._rtt_rt = StreamRTTRuntime(self._rtt)
         self._overlay_connected = False
+        self.connection_epoch: int = 0
 
         # Static HTTP root
         self._ws_static_dir: Optional[str] = getattr(self._args, "ws_static_dir", "./web") or None
@@ -3976,6 +3987,7 @@ class WebSocketSession(ISession):
     def set_on_peer_set(self, cb): self._on_peer_set_cb = cb
     def set_on_peer_disconnect(self, cb): self._on_peer_disconnect_cb = cb
     def set_on_app_from_peer_bytes(self, cb): self._on_app_from_peer_bytes = cb
+    def set_on_transport_epoch_change(self, cb): self._on_transport_epoch_change = cb
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -4859,6 +4871,7 @@ class WebSocketSession(ISession):
                 connect_kwargs["server_hostname"] = self._peer_name_host
 
         try:
+            had_previous_connection = self.connection_epoch > 0
             if connect_kwargs:
                 self._log.info(f"[WS-SESSION] ({self._probe_id}) connecting to {uri} via {host}:{int(port)}")
             else:
@@ -4886,6 +4899,14 @@ class WebSocketSession(ISession):
             remote = getattr(ws, "remote_address", None)
             self._log.info(f"[WS-SESSION] ({self._probe_id}) connected in {dt:.1f} ms local={local} peer={remote}")
             await self._on_accept(ws)
+            if self._ws is ws:
+                self.connection_epoch += 1
+                self._log.debug("[WS-SESSION] (%s) transport epoch=%d", self._probe_id, self.connection_epoch)
+                if had_previous_connection and callable(self._on_transport_epoch_change):
+                    try:
+                        self._on_transport_epoch_change(self.connection_epoch)
+                    except Exception:
+                        pass
             if self._peer_name_host:
                 self._peer_host = self._peer_name_host
                 self._peer_port = self._peer_name_port or int(port)
@@ -6014,6 +6035,13 @@ class ChannelMux:
         # Re-enable and (re)start
         self._accepting_enabled = True
         await self._start_all_services()
+        self._send_remote_services_catalog_if_any()
+
+    async def on_transport_epoch_change(self, epoch: int) -> None:
+        self.log.info("[MUX] transport epoch changed -> %s (hard resync)", epoch)
+        await self._close_all_channels()
+        if self._overlay_connected and self._accepting_enabled:
+            await self._start_all_services()
         self._send_remote_services_catalog_if_any()
 
     # ---------- service lifecycle ----------
@@ -7937,6 +7965,10 @@ class Runner:
             self._sessions.append(session)
             self._muxes.append(mux)
             self._session_labels.append(transport_name)
+            session.set_on_transport_epoch_change(
+                lambda epoch, transport_name=transport_name, session=session, mux=mux:
+                    self._on_transport_epoch_change(transport_name, session, mux, epoch)
+            )
             await session.start()
             await mux.start()
 
@@ -8084,6 +8116,18 @@ class Runner:
                 s.reset_sender()
             except Exception:
                 pass
+
+    def _on_transport_epoch_change(self, transport_name: str, session: ISession, mux: "ChannelMux", epoch: int) -> None:
+        self.log.info(
+            "[SERVER] transport epoch changed transport=%s session=%x epoch=%d",
+            transport_name,
+            id(session),
+            epoch,
+        )
+        try:
+            asyncio.get_running_loop().create_task(mux.on_transport_epoch_change(epoch))
+        except RuntimeError:
+            pass
 
     def request_restart(self) -> None:
         self.log.debug("[SERVER] Runner restart requested")
