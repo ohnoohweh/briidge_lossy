@@ -8164,8 +8164,6 @@ class Runner:
             session.set_on_peer_rx(self.stats.on_peer_rx_bytes)
             session.set_on_peer_tx(self.stats.on_peer_tx_bytes)
             session.set_on_peer_set(self.stats.on_peer_set)
-            session.set_on_app_from_peer_bytes(self.stats.on_app_tx_bytes)
-
             mux = ChannelMux.from_args(
                 session,
                 loop,
