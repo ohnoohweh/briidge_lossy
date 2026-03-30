@@ -20,3 +20,10 @@ where = ["src"]
 
 [project.scripts]
 ObstacleBridge = "obstacle_bridge.bridge:main"
+
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: end-to-end integration tests",
+    "slow: long-running tests",
+]
