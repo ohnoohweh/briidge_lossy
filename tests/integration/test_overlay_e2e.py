@@ -206,6 +206,35 @@ def _with_localhost_peer(case: Case, name: str, bind_host: str, resolve_family: 
     )
 
 
+BASE_CASES = [
+    'case01_udp_over_own_udp_ipv4',
+    'case02_udp_over_own_udp_overlay_ipv6_clients_ipv4',
+    'case03_udp_over_own_udp_overlay_ipv6_clients_ipv6',
+    'case04_tcp_over_own_udp_clients_ipv4',
+    'case05_tcp_over_own_udp_clients_ipv6',
+    'case06_overlay_tcp_ipv4',
+    'case07_overlay_tcp_ipv6',
+    'case08_overlay_ws_ipv4',
+    'case09_overlay_ws_ipv6',
+    'case10_overlay_quic_ipv4',
+    'case11_overlay_quic_ipv6',
+]
+
+LOCALHOST_CASES = [
+    'case01_udp_over_own_udp_localhost_ipv4',
+    'case01_udp_over_own_udp_localhost_ipv6',
+    'case06_overlay_tcp_localhost_ipv4',
+    'case06_overlay_tcp_localhost_ipv6',
+    'case08_overlay_ws_localhost_ipv4',
+    'case08_overlay_ws_localhost_ipv6',
+    'case10_overlay_quic_localhost_ipv4',
+    'case10_overlay_quic_localhost_ipv6',
+]
+
+LISTENER_CASES = [
+    'case12_overlay_ws_ipv4_listener_two_clients',
+]
+
 CASES.update({
     'case01_udp_over_own_udp_localhost_ipv4': _with_localhost_peer(
         CASES['case01_udp_over_own_udp_ipv4'],
@@ -257,7 +286,29 @@ CASES.update({
     ),
 })
 
-DEFAULT_CASES = list(CASES.keys())
+BASIC_CASES = list(BASE_CASES)
+RECONNECT_CASES = list(BASE_CASES) + list(LOCALHOST_CASES)
+ALL_CASES = list(CASES.keys())
+
+DEFAULT_CASES = {
+    'basic': BASIC_CASES,
+    'reconnect': RECONNECT_CASES,
+    'listener-two-clients': LISTENER_CASES,
+}
+
+
+def _validate_case_catalog() -> None:
+    missing_from_cases = [name for name in ALL_CASES if name not in CASES]
+    if missing_from_cases:
+        raise RuntimeError(f'Case catalog mismatch; missing case specs: {missing_from_cases}')
+
+    required_by_cases = set(BASE_CASES) | set(LOCALHOST_CASES) | set(LISTENER_CASES)
+    missing_choice_names = sorted(name for name in required_by_cases if name not in ALL_CASES)
+    if missing_choice_names:
+        raise RuntimeError(f'--cases choices missing required names: {missing_choice_names}')
+
+
+_validate_case_catalog()
 
 
 def response_payload(data: bytes) -> bytes:
@@ -1149,7 +1200,7 @@ def wait_both_connected(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description='Automated end-to-end overlay tests with built-in bounce-back server')
-    p.add_argument('--cases', nargs='*', default=DEFAULT_CASES, choices=DEFAULT_CASES)
+    p.add_argument('--cases', nargs='*', default=None, choices=ALL_CASES)
     p.add_argument(
         '--mode',
         choices=['basic', 'reconnect', 'listener-two-clients'],
@@ -1172,9 +1223,11 @@ def main() -> int:
     args = parse_args()
 
     if args.list_cases:
-        for name in DEFAULT_CASES:
+        for name in ALL_CASES:
             print(name)
         return 0
+
+    selected_cases = list(args.cases) if args.cases is not None else list(DEFAULT_CASES[args.mode])
 
     log_dir = Path(args.log_dir) if args.log_dir else Path(tempfile.mkdtemp(prefix='overlay_e2e_'))
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -1192,7 +1245,7 @@ def main() -> int:
             return 2
 
     failures = []
-    for idx, name in enumerate(args.cases):
+    for idx, name in enumerate(selected_cases):
         case = CASES[name]
         log.info(f'=== RUN {case.name} ===')
         try:
