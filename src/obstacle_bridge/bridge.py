@@ -9281,9 +9281,18 @@ class ConfigAwareCLI:
         if boot_args.config:
             config_path = pathlib.Path(boot_args.config)
             if explicit_config_flag or config_path.exists():
-                cfg = self._load_json_config(boot_args.config)
-                self._raw_config = cfg
-                self._apply_config_defaults_from_json(parser, cfg)
+                try:
+                    cfg = self._load_json_config(boot_args.config)
+                except FileNotFoundError:
+                    # Missing config should not prevent startup; continue with
+                    # built-in argparse defaults unless a readable config exists.
+                    sys.stderr.write(
+                        f"Config file not found, continuing with defaults: {config_path}\n"
+                    )
+                    sys.stderr.flush()
+                else:
+                    self._raw_config = cfg
+                    self._apply_config_defaults_from_json(parser, cfg)
 
         # Phase 3: final parse; CLI overrides config/defaults
         args = parser.parse_args(remaining)
