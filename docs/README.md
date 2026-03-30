@@ -1,84 +1,153 @@
-## Proposed Python module framework
+# Clean Test Suite — NAT + 300ms delay + 5-frame guarantee
 
-The repository is now organized as a package-first Python project:
+**What this suite guarantees**
+- On-wire ptypes: **DATA=0x01**, **CONTROL=0x02** (original).
+- NAT overlay: **PC1:40001 ↔ PC2:443** (single logical path in both directions).
+- **300 ms one way** overlay delay between PCs.
+- Overlay frames are **RX-logged before delivery** — so PCAP shows overlay immediately *before* the local deliver on the receiver.
+- **Exactly 5 frames** per message: local send → overlay DATA → local receive → CONTROL (rx→tx) → CONTROL (tx→rx).
 
-```text
-src/obstacle_bridge/
-  bridge.py                  # primary bridge/session implementation
-  transfer.py                # transport/framing implementation
-  tools/
-    overlay_tty.py           # interactive UDP/TCP test terminal
-    extract_udp_debug.py     # debug/pcap extraction helper
-tests/
-  unit/
-  integration/
-scripts/
-  run_udp_bidir_tests.py     # async virtual transport harness
-docs/
-  README.md
-  README_TESTING.md
+**Files**
+- `src/obstacle_bridge/transfer.py` – deterministic CONTROL emission: receiver sends CONTROL on DATA; sender replies with CONTROL on CONTROL.
+- `virtual_net.py` – NAT mapping, 300ms overlay delay, overlay RX-first PCAP logging, local app logging with global IPs.
+- `scripts/run_udp_bidir_tests.py` – five scenarios, including two large and one concurrent case.
+
+## Overlay integration suites
+
+The repository also ships two end-to-end overlay harnesses in `tests/integration/`:
+
+- `test_overlay_e2e.py`: single-pass smoke checks across all configured transports and address-family combinations.
+- `test_overlay_e2e_reconnect.py`: smoke + reconnect/state-transition regression flows (and one dedicated two-client WS listener scenario).
+
+Both scripts are **standalone Python runners** (not pytest functions). They start a local bounce-back server, launch one or more `ObstacleBridge.py` processes, wait for tunnel readiness, then probe through the overlay and fail with process/log dumps if a step breaks.
+
+---
+
+## 1) `test_overlay_e2e.py`
+
+### Start the suite
+
+Run all default cases:
+
+```bash
+python tests/integration/test_overlay_e2e.py
 ```
 
-The supported entry points now use the packaged implementation directly, with
-`ObstacleBridge.py` retained as the repository-root launcher for the bridge
-itself while tooling is invoked from its maintained location under `scripts/`.
+List available case names:
 
-I like to change the way how ChannelMux is controlled in terms of the UDP/TCP servers and clients.
+```bash
+python tests/integration/test_overlay_e2e.py --list-cases
+```
 
-As an CLI argument I like to tell the instance:
-Please setup a UDP or TCP server port number z, when client APP connects to it, please instruct instance on other side to establish a UDP/TCP connection to host:port (always from a new dynamic port). 
-Today only one UDP and one TCP server is provided
-it should possible to setup none, one or multiple TCP servers on different ports, same for UDP
+Run only selected cases:
 
-Example
-Server side:
---own-servers tcp,80,0.0.0.0,tcp,127.0.0.1,88
-Explanation:
-Offer a tcp server listening on port 80, binding to 0.0.0.0 on TCP connection income on server, as accepted&connected on server, generate on peer a tcp client connection to 127.0.0.1:88 using an dynamic source port. Route all data bidirectionally between the accepted&connected TCP connection and the established TCP client connection on peer side.
+```bash
+python tests/integration/test_overlay_e2e.py \
+  --cases case01_udp_over_own_udp_ipv4 case08_overlay_ws_ipv4
+```
 
-Multiple connections
---own-servers "tcp,80,0.0.0.0,tcp,127.0.0.1,80 tcp,22,0.0.0.0,tcp,127.0.0.1,22 tcp,3128,0.0.0.0,tcp,127.0.0.1,3128 udp,16666,0.0.0.0,udp,127.0.0.1,16666"
+Preserve logs in a chosen folder:
 
-thus ObstacleBridge.py provides tcp servers listening on port 80,22,3128 and udp server on port 16666.
+```bash
+python tests/integration/test_overlay_e2e.py --log-dir /tmp/overlay-e2e-logs
+```
 
+### Options
 
-Remove legacy CLI, no need for backward compatibility
---udp-role client 
---udp-target-host
---udp-target-port
---tcp-role client 
---tcp-target-host 
---tcp-target-port 
+- `--cases <case...>`: run only the selected named cases (default: all).
+- `--list-cases`: print supported case names and exit.
+- `--log-dir <dir>`: keep process and bounce logs in a fixed directory (otherwise temp dir).
+- `--settle-seconds <float>`: override default startup wait before probing.
+- `--require-aioquic`: fail immediately if `aioquic` is missing (instead of silently skipping QUIC coverage).
 
-Format of app message OPEN can be changed freely to instruct peer opening corresponding client connection. No backward compatibility for app message OPEN required
+### Implemented tests
 
-Include knowledge gain we got from UDPConnection in respect to UDP transport for UDP server
-        transport, protocol = await self._loop.create_datagram_endpoint(
-            _factory, local_addr=listen, family=socket.AF_UNSPEC
-        )
-Transport needs to be peer free connected, in this transport datagram from different origins will be received, Based on known source addr, port deceided if it is a new or existing connection.
-UDP Connection close/time out when with source addr,port combination for more than 20s no data was exchanged, thus eighter received or sent 
+Default case set (`DEFAULT_CASES`) currently includes 11 smoke scenarios:
 
-Option A, full updated ChannelMux code
-please keep/include existing features as - but not limited to -
--extensive verbose logging in case of LOG debug: 
---TCP/UDP Server, listener port state  transitions
---per communication channel, traffic status as count of rx and tx bytes, CRC32 of rx bytes, CRC32 of tx bytes
--TCP backpressure feature
--restart listener ports in case they close for whatever reason
--Limited reading from UDP/TCP ports to avoid exceeding 65535bytes app messages
+1. `case01_udp_over_own_udp_ipv4`
+2. `case02_udp_over_own_udp_overlay_ipv6_clients_ipv4`
+3. `case03_udp_over_own_udp_overlay_ipv6_clients_ipv6`
+4. `case04_tcp_over_own_udp_clients_ipv4`
+5. `case05_tcp_over_own_udp_clients_ipv6`
+6. `case06_overlay_tcp_ipv4`
+7. `case07_overlay_tcp_ipv6`
+8. `case08_overlay_ws_ipv4`
+9. `case09_overlay_ws_ipv6`
+10. `case10_overlay_quic_ipv4`
+11. `case11_overlay_quic_ipv6`
 
-Certificate
------------ 
-openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=localhost"
+Each case validates that a probe payload (`0x01 0x30`) traverses the configured bridge path and returns the expected transformed payload (`0x02 0x30`) from the bounce service.
 
+---
 
-I tested the new ChannelMux component#
-# Bridge server
-#
-python ObstacleBridge.py  --bind443 0.0.0.0 --port443 443  --debug-session-udp --debug-peer-udp --log DEBUG --log-file br_server.txt
-#
-# Bridge client
-#
-python ObstacleBridge.py --bind443 0.0.0.0 --peer 127.0.0.1 --peer-port 443 --port443 0 --own-servers "udp,16667,0.0.0.0,udp,127.0.0.1,16666" --debug-session-udp --debug-peer-udp --debug-session-out-port 41000 --debug-session-in-port 41001 --debug-peer-out-port 41002 --debug-peer-in-port 41003 --log DEBUG --log-file br_client.txt
-#br_server.txt attached. Please filter those elements for ChannelMux. What data went in/out on App message side, which data went out on UDP side ?
+## 2) `test_overlay_e2e_reconnect.py`
+
+### Start the suite
+
+Run default smoke mode (all reconnect-harness cases):
+
+```bash
+python tests/integration/test_overlay_e2e_reconnect.py
+```
+
+Run reconnect regression mode:
+
+```bash
+python tests/integration/test_overlay_e2e_reconnect.py --reconnect
+```
+
+Run only one case in reconnect mode with custom transition timeout:
+
+```bash
+python tests/integration/test_overlay_e2e_reconnect.py \
+  --cases case08_overlay_ws_ipv4 \
+  --reconnect \
+  --reconnect-timeout 45
+```
+
+List cases:
+
+```bash
+python tests/integration/test_overlay_e2e_reconnect.py --list-cases
+```
+
+### Options
+
+- `--cases <case...>`: run only selected case names (default: all).
+- `--list-cases`: print supported names and exit.
+- `--log-dir <dir>`: output directory for child-process logs.
+- `--settle-seconds <float>`: override case startup delay.
+- `--require-aioquic`: fail fast if `aioquic` is unavailable.
+- `--reconnect`: switch from smoke probe mode to reconnect transition mode.
+- `--reconnect-timeout <float>`: timeout used for connected/disconnected admin-state waits.
+
+### Implemented tests
+
+Default case set currently includes base transport checks plus localhost-resolution variants:
+
+- Base IPv4 cases:
+  - `case01_udp_over_own_udp_ipv4`
+  - `case06_overlay_tcp_ipv4`
+  - `case08_overlay_ws_ipv4`
+  - `case10_overlay_quic_ipv4`
+  - `case12_overlay_ws_ipv4_listener_two_clients`
+- Localhost + resolve-family variants for UDP/TCP/WS/QUIC:
+  - `*_localhost_ipv4`
+  - `*_localhost_ipv6`
+
+Behavior by mode:
+
+- **Smoke mode (default)**
+  - Runs single pass probe validation for each case.
+  - For `case12_overlay_ws_ipv4_listener_two_clients`, runs the dedicated two-client listener flow and verifies both clients can independently traverse the same WS listener.
+
+- **Reconnect mode (`--reconnect`)**
+  - Runs a staged restart/disconnect/reconnect workflow with admin API checks:
+    1. Verify initial connectivity.
+    2. Restart server and wait for connected state recovery.
+    3. Stop server and verify disconnection + probe failure.
+    4. Restart server and verify recovery.
+    5. Stop client and verify disconnection + probe failure.
+    6. Restart client and verify recovery.
+
+These checks ensure overlay transport resiliency and control-plane state tracking (connected/not connected) for restart events.
