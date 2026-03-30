@@ -56,8 +56,8 @@ CASES: Dict[str, Case] = {
         name='case01_udp_over_own_udp_ipv4',
         bounce_proto='udp', bounce_bind='0.0.0.0', bounce_port=16666,
         probe_proto='udp', probe_host='127.0.0.1', probe_port=16667, probe_bind='0.0.0.0',
-        bridge_server_args=['--udp-bind', '0.0.0.0', '--udp-own-port', '443', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server_ipv4.txt'],
-        bridge_client_args=['--udp-bind', '0.0.0.0', '--udp-peer', '127.0.0.1', '--udp-peer-port', '443', '--udp-own-port', '0', '--own-servers', 'udp,16667,0.0.0.0,udp,127.0.0.1,16666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_ipv4.txt'],
+        bridge_server_args=['--udp-bind', '0.0.0.0', '--udp-own-port', '14443', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server_ipv4.txt'],
+        bridge_client_args=['--udp-bind', '0.0.0.0', '--udp-peer', '127.0.0.1', '--udp-peer-port', '14443', '--udp-own-port', '0', '--own-servers', 'udp,16667,0.0.0.0,udp,127.0.0.1,16666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_ipv4.txt'],
     ),
     'case06_overlay_tcp_ipv4': Case(
         name='case06_overlay_tcp_ipv4',
