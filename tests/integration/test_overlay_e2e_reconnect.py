@@ -54,40 +54,40 @@ class Case:
 CASES: Dict[str, Case] = {
     'case01_udp_over_own_udp_ipv4': Case(
         name='case01_udp_over_own_udp_ipv4',
-        bounce_proto='udp', bounce_bind='0.0.0.0', bounce_port=16666,
-        probe_proto='udp', probe_host='127.0.0.1', probe_port=16667, probe_bind='0.0.0.0',
+        bounce_proto='udp', bounce_bind='0.0.0.0', bounce_port=26666,
+        probe_proto='udp', probe_host='127.0.0.1', probe_port=26667, probe_bind='0.0.0.0',
         bridge_server_args=['--udp-bind', '0.0.0.0', '--udp-own-port', '14443', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server_ipv4.txt'],
-        bridge_client_args=['--udp-bind', '0.0.0.0', '--udp-peer', '127.0.0.1', '--udp-peer-port', '14443', '--udp-own-port', '0', '--own-servers', 'udp,16667,0.0.0.0,udp,127.0.0.1,16666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_ipv4.txt'],
+        bridge_client_args=['--udp-bind', '0.0.0.0', '--udp-peer', '127.0.0.1', '--udp-peer-port', '14443', '--udp-own-port', '0', '--own-servers', 'udp,26667,0.0.0.0,udp,127.0.0.1,26666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_ipv4.txt'],
     ),
     'case06_overlay_tcp_ipv4': Case(
         name='case06_overlay_tcp_ipv4',
-        bounce_proto='udp', bounce_bind='0.0.0.0', bounce_port=16666,
-        probe_proto='udp', probe_host='127.0.0.1', probe_port=16667, probe_bind='0.0.0.0',
+        bounce_proto='udp', bounce_bind='0.0.0.0', bounce_port=26666,
+        probe_proto='udp', probe_host='127.0.0.1', probe_port=26667, probe_bind='0.0.0.0',
         bridge_server_args=['--overlay-transport', 'tcp', '--tcp-bind', '0.0.0.0', '--tcp-own-port', '12345', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server.txt'],
-        bridge_client_args=['--overlay-transport', 'tcp', '--tcp-peer', '127.0.0.1', '--tcp-peer-port', '12345', '--tcp-bind', '0.0.0.0', '--tcp-own-port', '0', '--own-servers', 'udp,16667,0.0.0.0,udp,127.0.0.1,16666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_ipv6.txt'],
+        bridge_client_args=['--overlay-transport', 'tcp', '--tcp-peer', '127.0.0.1', '--tcp-peer-port', '12345', '--tcp-bind', '0.0.0.0', '--tcp-own-port', '0', '--own-servers', 'udp,26667,0.0.0.0,udp,127.0.0.1,26666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_ipv6.txt'],
     ),
     'case08_overlay_ws_ipv4': Case(
         name='case08_overlay_ws_ipv4',
-        bounce_proto='udp', bounce_bind='0.0.0.0', bounce_port=16666,
-        probe_proto='udp', probe_host='127.0.0.1', probe_port=16667, probe_bind='0.0.0.0',
+        bounce_proto='udp', bounce_bind='0.0.0.0', bounce_port=26666,
+        probe_proto='udp', probe_host='127.0.0.1', probe_port=26667, probe_bind='0.0.0.0',
         bridge_server_args=['--overlay-transport', 'ws', '--ws-bind', '0.0.0.0', '--ws-own-port', '54321', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server.txt'],
-        bridge_client_args=['--overlay-transport', 'ws', '--ws-peer', '127.0.0.1', '--ws-peer-port', '54321', '--ws-bind', '0.0.0.0', '--ws-own-port', '0', '--own-servers', 'udp,16667,0.0.0.0,udp,127.0.0.1,16666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_ipv6.txt'],
+        bridge_client_args=['--overlay-transport', 'ws', '--ws-peer', '127.0.0.1', '--ws-peer-port', '54321', '--ws-bind', '0.0.0.0', '--ws-own-port', '0', '--own-servers', 'udp,26667,0.0.0.0,udp,127.0.0.1,26666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_ipv6.txt'],
         server_env={'NO_PROXY': '127.0.0.1'},
         client_env={'NO_PROXY': '127.0.0.1'},
     ),
     'case10_overlay_quic_ipv4': Case(
         name='case10_overlay_quic_ipv4',
-        bounce_proto='udp', bounce_bind='0.0.0.0', bounce_port=16666,
-        probe_proto='udp', probe_host='127.0.0.1', probe_port=16667, probe_bind='0.0.0.0',
+        bounce_proto='udp', bounce_bind='0.0.0.0', bounce_port=26666,
+        probe_proto='udp', probe_host='127.0.0.1', probe_port=26667, probe_bind='0.0.0.0',
         bridge_server_args=['--overlay-transport', 'quic', '--quic-bind', '0.0.0.0', '--quic-own-port', '4443', '--quic-cert', 'cert.pem', '--quic-key', 'key.pem', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server.txt'],
-        bridge_client_args=['--overlay-transport', 'quic', '--quic-peer', '127.0.0.1', '--quic-peer-port', '4443', '--quic-bind', '0.0.0.0', '--quic-own-port', '0', '--quic-insecure', '--own-servers', 'udp,16667,0.0.0.0,udp,127.0.0.1,16666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_ipv6.txt'],
+        bridge_client_args=['--overlay-transport', 'quic', '--quic-peer', '127.0.0.1', '--quic-peer-port', '4443', '--quic-bind', '0.0.0.0', '--quic-own-port', '0', '--quic-insecure', '--own-servers', 'udp,26667,0.0.0.0,udp,127.0.0.1,26666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_ipv6.txt'],
     ),
     'case12_overlay_ws_ipv4_listener_two_clients': Case(
         name='case12_overlay_ws_ipv4_listener_two_clients',
-        bounce_proto='udp', bounce_bind='0.0.0.0', bounce_port=16666,
-        probe_proto='udp', probe_host='127.0.0.1', probe_port=16667, probe_bind='0.0.0.0',
+        bounce_proto='udp', bounce_bind='0.0.0.0', bounce_port=26666,
+        probe_proto='udp', probe_host='127.0.0.1', probe_port=26667, probe_bind='0.0.0.0',
         bridge_server_args=['--overlay-transport', 'ws', '--ws-bind', '0.0.0.0', '--ws-own-port', '54331', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server_two_clients.txt'],
-        bridge_client_args=['--overlay-transport', 'ws', '--ws-peer', '127.0.0.1', '--ws-peer-port', '54331', '--ws-bind', '0.0.0.0', '--ws-own-port', '0', '--own-servers', 'udp,16667,0.0.0.0,udp,127.0.0.1,16666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_two_clients.txt'],
+        bridge_client_args=['--overlay-transport', 'ws', '--ws-peer', '127.0.0.1', '--ws-peer-port', '54331', '--ws-bind', '0.0.0.0', '--ws-own-port', '0', '--own-servers', 'udp,26667,0.0.0.0,udp,127.0.0.1,26666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_two_clients.txt'],
         server_env={'NO_PROXY': '127.0.0.1'},
         client_env={'NO_PROXY': '127.0.0.1'},
     ),
@@ -550,7 +550,7 @@ def materialize_args(args: List[str], log_dir: Path, case_name: str, side: str) 
     return out
 
 
-def alloc_admin_ports(case_index: int, base: int = 18080) -> Tuple[int, int]:
+def alloc_admin_ports(case_index: int, base: int = 18180) -> Tuple[int, int]:
     server = base + case_index * 20
     client = server + 10
     return server, client
