@@ -563,8 +563,13 @@ def admin_args(port: int) -> List[str]:
 def build_commands(case: Case, log_dir: Path, case_index: int, enable_admin: bool = False) -> List[tuple[str, List[str], Dict[str, str], Optional[int]]]:
     py = sys.executable
     server_admin, client_admin = alloc_admin_ports(case_index)
+    missing_cfg = str(log_dir / f'{case.name}_missing.cfg')
     server_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_server_args, log_dir, case.name, 'bridge_server')
     client_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_client_args, log_dir, case.name, 'bridge_client')
+    # Force default startup values from CLI/test case and avoid loading local ObstacleBridge.cfg.
+    # ConfigAwareCLI treats a missing explicitly-requested config as non-fatal and continues with defaults.
+    server_cmd += ['--config', missing_cfg]
+    client_cmd += ['--config', missing_cfg]
     # Prevent accidental fixed-port collisions from external config defaults.
     server_cmd += ['--admin-web-port', '0']
     client_cmd += ['--admin-web-port', '0']
