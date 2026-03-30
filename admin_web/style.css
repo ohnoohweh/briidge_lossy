@@ -565,6 +565,10 @@ h1 {
   padding: 24px 18px;
 }
 
+.misc-actions {
+  margin-top: 16px;
+}
+
 @media (max-width: 1200px) {
   .conn-table {
     min-width: 760px;
