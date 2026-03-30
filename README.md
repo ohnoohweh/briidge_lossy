@@ -10,6 +10,11 @@ ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for ba
 ## Entry points
 - `python -m obstacle_bridge --help`
 
+## Integration reconnect suite
+- `python tests/integration/test_overlay_e2e_reconnect.py` runs the reconnect regression workflow by default for selected cases.
+- `--reconnect-timeout` can be used to tune connected/disconnected transition waits.
+- Additional test-suite usage details are documented in `docs/README_TESTING.md`.
+
 ## Quick-start examples
 ### 1) WireGuard bridge setup
 This example assumes the bridge **server** can already reach a local WireGuard UDP service on `127.0.0.1:16666`. The **peer** connects to that bridge server and recreates the same UDP port locally on `127.0.0.1:16666`, so a WireGuard client on the peer machine can point at `localhost:16666`.
