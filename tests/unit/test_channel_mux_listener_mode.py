@@ -133,14 +133,14 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         chan, proto, mtype, payload = send_mux.call_args.args
         self.assertEqual(chan, 0)
         self.assertEqual(proto, ChannelMux.Proto.UDP)
-        self.assertEqual(mtype, ChannelMux.MType.REMOTE_SERVICES_SET_V1)
-        self.assertEqual(self.mux._decode_remote_services_set_v1(payload), [spec])
+        self.assertEqual(mtype, ChannelMux.MType.REMOTE_SERVICES_SET_V2)
+        self.assertEqual(self.mux._decode_remote_services_set_v2(payload)[2], [spec])
 
     async def test_receiver_starts_udp_and_tcp_listeners_from_remote_catalog(self):
         udp_spec = ChannelMux.ServiceSpec(1, 'udp', '127.0.0.1', 10001, 'udp', '127.0.0.1', 20001)
         tcp_spec = ChannelMux.ServiceSpec(2, 'tcp', '127.0.0.1', 10002, 'tcp', '127.0.0.1', 20002)
-        payload = self.mux._encode_remote_services_set_v1([udp_spec, tcp_spec])
-        frame = self.mux._pack_mux(0, ChannelMux.Proto.UDP, 0, ChannelMux.MType.REMOTE_SERVICES_SET_V1, payload)
+        payload = self.mux._encode_remote_services_set_v2([udp_spec, tcp_spec])
+        frame = self.mux._pack_mux(0, ChannelMux.Proto.UDP, 0, ChannelMux.MType.REMOTE_SERVICES_SET_V2, payload)
 
         with patch.object(self.mux, '_start_udp_server_for', new=AsyncMock()) as start_udp, patch.object(self.mux, '_start_tcp_server_for', new=AsyncMock()) as start_tcp:
             ok = self.mux.on_app_payload_from_peer(frame, peer_id=77)
