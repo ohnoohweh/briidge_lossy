@@ -398,6 +398,11 @@ def build_commands(case: Case, log_dir: Path) -> List[tuple[str, List[str], Dict
     py = sys.executable
     server_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_server_args, log_dir, case.name, 'bridge_server')
     client_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_client_args, log_dir, case.name, 'bridge_client')
+
+    # Avoid collisions with local services when multiple bridge instances are launched.
+    server_cmd += ['--admin-web-port', '0']
+    client_cmd += ['--admin-web-port', '0']
+
     return [
         ('bridge_server', server_cmd, case.server_env),
         ('bridge_client', client_cmd, case.client_env),
