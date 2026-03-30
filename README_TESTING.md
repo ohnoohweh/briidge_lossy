@@ -9,4 +9,7 @@ This now includes dedicated sections for:
 For both suites, the doc describes:
 - how to start the suite,
 - available command-line options,
+- pytest mode support (including marker filters),
 - and the currently implemented test cases/flows.
+
+- Pytest execution mode is supported; see `docs/README_TESTING.md` for copy/paste commands.

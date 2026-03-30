@@ -18,9 +18,42 @@ The repository also ships two end-to-end overlay harnesses in `tests/integration
 
 - `test_overlay_e2e.py`: unified smoke/reconnect/listener harness. Use `--mode basic`, `--mode reconnect`, or `--mode listener-two-clients`.
 
-The script is a **standalone Python runner** (not a pytest function). It starts a local bounce-back server, launches one or more `ObstacleBridge.py` processes, waits for tunnel readiness, then probes through the overlay and fails with process/log dumps if a step breaks.
+The harness supports **two execution modes**:
+
+- **CLI mode** (direct script entrypoint) for explicit `--mode` and `--cases` control.
+- **pytest mode** for marker/k-expression filtering and standard pytest workflows.
+
+Both paths start a local bounce-back server, launch one or more `ObstacleBridge.py` processes, wait for tunnel readiness, then probe through the overlay and fail with process/log dumps if a step breaks.
 
 ---
+
+
+## Pytest interface
+
+Run the unified harness through pytest (environment gate required):
+
+```bash
+RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k basic
+RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k reconnect
+RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k listener_two_clients
+```
+
+### Markers and filtering
+
+The overlay end-to-end coverage uses pytest markers:
+
+- `integration`: integration/subprocess tests (typically slower than unit scope).
+- `slow`: long-running scenarios (restart/reconnect and listener multi-client flows).
+
+Common marker filters:
+
+```bash
+# run integration tests that are not marked slow
+RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -m "integration and not slow"
+
+# run only slow integration coverage
+RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -m "integration and slow"
+```
 
 ## Unified harness: `test_overlay_e2e.py`
 
