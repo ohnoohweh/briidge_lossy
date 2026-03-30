@@ -396,8 +396,14 @@ def materialize_args(args: List[str], log_dir: Path, case_name: str, side: str) 
 
 def build_commands(case: Case, log_dir: Path) -> List[tuple[str, List[str], Dict[str, str]]]:
     py = sys.executable
+    missing_cfg = str(log_dir / f'{case.name}_missing.cfg')
     server_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_server_args, log_dir, case.name, 'bridge_server')
     client_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_client_args, log_dir, case.name, 'bridge_client')
+
+    # Force defaults from the test case/CLI and avoid loading a local ObstacleBridge.cfg.
+    # ConfigAwareCLI treats an explicitly requested missing config as non-fatal.
+    server_cmd += ['--config', missing_cfg]
+    client_cmd += ['--config', missing_cfg]
 
     # Avoid collisions with local services when multiple bridge instances are launched.
     server_cmd += ['--admin-web-port', '0']
