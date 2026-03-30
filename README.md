@@ -11,7 +11,7 @@ ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for ba
 - `python -m obstacle_bridge --help`
 
 ## Integration reconnect suite
-- `python tests/integration/test_overlay_e2e_reconnect.py` runs the reconnect regression workflow by default for selected cases.
+- `python tests/integration/test_overlay_e2e.py --mode reconnect` runs the reconnect regression workflow by default for selected cases.
 - `--reconnect-timeout` can be used to tune connected/disconnected transition waits.
 - Additional test-suite usage details are documented in `docs/README_TESTING.md`.
 

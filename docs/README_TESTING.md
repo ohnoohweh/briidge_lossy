@@ -16,21 +16,20 @@
 
 The repository also ships two end-to-end overlay harnesses in `tests/integration/`:
 
-- `test_overlay_e2e.py`: single-pass smoke checks across all configured transports and address-family combinations.
-- `test_overlay_e2e_reconnect.py`: smoke + reconnect/state-transition regression flows (and one dedicated two-client WS listener scenario).
+- `test_overlay_e2e.py`: unified smoke/reconnect/listener harness. Use `--mode basic`, `--mode reconnect`, or `--mode listener-two-clients`.
 
-Both scripts are **standalone Python runners** (not pytest functions). They start a local bounce-back server, launch one or more `ObstacleBridge.py` processes, wait for tunnel readiness, then probe through the overlay and fail with process/log dumps if a step breaks.
+The script is a **standalone Python runner** (not a pytest function). It starts a local bounce-back server, launches one or more `ObstacleBridge.py` processes, waits for tunnel readiness, then probes through the overlay and fails with process/log dumps if a step breaks.
 
 ---
 
-## 1) `test_overlay_e2e.py`
+## Unified harness: `test_overlay_e2e.py`
 
 ### Start the suite
 
-Run all default cases:
+Run all default cases in basic mode:
 
 ```bash
-python tests/integration/test_overlay_e2e.py
+python tests/integration/test_overlay_e2e.py --mode basic
 ```
 
 List available case names:
@@ -49,7 +48,7 @@ python tests/integration/test_overlay_e2e.py \
 Preserve logs in a chosen folder:
 
 ```bash
-python tests/integration/test_overlay_e2e.py --log-dir /tmp/overlay-e2e-logs
+python tests/integration/test_overlay_e2e.py --mode basic --log-dir /tmp/overlay-e2e-logs
 ```
 
 ### Options
@@ -59,41 +58,31 @@ python tests/integration/test_overlay_e2e.py --log-dir /tmp/overlay-e2e-logs
 - `--log-dir <dir>`: keep process and bounce logs in a fixed directory (otherwise temp dir).
 - `--settle-seconds <float>`: override default startup wait before probing.
 - `--require-aioquic`: fail immediately if `aioquic` is missing (instead of silently skipping QUIC coverage).
+- `--mode <basic|reconnect|listener-two-clients>`: select execution path in the unified harness.
+- `--reconnect-timeout <float>`: timeout used for connected/disconnected admin-state waits (applies to reconnect mode; ignored by basic mode).
 
 ### Implemented tests
 
-Default case set (`DEFAULT_CASES`) currently includes 11 smoke scenarios:
+`DEFAULT_CASES` is now unified and currently includes 20 cases: the original 11 smoke cases, reconnect-focused localhost variants (`*_localhost_ipv4` / `*_localhost_ipv6`), and `case12_overlay_ws_ipv4_listener_two_clients`.
 
-1. `case01_udp_over_own_udp_ipv4`
-2. `case02_udp_over_own_udp_overlay_ipv6_clients_ipv4`
-3. `case03_udp_over_own_udp_overlay_ipv6_clients_ipv6`
-4. `case04_tcp_over_own_udp_clients_ipv4`
-5. `case05_tcp_over_own_udp_clients_ipv6`
-6. `case06_overlay_tcp_ipv4`
-7. `case07_overlay_tcp_ipv6`
-8. `case08_overlay_ws_ipv4`
-9. `case09_overlay_ws_ipv6`
-10. `case10_overlay_quic_ipv4`
-11. `case11_overlay_quic_ipv6`
-
-Each case validates that a probe payload (`0x01 0x30`) traverses the configured bridge path and returns the expected transformed payload (`0x02 0x30`) from the bounce service.
+Use `--list-cases` to print the exact active set from the harness.
 
 ---
 
-## 2) `test_overlay_e2e_reconnect.py`
+## Reconnect mode (same file)
 
 ### Start the suite
 
 Run reconnect regression mode (all reconnect-harness cases):
 
 ```bash
-python tests/integration/test_overlay_e2e_reconnect.py
+python tests/integration/test_overlay_e2e.py --mode reconnect
 ```
 
 Run only one case with custom transition timeout:
 
 ```bash
-python tests/integration/test_overlay_e2e_reconnect.py \
+python tests/integration/test_overlay_e2e.py --mode reconnect \
   --cases case08_overlay_ws_ipv4 \
   --reconnect-timeout 45
 ```
@@ -101,7 +90,7 @@ python tests/integration/test_overlay_e2e_reconnect.py \
 List cases:
 
 ```bash
-python tests/integration/test_overlay_e2e_reconnect.py --list-cases
+python tests/integration/test_overlay_e2e.py --mode reconnect --list-cases
 ```
 
 ### Options
