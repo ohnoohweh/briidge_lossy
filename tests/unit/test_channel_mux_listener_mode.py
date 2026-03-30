@@ -99,6 +99,10 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '--remote-servers ports must be integers in 1..65535'):
             ChannelMux._parse_remote_servers(['udp,0,0.0.0.0,udp,127.0.0.1,16666'])
 
+    def test_parse_service_specs_treats_empty_config_entries_as_no_services(self):
+        self.assertEqual(ChannelMux._parse_own_servers([None]), [])
+        self.assertEqual(ChannelMux._parse_remote_servers([None, '  ']), [])
+
 
 class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
