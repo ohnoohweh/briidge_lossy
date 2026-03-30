@@ -12,6 +12,8 @@ import logging
 import time
 import urllib.error
 import urllib.request
+
+import pytest
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -1197,6 +1199,37 @@ def wait_both_connected(
         f'Both not CONNECTED before timeout; '
         f'server_last={last_server!r} client_last={last_client!r}'
     )
+
+
+def _require_overlay_e2e_enabled() -> None:
+    if os.environ.get("RUN_OVERLAY_E2E") != "1":
+        pytest.skip("Set RUN_OVERLAY_E2E=1 to run overlay integration harness")
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize("case_name", BASIC_CASES)
+def test_overlay_e2e_basic(case_name: str, tmp_path: Path) -> None:
+    _require_overlay_e2e_enabled()
+    run_case(CASES[case_name], tmp_path, ALL_CASES.index(case_name))
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize("case_name", RECONNECT_CASES)
+def test_overlay_e2e_reconnect(case_name: str, tmp_path: Path) -> None:
+    _require_overlay_e2e_enabled()
+    run_case_reconnect(CASES[case_name], tmp_path, ALL_CASES.index(case_name))
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize("case_name", LISTENER_CASES)
+def test_overlay_e2e_listener_two_clients(case_name: str, tmp_path: Path) -> None:
+    _require_overlay_e2e_enabled()
+    run_case_two_peer_clients_listener(CASES[case_name], tmp_path, ALL_CASES.index(case_name))
+
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description='Automated end-to-end overlay tests with built-in bounce-back server')
