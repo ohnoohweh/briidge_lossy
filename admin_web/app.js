@@ -185,6 +185,11 @@ function renderPeerTable(rows) {
     tbody.innerHTML = '<tr class="empty-row"><td colspan="16">No peer sessions</td></tr>';
     return;
   }
+  const fmtMyUdpMetric = (row, value) => {
+    const transport = String(row.transport || '').toLowerCase();
+    if (transport !== 'myudp') return 'n/a';
+    return fmtInteger(value);
+  };
   tbody.innerHTML = rows.map((row) => `
     <tr>
       <td class="mono">${fmtInteger(row.id)}</td>
@@ -199,10 +204,10 @@ function renderPeerTable(rows) {
       <td class="mono">${fmtBytes(row.traffic?.tx_bytes ?? 0)}</td>
       <td class="mono">${fmtInteger(row.decode_errors ?? 0)}</td>
       <td class="mono">${fmtInteger(row.inflight)}</td>
-      <td class="mono">${fmtInteger(row.myudp?.confirmed_total)}</td>
-      <td class="mono">${fmtInteger(row.myudp?.first_pass)}</td>
-      <td class="mono">${fmtInteger(row.myudp?.repeated_once)}</td>
-      <td class="mono">${fmtInteger(row.myudp?.repeated_multiple)}</td>
+      <td class="mono">${fmtMyUdpMetric(row, row.myudp?.confirmed_total)}</td>
+      <td class="mono">${fmtMyUdpMetric(row, row.myudp?.first_pass)}</td>
+      <td class="mono">${fmtMyUdpMetric(row, row.myudp?.repeated_once)}</td>
+      <td class="mono">${fmtMyUdpMetric(row, row.myudp?.repeated_multiple)}</td>
     </tr>
   `).join('');
 }
