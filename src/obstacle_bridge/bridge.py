@@ -8137,6 +8137,7 @@ class Runner:
         self.admin_web = None
         self._restart_requested: Optional[asyncio.Event] = None
         self._restart_requested_flag = False
+        self._shutdown_exit_code: Optional[int] = None
         self._last_connected_monotonic: Optional[float] = None
         self._last_disconnected_monotonic: Optional[float] = None
         self._client_restart_watchdog_task: Optional[asyncio.Task] = None        
@@ -8257,6 +8258,10 @@ class Runner:
         if self._restart_requested is not None and self._restart_requested.is_set():
             self.log.warning("[RUNNER] exiting rc=75")
             raise SystemExit(75)
+
+        if self._shutdown_exit_code is not None:
+            self.log.warning("[RUNNER] exiting rc=%d", self._shutdown_exit_code)
+            raise SystemExit(self._shutdown_exit_code)
 
         self.log.debug("[RUNNER] Leaving stop")
 
@@ -8723,8 +8728,12 @@ class Runner:
             setattr(self.args, key, value)
         return self.save_runtime_config()
 
-    def request_shutdown(self) -> None:
-        self.log.debug("[SERVER] Runner shutdown requested")
+    def request_shutdown(self, exit_code: Optional[int] = None) -> None:
+        if exit_code is not None:
+            self._shutdown_exit_code = int(exit_code)
+            self.log.debug("[SERVER] Runner shutdown requested rc=%d", self._shutdown_exit_code)
+        else:
+            self.log.debug("[SERVER] Runner shutdown requested")
         self._stop_requested = True
         if self._stop is not None:
             self._stop.set()
@@ -9144,8 +9153,8 @@ class AdminWebUI:
         self._log_api_response("/api/shutdown", 200, payload)
         await self._send_json(writer, 200, payload)
 
-        # let response flush before stopping
-        asyncio.get_running_loop().call_soon(self.runner.request_shutdown)
+        # let response flush before stopping (non-restart exit code)
+        asyncio.get_running_loop().call_soon(self.runner.request_shutdown, 76)
 
     async def _handle_static(self, writer, req_path):
         base = pathlib.Path(self.args.admin_web_dir).resolve()

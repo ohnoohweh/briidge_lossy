@@ -145,6 +145,14 @@ async function restart() {
   alert(JSON.stringify(j));
 }
 
+async function exitProgram() {
+  const confirmed = window.confirm('Exit the program now?');
+  if (!confirmed) return;
+  const r = await fetch('/api/shutdown', { method: 'POST' });
+  const j = await r.json();
+  alert(JSON.stringify(j));
+}
+
 async function loadStatus() {
   try {
     const r = await fetch('/api/status', { cache: 'no-store' });
@@ -475,6 +483,7 @@ function initMetaToggle() {
 }
 
 document.getElementById('restartBtn').addEventListener('click', restart);
+document.getElementById('exitBtn')?.addEventListener('click', exitProgram);
 document.getElementById('configReloadBtn')?.addEventListener('click', loadConfig);
 document.getElementById('configSaveBtn')?.addEventListener('click', saveConfig);
 document.getElementById('logsReloadBtn')?.addEventListener('click', loadLogs);
