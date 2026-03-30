@@ -5752,7 +5752,10 @@ class ChannelMux:
         import shlex
         if not specs:
             return []
-        flat = " ".join(specs)
+        filtered_specs = [s for s in specs if isinstance(s, str) and s.strip()]
+        if not filtered_specs:
+            return []
+        flat = " ".join(filtered_specs)
         tokens = shlex.split(flat)
         out: list[ChannelMux.ServiceSpec] = []
         sid = 1
