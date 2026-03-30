@@ -84,24 +84,17 @@ Each case validates that a probe payload (`0x01 0x30`) traverses the configured 
 
 ### Start the suite
 
-Run default smoke mode (all reconnect-harness cases):
+Run reconnect regression mode (all reconnect-harness cases):
 
 ```bash
 python tests/integration/test_overlay_e2e_reconnect.py
 ```
 
-Run reconnect regression mode:
-
-```bash
-python tests/integration/test_overlay_e2e_reconnect.py --reconnect
-```
-
-Run only one case in reconnect mode with custom transition timeout:
+Run only one case with custom transition timeout:
 
 ```bash
 python tests/integration/test_overlay_e2e_reconnect.py \
   --cases case08_overlay_ws_ipv4 \
-  --reconnect \
   --reconnect-timeout 45
 ```
 
@@ -118,7 +111,6 @@ python tests/integration/test_overlay_e2e_reconnect.py --list-cases
 - `--log-dir <dir>`: output directory for child-process logs.
 - `--settle-seconds <float>`: override case startup delay.
 - `--require-aioquic`: fail fast if `aioquic` is unavailable.
-- `--reconnect`: switch from smoke probe mode to reconnect transition mode.
 - `--reconnect-timeout <float>`: timeout used for connected/disconnected admin-state waits.
 
 ### Implemented tests
@@ -135,19 +127,14 @@ Default case set currently includes base transport checks plus localhost-resolut
   - `*_localhost_ipv4`
   - `*_localhost_ipv6`
 
-Behavior by mode:
+Behavior:
 
-- **Smoke mode (default)**
-  - Runs single pass probe validation for each case.
-  - For `case12_overlay_ws_ipv4_listener_two_clients`, runs the dedicated two-client listener flow and verifies both clients can independently traverse the same WS listener.
-
-- **Reconnect mode (`--reconnect`)**
-  - Runs a staged restart/disconnect/reconnect workflow with admin API checks:
-    1. Verify initial connectivity.
-    2. Restart server and wait for connected state recovery.
-    3. Stop server and verify disconnection + probe failure.
-    4. Restart server and verify recovery.
-    5. Stop client and verify disconnection + probe failure.
-    6. Restart client and verify recovery.
+- Runs a staged restart/disconnect/reconnect workflow with admin API checks:
+  1. Verify initial connectivity.
+  2. Restart server and wait for connected state recovery.
+  3. Stop server and verify disconnection + probe failure.
+  4. Restart server and verify recovery.
+  5. Stop client and verify disconnection + probe failure.
+  6. Restart client and verify recovery.
 
 These checks ensure overlay transport resiliency and control-plane state tracking (connected/not connected) for restart events.

@@ -1103,7 +1103,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--log-dir', default=None, help='Directory for child-process logs (default: temp dir)')
     p.add_argument('--settle-seconds', type=float, default=None, help='Override per-case settle time')
     p.add_argument('--require-aioquic', action='store_true', help='Fail fast if aioquic is not importable')
-    p.add_argument('--reconnect', action='store_true', help='Run reconnect regression flow instead of single smoke probe')
     p.add_argument('--reconnect-timeout', type=float, default=30.0, help='Timeout for connected/disconnected state transitions')
     return p.parse_args()
 
@@ -1126,7 +1125,7 @@ def main() -> int:
     log.info(f'Using log dir: {log_dir}')
     log.info(f'ObstacleBridge.py: {BRIDGE}')
     log.info('Bounce-back server: built into this harness')
-    log.info(f'Mode: {"reconnect" if args.reconnect else "smoke"}')
+    log.info('Mode: reconnect')
 
     if args.require_aioquic:
         try:
@@ -1140,12 +1139,7 @@ def main() -> int:
         case = CASES[name]
         log.info(f'=== RUN {case.name} ===')
         try:
-            if args.reconnect:
-                run_case_reconnect(case, log_dir, idx, settle_s=args.settle_seconds, reconnect_timeout=args.reconnect_timeout)
-            elif name == 'case12_overlay_ws_ipv4_listener_two_clients':
-                run_case_two_peer_clients_listener(case, log_dir, idx, settle_s=args.settle_seconds)
-            else:
-                run_case(case, log_dir, idx, settle_s=args.settle_seconds)
+            run_case_reconnect(case, log_dir, idx, settle_s=args.settle_seconds, reconnect_timeout=args.reconnect_timeout)
             log.info(f'PASS {case.name}')
         except Exception as e:
             log.info(f'FAIL {case.name}: {e}')
