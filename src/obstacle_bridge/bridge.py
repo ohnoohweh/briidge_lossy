@@ -4709,20 +4709,32 @@ class WebSocketSession(ISession):
                 pass
 
         # Start WebSocket server (+ static HTTP via process_request)
-        self._server = await websockets.serve(
-            _handler,
+        #
+        # NOTE: `open_timeout` isn't accepted by older websockets releases
+        # (it gets forwarded to loop.create_server(), which raises TypeError
+        # on Python 3.12). Only pass it when the installed websockets.serve
+        # signature explicitly supports it.
+        serve_kwargs = dict(
             host=self._listen_host,
             port=self._listen_port,
             ssl=ssl_ctx,
             subprotocols=subprotocols,
             max_size=self._ws_max_size,
             compression=self._ws_compression,
-            open_timeout=None,  # static HTTP requests may stay non-WS during asset transfer
             ping_interval=None,  # we run our own RTT ping
             ping_timeout=None,
             write_limit=max(131072, self._ws_max_size or 0),  # allow larger HTTP responses to flush before close
             process_request=_process_request,  # <-- key: serve static before WS
         )
+        try:
+            import inspect
+            if "open_timeout" in inspect.signature(websockets.serve).parameters:
+                # static HTTP requests may stay non-WS during asset transfer
+                serve_kwargs["open_timeout"] = None
+        except Exception:
+            pass
+
+        self._server = await websockets.serve(_handler, **serve_kwargs)
 
         sockets = ", ".join(str(s.getsockname()) for s in (self._server.sockets or []))
         self._log.info(
