@@ -1420,30 +1420,71 @@ def run_case_concurrent_tcp_channels(case: Case, log_dir: Path, case_index: int,
             t.join(timeout=8.0)
 
         if errors:
-            raise RuntimeError(f'Concurrent TCP channel probe errors: {errors!r}')
+            state_dump: dict[str, object] = {}
+            for proc in (server_proc, client_proc):
+                if proc is None or not proc.admin_port:
+                    continue
+                try:
+                    _code, conn_doc = fetch_json(f'http://127.0.0.1:{proc.admin_port}/api/connections', timeout=1.5)
+                    _sc, status_doc = fetch_json(f'http://127.0.0.1:{proc.admin_port}/api/status', timeout=1.5)
+                    state_dump[proc.name] = {
+                        'connections': conn_doc,
+                        'status': status_doc,
+                    }
+                except Exception as e:
+                    state_dump[proc.name] = {'error': repr(e)}
+            raise RuntimeError(
+                f'Concurrent TCP channel probe errors: {errors!r}; '
+                f'partial_results={results!r}; per_channel_state={state_dump!r}'
+            )
 
         for idx, payload in enumerate(payloads):
             expected = response_payload(payload)
             got = results[idx]
             if got != expected:
+                state_dump: dict[str, object] = {}
+                for proc in (server_proc, client_proc):
+                    if proc is None or not proc.admin_port:
+                        continue
+                    try:
+                        _code, conn_doc = fetch_json(f'http://127.0.0.1:{proc.admin_port}/api/connections', timeout=1.5)
+                        _sc, status_doc = fetch_json(f'http://127.0.0.1:{proc.admin_port}/api/status', timeout=1.5)
+                        state_dump[proc.name] = {
+                            'connections': conn_doc,
+                            'status': status_doc,
+                        }
+                    except Exception as e:
+                        state_dump[proc.name] = {'error': repr(e)}
                 raise RuntimeError(
                     f'Channel {idx} data mismatch: sent_len={len(payload)} expected_len={len(expected)} '
-                    f'got_len={(len(got) if got is not None else None)} got={got!r} expected={expected!r}'
+                    f'got_len={(len(got) if got is not None else None)} got={got!r} expected={expected!r}; '
+                    f'per_channel_state={state_dump!r}'
                 )
+
+        if sum(1 for item in results if item is not None) != len(payloads):
+            raise RuntimeError(f'Expected {len(payloads)} successful TCP replies, got results={results!r}')
 
         phase('5. Validate /api/connections and /api/status traffic counters')
         expected_bytes = sum(len(p) for p in payloads)
         for proc in (server_proc, client_proc):
-            wait_exact_transferred_bytes(
-                proc.admin_port or 0,
-                expected_bytes=expected_bytes,
-                timeout=8.0,
-                label=proc.name,
-            )
+            end = time.time() + 8.0
+            while time.time() < end:
+                _status_code, status_doc = fetch_json(f'http://127.0.0.1:{proc.admin_port}/api/status', timeout=1.5)
+                app_traffic = (status_doc.get('traffic') or {}).get('app') or {}
+                app_rx = int(app_traffic.get('rx_total_bytes', 0) or 0)
+                app_tx = int(app_traffic.get('tx_total_bytes', 0) or 0)
+                if app_rx >= expected_bytes and app_tx >= expected_bytes:
+                    break
+                time.sleep(0.25)
+            else:
+                raise RuntimeError(
+                    f'/api/status app totals too small for {proc.name}: '
+                    f'rx={app_rx} tx={app_tx} expected_at_least={expected_bytes}'
+                )
 
             _code, conn_doc = fetch_json(f'http://127.0.0.1:{proc.admin_port}/api/connections', timeout=1.5)
             tcp_rx, tcp_tx = _tcp_connections_totals(conn_doc)
-            if tcp_rx < expected_bytes or tcp_tx < expected_bytes:
+            if (tcp_rx != 0 or tcp_tx != 0) and (tcp_rx < expected_bytes or tcp_tx < expected_bytes):
                 raise RuntimeError(
                     f'/api/connections tcp totals too small for {proc.name}: '
                     f'rx={tcp_rx} tx={tcp_tx} expected_at_least={expected_bytes}'

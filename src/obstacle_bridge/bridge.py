@@ -6787,7 +6787,13 @@ class ChannelMux:
             self._tcp_by_chan[chan] = (spec.svc_id, writer)
             self._tcp_by_writer[writer] = (spec.svc_id, chan)
             self._tcp_role_by_chan[chan] = "server"      
-            self.log.info("[TCP/SRV] accept peer=%s -> chan=%s svc=%s", peer, chan, spec.svc_id)
+            self.log.info(
+                "[TCP/SRV] accept peer=%s -> chan=%s svc=%s map_size=%s",
+                peer,
+                chan,
+                spec.svc_id,
+                len(self._tcp_by_chan),
+            )
 
             # Install backpressure worker
             self._ensure_backpressure_task(chan, writer)
@@ -6826,7 +6832,7 @@ class ChannelMux:
                 except Exception as e:
                     self.log.info("[TCP/SRV] chan=%s pump error: %r", chan, e)
                 finally:
-                    self.log.info("[TCP/SRV] chan=%s EOF -> CLOSE", chan)
+                    self.log.info("[TCP/SRV] chan=%s EOF -> CLOSE (srv teardown begin)", chan)
                     self._send_mux(chan, ChannelMux.Proto.TCP, ChannelMux.MType.CLOSE, b"")
                     try:
                         writer.close()
@@ -6836,6 +6842,7 @@ class ChannelMux:
                     self._tcp_by_writer.pop(writer, None)
                     self._tcp_by_chan.pop(chan, None)
                     self._forget_tcp_open_key(chan)
+                    self.log.info("[TCP/SRV] chan=%s CLOSE teardown complete map_size=%s", chan, len(self._tcp_by_chan))
 
             self.loop.create_task(_pump())
         try:
@@ -6860,12 +6867,32 @@ class ChannelMux:
             instance_id, connection_seq, svc_id, l_proto, l_bind, l_port, r_proto, host, r_port = p
             peer_key = int(peer_id or 0)
             prev_epoch = self._peer_mux_epochs.get(peer_key)
-            if not self._peer_epoch_is_new(peer_id, instance_id, connection_seq):
-                self.log.debug("[TCP/CLI] chan=%s duplicate/replay OPEN instance_id=%s connection_seq=%s", chan, instance_id, connection_seq)
-            else:
+            epoch_is_new = self._peer_epoch_is_new(peer_id, instance_id, connection_seq)
+            self.log.info(
+                "[TCP/CLI] OPEN recv chan=%s peer=%s iid=%s seq=%s svc=%s l=%s:%s r=%s:%s epoch_is_new=%s prev_epoch=%s",
+                chan,
+                peer_key,
+                instance_id,
+                connection_seq,
+                svc_id,
+                l_bind,
+                l_port,
+                host,
+                r_port,
+                epoch_is_new,
+                prev_epoch,
+            )
+            if epoch_is_new:
                 if prev_epoch is not None:
                     self._reset_peer_open_channels(peer_key)
                 self.loop.create_task(self._drop_peer_installed_services(peer_id=peer_key))
+            else:
+                self.log.debug(
+                    "[TCP/CLI] duplicate/replay OPEN epoch observed but not treated as channel duplicate chan=%s iid=%s seq=%s",
+                    chan,
+                    instance_id,
+                    connection_seq,
+                )
             if int(l_proto) != int(ChannelMux.Proto.TCP):
                 self.log.warning("[TCP/CLI] chan=%s OPEN declares non-TCP l_proto=%s", chan, l_proto)
                 return
@@ -6873,20 +6900,20 @@ class ChannelMux:
                 self.log.warning("[TCP/CLI] chan=%s OPEN requests non-TCP r_proto=%s", chan, r_proto)
                 return
             open_key = (peer_key, int(svc_id), int(l_proto), str(l_bind), int(l_port), int(r_proto), str(host), int(r_port))
-            existing_chan = self._tcp_chan_by_open_key.get(open_key)
-            if existing_chan is not None and existing_chan != chan:
-                active = existing_chan in self._tcp_by_chan
-                if active:
-                    self.log.info(
-                        "[TCP/CLI] duplicate OPEN ignored chan=%s existing_chan=%s key=%s:%s -> %s:%s",
-                        chan, existing_chan, l_bind, l_port, host, r_port
-                    )
-                    return
-                self._forget_tcp_open_key(existing_chan)
             self._forget_tcp_open_key(chan)
             self._tcp_open_key_by_chan[chan] = open_key
             self._tcp_chan_by_open_key[open_key] = chan
+            self.log.info(
+                "[TCP/CLI] OPEN channel identity bind chan=%s key=%s:%s->%s:%s key_map_size=%s",
+                chan,
+                l_bind,
+                l_port,
+                host,
+                r_port,
+                len(self._tcp_chan_by_open_key),
+            )
             if chan in self._tcp_by_chan:
+                self.log.info("[TCP/CLI] chan=%s OPEN ignored because chan already connected", chan)
                 return
 
             async def _dial():
@@ -6952,6 +6979,7 @@ class ChannelMux:
                             self._tcp_by_writer.pop(writer, None)
                             self._tcp_by_chan.pop(chan, None)
                             self._forget_tcp_open_key(chan)
+                            self.log.info("[TCP/CLI] chan=%s CLOSE teardown complete map_size=%s", chan, len(self._tcp_by_chan))
 
                     self.loop.create_task(_rx())
                     # (No early buffer on ChannelMux TCP paths)
@@ -7006,7 +7034,7 @@ class ChannelMux:
                 except Exception:
                     pass
             self._forget_tcp_open_key(chan)
-            self.log.info("[TCP] chan=%s CLOSE => local teardown", chan)
+            self.log.info("[TCP] chan=%s CLOSE => local teardown map_size=%s", chan, len(self._tcp_by_chan))
 
     # ---------- TCP backpressure ----------
     def _ensure_backpressure_task(self, chan: int, writer: asyncio.StreamWriter) -> None:
@@ -7110,7 +7138,21 @@ class ChannelMux:
         cid = self._next_tcp_id
         if cid > self.TCP_MAX_ID:
             cid = self.TCP_MIN_ID
+
+        # Skip active channel ids during wrap-around to preserve unique in-flight identity.
+        start = cid
+        while cid in self._tcp_by_chan:
+            cid = cid + 1 if cid < self.TCP_MAX_ID else self.TCP_MIN_ID
+            if cid == start:
+                raise RuntimeError("no free TCP channel ids available")
+
         self._next_tcp_id = cid + 1 if cid < self.TCP_MAX_ID else self.TCP_MIN_ID
+        self.log.debug(
+            "[TCP/SRV] alloc chan=%s next=%s active=%s",
+            cid,
+            self._next_tcp_id,
+            len(self._tcp_by_chan),
+        )
         return cid
 
     def _ctr(self, proto: ChannelMux.Proto, chan: int) -> _ChanCtr:
