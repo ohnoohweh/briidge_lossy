@@ -8939,11 +8939,7 @@ class Runner:
     def _overlay_port_for(args: argparse.Namespace, transport: str, multi_count: int) -> int:
         listen_attr = _overlay_cli_attrs(transport)[3]
         base_default = {"myudp": 4433, "tcp": 8081, "quic": 443, "ws": 8080}[transport]
-        base = int(getattr(args, listen_attr, base_default))
-        if multi_count <= 1:
-            return base
-        offsets = {"myudp": 0, "tcp": 1, "quic": 2, "ws": 3}
-        return base + offsets[transport]
+        return int(getattr(args, listen_attr, base_default))
 
     @staticmethod
     def build_sessions_from_overlay(args: argparse.Namespace) -> List[Tuple[str, ISession]]:

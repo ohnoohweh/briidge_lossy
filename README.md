@@ -58,7 +58,7 @@ python -m obstacle_bridge \
   --quic-cert Cert_localhost/cert.pem \
   --quic-key Cert_localhost/key.pem
 ```
-In multi-transport listener mode, ObstacleBridge derives deterministic own-port offsets from `--udp-own-port`: `myudp:+0`, `tcp:+1`, `quic:+2`, `ws:+3`.
+In multi-transport listener mode, ObstacleBridge uses each transport's configured own-port directly (`--udp-own-port`, `--tcp-own-port`, `--quic-own-port`, `--ws-own-port`) without applying automatic offsets.
 ### 4) Peer client exposing local services
 ```bash
 python -m obstacle_bridge \
