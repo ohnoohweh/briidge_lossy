@@ -719,6 +719,27 @@ def materialize_args(args: List[str], log_dir: Path, case_name: str, side: str) 
     return out
 
 
+def _arg_value(args: List[str], name: str, default: str) -> str:
+    if name in args:
+        idx = args.index(name)
+        if idx + 1 < len(args):
+            return str(args[idx + 1])
+    return default
+
+
+def _listener_overlay_port(case: Case, transport: str) -> int:
+    transports = [p.strip().lower() for p in _arg_value(case.bridge_server_args, '--overlay-transport', 'myudp').split(',') if p.strip()]
+    if not transports:
+        transports = ['myudp']
+    listen_opt = {'myudp': '--udp-own-port', 'tcp': '--tcp-own-port', 'quic': '--quic-own-port', 'ws': '--ws-own-port'}[transport]
+    base_default = {'myudp': 4433, 'tcp': 8081, 'quic': 443, 'ws': 8080}[transport]
+    base = int(_arg_value(case.bridge_server_args, listen_opt, str(base_default)))
+    if len(transports) <= 1:
+        return base
+    offsets = {'myudp': 0, 'tcp': 1, 'quic': 2, 'ws': 3}
+    return base + offsets[transport]
+
+
 def alloc_admin_ports(case_index: int, base: int = 18180) -> Tuple[int, int]:
     server = base + case_index * 20
     client = server + 10
@@ -1639,6 +1660,8 @@ def run_case_mixed_overlay_two_clients_concurrent_udp_tcp(
     udp_client_proc: Optional[Proc] = None
     server_admin, ws_client_admin = alloc_admin_ports(case_index)
     udp_client_admin = ws_client_admin + 1
+    ws_peer_port = _listener_overlay_port(case, 'ws')
+    udp_peer_port = _listener_overlay_port(case, 'myudp')
 
     py = sys.executable
     missing_cfg = str(log_dir / f'{case.name}_missing.cfg')
@@ -1648,7 +1671,7 @@ def run_case_mixed_overlay_two_clients_concurrent_udp_tcp(
 
     ws_client_cmd = [py, str(BRIDGE),
         '--overlay-transport', 'ws',
-        '--ws-peer', '127.0.0.1', '--ws-peer-port', '54351', '--ws-bind', '0.0.0.0', '--ws-own-port', '0',
+        '--ws-peer', '127.0.0.1', '--ws-peer-port', str(ws_peer_port), '--ws-bind', '0.0.0.0', '--ws-own-port', '0',
         '--own-servers',
         f'udp,{base_tcp_port + 30},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 20}',
         f'udp,{base_tcp_port + 31},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 21}',
@@ -1665,15 +1688,15 @@ def run_case_mixed_overlay_two_clients_concurrent_udp_tcp(
 
     udp_client_cmd = [py, str(BRIDGE),
         '--overlay-transport', 'myudp',
-        '--udp-peer', '127.0.0.1', '--udp-peer-port', '14551', '--udp-bind', '0.0.0.0', '--udp-own-port', '0',
+        '--udp-peer', '127.0.0.1', '--udp-peer-port', str(udp_peer_port), '--udp-bind', '0.0.0.0', '--udp-own-port', '0',
         '--own-servers',
         f'udp,{base_tcp_port + 34},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 22}',
         f'udp,{base_tcp_port + 35},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 23}',
         f'tcp,{base_tcp_port + 36},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 4}',
         f'tcp,{base_tcp_port + 37},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 5}',
         '--remote-servers',
-        f'tcp,{base_tcp_port + 42},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 6}',
-        f'tcp,{base_tcp_port + 43},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 7}',
+        f'tcp,{base_tcp_port + 44},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 6}',
+        f'tcp,{base_tcp_port + 45},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 7}',
         '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
         '--log-file', str(log_dir / f'{case.name}_bridge_client_myudp.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
@@ -1687,8 +1710,8 @@ def run_case_mixed_overlay_two_clients_concurrent_udp_tcp(
         ('ws-remote-tcp-2', base_tcp_port + 41, b'\x01ws-remote-tcp-2' * 4),
         ('udp-own-tcp-1', base_tcp_port + 36, b'\x01udp-own-tcp-1' * 5),
         ('udp-own-tcp-2', base_tcp_port + 37, b'\x01udp-own-tcp-2' * 6),
-        ('udp-remote-tcp-1', base_tcp_port + 42, b'\x01udp-remote-tcp-1' * 7),
-        ('udp-remote-tcp-2', base_tcp_port + 43, b'\x01udp-remote-tcp-2' * 8),
+        ('udp-remote-tcp-1', base_tcp_port + 44, b'\x01udp-remote-tcp-1' * 7),
+        ('udp-remote-tcp-2', base_tcp_port + 45, b'\x01udp-remote-tcp-2' * 8),
     ]
     udp_specs = [
         (base_tcp_port + 30, b'\x01ws-own-udp-1'),
@@ -1753,10 +1776,7 @@ def run_case_mixed_overlay_two_clients_concurrent_udp_tcp(
         start_evt.set()
 
         try:
-            if not ready_for_poll_evt.wait(timeout=8.0):
-                raise RuntimeError('Timed out waiting for 8 concurrent TCP channels before /api/connections polling')
-
-            poll_end = time.time() + 4.0
+            poll_end = time.time() + 8.0
             observed = False
             last_docs: dict[str, dict] = {}
             while time.time() < poll_end:
@@ -1768,7 +1788,10 @@ def run_case_mixed_overlay_two_clients_concurrent_udp_tcp(
                     break
                 time.sleep(0.1)
             if not observed:
-                raise RuntimeError(f'/api/connections on server did not expose 8 active TCP rows; last_docs={last_docs!r}')
+                raise RuntimeError(
+                    f'/api/connections on server did not expose 8 active TCP rows; '
+                    f'ready_count={ready_count}/{len(tcp_specs)} last_docs={last_docs!r}'
+                )
         finally:
             release_close_evt.set()
         for t in tcp_threads:
