@@ -16,11 +16,11 @@
 
 The repository also ships two end-to-end overlay harnesses in `tests/integration/`:
 
-- `test_overlay_e2e.py`: unified smoke/reconnect/listener harness. Use `--mode basic`, `--mode reconnect`, or `--mode listener-two-clients`.
+- `test_overlay_e2e.py`: unified smoke/reconnect/listener harness. `--mode` is optional; if omitted, the runner infers the path from selected cases.
 
 The harness supports **two execution modes**:
 
-- **CLI mode** (direct script entrypoint) for explicit `--mode` and `--cases` control.
+- **CLI mode** (direct script entrypoint) for `--cases` control with optional `--mode` override.
 - **pytest mode** for marker/k-expression filtering and standard pytest workflows.
 
 Both paths start a local bounce-back server, launch one or more `ObstacleBridge.py` processes, wait for tunnel readiness, then probe through the overlay and fail with process/log dumps if a step breaks.
@@ -59,10 +59,10 @@ RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -m "integratio
 
 ### Start the suite
 
-Run all default cases in basic mode:
+Canonical/common command (no mode flag required):
 
 ```bash
-python tests/integration/test_overlay_e2e.py --mode basic
+python tests/integration/test_overlay_e2e.py
 ```
 
 List available case names:
@@ -81,7 +81,7 @@ python tests/integration/test_overlay_e2e.py \
 Preserve logs in a chosen folder:
 
 ```bash
-python tests/integration/test_overlay_e2e.py --mode basic --log-dir /tmp/overlay-e2e-logs
+python tests/integration/test_overlay_e2e.py --log-dir /tmp/overlay-e2e-logs
 ```
 
 ### Options
@@ -91,8 +91,14 @@ python tests/integration/test_overlay_e2e.py --mode basic --log-dir /tmp/overlay
 - `--log-dir <dir>`: keep process and bounce logs in a fixed directory (otherwise temp dir).
 - `--settle-seconds <float>`: override default startup wait before probing.
 - `--require-aioquic`: fail immediately if `aioquic` is missing (instead of silently skipping QUIC coverage).
-- `--mode <basic|reconnect|listener-two-clients>`: select execution path in the unified harness.
+- `--mode <basic|reconnect|listener-two-clients|concurrent-tcp-channels>`: optional override for execution path in the unified harness.
 - `--reconnect-timeout <float>`: timeout used for connected/disconnected admin-state waits (applies to reconnect mode; ignored by basic mode).
+
+Mode inference when `--mode` is omitted:
+
+- if only concurrent TCP case(s) are selected (currently `case13_*`), the concurrent runner is used,
+- if selected cases are reconnect-only localhost variants, reconnect runner is used,
+- otherwise the basic suite path is used.
 
 ### Implemented tests
 
@@ -106,7 +112,7 @@ Use `--list-cases` to print the exact active set from the harness.
 
 ### Start the suite
 
-Run reconnect regression mode (all reconnect-harness cases):
+Run reconnect regression mode explicitly (backward-compatible with existing CI/script invocations):
 
 ```bash
 python tests/integration/test_overlay_e2e.py --mode reconnect
