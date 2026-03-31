@@ -144,6 +144,15 @@ CASES: Dict[str, Case] = {
         server_env={'NO_PROXY': '127.0.0.1'},
         client_env={'NO_PROXY': '127.0.0.1'},
     ),
+    'case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels': Case(
+        name='case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels',
+        bounce_proto='tcp', bounce_bind='0.0.0.0', bounce_port=3138,
+        probe_proto='tcp', probe_host='127.0.0.1', probe_port=3139, probe_bind='0.0.0.0',
+        bridge_server_args=['--overlay-transport', 'ws', '--ws-bind', '0.0.0.0', '--ws-own-port', '54341', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server_concurrent_tcp.txt'],
+        bridge_client_args=['--overlay-transport', 'ws', '--ws-peer', '127.0.0.1', '--ws-peer-port', '54341', '--ws-bind', '0.0.0.0', '--ws-own-port', '0', '--own-servers', 'tcp,3139,0.0.0.0,tcp,127.0.0.1,3138', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_concurrent_tcp.txt'],
+        server_env={'NO_PROXY': '127.0.0.1'},
+        client_env={'NO_PROXY': '127.0.0.1'},
+    ),
 }
 
 
@@ -237,6 +246,10 @@ LISTENER_CASES = [
     'case12_overlay_ws_ipv4_listener_two_clients',
 ]
 
+CONCURRENT_TCP_CHANNEL_CASES = [
+    'case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels',
+]
+
 CASES.update({
     'case01_udp_over_own_udp_localhost_ipv4': _with_localhost_peer(
         CASES['case01_udp_over_own_udp_ipv4'],
@@ -296,6 +309,7 @@ DEFAULT_CASES = {
     'basic': BASIC_CASES,
     'reconnect': RECONNECT_CASES,
     'listener-two-clients': LISTENER_CASES,
+    'concurrent-tcp-channels': CONCURRENT_TCP_CHANNEL_CASES,
 }
 
 EXACT_BYTES_CASES = {
@@ -309,7 +323,7 @@ def _validate_case_catalog() -> None:
     if missing_from_cases:
         raise RuntimeError(f'Case catalog mismatch; missing case specs: {missing_from_cases}')
 
-    required_by_cases = set(BASE_CASES) | set(LOCALHOST_CASES) | set(LISTENER_CASES)
+    required_by_cases = set(BASE_CASES) | set(LOCALHOST_CASES) | set(LISTENER_CASES) | set(CONCURRENT_TCP_CHANNEL_CASES)
     missing_choice_names = sorted(name for name in required_by_cases if name not in ALL_CASES)
     if missing_choice_names:
         raise RuntimeError(f'--cases choices missing required names: {missing_choice_names}')
@@ -1339,6 +1353,108 @@ def run_case_two_peer_clients_listener(case: Case, log_dir: Path, case_index: in
         bounce.stop()
 
 
+
+def run_case_concurrent_tcp_channels(case: Case, log_dir: Path, case_index: int, settle_s: Optional[float] = None) -> None:
+    bounce = BounceBackServer(
+        name=f'{case.name}_bounce',
+        proto=case.bounce_proto,
+        bind_host=case.bounce_bind,
+        port=case.bounce_port,
+        log_path=log_dir / f'{case.name}_bounce.log',
+    )
+    server_proc: Optional[Proc] = None
+    client_proc: Optional[Proc] = None
+    server_spec, client_spec = build_commands(case, log_dir, case_index, enable_admin=True)
+
+    payloads = [
+        b'\x01alpha',
+        b'\x01bravo-bravo',
+        b'\x01charlie' * 8,
+        b'\x01delta' * 32,
+        b'\x01echo' * 96,
+    ]
+
+    try:
+        phase('1. Start bounce-back server')
+        bounce.start()
+
+        phase('2. Start incoming bridge server')
+        s_name, s_cmd, s_env, s_admin_port = server_spec
+        server_proc = start_proc(f'{case.name}_{s_name}', s_cmd, log_dir, env_extra=s_env, admin_port=s_admin_port)
+        time.sleep(0.5)
+        assert_running(server_proc)
+        wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+
+        phase('3. Start outgoing bridge client')
+        c_name, c_cmd, c_env, c_admin_port = client_spec
+        client_proc = start_proc(f'{case.name}_{c_name}', c_cmd, log_dir, env_extra=c_env, admin_port=c_admin_port)
+        time.sleep(0.5)
+        assert_running(client_proc)
+        wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
+
+        time.sleep(case.settle_seconds if settle_s is None else settle_s)
+        assert_running(server_proc)
+        assert_running(client_proc)
+        server_proc, client_proc = wait_both_connected(server_proc, client_proc, log_dir, timeout=30.0)
+
+        phase('4. Establish 5 concurrent TCP channels and transfer different payloads')
+        wait_tcp_listen(case.probe_host, case.probe_port, timeout=5.0)
+
+        start_evt = threading.Event()
+        results: list[Optional[bytes]] = [None] * len(payloads)
+        errors: list[tuple[int, Exception]] = []
+
+        def _worker(i: int, payload: bytes) -> None:
+            try:
+                start_evt.wait(timeout=5.0)
+                reply = probe_tcp(case.probe_host, case.probe_port, case.probe_bind, payload, timeout=4.0)
+                results[i] = reply
+            except Exception as e:
+                errors.append((i, e))
+
+        threads = [threading.Thread(target=_worker, args=(idx, payload), daemon=True) for idx, payload in enumerate(payloads)]
+        for t in threads:
+            t.start()
+        start_evt.set()
+        for t in threads:
+            t.join(timeout=8.0)
+
+        if errors:
+            raise RuntimeError(f'Concurrent TCP channel probe errors: {errors!r}')
+
+        for idx, payload in enumerate(payloads):
+            expected = response_payload(payload)
+            got = results[idx]
+            if got != expected:
+                raise RuntimeError(
+                    f'Channel {idx} data mismatch: sent_len={len(payload)} expected_len={len(expected)} '
+                    f'got_len={(len(got) if got is not None else None)} got={got!r} expected={expected!r}'
+                )
+
+        phase('5. Validate /api/connections and /api/status traffic counters')
+        expected_bytes = sum(len(p) for p in payloads)
+        for proc in (server_proc, client_proc):
+            wait_exact_transferred_bytes(
+                proc.admin_port or 0,
+                expected_bytes=expected_bytes,
+                timeout=8.0,
+                label=proc.name,
+            )
+
+            _code, conn_doc = fetch_json(f'http://127.0.0.1:{proc.admin_port}/api/connections', timeout=1.5)
+            tcp_rx, tcp_tx = _tcp_connections_totals(conn_doc)
+            if tcp_rx < expected_bytes or tcp_tx < expected_bytes:
+                raise RuntimeError(
+                    f'/api/connections tcp totals too small for {proc.name}: '
+                    f'rx={tcp_rx} tx={tcp_tx} expected_at_least={expected_bytes}'
+                )
+    finally:
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+        bounce.stop()
+
 def wait_both_connected(
     server_proc: Proc,
     client_proc: Proc,
@@ -1425,15 +1541,22 @@ def test_overlay_e2e_listener_two_clients(case_name: str, tmp_path: Path) -> Non
     run_case_two_peer_clients_listener(CASES[case_name], tmp_path, ALL_CASES.index(case_name))
 
 
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize("case_name", CONCURRENT_TCP_CHANNEL_CASES)
+def test_overlay_e2e_concurrent_tcp_channels(case_name: str, tmp_path: Path) -> None:
+    _require_overlay_e2e_enabled()
+    run_case_concurrent_tcp_channels(CASES[case_name], tmp_path, ALL_CASES.index(case_name))
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description='Automated end-to-end overlay tests with built-in bounce-back server')
     p.add_argument('--cases', nargs='*', default=None, choices=ALL_CASES)
     p.add_argument(
         '--mode',
-        choices=['basic', 'reconnect', 'listener-two-clients'],
+        choices=['basic', 'reconnect', 'listener-two-clients', 'concurrent-tcp-channels'],
         default='reconnect',
-        help='Execution path: basic smoke, reconnect workflow, or two-peer listener workflow',
+        help='Execution path: basic smoke, reconnect workflow, two-peer listener workflow, or concurrent TCP channels over one peer',
     )
     p.add_argument('--list-cases', action='store_true')
     p.add_argument('--log-dir', default=None, help='Directory for child-process logs (default: temp dir)')
@@ -1481,6 +1604,8 @@ def main() -> int:
                 run_case(case, log_dir, idx, settle_s=args.settle_seconds)
             elif args.mode == 'listener-two-clients':
                 run_case_two_peer_clients_listener(case, log_dir, idx, settle_s=args.settle_seconds)
+            elif args.mode == 'concurrent-tcp-channels':
+                run_case_concurrent_tcp_channels(case, log_dir, idx, settle_s=args.settle_seconds)
             else:
                 run_case_reconnect(case, log_dir, idx, settle_s=args.settle_seconds, reconnect_timeout=args.reconnect_timeout)
             log.info(f'PASS {case.name}')
