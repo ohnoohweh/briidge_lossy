@@ -838,6 +838,14 @@ def _tcp_connections_totals(doc: dict) -> tuple[int, int]:
     return rx_total, tx_total
 
 
+def _connected_tcp_rows(doc: dict) -> list[dict]:
+    rows: list[dict] = []
+    for row in doc.get('tcp', []) or []:
+        if str(row.get('state', '')).strip().lower() == 'connected':
+            rows.append(row)
+    return rows
+
+
 def wait_tcp_connections_exact_transferred_bytes(
     admin_port: int,
     expected_bytes: int,
@@ -1401,13 +1409,33 @@ def run_case_concurrent_tcp_channels(case: Case, log_dir: Path, case_index: int,
         wait_tcp_listen(case.probe_host, case.probe_port, timeout=5.0)
 
         start_evt = threading.Event()
+        release_close_evt = threading.Event()
+        ready_for_poll_evt = threading.Event()
+        ready_lock = threading.Lock()
+        ready_count = 0
         results: list[Optional[bytes]] = [None] * len(payloads)
         errors: list[tuple[int, Exception]] = []
+
+        def _before_close() -> None:
+            nonlocal ready_count
+            with ready_lock:
+                ready_count += 1
+                if ready_count == len(payloads):
+                    ready_for_poll_evt.set()
+            if not release_close_evt.wait(timeout=8.0):
+                raise TimeoutError('Timed out waiting to release TCP channel close')
 
         def _worker(i: int, payload: bytes) -> None:
             try:
                 start_evt.wait(timeout=5.0)
-                reply = probe_tcp(case.probe_host, case.probe_port, case.probe_bind, payload, timeout=4.0)
+                reply = probe_tcp(
+                    case.probe_host,
+                    case.probe_port,
+                    case.probe_bind,
+                    payload,
+                    timeout=4.0,
+                    before_close=_before_close,
+                )
                 results[i] = reply
             except Exception as e:
                 errors.append((i, e))
@@ -1416,6 +1444,41 @@ def run_case_concurrent_tcp_channels(case: Case, log_dir: Path, case_index: int,
         for t in threads:
             t.start()
         start_evt.set()
+
+        try:
+            if not ready_for_poll_evt.wait(timeout=8.0):
+                raise RuntimeError('Timed out waiting for concurrent TCP channels before /api/connections polling')
+
+            expected_lens = sorted(len(p) for p in payloads)
+            rows_observed = False
+            poll_end = time.time() + 3.0
+            last_conn_docs: dict[str, dict] = {}
+            while time.time() < poll_end:
+                for proc in (server_proc, client_proc):
+                    _code, conn_doc = fetch_json(f'http://127.0.0.1:{proc.admin_port}/api/connections', timeout=1.5)
+                    last_conn_docs[proc.name] = conn_doc
+                    connected_rows = _connected_tcp_rows(conn_doc)
+                    if len(connected_rows) != len(payloads):
+                        continue
+                    rx_lens = sorted(int(((row.get('stats') or {}).get('rx_bytes', 0) or 0)) for row in connected_rows)
+                    tx_lens = sorted(int(((row.get('stats') or {}).get('tx_bytes', 0) or 0)) for row in connected_rows)
+                    if rx_lens != expected_lens or tx_lens != expected_lens:
+                        raise RuntimeError(
+                            f'/api/connections per-connection byte mismatch for {proc.name}: '
+                            f'rx={rx_lens} tx={tx_lens} expected={expected_lens}; doc={conn_doc!r}'
+                        )
+                    rows_observed = True
+                    break
+                if rows_observed:
+                    break
+                time.sleep(0.1)
+            if not rows_observed:
+                raise RuntimeError(
+                    f'/api/connections did not expose {len(payloads)} active TCP rows before teardown; '
+                    f'last_docs={last_conn_docs!r}'
+                )
+        finally:
+            release_close_evt.set()
         for t in threads:
             t.join(timeout=8.0)
 
