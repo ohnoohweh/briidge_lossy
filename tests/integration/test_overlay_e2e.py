@@ -1549,13 +1549,34 @@ def test_overlay_e2e_concurrent_tcp_channels(case_name: str, tmp_path: Path) -> 
     run_case_concurrent_tcp_channels(CASES[case_name], tmp_path, ALL_CASES.index(case_name))
 
 
-def parse_args() -> argparse.Namespace:
+def test_overlay_e2e_cli_routing_infers_concurrent_mode_from_case13() -> None:
+    args = parse_args(['--cases', 'case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels'])
+    selected_cases, selected_mode = resolve_selected_cases_and_mode(args)
+
+    assert selected_cases == ['case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels']
+    assert selected_mode == 'concurrent-tcp-channels'
+
+
+def test_overlay_e2e_cli_routing_keeps_explicit_mode_override() -> None:
+    args = parse_args([
+        '--mode',
+        'reconnect',
+        '--cases',
+        'case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels',
+    ])
+    selected_cases, selected_mode = resolve_selected_cases_and_mode(args)
+
+    assert selected_cases == ['case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels']
+    assert selected_mode == 'reconnect'
+
+
+def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description='Automated end-to-end overlay tests with built-in bounce-back server')
     p.add_argument('--cases', nargs='*', default=None, choices=ALL_CASES)
     p.add_argument(
         '--mode',
         choices=['basic', 'reconnect', 'listener-two-clients', 'concurrent-tcp-channels'],
-        default='reconnect',
+        default=None,
         help='Execution path: basic smoke, reconnect workflow, two-peer listener workflow, or concurrent TCP channels over one peer',
     )
     p.add_argument('--list-cases', action='store_true')
@@ -1563,7 +1584,28 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--settle-seconds', type=float, default=None, help='Override per-case settle time')
     p.add_argument('--require-aioquic', action='store_true', help='Fail fast if aioquic is not importable')
     p.add_argument('--reconnect-timeout', type=float, default=30.0, help='Timeout for connected/disconnected state transitions')
-    return p.parse_args()
+    return p.parse_args(argv)
+
+
+def infer_mode_from_cases(selected_cases: List[str]) -> str:
+    selected = set(selected_cases)
+    if selected and selected.issubset(set(CONCURRENT_TCP_CHANNEL_CASES)):
+        return 'concurrent-tcp-channels'
+    if selected and selected.issubset(set(LOCALHOST_CASES)):
+        return 'reconnect'
+    return 'basic'
+
+
+def resolve_selected_cases_and_mode(args: argparse.Namespace) -> Tuple[List[str], str]:
+    if args.mode is not None:
+        selected_cases = list(args.cases) if args.cases is not None else list(DEFAULT_CASES[args.mode])
+        return selected_cases, args.mode
+
+    if args.cases is None:
+        return list(DEFAULT_CASES['basic']), 'basic'
+
+    selected_cases = list(args.cases)
+    return selected_cases, infer_mode_from_cases(selected_cases)
 
 
 def main() -> int:
@@ -1578,7 +1620,7 @@ def main() -> int:
             print(name)
         return 0
 
-    selected_cases = list(args.cases) if args.cases is not None else list(DEFAULT_CASES[args.mode])
+    selected_cases, selected_mode = resolve_selected_cases_and_mode(args)
 
     log_dir = Path(args.log_dir) if args.log_dir else Path(tempfile.mkdtemp(prefix='overlay_e2e_'))
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -1586,7 +1628,7 @@ def main() -> int:
     log.info(f'Using log dir: {log_dir}')
     log.info(f'ObstacleBridge.py: {BRIDGE}')
     log.info('Bounce-back server: built into this harness')
-    log.info(f'Mode: {args.mode}')
+    log.info(f'Mode: {selected_mode}')
 
     if args.require_aioquic:
         try:
@@ -1600,11 +1642,11 @@ def main() -> int:
         case = CASES[name]
         log.info(f'=== RUN {case.name} ===')
         try:
-            if args.mode == 'basic':
+            if selected_mode == 'basic':
                 run_case(case, log_dir, idx, settle_s=args.settle_seconds)
-            elif args.mode == 'listener-two-clients':
+            elif selected_mode == 'listener-two-clients':
                 run_case_two_peer_clients_listener(case, log_dir, idx, settle_s=args.settle_seconds)
-            elif args.mode == 'concurrent-tcp-channels':
+            elif selected_mode == 'concurrent-tcp-channels':
                 run_case_concurrent_tcp_channels(case, log_dir, idx, settle_s=args.settle_seconds)
             else:
                 run_case_reconnect(case, log_dir, idx, settle_s=args.settle_seconds, reconnect_timeout=args.reconnect_timeout)
