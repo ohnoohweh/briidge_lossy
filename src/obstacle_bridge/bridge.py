@@ -5898,6 +5898,7 @@ class ChannelMux:
         # Dashboard interface
         self._udp_client_svc_id: Dict[int, int] = {}
         self._tcp_role_by_chan: Dict[int, str] = {}
+        self._warn_dumped_channel_config: bool = False
 
         # Session payload hook
         try:
@@ -6493,6 +6494,30 @@ class ChannelMux:
         except Exception as e:
             self.log.debug("[MUX] logging error: %r", e)
 
+    def _warning_with_channel_dump(self, msg: str, *args) -> None:
+        self.log.warning(msg, *args)
+        if self._warn_dumped_channel_config:
+            return
+        self._warn_dumped_channel_config = True
+        try:
+            self.log.warning(
+                "[MUX/CFG] channel-config local=%d requested_remote=%d peer_installed=%d tcp_live=%d udp_srv_map=%d udp_cli_live=%d",
+                len(self._local_services),
+                len(self._remote_services_requested),
+                len(self._peer_installed_services),
+                len(self._tcp_by_chan),
+                len(self._udp_by_chan),
+                len(self._udp_client_transports),
+            )
+            self.log.warning(
+                "[MUX/CFG] local_services=%s requested_remote=%s peer_installed=%s",
+                [f"{k[0]}:{k[2]}:{v.l_proto}:{v.l_bind}:{v.l_port}->{v.r_proto}:{v.r_host}:{v.r_port}" for k, v in self._local_services.items()],
+                [f"{s.svc_id}:{s.l_proto}:{s.l_bind}:{s.l_port}->{s.r_proto}:{s.r_host}:{s.r_port}" for s in self._remote_services_requested],
+                [f"{k[0]}:{k[1]}:{k[2]}:{v.l_proto}:{v.l_bind}:{v.l_port}->{v.r_proto}:{v.r_host}:{v.r_port}" for k, v in self._peer_installed_services.items()],
+            )
+        except Exception as e:
+            self.log.warning("[MUX/CFG] failed to dump channel-config: %r", e)
+
     def _next_ctr(self, chan_id: int, proto: ChannelMux.Proto, mtype: ChannelMux.MType) -> int:
         key = (chan_id, int(proto))
         if mtype == ChannelMux.MType.OPEN:
@@ -6715,11 +6740,19 @@ class ChannelMux:
             q = self._udp_client_pending.setdefault(chan, [])
             if len(q) < self._udp_client_pending_cap:
                 q.append(bytes(data))
-                self.log.debug("[UDP/CLI] chan=%s early-buffer %dB (pending=%d)",
-                            chan, len(data), len(q))
+                self.log.info(
+                    "[UDP/CLI] chan=%s DATA not routed yet (no client transport); early-buffered %dB (pending=%d)",
+                    chan,
+                    len(data),
+                    len(q),
+                )
             else:
-                self.log.info("[UDP/CLI] chan=%s early-buffer full (cap=%d) -> drop %dB",
-                            chan, self._udp_client_pending_cap, len(data))
+                self._warning_with_channel_dump(
+                    "[UDP/CLI] chan=%s DATA routing failed (no client transport, early-buffer full cap=%d) -> drop %dB",
+                    chan,
+                    self._udp_client_pending_cap,
+                    len(data),
+                )
             return
 
         # We have a transport: send and log
@@ -7024,7 +7057,12 @@ class ChannelMux:
             tup = self._tcp_by_chan.get(chan)
             if not tup:
                 self._tcp_pending_data.setdefault(chan, []).append(data)
-                self.log.debug("[TCP] chan=%s DATA buffered %dB (writer not ready)", chan, len(data))
+                self._warning_with_channel_dump(
+                    "[TCP] chan=%s DATA not routed yet (writer not ready); buffered %dB (pending=%d)",
+                    chan,
+                    len(data),
+                    len(self._tcp_pending_data.get(chan, [])),
+                )
                 return
             svc_id, writer = tup
             try:
@@ -7229,6 +7267,21 @@ class ChannelMux:
             except Exception:
                 pay = ''
             self.log.info(f"{basestr} OPEN {pay}")
+        if mtype == ChannelMux.MType.REMOTE_SERVICES_SET_V2:
+            decoded = self._decode_remote_services_set_v2(data)
+            if decoded is None:
+                self.log.info(f"{basestr} REMOTE_SERVICES_SET_V2 invalid len={len(data)}")
+            else:
+                iid, seq, services = decoded
+                self.log.info(
+                    "%s REMOTE_SERVICES_SET_V2 iid=%s seq=%s count=%s",
+                    basestr,
+                    iid,
+                    seq,
+                    len(services),
+                )
+        if mtype == ChannelMux.MType.REMOTE_SERVICES_SET_V1:
+            self.log.info(f"{basestr} REMOTE_SERVICES_SET_V1 len={len(data)} (legacy/unsupported)")
         if mtype == ChannelMux.MType.DATA:
             self.log.debug(f"{basestr} DATA len={len(data)}:  {data[:5].hex().upper()}")
         if mtype == ChannelMux.MType.CLOSE:
