@@ -778,6 +778,7 @@ def _conn_rows_with_traffic(doc: dict) -> list[dict]:
 def wait_connections_metrics_updated(admin_port: int, timeout: float = 8.0, label: str = '') -> dict:
     end = time.time() + timeout
     last_doc = None
+    last_status = None
     while time.time() < end:
         _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/connections', timeout=1.5)
         last_doc = doc
@@ -786,8 +787,28 @@ def wait_connections_metrics_updated(admin_port: int, timeout: float = 8.0, labe
             who = f' {label}' if label else ''
             log.info(f'[METRICS]{who} port={admin_port} traffic rows={len(rows)}')
             return doc
+
+        # TCP probes can be very short-lived, so a connection may complete and tear
+        # down before /api/connections polling observes a live row. In that case,
+        # accept aggregate app counters from /api/status as proof of traffic.
+        _status_code, status_doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.5)
+        last_status = status_doc
+        app_traffic = (status_doc.get('traffic') or {}).get('app') or {}
+        if int(app_traffic.get('rx_total_bytes', 0) or 0) > 0 and int(app_traffic.get('tx_total_bytes', 0) or 0) > 0:
+            who = f' {label}' if label else ''
+            log.info(
+                '[METRICS]%s port=%s aggregate traffic rx=%s tx=%s',
+                who,
+                admin_port,
+                int(app_traffic.get('rx_total_bytes', 0) or 0),
+                int(app_traffic.get('tx_total_bytes', 0) or 0),
+            )
+            return doc
         time.sleep(0.25)
-    raise RuntimeError(f'/api/connections metrics not updated on port {admin_port}; last={last_doc!r}')
+    raise RuntimeError(
+        f'/api/connections metrics not updated on port {admin_port}; '
+        f'last_connections={last_doc!r}; last_status={last_status!r}'
+    )
 
 
 def wait_peers_count(admin_port: int, minimum_count: int, timeout: float = 12.0, label: str = '') -> dict:
