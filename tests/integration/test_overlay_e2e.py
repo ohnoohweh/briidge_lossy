@@ -149,7 +149,14 @@ CASES: Dict[str, Case] = {
         bounce_proto='tcp', bounce_bind='0.0.0.0', bounce_port=3138,
         probe_proto='tcp', probe_host='127.0.0.1', probe_port=3139, probe_bind='0.0.0.0',
         bridge_server_args=['--overlay-transport', 'ws', '--ws-bind', '0.0.0.0', '--ws-own-port', '54341', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server_concurrent_tcp.txt'],
-        bridge_client_args=['--overlay-transport', 'ws', '--ws-peer', '127.0.0.1', '--ws-peer-port', '54341', '--ws-bind', '0.0.0.0', '--ws-own-port', '0', '--own-servers', 'tcp,3139,0.0.0.0,tcp,127.0.0.1,3138', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_concurrent_tcp.txt'],
+        bridge_client_args=[
+            '--overlay-transport', 'ws', '--ws-peer', '127.0.0.1', '--ws-peer-port', '54341', '--ws-bind', '0.0.0.0', '--ws-own-port', '0',
+            '--own-servers',
+            'tcp,3139,0.0.0.0,tcp,127.0.0.1,3138',
+            'udp,3140,0.0.0.0,udp,127.0.0.1,3141',
+            'udp,3142,0.0.0.0,udp,127.0.0.1,3143',
+            '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_concurrent_tcp.txt',
+        ],
         server_env={'NO_PROXY': '127.0.0.1'},
         client_env={'NO_PROXY': '127.0.0.1'},
     ),
@@ -1370,6 +1377,22 @@ def run_case_concurrent_tcp_channels(case: Case, log_dir: Path, case_index: int,
         port=case.bounce_port,
         log_path=log_dir / f'{case.name}_bounce.log',
     )
+    udp_bounces = [
+        BounceBackServer(
+            name=f'{case.name}_udp_bounce_1',
+            proto='udp',
+            bind_host=case.bounce_bind,
+            port=3141,
+            log_path=log_dir / f'{case.name}_udp_bounce_1.log',
+        ),
+        BounceBackServer(
+            name=f'{case.name}_udp_bounce_2',
+            proto='udp',
+            bind_host=case.bounce_bind,
+            port=3143,
+            log_path=log_dir / f'{case.name}_udp_bounce_2.log',
+        ),
+    ] if case.name == 'case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels' else []
     server_proc: Optional[Proc] = None
     client_proc: Optional[Proc] = None
     server_spec, client_spec = build_commands(case, log_dir, case_index, enable_admin=True)
@@ -1385,6 +1408,8 @@ def run_case_concurrent_tcp_channels(case: Case, log_dir: Path, case_index: int,
     try:
         phase('1. Start bounce-back server')
         bounce.start()
+        for udp_bounce in udp_bounces:
+            udp_bounce.start()
 
         phase('2. Start incoming bridge server')
         s_name, s_cmd, s_env, s_admin_port = server_spec
@@ -1527,7 +1552,16 @@ def run_case_concurrent_tcp_channels(case: Case, log_dir: Path, case_index: int,
         if sum(1 for item in results if item is not None) != len(payloads):
             raise RuntimeError(f'Expected {len(payloads)} successful TCP replies, got results={results!r}')
 
-        phase('5. Validate /api/connections and /api/status traffic counters')
+        phase('5. Probe additional UDP channels routed through the same overlay peer')
+        if udp_bounces:
+            udp_probe_1 = probe_udp(case.probe_host, 3140, case.probe_bind, b'\x01udp-one', timeout=2.0)
+            udp_probe_2 = probe_udp(case.probe_host, 3142, case.probe_bind, b'\x01udp-two', timeout=2.0)
+            if udp_probe_1 != b'\x02udp-one':
+                raise RuntimeError(f'Unexpected UDP probe response on 3140: {udp_probe_1!r}')
+            if udp_probe_2 != b'\x02udp-two':
+                raise RuntimeError(f'Unexpected UDP probe response on 3142: {udp_probe_2!r}')
+
+        phase('6. Validate /api/connections and /api/status traffic counters')
         expected_bytes = sum(len(p) for p in payloads)
         for proc in (server_proc, client_proc):
             end = time.time() + 8.0
@@ -1557,6 +1591,8 @@ def run_case_concurrent_tcp_channels(case: Case, log_dir: Path, case_index: int,
             stop_proc(client_proc)
         if server_proc is not None:
             stop_proc(server_proc)
+        for udp_bounce in udp_bounces:
+            udp_bounce.stop()
         bounce.stop()
 
 def wait_both_connected(
