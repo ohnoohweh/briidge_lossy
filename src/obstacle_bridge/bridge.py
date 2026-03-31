@@ -5870,6 +5870,11 @@ class ChannelMux:
         # Dashboard interface
         self._udp_client_svc_id: Dict[int, int] = {}
         self._tcp_role_by_chan: Dict[int, str] = {}
+        self._tcp_state_by_chan: Dict[int, str] = {}
+        self._tcp_state_changed_ts: Dict[int, float] = {}
+        self._tcp_last_activity_ts: Dict[int, float] = {}
+        self._tcp_recently_closed: Dict[int, dict] = {}
+        self._tcp_snapshot_closed_retention_s: float = 3.0
 
         # Session payload hook
         try:
@@ -6074,6 +6079,53 @@ class ChannelMux:
         if key is not None and self._tcp_chan_by_open_key.get(key) == chan:
             self._tcp_chan_by_open_key.pop(key, None)
 
+    def _tcp_mark_state(self, chan: int, state: str) -> None:
+        now = time.time()
+        self._tcp_state_by_chan[int(chan)] = str(state).upper()
+        self._tcp_state_changed_ts[int(chan)] = now
+        if state == "ACTIVE":
+            self._tcp_last_activity_ts[int(chan)] = now
+
+    def _tcp_remember_closed(self, chan: int, svc_id: int, writer: Optional[asyncio.StreamWriter], role: str, state: str = "CLOSED") -> None:
+        now = time.time()
+        role_str = str(role or "unknown")
+        spec = self._svc_spec_or_none(svc_id)
+        local_ep, remote_ep = self._tcp_endpoints(writer) if writer is not None else (None, None)
+        if role_str == "server":
+            source = remote_ep
+            local = local_ep
+            remote_destination = (
+                {"host": spec.r_host, "port": int(spec.r_port)} if spec else None
+            )
+        else:
+            source = local_ep
+            local = local_ep
+            remote_destination = (
+                {"host": remote_ep[0], "port": int(remote_ep[1])} if remote_ep else
+                ({"host": spec.r_host, "port": int(spec.r_port)} if spec else None)
+            )
+        state_upper = str(state or "CLOSED").upper()
+        state_changed_ts = self._tcp_state_changed_ts.get(int(chan), now)
+        self._tcp_recently_closed[int(chan)] = {
+            "protocol": "tcp",
+            "role": role_str,
+            "state": state_upper,
+            "chan_id": int(chan),
+            "svc_id": int(svc_id),
+            "source": source,
+            "local": local,
+            "local_port": int(local[1]) if local else (int(spec.l_port) if spec else None),
+            "remote_destination": remote_destination,
+            "stats": self._chan_stat_dict(chan, ChannelMux.Proto.TCP),
+            "state_changed_at_ms": int(state_changed_ts * 1000),
+            "last_activity_at_ms": int(self._tcp_last_activity_ts.get(int(chan), state_changed_ts) * 1000),
+            "closed_at_ms": int(now * 1000),
+            "retained_until_ms": int((now + float(self._tcp_snapshot_closed_retention_s)) * 1000),
+        }
+        self._tcp_state_by_chan.pop(int(chan), None)
+        self._tcp_state_changed_ts.pop(int(chan), None)
+        self._tcp_last_activity_ts.pop(int(chan), None)
+
     def _reset_peer_open_channels(self, peer_key: int) -> None:
         # UDP channels created from OPEN
         for key, chan in list(self._udp_chan_by_open_key.items()):
@@ -6097,10 +6149,12 @@ class ChannelMux:
                 continue
             tup = self._tcp_by_chan.pop(chan, None)
             self._tcp_pending_data.pop(chan, None)
-            self._tcp_role_by_chan.pop(chan, None)
+            role = self._tcp_role_by_chan.pop(chan, "unknown")
             if tup:
-                _, writer = tup
+                sid, writer = tup
                 self._tcp_by_writer.pop(writer, None)
+                self._tcp_mark_state(chan, "CLOSING")
+                self._tcp_remember_closed(chan, sid, writer, role, state="CLOSED")
                 try:
                     writer.close()
                 except Exception:
@@ -6200,6 +6254,10 @@ class ChannelMux:
         self._tcp_by_writer.clear()
         self._tcp_pending_data.clear()
         self._tcp_role_by_chan.clear()
+        self._tcp_state_by_chan.clear()
+        self._tcp_state_changed_ts.clear()
+        self._tcp_last_activity_ts.clear()
+        self._tcp_recently_closed.clear()
         self._tcp_open_key_by_chan.clear()
         self._tcp_chan_by_open_key.clear()
         # UDP server maps
@@ -6786,7 +6844,8 @@ class ChannelMux:
             peer = writer.get_extra_info("peername")
             self._tcp_by_chan[chan] = (spec.svc_id, writer)
             self._tcp_by_writer[writer] = (spec.svc_id, chan)
-            self._tcp_role_by_chan[chan] = "server"      
+            self._tcp_role_by_chan[chan] = "server"
+            self._tcp_mark_state(chan, "ACTIVE")
             self.log.info("[TCP/SRV] accept peer=%s -> chan=%s svc=%s", peer, chan, spec.svc_id)
 
             # Install backpressure worker
@@ -6821,12 +6880,14 @@ class ChannelMux:
                         ctr = self._ctr(ChannelMux.Proto.TCP, chan)
                         ctr.msgs_in += 1
                         ctr.bytes_in += len(data)
+                        self._tcp_last_activity_ts[chan] = time.time()
                         self._send_mux(chan, ChannelMux.Proto.TCP, ChannelMux.MType.DATA, data)
                         self.log.debug("[TCP/SRV] chan=%s local->overlay %dB", chan, len(data))
                 except Exception as e:
                     self.log.info("[TCP/SRV] chan=%s pump error: %r", chan, e)
                 finally:
                     self.log.info("[TCP/SRV] chan=%s EOF -> CLOSE", chan)
+                    self._tcp_mark_state(chan, "CLOSING")
                     self._send_mux(chan, ChannelMux.Proto.TCP, ChannelMux.MType.CLOSE, b"")
                     try:
                         writer.close()
@@ -6835,6 +6896,7 @@ class ChannelMux:
                         pass
                     self._tcp_by_writer.pop(writer, None)
                     self._tcp_by_chan.pop(chan, None)
+                    self._tcp_remember_closed(chan, spec.svc_id, writer, self._tcp_role_by_chan.pop(chan, "server"), state="CLOSED")
                     self._forget_tcp_open_key(chan)
 
             self.loop.create_task(_pump())
@@ -6899,6 +6961,7 @@ class ChannelMux:
                     self._tcp_by_chan[chan] = (svc_id, writer)
                     self._tcp_by_writer[writer] = (svc_id, chan)
                     self._tcp_role_by_chan[chan] = "client"
+                    self._tcp_mark_state(chan, "ACTIVE")
                     pending = self._tcp_pending_data.pop(chan, [])
                     for buf in pending:
                         try:
@@ -6906,6 +6969,7 @@ class ChannelMux:
                             ctr = self._ctr(ChannelMux.Proto.TCP, chan)
                             ctr.msgs_out += 1
                             ctr.bytes_out += len(buf)
+                            self._tcp_last_activity_ts[chan] = time.time()
                             self._maybe_signal_backpressure(chan, writer)
                             self.log.debug("[TCP/CLI] chan=%s flushed pending %dB", chan, len(buf))
                         except Exception as e:
@@ -6937,12 +7001,14 @@ class ChannelMux:
                                 ctr = self._ctr(ChannelMux.Proto.TCP, chan)
                                 ctr.msgs_in += 1
                                 ctr.bytes_in += len(buf)
+                                self._tcp_last_activity_ts[chan] = time.time()
                                 self._send_mux(chan, ChannelMux.Proto.TCP, ChannelMux.MType.DATA, buf)
                                 self.log.debug("[TCP/CLI] chan=%s remote->overlay %dB", chan, len(buf))
                         except Exception as e:
                             self.log.info("[TCP/CLI] chan=%s rx error: %r", chan, e)
                         finally:
                             self.log.info("[TCP/CLI] chan=%s EOF -> CLOSE", chan)
+                            self._tcp_mark_state(chan, "CLOSING")
                             self._send_mux(chan, ChannelMux.Proto.TCP, ChannelMux.MType.CLOSE, b"")
                             try:
                                 writer.close()
@@ -6951,6 +7017,7 @@ class ChannelMux:
                                 pass
                             self._tcp_by_writer.pop(writer, None)
                             self._tcp_by_chan.pop(chan, None)
+                            self._tcp_remember_closed(chan, svc_id, writer, self._tcp_role_by_chan.pop(chan, "client"), state="CLOSED")
                             self._forget_tcp_open_key(chan)
 
                     self.loop.create_task(_rx())
@@ -6987,6 +7054,7 @@ class ChannelMux:
                 ctr = self._ctr(ChannelMux.Proto.TCP, chan)
                 ctr.msgs_out += 1
                 ctr.bytes_out += len(data)
+                self._tcp_last_activity_ts[chan] = time.time()
                 self._maybe_signal_backpressure(chan, writer)
                 self.log.debug("[TCP] chan=%s overlay->local %dB", chan, len(data))
             except Exception as e:
@@ -6997,10 +7065,13 @@ class ChannelMux:
         if mtype == ChannelMux.MType.CLOSE:
             tup = self._tcp_by_chan.pop(chan, None)
             if tup:
+                self._tcp_mark_state(chan, "CLOSING")
                 _, writer = tup
+                svc_id = int(tup[0])
                 self._tcp_pending_data.pop(chan, None)
                 self._tcp_by_writer.pop(writer, None)
-                self._tcp_role_by_chan.pop(chan, None)
+                role = self._tcp_role_by_chan.pop(chan, "unknown")
+                self._tcp_remember_closed(chan, svc_id, writer, role, state="CLOSED")
                 try:
                     writer.close()
                 except Exception:
@@ -7351,6 +7422,9 @@ class ChannelMux:
 
     def snapshot_tcp_connections(self) -> list[dict]:
         rows: list[dict] = []
+        now = time.time()
+        now = time.time()
+        now = time.time()
 
         for chan, tup in list(self._tcp_by_chan.items()):
             try:
@@ -7380,7 +7454,7 @@ class ChannelMux:
             rows.append({
                 "protocol": "tcp",
                 "role": role,
-                "state": "connected",
+                "state": self._tcp_state_by_chan.get(chan, "ACTIVE"),
                 "chan_id": int(chan),
                 "svc_id": int(svc_id),
                 "source": source,
@@ -7388,6 +7462,9 @@ class ChannelMux:
                 "local_port": int(local[1]) if local else (int(spec.l_port) if spec else None),
                 "remote_destination": remote_destination,
                 "stats": stats,
+                "state_changed_at_ms": int(self._tcp_state_changed_ts.get(chan, now) * 1000),
+                "last_activity_at_ms": int(self._tcp_last_activity_ts.get(chan, self._tcp_state_changed_ts.get(chan, now)) * 1000),
+                "closed_at_ms": None,
             })
 
         rows.sort(key=lambda x: (x["protocol"], x["role"], x["chan_id"]))
@@ -7568,7 +7645,7 @@ class ChannelMux:
             rows.append({
                 "protocol": "tcp",
                 "role": role,
-                "state": "connected",
+                "state": self._tcp_state_by_chan.get(chan, "ACTIVE"),
                 "chan_id": int(chan),
                 "svc_id": int(svc_id),
                 "source": source,
@@ -7576,6 +7653,9 @@ class ChannelMux:
                 "local_port": int(local[1]) if local else (int(spec.l_port) if spec else None),
                 "remote_destination": remote_destination,
                 "stats": stats,
+                "state_changed_at_ms": int(self._tcp_state_changed_ts.get(chan, now) * 1000),
+                "last_activity_at_ms": int(self._tcp_last_activity_ts.get(chan, self._tcp_state_changed_ts.get(chan, now)) * 1000),
+                "closed_at_ms": None,
             })
 
         # TCP listeners: bound server sockets waiting for incoming channels.
@@ -7597,7 +7677,7 @@ class ChannelMux:
                 rows.append({
                     "protocol": "tcp",
                     "role": "server",
-                    "state": "listening",
+                    "state": "LISTENING",
                     "chan_id": None,
                     "svc_owner_peer_id": int(svc_key[1]) if len(svc_key) >= 2 and str(svc_key[0]) == "peer" else None,
                     "svc_id": svc_id,
@@ -7613,7 +7693,18 @@ class ChannelMux:
                         "rx_bytes": 0,
                         "tx_bytes": 0,
                     },
+                    "state_changed_at_ms": int(now * 1000),
+                    "last_activity_at_ms": None,
+                    "closed_at_ms": None,
                 })
+
+        retention_s = float(getattr(self, "_tcp_snapshot_closed_retention_s", 0.0) or 0.0)
+        for chan, row in list(self._tcp_recently_closed.items()):
+            closed_at_ms = int(row.get("closed_at_ms", 0) or 0)
+            if retention_s <= 0 or (closed_at_ms > 0 and now >= ((closed_at_ms / 1000.0) + retention_s)):
+                self._tcp_recently_closed.pop(chan, None)
+                continue
+            rows.append(dict(row))
 
         rows.sort(
             key=lambda x: (

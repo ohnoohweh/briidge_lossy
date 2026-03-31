@@ -838,6 +838,53 @@ def _tcp_connections_totals(doc: dict) -> tuple[int, int]:
     return rx_total, tx_total
 
 
+def _observable_tcp_rows(doc: dict) -> list[dict]:
+    rows: list[dict] = []
+    for row in doc.get('tcp', []) or []:
+        state = str(row.get('state') or '').upper()
+        if state in {'ACTIVE', 'CLOSING', 'CLOSED'}:
+            rows.append(row)
+    return rows
+
+
+def wait_tcp_observable_rows_with_distinct_traffic(
+    admin_port: int,
+    expected_rows: int,
+    timeout: float = 4.0,
+    label: str = '',
+) -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    last_rows = None
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/connections', timeout=1.5)
+        last_doc = doc
+        rows = _observable_tcp_rows(doc)
+        last_rows = rows
+        if len(rows) != expected_rows:
+            time.sleep(0.1)
+            continue
+        stats_pairs = []
+        all_non_zero = True
+        for row in rows:
+            stats = row.get('stats') or {}
+            rx = int(stats.get('rx_bytes', 0) or 0)
+            tx = int(stats.get('tx_bytes', 0) or 0)
+            if rx <= 0 or tx <= 0:
+                all_non_zero = False
+                break
+            stats_pairs.append((rx, tx))
+        if all_non_zero and len(set(stats_pairs)) == expected_rows:
+            who = f' {label}' if label else ''
+            log.info('[METRICS]%s port=%s observable tcp rows=%s stats=%s', who, admin_port, len(rows), stats_pairs)
+            return doc
+        time.sleep(0.1)
+    raise RuntimeError(
+        f'Observable TCP rows check failed on port {admin_port}; expected_rows={expected_rows}; '
+        f'last_rows={last_rows!r}; last_connections={last_doc!r}'
+    )
+
+
 def wait_tcp_connections_exact_transferred_bytes(
     admin_port: int,
     expected_bytes: int,
@@ -1401,13 +1448,31 @@ def run_case_concurrent_tcp_channels(case: Case, log_dir: Path, case_index: int,
         wait_tcp_listen(case.probe_host, case.probe_port, timeout=5.0)
 
         start_evt = threading.Event()
+        hold_open_evt = threading.Event()
+        ready_evt = threading.Event()
         results: list[Optional[bytes]] = [None] * len(payloads)
         errors: list[tuple[int, Exception]] = []
+        ready_flags = [False] * len(payloads)
+        ready_lock = threading.Lock()
 
         def _worker(i: int, payload: bytes) -> None:
+            family = socket.AF_INET6 if ':' in case.probe_host else socket.AF_INET
             try:
                 start_evt.wait(timeout=5.0)
-                reply = probe_tcp(case.probe_host, case.probe_port, case.probe_bind, payload, timeout=4.0)
+                if not start_evt.is_set():
+                    raise RuntimeError('start event timeout')
+                with socket.socket(family, socket.SOCK_STREAM) as s:
+                    if case.probe_bind is not None:
+                        s.bind((case.probe_bind, 0))
+                    s.settimeout(4.0)
+                    s.connect((case.probe_host, case.probe_port))
+                    s.sendall(payload)
+                    reply = s.recv(4096)
+                    with ready_lock:
+                        ready_flags[i] = True
+                        if all(ready_flags):
+                            ready_evt.set()
+                    hold_open_evt.wait(timeout=5.0)
                 results[i] = reply
             except Exception as e:
                 errors.append((i, e))
@@ -1416,6 +1481,28 @@ def run_case_concurrent_tcp_channels(case: Case, log_dir: Path, case_index: int,
         for t in threads:
             t.start()
         start_evt.set()
+        if not ready_evt.wait(timeout=6.0):
+            hold_open_evt.set()
+            raise RuntimeError(f'Concurrent TCP workers did not all reach hold-open point: ready_flags={ready_flags!r}')
+
+        phase('5. Assert 5 observable TCP rows with distinct non-zero rx/tx bytes before socket close')
+        for proc in (server_proc, client_proc):
+            try:
+                wait_tcp_observable_rows_with_distinct_traffic(
+                    proc.admin_port or 0,
+                    expected_rows=5,
+                    timeout=4.0,
+                    label=proc.name,
+                )
+            except Exception as e:
+                _code, conn_doc = fetch_json(f'http://127.0.0.1:{proc.admin_port}/api/connections', timeout=1.5)
+                tcp_rows = conn_doc.get('tcp', []) or []
+                raise RuntimeError(
+                    f'Observable TCP row assertion failed for {proc.name}: {e}; '
+                    f'tcp_rows={tcp_rows!r}'
+                ) from e
+        hold_open_evt.set()
+
         for t in threads:
             t.join(timeout=8.0)
 
@@ -1431,7 +1518,7 @@ def run_case_concurrent_tcp_channels(case: Case, log_dir: Path, case_index: int,
                     f'got_len={(len(got) if got is not None else None)} got={got!r} expected={expected!r}'
                 )
 
-        phase('5. Validate /api/connections and /api/status traffic counters')
+        phase('6. Validate /api/connections and /api/status traffic counters')
         expected_bytes = sum(len(p) for p in payloads)
         for proc in (server_proc, client_proc):
             wait_exact_transferred_bytes(
