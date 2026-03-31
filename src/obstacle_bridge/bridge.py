@@ -4129,10 +4129,10 @@ class WebSocketSession(ISession):
     def _alloc_server_mux_chan(self) -> int:
         chan = self._server_next_mux_chan
         while chan in self._server_chan_to_peer:
-            chan += 1
+            chan += 2
             if chan > 0xFFFF:
                 chan = 1
-        self._server_next_mux_chan = 1 if chan >= 0xFFFF else (chan + 1)
+        self._server_next_mux_chan = 1 if chan >= 0xFFFF else (chan + 2)
         return chan
 
     def _rewrite_mux_chan_id(self, payload: bytes, new_chan: int) -> bytes:
@@ -4171,7 +4171,15 @@ class WebSocketSession(ISession):
             return None
         mapped = self._server_chan_to_peer.get(mux_chan)
         if mapped is None:
-            return None
+            # Server-initiated channels (for peer-installed services) may not have an
+            # inbound mapping yet. If exactly one peer is connected, route directly.
+            if len(self._server_peers) == 1:
+                only_peer_id = next(iter(self._server_peers.keys()))
+                mapped = (int(only_peer_id), int(mux_chan))
+                self._server_peer_chan_to_mux[mapped] = int(mux_chan)
+                self._server_chan_to_peer[int(mux_chan)] = mapped
+            else:
+                return None
         peer_id, peer_chan = mapped
         return peer_id, self._rewrite_mux_chan_id(payload, peer_chan)
 
@@ -5708,6 +5716,12 @@ class ChannelMux:
         remote_services = ChannelMux._parse_remote_servers(getattr(args, 'remote_servers', None))
         active_transport = str(getattr(args, "overlay_transport", "myudp") or "myudp").split(",", 1)[0].strip().lower()
         listener_mode = not _has_configured_overlay_peer(args, active_transport)
+        # Split channel-id space by role to avoid bidirectional OPEN collisions:
+        # listener uses even ids, peer/client uses odd ids.
+        mux._chan_id_start = 2 if listener_mode else 1
+        mux._chan_id_stride = 2
+        mux._next_udp_id = mux._chan_id_start
+        mux._next_tcp_id = mux._chan_id_start
         if listener_mode and services:
             mux.log.info(
                 "[MUX] listener mode detected: ignoring %d --own-servers entries; "
@@ -5812,6 +5826,8 @@ class ChannelMux:
         self._svc_udp_servers: dict[ChannelMux.ServiceKey, asyncio.DatagramTransport] = {}
 
         # Channel id allocators
+        self._chan_id_start: int = 1
+        self._chan_id_stride: int = 1
         self._next_udp_id: int = self.UDP_MIN_ID
         self._next_tcp_id: int = self.TCP_MIN_ID
 
@@ -7128,25 +7144,32 @@ class ChannelMux:
             return None, None
     # ---------- helpers ----------
     def _alloc_udp_id(self) -> int:
+        start = self._chan_id_start if self._chan_id_stride == 2 else self.UDP_MIN_ID
+        stride = self._chan_id_stride if self._chan_id_stride > 0 else 1
         cid = self._next_udp_id
-        if cid > self.UDP_MAX_ID:
-            cid = self.UDP_MIN_ID
-        self._next_udp_id = cid + 1 if cid < self.UDP_MAX_ID else self.UDP_MIN_ID
+        if cid > self.UDP_MAX_ID or cid < start:
+            cid = start
+        nxt = cid + stride
+        self._next_udp_id = nxt if nxt <= self.UDP_MAX_ID else start
         return cid
 
     def _alloc_tcp_id(self) -> int:
+        start = self._chan_id_start if self._chan_id_stride == 2 else self.TCP_MIN_ID
+        stride = self._chan_id_stride if self._chan_id_stride > 0 else 1
         cid = self._next_tcp_id
-        if cid > self.TCP_MAX_ID:
-            cid = self.TCP_MIN_ID
+        if cid > self.TCP_MAX_ID or cid < start:
+            cid = start
 
         # Skip active channel ids during wrap-around to preserve unique in-flight identity.
-        start = cid
+        scan_start = cid
         while cid in self._tcp_by_chan:
-            cid = cid + 1 if cid < self.TCP_MAX_ID else self.TCP_MIN_ID
-            if cid == start:
+            nxt = cid + stride
+            cid = nxt if nxt <= self.TCP_MAX_ID else start
+            if cid == scan_start:
                 raise RuntimeError("no free TCP channel ids available")
 
-        self._next_tcp_id = cid + 1 if cid < self.TCP_MAX_ID else self.TCP_MIN_ID
+        nxt = cid + stride
+        self._next_tcp_id = nxt if nxt <= self.TCP_MAX_ID else start
         self.log.debug(
             "[TCP/SRV] alloc chan=%s next=%s active=%s",
             cid,
