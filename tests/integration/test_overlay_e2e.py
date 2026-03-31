@@ -728,16 +728,9 @@ def _arg_value(args: List[str], name: str, default: str) -> str:
 
 
 def _listener_overlay_port(case: Case, transport: str) -> int:
-    transports = [p.strip().lower() for p in _arg_value(case.bridge_server_args, '--overlay-transport', 'myudp').split(',') if p.strip()]
-    if not transports:
-        transports = ['myudp']
     listen_opt = {'myudp': '--udp-own-port', 'tcp': '--tcp-own-port', 'quic': '--quic-own-port', 'ws': '--ws-own-port'}[transport]
     base_default = {'myudp': 4433, 'tcp': 8081, 'quic': 443, 'ws': 8080}[transport]
-    base = int(_arg_value(case.bridge_server_args, listen_opt, str(base_default)))
-    if len(transports) <= 1:
-        return base
-    offsets = {'myudp': 0, 'tcp': 1, 'quic': 2, 'ws': 3}
-    return base + offsets[transport]
+    return int(_arg_value(case.bridge_server_args, listen_opt, str(base_default)))
 
 
 def alloc_admin_ports(case_index: int, base: int = 18180) -> Tuple[int, int]:

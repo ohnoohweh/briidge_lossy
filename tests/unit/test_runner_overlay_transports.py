@@ -33,12 +33,12 @@ class RunnerOverlayTransportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Runner._parse_overlay_transports(args)
 
-    def test_overlay_port_for_uses_deterministic_offsets(self):
+    def test_overlay_port_for_uses_transport_port(self):
         args = _args(udp_own_port=9000)
         self.assertEqual(Runner._overlay_port_for(args, 'myudp', 4), 9000)
-        self.assertEqual(Runner._overlay_port_for(args, 'tcp', 4), 8082)
-        self.assertEqual(Runner._overlay_port_for(args, 'quic', 4), 445)
-        self.assertEqual(Runner._overlay_port_for(args, 'ws', 4), 8083)
+        self.assertEqual(Runner._overlay_port_for(args, 'tcp', 4), 8081)
+        self.assertEqual(Runner._overlay_port_for(args, 'quic', 4), 443)
+        self.assertEqual(Runner._overlay_port_for(args, 'ws', 4), 8080)
 
     def test_build_sessions_from_overlay_uses_per_transport_ports(self):
         args = _args(overlay_transport='myudp,tcp,quic,ws', udp_own_port=7000, tcp_own_port=7000, quic_own_port=7000, ws_own_port=7000)
@@ -60,7 +60,7 @@ class RunnerOverlayTransportTests(unittest.TestCase):
         self.assertEqual([name for name, _ in sessions], ['myudp', 'tcp', 'quic', 'ws'])
         self.assertEqual(
             [s[1] for s in seen],
-            [7000, 7001, 7002, 7003],
+            [7000, 7000, 7000, 7000],
         )
 
 
