@@ -225,7 +225,7 @@ python -m obstacle_bridge.tools.overlay_tty --proto udp --role server --port 166
 #
 # Bridge server
 #
-python ObstacleBridge.py --overlay-transport quic --bind443 0.0.0.0 --port443 4443 --quic-cert cert.pem --quic-key key.pem --udp-role client --udp-target-host 127.0.0.1 --udp-target-port 16666 --tcp-role client --tcp-target-host 127.0.0.1 --tcp-target-port 3128 --debug-session-udp --debug-peer-udp  --log DEBUG --log-file br_server.txt
+python ObstacleBridge.py --overlay-transport quic --bind443 0.0.0.0 --port443 4443 --quic-cert Cert_localhost/cert.pem --quic-key Cert_localhost/key.pem --udp-role client --udp-target-host 127.0.0.1 --udp-target-port 16666 --tcp-role client --tcp-target-host 127.0.0.1 --tcp-target-port 3128 --debug-session-udp --debug-peer-udp  --log DEBUG --log-file br_server.txt
 #
 # Bridge client
 #
@@ -237,7 +237,7 @@ python -m obstacle_bridge.tools.overlay_tty --proto udp --role client --host 127
 
 
 "C:\Program Files\Git\usr\bin\openssl.exe"
-openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=localhost"
+openssl req -x509 -newkey rsa:2048 -keyout Cert_localhost/key.pem -out Cert_localhost/cert.pem -days 365 -nodes -subj "/CN=localhost"
 
 Certificate for Server with static IPv4 and IPv6
 san.cnf: Replace <IPv?> with static addresses
@@ -256,7 +256,7 @@ subjectAltName = @alt_names
 IP.1 = <IPv4>
 IP.2 = <IPv6>
 
-openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -config san.cnf
+openssl req -x509 -newkey rsa:2048 -keyout Cert_localhost/key.pem -out Cert_localhost/cert.pem -days 365 -nodes -config Cert_localhost/san.cfg
 
 
 
