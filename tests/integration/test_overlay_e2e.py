@@ -1234,7 +1234,28 @@ def run_case_reconnect(case: Case, log_dir: Path, case_index: int, settle_s: Opt
 
         phase('12. Send probe 01 34 and expect 02 34')
         log.info('[PROBE] send=0134 expect=0234')
-        wait_probe(case, payload=b'\x01\x34', timeout=8.0)
+        def assert_case12_tcp_bytes_before_close() -> None:
+            if case.probe_proto != 'tcp':
+                return
+            wait_tcp_connections_exact_transferred_bytes(
+                server_proc.admin_port or 0,
+                expected_bytes=2,
+                timeout=4.0,
+                label='server',
+            )
+            wait_tcp_connections_exact_transferred_bytes(
+                client_proc.admin_port or 0,
+                expected_bytes=2,
+                timeout=4.0,
+                label='client',
+            )
+
+        wait_probe(
+            case,
+            payload=b'\x01\x34',
+            timeout=8.0,
+            before_tcp_close=assert_case12_tcp_bytes_before_close,
+        )
 
         phase('13. Verify per-connection metrics updated after 01 34 / 02 34 exchange')
         wait_connections_metrics_updated(server_proc.admin_port or 0, timeout=8.0, label='server')
