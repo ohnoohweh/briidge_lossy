@@ -298,6 +298,11 @@ DEFAULT_CASES = {
     'listener-two-clients': LISTENER_CASES,
 }
 
+EXACT_BYTES_CASES = {
+    'case01_udp_over_own_udp_ipv4',
+    'case04_tcp_over_own_udp_clients_ipv4',
+}
+
 
 def _validate_case_catalog() -> None:
     missing_from_cases = [name for name in ALL_CASES if name not in CASES]
@@ -775,6 +780,65 @@ def _conn_rows_with_traffic(doc: dict) -> list[dict]:
     return rows
 
 
+def _connections_totals(doc: dict) -> tuple[int, int]:
+    rx_total = 0
+    tx_total = 0
+    for key in ('udp', 'tcp'):
+        for row in doc.get(key, []) or []:
+            stats = row.get('stats') or {}
+            rx_total += int(stats.get('rx_bytes', 0) or 0)
+            tx_total += int(stats.get('tx_bytes', 0) or 0)
+    return rx_total, tx_total
+
+
+def wait_exact_transferred_bytes(
+    admin_port: int,
+    expected_bytes: int,
+    timeout: float = 8.0,
+    label: str = '',
+) -> dict:
+    end = time.time() + timeout
+    last_conn = None
+    last_status = None
+    while time.time() < end:
+        _code, conn_doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/connections', timeout=1.5)
+        last_conn = conn_doc
+        conn_rx, conn_tx = _connections_totals(conn_doc)
+        if conn_rx == expected_bytes and conn_tx == expected_bytes:
+            who = f' {label}' if label else ''
+            log.info(
+                '[METRICS]%s port=%s exact /api/connections bytes rx=%s tx=%s',
+                who,
+                admin_port,
+                conn_rx,
+                conn_tx,
+            )
+            return conn_doc
+
+        # TCP probes can disconnect too quickly for /api/connections polling to
+        # observe a live row. Validate exact byte totals via aggregate counters.
+        _status_code, status_doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.5)
+        last_status = status_doc
+        app_traffic = (status_doc.get('traffic') or {}).get('app') or {}
+        app_rx = int(app_traffic.get('rx_total_bytes', 0) or 0)
+        app_tx = int(app_traffic.get('tx_total_bytes', 0) or 0)
+        if app_rx == expected_bytes and app_tx == expected_bytes:
+            who = f' {label}' if label else ''
+            log.info(
+                '[METRICS]%s port=%s exact aggregate bytes rx=%s tx=%s',
+                who,
+                admin_port,
+                app_rx,
+                app_tx,
+            )
+            return conn_doc
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'Exact byte counters not reached on port {admin_port}; expected={expected_bytes}; '
+        f'last_connections={last_conn!r}; last_status={last_status!r}'
+    )
+
+
 def wait_connections_metrics_updated(admin_port: int, timeout: float = 8.0, label: str = '') -> dict:
     end = time.time() + timeout
     last_doc = None
@@ -948,11 +1012,14 @@ def run_case(case: Case, log_dir: Path, case_index: int, settle_s: Optional[floa
     )
     try:
         bounce.start()
-        for name, cmd, env, admin_port in build_commands(case, log_dir, case_index, enable_admin=False):
+        check_exact_bytes = case.name in EXACT_BYTES_CASES
+        for name, cmd, env, admin_port in build_commands(case, log_dir, case_index, enable_admin=check_exact_bytes):
             proc = start_proc(f'{case.name}_{name}', cmd, log_dir, env_extra=env, admin_port=admin_port)
             procs.append(proc)
             time.sleep(0.5)
             assert_running(proc)
+            if check_exact_bytes:
+                wait_admin_up(proc.admin_port or 0, timeout=10.0)
 
         time.sleep(case.settle_seconds if settle_s is None else settle_s)
         for proc in procs:
@@ -961,6 +1028,15 @@ def run_case(case: Case, log_dir: Path, case_index: int, settle_s: Optional[floa
         if case.probe_proto == 'tcp':
             wait_tcp_listen(case.probe_host, case.probe_port, timeout=5.0)
         wait_probe(case, timeout=8.0)
+        if check_exact_bytes:
+            expected_bytes = len(PAYLOAD_IN)
+            for proc in procs:
+                wait_exact_transferred_bytes(
+                    proc.admin_port or 0,
+                    expected_bytes=expected_bytes,
+                    timeout=8.0,
+                    label=proc.name,
+                )
     finally:
         for proc in reversed(procs):            
             stop_proc(proc)
