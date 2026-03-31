@@ -16,7 +16,7 @@ import urllib.request
 import pytest
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[2]
 BRIDGE = ROOT / 'ObstacleBridge.py'
@@ -599,7 +599,14 @@ def probe_udp(host: str, port: int, bind_host: Optional[str], payload: bytes, ti
         return data
 
 
-def probe_tcp(host: str, port: int, bind_host: Optional[str], payload: bytes, timeout: float = 1.0) -> bytes:
+def probe_tcp(
+    host: str,
+    port: int,
+    bind_host: Optional[str],
+    payload: bytes,
+    timeout: float = 1.0,
+    before_close: Optional[Callable[[], None]] = None,
+) -> bytes:
     family = socket.AF_INET6 if ':' in host else socket.AF_INET
     with socket.socket(family, socket.SOCK_STREAM) as s:
         if bind_host is not None:
@@ -607,10 +614,19 @@ def probe_tcp(host: str, port: int, bind_host: Optional[str], payload: bytes, ti
         s.settimeout(timeout)
         s.connect((host, port))
         s.sendall(payload)
-        return s.recv(4096)
+        data = s.recv(4096)
+        if before_close is not None:
+            before_close()
+        return data
 
 
-def wait_probe(case: Case, payload: bytes = PAYLOAD_IN, expected: Optional[bytes] = None, timeout: float = 8.0) -> None:
+def wait_probe(
+    case: Case,
+    payload: bytes = PAYLOAD_IN,
+    expected: Optional[bytes] = None,
+    timeout: float = 8.0,
+    before_tcp_close: Optional[Callable[[], None]] = None,
+) -> None:
     if expected is None:
         expected = response_payload(payload)
     end = time.time() + timeout
@@ -620,7 +636,14 @@ def wait_probe(case: Case, payload: bytes = PAYLOAD_IN, expected: Optional[bytes
             if case.probe_proto == 'udp':
                 data = probe_udp(case.probe_host, case.probe_port, case.probe_bind, payload, timeout=1.0)
             else:
-                data = probe_tcp(case.probe_host, case.probe_port, case.probe_bind, payload, timeout=1.0)
+                data = probe_tcp(
+                    case.probe_host,
+                    case.probe_port,
+                    case.probe_bind,
+                    payload,
+                    timeout=1.0,
+                    before_close=before_tcp_close,
+                )
             if data == expected:
                 return
             last_exc = RuntimeError(f'unexpected response: {data!r}')
@@ -1027,7 +1050,16 @@ def run_case(case: Case, log_dir: Path, case_index: int, settle_s: Optional[floa
 
         if case.probe_proto == 'tcp':
             wait_tcp_listen(case.probe_host, case.probe_port, timeout=5.0)
-        wait_probe(case, timeout=8.0)
+        before_tcp_close = None
+        if check_exact_bytes and case.probe_proto == 'tcp':
+            admin_ports = [proc.admin_port or 0 for proc in procs]
+
+            def _request_connections_before_close() -> None:
+                for admin_port in admin_ports:
+                    fetch_json(f'http://127.0.0.1:{admin_port}/api/connections', timeout=1.5)
+
+            before_tcp_close = _request_connections_before_close
+        wait_probe(case, timeout=8.0, before_tcp_close=before_tcp_close)
         if check_exact_bytes:
             expected_bytes = len(PAYLOAD_IN)
             for proc in procs:
