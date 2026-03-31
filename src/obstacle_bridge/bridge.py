@@ -6818,7 +6818,9 @@ class ChannelMux:
                             pass
 
                         # ---------------------------------------------------------
-
+                        ctr = self._ctr(ChannelMux.Proto.TCP, chan)
+                        ctr.msgs_in += 1
+                        ctr.bytes_in += len(data)
                         self._send_mux(chan, ChannelMux.Proto.TCP, ChannelMux.MType.DATA, data)
                         self.log.debug("[TCP/SRV] chan=%s local->overlay %dB", chan, len(data))
                 except Exception as e:
@@ -6901,6 +6903,9 @@ class ChannelMux:
                     for buf in pending:
                         try:
                             writer.write(buf)
+                            ctr = self._ctr(ChannelMux.Proto.TCP, chan)
+                            ctr.msgs_out += 1
+                            ctr.bytes_out += len(buf)
                             self._maybe_signal_backpressure(chan, writer)
                             self.log.debug("[TCP/CLI] chan=%s flushed pending %dB", chan, len(buf))
                         except Exception as e:
@@ -6929,7 +6934,9 @@ class ChannelMux:
                                     self.log.debug(f"[NET] logging failed : %r",e)
                                     pass
                                 # ---------------------------------------------------------
-
+                                ctr = self._ctr(ChannelMux.Proto.TCP, chan)
+                                ctr.msgs_in += 1
+                                ctr.bytes_in += len(buf)
                                 self._send_mux(chan, ChannelMux.Proto.TCP, ChannelMux.MType.DATA, buf)
                                 self.log.debug("[TCP/CLI] chan=%s remote->overlay %dB", chan, len(buf))
                         except Exception as e:
@@ -6977,7 +6984,9 @@ class ChannelMux:
                     pass
 
                 # --------------------------------------------------------
-
+                ctr = self._ctr(ChannelMux.Proto.TCP, chan)
+                ctr.msgs_out += 1
+                ctr.bytes_out += len(data)
                 self._maybe_signal_backpressure(chan, writer)
                 self.log.debug("[TCP] chan=%s overlay->local %dB", chan, len(data))
             except Exception as e:
