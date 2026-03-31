@@ -814,6 +814,45 @@ def _connections_totals(doc: dict) -> tuple[int, int]:
     return rx_total, tx_total
 
 
+def _tcp_connections_totals(doc: dict) -> tuple[int, int]:
+    rx_total = 0
+    tx_total = 0
+    for row in doc.get('tcp', []) or []:
+        stats = row.get('stats') or {}
+        rx_total += int(stats.get('rx_bytes', 0) or 0)
+        tx_total += int(stats.get('tx_bytes', 0) or 0)
+    return rx_total, tx_total
+
+
+def wait_tcp_connections_exact_transferred_bytes(
+    admin_port: int,
+    expected_bytes: int,
+    timeout: float = 3.0,
+    label: str = '',
+) -> dict:
+    end = time.time() + timeout
+    last_conn = None
+    while time.time() < end:
+        _code, conn_doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/connections', timeout=1.5)
+        last_conn = conn_doc
+        tcp_rx, tcp_tx = _tcp_connections_totals(conn_doc)
+        if tcp_rx == expected_bytes and tcp_tx == expected_bytes:
+            who = f' {label}' if label else ''
+            log.info(
+                '[METRICS]%s port=%s exact /api/connections TCP bytes rx=%s tx=%s',
+                who,
+                admin_port,
+                tcp_rx,
+                tcp_tx,
+            )
+            return conn_doc
+        time.sleep(0.1)
+    raise RuntimeError(
+        f'Exact TCP /api/connections byte counters not reached on port {admin_port}; '
+        f'expected={expected_bytes}; last_connections={last_conn!r}'
+    )
+
+
 def wait_exact_transferred_bytes(
     admin_port: int,
     expected_bytes: int,
@@ -1052,11 +1091,17 @@ def run_case(case: Case, log_dir: Path, case_index: int, settle_s: Optional[floa
             wait_tcp_listen(case.probe_host, case.probe_port, timeout=5.0)
         before_tcp_close = None
         if check_exact_bytes and case.probe_proto == 'tcp':
-            admin_ports = [proc.admin_port or 0 for proc in procs]
+            expected_bytes = len(PAYLOAD_IN)
+            admin_ports_with_name = [(proc.admin_port or 0, proc.name) for proc in procs]
 
             def _request_connections_before_close() -> None:
-                for admin_port in admin_ports:
-                    fetch_json(f'http://127.0.0.1:{admin_port}/api/connections', timeout=1.5)
+                for admin_port, proc_name in admin_ports_with_name:
+                    wait_tcp_connections_exact_transferred_bytes(
+                        admin_port,
+                        expected_bytes=expected_bytes,
+                        timeout=3.0,
+                        label=f'{proc_name} before-close',
+                    )
 
             before_tcp_close = _request_connections_before_close
         wait_probe(case, timeout=8.0, before_tcp_close=before_tcp_close)
