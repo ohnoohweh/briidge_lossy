@@ -46,6 +46,12 @@ const authState = {
   appStarted: false,
 };
 
+const restartState = {
+  active: false,
+  reloadAtMs: 0,
+  intervalId: null,
+};
+
 function isApiEnabled() {
   return !authState.required || authState.authenticated;
 }
@@ -62,6 +68,41 @@ function updateAuthUi() {
   document.body.classList.toggle('auth-locked', locked);
   document.getElementById('authGate')?.classList.toggle('hidden', !locked);
   document.getElementById('logoutBtn')?.classList.toggle('hidden', !authState.required || !authState.authenticated);
+}
+
+function updateRestartUi(remainingSec) {
+  const active = restartState.active;
+  document.body.classList.toggle('restart-locked', active);
+  document.getElementById('restartGate')?.classList.toggle('hidden', !active);
+  const restartBtn = document.getElementById('restartBtn');
+  if (restartBtn) restartBtn.disabled = active;
+  const countdown = document.getElementById('restartCountdown');
+  if (countdown) countdown.textContent = `${Math.max(0, remainingSec)}s`;
+}
+
+function startRestartCountdown(durationSec = 30) {
+  if (restartState.intervalId) {
+    window.clearInterval(restartState.intervalId);
+    restartState.intervalId = null;
+  }
+  restartState.active = true;
+  restartState.reloadAtMs = Date.now() + (durationSec * 1000);
+
+  const tick = () => {
+    const remainingMs = restartState.reloadAtMs - Date.now();
+    const remainingSec = Math.ceil(remainingMs / 1000);
+    updateRestartUi(remainingSec);
+    if (remainingMs <= 0) {
+      if (restartState.intervalId) {
+        window.clearInterval(restartState.intervalId);
+        restartState.intervalId = null;
+      }
+      window.location.reload();
+    }
+  };
+
+  tick();
+  restartState.intervalId = window.setInterval(tick, 200);
 }
 
 function handleAuthRequired(message = 'Authentication required.') {
@@ -205,9 +246,17 @@ async function loadMeta() {
 }
 
 async function restart() {
-  const r = await apiFetch('/api/restart', { method: 'POST' });
-  const j = await r.json();
-  alert(JSON.stringify(j));
+  try {
+    if (restartState.active) return;
+    const r = await apiFetch('/api/restart', { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || `HTTP ${r.status}`);
+    }
+    startRestartCountdown(30);
+  } catch (e) {
+    window.alert(`Restart failed: ${e}`);
+  }
 }
 
 async function exitProgram() {

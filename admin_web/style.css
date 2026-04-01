@@ -54,6 +54,16 @@ body.auth-locked .shell {
   user-select: none;
 }
 
+body.restart-locked {
+  overflow: hidden;
+}
+
+body.restart-locked .shell {
+  filter: blur(8px);
+  pointer-events: none;
+  user-select: none;
+}
+
 .auth-gate {
   position: fixed;
   inset: 0;
@@ -115,6 +125,37 @@ body.auth-locked .shell {
 
 .auth-submit {
   justify-self: start;
+}
+
+.restart-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 21;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(6, 12, 22, 0.76);
+  backdrop-filter: blur(10px);
+}
+
+.restart-card {
+  width: min(100%, 440px);
+  padding: 30px;
+  text-align: center;
+}
+
+.restart-copy {
+  margin-top: 10px;
+  color: var(--muted);
+}
+
+.restart-countdown {
+  margin-top: 22px;
+  font-size: 56px;
+  font-weight: 800;
+  color: var(--accent);
+  letter-spacing: 0.04em;
 }
 
 .topbar {
