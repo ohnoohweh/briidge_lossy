@@ -41,6 +41,7 @@ import enum
 import importlib.util
 import ipaddress
 import logging
+import logging.handlers
 import socket
 import struct
 import sys
@@ -60,7 +61,14 @@ from typing import Dict, Optional, Tuple, List, Set, Deque, Any, Callable, Liter
 ANSI_HIDE_CURSOR = "\x1b[?25l"
 ANSI_SHOW_CURSOR = "\x1b[?25h"
 ANSI_HOME_CLEAR = "\x1b[H\x1b[J"
-DEBUG_LOG_RING: Deque[str] = deque(maxlen=1200)
+DEFAULT_ADMIN_WEB_LOG_MAX_LINES = 1200
+DEBUG_LOG_RING: Deque[str] = deque(maxlen=DEFAULT_ADMIN_WEB_LOG_MAX_LINES)
+
+
+def configure_debug_log_ring(max_lines: int) -> None:
+    global DEBUG_LOG_RING
+    limit = max(1, int(max_lines))
+    DEBUG_LOG_RING = deque(DEBUG_LOG_RING, maxlen=limit)
 
 # ============================== Logging / Debug Config ===============================
 def debug_print(msg: str):
@@ -124,6 +132,12 @@ class DebugLoggingConfigurator:
         if not _has('--log-file'):
             p.add_argument('--log-file', default=None,
                            help='file path to also write logs enabled by --log')
+        if not _has('--log-file-max-bytes'):
+            p.add_argument('--log-file-max-bytes', type=int, default=0,
+                           help='maximum on-disk log file size in bytes before rotation; 0 disables rotation')
+        if not _has('--log-file-backup-count'):
+            p.add_argument('--log-file-backup-count', type=int, default=5,
+                           help='number of rotated log files to keep when --log-file-max-bytes is enabled')
 
         # NEW: split console/file levels to avoid screen flooding at DEBUG
         if not _has('--console-level'):
@@ -137,6 +151,9 @@ class DebugLoggingConfigurator:
         if not _has('--debug-stderr'):
             p.add_argument('--debug-stderr', action='store_true', default=False,
                            help='mirror DEBUG lines to stderr (default: off)')
+        if not _has('--admin-web-log-max-lines'):
+            p.add_argument('--admin-web-log-max-lines', type=int, default=DEFAULT_ADMIN_WEB_LOG_MAX_LINES,
+                           help='maximum number of debug log lines kept in memory for the admin web log view')
 
 
     @staticmethod
@@ -146,7 +163,10 @@ class DebugLoggingConfigurator:
             console_level_name=getattr(args, 'console_level', 'INFO'),
             file_level_name=getattr(args, 'file_level', None),
             file_path=getattr(args, 'log_file', None),
+            file_max_bytes=getattr(args, 'log_file_max_bytes', 0),
+            file_backup_count=getattr(args, 'log_file_backup_count', 5),
             debug_to_stderr=bool(getattr(args, 'debug_stderr', False)),
+            admin_web_log_max_lines=getattr(args, 'admin_web_log_max_lines', DEFAULT_ADMIN_WEB_LOG_MAX_LINES),
         )
         # capture per-section log overrides into the object
         for k, v in vars(args).items():
@@ -180,12 +200,18 @@ class DebugLoggingConfigurator:
                  console_level_name: str = 'INFO',
                  file_level_name: Optional[str] = None,
                  file_path: Optional[str] = None,
-                 debug_to_stderr: bool = False):
+                 file_max_bytes: int = 0,
+                 file_backup_count: int = 5,
+                 debug_to_stderr: bool = False,
+                 admin_web_log_max_lines: int = DEFAULT_ADMIN_WEB_LOG_MAX_LINES):
         self.level_name = (level_name or 'WARNING').upper()
         self.console_level_name = (console_level_name or 'INFO').upper()
         self.file_level_name = (file_level_name.upper() if file_level_name else None)
         self.file_path = file_path
+        self.file_max_bytes = max(0, int(file_max_bytes))
+        self.file_backup_count = max(0, int(file_backup_count))
         self.debug_to_stderr = debug_to_stderr
+        self.admin_web_log_max_lines = max(1, int(admin_web_log_max_lines))
 
     def apply(self) -> logging.Logger:
         """
@@ -211,12 +237,21 @@ class DebugLoggingConfigurator:
         file_level = getattr(logging, (self.file_level_name or self.level_name), logging.WARNING)
         root.setLevel(root_level)
         fmt = logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s')
+        configure_debug_log_ring(self.admin_web_log_max_lines)
 
 
         # Optional file handler (can be DEBUG)
         if self.file_path:
             try:
-                fh = logging.FileHandler(self.file_path, encoding="utf-8")
+                if self.file_max_bytes > 0:
+                    fh = logging.handlers.RotatingFileHandler(
+                        self.file_path,
+                        maxBytes=self.file_max_bytes,
+                        backupCount=max(1, self.file_backup_count),
+                        encoding="utf-8",
+                    )
+                else:
+                    fh = logging.FileHandler(self.file_path, encoding="utf-8")
                 fh.setLevel(file_level)
                 fh.setFormatter(fmt)
                 root.addHandler(fh)
