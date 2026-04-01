@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">High-loss obstacle issue example</title>
+  <desc id="desc">A client in Asia faces artificial packet drops and retransmission pressure. Direct VPN traffic becomes unusably slow.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#fbfdff"/>
+      <stop offset="100%" stop-color="#edf4fa"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="14" markerHeight="10" refX="10" refY="5" orient="auto">
+      <path d="M0,0 L14,5 L0,10 z" fill="#165b7a"/>
+    </marker>
+    <style>
+      .label { font: 700 26px sans-serif; fill: #0a2737; }
+      .body { font: 400 20px sans-serif; fill: #173c4f; }
+      .small { font: 400 18px sans-serif; fill: #3a5b6c; }
+      .box { fill: #fff; stroke: #0a2737; stroke-width: 2.5; rx: 20; ry: 20; }
+      .warn { fill: #fff1f1; stroke: #b53030; }
+      .svc { fill: #eef7ff; }
+      .cloud { fill: #dbe9f6; stroke: #0a2737; stroke-width: 2.5; }
+      .badline { stroke: #c63d3d; stroke-width: 5; fill: none; marker-end: url(#arrow); stroke-dasharray: 13 10; }
+      .faintline { stroke: #165b7a; stroke-width: 4; fill: none; marker-end: url(#arrow); opacity: 0.65; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="720" fill="url(#bg)"/>
+
+  <path class="cloud" d="M317 207c-26-71 68-126 174-129 47-1 92 8 126 25 31-22 79-34 128-31 49 2 92 19 112 45 29-11 66-9 98 4 37 15 60 42 62 71 56 9 94 40 90 76-2 17-14 34-33 48 26 18 36 46 22 72-20 39-74 65-141 68-28 1-55-3-78-11-22 26-67 42-122 44-36 1-70-5-97-18-28 22-72 35-121 35-59 0-109-19-127-47-17 4-34 6-52 6-67 0-122-32-122-72 0-18 12-35 31-48-22-12-35-30-35-50 0-23 15-44 41-58z"/>
+  <text x="640" y="220" text-anchor="middle" class="label" font-size="42">High-loss obstacle path</text>
+  <text x="640" y="253" text-anchor="middle" class="small">Artificial packet drops and forced retransmissions make conventional protocols collapse in throughput.</text>
+
+  <rect x="70" y="360" width="300" height="230" class="box"/>
+  <text x="220" y="412" text-anchor="middle" class="label">Client device</text>
+  <text x="220" y="448" text-anchor="middle" class="body">Inside degraded Asia path</text>
+  <text x="220" y="484" text-anchor="middle" class="small">WireGuard or OpenVPN client</text>
+  <text x="220" y="516" text-anchor="middle" class="small">Needs full internet access</text>
+  <text x="220" y="548" text-anchor="middle" class="small">UDP may pass, but with severe loss</text>
+
+  <rect x="932" y="360" width="280" height="230" class="box svc"/>
+  <text x="1072" y="412" text-anchor="middle" class="label">External services</text>
+  <text x="1072" y="448" text-anchor="middle" class="body">Outside the obstacle</text>
+  <text x="1072" y="484" text-anchor="middle" class="small">VPN server and internet applications</text>
+  <text x="1072" y="516" text-anchor="middle" class="small">Reachable only over a hostile path</text>
+  <text x="1072" y="548" text-anchor="middle" class="small">Need something loss-tolerant</text>
+
+  <rect x="455" y="420" width="370" height="125" class="box warn"/>
+  <text x="640" y="467" text-anchor="middle" class="label" font-size="28">Direct VPN becomes unusably slow</text>
+  <text x="640" y="503" text-anchor="middle" class="small">Packet drops trigger retransmissions until normal transports lose practical throughput.</text>
+
+  <path class="badline" d="M370 457 C470 400, 555 400, 932 457"/>
+  <text x="647" y="392" text-anchor="middle" class="small">Loss, retransmissions, stalls</text>
+
+  <path class="faintline" d="M370 530 C490 575, 665 603, 932 530"/>
+  <text x="650" y="628" text-anchor="middle" class="small">Some raw UDP still crosses, but quality is poor</text>
+</svg>
