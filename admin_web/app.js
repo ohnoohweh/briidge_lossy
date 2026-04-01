@@ -190,7 +190,7 @@ function renderPeerTable(rows) {
   const tbody = document.getElementById('peerConnectionsBody');
   if (!tbody) return;
   if (!rows || rows.length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="16">No peer sessions</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="17">No peer sessions</td></tr>';
     return;
   }
   const fmtMyUdpMetric = (row, value) => {
@@ -211,6 +211,7 @@ function renderPeerTable(rows) {
       <td class="mono">${fmtBytes(row.traffic?.rx_bytes ?? 0)}</td>
       <td class="mono">${fmtBytes(row.traffic?.tx_bytes ?? 0)}</td>
       <td class="mono">${fmtInteger(row.decode_errors ?? 0)}</td>
+      <td class="mono">${fmtMyUdpMetric(row, row.myudp?.buffered_frames)}</td>
       <td class="mono">${fmtInteger(row.inflight)}</td>
       <td class="mono">${fmtMyUdpMetric(row, row.myudp?.confirmed_total)}</td>
       <td class="mono">${fmtMyUdpMetric(row, row.myudp?.first_pass)}</td>

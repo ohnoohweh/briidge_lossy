@@ -8667,10 +8667,16 @@ class Runner:
 
     def _session_retransmit_stats(self, session: ISession) -> dict:
         hist: dict = {}
+        buffered_frames = None
         with contextlib.suppress(Exception):
             if isinstance(session, UdpSession):
-                hist = dict(getattr(session.inner_session, "stats_hist", {}) or {})
+                inner = getattr(session, "inner_session", None)
+                hist = dict(getattr(inner, "stats_hist", {}) or {})
+                waiting_count = getattr(inner, "waiting_count", None)
+                if callable(waiting_count):
+                    buffered_frames = int(waiting_count())
         return {
+            "buffered_frames": buffered_frames,
             "first_pass": int(hist.get("once", 0)),
             "repeated_once": int(hist.get("twice", 0)),
             "repeated_multiple": int(hist.get("thrice", 0)) + int(hist.get("gt3", 0)),
