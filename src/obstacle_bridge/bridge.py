@@ -9438,7 +9438,13 @@ class AdminWebUI:
         return cookies
 
     def _session_cookie_name(self) -> str:
-        return "admin_web_session"
+        scope = "|".join([
+            str(getattr(self.args, "admin_web_bind", "") or ""),
+            str(getattr(self.args, "admin_web_port", "") or ""),
+            str(getattr(self.args, "admin_web_path", "") or ""),
+        ])
+        suffix = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:12]
+        return f"admin_web_session_{suffix}"
 
     def _is_authenticated(self, headers: dict) -> bool:
         if not self.auth_required():
@@ -9630,7 +9636,9 @@ class AdminWebUI:
             f"Content-Type: {content_type}\r\n"
             f"Content-Length: {len(data)}\r\n"
             f"Connection: close\r\n"
-            f"Cache-Control: no-cache\r\n"
+            f"Cache-Control: no-store, no-cache, must-revalidate, max-age=0\r\n"
+            f"Pragma: no-cache\r\n"
+            f"Expires: 0\r\n"
         )
         extra = ""
         for key, value in (headers or []):
