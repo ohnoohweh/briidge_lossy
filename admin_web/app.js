@@ -437,8 +437,12 @@ function renderConfigRows(items, config) {
     const defaultRaw = configValueToEditor(item.default);
     const isLevelSetting = isLoggingLevelSetting(key, current, item.default);
     const isLogFileSetting = isLogFileConfigSetting(key);
+    const isDirectEntrySetting = isDirectEntryConfigSetting(key);
     const isBooleanSetting = isBooleanConfigSetting(current, item.default);
-    const hasChoices = !isLogFileSetting && Array.isArray(item.choices) && item.choices.length > 0;
+    const hasChoices = !isLogFileSetting
+      && !isDirectEntrySetting
+      && Array.isArray(item.choices)
+      && item.choices.length > 0;
     const editorHtml = isSecret
       ? renderSecretInput(key)
       : hasChoices
@@ -518,6 +522,14 @@ function isLogFileConfigSetting(key) {
     || normalizedKey === 'log_file'
     || normalizedKey.endsWith('.--log-file')
     || normalizedKey.endsWith('.log_file');
+}
+
+function isDirectEntryConfigSetting(key) {
+  const normalizedKey = String(key || '').toLowerCase();
+  return normalizedKey === 'log_file_backup_count'
+    || normalizedKey === 'log_file_max_bytes'
+    || normalizedKey.endsWith('.log_file_backup_count')
+    || normalizedKey.endsWith('.log_file_max_bytes');
 }
 
 function isLoggingLevelSetting(key, currentValue, defaultValue) {
