@@ -9,4 +9,5 @@ while true; do
   if [ "$rc" -ne 75 ]; then
     exit "$rc"
   fi
+  sleep 30
 done
