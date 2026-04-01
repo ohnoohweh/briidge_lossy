@@ -13,9 +13,9 @@ ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for ba
 - `tests/unit/` — targeted unit tests.
 - `tests/integration/` — end-to-end and subprocess tests.
 - `scripts/` — development helpers.
-- `docs/ObstacleBridge Client.html` — exported example of the admin web UI on a peer/client instance.
-- `docs/ObstacleBridge Server.html` — exported example of the admin web UI on a listener/server instance.
-- `docs/WHITEPAPER.html` — full whitepaper requested for this repository update.
+- `docs/ObstacleBridge Client.html` — exported example of the admin web UI on a peer/client instance. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/ObstacleBridge%20Client.html`
+- `docs/ObstacleBridge Server.html` — exported example of the admin web UI on a listener/server instance. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/ObstacleBridge%20Server.html`
+- `docs/WHITEPAPER.html` — full whitepaper requested for this repository update. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/WHITEPAPER.html`
 - `wireshark/` — Wireshark dissectors grouped by framing/version.
 ## Entry points
 - `python -m obstacle_bridge --help`
@@ -327,8 +327,8 @@ Expected behavior:
 
 The repository includes two exported admin web snapshots:
 
-- [docs/ObstacleBridge Client.html](docs/ObstacleBridge%20Client.html) shows a peer/client-side view.
-- [docs/ObstacleBridge Server.html](docs/ObstacleBridge%20Server.html) shows a listener/server-side view.
+- [docs/ObstacleBridge Client.html](https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/ObstacleBridge%20Client.html) shows a peer/client-side view.
+- [docs/ObstacleBridge Server.html](https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/ObstacleBridge%20Server.html) shows a listener/server-side view.
 
 Client admin web screenshot:
 
@@ -365,7 +365,7 @@ What is visible in the included snapshots:
 | `--client-restart-if-disconnected` | `0.0` | If configured as a peer client (for example --udp-peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables. |
 
 ## Whitepaper
-The complete whitepaper requested for this project update is included verbatim in [`docs/WHITEPAPER.html`](docs/WHITEPAPER.html). It covers:
+The complete whitepaper requested for this project update is available as a rendered preview at [`docs/WHITEPAPER.html`](https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/WHITEPAPER.html). It covers:
 - Internet barriers such as NAT, DPI, protocol blocking, traffic shaping, and TLS interception.
 - Transport-level behavior for IP, ICMP, UDP, TCP, QUIC, DNS, HTTP/HTTPS, and WebSockets.
 - The layered overlay architecture used here: RTT/liveness, reliable DATA/CONTROL framing, and ChannelMux OPEN/DATA/CLOSE multiplexing.
