@@ -212,32 +212,23 @@ Operational note:
 - prefer this `myudp` setup when outside UDP is available but the path is extremely lossy
 - prefer the WebSocket example above when only HTTP(S)-shaped traffic reliably survives the obstacle
 
-### 4) Single overlay transport listener
-```bash
-python -m obstacle_bridge --overlay-transport ws --ws-bind 0.0.0.0 --ws-own-port 54321
-```
-### 5) Multi-transport listening instance
+### 4) Peer client setup for both inspected and high-loss paths
 ```bash
 python -m obstacle_bridge \
-  --overlay-transport "myudp,tcp,quic,ws" \
-  --udp-own-port 443 \
-  --udp-bind 0.0.0.0 \
-  --tcp-bind 0.0.0.0 \
-  --quic-bind 0.0.0.0 \
-  --ws-bind 0.0.0.0 \
-  --quic-cert Cert_localhost/cert.pem \
-  --quic-key Cert_localhost/key.pem
-```
-In multi-transport listener mode, ObstacleBridge uses each transport's configured own-port directly (`--udp-own-port`, `--tcp-own-port`, `--quic-own-port`, `--ws-own-port`) without applying automatic offsets.
-### 6) Peer client exposing local services
-```bash
-python -m obstacle_bridge \
-  --overlay-transport ws \
-  --ws-peer 203.0.113.10 --ws-peer-port 446 \
+  --overlay-transport ws,myudp \
+  --ws-peer bridge.example.com --ws-peer-port 443 \
   --ws-own-port 0 \
-  --own-servers "udp,16667,0.0.0.0,udp,127.0.0.1,16666 tcp,3129,0.0.0.0,tcp,127.0.0.1,3128"
+  --udp-peer bridge.example.com --udp-peer-port 4433 \
+  --udp-own-port 0 \
+  --own-servers "udp,16666,127.0.0.1,udp,127.0.0.1,16666"
 ```
-Using `--ws-own-port 0` requests dynamic local source-port assignment by the OS. If a specific outgoing local WebSocket port is required by your network policy, set that exact value with `--ws-own-port`.
+This combines the peer-side ideas from examples 2 and 3 in one command:
+
+- `ws` is available for environments where only HTTP(S)-shaped traffic survives reliably
+- `myudp` is available for environments where UDP still passes but the path is highly lossy
+- the local WireGuard or OpenVPN client still talks to `127.0.0.1:16666`
+
+Using `--ws-own-port 0` and `--udp-own-port 0` requests dynamic local source-port assignment by the OS for outgoing overlay traffic.
 ## CLI parameter reference
 The tables below are generated from the current parser registrations in `bridge.py`, so the defaults and descriptions match the live code.
 ### General / status
