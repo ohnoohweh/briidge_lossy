@@ -535,6 +535,7 @@ function isDirectEntryConfigSetting(key) {
 function isLoggingLevelSetting(key, currentValue, defaultValue) {
   const normalizedKey = String(key || '').toLowerCase();
   if (isLogFileConfigSetting(normalizedKey)) return false;
+  if (isDirectEntryConfigSetting(normalizedKey)) return false;
   const byName = normalizedKey === 'log'
     || normalizedKey.startsWith('log_')
     || normalizedKey.endsWith('_level');
