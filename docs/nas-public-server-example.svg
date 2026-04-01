@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">ObstacleBridge NAS through public server example</title>
+  <desc id="desc">A NAS opens an outgoing ObstacleBridge myudp connection to a public dual-stack server. Client devices connect to the public server on ports 21, 80, 443, and 18080, and traffic is forwarded to the NAS.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0%" stop-color="#f7fbff"/>
+      <stop offset="100%" stop-color="#eaf4fb"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="14" markerHeight="10" refX="10" refY="5" orient="auto">
+      <path d="M0,0 L14,5 L0,10 z" fill="#156082"/>
+    </marker>
+    <style>
+      .label { font: 700 24px sans-serif; fill: #042433; }
+      .body { font: 400 20px sans-serif; fill: #042433; }
+      .small { font: 400 18px sans-serif; fill: #24485a; }
+      .box { fill: #ffffff; stroke: #042433; stroke-width: 2.5; rx: 18; ry: 18; }
+      .server { fill: #eef7ff; }
+      .warning { fill: #fff2f2; stroke: #9d1c1c; }
+      .cloud { fill: #dceaf7; stroke: #042433; stroke-width: 2.5; }
+      .line { stroke: #156082; stroke-width: 5; fill: none; marker-end: url(#arrow); }
+      .dashed { stroke-dasharray: 12 10; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="720" fill="url(#bg)"/>
+
+  <path class="cloud" d="M353 204c-32-68 76-121 183-116 45 2 86 13 116 30 35-27 101-35 154-18 15 5 28 11 39 18 29-18 76-24 116-13 17 5 31 12 42 21 41-18 101-16 138 3 24 12 38 29 40 47 55 8 93 38 89 72-2 17-13 33-31 46 31 18 42 47 26 74-22 37-79 61-145 61-26 0-50-4-71-11-24 28-74 47-132 47-31 0-59-6-82-16-24 18-62 29-104 29-54 0-100-19-118-46-17 5-36 8-56 8-67 0-122-31-122-70 0-17 10-33 28-45-22-11-35-28-35-47 0-22 17-42 46-55z"/>
+  <text x="640" y="305" text-anchor="middle" class="label" font-size="46">Internet obstacle</text>
+  <text x="640" y="340" text-anchor="middle" class="small">NAS has outbound access only, client is IPv6-only, direct reachability fails.</text>
+
+  <rect x="120" y="110" width="230" height="210" class="box"/>
+  <text x="235" y="155" text-anchor="middle" class="label">NAS</text>
+  <text x="235" y="195" text-anchor="middle" class="body">Services on local NAS</text>
+  <text x="235" y="228" text-anchor="middle" class="small">TCP/21, TCP/80, TCP/443</text>
+  <text x="235" y="258" text-anchor="middle" class="small">Admin web on TCP/18080</text>
+  <text x="235" y="292" text-anchor="middle" class="small">Only outgoing internet connection</text>
+
+  <rect x="515" y="470" width="270" height="170" class="box server"/>
+  <text x="650" y="515" text-anchor="middle" class="label">Public server</text>
+  <text x="650" y="550" text-anchor="middle" class="body">ObstacleBridge listener</text>
+  <text x="650" y="585" text-anchor="middle" class="small">Dual-stack IPv4 + IPv6 VPS</text>
+  <text x="650" y="615" text-anchor="middle" class="small">Publishes 21, 80, 443, 18080</text>
+
+  <rect x="935" y="110" width="230" height="210" class="box"/>
+  <text x="1050" y="155" text-anchor="middle" class="label">Client device</text>
+  <text x="1050" y="195" text-anchor="middle" class="body">Connects to public server</text>
+  <text x="1050" y="228" text-anchor="middle" class="small">Can be IPv6-only</text>
+  <text x="1050" y="258" text-anchor="middle" class="small">Uses public VPS address</text>
+  <text x="1050" y="292" text-anchor="middle" class="small">No direct path to NAS</text>
+
+  <rect x="455" y="95" width="370" height="90" class="box warning"/>
+  <text x="640" y="132" text-anchor="middle" class="label" font-size="28">Direct access does not work</text>
+  <text x="640" y="163" text-anchor="middle" class="small">No incoming connections to the NAS, and address families do not line up.</text>
+
+  <path class="line dashed" d="M305 320 C365 395, 455 470, 545 520"/>
+  <text x="405" y="430" class="small">Outgoing `myudp` overlay from NAS</text>
+
+  <path class="line" d="M935 215 C865 235, 805 280, 745 470"/>
+  <text x="820" y="370" class="small">Client traffic to public VPS</text>
+
+  <path class="line" d="M760 570 C860 520, 930 390, 980 320"/>
+  <text x="890" y="500" class="small">Responses return the same way</text>
+
+  <path class="line" d="M555 560 C470 505, 385 420, 300 320"/>
+  <text x="335" y="530" class="small">Forwarded over overlay to NAS-local services</text>
+</svg>

@@ -1,0 +1,1492 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+  <meta charset="utf-8">
+  <title>ObstacleBridge</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="ObstacleBridge%20Client_files/style.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">Network Appliance</div>
+        <h1>ObstacleBridge</h1>
+      </div>
+      <div class="topbar-right">
+        <div class="status-cluster">
+          <span class="status-label">State</span>
+          <span id="peerStateBadge" class="state-badge state-connected">CONNECTED</span>
+        </div>
+        <button id="restartBtn" class="btn btn-danger" type="button">Restart</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar card">
+        <nav class="nav-tabs" aria-label="Main navigation">
+          <button class="nav-tab active" data-tab="status" type="button">Status</button>
+          <button class="nav-tab" data-tab="configuration" type="button">Configuration</button>
+          <button class="nav-tab" data-tab="logs" type="button">Debug Logs</button>
+          <button class="nav-tab" data-tab="misc" type="button">Misc</button>
+        </nav>
+
+        <section class="sidebar-section">
+          <div class="sidebar-title">Runtime</div>
+          <div class="kv-list">
+            <div class="kv-row"><span>Uptime</span><strong id="uptimeSec">7h 46m 21s</strong></div>
+          </div>
+        </section>
+      </aside>
+
+      <main class="mainview">
+        <section id="tab-status" class="tab-panel active">
+          <section class="summary-grid">
+            <article class="metric-card card">
+              <div class="metric-label">UDP Open</div>
+              <div class="metric-value" id="udpOpen">1</div>
+              <div class="metric-note">active UDP mappings</div>
+            </article>
+            <article class="metric-card card">
+              <div class="metric-label">TCP Open</div>
+              <div class="metric-value" id="tcpOpen">3</div>
+              <div class="metric-note">active TCP mappings</div>
+            </article>
+          </section>
+
+          
+
+          <section class="section-block">
+            <div class="section-header">
+              <div>
+                <h2>Traffic</h2>
+                <p>Current throughput and accumulated volume</p>
+              </div>
+            </div>
+            <div class="traffic-grid">
+              <article class="traffic-card card">
+                <div class="traffic-top">
+                  <span class="traffic-title">App RX</span>
+                  <span class="traffic-value"><span id="appRxRate">1.4</span> <small>kB/s</small></span>
+                </div>
+                <div class="progress"><div id="barAppRx" class="progress-fill" style="width: 0.5%;"></div></div>
+              </article>
+              <article class="traffic-card card">
+                <div class="traffic-top">
+                  <span class="traffic-title">App TX</span>
+                  <span class="traffic-value"><span id="appTxRate">4.6</span> <small>kB/s</small></span>
+                </div>
+                <div class="progress"><div id="barAppTx" class="progress-fill" style="width: 1.8%;"></div></div>
+              </article>
+              <article class="traffic-card card">
+                <div class="traffic-top">
+                  <span class="traffic-title">Peer TX</span>
+                  <span class="traffic-value"><span id="peerTxRate">1.7</span> <small>kB/s</small></span>
+                </div>
+                <div class="progress"><div id="barPeerTx" class="progress-fill" style="width: 0.7%;"></div></div>
+              </article>
+              <article class="traffic-card card">
+                <div class="traffic-top">
+                  <span class="traffic-title">Peer RX</span>
+                  <span class="traffic-value"><span id="peerRxRate">5.2</span> <small>kB/s</small></span>
+                </div>
+                <div class="progress"><div id="barPeerRx" class="progress-fill" style="width: 2%;"></div></div>
+              </article>
+            </div>
+          </section>
+
+          <section class="section-block">
+            <div class="section-header">
+              <div>
+                <h2>Peer Connections</h2>
+                <p>All active overlay peer sessions and per-peer health metrics</p>
+              </div>
+            </div>
+            <div class="table-card card">
+              <div class="table-wrap">
+                <table class="conn-table">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Transport</th>
+                      <th>Listen</th>
+                      <th>Connected</th>
+                      <th>Peer</th>
+                      <th>RTT Est (ms)</th>
+                      <th>UDP Open</th>
+                      <th>TCP Open</th>
+                      <th>RX Bytes</th>
+                      <th>TX Bytes</th>
+                      <th>Decode Errors</th>
+                      <th>Inflight</th>
+                      <th>myUDP Confirmed Total</th>
+                      <th>myUDP First Pass</th>
+                      <th>myUDP Repeated Once</th>
+                      <th>myUDP Repeated Multiple</th>
+                    </tr>
+                  </thead>
+                  <tbody id="peerConnectionsBody">
+    <tr>
+      <td class="mono">0</td>
+      <td class="mono">myudp</td>
+      <td class="mono">n/a</td>
+      <td><span class="role-pill role-server">yes</span></td>
+      <td class="mono">n/a</td>
+      <td class="mono">322.3</td>
+      <td class="mono">2</td>
+      <td class="mono">2</td>
+      <td class="mono">490.7 kB</td>
+      <td class="mono">335.7 kB</td>
+      <td class="mono">0</td>
+      <td class="mono">2</td>
+      <td class="mono">234718</td>
+      <td class="mono">180556</td>
+      <td class="mono">53756</td>
+      <td class="mono">406</td>
+    </tr>
+  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <section class="section-block">
+            <div class="section-header">
+              <div>
+                <h2>UDP Connections</h2>
+                <p>Current UDP mappings and client transports · Listening: <strong id="udpListening">1</strong></p>
+              </div>
+            </div>
+            <div class="table-card card">
+              <div class="table-wrap">
+                <table class="conn-table">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Chan</th>
+                      <th>Svc</th>
+                      <th>State</th>
+                      <th>Role</th>
+                      <th>Source</th>
+                      <th>Local Port</th>
+                      <th>Destination</th>
+                      <th>RX Bytes</th>
+                      <th>TX Bytes</th>
+                      <th>RX Msgs</th>
+                      <th>TX Msgs</th>
+                    </tr>
+                  </thead>
+                  <tbody id="udpConnectionsBody">
+      <tr>
+        <td class="mono">0</td>
+        <td class="mono">317</td>
+        <td class="mono">1</td>
+        <td><span class="role-pill role-client">connected</span></td>
+        <td><span class="role-pill role-server">server</span></td>
+        <td class="mono">127.0.0.1:51820</td>
+        <td class="mono">16666</td>
+        <td class="mono">127.0.0.1:16666</td>
+        <td class="mono">490.7 kB</td>
+        <td class="mono">335.7 kB</td>
+        <td class="mono">1240</td>
+        <td class="mono">621</td>        
+      </tr>
+    
+      <tr>
+        <td class="mono">0</td>
+        <td class="mono">-</td>
+        <td class="mono">1</td>
+        <td><span class="role-pill role-unknown">listening</span></td>
+        <td><span class="role-pill role-server">server</span></td>
+        <td class="mono">n/a</td>
+        <td class="mono">16666</td>
+        <td class="mono">127.0.0.1:16666</td>
+        <td class="mono">0 B</td>
+        <td class="mono">0 B</td>
+        <td class="mono">0</td>
+        <td class="mono">0</td>        
+      </tr>
+    </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <section class="section-block">
+            <div class="section-header">
+              <div>
+                <h2>TCP Connections</h2>
+                <p>Current TCP mappings and active streams · Listening: <strong id="tcpListening">2</strong></p>
+              </div>
+            </div>
+            <div class="table-card card">
+              <div class="table-wrap">
+                <table class="conn-table">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Chan</th>
+                      <th>Svc</th>
+                      <th>State</th>
+                      <th>Role</th>
+                      <th>Source</th>
+                      <th>Local Port</th>
+                      <th>Destination</th>
+                      <th>RX Bytes</th>
+                      <th>TX Bytes</th>
+                      <th>RX Msgs</th>
+                      <th>TX Msgs</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tcpConnectionsBody">
+      <tr>
+        <td class="mono">0</td>
+        <td class="mono">-</td>
+        <td class="mono">2</td>
+        <td><span class="role-pill role-unknown">listening</span></td>
+        <td><span class="role-pill role-server">server</span></td>
+        <td class="mono">n/a</td>
+        <td class="mono">3128</td>
+        <td class="mono">127.0.0.1:3128</td>
+        <td class="mono">0 B</td>
+        <td class="mono">0 B</td>
+        <td class="mono">0</td>
+        <td class="mono">0</td>        
+      </tr>
+    
+      <tr>
+        <td class="mono">0</td>
+        <td class="mono">-</td>
+        <td class="mono">3</td>
+        <td><span class="role-pill role-unknown">listening</span></td>
+        <td><span class="role-pill role-server">server</span></td>
+        <td class="mono">n/a</td>
+        <td class="mono">18081</td>
+        <td class="mono">127.0.0.1:18090</td>
+        <td class="mono">0 B</td>
+        <td class="mono">0 B</td>
+        <td class="mono">0</td>
+        <td class="mono">0</td>        
+      </tr>
+    </tbody>
+                </table>
+              </div>
+            </div>
+          </section>        
+                  
+        
+        </section>
+
+        <section id="tab-configuration" class="tab-panel">
+          <section class="section-block card">
+            <div class="section-header compact">
+              <div>
+                <h2>Configuration</h2>
+                <p>Configuration is organized by section (for example: 
+admin_web and ws_session), with description and built-in default value. 
+Overlay settings are transport-specific (`udp_*`, `tcp_*`, `quic_*`, 
+`ws_*`).</p>
+              </div>
+              <div class="config-actions">
+                <button id="configReloadBtn" class="btn btn-secondary" type="button">Reload</button>
+                <button id="configSaveBtn" class="btn btn-secondary" type="button">Save Configuration</button>
+              </div>
+            </div>
+            <p id="configMessage" class="config-message"></p>
+            <div id="configSections" class="config-sections">
+    <section class="config-section card">
+      <div class="section-header compact">
+        <div>
+          <h3>admin_web</h3>
+        </div>
+      </div>
+      <div class="table-wrap config-table-wrap">
+        <table class="conn-table">
+          <thead>
+            <tr>
+              <th>Key</th>
+              <th>Description</th>
+              <th>Default</th>
+              <th>Current (JSON)</th>
+            </tr>
+          </thead>
+          <tbody>
+      <tr>
+        <td class="mono">admin_web</td>
+        <td>Enable admin web interface</td>
+        <td class="mono">true</td>
+        <td><select class="config-editor mono" data-config-key="admin_web"><option value="true" selected="selected">true</option><option value="false">false</option></select></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">admin_web_bind</td>
+        <td>Bind address for admin web interface</td>
+        <td class="mono">"127.0.0.1"</td>
+        <td><input class="config-editor mono" data-config-key="admin_web_bind" value="&quot;127.0.0.1&quot;"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">admin_web_dir</td>
+        <td>Directory containing admin web files</td>
+        <td class="mono">"./admin_web"</td>
+        <td><input class="config-editor mono" data-config-key="admin_web_dir" value="&quot;./admin_web&quot;"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">admin_web_path</td>
+        <td>Base path for admin web interface</td>
+        <td class="mono">"/"</td>
+        <td><input class="config-editor mono" data-config-key="admin_web_path" value="&quot;/&quot;"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">admin_web_port</td>
+        <td>Port for admin web interface</td>
+        <td class="mono">18080</td>
+        <td><input class="config-editor mono" data-config-key="admin_web_port" value="18090"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">admin_web_token</td>
+        <td>Optional bearer token for admin restart endpoint</td>
+        <td class="mono">""</td>
+        <td><input class="config-editor mono" data-config-key="admin_web_token" value="&quot;&quot;"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">log_admin_web</td>
+        <td>Override log level for component 'admin_web'</td>
+        <td class="mono">null</td>
+        <td><select class="config-editor mono" data-config-key="log_admin_web"><option value="&quot;CRITICAL&quot;" selected="selected">CRITICAL</option><option value="&quot;ERROR&quot;">ERROR</option><option value="&quot;WARNING&quot;">WARNING</option><option value="&quot;INFO&quot;">INFO</option><option value="&quot;DEBUG&quot;">DEBUG</option><option value="&quot;NOTSET&quot;">NOTSET</option></select></td>
+      </tr>
+    </tbody>
+        </table>
+      </div>
+    </section>
+  
+    <section class="config-section card">
+      <div class="section-header compact">
+        <div>
+          <h3>channel_mux</h3>
+        </div>
+      </div>
+      <div class="table-wrap config-table-wrap">
+        <table class="conn-table">
+          <thead>
+            <tr>
+              <th>Key</th>
+              <th>Description</th>
+              <th>Default</th>
+              <th>Current (JSON)</th>
+            </tr>
+          </thead>
+          <tbody>
+      <tr>
+        <td class="mono">log_channel_mux</td>
+        <td>Override log level for component 'channel_mux'</td>
+        <td class="mono">null</td>
+        <td><select class="config-editor mono" data-config-key="log_channel_mux"><option value="&quot;CRITICAL&quot;">CRITICAL</option><option value="&quot;ERROR&quot;">ERROR</option><option value="&quot;WARNING&quot;">WARNING</option><option value="&quot;INFO&quot;">INFO</option><option value="&quot;DEBUG&quot;" selected="selected">DEBUG</option><option value="&quot;NOTSET&quot;">NOTSET</option></select></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">mux_tcp_bp_latency_ms</td>
+        <td>Mux TCP: if &gt; 0, drain writers after this ms when bytes pending.</td>
+        <td class="mono">300</td>
+        <td><input class="config-editor mono" data-config-key="mux_tcp_bp_latency_ms" value="300"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">mux_tcp_bp_poll_interval_ms</td>
+        <td>Mux TCP: polling interval for time-based backpressure (ms).</td>
+        <td class="mono">50</td>
+        <td><input class="config-editor mono" data-config-key="mux_tcp_bp_poll_interval_ms" value="50"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">mux_tcp_bp_threshold</td>
+        <td>Mux TCP: size threshold (bytes) to trigger drain() (default 1).</td>
+        <td class="mono">1</td>
+        <td><input class="config-editor mono" data-config-key="mux_tcp_bp_threshold" value="1"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">own_servers</td>
+        <td>Space-separated service specs (client mode only): 
+'proto,listen_port,listen_bind,proto,host,port' (quoted). Listener 
+instances ignore --own-servers because multiple overlay peers make the 
+target ambiguous. Example: "tcp,80,0.0.0.0,tcp,127.0.0.1,88 
+udp,16666,::,udp,127.0.0.1,16666"</td>
+        <td class="mono">null</td>
+        <td><input class="config-editor mono" data-config-key="own_servers" value="[&quot;udp,16666,0.0.0.0,udp,127.0.0.1,16666 tcp,3128,0.0.0.0,tcp,127.0.0.1,3128 tcp,18081,0.0.0.0,tcp,127.0.0.1,18090&quot;]"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">remote_servers</td>
+        <td>Space-separated service specs (client mode only, applied on 
+connected peer): 'proto,listen_port,listen_bind,proto,host,port' 
+(quoted). Listener instances ignore --remote-servers because multiple 
+overlay peers make the target ambiguous. Example: 
+"tcp,80,0.0.0.0,tcp,127.0.0.1,88 udp,16666,::,udp,127.0.0.1,16666"</td>
+        <td class="mono">null</td>
+        <td><input class="config-editor mono" data-config-key="remote_servers" value="[&quot;tcp,18081,0.0.0.0,tcp,127.0.0.1,18090&quot;]"></td>
+      </tr>
+    </tbody>
+        </table>
+      </div>
+    </section>
+  
+    <section class="config-section card">
+      <div class="section-header compact">
+        <div>
+          <h3>debug_logging</h3>
+        </div>
+      </div>
+      <div class="table-wrap config-table-wrap">
+        <table class="conn-table">
+          <thead>
+            <tr>
+              <th>Key</th>
+              <th>Description</th>
+              <th>Default</th>
+              <th>Current (JSON)</th>
+            </tr>
+          </thead>
+          <tbody>
+      <tr>
+        <td class="mono">console_level</td>
+        <td>console (stdout) logging level (default INFO)</td>
+        <td class="mono">"INFO"</td>
+        <td><select class="config-editor mono" data-config-key="console_level"><option value="&quot;CRITICAL&quot;">CRITICAL</option><option value="&quot;ERROR&quot;">ERROR</option><option value="&quot;WARNING&quot;" selected="selected">WARNING</option><option value="&quot;INFO&quot;">INFO</option><option value="&quot;DEBUG&quot;">DEBUG</option><option value="&quot;NOTSET&quot;">NOTSET</option></select></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">debug_stderr</td>
+        <td>mirror DEBUG lines to stderr (default: off)</td>
+        <td class="mono">false</td>
+        <td><select class="config-editor mono" data-config-key="debug_stderr"><option value="true">true</option><option value="false" selected="selected">false</option></select></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">file_level</td>
+        <td>file logging level (default: same as --log)</td>
+        <td class="mono">"DEBUG"</td>
+        <td><select class="config-editor mono" data-config-key="file_level"><option value="&quot;CRITICAL&quot;">CRITICAL</option><option value="&quot;ERROR&quot;">ERROR</option><option value="&quot;WARNING&quot;">WARNING</option><option value="&quot;INFO&quot;">INFO</option><option value="&quot;DEBUG&quot;" selected="selected">DEBUG</option><option value="&quot;NOTSET&quot;">NOTSET</option></select></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">log</td>
+        <td>logging level (default WARNING; try INFO or DEBUG) be aware of --console-level and --file-level</td>
+        <td class="mono">"WARNING"</td>
+        <td><select class="config-editor mono" data-config-key="log"><option value="&quot;CRITICAL&quot;">CRITICAL</option><option value="&quot;ERROR&quot;">ERROR</option><option value="&quot;WARNING&quot;" selected="selected">WARNING</option><option value="&quot;INFO&quot;">INFO</option><option value="&quot;DEBUG&quot;">DEBUG</option><option value="&quot;NOTSET&quot;">NOTSET</option></select></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">log_debug_logging</td>
+        <td>Override log level for component 'debug_logging'</td>
+        <td class="mono">null</td>
+        <td><select class="config-editor mono" data-config-key="log_debug_logging"><option value="&quot;CRITICAL&quot;" selected="selected">CRITICAL</option><option value="&quot;ERROR&quot;">ERROR</option><option value="&quot;WARNING&quot;">WARNING</option><option value="&quot;INFO&quot;">INFO</option><option value="&quot;DEBUG&quot;">DEBUG</option><option value="&quot;NOTSET&quot;">NOTSET</option></select></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">log_file</td>
+        <td>file path to also write logs enabled by --log</td>
+        <td class="mono">null</td>
+        <td><input class="config-editor mono" data-config-key="log_file" value="&quot;&quot;"></td>
+      </tr>
+    </tbody>
+        </table>
+      </div>
+    </section>
+  
+    <section class="config-section card">
+      <div class="section-header compact">
+        <div>
+          <h3>quic_session</h3>
+        </div>
+      </div>
+      <div class="table-wrap config-table-wrap">
+        <table class="conn-table">
+          <thead>
+            <tr>
+              <th>Key</th>
+              <th>Description</th>
+              <th>Default</th>
+              <th>Current (JSON)</th>
+            </tr>
+          </thead>
+          <tbody>
+      <tr>
+        <td class="mono">log_quic_session</td>
+        <td>Override log level for component 'quic_session'</td>
+        <td class="mono">null</td>
+        <td><select class="config-editor mono" data-config-key="log_quic_session"><option value="&quot;CRITICAL&quot;" selected="selected">CRITICAL</option><option value="&quot;ERROR&quot;">ERROR</option><option value="&quot;WARNING&quot;">WARNING</option><option value="&quot;INFO&quot;">INFO</option><option value="&quot;DEBUG&quot;">DEBUG</option><option value="&quot;NOTSET&quot;">NOTSET</option></select></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">quic_alpn</td>
+        <td>ALPN protocol ID (default hq-29)</td>
+        <td class="mono">"hq-29"</td>
+        <td><input class="config-editor mono" data-config-key="quic_alpn" value="&quot;hq-29&quot;"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">quic_bind</td>
+        <td>QUIC overlay bind address</td>
+        <td class="mono">"::"</td>
+        <td><input class="config-editor mono" data-config-key="quic_bind" value="&quot;::&quot;"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">quic_cert</td>
+        <td>Server certificate file (PEM)</td>
+        <td class="mono">null</td>
+        <td><input class="config-editor mono" data-config-key="quic_cert" value="null"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">quic_insecure</td>
+        <td>Client: disable certificate verification (TEST ONLY)</td>
+        <td class="mono">false</td>
+        <td><select class="config-editor mono" data-config-key="quic_insecure"><option value="true">true</option><option value="false" selected="selected">false</option></select></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">quic_key</td>
+        <td>Server private key file (PEM)</td>
+        <td class="mono">null</td>
+        <td><input class="config-editor mono" data-config-key="quic_key" value="null"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">quic_max_size</td>
+        <td>Maximum app message size accepted/sent (default 65535).</td>
+        <td class="mono">65535</td>
+        <td><input class="config-editor mono" data-config-key="quic_max_size" value="65535"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">quic_own_port</td>
+        <td>QUIC overlay own port</td>
+        <td class="mono">443</td>
+        <td><input class="config-editor mono" data-config-key="quic_own_port" value="443"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">quic_peer</td>
+        <td>QUIC peer IP/FQDN</td>
+        <td class="mono">null</td>
+        <td><input class="config-editor mono" data-config-key="quic_peer" value="null"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">quic_peer_port</td>
+        <td>QUIC peer overlay port</td>
+        <td class="mono">443</td>
+        <td><input class="config-editor mono" data-config-key="quic_peer_port" value="443"></td>
+      </tr>
+    </tbody>
+        </table>
+      </div>
+    </section>
+  
+    <section class="config-section card">
+      <div class="section-header compact">
+        <div>
+          <h3>runner</h3>
+        </div>
+      </div>
+      <div class="table-wrap config-table-wrap">
+        <table class="conn-table">
+          <thead>
+            <tr>
+              <th>Key</th>
+              <th>Description</th>
+              <th>Default</th>
+              <th>Current (JSON)</th>
+            </tr>
+          </thead>
+          <tbody>
+      <tr>
+        <td class="mono">client_restart_if_disconnected</td>
+        <td>If configured as a peer client (for example --udp-peer set) 
+and overlay stays disconnected for this many seconds, request process 
+restart. 0 disables.</td>
+        <td class="mono">0</td>
+        <td><input class="config-editor mono" data-config-key="client_restart_if_disconnected" value="30"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">log_runner</td>
+        <td>Override log level for component 'runner'</td>
+        <td class="mono">null</td>
+        <td><select class="config-editor mono" data-config-key="log_runner"><option value="&quot;CRITICAL&quot;" selected="selected">CRITICAL</option><option value="&quot;ERROR&quot;">ERROR</option><option value="&quot;WARNING&quot;">WARNING</option><option value="&quot;INFO&quot;">INFO</option><option value="&quot;DEBUG&quot;">DEBUG</option><option value="&quot;NOTSET&quot;">NOTSET</option></select></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">overlay_transport</td>
+        <td>Overlay transport between peers: comma-separated list from 
+myudp,tcp,quic,ws. Multiple transports are supported simultaneously for 
+listening instances.</td>
+        <td class="mono">"myudp"</td>
+        <td><input class="config-editor mono" data-config-key="overlay_transport" value="&quot;myudp&quot;"></td>
+      </tr>
+    </tbody>
+        </table>
+      </div>
+    </section>
+  
+    <section class="config-section card">
+      <div class="section-header compact">
+        <div>
+          <h3>stats_board</h3>
+        </div>
+      </div>
+      <div class="table-wrap config-table-wrap">
+        <table class="conn-table">
+          <thead>
+            <tr>
+              <th>Key</th>
+              <th>Description</th>
+              <th>Default</th>
+              <th>Current (JSON)</th>
+            </tr>
+          </thead>
+          <tbody>
+      <tr>
+        <td class="mono">log_stats_board</td>
+        <td>Override log level for component 'stats_board'</td>
+        <td class="mono">null</td>
+        <td><select class="config-editor mono" data-config-key="log_stats_board"><option value="&quot;CRITICAL&quot;" selected="selected">CRITICAL</option><option value="&quot;ERROR&quot;">ERROR</option><option value="&quot;WARNING&quot;">WARNING</option><option value="&quot;INFO&quot;">INFO</option><option value="&quot;DEBUG&quot;">DEBUG</option><option value="&quot;NOTSET&quot;">NOTSET</option></select></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">no_dashboard</td>
+        <td>disable non-scrolling dashboard (print multiline blocks instead)</td>
+        <td class="mono">false</td>
+        <td><select class="config-editor mono" data-config-key="no_dashboard"><option value="true">true</option><option value="false" selected="selected">false</option></select></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">status</td>
+        <td>enable periodic status (default: on)</td>
+        <td class="mono">true</td>
+        <td><select class="config-editor mono" data-config-key="status"><option value="true" selected="selected">true</option><option value="false">false</option></select></td>
+      </tr>
+    </tbody>
+        </table>
+      </div>
+    </section>
+  
+    <section class="config-section card">
+      <div class="section-header compact">
+        <div>
+          <h3>tcp_session</h3>
+        </div>
+      </div>
+      <div class="table-wrap config-table-wrap">
+        <table class="conn-table">
+          <thead>
+            <tr>
+              <th>Key</th>
+              <th>Description</th>
+              <th>Default</th>
+              <th>Current (JSON)</th>
+            </tr>
+          </thead>
+          <tbody>
+      <tr>
+        <td class="mono">log_tcp_session</td>
+        <td>Override log level for component 'tcp_session'</td>
+        <td class="mono">null</td>
+        <td><select class="config-editor mono" data-config-key="log_tcp_session"><option value="&quot;CRITICAL&quot;" selected="selected">CRITICAL</option><option value="&quot;ERROR&quot;">ERROR</option><option value="&quot;WARNING&quot;">WARNING</option><option value="&quot;INFO&quot;">INFO</option><option value="&quot;DEBUG&quot;">DEBUG</option><option value="&quot;NOTSET&quot;">NOTSET</option></select></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">tcp_bind</td>
+        <td>TCP overlay bind address</td>
+        <td class="mono">"::"</td>
+        <td><input class="config-editor mono" data-config-key="tcp_bind" value="&quot;::&quot;"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">tcp_bp_latency_ms</td>
+        <td>TCP overlay: if &gt; 0, trigger drain after this latency (ms) whenever pending bytes exist.</td>
+        <td class="mono">300</td>
+        <td><input class="config-editor mono" data-config-key="tcp_bp_latency_ms" value="300"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">tcp_bp_poll_interval_ms</td>
+        <td>TCP overlay: polling interval for time-based backpressure checks (ms; default 50).</td>
+        <td class="mono">50</td>
+        <td><input class="config-editor mono" data-config-key="tcp_bp_poll_interval_ms" value="50"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">tcp_bp_wbuf_threshold</td>
+        <td>TCP overlay: write() buffer size threshold in bytes to signal drain (default 131072).</td>
+        <td class="mono">131072</td>
+        <td><input class="config-editor mono" data-config-key="tcp_bp_wbuf_threshold" value="131072"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">tcp_own_port</td>
+        <td>TCP overlay own port</td>
+        <td class="mono">8081</td>
+        <td><input class="config-editor mono" data-config-key="tcp_own_port" value="8081"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">tcp_peer</td>
+        <td>TCP peer IP/FQDN</td>
+        <td class="mono">null</td>
+        <td><input class="config-editor mono" data-config-key="tcp_peer" value="null"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">tcp_peer_port</td>
+        <td>TCP peer overlay port</td>
+        <td class="mono">8081</td>
+        <td><input class="config-editor mono" data-config-key="tcp_peer_port" value="443"></td>
+      </tr>
+    </tbody>
+        </table>
+      </div>
+    </section>
+  
+    <section class="config-section card">
+      <div class="section-header compact">
+        <div>
+          <h3>udp_session</h3>
+        </div>
+      </div>
+      <div class="table-wrap config-table-wrap">
+        <table class="conn-table">
+          <thead>
+            <tr>
+              <th>Key</th>
+              <th>Description</th>
+              <th>Default</th>
+              <th>Current (JSON)</th>
+            </tr>
+          </thead>
+          <tbody>
+      <tr>
+        <td class="mono">log_udp_session</td>
+        <td>Override log level for component 'udp_session'</td>
+        <td class="mono">null</td>
+        <td><select class="config-editor mono" data-config-key="log_udp_session"><option value="&quot;CRITICAL&quot;" selected="selected">CRITICAL</option><option value="&quot;ERROR&quot;">ERROR</option><option value="&quot;WARNING&quot;">WARNING</option><option value="&quot;INFO&quot;">INFO</option><option value="&quot;DEBUG&quot;">DEBUG</option><option value="&quot;NOTSET&quot;">NOTSET</option></select></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">max_inflight</td>
+        <td>max DATA frames allowed in flight (1..32767). Excess frames are queued.</td>
+        <td class="mono">32767</td>
+        <td><input class="config-editor mono" data-config-key="max_inflight" value="32767"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">peer_resolve_family</td>
+        <td>Peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.</td>
+        <td class="mono">"prefer-ipv6"</td>
+        <td><select class="config-editor mono" data-config-key="peer_resolve_family"><option value="&quot;prefer-ipv6&quot;" selected="selected">prefer-ipv6</option><option value="&quot;ipv4&quot;">ipv4</option><option value="&quot;ipv6&quot;">ipv6</option></select></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">udp_bind</td>
+        <td>overlay bind address (IPv4 '0.0.0.0' or IPv6 '::')</td>
+        <td class="mono">"::"</td>
+        <td><input class="config-editor mono" data-config-key="udp_bind" value="&quot;0.0.0.0&quot;"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">udp_own_port</td>
+        <td>overlay own port</td>
+        <td class="mono">4433</td>
+        <td><input class="config-editor mono" data-config-key="udp_own_port" value="0"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">udp_peer</td>
+        <td>peer IP/FQDN (IPv4 or IPv6 literal; IPv6 may be in [brackets])</td>
+        <td class="mono">null</td>
+        <td><input class="config-editor mono" data-config-key="udp_peer" value="&quot;obstaclebridge.bkp.ohnoohweh.synology.me&quot;"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">udp_peer_port</td>
+        <td>peer overlay port</td>
+        <td class="mono">4433</td>
+        <td><input class="config-editor mono" data-config-key="udp_peer_port" value="4443"></td>
+      </tr>
+    </tbody>
+        </table>
+      </div>
+    </section>
+  
+    <section class="config-section card">
+      <div class="section-header compact">
+        <div>
+          <h3>ws_session</h3>
+        </div>
+      </div>
+      <div class="table-wrap config-table-wrap">
+        <table class="conn-table">
+          <thead>
+            <tr>
+              <th>Key</th>
+              <th>Description</th>
+              <th>Default</th>
+              <th>Current (JSON)</th>
+            </tr>
+          </thead>
+          <tbody>
+      <tr>
+        <td class="mono">log_ws_session</td>
+        <td>Override log level for component 'ws_session'</td>
+        <td class="mono">null</td>
+        <td><select class="config-editor mono" data-config-key="log_ws_session"><option value="&quot;CRITICAL&quot;">CRITICAL</option><option value="&quot;ERROR&quot;">ERROR</option><option value="&quot;WARNING&quot;">WARNING</option><option value="&quot;INFO&quot;">INFO</option><option value="&quot;DEBUG&quot;" selected="selected">DEBUG</option><option value="&quot;NOTSET&quot;">NOTSET</option></select></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">ws_bind</td>
+        <td>WebSocket overlay bind address</td>
+        <td class="mono">"::"</td>
+        <td><input class="config-editor mono" data-config-key="ws_bind" value="&quot;::&quot;"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">ws_max_size</td>
+        <td>Maximum binary message size to accept/send (default 65535).</td>
+        <td class="mono">65535</td>
+        <td><input class="config-editor mono" data-config-key="ws_max_size" value="65535"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">ws_own_port</td>
+        <td>WebSocket overlay own port</td>
+        <td class="mono">8080</td>
+        <td><input class="config-editor mono" data-config-key="ws_own_port" value="8080"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">ws_path</td>
+        <td>WebSocket HTTP path (default /)</td>
+        <td class="mono">"/"</td>
+        <td><input class="config-editor mono" data-config-key="ws_path" value="&quot;/&quot;"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">ws_payload_mode</td>
+        <td>WebSocket payload transfer mode: raw binary frames 
+(default), base64 text frames, or JSON text frames with the base64 
+payload in the data field.</td>
+        <td class="mono">"binary"</td>
+        <td><select class="config-editor mono" data-config-key="ws_payload_mode"><option value="&quot;base64&quot;">base64</option><option value="&quot;binary&quot;" selected="selected">binary</option><option value="&quot;json-base64&quot;">json-base64</option></select></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">ws_peer</td>
+        <td>WebSocket peer IP/FQDN</td>
+        <td class="mono">null</td>
+        <td><input class="config-editor mono" data-config-key="ws_peer" value="&quot;obstaclebridge.ohnoohweh.synology.me&quot;"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">ws_peer_port</td>
+        <td>WebSocket peer overlay port</td>
+        <td class="mono">8080</td>
+        <td><input class="config-editor mono" data-config-key="ws_peer_port" value="8080"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">ws_reconnect_grace</td>
+        <td>Seconds to wait before reporting DISCONNECTED after WS transport loss (default 3.0).</td>
+        <td class="mono">3</td>
+        <td><input class="config-editor mono" data-config-key="ws_reconnect_grace" value="3"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">ws_send_timeout</td>
+        <td>Seconds to wait for a WebSocket frame send before forcing reconnect (default 3.0).</td>
+        <td class="mono">3</td>
+        <td><input class="config-editor mono" data-config-key="ws_send_timeout" value="3"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">ws_static_dir</td>
+        <td>Directory to serve as a static web root on the WS port (default ./web). Set to '' to disable.</td>
+        <td class="mono">"./web"</td>
+        <td><input class="config-editor mono" data-config-key="ws_static_dir" value="&quot;./web&quot;"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">ws_subprotocol</td>
+        <td>Optional WebSocket subprotocol (e.g. mux2)</td>
+        <td class="mono">null</td>
+        <td><input class="config-editor mono" data-config-key="ws_subprotocol" value="null"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">ws_tcp_user_timeout_ms</td>
+        <td>TCP_USER_TIMEOUT in milliseconds for WebSocket sockets (default 10000, 0 disables).</td>
+        <td class="mono">10000</td>
+        <td><input class="config-editor mono" data-config-key="ws_tcp_user_timeout_ms" value="10000"></td>
+      </tr>
+    
+      <tr>
+        <td class="mono">ws_tls</td>
+        <td>Use TLS (wss://). Provide cert/key via your deployment.</td>
+        <td class="mono">false</td>
+        <td><select class="config-editor mono" data-config-key="ws_tls"><option value="true">true</option><option value="false" selected="selected">false</option></select></td>
+      </tr>
+    </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+          </section>
+        </section>
+
+        <section id="tab-logs" class="tab-panel">
+          <section class="section-block card">
+            <div class="section-header compact">
+              <div>
+                <h2>Debug Logs</h2>
+                <p>Latest in-memory debug/application logs captured from runtime.</p>
+              </div>
+              <button id="logsReloadBtn" class="btn btn-secondary" type="button">Reload</button>
+            </div>
+            <pre id="debugLogs" class="meta-box">2026-04-01 00:35:45,722 INFO channel_mux: [TCP/SRV] chan=3651 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:45,722 INFO channel_mux: [APP] TCP:3651 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:45,722 INFO channel_mux: [TCP/SRV] chan=3651 CLOSE teardown complete map_size=0
+2026-04-01 00:35:45,729 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:45,730 INFO channel_mux: [APP] TCP:3651 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:45,730 INFO channel_mux: [TCP] chan=3651 CLOSE =&gt; local teardown map_size=0
+2026-04-01 00:35:46,383 DEBUG channel_mux: [TCP/SRV] alloc chan=3653 next=3655 active=0
+2026-04-01 00:35:46,383 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 36042) -&gt; chan=3653 svc=3 map_size=1
+2026-04-01 00:35:46,383 INFO channel_mux: [APP] TCP:3653 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:46,384 DEBUG channel_mux: [NET] TCP:3653 &lt;-  127.0.0.1:36042 -&gt; 127.0.0.1:18081  len=411:  474554202F
+2026-04-01 00:35:46,384 DEBUG channel_mux: [APP] TCP:3653 -&gt; CNT:1 DATA len=411:  474554202F
+2026-04-01 00:35:46,384 DEBUG channel_mux: [TCP/SRV] chan=3653 local-&gt;overlay 411B
+2026-04-01 00:35:46,697 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:46,697 DEBUG channel_mux: [APP] TCP:3653 &lt;- CNT:1 DATA len=293:  485454502F
+2026-04-01 00:35:46,697 DEBUG channel_mux: [TCP] chan=3653 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=1
+2026-04-01 00:35:46,697 DEBUG channel_mux: [NET] TCP:3653 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:36042  len=293:  485454502F
+2026-04-01 00:35:46,697 DEBUG channel_mux: [TCP] chan=3653 overlay-&gt;local 293B
+2026-04-01 00:35:46,698 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:46,698 INFO channel_mux: [APP] TCP:3653 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:46,698 INFO channel_mux: [TCP] chan=3653 CLOSE =&gt; local teardown map_size=0
+2026-04-01 00:35:46,698 INFO channel_mux: [TCP/SRV] chan=3653 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:46,698 INFO channel_mux: [APP] TCP:3653 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:46,698 INFO channel_mux: [TCP/SRV] chan=3653 CLOSE teardown complete map_size=0
+2026-04-01 00:35:47,383 DEBUG channel_mux: [TCP/SRV] alloc chan=3655 next=3657 active=0
+2026-04-01 00:35:47,383 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 36056) -&gt; chan=3655 svc=3 map_size=1
+2026-04-01 00:35:47,384 INFO channel_mux: [APP] TCP:3655 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:47,384 DEBUG channel_mux: [TCP/SRV] alloc chan=3657 next=3659 active=1
+2026-04-01 00:35:47,384 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 36070) -&gt; chan=3657 svc=3 map_size=2
+2026-04-01 00:35:47,384 INFO channel_mux: [APP] TCP:3657 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:47,384 DEBUG channel_mux: [TCP/SRV] alloc chan=3659 next=3661 active=2
+2026-04-01 00:35:47,384 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 36074) -&gt; chan=3659 svc=3 map_size=3
+2026-04-01 00:35:47,384 INFO channel_mux: [APP] TCP:3659 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:47,384 DEBUG channel_mux: [TCP/SRV] alloc chan=3661 next=3663 active=3
+2026-04-01 00:35:47,384 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 36080) -&gt; chan=3661 svc=3 map_size=4
+2026-04-01 00:35:47,384 INFO channel_mux: [APP] TCP:3661 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:47,385 DEBUG channel_mux: [NET] TCP:3655 &lt;-  127.0.0.1:36056 -&gt; 127.0.0.1:18081  len=413:  474554202F
+2026-04-01 00:35:47,385 DEBUG channel_mux: [APP] TCP:3655 -&gt; CNT:1 DATA len=413:  474554202F
+2026-04-01 00:35:47,385 DEBUG channel_mux: [TCP/SRV] chan=3655 local-&gt;overlay 413B
+2026-04-01 00:35:47,385 DEBUG channel_mux: [NET] TCP:3657 &lt;-  127.0.0.1:36070 -&gt; 127.0.0.1:18081  len=418:  474554202F
+2026-04-01 00:35:47,385 DEBUG channel_mux: [APP] TCP:3657 -&gt; CNT:1 DATA len=418:  474554202F
+2026-04-01 00:35:47,385 DEBUG channel_mux: [TCP/SRV] chan=3657 local-&gt;overlay 418B
+2026-04-01 00:35:47,385 DEBUG channel_mux: [NET] TCP:3659 &lt;-  127.0.0.1:36074 -&gt; 127.0.0.1:18081  len=412:  474554202F
+2026-04-01 00:35:47,385 DEBUG channel_mux: [APP] TCP:3659 -&gt; CNT:1 DATA len=412:  474554202F
+2026-04-01 00:35:47,385 DEBUG channel_mux: [TCP/SRV] chan=3659 local-&gt;overlay 412B
+2026-04-01 00:35:47,385 DEBUG channel_mux: [NET] TCP:3661 &lt;-  127.0.0.1:36080 -&gt; 127.0.0.1:18081  len=421:  474554202F
+2026-04-01 00:35:47,385 DEBUG channel_mux: [APP] TCP:3661 -&gt; CNT:1 DATA len=421:  474554202F
+2026-04-01 00:35:47,385 DEBUG channel_mux: [TCP/SRV] chan=3661 local-&gt;overlay 421B
+2026-04-01 00:35:47,727 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:47,727 DEBUG channel_mux: [APP] TCP:3655 &lt;- CNT:1 DATA len=1579:  485454502F
+2026-04-01 00:35:47,727 DEBUG channel_mux: [TCP] chan=3655 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=4
+2026-04-01 00:35:47,728 DEBUG channel_mux: [NET] TCP:3655 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:36056  len=1579:  485454502F
+2026-04-01 00:35:47,728 DEBUG channel_mux: [TCP] chan=3655 overlay-&gt;local 1579B
+2026-04-01 00:35:47,729 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:47,729 INFO channel_mux: [APP] TCP:3655 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:47,729 INFO channel_mux: [TCP] chan=3655 CLOSE =&gt; local teardown map_size=3
+2026-04-01 00:35:47,730 INFO channel_mux: [TCP/SRV] chan=3655 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:47,730 INFO channel_mux: [APP] TCP:3655 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:47,730 INFO channel_mux: [TCP/SRV] chan=3655 CLOSE teardown complete map_size=3
+2026-04-01 00:35:47,731 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:47,731 DEBUG channel_mux: [APP] TCP:3657 &lt;- CNT:1 DATA len=3372:  485454502F
+2026-04-01 00:35:47,731 DEBUG channel_mux: [TCP] chan=3657 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=3
+2026-04-01 00:35:47,731 DEBUG channel_mux: [NET] TCP:3657 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:36070  len=3372:  485454502F
+2026-04-01 00:35:47,731 DEBUG channel_mux: [TCP] chan=3657 overlay-&gt;local 3372B
+2026-04-01 00:35:47,731 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:47,731 INFO channel_mux: [APP] TCP:3657 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:47,731 INFO channel_mux: [TCP] chan=3657 CLOSE =&gt; local teardown map_size=2
+2026-04-01 00:35:47,732 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:47,732 DEBUG channel_mux: [APP] TCP:3659 &lt;- CNT:1 DATA len=1189:  485454502F
+2026-04-01 00:35:47,732 DEBUG channel_mux: [TCP] chan=3659 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=2
+2026-04-01 00:35:47,732 DEBUG channel_mux: [NET] TCP:3659 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:36074  len=1189:  485454502F
+2026-04-01 00:35:47,732 DEBUG channel_mux: [TCP] chan=3659 overlay-&gt;local 1189B
+2026-04-01 00:35:47,732 INFO channel_mux: [TCP/SRV] chan=3657 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:47,732 INFO channel_mux: [APP] TCP:3657 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:47,732 INFO channel_mux: [TCP/SRV] chan=3657 CLOSE teardown complete map_size=2
+2026-04-01 00:35:47,733 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:47,733 INFO channel_mux: [APP] TCP:3659 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:47,733 INFO channel_mux: [TCP] chan=3659 CLOSE =&gt; local teardown map_size=1
+2026-04-01 00:35:47,734 INFO channel_mux: [TCP/SRV] chan=3659 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:47,734 INFO channel_mux: [APP] TCP:3659 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:47,734 INFO channel_mux: [TCP/SRV] chan=3659 CLOSE teardown complete map_size=1
+2026-04-01 00:35:48,244 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:48,244 DEBUG channel_mux: [APP] TCP:3661 &lt;- CNT:1 DATA len=58707:  485454502F
+2026-04-01 00:35:48,244 DEBUG channel_mux: [TCP] chan=3661 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=1
+2026-04-01 00:35:48,244 DEBUG channel_mux: [NET] TCP:3661 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:36080  len=58707:  485454502F
+2026-04-01 00:35:48,244 DEBUG channel_mux: [TCP] chan=3661 overlay-&gt;local 58707B
+2026-04-01 00:35:48,247 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:48,247 INFO channel_mux: [APP] TCP:3661 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:48,247 INFO channel_mux: [TCP] chan=3661 CLOSE =&gt; local teardown map_size=0
+2026-04-01 00:35:48,250 INFO channel_mux: [TCP/SRV] chan=3661 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:48,250 INFO channel_mux: [APP] TCP:3661 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:48,251 INFO channel_mux: [TCP/SRV] chan=3661 CLOSE teardown complete map_size=0
+2026-04-01 00:35:48,418 DEBUG channel_mux: [TCP/SRV] alloc chan=3663 next=3665 active=0
+2026-04-01 00:35:48,418 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 36086) -&gt; chan=3663 svc=3 map_size=1
+2026-04-01 00:35:48,418 INFO channel_mux: [APP] TCP:3663 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:48,418 DEBUG channel_mux: [TCP/SRV] alloc chan=3665 next=3667 active=1
+2026-04-01 00:35:48,418 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 36098) -&gt; chan=3665 svc=3 map_size=2
+2026-04-01 00:35:48,418 INFO channel_mux: [APP] TCP:3665 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:48,418 DEBUG channel_mux: [TCP/SRV] alloc chan=3667 next=3669 active=2
+2026-04-01 00:35:48,418 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 36104) -&gt; chan=3667 svc=3 map_size=3
+2026-04-01 00:35:48,418 INFO channel_mux: [APP] TCP:3667 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:48,419 DEBUG channel_mux: [NET] TCP:3663 &lt;-  127.0.0.1:36086 -&gt; 127.0.0.1:18081  len=413:  474554202F
+2026-04-01 00:35:48,419 DEBUG channel_mux: [APP] TCP:3663 -&gt; CNT:1 DATA len=413:  474554202F
+2026-04-01 00:35:48,419 DEBUG channel_mux: [TCP/SRV] chan=3663 local-&gt;overlay 413B
+2026-04-01 00:35:48,420 DEBUG channel_mux: [NET] TCP:3665 &lt;-  127.0.0.1:36098 -&gt; 127.0.0.1:18081  len=418:  474554202F
+2026-04-01 00:35:48,420 DEBUG channel_mux: [APP] TCP:3665 -&gt; CNT:1 DATA len=418:  474554202F
+2026-04-01 00:35:48,420 DEBUG channel_mux: [TCP/SRV] chan=3665 local-&gt;overlay 418B
+2026-04-01 00:35:48,420 DEBUG channel_mux: [NET] TCP:3667 &lt;-  127.0.0.1:36104 -&gt; 127.0.0.1:18081  len=412:  474554202F
+2026-04-01 00:35:48,420 DEBUG channel_mux: [APP] TCP:3667 -&gt; CNT:1 DATA len=412:  474554202F
+2026-04-01 00:35:48,420 DEBUG channel_mux: [TCP/SRV] chan=3667 local-&gt;overlay 412B
+2026-04-01 00:35:48,749 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:48,749 DEBUG channel_mux: [APP] TCP:3663 &lt;- CNT:1 DATA len=1579:  485454502F
+2026-04-01 00:35:48,749 DEBUG channel_mux: [TCP] chan=3663 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=3
+2026-04-01 00:35:48,749 DEBUG channel_mux: [NET] TCP:3663 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:36086  len=1579:  485454502F
+2026-04-01 00:35:48,749 DEBUG channel_mux: [TCP] chan=3663 overlay-&gt;local 1579B
+2026-04-01 00:35:48,749 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:48,749 INFO channel_mux: [APP] TCP:3663 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:48,749 INFO channel_mux: [TCP] chan=3663 CLOSE =&gt; local teardown map_size=2
+2026-04-01 00:35:48,750 INFO channel_mux: [TCP/SRV] chan=3663 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:48,750 INFO channel_mux: [APP] TCP:3663 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:48,750 INFO channel_mux: [TCP/SRV] chan=3663 CLOSE teardown complete map_size=2
+2026-04-01 00:35:48,750 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:48,750 DEBUG channel_mux: [APP] TCP:3665 &lt;- CNT:1 DATA len=2862:  485454502F
+2026-04-01 00:35:48,750 DEBUG channel_mux: [TCP] chan=3665 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=2
+2026-04-01 00:35:48,751 DEBUG channel_mux: [NET] TCP:3665 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:36098  len=2862:  485454502F
+2026-04-01 00:35:48,751 DEBUG channel_mux: [TCP] chan=3665 overlay-&gt;local 2862B
+2026-04-01 00:35:48,751 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:48,751 INFO channel_mux: [APP] TCP:3665 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:48,751 INFO channel_mux: [TCP] chan=3665 CLOSE =&gt; local teardown map_size=1
+2026-04-01 00:35:48,751 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:48,751 DEBUG channel_mux: [APP] TCP:3667 &lt;- CNT:1 DATA len=1189:  485454502F
+2026-04-01 00:35:48,751 DEBUG channel_mux: [TCP] chan=3667 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=1
+2026-04-01 00:35:48,751 DEBUG channel_mux: [NET] TCP:3667 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:36104  len=1189:  485454502F
+2026-04-01 00:35:48,752 DEBUG channel_mux: [TCP] chan=3667 overlay-&gt;local 1189B
+2026-04-01 00:35:48,752 INFO channel_mux: [TCP/SRV] chan=3665 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:48,752 INFO channel_mux: [APP] TCP:3665 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:48,752 INFO channel_mux: [TCP/SRV] chan=3665 CLOSE teardown complete map_size=1
+2026-04-01 00:35:48,752 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:48,752 INFO channel_mux: [APP] TCP:3667 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:48,752 INFO channel_mux: [TCP] chan=3667 CLOSE =&gt; local teardown map_size=0
+2026-04-01 00:35:48,753 INFO channel_mux: [TCP/SRV] chan=3667 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:48,753 INFO channel_mux: [APP] TCP:3667 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:48,753 INFO channel_mux: [TCP/SRV] chan=3667 CLOSE teardown complete map_size=0
+2026-04-01 00:35:49,415 DEBUG channel_mux: [TCP/SRV] alloc chan=3669 next=3671 active=0
+2026-04-01 00:35:49,415 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 36108) -&gt; chan=3669 svc=3 map_size=1
+2026-04-01 00:35:49,416 INFO channel_mux: [APP] TCP:3669 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:49,416 DEBUG channel_mux: [NET] TCP:3669 &lt;-  127.0.0.1:36108 -&gt; 127.0.0.1:18081  len=421:  474554202F
+2026-04-01 00:35:49,416 DEBUG channel_mux: [APP] TCP:3669 -&gt; CNT:1 DATA len=421:  474554202F
+2026-04-01 00:35:49,416 DEBUG channel_mux: [TCP/SRV] chan=3669 local-&gt;overlay 421B
+2026-04-01 00:35:49,416 DEBUG channel_mux: [TCP/SRV] alloc chan=3671 next=3673 active=1
+2026-04-01 00:35:49,416 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 36120) -&gt; chan=3671 svc=3 map_size=2
+2026-04-01 00:35:49,416 INFO channel_mux: [APP] TCP:3671 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:49,416 DEBUG channel_mux: [NET] TCP:3671 &lt;-  127.0.0.1:36120 -&gt; 127.0.0.1:18081  len=413:  474554202F
+2026-04-01 00:35:49,416 DEBUG channel_mux: [APP] TCP:3671 -&gt; CNT:1 DATA len=413:  474554202F
+2026-04-01 00:35:49,416 DEBUG channel_mux: [TCP/SRV] chan=3671 local-&gt;overlay 413B
+2026-04-01 00:35:50,079 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:50,079 DEBUG channel_mux: [APP] TCP:3669 &lt;- CNT:1 DATA len=58671:  485454502F
+2026-04-01 00:35:50,079 DEBUG channel_mux: [TCP] chan=3669 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=2
+2026-04-01 00:35:50,079 DEBUG channel_mux: [NET] TCP:3669 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:36108  len=58671:  485454502F
+2026-04-01 00:35:50,079 DEBUG channel_mux: [TCP] chan=3669 overlay-&gt;local 58671B
+2026-04-01 00:35:50,079 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:50,079 INFO channel_mux: [APP] TCP:3669 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:50,079 INFO channel_mux: [TCP] chan=3669 CLOSE =&gt; local teardown map_size=1
+2026-04-01 00:35:50,079 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:50,079 DEBUG channel_mux: [APP] TCP:3671 &lt;- CNT:1 DATA len=1586:  485454502F
+2026-04-01 00:35:50,079 DEBUG channel_mux: [TCP] chan=3671 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=1
+2026-04-01 00:35:50,079 DEBUG channel_mux: [NET] TCP:3671 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:36120  len=1586:  485454502F
+2026-04-01 00:35:50,079 DEBUG channel_mux: [TCP] chan=3671 overlay-&gt;local 1586B
+2026-04-01 00:35:50,079 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:50,079 INFO channel_mux: [APP] TCP:3671 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:50,079 INFO channel_mux: [TCP] chan=3671 CLOSE =&gt; local teardown map_size=0
+2026-04-01 00:35:50,084 INFO channel_mux: [TCP/SRV] chan=3669 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:50,084 INFO channel_mux: [APP] TCP:3669 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:50,084 INFO channel_mux: [TCP/SRV] chan=3669 CLOSE teardown complete map_size=0
+2026-04-01 00:35:50,084 INFO channel_mux: [TCP/SRV] chan=3671 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:50,085 INFO channel_mux: [APP] TCP:3671 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:50,085 INFO channel_mux: [TCP/SRV] chan=3671 CLOSE teardown complete map_size=0
+2026-04-01 00:35:50,417 DEBUG channel_mux: [TCP/SRV] alloc chan=3673 next=3675 active=0
+2026-04-01 00:35:50,417 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 36130) -&gt; chan=3673 svc=3 map_size=1
+2026-04-01 00:35:50,417 INFO channel_mux: [APP] TCP:3673 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:50,417 DEBUG channel_mux: [TCP/SRV] alloc chan=3675 next=3677 active=1
+2026-04-01 00:35:50,417 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 36132) -&gt; chan=3675 svc=3 map_size=2
+2026-04-01 00:35:50,417 INFO channel_mux: [APP] TCP:3675 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:50,418 DEBUG channel_mux: [NET] TCP:3673 &lt;-  127.0.0.1:36130 -&gt; 127.0.0.1:18081  len=418:  474554202F
+2026-04-01 00:35:50,418 DEBUG channel_mux: [APP] TCP:3673 -&gt; CNT:1 DATA len=418:  474554202F
+2026-04-01 00:35:50,418 DEBUG channel_mux: [TCP/SRV] chan=3673 local-&gt;overlay 418B
+2026-04-01 00:35:50,418 DEBUG channel_mux: [NET] TCP:3675 &lt;-  127.0.0.1:36132 -&gt; 127.0.0.1:18081  len=412:  474554202F
+2026-04-01 00:35:50,418 DEBUG channel_mux: [APP] TCP:3675 -&gt; CNT:1 DATA len=412:  474554202F
+2026-04-01 00:35:50,418 DEBUG channel_mux: [TCP/SRV] chan=3675 local-&gt;overlay 412B
+2026-04-01 00:35:50,697 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:50,697 DEBUG channel_mux: [APP] TCP:3673 &lt;- CNT:1 DATA len=2352:  485454502F
+2026-04-01 00:35:50,697 DEBUG channel_mux: [TCP] chan=3673 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=2
+2026-04-01 00:35:50,697 DEBUG channel_mux: [NET] TCP:3673 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:36130  len=2352:  485454502F
+2026-04-01 00:35:50,697 DEBUG channel_mux: [TCP] chan=3673 overlay-&gt;local 2352B
+2026-04-01 00:35:50,699 INFO channel_mux: [TCP/SRV] chan=3673 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:50,699 INFO channel_mux: [APP] TCP:3673 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:50,702 INFO channel_mux: [TCP/SRV] chan=3673 CLOSE teardown complete map_size=1
+2026-04-01 00:35:50,704 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:50,704 INFO channel_mux: [APP] TCP:3673 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:50,704 INFO channel_mux: [TCP] chan=3673 CLOSE =&gt; local teardown map_size=1
+2026-04-01 00:35:50,705 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:50,705 DEBUG channel_mux: [APP] TCP:3675 &lt;- CNT:1 DATA len=1196:  485454502F
+2026-04-01 00:35:50,705 DEBUG channel_mux: [TCP] chan=3675 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=1
+2026-04-01 00:35:50,705 DEBUG channel_mux: [NET] TCP:3675 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:36132  len=1196:  485454502F
+2026-04-01 00:35:50,705 DEBUG channel_mux: [TCP] chan=3675 overlay-&gt;local 1196B
+2026-04-01 00:35:50,707 INFO channel_mux: [TCP/SRV] chan=3675 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:50,707 INFO channel_mux: [APP] TCP:3675 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:50,709 INFO channel_mux: [TCP/SRV] chan=3675 CLOSE teardown complete map_size=0
+2026-04-01 00:35:50,709 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:50,710 INFO channel_mux: [APP] TCP:3675 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:50,710 INFO channel_mux: [TCP] chan=3675 CLOSE =&gt; local teardown map_size=0
+2026-04-01 00:35:51,418 DEBUG channel_mux: [TCP/SRV] alloc chan=3677 next=3679 active=0
+2026-04-01 00:35:51,418 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 36138) -&gt; chan=3677 svc=3 map_size=1
+2026-04-01 00:35:51,418 INFO channel_mux: [APP] TCP:3677 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:51,418 DEBUG channel_mux: [NET] TCP:3677 &lt;-  127.0.0.1:36138 -&gt; 127.0.0.1:18081  len=413:  474554202F
+2026-04-01 00:35:51,418 DEBUG channel_mux: [APP] TCP:3677 -&gt; CNT:1 DATA len=413:  474554202F
+2026-04-01 00:35:51,418 DEBUG channel_mux: [TCP/SRV] chan=3677 local-&gt;overlay 413B
+2026-04-01 00:35:51,423 DEBUG channel_mux: [TCP/SRV] alloc chan=3679 next=3681 active=1
+2026-04-01 00:35:51,423 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 36140) -&gt; chan=3679 svc=3 map_size=2
+2026-04-01 00:35:51,424 INFO channel_mux: [APP] TCP:3679 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:51,424 DEBUG channel_mux: [TCP/SRV] alloc chan=3681 next=3683 active=2
+2026-04-01 00:35:51,424 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 36148) -&gt; chan=3681 svc=3 map_size=3
+2026-04-01 00:35:51,424 INFO channel_mux: [APP] TCP:3681 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:51,427 DEBUG channel_mux: [NET] TCP:3679 &lt;-  127.0.0.1:36140 -&gt; 127.0.0.1:18081  len=411:  474554202F
+2026-04-01 00:35:51,427 DEBUG channel_mux: [APP] TCP:3679 -&gt; CNT:1 DATA len=411:  474554202F
+2026-04-01 00:35:51,427 DEBUG channel_mux: [TCP/SRV] chan=3679 local-&gt;overlay 411B
+2026-04-01 00:35:51,427 DEBUG channel_mux: [NET] TCP:3681 &lt;-  127.0.0.1:36148 -&gt; 127.0.0.1:18081  len=421:  474554202F
+2026-04-01 00:35:51,427 DEBUG channel_mux: [APP] TCP:3681 -&gt; CNT:1 DATA len=421:  474554202F
+2026-04-01 00:35:51,427 DEBUG channel_mux: [TCP/SRV] chan=3681 local-&gt;overlay 421B
+2026-04-01 00:35:51,429 DEBUG channel_mux: [TCP/SRV] alloc chan=3683 next=3685 active=3
+2026-04-01 00:35:51,429 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 36164) -&gt; chan=3683 svc=3 map_size=4
+2026-04-01 00:35:51,429 INFO channel_mux: [APP] TCP:3683 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:51,429 DEBUG channel_mux: [TCP/SRV] alloc chan=3685 next=3687 active=4
+2026-04-01 00:35:51,429 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 36172) -&gt; chan=3685 svc=3 map_size=5
+2026-04-01 00:35:51,429 INFO channel_mux: [APP] TCP:3685 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:51,432 DEBUG channel_mux: [NET] TCP:3683 &lt;-  127.0.0.1:36164 -&gt; 127.0.0.1:18081  len=418:  474554202F
+2026-04-01 00:35:51,432 DEBUG channel_mux: [APP] TCP:3683 -&gt; CNT:1 DATA len=418:  474554202F
+2026-04-01 00:35:51,432 DEBUG channel_mux: [TCP/SRV] chan=3683 local-&gt;overlay 418B
+2026-04-01 00:35:51,432 DEBUG channel_mux: [NET] TCP:3685 &lt;-  127.0.0.1:36172 -&gt; 127.0.0.1:18081  len=412:  474554202F
+2026-04-01 00:35:51,432 DEBUG channel_mux: [APP] TCP:3685 -&gt; CNT:1 DATA len=412:  474554202F
+2026-04-01 00:35:51,432 DEBUG channel_mux: [TCP/SRV] chan=3685 local-&gt;overlay 412B
+2026-04-01 00:35:51,715 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:51,716 DEBUG channel_mux: [APP] TCP:3677 &lt;- CNT:1 DATA len=1575:  485454502F
+2026-04-01 00:35:51,716 DEBUG channel_mux: [TCP] chan=3677 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=5
+2026-04-01 00:35:51,716 DEBUG channel_mux: [NET] TCP:3677 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:36138  len=1575:  485454502F
+2026-04-01 00:35:51,716 DEBUG channel_mux: [TCP] chan=3677 overlay-&gt;local 1575B
+2026-04-01 00:35:51,716 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:51,716 INFO channel_mux: [APP] TCP:3677 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:51,716 INFO channel_mux: [TCP] chan=3677 CLOSE =&gt; local teardown map_size=4
+2026-04-01 00:35:51,716 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:51,716 DEBUG channel_mux: [APP] TCP:3679 &lt;- CNT:1 DATA len=293:  485454502F
+2026-04-01 00:35:51,716 DEBUG channel_mux: [TCP] chan=3679 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=4
+2026-04-01 00:35:51,716 DEBUG channel_mux: [NET] TCP:3679 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:36140  len=293:  485454502F
+2026-04-01 00:35:51,717 DEBUG channel_mux: [TCP] chan=3679 overlay-&gt;local 293B
+2026-04-01 00:35:51,717 INFO channel_mux: [TCP/SRV] chan=3677 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:51,717 INFO channel_mux: [APP] TCP:3677 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:51,717 INFO channel_mux: [TCP/SRV] chan=3677 CLOSE teardown complete map_size=4
+2026-04-01 00:35:51,717 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:51,717 INFO channel_mux: [APP] TCP:3679 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:51,717 INFO channel_mux: [TCP] chan=3679 CLOSE =&gt; local teardown map_size=3
+2026-04-01 00:35:51,719 INFO channel_mux: [TCP/SRV] chan=3679 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:51,719 INFO channel_mux: [APP] TCP:3679 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:51,719 INFO channel_mux: [TCP/SRV] chan=3679 CLOSE teardown complete map_size=3
+2026-04-01 00:35:51,961 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:51,961 DEBUG channel_mux: [APP] TCP:3681 &lt;- CNT:1 DATA len=59207:  485454502F
+2026-04-01 00:35:51,961 DEBUG channel_mux: [TCP] chan=3681 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=3
+2026-04-01 00:35:51,961 DEBUG channel_mux: [NET] TCP:3681 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:36148  len=59207:  485454502F
+2026-04-01 00:35:51,961 DEBUG channel_mux: [TCP] chan=3681 overlay-&gt;local 59207B
+2026-04-01 00:35:51,961 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:51,961 INFO channel_mux: [APP] TCP:3681 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:51,961 INFO channel_mux: [TCP] chan=3681 CLOSE =&gt; local teardown map_size=2
+2026-04-01 00:35:51,961 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:51,961 DEBUG channel_mux: [APP] TCP:3683 &lt;- CNT:1 DATA len=3378:  485454502F
+2026-04-01 00:35:51,961 DEBUG channel_mux: [TCP] chan=3683 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=2
+2026-04-01 00:35:51,961 DEBUG channel_mux: [NET] TCP:3683 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:36164  len=3378:  485454502F
+2026-04-01 00:35:51,961 DEBUG channel_mux: [TCP] chan=3683 overlay-&gt;local 3378B
+2026-04-01 00:35:51,961 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:51,961 INFO channel_mux: [APP] TCP:3683 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:51,961 INFO channel_mux: [TCP] chan=3683 CLOSE =&gt; local teardown map_size=1
+2026-04-01 00:35:51,961 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:51,961 DEBUG channel_mux: [APP] TCP:3685 &lt;- CNT:1 DATA len=1190:  485454502F
+2026-04-01 00:35:51,961 DEBUG channel_mux: [TCP] chan=3685 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=1
+2026-04-01 00:35:51,962 DEBUG channel_mux: [NET] TCP:3685 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:36172  len=1190:  485454502F
+2026-04-01 00:35:51,962 DEBUG channel_mux: [TCP] chan=3685 overlay-&gt;local 1190B
+2026-04-01 00:35:51,962 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:51,962 INFO channel_mux: [APP] TCP:3685 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:51,962 INFO channel_mux: [TCP] chan=3685 CLOSE =&gt; local teardown map_size=0
+2026-04-01 00:35:51,962 INFO channel_mux: [TCP/SRV] chan=3681 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:51,962 INFO channel_mux: [APP] TCP:3681 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:51,962 INFO channel_mux: [TCP/SRV] chan=3681 CLOSE teardown complete map_size=0
+2026-04-01 00:35:51,962 INFO channel_mux: [TCP/SRV] chan=3683 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:51,962 INFO channel_mux: [APP] TCP:3683 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:51,962 INFO channel_mux: [TCP/SRV] chan=3683 CLOSE teardown complete map_size=0
+2026-04-01 00:35:51,962 INFO channel_mux: [TCP/SRV] chan=3685 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:51,962 INFO channel_mux: [APP] TCP:3685 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:51,962 INFO channel_mux: [TCP/SRV] chan=3685 CLOSE teardown complete map_size=0
+2026-04-01 00:35:52,418 DEBUG channel_mux: [TCP/SRV] alloc chan=3687 next=3689 active=0
+2026-04-01 00:35:52,418 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 36174) -&gt; chan=3687 svc=3 map_size=1
+2026-04-01 00:35:52,419 INFO channel_mux: [APP] TCP:3687 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:52,419 DEBUG channel_mux: [NET] TCP:3687 &lt;-  127.0.0.1:36174 -&gt; 127.0.0.1:18081  len=413:  474554202F
+2026-04-01 00:35:52,419 DEBUG channel_mux: [APP] TCP:3687 -&gt; CNT:1 DATA len=413:  474554202F
+2026-04-01 00:35:52,419 DEBUG channel_mux: [TCP/SRV] chan=3687 local-&gt;overlay 413B
+2026-04-01 00:35:52,419 DEBUG channel_mux: [TCP/SRV] alloc chan=3689 next=3691 active=1
+2026-04-01 00:35:52,419 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 36180) -&gt; chan=3689 svc=3 map_size=2
+2026-04-01 00:35:52,419 INFO channel_mux: [APP] TCP:3689 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:52,419 DEBUG channel_mux: [NET] TCP:3689 &lt;-  127.0.0.1:36180 -&gt; 127.0.0.1:18081  len=418:  474554202F
+2026-04-01 00:35:52,419 DEBUG channel_mux: [APP] TCP:3689 -&gt; CNT:1 DATA len=418:  474554202F
+2026-04-01 00:35:52,419 DEBUG channel_mux: [TCP/SRV] chan=3689 local-&gt;overlay 418B
+2026-04-01 00:35:52,737 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:52,737 DEBUG channel_mux: [APP] TCP:3687 &lt;- CNT:1 DATA len=1581:  485454502F
+2026-04-01 00:35:52,737 DEBUG channel_mux: [TCP] chan=3687 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=2
+2026-04-01 00:35:52,738 DEBUG channel_mux: [NET] TCP:3687 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:36174  len=1581:  485454502F
+2026-04-01 00:35:52,738 DEBUG channel_mux: [TCP] chan=3687 overlay-&gt;local 1581B
+2026-04-01 00:35:52,738 INFO channel_mux: [TCP/SRV] chan=3687 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:52,738 INFO channel_mux: [APP] TCP:3687 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:52,738 INFO channel_mux: [TCP/SRV] chan=3687 CLOSE teardown complete map_size=1
+2026-04-01 00:35:52,742 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:52,742 INFO channel_mux: [APP] TCP:3687 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:52,742 INFO channel_mux: [TCP] chan=3687 CLOSE =&gt; local teardown map_size=1
+2026-04-01 00:35:52,759 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:52,759 DEBUG channel_mux: [APP] TCP:3689 &lt;- CNT:1 DATA len=2355:  485454502F
+2026-04-01 00:35:52,759 DEBUG channel_mux: [TCP] chan=3689 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=1
+2026-04-01 00:35:52,759 DEBUG channel_mux: [NET] TCP:3689 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:36180  len=2355:  485454502F
+2026-04-01 00:35:52,759 DEBUG channel_mux: [TCP] chan=3689 overlay-&gt;local 2355B
+2026-04-01 00:35:52,761 INFO channel_mux: [TCP/SRV] chan=3689 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:52,761 INFO channel_mux: [APP] TCP:3689 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:52,762 INFO channel_mux: [TCP/SRV] chan=3689 CLOSE teardown complete map_size=0
+2026-04-01 00:35:52,766 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:52,766 INFO channel_mux: [APP] TCP:3689 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:52,766 INFO channel_mux: [TCP] chan=3689 CLOSE =&gt; local teardown map_size=0
+2026-04-01 00:35:53,452 DEBUG channel_mux: [TCP/SRV] alloc chan=3691 next=3693 active=0
+2026-04-01 00:35:53,453 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 54472) -&gt; chan=3691 svc=3 map_size=1
+2026-04-01 00:35:53,453 INFO channel_mux: [APP] TCP:3691 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:53,453 DEBUG channel_mux: [NET] TCP:3691 &lt;-  127.0.0.1:54472 -&gt; 127.0.0.1:18081  len=412:  474554202F
+2026-04-01 00:35:53,453 DEBUG channel_mux: [APP] TCP:3691 -&gt; CNT:1 DATA len=412:  474554202F
+2026-04-01 00:35:53,453 DEBUG channel_mux: [TCP/SRV] chan=3691 local-&gt;overlay 412B
+2026-04-01 00:35:53,453 DEBUG channel_mux: [TCP/SRV] alloc chan=3693 next=3695 active=1
+2026-04-01 00:35:53,453 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 54478) -&gt; chan=3693 svc=3 map_size=2
+2026-04-01 00:35:53,454 INFO channel_mux: [APP] TCP:3693 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:53,454 DEBUG channel_mux: [TCP/SRV] alloc chan=3695 next=3697 active=2
+2026-04-01 00:35:53,454 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 54484) -&gt; chan=3695 svc=3 map_size=3
+2026-04-01 00:35:53,454 INFO channel_mux: [APP] TCP:3695 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:53,454 DEBUG channel_mux: [TCP/SRV] alloc chan=3697 next=3699 active=3
+2026-04-01 00:35:53,454 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 54488) -&gt; chan=3697 svc=3 map_size=4
+2026-04-01 00:35:53,454 INFO channel_mux: [APP] TCP:3697 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:53,454 DEBUG channel_mux: [NET] TCP:3693 &lt;-  127.0.0.1:54478 -&gt; 127.0.0.1:18081  len=421:  474554202F
+2026-04-01 00:35:53,454 DEBUG channel_mux: [APP] TCP:3693 -&gt; CNT:1 DATA len=421:  474554202F
+2026-04-01 00:35:53,454 DEBUG channel_mux: [TCP/SRV] chan=3693 local-&gt;overlay 421B
+2026-04-01 00:35:53,454 DEBUG channel_mux: [NET] TCP:3695 &lt;-  127.0.0.1:54484 -&gt; 127.0.0.1:18081  len=413:  474554202F
+2026-04-01 00:35:53,454 DEBUG channel_mux: [APP] TCP:3695 -&gt; CNT:1 DATA len=413:  474554202F
+2026-04-01 00:35:53,454 DEBUG channel_mux: [TCP/SRV] chan=3695 local-&gt;overlay 413B
+2026-04-01 00:35:53,454 DEBUG channel_mux: [NET] TCP:3697 &lt;-  127.0.0.1:54488 -&gt; 127.0.0.1:18081  len=418:  474554202F
+2026-04-01 00:35:53,454 DEBUG channel_mux: [APP] TCP:3697 -&gt; CNT:1 DATA len=418:  474554202F
+2026-04-01 00:35:53,454 DEBUG channel_mux: [TCP/SRV] chan=3697 local-&gt;overlay 418B
+2026-04-01 00:35:53,787 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:53,787 DEBUG channel_mux: [APP] TCP:3691 &lt;- CNT:1 DATA len=1197:  485454502F
+2026-04-01 00:35:53,787 DEBUG channel_mux: [TCP] chan=3691 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=4
+2026-04-01 00:35:53,787 DEBUG channel_mux: [NET] TCP:3691 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:54472  len=1197:  485454502F
+2026-04-01 00:35:53,787 DEBUG channel_mux: [TCP] chan=3691 overlay-&gt;local 1197B
+2026-04-01 00:35:53,788 INFO channel_mux: [TCP/SRV] chan=3691 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:53,788 INFO channel_mux: [APP] TCP:3691 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:53,788 INFO channel_mux: [TCP/SRV] chan=3691 CLOSE teardown complete map_size=3
+2026-04-01 00:35:53,811 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:53,811 INFO channel_mux: [APP] TCP:3691 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:53,811 INFO channel_mux: [TCP] chan=3691 CLOSE =&gt; local teardown map_size=3
+2026-04-01 00:35:53,857 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:53,858 DEBUG channel_mux: [APP] TCP:3693 &lt;- CNT:1 DATA len=59223:  485454502F
+2026-04-01 00:35:53,858 DEBUG channel_mux: [TCP] chan=3693 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=3
+2026-04-01 00:35:53,858 DEBUG channel_mux: [NET] TCP:3693 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:54478  len=59223:  485454502F
+2026-04-01 00:35:53,858 DEBUG channel_mux: [TCP] chan=3693 overlay-&gt;local 59223B
+2026-04-01 00:35:53,859 INFO channel_mux: [TCP/SRV] chan=3693 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:53,859 INFO channel_mux: [APP] TCP:3693 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:53,859 INFO channel_mux: [TCP/SRV] chan=3693 CLOSE teardown complete map_size=2
+2026-04-01 00:35:54,137 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:54,137 DEBUG channel_mux: [APP] TCP:3695 &lt;- CNT:1 DATA len=1577:  485454502F
+2026-04-01 00:35:54,137 DEBUG channel_mux: [TCP] chan=3695 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=2
+2026-04-01 00:35:54,137 DEBUG channel_mux: [NET] TCP:3695 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:54484  len=1577:  485454502F
+2026-04-01 00:35:54,137 DEBUG channel_mux: [TCP] chan=3695 overlay-&gt;local 1577B
+2026-04-01 00:35:54,137 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:54,137 INFO channel_mux: [APP] TCP:3693 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:54,137 INFO channel_mux: [TCP] chan=3693 CLOSE =&gt; local teardown map_size=2
+2026-04-01 00:35:54,138 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:54,138 INFO channel_mux: [APP] TCP:3695 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:54,138 INFO channel_mux: [TCP] chan=3695 CLOSE =&gt; local teardown map_size=1
+2026-04-01 00:35:54,138 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:54,138 DEBUG channel_mux: [APP] TCP:3697 &lt;- CNT:1 DATA len=3375:  485454502F
+2026-04-01 00:35:54,138 DEBUG channel_mux: [TCP] chan=3697 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=1
+2026-04-01 00:35:54,138 DEBUG channel_mux: [NET] TCP:3697 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:54488  len=3375:  485454502F
+2026-04-01 00:35:54,138 DEBUG channel_mux: [TCP] chan=3697 overlay-&gt;local 3375B
+2026-04-01 00:35:54,138 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:54,138 INFO channel_mux: [APP] TCP:3697 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:54,138 INFO channel_mux: [TCP] chan=3697 CLOSE =&gt; local teardown map_size=0
+2026-04-01 00:35:54,140 INFO channel_mux: [TCP/SRV] chan=3695 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:54,140 INFO channel_mux: [APP] TCP:3695 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:54,140 INFO channel_mux: [TCP/SRV] chan=3695 CLOSE teardown complete map_size=0
+2026-04-01 00:35:54,140 INFO channel_mux: [TCP/SRV] chan=3697 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:54,140 INFO channel_mux: [APP] TCP:3697 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:54,140 INFO channel_mux: [TCP/SRV] chan=3697 CLOSE teardown complete map_size=0
+2026-04-01 00:35:54,460 DEBUG channel_mux: [TCP/SRV] alloc chan=3699 next=3701 active=0
+2026-04-01 00:35:54,460 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 54500) -&gt; chan=3699 svc=3 map_size=1
+2026-04-01 00:35:54,460 INFO channel_mux: [APP] TCP:3699 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:54,460 DEBUG channel_mux: [TCP/SRV] alloc chan=3701 next=3703 active=1
+2026-04-01 00:35:54,460 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 54510) -&gt; chan=3701 svc=3 map_size=2
+2026-04-01 00:35:54,460 INFO channel_mux: [APP] TCP:3701 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:54,460 DEBUG channel_mux: [TCP/SRV] alloc chan=3703 next=3705 active=2
+2026-04-01 00:35:54,460 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 54524) -&gt; chan=3703 svc=3 map_size=3
+2026-04-01 00:35:54,460 INFO channel_mux: [APP] TCP:3703 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:54,461 DEBUG channel_mux: [NET] TCP:3699 &lt;-  127.0.0.1:54500 -&gt; 127.0.0.1:18081  len=412:  474554202F
+2026-04-01 00:35:54,461 DEBUG channel_mux: [APP] TCP:3699 -&gt; CNT:1 DATA len=412:  474554202F
+2026-04-01 00:35:54,461 DEBUG channel_mux: [TCP/SRV] chan=3699 local-&gt;overlay 412B
+2026-04-01 00:35:54,461 DEBUG channel_mux: [NET] TCP:3701 &lt;-  127.0.0.1:54510 -&gt; 127.0.0.1:18081  len=413:  474554202F
+2026-04-01 00:35:54,461 DEBUG channel_mux: [APP] TCP:3701 -&gt; CNT:1 DATA len=413:  474554202F
+2026-04-01 00:35:54,462 DEBUG channel_mux: [TCP/SRV] chan=3701 local-&gt;overlay 413B
+2026-04-01 00:35:54,462 DEBUG channel_mux: [NET] TCP:3703 &lt;-  127.0.0.1:54524 -&gt; 127.0.0.1:18081  len=418:  474554202F
+2026-04-01 00:35:54,462 DEBUG channel_mux: [APP] TCP:3703 -&gt; CNT:1 DATA len=418:  474554202F
+2026-04-01 00:35:54,462 DEBUG channel_mux: [TCP/SRV] chan=3703 local-&gt;overlay 418B
+2026-04-01 00:35:54,738 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:54,738 DEBUG channel_mux: [APP] TCP:3699 &lt;- CNT:1 DATA len=1189:  485454502F
+2026-04-01 00:35:54,738 DEBUG channel_mux: [TCP] chan=3699 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=3
+2026-04-01 00:35:54,738 DEBUG channel_mux: [NET] TCP:3699 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:54500  len=1189:  485454502F
+2026-04-01 00:35:54,738 DEBUG channel_mux: [TCP] chan=3699 overlay-&gt;local 1189B
+2026-04-01 00:35:54,740 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:54,740 DEBUG channel_mux: [APP] TCP:3701 &lt;- CNT:1 DATA len=1574:  485454502F
+2026-04-01 00:35:54,740 DEBUG channel_mux: [TCP] chan=3701 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=3
+2026-04-01 00:35:54,740 DEBUG channel_mux: [NET] TCP:3701 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:54510  len=1574:  485454502F
+2026-04-01 00:35:54,740 DEBUG channel_mux: [TCP] chan=3701 overlay-&gt;local 1574B
+2026-04-01 00:35:54,740 INFO channel_mux: [TCP/SRV] chan=3699 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:54,741 INFO channel_mux: [APP] TCP:3699 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:54,742 INFO channel_mux: [TCP/SRV] chan=3701 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:54,742 INFO channel_mux: [APP] TCP:3701 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:54,744 INFO channel_mux: [TCP/SRV] chan=3699 CLOSE teardown complete map_size=2
+2026-04-01 00:35:54,745 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:54,745 DEBUG channel_mux: [APP] TCP:3703 &lt;- CNT:1 DATA len=2862:  485454502F
+2026-04-01 00:35:54,745 DEBUG channel_mux: [TCP] chan=3703 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=2
+2026-04-01 00:35:54,745 DEBUG channel_mux: [NET] TCP:3703 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:54524  len=2862:  485454502F
+2026-04-01 00:35:54,745 DEBUG channel_mux: [TCP] chan=3703 overlay-&gt;local 2862B
+2026-04-01 00:35:54,746 INFO channel_mux: [TCP/SRV] chan=3701 CLOSE teardown complete map_size=1
+2026-04-01 00:35:54,748 INFO channel_mux: [TCP/SRV] chan=3703 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:54,748 INFO channel_mux: [APP] TCP:3703 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:54,750 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:54,750 INFO channel_mux: [APP] TCP:3699 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:54,750 INFO channel_mux: [TCP] chan=3699 CLOSE =&gt; local teardown map_size=1
+2026-04-01 00:35:54,751 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:54,752 INFO channel_mux: [APP] TCP:3701 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:54,752 INFO channel_mux: [TCP] chan=3701 CLOSE =&gt; local teardown map_size=1
+2026-04-01 00:35:54,752 INFO channel_mux: [TCP/SRV] chan=3703 CLOSE teardown complete map_size=0
+2026-04-01 00:35:54,754 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:54,754 INFO channel_mux: [APP] TCP:3703 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:54,754 INFO channel_mux: [TCP] chan=3703 CLOSE =&gt; local teardown map_size=0
+2026-04-01 00:35:55,458 DEBUG channel_mux: [TCP/SRV] alloc chan=3705 next=3707 active=0
+2026-04-01 00:35:55,458 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 54532) -&gt; chan=3705 svc=3 map_size=1
+2026-04-01 00:35:55,458 INFO channel_mux: [APP] TCP:3705 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:55,458 DEBUG channel_mux: [TCP/SRV] alloc chan=3707 next=3709 active=1
+2026-04-01 00:35:55,458 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 54538) -&gt; chan=3707 svc=3 map_size=2
+2026-04-01 00:35:55,458 INFO channel_mux: [APP] TCP:3707 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:55,459 DEBUG channel_mux: [NET] TCP:3705 &lt;-  127.0.0.1:54532 -&gt; 127.0.0.1:18081  len=421:  474554202F
+2026-04-01 00:35:55,459 DEBUG channel_mux: [APP] TCP:3705 -&gt; CNT:1 DATA len=421:  474554202F
+2026-04-01 00:35:55,459 DEBUG channel_mux: [TCP/SRV] chan=3705 local-&gt;overlay 421B
+2026-04-01 00:35:55,459 DEBUG channel_mux: [NET] TCP:3707 &lt;-  127.0.0.1:54538 -&gt; 127.0.0.1:18081  len=412:  474554202F
+2026-04-01 00:35:55,459 DEBUG channel_mux: [APP] TCP:3707 -&gt; CNT:1 DATA len=412:  474554202F
+2026-04-01 00:35:55,459 DEBUG channel_mux: [TCP/SRV] chan=3707 local-&gt;overlay 412B
+2026-04-01 00:35:55,732 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:55,732 DEBUG channel_mux: [APP] TCP:3705 &lt;- CNT:1 DATA len=58504:  485454502F
+2026-04-01 00:35:55,732 DEBUG channel_mux: [TCP] chan=3705 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=2
+2026-04-01 00:35:55,732 DEBUG channel_mux: [NET] TCP:3705 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:54532  len=58504:  485454502F
+2026-04-01 00:35:55,732 DEBUG channel_mux: [TCP] chan=3705 overlay-&gt;local 58504B
+2026-04-01 00:35:55,732 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:55,733 INFO channel_mux: [APP] TCP:3705 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:55,733 INFO channel_mux: [TCP] chan=3705 CLOSE =&gt; local teardown map_size=1
+2026-04-01 00:35:55,733 INFO channel_mux: [TCP/SRV] chan=3705 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:55,734 INFO channel_mux: [APP] TCP:3705 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:55,734 INFO channel_mux: [TCP/SRV] chan=3705 CLOSE teardown complete map_size=1
+2026-04-01 00:35:55,928 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:55,928 DEBUG channel_mux: [APP] TCP:3707 &lt;- CNT:1 DATA len=1189:  485454502F
+2026-04-01 00:35:55,928 DEBUG channel_mux: [TCP] chan=3707 DATA arrival check: writer_ready=True role=server pending=0 open_bound=False tcp_map_size=1
+2026-04-01 00:35:55,928 DEBUG channel_mux: [NET] TCP:3707 -&gt;  127.0.0.1:18081 -&gt; 127.0.0.1:54538  len=1189:  485454502F
+2026-04-01 00:35:55,928 DEBUG channel_mux: [TCP] chan=3707 overlay-&gt;local 1189B
+2026-04-01 00:35:55,928 DEBUG channel_mux: [MUX] APP data receiving on session id=7fde9f118440
+2026-04-01 00:35:55,928 INFO channel_mux: [APP] TCP:3707 &lt;- CNT:2 CLOSE
+2026-04-01 00:35:55,928 INFO channel_mux: [TCP] chan=3707 CLOSE =&gt; local teardown map_size=0
+2026-04-01 00:35:55,930 INFO channel_mux: [TCP/SRV] chan=3707 EOF -&gt; CLOSE (srv teardown begin)
+2026-04-01 00:35:55,930 INFO channel_mux: [APP] TCP:3707 -&gt; CNT:2 CLOSE
+2026-04-01 00:35:55,930 INFO channel_mux: [TCP/SRV] chan=3707 CLOSE teardown complete map_size=0
+2026-04-01 00:35:56,457 DEBUG channel_mux: [TCP/SRV] alloc chan=3709 next=3711 active=0
+2026-04-01 00:35:56,458 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 54542) -&gt; chan=3709 svc=3 map_size=1
+2026-04-01 00:35:56,458 INFO channel_mux: [APP] TCP:3709 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:56,458 DEBUG channel_mux: [NET] TCP:3709 &lt;-  127.0.0.1:54542 -&gt; 127.0.0.1:18081  len=413:  474554202F
+2026-04-01 00:35:56,458 DEBUG channel_mux: [APP] TCP:3709 -&gt; CNT:1 DATA len=413:  474554202F
+2026-04-01 00:35:56,458 DEBUG channel_mux: [TCP/SRV] chan=3709 local-&gt;overlay 413B
+2026-04-01 00:35:56,458 DEBUG channel_mux: [TCP/SRV] alloc chan=3711 next=3713 active=1
+2026-04-01 00:35:56,458 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 54558) -&gt; chan=3711 svc=3 map_size=2
+2026-04-01 00:35:56,458 INFO channel_mux: [APP] TCP:3711 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:56,458 DEBUG channel_mux: [NET] TCP:3711 &lt;-  127.0.0.1:54558 -&gt; 127.0.0.1:18081  len=418:  474554202F
+2026-04-01 00:35:56,459 DEBUG channel_mux: [APP] TCP:3711 -&gt; CNT:1 DATA len=418:  474554202F
+2026-04-01 00:35:56,459 DEBUG channel_mux: [TCP/SRV] chan=3711 local-&gt;overlay 418B
+2026-04-01 00:35:56,459 DEBUG channel_mux: [TCP/SRV] alloc chan=3713 next=3715 active=2
+2026-04-01 00:35:56,459 INFO channel_mux: [TCP/SRV] accept peer=('127.0.0.1', 54560) -&gt; chan=3713 svc=3 map_size=3
+2026-04-01 00:35:56,459 INFO channel_mux: [APP] TCP:3713 -&gt; CNT:0 OPEN OPENv4 iid=14997453915025939208 seq=2 svc=3 l=TCP 0.0.0.0:18081 r=TCP 127.0.0.1:18090
+2026-04-01 00:35:56,459 DEBUG channel_mux: [NET] TCP:3713 &lt;-  127.0.0.1:54560 -&gt; 127.0.0.1:18081  len=411:  474554202F
+2026-04-01 00:35:56,459 DEBUG channel_mux: [APP] TCP:3713 -&gt; CNT:1 DATA len=411:  474554202F
+2026-04-01 00:35:56,459 DEBUG channel_mux: [TCP/SRV] chan=3713 local-&gt;overlay 411B</pre>
+          </section>
+        </section>
+
+        <section id="tab-misc" class="tab-panel">
+          <section class="section-block card">
+            <div class="section-header compact">
+              <div>
+                <h2>Runtime Metadata</h2>
+                <p>Low-level information exposed by the current admin API</p>
+              </div>
+              <button id="toggleMetaBtn" class="btn btn-secondary" type="button">Toggle JSON</button>
+            </div>
+            <pre id="meta" class="meta-box">{
+  "app": "udp-bidirectional-mux",
+  "pid": 96234,
+  "uptime_sec": 27981,
+  "overlay_transport": "myudp",
+  "dashboard_enabled": null,
+  "milestone": "C"
+}</pre>
+            <div class="misc-actions">
+              <button id="exitBtn" class="btn btn-danger" type="button">Exit Program</button>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script src="ObstacleBridge%20Client_files/app.js"></script>
+
+
+</body></html>

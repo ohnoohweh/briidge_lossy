@@ -5,6 +5,8 @@ ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for ba
 - `tests/unit/` — targeted unit tests.
 - `tests/integration/` — end-to-end and subprocess tests.
 - `scripts/` — development helpers.
+- `docs/ObstacleBridge Client.html` — exported example of the admin web UI on a peer/client instance.
+- `docs/ObstacleBridge Server.html` — exported example of the admin web UI on a listener/server instance.
 - `docs/WHITEPAPER.html` — full whitepaper requested for this repository update.
 - `wireshark/` — Wireshark dissectors grouped by framing/version.
 ## Entry points
@@ -18,7 +20,59 @@ ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for ba
 - Additional test-suite usage details are documented in `docs/README_TESTING.md`.
 
 ## Quick-start examples
-### 1) WireGuard bridge setup
+### 1) NAS behind outbound-only internet, reached through a public server
+This example fits a common home or small-office setup:
+
+- The NAS can make outgoing internet connections, but incoming connections to the NAS are blocked.
+- The NAS may only have usable IPv4 internet access.
+- The client device may only have IPv6 connectivity.
+- The NAS still needs to offer services such as TCP/21, TCP/80, TCP/443, plus a private admin web UI on TCP/18080.
+
+Direct access fails because the NAS is not reachable from the outside and the two sides may not even share the same usable address family. The workaround is to place a small public VPS in the middle, for example a rented server on `ishost.com`, and let the NAS keep one outgoing overlay session open to that server.
+
+Issue before ObstacleBridge:
+
+![NAS issue example](docs/NAS_Issue.svg)
+
+Solution with a public ObstacleBridge server:
+
+![NAS solution example](docs/NAS_solution.svg)
+
+**Public dual-stack VPS running the ObstacleBridge listener**
+```bash
+python -m obstacle_bridge \
+  --overlay-transport myudp \
+  --udp-bind 0.0.0.0 \
+  --udp-own-port 443 \
+  --log INFO
+```
+
+This public server should have working IPv4 and IPv6 reachability and be reachable by DNS name such as `bridge.example.com`.
+
+**NAS running as peer client and asking the public server to publish NAS services**
+```bash
+python -m obstacle_bridge \
+  --overlay-transport myudp \
+  --udp-peer bridge.example.com \
+  --udp-peer-port 443 \
+  --udp-own-port 0 \
+  --admin-web \
+  --admin-web-bind 127.0.0.1 \
+  --admin-web-port 18080 \
+  --remote-servers "tcp,21,0.0.0.0,tcp,127.0.0.1,21 tcp,80,0.0.0.0,tcp,127.0.0.1,80 tcp,443,0.0.0.0,tcp,127.0.0.1,443 tcp,18080,0.0.0.0,tcp,127.0.0.1,18080" \
+  --log INFO
+```
+
+How this works:
+
+- The NAS opens one outgoing `myudp` overlay connection to the public server.
+- `--remote-servers` tells the public server to listen on TCP/21, TCP/80, TCP/443, and TCP/18080.
+- Connections arriving on the public server are forwarded over the overlay to the NAS-local targets on `127.0.0.1`.
+- The admin web port is especially useful here because it normally stays private on the NAS and only becomes reachable through the tunnel.
+
+If your NAS uses the default SSH port `22` instead of `21`, replace the `21` entries accordingly.
+
+### 2) WireGuard bridge setup
 This example assumes the bridge **server** can already reach a local WireGuard UDP service on `127.0.0.1:16666`. The **peer** connects to that bridge server and recreates the same UDP port locally on `127.0.0.1:16666`, so a WireGuard client on the peer machine can point at `localhost:16666`.
 
 **Bridge server**
@@ -42,11 +96,11 @@ python -m obstacle_bridge \
 
 With that peer command running, a local WireGuard client can use `127.0.0.1:16666` as its endpoint; ObstacleBridge forwards the traffic over the overlay to the bridge server, which then sends it to the WireGuard service on its own `127.0.0.1:16666`.
 
-### 2) Single overlay transport listener
+### 3) Single overlay transport listener
 ```bash
 python -m obstacle_bridge --overlay-transport ws --ws-bind 0.0.0.0 --ws-own-port 54321
 ```
-### 3) Multi-transport listening instance
+### 4) Multi-transport listening instance
 ```bash
 python -m obstacle_bridge \
   --overlay-transport "myudp,tcp,quic,ws" \
@@ -59,7 +113,7 @@ python -m obstacle_bridge \
   --quic-key Cert_localhost/key.pem
 ```
 In multi-transport listener mode, ObstacleBridge uses each transport's configured own-port directly (`--udp-own-port`, `--tcp-own-port`, `--quic-own-port`, `--ws-own-port`) without applying automatic offsets.
-### 4) Peer client exposing local services
+### 5) Peer client exposing local services
 ```bash
 python -m obstacle_bridge \
   --overlay-transport ws \
@@ -161,6 +215,32 @@ Expected behavior:
 | `--admin-web-path` | `/` | Base path for admin web interface |
 | `--admin-web-dir` | `./admin_web` | Directory containing admin web files |
 | `--admin-web-token` | `` | Optional bearer token for admin restart endpoint |
+
+#### Admin web examples
+
+The repository includes two exported admin web snapshots:
+
+- [docs/ObstacleBridge Client.html](docs/ObstacleBridge%20Client.html) shows a peer/client-side view.
+- [docs/ObstacleBridge Server.html](docs/ObstacleBridge%20Server.html) shows a listener/server-side view.
+
+Client admin web screenshot:
+
+![ObstacleBridge client admin web screenshot](docs/ObstaceBridge%20Client.png)
+
+What the admin web shows:
+
+- A top status badge with the current overlay state, for example `CONNECTED`.
+- A summary row with the currently open UDP and TCP channel counts.
+- Traffic cards for app-side RX/TX and peer-side RX/TX rates.
+- A peer-session table with transport type, RTT estimate, open channel counts, byte counters, inflight frames, and `myudp` confirmation statistics.
+- UDP and TCP connection tables that show current mappings, local listening ports, remote endpoints, and per-channel byte/message counters.
+- A configuration tab that exposes the live runtime options such as overlay transports, listener ports, `--remote-servers`, admin web settings, and log levels.
+- A debug log tab with recent in-memory log lines, which is especially useful while investigating channel setup, backpressure, reconnects, and late-data cases.
+
+What is visible in the included snapshots:
+
+- The client snapshot shows a connected `myudp` peer session, one active UDP service, and TCP listener activity on the peer side where overlay traffic is being delivered back to local sockets.
+- The server snapshot shows a public listener role with a connected `myudp` session, an additional idle `ws` listener, and multiple active TCP channels being bridged through the overlay.
 
 ### Logging
 | Option(s) | Default | Description |
