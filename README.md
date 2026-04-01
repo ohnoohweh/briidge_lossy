@@ -26,7 +26,7 @@ This example fits a common home or small-office setup:
 - The NAS can make outgoing internet connections, but incoming connections to the NAS are blocked.
 - The NAS may only have usable IPv4 internet access.
 - The client device may only have IPv6 connectivity.
-- The NAS still needs to offer services such as TCP/21, TCP/80, TCP/443, plus a private admin web UI on TCP/18080.
+- The NAS still needs to offer services such as SSH (TCP/22), HTTP (TCP/80), HTTPS (TCP/443), plus a private admin web UI on TCP/18080.
 
 Direct access fails because the NAS is not reachable from the outside and the two sides may not even share the same usable address family. The workaround is to place a small public VPS in the middle, for example a rented server on `ishost.com`, and let the NAS keep one outgoing overlay session open to that server.
 
@@ -42,8 +42,11 @@ Solution with a public ObstacleBridge server:
 ```bash
 python -m obstacle_bridge \
   --overlay-transport myudp \
-  --udp-bind 0.0.0.0 \
+  --udp-bind :: \
   --udp-own-port 443 \
+  --admin-web \
+  --admin-web-bind 127.0.0.1 \
+  --admin-web-port 18080 \
   --log INFO
 ```
 
@@ -58,19 +61,29 @@ python -m obstacle_bridge \
   --udp-own-port 0 \
   --admin-web \
   --admin-web-bind 127.0.0.1 \
-  --admin-web-port 18080 \
-  --remote-servers "tcp,21,0.0.0.0,tcp,127.0.0.1,21 tcp,80,0.0.0.0,tcp,127.0.0.1,80 tcp,443,0.0.0.0,tcp,127.0.0.1,443 tcp,18080,0.0.0.0,tcp,127.0.0.1,18080" \
+  --admin-web-port 18081 \
+  --remote-servers "tcp,18022,::,tcp,127.0.0.1,22 tcp,80,::,tcp,127.0.0.1,80 tcp,443,::,tcp,127.0.0.1,443 tcp,18081,::,tcp,127.0.0.1,18080" \
   --log INFO
 ```
+
+**Offered VPS port mapping for this setup**
+
+| VPS Port | Description | Destination | Destination Port |
+|---:|---|---|---:|
+| 22 | VPS SSH | VPS | 22 |
+| 80 | NAS HTTP | NAS | 80 |
+| 443 | NAS HTTPS + ObstacleBridge overlay | NAS + VPS | 443 |
+| 18022 | NAS SSH (published by VPS) | NAS | 22 |
+| 18080 | Admin web (VPS listener instance) | VPS | 18080 |
+| 18081 | Admin web (NAS peer instance, published by VPS) | NAS | 18080 |
 
 How this works:
 
 - The NAS opens one outgoing `myudp` overlay connection to the public server.
-- `--remote-servers` tells the public server to listen on TCP/21, TCP/80, TCP/443, and TCP/18080.
+- `--remote-servers` tells the public server to listen on TCP/18022, TCP/80, TCP/443, and TCP/18081.
 - Connections arriving on the public server are forwarded over the overlay to the NAS-local targets on `127.0.0.1`.
-- The admin web port is especially useful here because it normally stays private on the NAS and only becomes reachable through the tunnel.
-
-If your NAS uses the default SSH port `22` instead of `21`, replace the `21` entries accordingly.
+- The NAS admin web still runs on `127.0.0.1:18080`, while the VPS keeps its own admin web on `127.0.0.1:18080`; exposing NAS admin as TCP/18081 on the VPS avoids collisions.
+- Using `::` for exposed listener binds allows dual-stack socket behavior on VPS environments that support IPv4-mapped IPv6 sockets.
 
 ### 2) WireGuard bridge setup
 This example assumes the bridge **server** can already reach a local WireGuard UDP service on `127.0.0.1:16666`. The **peer** connects to that bridge server and recreates the same UDP port locally on `127.0.0.1:16666`, so a WireGuard client on the peer machine can point at `localhost:16666`.
