@@ -95,7 +95,7 @@ How this works:
 - Using `::` for exposed listener binds allows dual-stack socket behavior on VPS environments that support IPv4-mapped IPv6 sockets.
 
 ### 2) WireGuard bridge setup through inspected internet access
-This example fits a censorship or heavy-content-inspection environment:
+This example fits a heavy-content-inspection environment:
 
 - A large upstream network operator blocks or degrades access to many sites and services outside the country.
 - UDP-based VPNs such as WireGuard and UDP OpenVPN do not reach public servers directly.
@@ -373,35 +373,6 @@ The complete whitepaper requested for this project update is available as a rend
 - Development-process lessons from AI-supported programming.
 ### Whitepaper abstract
 > This whitepaper presents a detailed technical explanation of Internet communication mechanisms and a Python-based UDP overlay protocol designed to work across restrictive network environments. The report explains how modern Internet barriers such as NAT, IPv4/IPv6 asymmetry, deep packet inspection, protocol blocking, traffic shaping, and throttling affect connectivity, and how a layered UDP overlay can reconstruct connection detection, round-trip-time measurement, loss recovery, retransmission, and multi-channel multiplexing in user space.
-### Whitepaper table of contents
-1. Introduction  
-2. Internet Services and Their Performance Requirements  
-3. Routing Fundamentals: Hubs, Switches, Routers, VPN Paths, and the Layer Model  
-4. Modern Internet Barriers  
-5. Internet Protocol (IP)  
-6. ICMP Protocol  
-7. UDP Protocol  
-8. TCP Protocol  
-9. TCP Congestion Control  
-10. TCP Backpressure and Flow Control  
-11. QUIC Protocol  
-12. DNS Protocol  
-13. HTTP, HTTPS, and WebSockets  
-14. Deep Packet Inspection and TLS Interception  
-15. VPNs, HTTP Proxies, and Tunneling  
-16. Why a UDP Overlay Helps  
-17. Overlay Architecture Overview  
-18. Overlay Architecture Overview  
-19. Layer 1: Connection Detection and RTT Measurement  
-20. Layer 2: Reliable DATA / CONTROL Protocol  
-21. Layer 3: ChannelMux OPEN / DATA / CLOSE Protocol  
-22. End-to-End Example: Browser via HTTP Proxy over Overlay  
-23. Why This Can Improve Performance  
-24. Detailed TCP-over-TCP Problem Example  
-25. Limitations and Engineering Considerations  
-26. Development Procedure and Experience with AI-Supported Programming  
-27. Conclusion  
-References
 ## Notes
 - Listener mode intentionally ignores `--own-servers`, because a multi-peer listener cannot unambiguously bind one local listener to one remote peer.
 - Multi-transport mode is currently intended for listening instances without configured transport peers (for example no `--udp-peer`, `--tcp-peer`, `--quic-peer`, or `--ws-peer`).
