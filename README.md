@@ -94,35 +94,129 @@ How this works:
 - The NAS admin web still runs on `127.0.0.1:18080`, while the VPS keeps its own admin web on `127.0.0.1:18080`; exposing NAS admin as TCP/18081 on the VPS avoids collisions.
 - Using `::` for exposed listener binds allows dual-stack socket behavior on VPS environments that support IPv4-mapped IPv6 sockets.
 
-### 2) WireGuard bridge setup
-This example assumes the bridge **server** can already reach a local WireGuard UDP service on `127.0.0.1:16666`. The **peer** connects to that bridge server and recreates the same UDP port locally on `127.0.0.1:16666`, so a WireGuard client on the peer machine can point at `localhost:16666`.
+### 2) WireGuard bridge setup through inspected internet access
+This example fits a censorship or heavy-content-inspection environment:
 
-**Bridge server**
+- A large upstream network operator blocks or degrades access to many sites and services outside the country.
+- UDP-based VPNs such as WireGuard and UDP OpenVPN do not reach public servers directly.
+- Some outbound HTTP or HTTPS traffic still passes the obstacle.
+- A public server outside the restricted network can run ObstacleBridge and a WireGuard or OpenVPN server.
+
+In that situation, ObstacleBridge can carry traffic over a WebSocket overlay using binary frames on top of HTTP(S)-reachable connectivity. That lets a local WireGuard or OpenVPN client reach a server outside the filtered network, with one important tradeoff:
+
+- VPN over WebSocket means TCP over TCP tunneling, which is convenient and often effective, but not ideal for every workload.
+- For plain HTTP(S) browsing, a dedicated HTTP proxy such as SQUID can avoid that TCP-over-TCP penalty and may be the better tool.
+
+Issue before ObstacleBridge:
+
+![Client issue example](docs/Client_issue.svg)
+
+Solution with an ObstacleBridge WebSocket bridge:
+
+![Client solution example](docs/Client_solution.svg)
+
+This quick start assumes:
+
+- the public bridge server can already reach a local WireGuard UDP service on `127.0.0.1:16666`
+- the restricted-side client can reach `https://bridge.example.com` or `ws://bridge.example.com`
+- the client wants to recreate the same WireGuard UDP port locally on `127.0.0.1:16666`
+
+**Public bridge server with WebSocket overlay**
 ```bash
 python -m obstacle_bridge \
-  --udp-bind 0.0.0.0 \
-  --udp-own-port 443 \
+  --overlay-transport ws \
+  --ws-bind 0.0.0.0 \
+  --ws-own-port 443 \
   --log INFO
 ```
-This bridge server must be reachable by clients at DNS name `bridge.example.com` (for example via public DNS A/AAAA records and firewall/NAT rules).
+This public bridge server must be reachable by clients at DNS name `bridge.example.com` and should normally sit behind a firewall rule or reverse-proxy setup that allows WebSocket traffic on port `443`.
 
-**Peer that recreates the WireGuard UDP port locally**
+**Restricted-side peer that recreates the WireGuard UDP port locally**
 ```bash
 python -m obstacle_bridge \
+  --overlay-transport ws \
+  --ws-peer bridge.example.com \
+  --ws-peer-port 443 \
+  --ws-own-port 0 \
+  --own-servers "udp,16666,127.0.0.1,udp,127.0.0.1,16666" \
+  --log INFO
+```
+
+With that peer command running, a local WireGuard client can use `127.0.0.1:16666` as its endpoint. ObstacleBridge accepts the local UDP packets, carries them through the WebSocket overlay, and forwards them to the WireGuard server reachable from the public bridge host.
+
+How this helps:
+
+- the obstacle only sees outbound WebSocket-over-HTTP(S) traffic instead of raw WireGuard or OpenVPN UDP
+- the local VPN client keeps talking to a normal UDP endpoint on `127.0.0.1:16666`
+- once the VPN comes up, other applications can use the VPN tunnel normally
+
+Operational note:
+
+- if the network still allows direct UDP to the public bridge, prefer the `myudp` or native UDP overlay examples instead
+- use the WebSocket version when HTTP(S)-shaped traffic is what reliably survives the inspection system
+
+### 3) WireGuard bridge setup for high-loss obstacle conditions in Asia
+This example fits a different obstacle pattern than the inspected WebSocket-only path above:
+
+- A very large country in Asia artificially drops internet frames and triggers excessive retransmissions.
+- Conventional transports slow down so much under loss that the connection becomes nearly unusable.
+- UDP itself may still pass, but with heavy loss and jitter.
+- A public server outside the degraded network can run ObstacleBridge and a WireGuard or OpenVPN server.
+
+In this situation, the `myudp` overlay is designed to cope much better with packet loss than a conventional TCP-style transport. That makes it a practical carrier for a local WireGuard or OpenVPN client that still needs full internet access for arbitrary applications.
+
+Issue before ObstacleBridge:
+
+![Client2 issue example](docs/Client2_issue.svg)
+
+Solution with an ObstacleBridge `myudp` bridge:
+
+![Client2 solution example](docs/Client2_solution.svg)
+
+This quick start assumes:
+
+- the public bridge server can already reach a local WireGuard UDP service on `127.0.0.1:16666`
+- the restricted-side client can still send UDP to `bridge.example.com`
+- the network path is lossy enough that ordinary protocols degrade badly, but `myudp` remains workable
+
+**Public bridge server with `myudp` overlay**
+```bash
+python -m obstacle_bridge \
+  --overlay-transport myudp \
+  --udp-bind 0.0.0.0 \
+  --udp-own-port 4433 \
+  --log INFO
+```
+
+**Restricted-side peer that recreates the WireGuard UDP port locally**
+```bash
+python -m obstacle_bridge \
+  --overlay-transport myudp \
   --udp-peer bridge.example.com \
-  --udp-peer-port 443 \
+  --udp-peer-port 4433 \
   --udp-own-port 0 \
   --own-servers "udp,16666,127.0.0.1,udp,127.0.0.1,16666" \
   --log INFO
 ```
 
-With that peer command running, a local WireGuard client can use `127.0.0.1:16666` as its endpoint; ObstacleBridge forwards the traffic over the overlay to the bridge server, which then sends it to the WireGuard service on its own `127.0.0.1:16666`.
+With that peer command running, a local WireGuard or UDP OpenVPN client can use `127.0.0.1:16666` as its endpoint. ObstacleBridge accepts the local UDP packets, carries them through the lossy `myudp` overlay, and forwards them to the VPN server reachable from the public bridge host.
 
-### 3) Single overlay transport listener
+How this helps:
+
+- `myudp` is intended for paths with loss, jitter, and obstacle-induced retransmission pressure
+- the local VPN client still talks to a normal UDP endpoint on `127.0.0.1:16666`
+- once the VPN comes up, all applications can use the VPN tunnel normally
+
+Operational note:
+
+- prefer this `myudp` setup when outside UDP is available but the path is extremely lossy
+- prefer the WebSocket example above when only HTTP(S)-shaped traffic reliably survives the obstacle
+
+### 4) Single overlay transport listener
 ```bash
 python -m obstacle_bridge --overlay-transport ws --ws-bind 0.0.0.0 --ws-own-port 54321
 ```
-### 4) Multi-transport listening instance
+### 5) Multi-transport listening instance
 ```bash
 python -m obstacle_bridge \
   --overlay-transport "myudp,tcp,quic,ws" \
@@ -135,7 +229,7 @@ python -m obstacle_bridge \
   --quic-key Cert_localhost/key.pem
 ```
 In multi-transport listener mode, ObstacleBridge uses each transport's configured own-port directly (`--udp-own-port`, `--tcp-own-port`, `--quic-own-port`, `--ws-own-port`) without applying automatic offsets.
-### 5) Peer client exposing local services
+### 6) Peer client exposing local services
 ```bash
 python -m obstacle_bridge \
   --overlay-transport ws \

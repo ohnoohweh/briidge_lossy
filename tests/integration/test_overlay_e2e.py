@@ -657,6 +657,36 @@ def probe_tcp(
         return data
 
 
+def _row_source_port(row: dict) -> Optional[int]:
+    source = row.get('source')
+    if isinstance(source, (list, tuple)) and len(source) >= 2:
+        try:
+            return int(source[1])
+        except Exception:
+            return None
+    return None
+
+
+def _matching_connection_rows(
+    doc: dict,
+    protocol: str,
+    *,
+    local_port: Optional[int] = None,
+    state: Optional[str] = None,
+    source_port: Optional[int] = None,
+) -> list[dict]:
+    rows = []
+    for row in doc.get(protocol, []) or []:
+        if local_port is not None and int(row.get('local_port') or -1) != int(local_port):
+            continue
+        if state is not None and str(row.get('state') or '').strip().lower() != str(state).strip().lower():
+            continue
+        if source_port is not None and _row_source_port(row) != int(source_port):
+            continue
+        rows.append(row)
+    return rows
+
+
 def wait_probe(
     case: Case,
     payload: bytes = PAYLOAD_IN,
@@ -993,6 +1023,73 @@ def wait_connections_metrics_updated(admin_port: int, timeout: float = 8.0, labe
     raise RuntimeError(
         f'/api/connections metrics not updated on port {admin_port}; '
         f'last_connections={last_doc!r}; last_status={last_status!r}'
+    )
+
+
+def wait_connection_rows(
+    admin_port: int,
+    protocol: str,
+    *,
+    local_port: Optional[int] = None,
+    state: Optional[str] = None,
+    source_port: Optional[int] = None,
+    minimum_count: int = 1,
+    timeout: float = 8.0,
+    label: str = '',
+) -> list[dict]:
+    end = time.time() + timeout
+    last_doc = None
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/connections', timeout=1.5)
+        last_doc = doc
+        rows = _matching_connection_rows(
+            doc,
+            protocol,
+            local_port=local_port,
+            state=state,
+            source_port=source_port,
+        )
+        if len(rows) >= minimum_count:
+            who = f' {label}' if label else ''
+            log.info(f'[CONN]{who} port={admin_port} protocol={protocol} matched_rows={len(rows)}')
+            return rows
+        time.sleep(0.1)
+    raise RuntimeError(
+        f'/api/connections did not expose {minimum_count} matching {protocol} rows on port {admin_port}; '
+        f'local_port={local_port} state={state} source_port={source_port} last={last_doc!r}'
+    )
+
+
+def wait_connection_rows_gone(
+    admin_port: int,
+    protocol: str,
+    *,
+    local_port: Optional[int] = None,
+    state: Optional[str] = None,
+    source_port: Optional[int] = None,
+    timeout: float = 8.0,
+    label: str = '',
+) -> None:
+    end = time.time() + timeout
+    last_doc = None
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/connections', timeout=1.5)
+        last_doc = doc
+        rows = _matching_connection_rows(
+            doc,
+            protocol,
+            local_port=local_port,
+            state=state,
+            source_port=source_port,
+        )
+        if not rows:
+            who = f' {label}' if label else ''
+            log.info(f'[CONN]{who} port={admin_port} protocol={protocol} rows gone')
+            return
+        time.sleep(0.1)
+    raise RuntimeError(
+        f'/api/connections kept matching {protocol} rows on port {admin_port}; '
+        f'local_port={local_port} state={state} source_port={source_port} last={last_doc!r}'
     )
 
 
@@ -1630,6 +1727,204 @@ def run_case_concurrent_tcp_channels(case: Case, log_dir: Path, case_index: int,
         bounce.stop()
 
 
+def wait_tcp_socket_closed(sock: socket.socket, timeout: float = 8.0) -> None:
+    end = time.time() + timeout
+    last_error: Optional[Exception] = None
+    while time.time() < end:
+        try:
+            sock.settimeout(0.5)
+            data = sock.recv(1)
+            if data == b'':
+                return
+        except socket.timeout as e:
+            last_error = e
+        except OSError:
+            return
+        try:
+            sock.sendall(b'\x01close-check')
+        except OSError:
+            return
+        time.sleep(0.2)
+    raise RuntimeError(f'TCP socket stayed open after peer server restart; last_error={last_error!r}')
+
+
+def run_case_server_restart_closes_tcp_preserves_udp(case: Case, log_dir: Path, case_index: int, settle_s: Optional[float] = None) -> None:
+    if case.name != 'case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels':
+        raise RuntimeError(f'Unsupported restart-behavior case: {case.name}')
+
+    bounce = BounceBackServer(
+        name=f'{case.name}_bounce',
+        proto=case.bounce_proto,
+        bind_host=case.bounce_bind,
+        port=case.bounce_port,
+        log_path=log_dir / f'{case.name}_bounce.log',
+    )
+    udp_bounces = [
+        BounceBackServer(
+            name=f'{case.name}_udp_bounce_1',
+            proto='udp',
+            bind_host=case.bounce_bind,
+            port=3141,
+            log_path=log_dir / f'{case.name}_udp_bounce_1.log',
+        ),
+        BounceBackServer(
+            name=f'{case.name}_udp_bounce_2',
+            proto='udp',
+            bind_host=case.bounce_bind,
+            port=3143,
+            log_path=log_dir / f'{case.name}_udp_bounce_2.log',
+        ),
+    ]
+    server_proc: Optional[Proc] = None
+    client_proc: Optional[Proc] = None
+    tcp_sock: Optional[socket.socket] = None
+    udp_sock: Optional[socket.socket] = None
+    server_spec, client_spec = build_commands(case, log_dir, case_index, enable_admin=True)
+
+    def start_server() -> Proc:
+        nonlocal server_proc
+        name, cmd, env, admin_port = server_spec
+        server_proc = start_proc(f'{case.name}_{name}', cmd, log_dir, env_extra=env, admin_port=admin_port)
+        time.sleep(0.5)
+        assert_running(server_proc)
+        wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+        return server_proc
+
+    try:
+        phase('1. Start TCP and UDP bounce-back services')
+        bounce.start()
+        for udp_bounce in udp_bounces:
+            udp_bounce.start()
+
+        phase('2. Start bridge server and peer client')
+        start_server()
+        c_name, c_cmd, c_env, c_admin_port = client_spec
+        client_proc = start_proc(f'{case.name}_{c_name}', c_cmd, log_dir, env_extra=c_env, admin_port=c_admin_port)
+        time.sleep(0.5)
+        assert_running(client_proc)
+        wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
+
+        time.sleep(case.settle_seconds if settle_s is None else settle_s)
+        assert server_proc is not None
+        assert client_proc is not None
+        server_proc, client_proc = wait_both_connected(server_proc, client_proc, log_dir, timeout=30.0)
+
+        phase('3. Open one TCP channel and one UDP mapping through the peer client')
+        wait_tcp_listen(case.probe_host, case.probe_port, timeout=5.0)
+        tcp_family = socket.AF_INET6 if ':' in case.probe_host else socket.AF_INET
+        tcp_sock = socket.socket(tcp_family, socket.SOCK_STREAM)
+        if case.probe_bind is not None:
+            tcp_sock.bind((case.probe_bind, 0))
+        tcp_sock.settimeout(2.0)
+        tcp_sock.connect((case.probe_host, case.probe_port))
+        tcp_sock.sendall(b'\x01tcp-before-restart')
+        tcp_reply = tcp_sock.recv(4096)
+        if tcp_reply != b'\x02tcp-before-restart':
+            raise RuntimeError(f'Unexpected TCP reply before restart: {tcp_reply!r}')
+
+        udp_family = socket.AF_INET6 if ':' in case.probe_host else socket.AF_INET
+        udp_sock = socket.socket(udp_family, socket.SOCK_DGRAM)
+        if case.probe_bind is not None:
+            udp_sock.bind((case.probe_bind, 0))
+        udp_sock.settimeout(2.0)
+        udp_sock.sendto(b'\x01udp-before-restart', (case.probe_host, 3140))
+        udp_reply, _addr = udp_sock.recvfrom(4096)
+        if udp_reply != b'\x02udp-before-restart':
+            raise RuntimeError(f'Unexpected UDP reply before restart: {udp_reply!r}')
+        udp_source_port = int(udp_sock.getsockname()[1])
+
+        wait_connection_rows(
+            client_proc.admin_port or 0,
+            'tcp',
+            local_port=case.probe_port,
+            state='connected',
+            minimum_count=1,
+            timeout=8.0,
+            label='client',
+        )
+        initial_udp_rows = wait_connection_rows(
+            client_proc.admin_port or 0,
+            'udp',
+            local_port=3140,
+            state='connected',
+            source_port=udp_source_port,
+            minimum_count=1,
+            timeout=8.0,
+            label='client',
+        )
+        initial_udp_row = initial_udp_rows[0]
+
+        phase('4. Restart the peer server and observe peer client connection state')
+        stop_proc(server_proc)
+        wait_status_not_connected(client_proc.admin_port or 0, timeout=30.0, label='client')
+        wait_connection_rows_gone(
+            client_proc.admin_port or 0,
+            'tcp',
+            local_port=case.probe_port,
+            state='connected',
+            timeout=8.0,
+            label='client',
+        )
+        wait_tcp_socket_closed(tcp_sock, timeout=8.0)
+
+        phase('5. Restart the peer server and wait for reconnect')
+        start_server()
+        time.sleep(case.settle_seconds if settle_s is None else settle_s)
+        assert server_proc is not None
+        assert client_proc is not None
+        server_proc, client_proc = wait_both_connected(server_proc, client_proc, log_dir, timeout=30.0)
+
+        phase('6. Verify UDP resumes on the peer client with the same local source port')
+        udp_sock.sendto(b'\x01udp-after-restart', (case.probe_host, 3140))
+        udp_reply_after, _addr = udp_sock.recvfrom(4096)
+        if udp_reply_after != b'\x02udp-after-restart':
+            raise RuntimeError(f'Unexpected UDP reply after restart: {udp_reply_after!r}')
+        resumed_udp_rows = wait_connection_rows(
+            client_proc.admin_port or 0,
+            'udp',
+            local_port=3140,
+            state='connected',
+            source_port=udp_source_port,
+            minimum_count=1,
+            timeout=8.0,
+            label='client',
+        )
+        resumed_udp_row = resumed_udp_rows[0]
+        if int(resumed_udp_row.get('local_port') or -1) != int(initial_udp_row.get('local_port') or -1):
+            raise RuntimeError(
+                f'UDP local port changed across peer server restart: '
+                f'before={initial_udp_row!r} after={resumed_udp_row!r}'
+            )
+        if _row_source_port(resumed_udp_row) != _row_source_port(initial_udp_row):
+            raise RuntimeError(
+                f'UDP source port changed across peer server restart: '
+                f'before={initial_udp_row!r} after={resumed_udp_row!r}'
+            )
+
+        phase('7. Verify the test harness can open a new TCP client socket after reconnect')
+        # This is a brand-new application-side TCP connect from the test harness.
+        # The pre-restart TCP socket is expected to stay closed and is not resumed.
+        wait_probe(case, payload=b'\x01tcp-after-restart', timeout=8.0)
+    finally:
+        if udp_sock is not None:
+            try:
+                udp_sock.close()
+            except Exception:
+                pass
+        if tcp_sock is not None:
+            try:
+                tcp_sock.close()
+            except Exception:
+                pass
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+        for udp_bounce in udp_bounces:
+            udp_bounce.stop()
+        bounce.stop()
+
+
 def run_case_mixed_overlay_two_clients_concurrent_udp_tcp(
     case: Case,
     log_dir: Path,
@@ -1921,6 +2216,14 @@ def test_overlay_e2e_listener_two_clients(case_name: str, tmp_path: Path) -> Non
 def test_overlay_e2e_concurrent_tcp_channels(case_name: str, tmp_path: Path) -> None:
     _require_overlay_e2e_enabled()
     run_case_concurrent_tcp_channels(CASES[case_name], tmp_path, ALL_CASES.index(case_name))
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize("case_name", ['case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels'])
+def test_overlay_e2e_server_restart_closes_tcp_preserves_udp(case_name: str, tmp_path: Path) -> None:
+    _require_overlay_e2e_enabled()
+    run_case_server_restart_closes_tcp_preserves_udp(CASES[case_name], tmp_path, ALL_CASES.index(case_name))
 
 
 def test_overlay_e2e_cli_routing_infers_concurrent_mode_from_case13() -> None:

@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">High-loss obstacle solution example</title>
+  <desc id="desc">A client uses ObstacleBridge myudp to bridge a local WireGuard or OpenVPN endpoint to a public server outside a high-loss obstacle path.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#f9fcff"/>
+      <stop offset="100%" stop-color="#ecf5fb"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="14" markerHeight="10" refX="10" refY="5" orient="auto">
+      <path d="M0,0 L14,5 L0,10 z" fill="#165b7a"/>
+    </marker>
+    <style>
+      .label { font: 700 26px sans-serif; fill: #0a2737; }
+      .body { font: 400 20px sans-serif; fill: #173c4f; }
+      .small { font: 400 18px sans-serif; fill: #3a5b6c; }
+      .box { fill: #fff; stroke: #0a2737; stroke-width: 2.5; rx: 20; ry: 20; }
+      .svc { fill: #eef7ff; }
+      .bridge { fill: #ebfff5; stroke: #13744e; }
+      .cloud { fill: #dbe9f6; stroke: #0a2737; stroke-width: 2.5; }
+      .goodline { stroke: #165b7a; stroke-width: 5; fill: none; marker-end: url(#arrow); }
+      .goodline2 { stroke: #169b68; stroke-width: 5; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1280" height="720" fill="url(#bg)"/>
+
+  <path class="cloud" d="M317 207c-26-71 68-126 174-129 47-1 92 8 126 25 31-22 79-34 128-31 49 2 92 19 112 45 29-11 66-9 98 4 37 15 60 42 62 71 56 9 94 40 90 76-2 17-14 34-33 48 26 18 36 46 22 72-20 39-74 65-141 68-28 1-55-3-78-11-22 26-67 42-122 44-36 1-70-5-97-18-28 22-72 35-121 35-59 0-109-19-127-47-17 4-34 6-52 6-67 0-122-32-122-72 0-18 12-35 31-48-22-12-35-30-35-50 0-23 15-44 41-58z"/>
+  <text x="640" y="220" text-anchor="middle" class="label" font-size="42">Loss-tolerant myudp bridge</text>
+  <text x="640" y="253" text-anchor="middle" class="small">ObstacleBridge keeps a UDP-based overlay usable even when the path is hostile to conventional protocols.</text>
+
+  <rect x="55" y="360" width="280" height="230" class="box"/>
+  <text x="195" y="412" text-anchor="middle" class="label">Client device</text>
+  <text x="195" y="448" text-anchor="middle" class="body">Local VPN app endpoint</text>
+  <text x="195" y="484" text-anchor="middle" class="small">WireGuard or OpenVPN client</text>
+  <text x="195" y="516" text-anchor="middle" class="small">Talks to localhost UDP port</text>
+  <text x="195" y="548" text-anchor="middle" class="small">All apps can use the VPN once up</text>
+
+  <rect x="495" y="350" width="290" height="250" class="box bridge"/>
+  <text x="640" y="402" text-anchor="middle" class="label">ObstacleBridge</text>
+  <text x="640" y="438" text-anchor="middle" class="body">myudp overlay peer</text>
+  <text x="640" y="474" text-anchor="middle" class="small">Copes with packet loss better</text>
+  <text x="640" y="506" text-anchor="middle" class="small">Carries UDP VPN traffic through the obstacle</text>
+  <text x="640" y="538" text-anchor="middle" class="small">Recreates local UDP port for the VPN client</text>
+
+  <rect x="945" y="360" width="270" height="230" class="box svc"/>
+  <text x="1080" y="412" text-anchor="middle" class="label">Public server</text>
+  <text x="1080" y="448" text-anchor="middle" class="body">Outside the obstacle</text>
+  <text x="1080" y="484" text-anchor="middle" class="small">ObstacleBridge server</text>
+  <text x="1080" y="516" text-anchor="middle" class="small">WireGuard or OpenVPN server</text>
+  <text x="1080" y="548" text-anchor="middle" class="small">Normal internet reachable after VPN up</text>
+
+  <path class="goodline" d="M335 475 C410 475, 440 475, 495 475"/>
+  <text x="415" y="455" text-anchor="middle" class="small">Local UDP VPN endpoint</text>
+
+  <path class="goodline2" d="M785 475 C855 430, 900 420, 945 475"/>
+  <text x="865" y="396" text-anchor="middle" class="small">myudp over lossy path</text>
+
+  <path class="goodline" d="M980 565 C900 625, 720 655, 275 565"/>
+  <text x="640" y="645" text-anchor="middle" class="small">Once the VPN is up, all internet applications can use the tunnel normally</text>
+</svg>
