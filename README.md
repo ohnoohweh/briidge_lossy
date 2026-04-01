@@ -36,7 +36,7 @@ This example fits a common home or small-office setup:
 - The client device may only have IPv6 connectivity.
 - The NAS still needs to offer services such as SSH (TCP/22), HTTP (TCP/80), HTTPS (TCP/443), plus a private admin web UI on TCP/18080.
 
-Direct access fails because the NAS is not reachable from the outside and the two sides may not even share the same usable address family. The workaround is to place a small public VPS (Virtual Private Server) in the middle, for example a rented server on `ishost.com`, and let the NAS keep one outgoing overlay session open to that server.
+Direct access fails because the NAS is not reachable from the outside and the two sides may not even share the same usable address family. The workaround is to place a small public VPS (Virtual Private Server) in the middle, for example a rented server on `ishosting.com`, and let the NAS keep one outgoing overlay session open to that server.
 
 Issue before ObstacleBridge:
 
