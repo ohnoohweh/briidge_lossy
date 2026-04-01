@@ -20,7 +20,7 @@ ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for ba
 - Additional test-suite usage details are documented in `docs/README_TESTING.md`.
 
 ## Quick-start examples
-### 1) NAS behind outbound-only internet, reached through a public server
+### 1) NAS (network attached storage) behind outbound-only internet, reached through a public server
 This example fits a common home or small-office setup:
 
 - The NAS can make outgoing internet connections, but incoming connections to the NAS are blocked.
@@ -28,7 +28,7 @@ This example fits a common home or small-office setup:
 - The client device may only have IPv6 connectivity.
 - The NAS still needs to offer services such as SSH (TCP/22), HTTP (TCP/80), HTTPS (TCP/443), plus a private admin web UI on TCP/18080.
 
-Direct access fails because the NAS is not reachable from the outside and the two sides may not even share the same usable address family. The workaround is to place a small public VPS in the middle, for example a rented server on `ishost.com`, and let the NAS keep one outgoing overlay session open to that server.
+Direct access fails because the NAS is not reachable from the outside and the two sides may not even share the same usable address family. The workaround is to place a small public VPS (Virtual Private Server) in the middle, for example a rented server on `ishost.com`, and let the NAS keep one outgoing overlay session open to that server.
 
 Issue before ObstacleBridge:
 
@@ -43,7 +43,7 @@ Solution with a public ObstacleBridge server:
 python -m obstacle_bridge \
   --overlay-transport myudp \
   --udp-bind :: \
-  --udp-own-port 443 \
+  --udp-own-port 4443 \
   --admin-web \
   --admin-web-bind 127.0.0.1 \
   --admin-web-port 18080 \
@@ -57,7 +57,7 @@ This public server should have working IPv4 and IPv6 reachability and be reachab
 python -m obstacle_bridge \
   --overlay-transport myudp \
   --udp-peer bridge.example.com \
-  --udp-peer-port 443 \
+  --udp-peer-port 4443 \
   --udp-own-port 0 \
   --admin-web \
   --admin-web-bind 127.0.0.1 \
@@ -70,12 +70,13 @@ python -m obstacle_bridge \
 
 | VPS Port | Description | Destination | Destination Port |
 |---:|---|---|---:|
-| 22 | VPS SSH | VPS | 22 |
-| 80 | NAS HTTP | NAS | 80 |
-| 443 | NAS HTTPS + ObstacleBridge overlay | NAS + VPS | 443 |
-| 18022 | NAS SSH (published by VPS) | NAS | 22 |
-| 18080 | Admin web (VPS listener instance) | VPS | 18080 |
-| 18081 | Admin web (NAS peer instance, published by VPS) | NAS | 18080 |
+| TCP:22 | VPS SSH | VPS | TCP:22 |
+| TCP:80 | NAS HTTP | NAS | TCP:80 |
+| TCP:443 | NAS HTTPS | NAS | TCP:443 |
+| UDP:4433 | ObstacleBridge UDP peer communication | VPS | UDP:4443 |
+| TCP:18022 | NAS SSH (published by VPS) | NAS | TCP:22 |
+| TCP:18080 | Admin web (VPS listener instance) | VPS | TCP:18080 |
+| TCP:18081 | Admin web (NAS peer instance, published by VPS) | NAS | TCP:18080 |
 
 How this works:
 
