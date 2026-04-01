@@ -322,6 +322,7 @@ Expected behavior:
 | `--admin-web-path` | `/` | Base path for admin web interface |
 | `--admin-web-dir` | `./admin_web` | Directory containing admin web files |
 | `--admin-web-token` | `` | Optional bearer token for admin restart endpoint |
+| `--admin-web-log-max-lines` | `1200` | Maximum number of debug log lines kept in memory for the admin web log view |
 
 #### Admin web examples
 
@@ -354,6 +355,8 @@ What is visible in the included snapshots:
 |---|---:|---|
 | `--log` | `WARNING` | logging level (default WARNING; try INFO or DEBUG) be aware of --console-level and --file-level |
 | `--log-file` | `None` | file path to also write logs enabled by --log |
+| `--log-file-max-bytes` | `0` | Maximum on-disk log file size in bytes before rotation; `0` disables rotation |
+| `--log-file-backup-count` | `5` | Number of rotated log files to keep when `--log-file-max-bytes` is enabled |
 | `--console-level` | `INFO` | console (stdout) logging level (default INFO) |
 | `--file-level` | `DEBUG` | file logging level (default: same as --log) |
 | `--debug-stderr` | `False` | mirror DEBUG lines to stderr (default: off) |
