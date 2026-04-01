@@ -7054,6 +7054,18 @@ class ChannelMux:
 
         # DATA to local TCP writer (overlay -> local)
         if mtype == ChannelMux.MType.DATA:
+            open_key = self._tcp_open_key_by_chan.get(chan)
+            role = self._tcp_role_by_chan.get(chan)
+            pending = len(self._tcp_pending_data.get(chan, []))
+            self.log.debug(
+                "[TCP] chan=%s DATA arrival check: writer_ready=%s role=%s pending=%s open_bound=%s tcp_map_size=%s",
+                chan,
+                chan in self._tcp_by_chan,
+                role,
+                pending,
+                open_key is not None,
+                len(self._tcp_by_chan),
+            )
             tup = self._tcp_by_chan.get(chan)
             if not tup:
                 self._tcp_pending_data.setdefault(chan, []).append(data)
