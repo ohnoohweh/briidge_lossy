@@ -1,5 +1,13 @@
 # ObstacleBridge
 ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for barrier-resilient networking. It can run over multiple overlay transports (`myudp`, `tcp`, `quic`, `ws`), expose local TCP/UDP listener services through a reliable overlay, and host an admin UI for monitoring active channels.
+
+## Similar projects
+- [chisel](https://github.com/jpillora/chisel) — a well-known TCP/UDP tunnel over HTTP/WebSocket implemented in Go.
+
+## Why this project was developed
+- `chisel` is implemented in Go, and using/building it on Synology NAS environments can be difficult in practice.
+- ObstacleBridge adds the `myudp` transport to better handle network obstacles and traffic degradation conditions seen in large-scale Asian network environments.
+
 ## Repository layout
 - `src/obstacle_bridge/` — main implementation.
 - `tests/unit/` — targeted unit tests.
