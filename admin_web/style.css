@@ -35,9 +35,86 @@ body {
   padding: 24px;
 }
 
+.hidden {
+  display: none !important;
+}
+
 .shell {
   max-width: 1400px;
   margin: 0 auto;
+}
+
+body.auth-locked {
+  overflow: hidden;
+}
+
+body.auth-locked .shell {
+  filter: blur(8px);
+  pointer-events: none;
+  user-select: none;
+}
+
+.auth-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(6, 12, 22, 0.72);
+  backdrop-filter: blur(10px);
+}
+
+.auth-card {
+  width: min(100%, 420px);
+  padding: 28px;
+}
+
+.auth-copy {
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+.auth-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.auth-field {
+  display: grid;
+  gap: 8px;
+}
+
+.auth-field span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.auth-field input {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 15px;
+}
+
+.auth-message {
+  min-height: 20px;
+  margin: 0;
+  color: #ffb4b4;
+  font-size: 13px;
+}
+
+.auth-message.ok {
+  color: #9be7b0;
+}
+
+.auth-submit {
+  justify-self: start;
 }
 
 .topbar {
@@ -387,6 +464,11 @@ h1 {
   margin: 0 0 10px;
   color: #b8d3ff;
   font-size: 13px;
+}
+
+.config-secret-value {
+  color: var(--muted);
+  font-style: italic;
 }
 
 .meta-box {

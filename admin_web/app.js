@@ -40,6 +40,71 @@ function fmtUptime(sec) {
   return `${r}s`;
 }
 
+const authState = {
+  required: false,
+  authenticated: false,
+  appStarted: false,
+};
+
+function isApiEnabled() {
+  return !authState.required || authState.authenticated;
+}
+
+function setAuthMessage(message, isOk = false) {
+  const el = document.getElementById('authMessage');
+  if (!el) return;
+  el.textContent = message || '';
+  el.classList.toggle('ok', Boolean(message) && isOk);
+}
+
+function updateAuthUi() {
+  const locked = authState.required && !authState.authenticated;
+  document.body.classList.toggle('auth-locked', locked);
+  document.getElementById('authGate')?.classList.toggle('hidden', !locked);
+  document.getElementById('logoutBtn')?.classList.toggle('hidden', !authState.required || !authState.authenticated);
+}
+
+function handleAuthRequired(message = 'Authentication required.') {
+  if (!authState.required) return;
+  authState.authenticated = false;
+  updateAuthUi();
+  setAuthMessage(message);
+}
+
+async function apiFetch(url, options = {}) {
+  const { authRequest = false, ...fetchOptions } = options;
+  const response = await fetch(url, {
+    credentials: 'same-origin',
+    ...fetchOptions,
+  });
+  if (response.status === 401 && !authRequest) {
+    handleAuthRequired('Session expired. Please sign in again.');
+    throw new Error('HTTP 401');
+  }
+  return response;
+}
+
+async function sha256Hex(text) {
+  const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function fetchAuthState() {
+  const r = await apiFetch('/api/auth/state', { cache: 'no-store', authRequest: true });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+
+async function refreshAuthState() {
+  const state = await fetchAuthState();
+  authState.required = Boolean(state.auth_required);
+  authState.authenticated = !authState.required || Boolean(state.authenticated);
+  updateAuthUi();
+  if (!authState.required || authState.authenticated) {
+    setAuthMessage('');
+  }
+}
+
 function setText(id, value) {
   const el = document.getElementById(id);
   if (el) el.textContent = value;
@@ -128,7 +193,7 @@ function applyPeerState(state) {
 
 async function loadMeta() {
   try {
-    const r = await fetch('/api/meta', { cache: 'no-store' });
+    const r = await apiFetch('/api/meta', { cache: 'no-store' });
     const j = await r.json();
     setText('uptimeSec', fmtUptime(j.uptime_sec));
     const meta = document.getElementById('meta');
@@ -140,7 +205,7 @@ async function loadMeta() {
 }
 
 async function restart() {
-  const r = await fetch('/api/restart', { method: 'POST' });
+  const r = await apiFetch('/api/restart', { method: 'POST' });
   const j = await r.json();
   alert(JSON.stringify(j));
 }
@@ -148,7 +213,7 @@ async function restart() {
 async function exitProgram() {
   const confirmed = window.confirm('Exit the program now?');
   if (!confirmed) return;
-  const r = await fetch('/api/shutdown', { method: 'POST' });
+  const r = await apiFetch('/api/shutdown', { method: 'POST' });
   const j = await r.json();
   alert(JSON.stringify(j));
 }
@@ -162,6 +227,10 @@ function startPolling(task, intervalMs) {
 
   async function tick() {
     while (!stopped) {
+      if (!isApiEnabled()) {
+        await sleep(intervalMs);
+        continue;
+      }
       const startedAt = Date.now();
       try {
         await task();
@@ -187,7 +256,7 @@ function isTabActive(tabName) {
 
 async function loadStatus() {
   try {
-    const r = await fetch('/api/status', { cache: 'no-store' });
+    const r = await apiFetch('/api/status', { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
 
@@ -255,7 +324,7 @@ function renderPeerTable(rows) {
 
 async function loadConnections() {
   try {
-    const r = await fetch('/api/connections', { cache: 'no-store' });
+    const r = await apiFetch('/api/connections', { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
 
@@ -272,7 +341,7 @@ async function loadConnections() {
 
 async function loadPeers() {
   try {
-    const r = await fetch('/api/peers', { cache: 'no-store' });
+    const r = await apiFetch('/api/peers', { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
     renderPeerTable(j.peers || []);
@@ -283,7 +352,7 @@ async function loadPeers() {
 
 async function loadConfig() {
   try {
-    const r = await fetch('/api/config', { cache: 'no-store' });
+    const r = await apiFetch('/api/config', { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
     configState = {
@@ -304,6 +373,14 @@ async function saveConfig() {
   const updates = {};
   for (const input of editors) {
     const key = input.getAttribute('data-config-key');
+    const isSecret = input.getAttribute('data-secret') === 'true';
+    if (isSecret) {
+      const nextValue = input.value || '';
+      if (nextValue) {
+        updates[key] = nextValue;
+      }
+      continue;
+    }
     const raw = (input.value || '').trim();
     try {
       const parsed = JSON.parse(raw);
@@ -322,7 +399,7 @@ async function saveConfig() {
   }
 
   try {
-    const r = await fetch('/api/config', {
+    const r = await apiFetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ updates }),
@@ -347,28 +424,39 @@ function configValueToEditor(value) {
   return JSON.stringify(value);
 }
 
+function renderSecretInput(key) {
+  return `<input type="password" class="config-editor mono" data-config-key="${key}" data-secret="true" placeholder="Leave blank to keep current value" />`;
+}
+
 function renderConfigRows(items, config) {
   return (items || []).map((item) => {
     const key = item.key;
     const current = Object.prototype.hasOwnProperty.call(config, key) ? config[key] : null;
-    const currentRaw = configValueToEditor(current);
+    const isSecret = Boolean(item.secret);
+    const currentRaw = isSecret ? '' : configValueToEditor(current);
     const defaultRaw = configValueToEditor(item.default);
     const isLevelSetting = isLoggingLevelSetting(key, current, item.default);
     const isLogFileSetting = isLogFileConfigSetting(key);
     const isBooleanSetting = isBooleanConfigSetting(current, item.default);
     const hasChoices = !isLogFileSetting && Array.isArray(item.choices) && item.choices.length > 0;
-    const editorHtml = hasChoices
+    const editorHtml = isSecret
+      ? renderSecretInput(key)
+      : hasChoices
       ? renderChoiceSelect(key, current, item.choices)
       : (isBooleanSetting
         ? renderBooleanSelect(key, current)
         : (isLevelSetting
           ? renderLogLevelSelect(key, current)
           : `<input class="config-editor mono" data-config-key="${key}" value="${currentRaw.replace(/"/g, '&quot;')}" />`));
+    const currentValueHtml = isSecret
+      ? '<span class="config-secret-value">hidden</span>'
+      : currentRaw;
     return `
       <tr>
         <td class="mono">${key}</td>
         <td>${item.description || '(no description)'}</td>
         <td class="mono">${defaultRaw}</td>
+        <td class="mono">${currentValueHtml}</td>
         <td>${editorHtml}</td>
       </tr>
     `;
@@ -390,7 +478,8 @@ function renderConfigCard(title, rowsHtml) {
               <th>Key</th>
               <th>Description</th>
               <th>Default</th>
-              <th>Current (JSON)</th>
+              <th>Current</th>
+              <th>Edit</th>
             </tr>
           </thead>
           <tbody>${rowsHtml}</tbody>
@@ -482,7 +571,7 @@ function renderChoiceSelect(key, currentValue, choices) {
 
 async function loadLogs() {
   try {
-    const r = await fetch('/api/logs?limit=500', { cache: 'no-store' });
+    const r = await apiFetch('/api/logs?limit=500', { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
     const lines = Array.isArray(j.lines) ? j.lines : [];
@@ -502,6 +591,7 @@ function initTabs() {
       const target = tab.dataset.tab;
       tabs.forEach((t) => t.classList.toggle('active', t === tab));
       panels.forEach((p) => p.classList.toggle('active', p.id === `tab-${target}`));
+      if (!isApiEnabled()) return;
       if (target === 'status') {
         loadConnections();
         loadPeers();
@@ -511,6 +601,117 @@ function initTabs() {
       }
     });
   });
+}
+
+async function loginAdmin(event) {
+  event?.preventDefault();
+  const username = (document.getElementById('authUsername')?.value || '').trim();
+  const password = document.getElementById('authPassword')?.value || '';
+  if (!username || !password) {
+    setAuthMessage('Username and password are required.');
+    return;
+  }
+  if (!window.crypto?.subtle) {
+    setAuthMessage('Browser crypto support is required for login.');
+    return;
+  }
+  setAuthMessage('Authenticating...', true);
+  try {
+    const challengeResp = await apiFetch('/api/auth/challenge', { cache: 'no-store', authRequest: true });
+    if (!challengeResp.ok) throw new Error('HTTP ' + challengeResp.status);
+    const challenge = await challengeResp.json();
+    if (!challenge.auth_required) {
+      authState.required = false;
+      authState.authenticated = true;
+      updateAuthUi();
+      await startAdminApp();
+      return;
+    }
+    const proof = await sha256Hex(`${String(challenge.seed || '')}:${username}:${password}`);
+    const loginResp = await apiFetch('/api/auth/login', {
+      method: 'POST',
+      authRequest: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        challenge_id: String(challenge.challenge_id || ''),
+        proof,
+      }),
+    });
+    const loginDoc = await loginResp.json();
+    if (!loginResp.ok || !loginDoc.ok) {
+      throw new Error(loginDoc.error || `HTTP ${loginResp.status}`);
+    }
+    document.getElementById('authPassword').value = '';
+    authState.required = true;
+    authState.authenticated = true;
+    updateAuthUi();
+    setAuthMessage('');
+    await startAdminApp();
+  } catch (e) {
+    handleAuthRequired(`Login failed: ${e}`);
+  }
+}
+
+async function logoutAdmin() {
+  try {
+    await apiFetch('/api/auth/logout', { method: 'POST', authRequest: true });
+  } catch (e) {
+    console.error('logout failed', e);
+  }
+  authState.authenticated = false;
+  updateAuthUi();
+  setAuthMessage('Signed out.');
+}
+
+async function startAdminApp() {
+  if (!authState.appStarted) {
+    authState.appStarted = true;
+    loadStatus();
+    loadConnections();
+    loadPeers();
+    loadConfig();
+    startPolling(loadStatus, 1000);
+    startPolling(async () => {
+      if (!isTabActive('status')) return;
+      await loadConnections();
+    }, 1000);
+    startPolling(async () => {
+      if (!isTabActive('status')) return;
+      await loadPeers();
+    }, 1000);
+    startPolling(async () => {
+      if (!isTabActive('misc')) return;
+      await loadMeta();
+    }, 5000);
+    return;
+  }
+  if (isTabActive('status')) {
+    await loadStatus();
+    await loadConnections();
+    await loadPeers();
+    return;
+  }
+  if (isTabActive('configuration')) {
+    await loadConfig();
+    return;
+  }
+  if (isTabActive('misc')) {
+    await loadMeta();
+  }
+}
+
+async function bootstrapAdmin() {
+  try {
+    await refreshAuthState();
+  } catch (e) {
+    handleAuthRequired(`Authentication check failed: ${e}`);
+    return;
+  }
+  if (isApiEnabled()) {
+    await startAdminApp();
+  } else {
+    setAuthMessage('Authentication required.');
+  }
 }
 
 function initMetaToggle() {
@@ -523,26 +724,13 @@ function initMetaToggle() {
 }
 
 document.getElementById('restartBtn').addEventListener('click', restart);
+document.getElementById('logoutBtn')?.addEventListener('click', logoutAdmin);
 document.getElementById('exitBtn')?.addEventListener('click', exitProgram);
 document.getElementById('configReloadBtn')?.addEventListener('click', loadConfig);
 document.getElementById('configSaveBtn')?.addEventListener('click', saveConfig);
 document.getElementById('logsReloadBtn')?.addEventListener('click', loadLogs);
+document.getElementById('authForm')?.addEventListener('submit', loginAdmin);
 initTabs();
 initMetaToggle();
-loadStatus();
-loadConnections();
-loadPeers();
-loadConfig();
-startPolling(loadStatus, 1000);
-startPolling(async () => {
-  if (!isTabActive('status')) return;
-  await loadConnections();
-}, 1000);
-startPolling(async () => {
-  if (!isTabActive('status')) return;
-  await loadPeers();
-}, 1000);
-startPolling(async () => {
-  if (!isTabActive('misc')) return;
-  await loadMeta();
-}, 5000);
+updateAuthUi();
+bootstrapAdmin();

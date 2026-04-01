@@ -53,6 +53,8 @@ import mimetypes
 import os
 import pathlib
 import random
+import hashlib
+import secrets
 from dataclasses import dataclass
 from collections import deque
 from typing import Dict, Optional, Tuple, List, Set, Deque, Any, Callable, Literal
@@ -8624,14 +8626,18 @@ class Runner:
             },
         }
 
-    def get_config_snapshot(self) -> dict:
+    def get_config_snapshot(self, include_secrets: bool = False) -> dict:
         blocked = {
             "config", "dump_config", "save_config", "save_format", "force",
             "help",
         }
+        secret_keys = AdminWebUI._secret_config_keys()
         data = {}
         for k, v in vars(self.args).items():
             if k.startswith("_") or k in blocked:
+                continue
+            if k in secret_keys and not include_secrets:
+                data[k] = ""
                 continue
             if isinstance(v, (str, int, float, bool, list, dict)) or v is None:
                 data[k] = v
@@ -8687,6 +8693,8 @@ class Runner:
                     "description": descriptions.get(key, "(no description)"),
                     "default": defaults.get(key, None),
                 }
+                if key in AdminWebUI._secret_config_keys():
+                    row["secret"] = True
                 if key in choices:
                     row["choices"] = list(choices.get(key, []))
                 items.append(row)
@@ -8878,7 +8886,7 @@ class Runner:
             return (True, "")
         try:
             path = pathlib.Path(str(cfg_path))
-            payload = self._group_config_snapshot(self.get_config_snapshot())
+            payload = self._group_config_snapshot(self.get_config_snapshot(include_secrets=True))
             parent = path.parent
             if parent and str(parent) not in ("", "."):
                 parent.mkdir(parents=True, exist_ok=True)
@@ -8898,6 +8906,11 @@ class Runner:
             if not hasattr(self.args, key):
                 return (False, f"unknown config key: {key}")
             cur = getattr(self.args, key)
+            if key in AdminWebUI._secret_config_keys():
+                if not isinstance(value, str):
+                    return (False, f"{key} expects string")
+                setattr(self.args, key, value)
+                continue
             if isinstance(cur, bool):
                 if not isinstance(value, bool):
                     return (False, f"{key} expects boolean")
@@ -9075,6 +9088,9 @@ class Runner:
 # ------------ Admin Webinterface ------------
 
 class AdminWebUI:
+    AUTH_CHALLENGE_TTL_SEC = 90
+    AUTH_SESSION_TTL_SEC = 8 * 60 * 60
+
     @staticmethod
     def register_cli(p):
         g = p.add_argument_group("admin_web")
@@ -9110,6 +9126,22 @@ class AdminWebUI:
             default="",
             help="Optional bearer token for admin restart endpoint",
         )
+        g.add_argument(
+            "--admin-web-auth-disable",
+            action="store_true",
+            default=False,
+            help="Disable username/password challenge for admin web access",
+        )
+        g.add_argument(
+            "--admin-web-username",
+            default="",
+            help="Username for admin web access when challenge-based authentication is enabled",
+        )
+        g.add_argument(
+            "--admin-web-password",
+            default="",
+            help="Password for admin web access when challenge-based authentication is enabled",
+        )
 
     def __init__(self, args, runner):
         self.args = args
@@ -9118,6 +9150,8 @@ class AdminWebUI:
         self.log = logging.getLogger("admin_web")
         DebugLoggingConfigurator.debug_logger_status(self.log)
         self.started_monotonic = time.monotonic()
+        self._auth_challenges: Dict[str, dict] = {}
+        self._auth_sessions: Dict[str, float] = {}
 
     async def start(self):
         if not getattr(self.args, "admin_web", False):
@@ -9185,6 +9219,28 @@ class AdminWebUI:
 
             path = raw_path.split("?", 1)[0]
             self.log.info("ADMIN REQUEST method=%s path=%s", method, path)
+
+            if path == "/api/auth/state":
+                await self._handle_auth_state(writer, headers)
+                return
+
+            if path == "/api/auth/challenge":
+                await self._handle_auth_challenge(writer, method)
+                return
+
+            if path == "/api/auth/login":
+                await self._handle_auth_login(writer, method, body)
+                return
+
+            if path == "/api/auth/logout":
+                await self._handle_auth_logout(writer, method, headers)
+                return
+
+            if path.startswith("/api/") and not self._is_authenticated(headers):
+                payload = {"ok": False, "authenticated": False, "error": "authentication required"}
+                self._log_api_response(path, 401, payload, summary="auth required")
+                await self._send_json(writer, 401, payload)
+                return
 
             if path == "/api/health":
                 payload={"ok": True}
@@ -9279,6 +9335,8 @@ class AdminWebUI:
         if not ok:
             await self._send_json(writer, 400, {"ok": False, "error": err})
             return
+        if any(key in AdminWebUI._secret_config_keys() or key in {"admin_web_auth_disable", "admin_web_username"} for key in updates.keys()):
+            self.reset_auth_state()
         payload = {"ok": True, "config": self.runner.get_config_snapshot()}
         self._log_api_response("/api/config", 200, payload, summary=f"updated keys={list(updates.keys())}")
         await self._send_json(writer, 200, payload)
@@ -9344,6 +9402,151 @@ class AdminWebUI:
         # let response flush before stopping (non-restart exit code)
         asyncio.get_running_loop().call_soon(self.runner.request_shutdown, 76)
 
+    @staticmethod
+    def _secret_config_keys() -> Set[str]:
+        return {"admin_web_password"}
+
+    def auth_required(self) -> bool:
+        if bool(getattr(self.args, "admin_web_auth_disable", False)):
+            return False
+        username = str(getattr(self.args, "admin_web_username", "") or "")
+        password = str(getattr(self.args, "admin_web_password", "") or "")
+        return bool(username and password)
+
+    def reset_auth_state(self) -> None:
+        self._auth_challenges.clear()
+        self._auth_sessions.clear()
+
+    def _prune_auth_state(self) -> None:
+        now = time.time()
+        expired_challenges = [key for key, item in self._auth_challenges.items() if float(item.get("expires_at", 0.0)) <= now]
+        for key in expired_challenges:
+            self._auth_challenges.pop(key, None)
+        expired_sessions = [key for key, expires_at in self._auth_sessions.items() if float(expires_at) <= now]
+        for key in expired_sessions:
+            self._auth_sessions.pop(key, None)
+
+    def _parse_cookie_header(self, headers: dict) -> Dict[str, str]:
+        raw = str(headers.get("cookie", "") or "")
+        cookies: Dict[str, str] = {}
+        for part in raw.split(";"):
+            item = part.strip()
+            if not item or "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            cookies[key.strip()] = value.strip()
+        return cookies
+
+    def _session_cookie_name(self) -> str:
+        return "admin_web_session"
+
+    def _is_authenticated(self, headers: dict) -> bool:
+        if not self.auth_required():
+            return True
+        self._prune_auth_state()
+        token = self._parse_cookie_header(headers).get(self._session_cookie_name(), "")
+        return bool(token and token in self._auth_sessions)
+
+    def _build_auth_seed(self, challenge_id: str) -> str:
+        return secrets.token_hex(32) + challenge_id
+
+    def _build_auth_response(self, seed: str, username: str, password: str) -> str:
+        msg = f"{seed}:{username}:{password}".encode("utf-8")
+        return hashlib.sha256(msg).hexdigest()
+
+    def _issue_session_headers(self) -> List[Tuple[str, str]]:
+        token = secrets.token_hex(32)
+        self._auth_sessions[token] = time.time() + self.AUTH_SESSION_TTL_SEC
+        cookie = f"{self._session_cookie_name()}={token}; Path=/; HttpOnly; SameSite=Strict"
+        return [("Set-Cookie", cookie)]
+
+    async def _handle_auth_state(self, writer, headers: dict):
+        payload = {
+            "ok": True,
+            "auth_required": self.auth_required(),
+            "authenticated": self._is_authenticated(headers),
+        }
+        self._log_api_response("/api/auth/state", 200, payload)
+        await self._send_json(writer, 200, payload)
+
+    async def _handle_auth_challenge(self, writer, method: str):
+        if method != "GET":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+        if not self.auth_required():
+            payload = {"ok": True, "auth_required": False}
+            self._log_api_response("/api/auth/challenge", 200, payload, summary="auth disabled")
+            await self._send_json(writer, 200, payload)
+            return
+        self._prune_auth_state()
+        challenge_id = secrets.token_hex(16)
+        seed = self._build_auth_seed(challenge_id)
+        self._auth_challenges[challenge_id] = {
+            "seed": seed,
+            "expires_at": time.time() + self.AUTH_CHALLENGE_TTL_SEC,
+        }
+        payload = {
+            "ok": True,
+            "auth_required": True,
+            "challenge_id": challenge_id,
+            "seed": seed,
+            "algorithm": "sha256(seed:username:password)",
+        }
+        self._log_api_response("/api/auth/challenge", 200, {"ok": True, "auth_required": True}, summary="issued challenge")
+        await self._send_json(writer, 200, payload)
+
+    async def _handle_auth_login(self, writer, method: str, body: bytes):
+        if method != "POST":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+        if not self.auth_required():
+            payload = {"ok": True, "auth_required": False, "authenticated": True}
+            await self._send_json(writer, 200, payload, headers=self._issue_session_headers())
+            return
+        try:
+            req = json.loads((body or b"{}").decode("utf-8"))
+        except Exception:
+            await self._send_json(writer, 400, {"ok": False, "error": "invalid JSON body"})
+            return
+        challenge_id = str(req.get("challenge_id", "") or "")
+        proof = str(req.get("proof", "") or "").strip().lower()
+        self._prune_auth_state()
+        challenge = self._auth_challenges.pop(challenge_id, None)
+        if not challenge:
+            payload = {"ok": False, "authenticated": False, "error": "invalid or expired challenge"}
+            self._log_api_response("/api/auth/login", 403, payload, summary="invalid challenge")
+            await self._send_json(writer, 403, payload)
+            return
+        expected = self._build_auth_response(
+            str(challenge.get("seed", "") or ""),
+            str(getattr(self.args, "admin_web_username", "") or ""),
+            str(getattr(self.args, "admin_web_password", "") or ""),
+        )
+        if proof != expected:
+            payload = {"ok": False, "authenticated": False, "error": "authentication failed"}
+            self._log_api_response("/api/auth/login", 403, payload, summary="bad proof")
+            await self._send_json(writer, 403, payload)
+            return
+        payload = {"ok": True, "authenticated": True}
+        self._log_api_response("/api/auth/login", 200, payload, summary="authenticated")
+        await self._send_json(writer, 200, payload, headers=self._issue_session_headers())
+
+    async def _handle_auth_logout(self, writer, method: str, headers: dict):
+        if method != "POST":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+        token = self._parse_cookie_header(headers).get(self._session_cookie_name(), "")
+        if token:
+            self._auth_sessions.pop(token, None)
+        payload = {"ok": True, "authenticated": False}
+        self._log_api_response("/api/auth/logout", 200, payload)
+        await self._send_json(
+            writer,
+            200,
+            payload,
+            headers=[("Set-Cookie", f"{self._session_cookie_name()}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")],
+        )
+
     async def _handle_static(self, writer, req_path):
         base = pathlib.Path(self.args.admin_web_dir).resolve()
 
@@ -9407,14 +9610,15 @@ class AdminWebUI:
                 self._json_one_line(payload),
             )
 
-    async def _send_json(self, writer, code, obj):
+    async def _send_json(self, writer, code, obj, headers: Optional[List[Tuple[str, str]]] = None):
         data = json.dumps(obj, indent=2).encode("utf-8")
-        await self._send(writer, code, data, "application/json; charset=utf-8")
+        await self._send(writer, code, data, "application/json; charset=utf-8", headers=headers)
 
-    async def _send(self, writer, code, data, content_type):
+    async def _send(self, writer, code, data, content_type, headers: Optional[List[Tuple[str, str]]] = None):
         reason = {
             200: "OK",
             400: "Bad Request",
+            401: "Unauthorized",
             403: "Forbidden",
             404: "Not Found",
             405: "Method Not Allowed",
@@ -9427,8 +9631,11 @@ class AdminWebUI:
             f"Content-Length: {len(data)}\r\n"
             f"Connection: close\r\n"
             f"Cache-Control: no-cache\r\n"
-            f"\r\n"
-        ).encode("utf-8")
+        )
+        extra = ""
+        for key, value in (headers or []):
+            extra += f"{key}: {value}\r\n"
+        hdr = (hdr + extra + "\r\n").encode("utf-8")
 
         writer.write(hdr + data)
         await writer.drain()

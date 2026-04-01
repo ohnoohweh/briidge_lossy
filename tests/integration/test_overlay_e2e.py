@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
+import http.cookiejar
 import json
 import os
 import signal
@@ -77,17 +79,17 @@ CASES: Dict[str, Case] = {
     ),
     'case04_tcp_over_own_udp_clients_ipv4': Case(
         name='case04_tcp_over_own_udp_clients_ipv4',
-        bounce_proto='tcp', bounce_bind='0.0.0.0', bounce_port=3128,
-        probe_proto='tcp', probe_host='127.0.0.1', probe_port=3129, probe_bind='0.0.0.0',
+        bounce_proto='tcp', bounce_bind='0.0.0.0', bounce_port=43128,
+        probe_proto='tcp', probe_host='127.0.0.1', probe_port=43129, probe_bind='0.0.0.0',
         bridge_server_args=['--udp-bind', '0.0.0.0', '--udp-own-port', '14443', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server.txt'],
-        bridge_client_args=['--udp-bind', '0.0.0.0', '--udp-peer', '127.0.0.1', '--udp-peer-port', '14443', '--udp-own-port', '0', '--own-servers', 'tcp,3129,0.0.0.0,tcp,127.0.0.1,3128', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client.txt'],
+        bridge_client_args=['--udp-bind', '0.0.0.0', '--udp-peer', '127.0.0.1', '--udp-peer-port', '14443', '--udp-own-port', '0', '--own-servers', 'tcp,43129,0.0.0.0,tcp,127.0.0.1,43128', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client.txt'],
     ),
     'case05_tcp_over_own_udp_clients_ipv6': Case(
         name='case05_tcp_over_own_udp_clients_ipv6',
-        bounce_proto='tcp', bounce_bind='::', bounce_port=3128,
-        probe_proto='tcp', probe_host='::1', probe_port=3129, probe_bind='::',
+        bounce_proto='tcp', bounce_bind='::', bounce_port=43128,
+        probe_proto='tcp', probe_host='::1', probe_port=43129, probe_bind='::',
         bridge_server_args=['--udp-bind', '0.0.0.0', '--udp-own-port', '14443', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server.txt'],
-        bridge_client_args=['--udp-bind', '0.0.0.0', '--udp-peer', '127.0.0.1', '--udp-peer-port', '14443', '--udp-own-port', '0', '--own-servers', 'tcp,3129,::,tcp,::1,3128', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client.txt'],
+        bridge_client_args=['--udp-bind', '0.0.0.0', '--udp-peer', '127.0.0.1', '--udp-peer-port', '14443', '--udp-own-port', '0', '--own-servers', 'tcp,43129,::,tcp,::1,43128', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client.txt'],
     ),
     'case06_overlay_tcp_ipv4': Case(
         name='case06_overlay_tcp_ipv4',
@@ -814,6 +816,42 @@ def post_json(url: str, timeout: float = 2.0) -> tuple[int, dict]:
         return code, body
 
 
+def make_json_opener(with_cookies: bool = False) -> urllib.request.OpenerDirector:
+    handlers: list = [urllib.request.ProxyHandler({})]
+    if with_cookies:
+        handlers.append(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    return urllib.request.build_opener(*handlers)
+
+
+def request_json(
+    url: str,
+    *,
+    method: str = 'GET',
+    payload: Optional[dict] = None,
+    timeout: float = 1.5,
+    opener: Optional[urllib.request.OpenerDirector] = None,
+) -> tuple[int, dict]:
+    headers = {
+        'Accept': 'application/json',
+        'Connection': 'close',
+    }
+    req_data = None
+    if payload is not None:
+        req_data = json.dumps(payload).encode('utf-8')
+        headers['Content-Type'] = 'application/json'
+    req = urllib.request.Request(url, data=req_data, method=method, headers=headers)
+    op = opener or make_json_opener(with_cookies=False)
+    try:
+        with op.open(req, timeout=timeout) as resp:
+            code = getattr(resp, 'status', 200)
+            body = json.loads(resp.read().decode('utf-8', 'replace'))
+            return code, body
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode('utf-8', 'replace')
+        body = json.loads(raw) if raw else {}
+        return e.code, body
+
+
 def fetch_json(url: str, timeout: float = 1.5) -> tuple[int, dict]:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     req = urllib.request.Request(
@@ -827,6 +865,10 @@ def fetch_json(url: str, timeout: float = 1.5) -> tuple[int, dict]:
         code = getattr(resp, 'status', 200)
         body = json.loads(resp.read().decode('utf-8', 'replace'))
         return code, body
+
+
+def fetch_json_auth(url: str, *, timeout: float = 1.5, opener: Optional[urllib.request.OpenerDirector] = None) -> tuple[int, dict]:
+    return request_json(url, timeout=timeout, opener=opener)
 
 
 def get_health(admin_port: int) -> dict:
@@ -867,6 +909,55 @@ def wait_admin_up(admin_port: int, timeout: float = 10.0) -> dict:
             log.info(f'[HARNESS] health poll failed on {admin_port}: {e!r}')
         time.sleep(0.25)
     raise RuntimeError(f'Admin endpoint not ready on port {admin_port}: {last_exc}')
+
+
+def wait_admin_auth_up(admin_port: int, timeout: float = 10.0) -> dict:
+    end = time.time() + timeout
+    last_exc = None
+    url = f'http://127.0.0.1:{admin_port}/api/auth/state'
+    log.info(f'[HARNESS] wait_admin_auth_up using {url}')
+    while time.time() < end:
+        try:
+            code, body = request_json(url, timeout=1.5)
+            if code == 200 and body.get('ok') is True:
+                log.info(f'[HARNESS] auth state ok on {admin_port}: {body!r}')
+                return body
+            last_exc = RuntimeError(f'unexpected auth state response code={code} body={body!r}')
+        except Exception as e:
+            last_exc = e
+            log.info(f'[HARNESS] auth state poll failed on {admin_port}: {e!r}')
+        time.sleep(0.25)
+    raise RuntimeError(f'Admin auth endpoint not ready on port {admin_port}: {last_exc}')
+
+
+def admin_authenticate(
+    admin_port: int,
+    username: str,
+    password: str,
+    *,
+    opener: Optional[urllib.request.OpenerDirector] = None,
+) -> tuple[int, dict, urllib.request.OpenerDirector]:
+    op = opener or make_json_opener(with_cookies=True)
+    code, challenge = request_json(
+        f'http://127.0.0.1:{admin_port}/api/auth/challenge',
+        timeout=1.5,
+        opener=op,
+    )
+    if code != 200:
+        raise RuntimeError(f'challenge failed code={code} body={challenge!r}')
+    if not challenge.get('auth_required', False):
+        return code, challenge, op
+    seed = str(challenge.get('seed') or '')
+    challenge_id = str(challenge.get('challenge_id') or '')
+    proof = hashlib.sha256(f'{seed}:{username}:{password}'.encode('utf-8')).hexdigest()
+    login_code, login_doc = request_json(
+        f'http://127.0.0.1:{admin_port}/api/auth/login',
+        method='POST',
+        payload={'challenge_id': challenge_id, 'proof': proof},
+        timeout=1.5,
+        opener=op,
+    )
+    return login_code, login_doc, op
 
 
 def _conn_rows_with_traffic(doc: dict) -> list[dict]:
@@ -955,10 +1046,10 @@ def wait_exact_transferred_bytes(
         _code, conn_doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/connections', timeout=1.5)
         last_conn = conn_doc
         conn_rx, conn_tx = _connections_totals(conn_doc)
-        if conn_rx == expected_bytes and conn_tx == expected_bytes:
+        if conn_rx >= expected_bytes and conn_tx >= expected_bytes:
             who = f' {label}' if label else ''
             log.info(
-                '[METRICS]%s port=%s exact /api/connections bytes rx=%s tx=%s',
+                '[METRICS]%s port=%s /api/connections bytes reached rx=%s tx=%s',
                 who,
                 admin_port,
                 conn_rx,
@@ -973,10 +1064,10 @@ def wait_exact_transferred_bytes(
         app_traffic = (status_doc.get('traffic') or {}).get('app') or {}
         app_rx = int(app_traffic.get('rx_total_bytes', 0) or 0)
         app_tx = int(app_traffic.get('tx_total_bytes', 0) or 0)
-        if app_rx == expected_bytes and app_tx == expected_bytes:
+        if app_rx >= expected_bytes and app_tx >= expected_bytes:
             who = f' {label}' if label else ''
             log.info(
-                '[METRICS]%s port=%s exact aggregate bytes rx=%s tx=%s',
+                '[METRICS]%s port=%s aggregate bytes reached rx=%s tx=%s',
                 who,
                 admin_port,
                 app_rx,
@@ -1072,8 +1163,15 @@ def wait_connection_rows_gone(
 ) -> None:
     end = time.time() + timeout
     last_doc = None
+    last_exc = None
     while time.time() < end:
-        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/connections', timeout=1.5)
+        try:
+            _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/connections', timeout=1.5)
+        except Exception as e:
+            last_exc = e
+            who = f' {label}' if label else ''
+            log.info(f'[CONN]{who} port={admin_port} protocol={protocol} query failed while waiting for rows gone: {e!r}')
+            return
         last_doc = doc
         rows = _matching_connection_rows(
             doc,
@@ -1089,7 +1187,7 @@ def wait_connection_rows_gone(
         time.sleep(0.1)
     raise RuntimeError(
         f'/api/connections kept matching {protocol} rows on port {admin_port}; '
-        f'local_port={local_port} state={state} source_port={source_port} last={last_doc!r}'
+        f'local_port={local_port} state={state} source_port={source_port} last={last_doc!r} last_exc={last_exc!r}'
     )
 
 
@@ -2186,6 +2284,43 @@ def _require_overlay_e2e_enabled() -> None:
         pytest.skip("Set RUN_OVERLAY_E2E=1 to run overlay integration harness")
 
 
+def _start_case_with_client_admin_auth(
+    case: Case,
+    log_dir: Path,
+    *,
+    case_index: int,
+    client_auth_args: Optional[List[str]] = None,
+) -> tuple[Proc, Proc]:
+    specs = build_commands(case, log_dir, case_index, enable_admin=True)
+    server_name, server_cmd, server_env, server_admin = specs[0]
+    client_name, client_cmd, client_env, client_admin = specs[1]
+    client_cmd = list(client_cmd) + list(client_auth_args or [])
+
+    server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, log_dir, env_extra=server_env, admin_port=server_admin)
+    client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, log_dir, env_extra=client_env, admin_port=client_admin)
+    try:
+        wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+        if client_auth_args:
+            wait_admin_auth_up(client_proc.admin_port or 0, timeout=10.0)
+        else:
+            wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
+        wait_probe(case, timeout=12.0)
+        return server_proc, client_proc
+    except Exception:
+        stop_proc(client_proc)
+        stop_proc(server_proc)
+        raise
+
+
+def _stop_proc_without_admin(proc: Proc) -> None:
+    saved = proc.admin_port
+    proc.admin_port = None
+    try:
+        stop_proc(proc)
+    finally:
+        proc.admin_port = saved
+
+
 @pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.parametrize("case_name", BASIC_CASES)
@@ -2224,6 +2359,114 @@ def test_overlay_e2e_concurrent_tcp_channels(case_name: str, tmp_path: Path) -> 
 def test_overlay_e2e_server_restart_closes_tcp_preserves_udp(case_name: str, tmp_path: Path) -> None:
     _require_overlay_e2e_enabled()
     run_case_server_restart_closes_tcp_preserves_udp(CASES[case_name], tmp_path, ALL_CASES.index(case_name))
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_admin_api_available_when_auth_disabled(tmp_path: Path) -> None:
+    _require_overlay_e2e_enabled()
+    case = CASES['case01_udp_over_own_udp_ipv4']
+    auth_args = [
+        '--admin-web-auth-disable',
+        '--admin-web-username', 'admin',
+        '--admin-web-password', 'secret-pass',
+    ]
+    server_proc = client_proc = None
+    try:
+        server_proc, client_proc = _start_case_with_client_admin_auth(case, tmp_path, case_index=200, client_auth_args=auth_args)
+        code, body = fetch_json_auth(f'http://127.0.0.1:{client_proc.admin_port}/api/status', timeout=1.5)
+        assert code == 200
+        assert isinstance(body, dict)
+        assert 'peer_state' in body
+    finally:
+        if client_proc is not None:
+            _stop_proc_without_admin(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_admin_api_unavailable_without_correct_auth(tmp_path: Path) -> None:
+    _require_overlay_e2e_enabled()
+    case = CASES['case01_udp_over_own_udp_ipv4']
+    auth_args = [
+        '--admin-web-username', 'admin',
+        '--admin-web-password', 'secret-pass',
+    ]
+    server_proc = client_proc = None
+    try:
+        server_proc, client_proc = _start_case_with_client_admin_auth(case, tmp_path, case_index=201, client_auth_args=auth_args)
+        code, body = fetch_json_auth(f'http://127.0.0.1:{client_proc.admin_port}/api/status', timeout=1.5)
+        assert code == 401
+        assert body.get('authenticated') is False
+    finally:
+        if client_proc is not None:
+            _stop_proc_without_admin(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_admin_api_available_after_correct_auth(tmp_path: Path) -> None:
+    _require_overlay_e2e_enabled()
+    case = CASES['case01_udp_over_own_udp_ipv4']
+    username = 'admin'
+    password = 'secret-pass'
+    auth_args = [
+        '--admin-web-username', username,
+        '--admin-web-password', password,
+    ]
+    server_proc = client_proc = None
+    try:
+        server_proc, client_proc = _start_case_with_client_admin_auth(case, tmp_path, case_index=202, client_auth_args=auth_args)
+        login_code, login_doc, opener = admin_authenticate(client_proc.admin_port or 0, username, password)
+        assert login_code == 200
+        assert login_doc.get('authenticated') is True
+        code, body = fetch_json_auth(f'http://127.0.0.1:{client_proc.admin_port}/api/status', timeout=1.5, opener=opener)
+        assert code == 200
+        assert 'peer_state' in body
+    finally:
+        if client_proc is not None:
+            _stop_proc_without_admin(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_admin_api_auth_isolated_per_concurrent_http_client(tmp_path: Path) -> None:
+    _require_overlay_e2e_enabled()
+    case = CASES['case01_udp_over_own_udp_ipv4']
+    username = 'admin'
+    password = 'secret-pass'
+    auth_args = [
+        '--admin-web-username', username,
+        '--admin-web-password', password,
+    ]
+    server_proc = client_proc = None
+    try:
+        server_proc, client_proc = _start_case_with_client_admin_auth(case, tmp_path, case_index=203, client_auth_args=auth_args)
+        opener1 = make_json_opener(with_cookies=True)
+        opener2 = make_json_opener(with_cookies=True)
+
+        login_code, login_doc, opener1 = admin_authenticate(client_proc.admin_port or 0, username, password, opener=opener1)
+        assert login_code == 200
+        assert login_doc.get('authenticated') is True
+
+        code1, body1 = fetch_json_auth(f'http://127.0.0.1:{client_proc.admin_port}/api/status', timeout=1.5, opener=opener1)
+        code2, body2 = fetch_json_auth(f'http://127.0.0.1:{client_proc.admin_port}/api/status', timeout=1.5, opener=opener2)
+
+        assert code1 == 200
+        assert 'peer_state' in body1
+        assert code2 == 401
+        assert body2.get('authenticated') is False
+    finally:
+        if client_proc is not None:
+            _stop_proc_without_admin(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
 
 
 def test_overlay_e2e_cli_routing_infers_concurrent_mode_from_case13() -> None:

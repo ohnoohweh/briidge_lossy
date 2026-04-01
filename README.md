@@ -322,7 +322,12 @@ Expected behavior:
 | `--admin-web-path` | `/` | Base path for admin web interface |
 | `--admin-web-dir` | `./admin_web` | Directory containing admin web files |
 | `--admin-web-token` | `` | Optional bearer token for admin restart endpoint |
+| `--admin-web-auth-disable` | `False` | Disable admin web username/password challenge |
+| `--admin-web-username` | `` | Username for admin web access when challenge-based authentication is enabled |
+| `--admin-web-password` | `` | Password for admin web access when challenge-based authentication is enabled; redacted from admin config snapshots |
 | `--admin-web-log-max-lines` | `1200` | Maximum number of debug log lines kept in memory for the admin web log view |
+
+When `--admin-web-username` and `--admin-web-password` are configured and auth is not disabled, the admin web page requires a challenge-response login. The browser requests a one-time seed, hashes `seed:username:password` client-side, and sends only the hash proof back to the server. The configured password is not returned by the admin config API.
 
 #### Admin web examples
 
