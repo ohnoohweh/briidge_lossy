@@ -153,6 +153,38 @@ async function exitProgram() {
   alert(JSON.stringify(j));
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function startPolling(task, intervalMs) {
+  let stopped = false;
+
+  async function tick() {
+    while (!stopped) {
+      const startedAt = Date.now();
+      try {
+        await task();
+      } catch (e) {
+        console.error('poll task failed', e);
+      }
+      const elapsedMs = Date.now() - startedAt;
+      const waitMs = Math.max(0, intervalMs - elapsedMs);
+      await sleep(waitMs);
+    }
+  }
+
+  tick();
+  return () => {
+    stopped = true;
+  };
+}
+
+function isTabActive(tabName) {
+  const panel = document.getElementById(`tab-${tabName}`);
+  return Boolean(panel && panel.classList.contains('active'));
+}
+
 async function loadStatus() {
   try {
     const r = await fetch('/api/status', { cache: 'no-store' });
@@ -470,6 +502,13 @@ function initTabs() {
       const target = tab.dataset.tab;
       tabs.forEach((t) => t.classList.toggle('active', t === tab));
       panels.forEach((p) => p.classList.toggle('active', p.id === `tab-${target}`));
+      if (target === 'status') {
+        loadConnections();
+        loadPeers();
+      }
+      if (target === 'misc') {
+        loadMeta();
+      }
     });
   });
 }
@@ -490,14 +529,20 @@ document.getElementById('configSaveBtn')?.addEventListener('click', saveConfig);
 document.getElementById('logsReloadBtn')?.addEventListener('click', loadLogs);
 initTabs();
 initMetaToggle();
-loadMeta();
 loadStatus();
 loadConnections();
 loadPeers();
 loadConfig();
-loadLogs();
-setInterval(loadStatus, 1000);
-setInterval(loadConnections, 1000);
-setInterval(loadPeers, 1000);
-setInterval(loadMeta, 5000);
-setInterval(loadLogs, 2000);
+startPolling(loadStatus, 1000);
+startPolling(async () => {
+  if (!isTabActive('status')) return;
+  await loadConnections();
+}, 1000);
+startPolling(async () => {
+  if (!isTabActive('status')) return;
+  await loadPeers();
+}, 1000);
+startPolling(async () => {
+  if (!isTabActive('misc')) return;
+  await loadMeta();
+}, 5000);
