@@ -2,3 +2,4 @@ __pycache__
 *.cfg
 .codex
 run.sh
+*.egg-info/

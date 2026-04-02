@@ -205,6 +205,111 @@ def _append_args(args: List[str], extra: List[str]) -> List[str]:
     return list(args) + list(extra)
 
 
+def _xdist_worker_index() -> int:
+    worker = str(os.environ.get('PYTEST_XDIST_WORKER') or '').strip()
+    if worker.startswith('gw'):
+        suffix = worker[2:]
+        if suffix.isdigit():
+            return int(suffix)
+    return 0
+
+
+def _xdist_worker_count() -> int:
+    raw = str(os.environ.get('PYTEST_XDIST_WORKER_COUNT') or '').strip()
+    if raw.isdigit():
+        return max(1, int(raw))
+    return max(1, _xdist_worker_index() + 1)
+
+
+def _shift_port(port: int, offset: int) -> int:
+    if int(port) == 0:
+        return 0
+    shifted = int(port) + int(offset)
+    if shifted >= 65535:
+        raise ValueError(f'port overflow while shifting {port} by {offset}')
+    return shifted
+
+
+def _case_port_offset(case_index: int, stride: int = 64, highest_static_port: int = 55000) -> int:
+    worker_index = _xdist_worker_index()
+    worker_count = _xdist_worker_count()
+    max_offset = 65535 - int(highest_static_port) - 1
+    if max_offset < stride:
+        raise ValueError(
+            f'port allocation window too small: highest_static_port={highest_static_port} stride={stride}'
+        )
+    per_worker_budget = max(1, max_offset // worker_count)
+    if per_worker_budget < stride:
+        raise ValueError(
+            f'too many xdist workers for safe port allocation: '
+            f'workers={worker_count} highest_static_port={highest_static_port} stride={stride}'
+        )
+    case_slots = max(1, per_worker_budget // stride)
+    case_slot = (int(case_index) % case_slots) * stride
+    return worker_index * per_worker_budget + case_slot
+
+
+def _shift_service_specs(raw_specs: List[str], offset: int) -> List[str]:
+    shifted: List[str] = []
+    for raw in raw_specs:
+        parts = [p.strip() for p in raw.split(',')]
+        if len(parts) < 6:
+            shifted.append(raw)
+            continue
+        parts[1] = str(_shift_port(int(parts[1]), offset))
+        parts[5] = str(_shift_port(int(parts[5]), offset))
+        shifted.append(','.join(parts))
+    return shifted
+
+
+def _shift_port_options(args: List[str], offset: int) -> List[str]:
+    port_options = {
+        '--udp-own-port',
+        '--udp-peer-port',
+        '--tcp-own-port',
+        '--tcp-peer-port',
+        '--ws-own-port',
+        '--ws-peer-port',
+        '--quic-own-port',
+        '--quic-peer-port',
+        '--admin-web-port',
+    }
+    service_options = {'--own-servers', '--remote-servers'}
+    out: List[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in port_options and i + 1 < len(args):
+            out.extend([arg, str(_shift_port(int(args[i + 1]), offset))])
+            i += 2
+            continue
+        if arg in service_options:
+            out.append(arg)
+            i += 1
+            specs: List[str] = []
+            while i < len(args) and not str(args[i]).startswith('--'):
+                specs.append(str(args[i]))
+                i += 1
+            out.extend(_shift_service_specs(specs, offset))
+            continue
+        out.append(arg)
+        i += 1
+    return out
+
+
+def materialize_case_ports(case: Case, case_index: int) -> Case:
+    offset = _case_port_offset(case_index)
+    if offset == 0:
+        return case
+    return replace(
+        case,
+        bounce_port=_shift_port(case.bounce_port, offset),
+        probe_port=_shift_port(case.probe_port, offset),
+        bridge_server_args=_shift_port_options(case.bridge_server_args, offset),
+        bridge_client_args=_shift_port_options(case.bridge_client_args, offset),
+    )
+
+
 def _replace_own_servers_local_port(args: List[str], local_port: int) -> List[str]:
     out = list(args)
     if '--own-servers' not in out:
@@ -781,7 +886,7 @@ def _listener_overlay_port(case: Case, transport: str) -> int:
 
 
 def alloc_admin_ports(case_index: int, base: int = 18180) -> Tuple[int, int]:
-    server = base + case_index * 20
+    server = base + _xdist_worker_index() * 1000 + case_index * 20
     client = server + 10
     return server, client
 
@@ -1356,6 +1461,7 @@ def wait_status_not_connected(admin_port: int, timeout: float = 30.0, label: str
     raise RuntimeError(f'Port {admin_port} stayed CONNECTED for {timeout}s; last={last!r}')
 
 def run_case(case: Case, log_dir: Path, case_index: int, settle_s: Optional[float] = None) -> None:
+    case = materialize_case_ports(case, case_index)
     procs: List[Proc] = []
     bounce = BounceBackServer(
         name=f'{case.name}_bounce',
@@ -1417,6 +1523,7 @@ def run_case(case: Case, log_dir: Path, case_index: int, settle_s: Optional[floa
 
 
 def run_case_reconnect(case: Case, log_dir: Path, case_index: int, settle_s: Optional[float] = None, reconnect_timeout: float = 30.0) -> None:
+    case = materialize_case_ports(case, case_index)
     
     bounce = BounceBackServer(
         name=f'{case.name}_bounce',
@@ -1565,6 +1672,7 @@ def run_case_reconnect(case: Case, log_dir: Path, case_index: int, settle_s: Opt
 
 
 def run_case_two_peer_clients_listener(case: Case, log_dir: Path, case_index: int, settle_s: Optional[float] = None) -> None:
+    case = materialize_case_ports(case, case_index)
     bounce = BounceBackServer(
         name=f'{case.name}_bounce',
         proto=case.bounce_proto,
@@ -1596,7 +1704,8 @@ def run_case_two_peer_clients_listener(case: Case, log_dir: Path, case_index: in
         wait_admin_up(client1_proc.admin_port or 0, timeout=10.0)
 
         phase('4. Start client #2 bridge with a different local UDP service port')
-        client2_cmd = _replace_own_servers_local_port(c_cmd, 16668)
+        second_client_local_port = case.probe_port + 1
+        client2_cmd = _replace_own_servers_local_port(c_cmd, second_client_local_port)
         client2_cmd += ['--admin-web-port', '0']
         client2_proc = start_proc(f'{case.name}_{c_name}_2', client2_cmd, log_dir, env_extra=c_env, admin_port=None)
         time.sleep(0.5)
@@ -1609,7 +1718,7 @@ def run_case_two_peer_clients_listener(case: Case, log_dir: Path, case_index: in
 
         phase('5. Verify both client-side UDP service ports are reachable through the listener')
         wait_probe(case, payload=b'\x01\x41', timeout=8.0)
-        second_reply = probe_udp(case.probe_host, 16668, case.probe_bind, b'\x01\x42', timeout=2.0)
+        second_reply = probe_udp(case.probe_host, second_client_local_port, case.probe_bind, b'\x01\x42', timeout=2.0)
         if second_reply != b'\x02\x42':
             raise RuntimeError(f'Unexpected second client probe response: {second_reply!r}')
 
@@ -1637,6 +1746,7 @@ def run_case_two_peer_clients_listener(case: Case, log_dir: Path, case_index: in
 
 
 def run_case_concurrent_tcp_channels(case: Case, log_dir: Path, case_index: int, settle_s: Optional[float] = None) -> None:
+    case = materialize_case_ports(case, case_index)
     if case.name == 'case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp':
         run_case_mixed_overlay_two_clients_concurrent_udp_tcp(case, log_dir, case_index, settle_s=settle_s)
         return
@@ -1656,14 +1766,14 @@ def run_case_concurrent_tcp_channels(case: Case, log_dir: Path, case_index: int,
             name=f'{case.name}_udp_bounce_1',
             proto='udp',
             bind_host=case.bounce_bind,
-            port=3141,
+            port=case.bounce_port + 3,
             log_path=log_dir / f'{case.name}_udp_bounce_1.log',
         ),
         BounceBackServer(
             name=f'{case.name}_udp_bounce_2',
             proto='udp',
             bind_host=case.bounce_bind,
-            port=3143,
+            port=case.bounce_port + 5,
             log_path=log_dir / f'{case.name}_udp_bounce_2.log',
         ),
     ] if case.name == 'case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels' else []
@@ -1828,12 +1938,14 @@ def run_case_concurrent_tcp_channels(case: Case, log_dir: Path, case_index: int,
 
         phase('5. Probe additional UDP channels routed through the same overlay peer')
         if udp_bounces:
-            udp_probe_1 = probe_udp(case.probe_host, 3140, case.probe_bind, b'\x01udp-one', timeout=2.0)
-            udp_probe_2 = probe_udp(case.probe_host, 3142, case.probe_bind, b'\x01udp-two', timeout=2.0)
+            udp_probe_1_port = case.bounce_port + 2
+            udp_probe_2_port = case.bounce_port + 4
+            udp_probe_1 = probe_udp(case.probe_host, udp_probe_1_port, case.probe_bind, b'\x01udp-one', timeout=2.0)
+            udp_probe_2 = probe_udp(case.probe_host, udp_probe_2_port, case.probe_bind, b'\x01udp-two', timeout=2.0)
             if udp_probe_1 != b'\x02udp-one':
-                raise RuntimeError(f'Unexpected UDP probe response on 3140: {udp_probe_1!r}')
+                raise RuntimeError(f'Unexpected UDP probe response on {udp_probe_1_port}: {udp_probe_1!r}')
             if udp_probe_2 != b'\x02udp-two':
-                raise RuntimeError(f'Unexpected UDP probe response on 3142: {udp_probe_2!r}')
+                raise RuntimeError(f'Unexpected UDP probe response on {udp_probe_2_port}: {udp_probe_2!r}')
 
         phase('6. Validate /api/connections and /api/status traffic counters')
         expected_bytes = sum(len(p) for p in payloads)
@@ -1892,6 +2004,7 @@ def wait_tcp_socket_closed(sock: socket.socket, timeout: float = 8.0) -> None:
 
 
 def run_case_server_restart_closes_tcp_preserves_udp(case: Case, log_dir: Path, case_index: int, settle_s: Optional[float] = None) -> None:
+    case = materialize_case_ports(case, case_index)
     if case.name != 'case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels':
         raise RuntimeError(f'Unsupported restart-behavior case: {case.name}')
 
@@ -1907,14 +2020,14 @@ def run_case_server_restart_closes_tcp_preserves_udp(case: Case, log_dir: Path, 
             name=f'{case.name}_udp_bounce_1',
             proto='udp',
             bind_host=case.bounce_bind,
-            port=3141,
+            port=case.bounce_port + 3,
             log_path=log_dir / f'{case.name}_udp_bounce_1.log',
         ),
         BounceBackServer(
             name=f'{case.name}_udp_bounce_2',
             proto='udp',
             bind_host=case.bounce_bind,
-            port=3143,
+            port=case.bounce_port + 5,
             log_path=log_dir / f'{case.name}_udp_bounce_2.log',
         ),
     ]
@@ -1970,7 +2083,8 @@ def run_case_server_restart_closes_tcp_preserves_udp(case: Case, log_dir: Path, 
         if case.probe_bind is not None:
             udp_sock.bind((case.probe_bind, 0))
         udp_sock.settimeout(2.0)
-        udp_sock.sendto(b'\x01udp-before-restart', (case.probe_host, 3140))
+        udp_local_port = case.bounce_port + 2
+        udp_sock.sendto(b'\x01udp-before-restart', (case.probe_host, udp_local_port))
         udp_reply, _addr = udp_sock.recvfrom(4096)
         if udp_reply != b'\x02udp-before-restart':
             raise RuntimeError(f'Unexpected UDP reply before restart: {udp_reply!r}')
@@ -1988,7 +2102,7 @@ def run_case_server_restart_closes_tcp_preserves_udp(case: Case, log_dir: Path, 
         initial_udp_rows = wait_connection_rows(
             client_proc.admin_port or 0,
             'udp',
-            local_port=3140,
+            local_port=udp_local_port,
             state='connected',
             source_port=udp_source_port,
             minimum_count=1,
@@ -2018,14 +2132,14 @@ def run_case_server_restart_closes_tcp_preserves_udp(case: Case, log_dir: Path, 
         server_proc, client_proc = wait_both_connected(server_proc, client_proc, log_dir, timeout=30.0)
 
         phase('6. Verify UDP resumes on the peer client with the same local source port')
-        udp_sock.sendto(b'\x01udp-after-restart', (case.probe_host, 3140))
+        udp_sock.sendto(b'\x01udp-after-restart', (case.probe_host, udp_local_port))
         udp_reply_after, _addr = udp_sock.recvfrom(4096)
         if udp_reply_after != b'\x02udp-after-restart':
             raise RuntimeError(f'Unexpected UDP reply after restart: {udp_reply_after!r}')
         resumed_udp_rows = wait_connection_rows(
             client_proc.admin_port or 0,
             'udp',
-            local_port=3140,
+            local_port=udp_local_port,
             state='connected',
             source_port=udp_source_port,
             minimum_count=1,
@@ -2525,12 +2639,6 @@ def wait_both_connected(
         f'server_last={last_server!r} client_last={last_client!r}'
     )
 
-
-def _require_overlay_e2e_enabled() -> None:
-    if os.environ.get("RUN_OVERLAY_E2E") != "1":
-        pytest.skip("Set RUN_OVERLAY_E2E=1 to run overlay integration harness")
-
-
 def _start_case_with_client_admin_auth(
     case: Case,
     log_dir: Path,
@@ -2538,6 +2646,7 @@ def _start_case_with_client_admin_auth(
     case_index: int,
     client_auth_args: Optional[List[str]] = None,
 ) -> tuple[BounceBackServer, Proc, Proc]:
+    case = materialize_case_ports(case, case_index)
     bounce = BounceBackServer(
         name=f'{case.name}_bounce',
         proto=case.bounce_proto,
@@ -2581,7 +2690,6 @@ def _stop_proc_without_admin(proc: Proc) -> None:
 @pytest.mark.slow
 @pytest.mark.parametrize("case_name", BASIC_CASES)
 def test_overlay_e2e_basic(case_name: str, tmp_path: Path) -> None:
-    _require_overlay_e2e_enabled()
     run_case(CASES[case_name], tmp_path, ALL_CASES.index(case_name))
 
 
@@ -2589,7 +2697,6 @@ def test_overlay_e2e_basic(case_name: str, tmp_path: Path) -> None:
 @pytest.mark.slow
 @pytest.mark.parametrize("case_name", RECONNECT_CASES)
 def test_overlay_e2e_reconnect(case_name: str, tmp_path: Path) -> None:
-    _require_overlay_e2e_enabled()
     run_case_reconnect(CASES[case_name], tmp_path, ALL_CASES.index(case_name))
 
 
@@ -2597,7 +2704,6 @@ def test_overlay_e2e_reconnect(case_name: str, tmp_path: Path) -> None:
 @pytest.mark.slow
 @pytest.mark.parametrize("case_name", LISTENER_CASES)
 def test_overlay_e2e_listener_two_clients(case_name: str, tmp_path: Path) -> None:
-    _require_overlay_e2e_enabled()
     run_case_two_peer_clients_listener(CASES[case_name], tmp_path, ALL_CASES.index(case_name))
 
 
@@ -2605,7 +2711,6 @@ def test_overlay_e2e_listener_two_clients(case_name: str, tmp_path: Path) -> Non
 @pytest.mark.slow
 @pytest.mark.parametrize("case_name", CONCURRENT_TCP_CHANNEL_CASES)
 def test_overlay_e2e_concurrent_tcp_channels(case_name: str, tmp_path: Path) -> None:
-    _require_overlay_e2e_enabled()
     run_case_concurrent_tcp_channels(CASES[case_name], tmp_path, ALL_CASES.index(case_name))
 
 
@@ -2613,14 +2718,12 @@ def test_overlay_e2e_concurrent_tcp_channels(case_name: str, tmp_path: Path) -> 
 @pytest.mark.slow
 @pytest.mark.parametrize("case_name", ['case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels'])
 def test_overlay_e2e_server_restart_closes_tcp_preserves_udp(case_name: str, tmp_path: Path) -> None:
-    _require_overlay_e2e_enabled()
     run_case_server_restart_closes_tcp_preserves_udp(CASES[case_name], tmp_path, ALL_CASES.index(case_name))
 
 
 @pytest.mark.integration
 @pytest.mark.slow
 def test_overlay_e2e_admin_api_available_when_auth_disabled(tmp_path: Path) -> None:
-    _require_overlay_e2e_enabled()
     case = CASES['case01_udp_over_own_udp_ipv4']
     auth_args = [
         '--admin-web-auth-disable',
@@ -2647,7 +2750,6 @@ def test_overlay_e2e_admin_api_available_when_auth_disabled(tmp_path: Path) -> N
 @pytest.mark.integration
 @pytest.mark.slow
 def test_overlay_e2e_admin_api_unavailable_without_correct_auth(tmp_path: Path) -> None:
-    _require_overlay_e2e_enabled()
     case = CASES['case01_udp_over_own_udp_ipv4']
     auth_args = [
         '--admin-web-username', 'admin',
@@ -2672,7 +2774,6 @@ def test_overlay_e2e_admin_api_unavailable_without_correct_auth(tmp_path: Path) 
 @pytest.mark.integration
 @pytest.mark.slow
 def test_overlay_e2e_admin_api_available_after_correct_auth(tmp_path: Path) -> None:
-    _require_overlay_e2e_enabled()
     case = CASES['case01_udp_over_own_udp_ipv4']
     username = 'admin'
     password = 'secret-pass'
@@ -2702,7 +2803,6 @@ def test_overlay_e2e_admin_api_available_after_correct_auth(tmp_path: Path) -> N
 @pytest.mark.integration
 @pytest.mark.slow
 def test_overlay_e2e_admin_api_auth_isolated_per_concurrent_http_client(tmp_path: Path) -> None:
-    _require_overlay_e2e_enabled()
     case = CASES['case01_udp_over_own_udp_ipv4']
     username = 'admin'
     password = 'secret-pass'
@@ -2772,6 +2872,40 @@ def test_overlay_e2e_cli_routing_keeps_explicit_mode_override() -> None:
 
     assert selected_cases == ['case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels']
     assert selected_mode == 'reconnect'
+
+
+def test_overlay_e2e_materialize_case_ports_shifts_overlay_and_service_ports(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv('PYTEST_XDIST_WORKER', raising=False)
+    monkeypatch.delenv('PYTEST_XDIST_WORKER_COUNT', raising=False)
+    offset = _case_port_offset(2)
+    case = materialize_case_ports(CASES['case01_udp_over_own_udp_ipv4'], case_index=2)
+
+    assert case.bounce_port == 26666 + offset
+    assert case.probe_port == 26667 + offset
+    assert _arg_value(case.bridge_server_args, '--udp-own-port', '0') == str(14443 + offset)
+    assert _arg_value(case.bridge_client_args, '--udp-peer-port', '0') == str(14443 + offset)
+    own_spec = case.bridge_client_args[case.bridge_client_args.index('--own-servers') + 1]
+    assert own_spec == f'udp,{26667 + offset},0.0.0.0,udp,127.0.0.1,{26666 + offset}'
+
+
+def test_overlay_e2e_alloc_admin_ports_isolates_xdist_workers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('PYTEST_XDIST_WORKER', 'gw3')
+    server_port, client_port = alloc_admin_ports(4)
+
+    assert server_port == 18180 + 3000 + 80
+    assert client_port == server_port + 10
+
+
+def test_overlay_e2e_case_port_offset_stays_in_range_for_many_workers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('PYTEST_XDIST_WORKER', 'gw15')
+    monkeypatch.setenv('PYTEST_XDIST_WORKER_COUNT', '16')
+
+    case = materialize_case_ports(CASES['case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp'], case_index=33)
+
+    assert case.bounce_port < 65535
+    assert case.probe_port < 65535
+    assert int(_arg_value(case.bridge_server_args, '--ws-own-port', '0')) < 65535
+    assert int(_arg_value(case.bridge_server_args, '--udp-own-port', '0')) < 65535
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
