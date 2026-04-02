@@ -9122,6 +9122,11 @@ class AdminWebUI:
             help="Directory containing admin web files",
         )
         g.add_argument(
+            "--admin-web-name",
+            default="",
+            help="Optional instance name shown in the admin web title and headline",
+        )
+        g.add_argument(
             "--admin-web-token",
             default="",
             help="Optional bearer token for admin restart endpoint",
@@ -9303,6 +9308,7 @@ class AdminWebUI:
             "app": "udp-bidirectional-mux",
             "pid": os.getpid(),
             "uptime_sec": int(time.monotonic() - self.started_monotonic),
+            "admin_web_name": str(getattr(self.runner.args, "admin_web_name", "") or ""),
             "overlay_transport": getattr(self.runner.args, "overlay_transport", None),
             "dashboard_enabled": getattr(self.runner.args, "dashboard", None),
             "milestone": "C",
@@ -9585,6 +9591,7 @@ class AdminWebUI:
 
     async def _handle_status(self, writer):
         payload = self.runner.get_status_snapshot()
+        payload["admin_web_name"] = str(getattr(self.runner.args, "admin_web_name", "") or "")
         payload["app"] = "udp-bidirectional-mux"
         payload["milestone"] = "B"
         self._log_api_response("/api/status", 200, payload)

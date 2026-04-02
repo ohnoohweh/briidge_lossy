@@ -321,6 +321,7 @@ Expected behavior:
 | `--admin-web-port` | `18080` | Port for admin web interface |
 | `--admin-web-path` | `/` | Base path for admin web interface |
 | `--admin-web-dir` | `./admin_web` | Directory containing admin web files |
+| `--admin-web-name` | `` | Optional instance name shown in the admin web window title and headline |
 | `--admin-web-token` | `` | Optional bearer token for admin restart endpoint |
 | `--admin-web-auth-disable` | `False` | Disable admin web username/password challenge |
 | `--admin-web-username` | `` | Username for admin web access when challenge-based authentication is enabled |

@@ -40,6 +40,8 @@ function fmtUptime(sec) {
   return `${r}s`;
 }
 
+const APP_BASE_TITLE = 'ObstacleBridge';
+
 const authState = {
   required: false,
   authenticated: false,
@@ -151,6 +153,13 @@ function setText(id, value) {
   if (el) el.textContent = value;
 }
 
+function applyAdminInstanceName(name) {
+  const trimmed = String(name || '').trim();
+  const fullTitle = trimmed ? `${APP_BASE_TITLE} ${trimmed}` : APP_BASE_TITLE;
+  document.title = fullTitle;
+  setText('appHeadline', fullTitle);
+}
+
 function setProgress(id, value, maxScale = 256.0) {
   const el = document.getElementById(id);
   if (!el) return;
@@ -236,6 +245,7 @@ async function loadMeta() {
   try {
     const r = await apiFetch('/api/meta', { cache: 'no-store' });
     const j = await r.json();
+    applyAdminInstanceName(j.admin_web_name);
     setText('uptimeSec', fmtUptime(j.uptime_sec));
     const meta = document.getElementById('meta');
     if (meta) meta.textContent = JSON.stringify(j, null, 2);
@@ -308,6 +318,7 @@ async function loadStatus() {
     const r = await apiFetch('/api/status', { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
+    applyAdminInstanceName(j.admin_web_name);
 
     applyPeerState(j.peer_state);
     setText('udpOpen', fmtInteger(j.open_connections?.udp));
@@ -408,6 +419,7 @@ async function loadConfig() {
       config: j.config || {},
       schema: j.schema || {},
     };
+    applyAdminInstanceName(configState.config.admin_web_name);
     renderConfigSections(configState.schema, configState.config);
     setText('configMessage', '');
   } catch (e) {
@@ -496,7 +508,7 @@ function isLongConfigValue(rawValue) {
 }
 
 function renderSecretInput(key) {
-  return `<input type="password" class="config-editor mono" data-config-key="${key}" data-secret="true" placeholder="Leave blank to keep current value" />`;
+  return `<input type="password" class="config-editor mono" data-config-key="${key}" data-secret="true" placeholder="Leave blank to keep current value" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" />`;
 }
 
 function renderTextConfigEditor(key, currentValue) {
@@ -504,9 +516,9 @@ function renderTextConfigEditor(key, currentValue) {
   const escapedValue = escapeHtml(currentRaw);
   const multiline = isStructuredConfigValue(currentValue) || isLongConfigValue(currentRaw);
   if (multiline) {
-    return `<textarea class="config-editor config-editor-textarea mono" data-config-key="${key}" rows="4">${escapedValue}</textarea>`;
+    return `<textarea class="config-editor config-editor-textarea mono" data-config-key="${key}" rows="4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true">${escapedValue}</textarea>`;
   }
-  return `<input class="config-editor mono" data-config-key="${key}" value="${escapedValue}" />`;
+  return `<input class="config-editor mono" data-config-key="${key}" value="${escapedValue}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" />`;
 }
 
 function renderConfigValueCell(item, current) {
@@ -647,7 +659,7 @@ function renderLogLevelSelect(key, currentValue) {
     const selected = level === normalizedCurrent ? ' selected' : '';
     return `<option value="${JSON.stringify(level).replace(/"/g, '&quot;')}"${selected}>${level}</option>`;
   }).join('');
-  return `<select class="config-editor mono" data-config-key="${key}">${options}</select>`;
+  return `<select class="config-editor mono" data-config-key="${key}" autocomplete="off" data-lpignore="true" data-1p-ignore="true">${options}</select>`;
 }
 
 function isBooleanConfigSetting(currentValue, defaultValue) {
@@ -660,7 +672,7 @@ function renderBooleanSelect(key, currentValue) {
     const selected = value === normalizedCurrent ? ' selected' : '';
     return `<option value="${JSON.stringify(value)}"${selected}>${value}</option>`;
   }).join('');
-  return `<select class="config-editor mono" data-config-key="${key}">${options}</select>`;
+  return `<select class="config-editor mono" data-config-key="${key}" autocomplete="off" data-lpignore="true" data-1p-ignore="true">${options}</select>`;
 }
 
 function renderChoiceSelect(key, currentValue, choices) {
@@ -674,7 +686,7 @@ function renderChoiceSelect(key, currentValue, choices) {
     const label = typeof choice === 'string' ? choice : JSON.stringify(choice);
     return `<option value="${value}"${selected}>${label}</option>`;
   }).join('');
-  return `<select class="config-editor mono" data-config-key="${key}">${options}</select>`;
+  return `<select class="config-editor mono" data-config-key="${key}" autocomplete="off" data-lpignore="true" data-1p-ignore="true">${options}</select>`;
 }
 
 function setConfigRowEditing(key, editing) {
