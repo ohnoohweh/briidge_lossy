@@ -1,6 +1,16 @@
 # ObstacleBridge
 ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for barrier-resilient networking. It can run over multiple overlay transports (`myudp`, `tcp`, `quic`, `ws`), expose local TCP/UDP listener services through a reliable overlay, and host an admin UI for monitoring active channels.
 
+## Whitepaper
+The complete whitepaper requested for this project update is available as a rendered preview at [`docs/WHITEPAPER.html`](https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/WHITEPAPER.html). It covers:
+- Internet barriers such as NAT, DPI, protocol blocking, traffic shaping, and TLS interception.
+- Transport-level behavior for IP, ICMP, UDP, TCP, QUIC, DNS, HTTP/HTTPS, and WebSockets.
+- The layered overlay architecture used here: RTT/liveness, reliable DATA/CONTROL framing, and ChannelMux OPEN/DATA/CLOSE multiplexing.
+- Why UDP overlays can outperform TCP-over-TCP tunnels on hostile paths.
+- Development-process lessons from AI-supported programming.
+### Whitepaper abstract
+> This whitepaper presents a detailed technical explanation of Internet communication mechanisms and a Python-based UDP overlay protocol designed to work across restrictive network environments. The report explains how modern Internet barriers such as NAT, IPv4/IPv6 asymmetry, deep packet inspection, protocol blocking, traffic shaping, and throttling affect connectivity, and how a layered UDP overlay can reconstruct connection detection, round-trip-time measurement, loss recovery, retransmission, and multi-channel multiplexing in user space.
+
 ## Similar projects
 - [chisel](https://github.com/jpillora/chisel) — a well-known TCP/UDP tunnel over HTTP/WebSocket implemented in Go.
 
@@ -8,227 +18,190 @@ ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for ba
 - `chisel` is implemented in Go, and using/building it on Synology NAS environments can be difficult in practice.
 - ObstacleBridge adds the `myudp` transport to better handle network obstacles and traffic degradation conditions seen in large-scale Asian network environments.
 
-## Repository layout
-- `src/obstacle_bridge/` — main implementation.
-- `tests/unit/` — targeted unit tests.
-- `tests/integration/` — end-to-end and subprocess tests.
-- `scripts/` — development helpers.
-- `docs/ObstacleBridge Client.html` — exported example of the admin web UI on a peer/client instance. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/ObstacleBridge%20Client.html`
-- `docs/ObstacleBridge Server.html` — exported example of the admin web UI on a listener/server instance. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/ObstacleBridge%20Server.html`
-- `docs/WHITEPAPER.html` — full whitepaper requested for this repository update. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/WHITEPAPER.html`
-- `wireshark/` — Wireshark dissectors grouped by framing/version.
+## Quick-start examples
+The recommended workflow is:
+
+1. start each instance with a small config file
+2. enable the Admin Web UI from the beginning
+3. tune transports, peers, published services, auth, and logging in the Config tab
+4. save the resulting config and use it as the durable runtime definition
+
+This keeps first startup simple and makes larger settings such as `own_servers`, `remote_servers`, auth options, and multi-transport listener combinations much easier to manage than long shell commands.
+
+![WebAdmin Config Editor](docs/WebAdmin%20ConfigEditor.png)
+
+### Minimal bootstrap pattern
+Create one config file per instance and only keep a few startup arguments on the command line.
+
+**Listener / server bootstrap**
+```ini
+# bridge_server.ini
+overlay_transport = myudp
+udp_bind = ::
+udp_own_port = 4443
+admin_web = true
+admin_web_bind = 127.0.0.1
+admin_web_port = 18080
+log = INFO
+```
+
+```bash
+python -m obstacle_bridge --config bridge_server.ini
+```
+
+**Peer / client bootstrap**
+```ini
+# bridge_client.ini
+overlay_transport = myudp
+udp_peer = bridge.example.com
+udp_peer_port = 4443
+udp_own_port = 0
+admin_web = true
+admin_web_bind = 127.0.0.1
+admin_web_port = 18081
+log = INFO
+```
+
+```bash
+python -m obstacle_bridge --config bridge_client.ini
+```
+
+After the first startup, open the Admin Web UI and adjust the remaining details there:
+
+- overlay transport mix such as `myudp`, `ws`, `tcp`, or `quic`
+- peer target and listener bind/port values
+- `own_servers` and `remote_servers`
+- admin authentication and instance naming
+- logging and log retention settings
+
+### 1) NAS behind outbound-only internet, reached through a public server
+This setup fits a NAS or home server that can make outgoing connections but cannot accept incoming internet traffic directly.
+
+Use a small VPS listener config first, then finish the published service mapping in WebAdmin:
+
+**Public VPS initial config**
+```ini
+overlay_transport = myudp
+udp_bind = ::
+udp_own_port = 4443
+admin_web = true
+admin_web_bind = 127.0.0.1
+admin_web_port = 18080
+admin_web_name = VPS
+log = INFO
+```
+
+**NAS initial config**
+```ini
+overlay_transport = myudp
+udp_peer = bridge.example.com
+udp_peer_port = 4443
+udp_own_port = 0
+admin_web = true
+admin_web_bind = 127.0.0.1
+admin_web_port = 18081
+admin_web_name = NAS
+log = INFO
+```
+
+Then use WebAdmin to add the service exposure you want, for example:
+
+- VPS listener publishes NAS SSH as TCP `18022 -> 127.0.0.1:22`
+- VPS listener publishes NAS HTTP/HTTPS as TCP `80` and `443`
+- NAS peer publishes its admin UI back to the VPS on a separate TCP port such as `18081`
+
+### 2) WireGuard bridge through inspected internet access
+This fits environments where raw VPN UDP is blocked or degraded, but HTTP(S)-shaped traffic still survives.
+
+Start with a WebSocket-based config and then use WebAdmin to define the local UDP service recreation:
+
+**Public bridge config**
+```ini
+overlay_transport = ws
+ws_bind = 0.0.0.0
+ws_own_port = 443
+admin_web = true
+admin_web_bind = 127.0.0.1
+admin_web_port = 18080
+admin_web_name = Public WS Bridge
+log = INFO
+```
+
+**Restricted-side peer config**
+```ini
+overlay_transport = ws
+ws_peer = bridge.example.com
+ws_peer_port = 443
+ws_own_port = 0
+admin_web = true
+admin_web_bind = 127.0.0.1
+admin_web_port = 18081
+admin_web_name = Restricted Client
+log = INFO
+```
+
+Then use WebAdmin to add an `own_servers` entry that recreates the local WireGuard or UDP OpenVPN endpoint, for example `udp,16666,127.0.0.1,udp,127.0.0.1,16666`.
+
+### 3) WireGuard bridge for high-loss obstacle conditions
+This fits paths where UDP still passes, but loss and retransmission pressure make conventional transports perform badly.
+
+Start with `myudp` in the config file and use WebAdmin to finish the local service mapping:
+
+**Public bridge config**
+```ini
+overlay_transport = myudp
+udp_bind = 0.0.0.0
+udp_own_port = 4433
+admin_web = true
+admin_web_bind = 127.0.0.1
+admin_web_port = 18080
+admin_web_name = Public myudp Bridge
+log = INFO
+```
+
+**Restricted-side peer config**
+```ini
+overlay_transport = myudp
+udp_peer = bridge.example.com
+udp_peer_port = 4433
+udp_own_port = 0
+admin_web = true
+admin_web_bind = 127.0.0.1
+admin_web_port = 18081
+admin_web_name = Lossy Client
+log = INFO
+```
+
+Then use WebAdmin to add the same local UDP recreation for WireGuard or UDP OpenVPN, usually on `127.0.0.1:16666`.
+
+### 4) Peer client with both inspected-path and high-loss-path transports
+If you want one peer config that can use both WebSocket and `myudp`, keep the bootstrap config simple and tune the rest in WebAdmin:
+
+```ini
+overlay_transport = ws,myudp
+ws_peer = bridge.example.com
+ws_peer_port = 443
+ws_own_port = 0
+udp_peer = bridge.example.com
+udp_peer_port = 4433
+udp_own_port = 0
+admin_web = true
+admin_web_bind = 127.0.0.1
+admin_web_port = 18081
+admin_web_name = Dual Transport Client
+log = INFO
+```
+
+Then use WebAdmin to define:
+
+- the local UDP service recreation such as WireGuard on `127.0.0.1:16666`
+- any additional published TCP or UDP services
+- authentication, log policy, and instance naming
+
+Using config files plus WebAdmin makes these multi-transport setups much easier to review and maintain than long shell commands with many inline options.
 ## Entry points
 - `python -m obstacle_bridge --help`
 
-## Integration reconnect suite
-- `python tests/integration/test_overlay_e2e.py` runs the common/default overlay suite path.
-- `python tests/integration/test_overlay_e2e.py --mode reconnect` keeps the reconnect regression workflow available as an explicit override.
-- `pytest -q tests/integration/test_overlay_e2e.py -k reconnect` runs the same reconnect path via pytest.
-- `--reconnect-timeout` can be used to tune connected/disconnected transition waits.
-- Additional test-suite usage details are documented in `docs/README_TESTING.md`.
-
-## Quick-start examples
-### 1) NAS (network attached storage) behind outbound-only internet, reached through a public server
-This example fits a common home or small-office setup:
-
-- The NAS can make outgoing internet connections, but incoming connections to the NAS are blocked.
-- The NAS may only have usable IPv4 internet access.
-- The client device may only have IPv6 connectivity.
-- The NAS still needs to offer services such as SSH (TCP/22), HTTP (TCP/80), HTTPS (TCP/443), plus a private admin web UI on TCP/18080.
-
-Direct access fails because the NAS is not reachable from the outside and the two sides may not even share the same usable address family. The workaround is to place a small public VPS (Virtual Private Server) in the middle, for example a rented server on `ishosting.com`, and let the NAS keep one outgoing overlay session open to that server.
-
-Issue before ObstacleBridge:
-
-![NAS issue example](docs/NAS_Issue.svg)
-
-Solution with a public ObstacleBridge server:
-
-![NAS solution example](docs/NAS_solution.svg)
-
-**Public dual-stack VPS running the ObstacleBridge listener**
-```bash
-python -m obstacle_bridge \
-  --overlay-transport myudp \
-  --udp-bind :: \
-  --udp-own-port 4443 \
-  --admin-web \
-  --admin-web-bind 127.0.0.1 \
-  --admin-web-port 18080 \
-  --log INFO
-```
-
-This public server should have working IPv4 and IPv6 reachability and be reachable by DNS name such as `bridge.example.com`.
-
-**NAS running as peer client and asking the public server to publish NAS services**
-```bash
-python -m obstacle_bridge \
-  --overlay-transport myudp \
-  --udp-peer bridge.example.com \
-  --udp-peer-port 4443 \
-  --udp-own-port 0 \
-  --admin-web \
-  --admin-web-bind 127.0.0.1 \
-  --admin-web-port 18081 \
-  --remote-servers "tcp,18022,::,tcp,127.0.0.1,22 tcp,80,::,tcp,127.0.0.1,80 tcp,443,::,tcp,127.0.0.1,443 tcp,18081,::,tcp,127.0.0.1,18080" \
-  --log INFO
-```
-
-**Offered VPS port mapping for this setup**
-
-| VPS Port | Description | Destination | Destination Port |
-|---:|---|---|---:|
-| TCP:22 | VPS SSH | VPS | TCP:22 |
-| TCP:80 | NAS HTTP | NAS | TCP:80 |
-| TCP:443 | NAS HTTPS | NAS | TCP:443 |
-| UDP:4433 | ObstacleBridge UDP peer communication | VPS | UDP:4443 |
-| TCP:18022 | NAS SSH (published by VPS) | NAS | TCP:22 |
-| TCP:18080 | Admin web (VPS listener instance) | VPS | TCP:18080 |
-| TCP:18081 | Admin web (NAS peer instance, published by VPS) | NAS | TCP:18080 |
-
-How this works:
-
-- The NAS opens one outgoing `myudp` overlay connection to the public server.
-- `--remote-servers` tells the public server to listen on TCP/18022, TCP/80, TCP/443, and TCP/18081.
-- Connections arriving on the public server are forwarded over the overlay to the NAS-local targets on `127.0.0.1`.
-- The NAS admin web still runs on `127.0.0.1:18080`, while the VPS keeps its own admin web on `127.0.0.1:18080`; exposing NAS admin as TCP/18081 on the VPS avoids collisions.
-- Using `::` for exposed listener binds allows dual-stack socket behavior on VPS environments that support IPv4-mapped IPv6 sockets.
-
-### 2) WireGuard bridge setup through inspected internet access
-This example fits a heavy-content-inspection environment:
-
-- A large upstream network operator blocks or degrades access to many sites and services outside the country.
-- UDP-based VPNs such as WireGuard and UDP OpenVPN do not reach public servers directly.
-- Some outbound HTTP or HTTPS traffic still passes the obstacle.
-- A public server outside the restricted network can run ObstacleBridge and a WireGuard or OpenVPN server.
-
-In that situation, ObstacleBridge can carry traffic over a WebSocket overlay using binary frames on top of HTTP(S)-reachable connectivity. That lets a local WireGuard or OpenVPN client reach a server outside the filtered network, with one important tradeoff:
-
-- VPN over WebSocket means TCP over TCP tunneling, which is convenient and often effective, but not ideal for every workload.
-- For plain HTTP(S) browsing, a dedicated HTTP proxy such as SQUID can avoid that TCP-over-TCP penalty and may be the better tool.
-
-Issue before ObstacleBridge:
-
-![Client issue example](docs/Client_issue.svg)
-
-Solution with an ObstacleBridge WebSocket bridge:
-
-![Client solution example](docs/Client_solution.svg)
-
-This quick start assumes:
-
-- the public bridge server can already reach a local WireGuard UDP service on `127.0.0.1:16666`
-- the restricted-side client can reach `https://bridge.example.com` or `ws://bridge.example.com`
-- the client wants to recreate the same WireGuard UDP port locally on `127.0.0.1:16666`
-
-**Public bridge server with WebSocket overlay**
-```bash
-python -m obstacle_bridge \
-  --overlay-transport ws \
-  --ws-bind 0.0.0.0 \
-  --ws-own-port 443 \
-  --log INFO
-```
-This public bridge server must be reachable by clients at DNS name `bridge.example.com` and should normally sit behind a firewall rule or reverse-proxy setup that allows WebSocket traffic on port `443`.
-
-**Restricted-side peer that recreates the WireGuard UDP port locally**
-```bash
-python -m obstacle_bridge \
-  --overlay-transport ws \
-  --ws-peer bridge.example.com \
-  --ws-peer-port 443 \
-  --ws-own-port 0 \
-  --own-servers "udp,16666,127.0.0.1,udp,127.0.0.1,16666" \
-  --log INFO
-```
-
-With that peer command running, a local WireGuard client can use `127.0.0.1:16666` as its endpoint. ObstacleBridge accepts the local UDP packets, carries them through the WebSocket overlay, and forwards them to the WireGuard server reachable from the public bridge host.
-
-How this helps:
-
-- the obstacle only sees outbound WebSocket-over-HTTP(S) traffic instead of raw WireGuard or OpenVPN UDP
-- the local VPN client keeps talking to a normal UDP endpoint on `127.0.0.1:16666`
-- once the VPN comes up, other applications can use the VPN tunnel normally
-
-Operational note:
-
-- if the network still allows direct UDP to the public bridge, prefer the `myudp` or native UDP overlay examples instead
-- use the WebSocket version when HTTP(S)-shaped traffic is what reliably survives the inspection system
-
-### 3) WireGuard bridge setup for high-loss obstacle conditions in Asia
-This example fits a different obstacle pattern than the inspected WebSocket-only path above:
-
-- A very large country in Asia artificially drops internet frames and triggers excessive retransmissions.
-- Conventional transports slow down so much under loss that the connection becomes nearly unusable.
-- UDP itself may still pass, but with heavy loss and jitter.
-- A public server outside the degraded network can run ObstacleBridge and a WireGuard or OpenVPN server.
-
-In this situation, the `myudp` overlay is designed to cope much better with packet loss than a conventional TCP-style transport. That makes it a practical carrier for a local WireGuard or OpenVPN client that still needs full internet access for arbitrary applications.
-
-Issue before ObstacleBridge:
-
-![Client2 issue example](docs/Client2_issue.svg)
-
-Solution with an ObstacleBridge `myudp` bridge:
-
-![Client2 solution example](docs/Client2_solution.svg)
-
-This quick start assumes:
-
-- the public bridge server can already reach a local WireGuard UDP service on `127.0.0.1:16666`
-- the restricted-side client can still send UDP to `bridge.example.com`
-- the network path is lossy enough that ordinary protocols degrade badly, but `myudp` remains workable
-
-**Public bridge server with `myudp` overlay**
-```bash
-python -m obstacle_bridge \
-  --overlay-transport myudp \
-  --udp-bind 0.0.0.0 \
-  --udp-own-port 4433 \
-  --log INFO
-```
-
-**Restricted-side peer that recreates the WireGuard UDP port locally**
-```bash
-python -m obstacle_bridge \
-  --overlay-transport myudp \
-  --udp-peer bridge.example.com \
-  --udp-peer-port 4433 \
-  --udp-own-port 0 \
-  --own-servers "udp,16666,127.0.0.1,udp,127.0.0.1,16666" \
-  --log INFO
-```
-
-With that peer command running, a local WireGuard or UDP OpenVPN client can use `127.0.0.1:16666` as its endpoint. ObstacleBridge accepts the local UDP packets, carries them through the lossy `myudp` overlay, and forwards them to the VPN server reachable from the public bridge host.
-
-How this helps:
-
-- `myudp` is intended for paths with loss, jitter, and obstacle-induced retransmission pressure
-- the local VPN client still talks to a normal UDP endpoint on `127.0.0.1:16666`
-- once the VPN comes up, all applications can use the VPN tunnel normally
-
-Operational note:
-
-- prefer this `myudp` setup when outside UDP is available but the path is extremely lossy
-- prefer the WebSocket example above when only HTTP(S)-shaped traffic reliably survives the obstacle
-
-### 4) Peer client setup for both inspected and high-loss paths
-```bash
-python -m obstacle_bridge \
-  --overlay-transport ws,myudp \
-  --ws-peer bridge.example.com --ws-peer-port 443 \
-  --ws-own-port 0 \
-  --udp-peer bridge.example.com --udp-peer-port 4433 \
-  --udp-own-port 0 \
-  --own-servers "udp,16666,127.0.0.1,udp,127.0.0.1,16666"
-```
-This combines the peer-side ideas from examples 2 and 3 in one command:
-
-- `ws` is available for environments where only HTTP(S)-shaped traffic survives reliably
-- `myudp` is available for environments where UDP still passes but the path is highly lossy
-- the local WireGuard or OpenVPN client still talks to `127.0.0.1:16666`
-
-Using `--ws-own-port 0` and `--udp-own-port 0` requests dynamic local source-port assignment by the OS for outgoing overlay traffic.
 ## CLI parameter reference
 The tables below are generated from the current parser registrations in `bridge.py`, so the defaults and descriptions match the live code.
 ### General / status
@@ -373,16 +346,24 @@ What is visible in the included snapshots:
 | `--overlay-transport` | `myudp` | Overlay transport between peers: comma-separated list from myudp,tcp,quic,ws. Multiple transports are supported simultaneously for listening instances. |
 | `--client-restart-if-disconnected` | `0.0` | If configured as a peer client (for example --udp-peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables. |
 
-## Whitepaper
-The complete whitepaper requested for this project update is available as a rendered preview at [`docs/WHITEPAPER.html`](https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/WHITEPAPER.html). It covers:
-- Internet barriers such as NAT, DPI, protocol blocking, traffic shaping, and TLS interception.
-- Transport-level behavior for IP, ICMP, UDP, TCP, QUIC, DNS, HTTP/HTTPS, and WebSockets.
-- The layered overlay architecture used here: RTT/liveness, reliable DATA/CONTROL framing, and ChannelMux OPEN/DATA/CLOSE multiplexing.
-- Why UDP overlays can outperform TCP-over-TCP tunnels on hostile paths.
-- Development-process lessons from AI-supported programming.
-### Whitepaper abstract
-> This whitepaper presents a detailed technical explanation of Internet communication mechanisms and a Python-based UDP overlay protocol designed to work across restrictive network environments. The report explains how modern Internet barriers such as NAT, IPv4/IPv6 asymmetry, deep packet inspection, protocol blocking, traffic shaping, and throttling affect connectivity, and how a layered UDP overlay can reconstruct connection detection, round-trip-time measurement, loss recovery, retransmission, and multi-channel multiplexing in user space.
 ## Notes
 - Listener mode intentionally ignores `--own-servers`, because a multi-peer listener cannot unambiguously bind one local listener to one remote peer.
 - Multi-transport mode is currently intended for listening instances without configured transport peers (for example no `--udp-peer`, `--tcp-peer`, `--quic-peer`, or `--ws-peer`).
 - WebSocket listener mode supports multiple simultaneous peers with per-peer mux-channel rewriting so that peer-local channel IDs do not collide inside the shared mux logic.
+
+## Repository layout
+- `src/obstacle_bridge/` — main implementation.
+- `tests/unit/` — targeted unit tests.
+- `tests/integration/` — end-to-end and subprocess tests.
+- `scripts/` — development helpers.
+- `docs/ObstacleBridge Client.html` — exported example of the admin web UI on a peer/client instance. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/ObstacleBridge%20Client.html`
+- `docs/ObstacleBridge Server.html` — exported example of the admin web UI on a listener/server instance. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/ObstacleBridge%20Server.html`
+- `docs/WHITEPAPER.html` — full whitepaper requested for this repository update. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/WHITEPAPER.html`
+- `docs/README_TESTING.md` — consolidated testing catalog, execution commands, and regression coverage notes.
+- `wireshark/` — Wireshark dissectors grouped by framing/version.
+
+## Testing strategy
+- Run the regular pytest suite during normal development to cover unit, integration, and overlay harness regression paths.
+- Use the parallel overlay harness for frequent end-to-end validation when transport and socket behavior matter most.
+- Keep reconnect, listener, and concurrent multi-peer coverage in the regular regression flow instead of treating them as occasional manual checks.
+- The full testing catalog, commands, and scenario-by-scenario criteria are documented in `docs/README_TESTING.md`.
