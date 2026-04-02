@@ -1848,6 +1848,8 @@ class UdpSession(ISession):
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._transport: Optional[asyncio.DatagramTransport] = None
         self._proto: Optional[PeerProtocol] = None
+        self._peer_host: str = ""
+        self._peer_port: int = 0
 
         # Inner reliability/session engine remains the same one from base module. 
         self.inner_session = Session(max_in_flight=args.max_inflight)
@@ -1956,6 +1958,36 @@ class UdpSession(ISession):
         except Exception as e:
             self._log.debug(f"[UdpSession] get_metrics failed on SessionMetrics(..) %r", e)
             return SessionMetrics()
+
+    @staticmethod
+    def _format_peer_label(host: Optional[object], port: Optional[object]) -> Optional[str]:
+        try:
+            if host is None or port is None:
+                return None
+            host_s = str(host)
+            port_i = int(port)
+            if not host_s:
+                return None
+            return f"[{host_s}]:{port_i}" if ":" in host_s and not host_s.startswith("[") else f"{host_s}:{port_i}"
+        except Exception:
+            return None
+
+    def get_overlay_peers_snapshot(self) -> list[dict]:
+        peer_label = None
+        with contextlib.suppress(Exception):
+            if self._proto is not None and self._proto.send_port is not None:
+                peer = getattr(self._proto.send_port, "peer_addr", None)
+                if isinstance(peer, tuple) and len(peer) >= 2:
+                    peer_label = self._format_peer_label(peer[0], peer[1])
+        if not peer_label:
+            peer_label = self._format_peer_label(self._peer_host, self._peer_port)
+        return [{
+            "peer_id": 0,
+            "connected": bool(self.is_connected()),
+            "peer": peer_label,
+            "mux_chans": [],
+            "rtt_est_ms": getattr(self.inner_session, "rtt_est_ms", None),
+        }]
 
 
     # ---- ISession: lifecycle ----
@@ -2120,6 +2152,9 @@ class UdpSession(ISession):
 
     def _on_peer_set(self, host: str, port: int) -> None:
         self._log.debug(f"[UdpSession] On Peer Set {host}:{port} on session id=%x", id(self))
+        with contextlib.suppress(Exception):
+            self._peer_host = str(host or "")
+            self._peer_port = int(port or 0)
         # Inform external callback first
         if callable(self._on_peer_set_cb):
             try:

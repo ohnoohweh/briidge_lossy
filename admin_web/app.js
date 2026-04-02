@@ -82,7 +82,7 @@ function updateRestartUi(remainingSec) {
   if (countdown) countdown.textContent = `${Math.max(0, remainingSec)}s`;
 }
 
-function startRestartCountdown(durationSec = 30) {
+function startRestartCountdown(durationSec = 40) {
   if (restartState.intervalId) {
     window.clearInterval(restartState.intervalId);
     restartState.intervalId = null;
@@ -263,7 +263,7 @@ async function restart() {
     if (!r.ok || !j.ok) {
       throw new Error(j.error || `HTTP ${r.status}`);
     }
-    startRestartCountdown(30);
+    startRestartCountdown(40);
   } catch (e) {
     window.alert(`Restart failed: ${e}`);
   }
