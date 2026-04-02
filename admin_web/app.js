@@ -319,6 +319,7 @@ async function loadStatus() {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
     applyAdminInstanceName(j.admin_web_name);
+    setText('uptimeSec', fmtUptime(j.uptime_sec));
 
     applyPeerState(j.peer_state);
     setText('udpOpen', fmtInteger(j.open_connections?.udp));

@@ -9592,6 +9592,7 @@ class AdminWebUI:
     async def _handle_status(self, writer):
         payload = self.runner.get_status_snapshot()
         payload["admin_web_name"] = str(getattr(self.runner.args, "admin_web_name", "") or "")
+        payload["uptime_sec"] = int(time.monotonic() - self.started_monotonic)
         payload["app"] = "udp-bidirectional-mux"
         payload["milestone"] = "B"
         self._log_api_response("/api/status", 200, payload)
