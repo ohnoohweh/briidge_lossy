@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import argparse
+import heapq
 import hashlib
 import http.cookiejar
 import json
 import os
+import select
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -21,9 +24,14 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / 'src'
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 BRIDGE = ROOT / 'ObstacleBridge.py'
 PAYLOAD_IN = b'\x01\x30'
 PAYLOAD_OUT = b'\x02\x30'
+
+from obstacle_bridge.bridge import CONTROL_MAX_MISSED, PROTO, PTYPE_CONTROL, PTYPE_DATA
 
 log = logging.getLogger()
 
@@ -53,6 +61,18 @@ class Case:
     server_env: Dict[str, str] = field(default_factory=dict)
     client_env: Dict[str, str] = field(default_factory=dict)
     expected: bytes = PAYLOAD_OUT
+
+
+@dataclass(frozen=True)
+class MyudpDelayLossCase:
+    name: str
+    direction: str = 'client_to_server'
+    payload: bytes = PAYLOAD_IN
+    delay_ms: int = 300
+    drop_client_to_server_data: tuple[int, ...] = ()
+    drop_client_to_server_control: tuple[int, ...] = ()
+    drop_server_to_client_data: tuple[int, ...] = ()
+    drop_server_to_client_control: tuple[int, ...] = ()
 
 
 CASES: Dict[str, Case] = {
@@ -262,7 +282,7 @@ def _shift_port(port: int, offset: int) -> int:
 def _case_port_offset(case_index: int, stride: int = 64, highest_static_port: int = 55000) -> int:
     worker_index = _xdist_worker_index()
     worker_count = _xdist_worker_count()
-    max_offset = 65535 - int(highest_static_port) - 1
+    max_offset = SERVICE_PORT_CEILING - int(highest_static_port) - 1
     if max_offset < stride:
         raise ValueError(
             f'port allocation window too small: highest_static_port={highest_static_port} stride={stride}'
@@ -426,6 +446,36 @@ CONCURRENT_TCP_CHANNEL_CASES = [
     'case17_overlay_listener_quic_two_clients_concurrent_udp_tcp',
 ]
 
+MYUDP_DELAY_LOSS_CASES: Dict[str, MyudpDelayLossCase] = {
+    'tc0_idle_connectivity': MyudpDelayLossCase(name='tc0_idle_connectivity'),
+    'tc1_small_client_to_server': MyudpDelayLossCase(name='tc1_small_client_to_server', direction='client_to_server', payload=b'Hello from A1 -> via A2 -> to B2 (expect at B1)'),
+    'tc1a_drop_first_data_client_to_server': MyudpDelayLossCase(
+        name='tc1a_drop_first_data_client_to_server',
+        direction='client_to_server',
+        payload=b'Hello from A1 -> via A2 -> to B2 (expect at B1)',
+        drop_client_to_server_data=(1,),
+    ),
+    'tc1b_drop_first_control_server_to_client': MyudpDelayLossCase(
+        name='tc1b_drop_first_control_server_to_client',
+        direction='client_to_server',
+        payload=b'Hello from A1 -> via A2 -> to B2 (expect at B1)',
+        drop_server_to_client_control=(1,),
+    ),
+    'tc2_small_server_to_client': MyudpDelayLossCase(name='tc2_small_server_to_client', direction='server_to_client', payload=b'Hello from B2 -> to B1 (loop) -> over to A1'),
+    'tc3_2000_client_to_server': MyudpDelayLossCase(name='tc3_2000_client_to_server', direction='client_to_server', payload=b'A' * 2000),
+    'tc4_2000_server_to_client': MyudpDelayLossCase(name='tc4_2000_server_to_client', direction='server_to_client', payload=b'B' * 2000),
+    'tc5_concurrent_bidir': MyudpDelayLossCase(name='tc5_concurrent_bidir'),
+    'tc6_20k_drop_2_3': MyudpDelayLossCase(name='tc6_20k_drop_2_3', direction='client_to_server', payload=b'X' * (20 * 1024), drop_client_to_server_data=(2, 3)),
+    'tc7_20k_drop_2_3_20': MyudpDelayLossCase(name='tc7_20k_drop_2_3_20', direction='client_to_server', payload=b'X' * (20 * 1024), drop_client_to_server_data=(2, 3, 20)),
+    'tc8_20k_drop_2_3_21': MyudpDelayLossCase(name='tc8_20k_drop_2_3_21', direction='client_to_server', payload=b'X' * (20 * 1024), drop_client_to_server_data=(2, 3, 21)),
+    'tc9_20k_drop_2_3_20_21': MyudpDelayLossCase(name='tc9_20k_drop_2_3_20_21', direction='client_to_server', payload=b'X' * (20 * 1024), drop_client_to_server_data=(2, 3, 20, 21)),
+    'tc10_full_missed_list_pressure': MyudpDelayLossCase(
+        name='tc10_full_missed_list_pressure',
+        direction='client_to_server',
+        drop_client_to_server_data=tuple(range(1, CONTROL_MAX_MISSED + 3)),
+    ),
+}
+
 CASES.update({
     'case01_udp_over_own_udp_localhost_ipv4': _with_localhost_peer(
         CASES['case01_udp_over_own_udp_ipv4'],
@@ -487,6 +537,18 @@ DEFAULT_CASES = {
     'listener-two-clients': LISTENER_CASES,
     'concurrent-tcp-channels': CONCURRENT_TCP_CHANNEL_CASES,
 }
+
+CASE_INDEX_BASE_BASIC = 0
+CASE_INDEX_BASE_RECONNECT = 100
+CASE_INDEX_BASE_LISTENER = 200
+CASE_INDEX_BASE_CONCURRENT = 300
+CASE_INDEX_BASE_RESTART = 400
+CASE_INDEX_BASE_MYUDP_DELAY_LOSS = 500
+
+SERVICE_PORT_CEILING = 61000
+ADMIN_PORT_BASE = 61000
+ADMIN_PORTS_PER_WORKER = 256
+ADMIN_PORTS_PER_CASE = 4
 
 EXACT_BYTES_CASES = {
     'case01_udp_over_own_udp_ipv4',
@@ -615,6 +677,166 @@ class BounceBackServer:
                 except OSError as e:
                     self._log(f'TCP send failed to {addr!r}: {e!r}')
                     return
+
+
+class UdpDelayLossProxy:
+    def __init__(
+        self,
+        *,
+        name: str,
+        listen_host: str,
+        listen_port: int,
+        upstream_host: str,
+        upstream_port: int,
+        forward_bind_host: str,
+        forward_bind_port: int,
+        delay_ms: int,
+        log_path: Path,
+        drop_client_to_server_data: tuple[int, ...] = (),
+        drop_client_to_server_control: tuple[int, ...] = (),
+        drop_server_to_client_data: tuple[int, ...] = (),
+        drop_server_to_client_control: tuple[int, ...] = (),
+    ):
+        self.name = name
+        self.listen_host = listen_host
+        self.listen_port = int(listen_port)
+        self.upstream_host = upstream_host
+        self.upstream_port = int(upstream_port)
+        self.forward_bind_host = forward_bind_host
+        self.forward_bind_port = int(forward_bind_port)
+        self.delay_ms = max(0, int(delay_ms))
+        self.log_path = log_path
+        self.listen_sock: Optional[socket.socket] = None
+        self.upstream_sock: Optional[socket.socket] = None
+        self.thread: Optional[threading.Thread] = None
+        self.ready_event = threading.Event()
+        self.stop_event = threading.Event()
+        self.client_addr: Optional[tuple[str, int]] = None
+        self._pending: list[tuple[float, int, socket.socket, tuple[str, int], bytes]] = []
+        self._pending_seq = 0
+        self._drop_rules = {
+            'client_to_server': {
+                'data': set(drop_client_to_server_data),
+                'control': set(drop_client_to_server_control),
+            },
+            'server_to_client': {
+                'data': set(drop_server_to_client_data),
+                'control': set(drop_server_to_client_control),
+            },
+        }
+        self._counters = {
+            'client_to_server': {'data': 0, 'control': 0},
+            'server_to_client': {'data': 0, 'control': 0},
+        }
+
+    def _log(self, msg: str) -> None:
+        with self.log_path.open('a', encoding='utf-8', errors='replace') as fp:
+            fp.write(f'{time.strftime("%Y-%m-%d %H:%M:%S")} {msg}\n')
+
+    def start(self) -> None:
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+        if not self.ready_event.wait(5.0):
+            raise RuntimeError(f'UDP proxy {self.name} failed to start')
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        for sock in (self.listen_sock, self.upstream_sock):
+            try:
+                if sock is not None:
+                    sock.close()
+            except Exception:
+                pass
+        if self.thread is not None:
+            self.thread.join(timeout=2.0)
+
+    def _classify(self, data: bytes) -> Optional[str]:
+        parsed = PROTO.parse_frame_with_times(data)
+        if not parsed:
+            return None
+        ptype, payload, _tx_ns, _echo_ns = parsed
+        if ptype == PTYPE_DATA:
+            payload_bytes = bytes(payload)
+            ctr = struct.unpack('>H', payload_bytes[:2])[0] if len(payload_bytes) >= 2 else 0
+            if ctr == 0:
+                return None
+            return 'data'
+        if ptype == PTYPE_CONTROL:
+            return 'control'
+        return None
+
+    def _should_drop(self, direction: str, data: bytes) -> tuple[bool, Optional[str], Optional[int]]:
+        frame_kind = self._classify(data)
+        if frame_kind is None:
+            return False, None, None
+        self._counters[direction][frame_kind] += 1
+        frame_idx = self._counters[direction][frame_kind]
+        should_drop = frame_idx in self._drop_rules[direction][frame_kind]
+        return should_drop, frame_kind, frame_idx
+
+    def _schedule(self, sock: socket.socket, dest: tuple[str, int], data: bytes) -> None:
+        if self.delay_ms <= 0:
+            sock.sendto(data, dest)
+            return
+        self._pending_seq += 1
+        due = time.monotonic() + (self.delay_ms / 1000.0)
+        heapq.heappush(self._pending, (due, self._pending_seq, sock, dest, data))
+
+    def _flush_pending(self) -> None:
+        now = time.monotonic()
+        while self._pending and self._pending[0][0] <= now:
+            _due, _seq, sock, dest, data = heapq.heappop(self._pending)
+            try:
+                sock.sendto(data, dest)
+            except OSError as e:
+                self._log(f'sendto failed dest={dest!r}: {e!r}')
+
+    def _run(self) -> None:
+        self.listen_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.listen_sock.bind((self.listen_host, self.listen_port))
+        self.listen_sock.setblocking(False)
+        self.upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.upstream_sock.bind((self.forward_bind_host, self.forward_bind_port))
+        self.upstream_sock.setblocking(False)
+        self._log(
+            f'proxy listening {self.listen_host}:{self.listen_port} '
+            f'-> {self.upstream_host}:{self.upstream_port} via {self.forward_bind_host}:{self.forward_bind_port} '
+            f'delay_ms={self.delay_ms}'
+        )
+        self.ready_event.set()
+        while not self.stop_event.is_set():
+            self._flush_pending()
+            timeout = 0.05
+            if self._pending:
+                timeout = max(0.0, min(timeout, self._pending[0][0] - time.monotonic()))
+            try:
+                readable, _, _ = select.select([self.listen_sock, self.upstream_sock], [], [], timeout)
+            except (OSError, ValueError):
+                break
+            for sock in readable:
+                try:
+                    data, addr = sock.recvfrom(65535)
+                except BlockingIOError:
+                    continue
+                except OSError:
+                    continue
+                if sock is self.listen_sock:
+                    self.client_addr = (str(addr[0]), int(addr[1]))
+                    should_drop, frame_kind, frame_idx = self._should_drop('client_to_server', data)
+                    if should_drop:
+                        self._log(f'drop c2s kind={frame_kind} idx={frame_idx} from={addr!r}')
+                        continue
+                    self._schedule(self.upstream_sock, (self.upstream_host, self.upstream_port), data)
+                else:
+                    if self.client_addr is None:
+                        self._log(f'ignore s2c packet before client discovery from={addr!r}')
+                        continue
+                    should_drop, frame_kind, frame_idx = self._should_drop('server_to_client', data)
+                    if should_drop:
+                        self._log(f'drop s2c kind={frame_kind} idx={frame_idx} from={addr!r}')
+                        continue
+                    self._schedule(self.listen_sock, self.client_addr, data)
+        self._flush_pending()
 
 
 def merge_env(extra: Dict[str, str]) -> Dict[str, str]:
@@ -785,7 +1007,7 @@ def probe_udp(host: str, port: int, bind_host: Optional[str], payload: bytes, ti
             s.bind((bind_host, 0))
         s.settimeout(timeout)
         s.sendto(payload, (host, port))
-        data, _ = s.recvfrom(4096)
+        data, _ = s.recvfrom(65535)
         return data
 
 
@@ -916,9 +1138,12 @@ def _listener_overlay_port(case: Case, transport: str) -> int:
     return int(_arg_value(case.bridge_server_args, listen_opt, str(base_default)))
 
 
-def alloc_admin_ports(case_index: int, base: int = 18180) -> Tuple[int, int]:
-    server = base + _xdist_worker_index() * 1000 + case_index * 20
-    client = server + 10
+def alloc_admin_ports(case_index: int, base: int = ADMIN_PORT_BASE) -> Tuple[int, int]:
+    worker_index = _xdist_worker_index()
+    slot_count = ADMIN_PORTS_PER_WORKER // ADMIN_PORTS_PER_CASE
+    slot = int(case_index) % max(1, slot_count)
+    server = base + worker_index * ADMIN_PORTS_PER_WORKER + slot * ADMIN_PORTS_PER_CASE
+    client = server + 1
     return server, client
 
 
@@ -1583,6 +1808,185 @@ def run_case(case: Case, log_dir: Path, case_index: int, settle_s: Optional[floa
         for proc in reversed(procs):            
             stop_proc(proc)
         bounce.stop()
+
+
+def _myudp_delay_loss_base_port(case_index: int) -> int:
+    return 36000 + _case_port_offset(case_index, highest_static_port=40000)
+
+
+def _wait_udp_probe_result(host: str, port: int, payload: bytes, *, bind_host: str = '127.0.0.1', timeout: float = 20.0) -> bytes:
+    end = time.time() + timeout
+    last_exc = None
+    expected = response_payload(payload)
+    while time.time() < end:
+        try:
+            got = probe_udp(host, port, bind_host, payload, timeout=min(2.5, max(0.5, end - time.time())))
+            if got == expected:
+                return got
+            last_exc = RuntimeError(f'unexpected UDP reply: {got!r} != {expected!r}')
+        except Exception as e:
+            last_exc = e
+        time.sleep(0.2)
+    raise RuntimeError(f'UDP probe to {host}:{port} failed for payload len={len(payload)}: {last_exc!r}')
+
+
+def run_case_myudp_delay_loss(loss_case: MyudpDelayLossCase, log_dir: Path, case_index: int) -> None:
+    base_port = _myudp_delay_loss_base_port(case_index)
+    server_overlay_port = base_port
+    proxy_listen_port = base_port + 1
+    proxy_forward_port = base_port + 2
+    client_probe_port = base_port + 10
+    server_probe_port = base_port + 11
+    server_target_port = base_port + 12
+    client_target_port = base_port + 13
+    server_admin, client_admin = alloc_admin_ports(case_index)
+
+    bounce_server = BounceBackServer(
+        name=f'{loss_case.name}_server_bounce',
+        proto='udp',
+        bind_host='127.0.0.1',
+        port=server_target_port,
+        log_path=log_dir / f'{loss_case.name}_server_bounce.log',
+    )
+    bounce_client = BounceBackServer(
+        name=f'{loss_case.name}_client_bounce',
+        proto='udp',
+        bind_host='127.0.0.1',
+        port=client_target_port,
+        log_path=log_dir / f'{loss_case.name}_client_bounce.log',
+    )
+    proxy = UdpDelayLossProxy(
+        name=loss_case.name,
+        listen_host='127.0.0.1',
+        listen_port=proxy_listen_port,
+        upstream_host='127.0.0.1',
+        upstream_port=server_overlay_port,
+        forward_bind_host='127.0.0.1',
+        forward_bind_port=proxy_forward_port,
+        delay_ms=loss_case.delay_ms,
+        log_path=log_dir / f'{loss_case.name}_proxy.log',
+        drop_client_to_server_data=loss_case.drop_client_to_server_data,
+        drop_client_to_server_control=loss_case.drop_client_to_server_control,
+        drop_server_to_client_data=loss_case.drop_server_to_client_data,
+        drop_server_to_client_control=loss_case.drop_server_to_client_control,
+    )
+
+    py = sys.executable
+    missing_cfg = str(log_dir / f'{loss_case.name}_missing.cfg')
+    server_cmd = [
+        py, str(BRIDGE),
+        '--overlay-transport', 'myudp',
+        '--udp-bind', '127.0.0.1', '--udp-own-port', str(server_overlay_port),
+        '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
+        '--log-file', str(log_dir / f'{loss_case.name}_bridge_server.txt'),
+        '--config', missing_cfg, '--admin-web-port', '0',
+    ] + admin_args(server_admin)
+    client_cmd = [
+        py, str(BRIDGE),
+        '--overlay-transport', 'myudp',
+        '--udp-peer', '127.0.0.1', '--udp-peer-port', str(proxy_listen_port),
+        '--udp-bind', '127.0.0.1', '--udp-own-port', '0',
+        '--own-servers', f'udp,{client_probe_port},127.0.0.1,udp,127.0.0.1,{server_target_port}',
+        '--remote-servers', f'udp,{server_probe_port},127.0.0.1,udp,127.0.0.1,{client_target_port}',
+        '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
+        '--log-file', str(log_dir / f'{loss_case.name}_bridge_client.txt'),
+        '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
+    ] + admin_args(client_admin)
+
+    server_proc: Optional[Proc] = None
+    client_proc: Optional[Proc] = None
+    try:
+        phase('1. Start bidirectional UDP bounce services and delay/loss proxy')
+        bounce_server.start()
+        bounce_client.start()
+        proxy.start()
+
+        phase('2. Start myudp bridge server and client through proxy')
+        server_proc = start_proc(f'{loss_case.name}_bridge_server', server_cmd, log_dir, admin_port=server_admin)
+        client_proc = start_proc(f'{loss_case.name}_bridge_client', client_cmd, log_dir, admin_port=client_admin)
+        wait_admin_up(server_admin, timeout=10.0)
+        wait_admin_up(client_admin, timeout=10.0)
+
+        phase('3. Wait for both peers to become CONNECTED')
+        server_proc, client_proc = wait_both_connected(server_proc, client_proc, log_dir, timeout=30.0)
+        wait_peer_endpoint_visible(server_admin, timeout=12.0, label='server', transport='myudp')
+        wait_peer_endpoint_visible(client_admin, timeout=12.0, label='client', transport='myudp')
+
+        if loss_case.name == 'tc0_idle_connectivity':
+            time.sleep(1.5)
+            return
+
+        phase('4. Execute bidirectional app probes across the delayed/lossy myudp overlay')
+        if loss_case.name == 'tc5_concurrent_bidir':
+            results: dict[str, bytes] = {}
+            errors: list[tuple[str, Exception]] = []
+
+            def _worker(label: str, port: int, payload: bytes, timeout: float) -> None:
+                try:
+                    results[label] = _wait_udp_probe_result('127.0.0.1', port, payload, timeout=timeout)
+                except Exception as e:
+                    errors.append((label, e))
+
+            threads = [
+                threading.Thread(target=_worker, args=('client_to_server', client_probe_port, b'A' * 2000, 20.0), daemon=True),
+                threading.Thread(target=_worker, args=('server_to_client', server_probe_port, b'C' * 1900, 20.0), daemon=True),
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=25.0)
+            if errors:
+                raise RuntimeError(f'Concurrent myudp delay/loss probes failed: {errors!r}')
+            if results.get('client_to_server') != response_payload(b'A' * 2000):
+                raise RuntimeError(f'Unexpected concurrent client_to_server reply: {results.get("client_to_server")!r}')
+            if results.get('server_to_client') != response_payload(b'C' * 1900):
+                raise RuntimeError(f'Unexpected concurrent server_to_client reply: {results.get("server_to_client")!r}')
+            return
+
+        if loss_case.name == 'tc10_full_missed_list_pressure':
+            payloads = [
+                (f'Z{i:03d}-'.encode('ascii') + b'Z' * (32768 - 5))
+                for i in range(16)
+            ]
+            results: list[Optional[bytes]] = [None] * len(payloads)
+            errors: list[tuple[int, Exception]] = []
+
+            def _bulk_worker(idx: int, payload: bytes) -> None:
+                try:
+                    results[idx] = _wait_udp_probe_result('127.0.0.1', client_probe_port, payload, timeout=45.0)
+                except Exception as e:
+                    errors.append((idx, e))
+
+            threads = [threading.Thread(target=_bulk_worker, args=(idx, payload), daemon=True) for idx, payload in enumerate(payloads)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=50.0)
+            if errors:
+                raise RuntimeError(f'Bulk myudp delay/loss probes failed: {errors!r}')
+            for idx, payload in enumerate(payloads):
+                expected = response_payload(payload)
+                if results[idx] != expected:
+                    raise RuntimeError(
+                        f'Bulk myudp delay/loss reply mismatch idx={idx}: '
+                        f'got={results[idx]!r} expected={expected!r}'
+                    )
+            return
+
+        target_port = client_probe_port if loss_case.direction == 'client_to_server' else server_probe_port
+        timeout = 30.0 if len(loss_case.payload) >= 20 * 1024 or loss_case.drop_client_to_server_data else 15.0
+        got = _wait_udp_probe_result('127.0.0.1', target_port, loss_case.payload, timeout=timeout)
+        expected = response_payload(loss_case.payload)
+        if got != expected:
+            raise RuntimeError(f'myudp delay/loss probe mismatch: got={got!r} expected={expected!r}')
+    finally:
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+        proxy.stop()
+        bounce_client.stop()
+        bounce_server.stop()
 
 
 def run_case_reconnect(case: Case, log_dir: Path, case_index: int, settle_s: Optional[float] = None, reconnect_timeout: float = 30.0) -> None:
@@ -3159,35 +3563,50 @@ def _stop_proc_without_admin(proc: Proc) -> None:
 @pytest.mark.slow
 @pytest.mark.parametrize("case_name", BASIC_CASES)
 def test_overlay_e2e_basic(case_name: str, tmp_path: Path) -> None:
-    run_case(CASES[case_name], tmp_path, ALL_CASES.index(case_name))
+    run_case(CASES[case_name], tmp_path, CASE_INDEX_BASE_BASIC + ALL_CASES.index(case_name))
 
 
 @pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.parametrize("case_name", RECONNECT_CASES)
 def test_overlay_e2e_reconnect(case_name: str, tmp_path: Path) -> None:
-    run_case_reconnect(CASES[case_name], tmp_path, ALL_CASES.index(case_name))
+    run_case_reconnect(CASES[case_name], tmp_path, CASE_INDEX_BASE_RECONNECT + ALL_CASES.index(case_name))
 
 
 @pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.parametrize("case_name", LISTENER_CASES)
 def test_overlay_e2e_listener_two_clients(case_name: str, tmp_path: Path) -> None:
-    run_case_two_peer_clients_listener(CASES[case_name], tmp_path, ALL_CASES.index(case_name))
+    run_case_two_peer_clients_listener(CASES[case_name], tmp_path, CASE_INDEX_BASE_LISTENER + ALL_CASES.index(case_name))
 
 
 @pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.parametrize("case_name", CONCURRENT_TCP_CHANNEL_CASES)
 def test_overlay_e2e_concurrent_tcp_channels(case_name: str, tmp_path: Path) -> None:
-    run_case_concurrent_tcp_channels(CASES[case_name], tmp_path, ALL_CASES.index(case_name))
+    run_case_concurrent_tcp_channels(CASES[case_name], tmp_path, CASE_INDEX_BASE_CONCURRENT + ALL_CASES.index(case_name))
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize("case_name", list(MYUDP_DELAY_LOSS_CASES.keys()))
+def test_overlay_e2e_myudp_delay_loss(case_name: str, tmp_path: Path) -> None:
+    run_case_myudp_delay_loss(
+        MYUDP_DELAY_LOSS_CASES[case_name],
+        tmp_path,
+        CASE_INDEX_BASE_MYUDP_DELAY_LOSS + list(MYUDP_DELAY_LOSS_CASES.keys()).index(case_name),
+    )
 
 
 @pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.parametrize("case_name", ['case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels'])
 def test_overlay_e2e_server_restart_closes_tcp_preserves_udp(case_name: str, tmp_path: Path) -> None:
-    run_case_server_restart_closes_tcp_preserves_udp(CASES[case_name], tmp_path, ALL_CASES.index(case_name))
+    run_case_server_restart_closes_tcp_preserves_udp(
+        CASES[case_name],
+        tmp_path,
+        CASE_INDEX_BASE_RESTART + ALL_CASES.index(case_name),
+    )
 
 
 @pytest.mark.integration
@@ -3377,8 +3796,9 @@ def test_overlay_e2e_alloc_admin_ports_isolates_xdist_workers(monkeypatch: pytes
     monkeypatch.setenv('PYTEST_XDIST_WORKER', 'gw3')
     server_port, client_port = alloc_admin_ports(4)
 
-    assert server_port == 18180 + 3000 + 80
-    assert client_port == server_port + 10
+    assert server_port == ADMIN_PORT_BASE + 3 * ADMIN_PORTS_PER_WORKER + 4 * ADMIN_PORTS_PER_CASE
+    assert client_port == server_port + 1
+    assert server_port >= SERVICE_PORT_CEILING
 
 
 def test_overlay_e2e_case_port_offset_stays_in_range_for_many_workers(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3391,6 +3811,8 @@ def test_overlay_e2e_case_port_offset_stays_in_range_for_many_workers(monkeypatc
     assert case.probe_port < 65535
     assert int(_arg_value(case.bridge_server_args, '--ws-own-port', '0')) < 65535
     assert int(_arg_value(case.bridge_server_args, '--udp-own-port', '0')) < 65535
+    assert case.bounce_port < SERVICE_PORT_CEILING
+    assert case.probe_port < SERVICE_PORT_CEILING
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
