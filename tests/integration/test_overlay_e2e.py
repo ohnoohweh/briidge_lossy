@@ -1206,6 +1206,29 @@ def wait_peers_count(admin_port: int, minimum_count: int, timeout: float = 12.0,
     raise RuntimeError(f'/api/peers did not reach {minimum_count} rows on port {admin_port}; last={last_doc!r}')
 
 
+def wait_peer_endpoint_visible(admin_port: int, timeout: float = 12.0, label: str = '', transport: str = 'myudp') -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    normalized_transport = str(transport or '').strip().lower()
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
+        last_doc = doc
+        rows = list(doc.get('peers') or [])
+        for row in rows:
+            if str(row.get('transport', '')).strip().lower() != normalized_transport:
+                continue
+            peer = str(row.get('peer') or '').strip()
+            if peer and peer.lower() != 'n/a':
+                who = f' {label}' if label else ''
+                log.info(f'[PEERS]{who} port={admin_port} transport={normalized_transport} peer={peer}')
+                return doc
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'/api/peers did not expose a non-empty peer endpoint for transport={normalized_transport} '
+        f'on port {admin_port}; last={last_doc!r}'
+    )
+
+
 def status_state(doc: dict) -> str:
     return str(doc.get('peer_state', '')).strip().upper()
 
@@ -1340,6 +1363,10 @@ def run_case(case: Case, log_dir: Path, case_index: int, settle_s: Optional[floa
         time.sleep(case.settle_seconds if settle_s is None else settle_s)
         for proc in procs:
             assert_running(proc)
+
+        if case.name.startswith('case01_'):
+            for proc in procs:
+                wait_peer_endpoint_visible(proc.admin_port or 0, timeout=10.0, label=proc.name, transport='myudp')
 
         if case.probe_proto == 'tcp':
             wait_tcp_listen(case.probe_host, case.probe_port, timeout=5.0)
