@@ -355,6 +355,12 @@ function renderPeerTable(rows) {
     tbody.innerHTML = '<tr class="empty-row"><td colspan="17">No peer sessions</td></tr>';
     return;
   }
+  const peerStateClass = (state) => {
+    const s = String(state || '').toLowerCase();
+    if (s === 'connected') return 'role-pill role-server';
+    if (s === 'connecting') return 'role-pill role-client';
+    return 'role-pill role-unknown';
+  };
   const fmtMyUdpMetric = (row, value) => {
     const transport = String(row.transport || '').toLowerCase();
     if (transport !== 'myudp') return 'n/a';
@@ -365,7 +371,7 @@ function renderPeerTable(rows) {
       <td class="mono">${fmtInteger(row.id)}</td>
       <td class="mono">${row.transport || 'n/a'}</td>
       <td class="mono">${row.listen || 'n/a'}</td>
-      <td><span class="${(row.connected ? 'role-pill role-server' : 'role-pill role-unknown')}">${row.connected ? 'yes' : 'no'}</span></td>
+      <td><span class="${peerStateClass(row.state)}">${String(row.state || 'unknown').toLowerCase()}</span></td>
       <td class="mono">${row.peer || 'n/a'}</td>
       <td class="mono">${fmtNumber(row.rtt_est_ms)}</td>
       <td class="mono">${fmtInteger(row.open_connections?.udp ?? 0)}</td>
