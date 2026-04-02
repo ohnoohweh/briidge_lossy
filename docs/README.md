@@ -8,17 +8,16 @@
 - **Exactly 5 frames** per message: local send → overlay DATA → local receive → CONTROL (rx→tx) → CONTROL (tx→rx).
 
 **Files**
-- `src/obstacle_bridge/transfer.py` – deterministic CONTROL emission: receiver sends CONTROL on DATA; sender replies with CONTROL on CONTROL.
-- `virtual_net.py` – NAT mapping, 300ms overlay delay, overlay RX-first PCAP logging, local app logging with global IPs.
-- `scripts/run_udp_bidir_tests.py` – five scenarios, including two large and one concurrent case.
+- `src/obstacle_bridge/bridge.py` – protocol framing, retransmit handling, and admin instrumentation used by the end-to-end harness.
+- `tests/integration/test_overlay_e2e.py` – unified subprocess/socket integration harness, including the migrated myudp bidirectional delay/loss cases.
 
 ## Overlay integration suites
 
-The repository also ships two end-to-end overlay harnesses in `tests/integration/`:
+The repository ships the end-to-end overlay harness in `tests/integration/`:
 
-- `test_overlay_e2e.py`: unified smoke/reconnect/listener harness. Use `--mode basic`, `--mode reconnect`, or `--mode listener-two-clients`.
+- `test_overlay_e2e.py`: unified smoke/reconnect/listener harness.
 
-The script is a **standalone Python runner** (not a pytest function). It starts a local bounce-back server, launches one or more `ObstacleBridge.py` processes, waits for tunnel readiness, then probes through the overlay and fails with process/log dumps if a step breaks.
+The file can be used through its direct CLI entrypoint or through pytest. It starts local bounce-back services, launches one or more `ObstacleBridge.py` processes, waits for tunnel readiness, then probes through the overlay and fails with process/log dumps if a step breaks.
 
 ---
 
