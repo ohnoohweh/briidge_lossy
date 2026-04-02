@@ -176,6 +176,56 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(peer["traffic"]["rx_bytes"], 1234)
         self.assertEqual(peer["traffic"]["tx_bytes"], 4321)
 
+    def test_listener_snapshot_includes_myudp_listener_row(self):
+        class _ListenerSession:
+            def __init__(self):
+                self._metrics = SessionMetrics()
+
+            def get_metrics(self):
+                return self._metrics
+
+            def is_connected(self):
+                return True
+
+            def get_overlay_peers_snapshot(self):
+                return [
+                    {
+                        "peer_id": -1,
+                        "connected": False,
+                        "peer": None,
+                        "mux_chans": [],
+                        "rtt_est_ms": None,
+                        "listening": True,
+                    },
+                    {
+                        "peer_id": 7,
+                        "connected": True,
+                        "peer": "198.51.100.7:4433",
+                        "mux_chans": [101],
+                    },
+                ]
+
+        args = argparse.Namespace(no_dashboard=True, overlay_transport="myudp")
+        runner = Runner(args)
+        runner._sessions = [_ListenerSession()]
+        runner._muxes = [_MuxWithListeners()]
+        runner._session_labels = ["myudp"]
+
+        out = runner.get_peer_connections_snapshot()
+        self.assertEqual(len(out["peers"]), 2)
+        listener = next(p for p in out["peers"] if p["id"] == "0:-1")
+        peer = next(p for p in out["peers"] if p["id"] == "0:7")
+
+        self.assertFalse(listener["connected"])
+        self.assertIsNone(listener["peer"])
+        self.assertEqual(listener["open_connections"]["udp"], 0)
+        self.assertEqual(listener["open_connections"]["tcp"], 0)
+
+        self.assertTrue(peer["connected"])
+        self.assertEqual(peer["open_connections"]["udp"], 1)
+        self.assertEqual(peer["traffic"]["rx_bytes"], 1234)
+        self.assertEqual(peer["traffic"]["tx_bytes"], 4321)
+
 
 if __name__ == "__main__":
     unittest.main()

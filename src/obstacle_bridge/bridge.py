@@ -2016,6 +2016,14 @@ class UdpSession(ISession):
                     mux_by_peer.setdefault(int(peer_id), []).append(int(mux_chan))
                 except Exception:
                     continue
+            rows.append({
+                "peer_id": -1,
+                "connected": False,
+                "peer": None,
+                "mux_chans": [],
+                "rtt_est_ms": None,
+                "listening": True,
+            })
             for peer_id in sorted(self._server_peers.keys()):
                 ctx = self._server_peers.get(peer_id, {})
                 addr = ctx.get("addr") if isinstance(ctx, dict) else None
@@ -2965,6 +2973,51 @@ class TcpStreamSession(ISession):
         except Exception:
             return SessionMetrics()
 
+    @staticmethod
+    def _format_peer_label(host: Optional[object], port: Optional[object]) -> Optional[str]:
+        try:
+            if host is None or port is None:
+                return None
+            host_s = str(host)
+            port_i = int(port)
+            if not host_s:
+                return None
+            return f"[{host_s}]:{port_i}" if ":" in host_s and not host_s.startswith("[") else f"{host_s}:{port_i}"
+        except Exception:
+            return None
+
+    def get_overlay_peers_snapshot(self) -> list[dict]:
+        if self._peer_tuple:
+            return [{
+                "peer_id": 0,
+                "connected": bool(self.is_connected()),
+                "state": "connected" if self.is_connected() else "connecting",
+                "peer": self._format_peer_label(self._peer_host, self._peer_port),
+                "mux_chans": [],
+                "rtt_est_ms": getattr(self._rtt, "rtt_est_ms", None),
+            }]
+
+        rows = [{
+            "peer_id": -1,
+            "connected": False,
+            "state": "listening",
+            "peer": None,
+            "mux_chans": [],
+            "rtt_est_ms": None,
+            "listening": True,
+        }]
+        peer_label = self._format_peer_label(self._peer_host, self._peer_port)
+        if peer_label or self.is_connected():
+            rows.append({
+                "peer_id": 0,
+                "connected": bool(self.is_connected()),
+                "state": "connected" if self.is_connected() else "connecting",
+                "peer": peer_label,
+                "mux_chans": [],
+                "rtt_est_ms": getattr(self._rtt, "rtt_est_ms", None),
+            })
+        return rows
+
     # ---- ISession: data path (APP) ----
     def send_app(self, payload: bytes) -> int:
         if not payload:
@@ -3657,6 +3710,51 @@ class QuicSession(ISession):
             )
         except Exception:
             return SessionMetrics()
+
+    @staticmethod
+    def _format_peer_label(host: Optional[object], port: Optional[object]) -> Optional[str]:
+        try:
+            if host is None or port is None:
+                return None
+            host_s = str(host)
+            port_i = int(port)
+            if not host_s:
+                return None
+            return f"[{host_s}]:{port_i}" if ":" in host_s and not host_s.startswith("[") else f"{host_s}:{port_i}"
+        except Exception:
+            return None
+
+    def get_overlay_peers_snapshot(self) -> list[dict]:
+        if self._peer_tuple:
+            return [{
+                "peer_id": 0,
+                "connected": bool(self.is_connected()),
+                "state": "connected" if self.is_connected() else "connecting",
+                "peer": self._format_peer_label(self._peer_host, self._peer_port),
+                "mux_chans": [],
+                "rtt_est_ms": getattr(self._rtt, "rtt_est_ms", None),
+            }]
+
+        rows = [{
+            "peer_id": -1,
+            "connected": False,
+            "state": "listening",
+            "peer": None,
+            "mux_chans": [],
+            "rtt_est_ms": None,
+            "listening": True,
+        }]
+        peer_label = self._format_peer_label(self._peer_host, self._peer_port)
+        if peer_label or self.is_connected():
+            rows.append({
+                "peer_id": 0,
+                "connected": bool(self.is_connected()),
+                "state": "connected" if self.is_connected() else "connecting",
+                "peer": peer_label,
+                "mux_chans": [],
+                "rtt_est_ms": getattr(self._rtt, "rtt_est_ms", None),
+            })
+        return rows
 
     # ---- data path (APP) ----
     def send_app(self, payload: bytes) -> int:
@@ -4638,12 +4736,25 @@ class WebSocketSession(ISession):
                 {
                     "peer_id": 0,
                     "connected": bool(self.is_connected()),
+                    "state": "connected" if self.is_connected() else "connecting",
                     "peer": peer_label,
                     "mux_chans": [],
                     "rtt_est_ms": getattr(self._rtt, "rtt_est_ms", None),
                 }
             )
             return rows
+
+        rows.append(
+            {
+                "peer_id": -1,
+                "connected": False,
+                "state": "listening",
+                "peer": None,
+                "mux_chans": [],
+                "rtt_est_ms": None,
+                "listening": True,
+            }
+        )
 
         mux_by_peer: Dict[int, list[int]] = {}
         for mux_chan, mapped in self._server_chan_to_peer.items():
@@ -4668,6 +4779,7 @@ class WebSocketSession(ISession):
                 {
                     "peer_id": peer_id,
                     "connected": bool(peer_id in self._server_peers),
+                    "state": "connected" if peer_id in self._server_peers else "connecting",
                     "peer": peer_label,
                     "mux_chans": sorted(mux_by_peer.get(peer_id, [])),
                     "rtt_est_ms": getattr(rtt, "rtt_est_ms", None),
@@ -9156,6 +9268,28 @@ class Runner:
 
             if overlay_rows:
                 for p in overlay_rows:
+                    if bool(p.get("listening")):
+                        peers.append({
+                            "id": f"{idx}:{p.get('peer_id', 0)}",
+                            "transport": label,
+                            "state": "listening",
+                            "connected": False,
+                            "listen": listen_endpoint,
+                            "peer": p.get("peer"),
+                            "rtt_est_ms": p.get("rtt_est_ms", m.rtt_est_ms),
+                            "inflight": m.inflight,
+                            "decode_errors": 0,
+                            "open_connections": {
+                                "udp": 0,
+                                "tcp": 0,
+                            },
+                            "traffic": {
+                                "rx_bytes": 0,
+                                "tx_bytes": 0,
+                            },
+                            "myudp": self._session_retransmit_stats(session),
+                        })
+                        continue
                     mux_chans = set(int(c) for c in (p.get("mux_chans") or []))
                     p_rx = 0
                     p_tx = 0
@@ -9186,10 +9320,13 @@ class Runner:
                         p_tx += int(st.get("tx_bytes", 0) or 0)
                         tcp_open += 1
 
+                    row_connected = bool(p.get("connected", session.is_connected()))
+                    row_state = str(p.get("state") or ("connected" if row_connected else "connecting"))
                     peers.append({
                         "id": f"{idx}:{p.get('peer_id', 0)}",
                         "transport": label,
-                        "connected": bool(p.get("connected", session.is_connected())),
+                        "state": row_state,
+                        "connected": row_connected,
                         "listen": listen_endpoint,
                         "peer": p.get("peer"),
                         "rtt_est_ms": p.get("rtt_est_ms", m.rtt_est_ms),
@@ -9233,6 +9370,7 @@ class Runner:
             peers.append({
                 "id": idx,
                 "transport": label,
+                "state": "connected" if bool(session.is_connected()) else "connecting",
                 "connected": bool(session.is_connected()),
                 "listen": listen_endpoint,
                 "peer": peer_label,
