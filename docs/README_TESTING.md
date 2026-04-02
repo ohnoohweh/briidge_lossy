@@ -30,12 +30,12 @@ Both paths start a local bounce-back server, launch one or more `ObstacleBridge.
 
 ## Pytest interface
 
-Run the unified harness through pytest (environment gate required):
+Run the unified harness through pytest:
 
 ```bash
-RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k basic
-RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k reconnect
-RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k listener_two_clients
+pytest -q tests/integration/test_overlay_e2e.py -k basic
+pytest -q tests/integration/test_overlay_e2e.py -k reconnect
+pytest -q tests/integration/test_overlay_e2e.py -k listener_two_clients
 ```
 
 ### Markers and filtering
@@ -49,11 +49,27 @@ Common marker filters:
 
 ```bash
 # run integration tests that are not marked slow
-RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -m "integration and not slow"
+pytest -q tests/integration/test_overlay_e2e.py -m "integration and not slow"
 
 # run only slow integration coverage
-RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -m "integration and slow"
+pytest -q tests/integration/test_overlay_e2e.py -m "integration and slow"
 ```
+
+### Parallel execution
+
+`test_overlay_e2e.py` now rewrites each case into its own deterministic port range, and also adds a worker-specific port offset when `pytest-xdist` is active. That makes subprocess/socket runs safe to distribute across workers instead of relying on one shared set of hardcoded ports.
+
+Example:
+
+```bash
+pytest -q -n 4 tests/integration/test_overlay_e2e.py
+```
+
+Notes:
+
+- install the test extra first if `pytest -n ...` is not available: `pip install -e .[test]`
+- admin ports are also worker-isolated
+- per-case logs still remain separated by pytest `tmp_path`
 
 ## Unified harness: `test_overlay_e2e.py`
 
@@ -347,17 +363,19 @@ This is the suite that validates restart resilience and admin-plane state transi
 
 ## Consolidated test catalog
 
-This repository currently collects **91 pytest tests**.
+This repository currently collects **94 pytest tests**.
 
 Observed execution modes:
 
-- Default run: `pytest -q` -> **52 passed, 39 skipped**
-- Gated overlay integration run: `RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py` -> **43 passed**
+- Default run: `pytest -q`
+- Overlay-only run: `pytest -q tests/integration/test_overlay_e2e.py`
+- Parallel overlay run: `pytest -q -n 16 tests/integration/test_overlay_e2e.py` -> **46 passed in about 2 minutes**
 
 Interpretation:
 
-- the default run executes all unit tests plus the lightweight CLI-routing integration tests
-- the remaining 39 overlay subprocess/socket tests are intentionally gated behind `RUN_OVERLAY_E2E=1`
+- the default run now includes the overlay subprocess/socket tests instead of skipping them behind an environment flag
+- whether all tests pass depends on the execution environment supporting subprocesses, sockets, and the required transport dependencies
+- the overlay integration file currently collects **46 pytest tests**
 
 ### Unit tests
 
@@ -461,66 +479,66 @@ Interpretation:
 
 ### Integration tests
 
-All rows in this section use the overlay subprocess/socket harness. For the heavier end-to-end cases, prepend `RUN_OVERLAY_E2E=1`.
+All rows in this section use the overlay subprocess/socket harness.
 
 #### `tests/integration/test_overlay_e2e.py` basic transport cases
 
 | Scenario | Objective | Test criteria | How to start test |
 |---|---|---|---|
-| Basic case01 UDP over own UDP IPv4 | Verify native UDP overlay on IPv4 forwards UDP payloads. | Overlay connects and a UDP probe returns the expected bounced payload. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case01_udp_over_own_udp_ipv4]'` |
-| Basic case02 UDP over own UDP overlay IPv6 to IPv4 client service | Verify IPv6 overlay can forward to an IPv4-side UDP service. | Overlay connects and the IPv4 UDP service returns the expected payload. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case02_udp_over_own_udp_overlay_ipv6_clients_ipv4]'` |
-| Basic case03 UDP over own UDP IPv6 end to end | Verify IPv6 overlay and IPv6 UDP service work together. | Overlay connects and the IPv6 UDP probe succeeds. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case03_udp_over_own_udp_overlay_ipv6_clients_ipv6]'` |
-| Basic case04 TCP over own UDP IPv4 | Verify TCP channels can ride over the native UDP overlay. | TCP client connects through overlay and receives expected bounced reply. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case04_tcp_over_own_udp_clients_ipv4]'` |
-| Basic case05 TCP over own UDP IPv6 | Verify IPv6 TCP channels can ride over the native UDP overlay. | IPv6 TCP client connects through overlay and receives expected bounced reply. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case05_tcp_over_own_udp_clients_ipv6]'` |
-| Basic case06 UDP over TCP overlay IPv4 | Verify TCP overlay transport forwards UDP application traffic. | TCP overlay connects and the UDP probe returns the expected payload. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case06_overlay_tcp_ipv4]'` |
-| Basic case07 UDP over TCP overlay IPv6 | Verify IPv6 TCP overlay transport forwards UDP traffic. | IPv6 TCP overlay connects and the UDP probe succeeds. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case07_overlay_tcp_ipv6]'` |
-| Basic case08 UDP over WS overlay IPv4 | Verify websocket overlay transport forwards UDP traffic. | WS overlay connects and the UDP probe succeeds. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case08_overlay_ws_ipv4]'` |
-| Basic case09 UDP over WS overlay IPv6 | Verify IPv6 websocket overlay transport forwards UDP traffic. | IPv6 WS overlay connects and the UDP probe succeeds. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case09_overlay_ws_ipv6]'` |
-| Basic case10 UDP over QUIC overlay IPv4 | Verify QUIC overlay transport forwards UDP traffic. | QUIC overlay connects and the UDP probe succeeds. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case10_overlay_quic_ipv4]'` |
-| Basic case11 UDP over QUIC overlay IPv6 | Verify IPv6 QUIC overlay transport forwards UDP traffic. | IPv6 QUIC overlay connects and the UDP probe succeeds. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case11_overlay_quic_ipv6]'` |
+| Basic case01 UDP over own UDP IPv4 | Verify native UDP overlay on IPv4 forwards UDP payloads. | Overlay connects and a UDP probe returns the expected bounced payload. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case01_udp_over_own_udp_ipv4]'` |
+| Basic case02 UDP over own UDP overlay IPv6 to IPv4 client service | Verify IPv6 overlay can forward to an IPv4-side UDP service. | Overlay connects and the IPv4 UDP service returns the expected payload. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case02_udp_over_own_udp_overlay_ipv6_clients_ipv4]'` |
+| Basic case03 UDP over own UDP IPv6 end to end | Verify IPv6 overlay and IPv6 UDP service work together. | Overlay connects and the IPv6 UDP probe succeeds. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case03_udp_over_own_udp_overlay_ipv6_clients_ipv6]'` |
+| Basic case04 TCP over own UDP IPv4 | Verify TCP channels can ride over the native UDP overlay. | TCP client connects through overlay and receives expected bounced reply. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case04_tcp_over_own_udp_clients_ipv4]'` |
+| Basic case05 TCP over own UDP IPv6 | Verify IPv6 TCP channels can ride over the native UDP overlay. | IPv6 TCP client connects through overlay and receives expected bounced reply. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case05_tcp_over_own_udp_clients_ipv6]'` |
+| Basic case06 UDP over TCP overlay IPv4 | Verify TCP overlay transport forwards UDP application traffic. | TCP overlay connects and the UDP probe returns the expected payload. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case06_overlay_tcp_ipv4]'` |
+| Basic case07 UDP over TCP overlay IPv6 | Verify IPv6 TCP overlay transport forwards UDP traffic. | IPv6 TCP overlay connects and the UDP probe succeeds. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case07_overlay_tcp_ipv6]'` |
+| Basic case08 UDP over WS overlay IPv4 | Verify websocket overlay transport forwards UDP traffic. | WS overlay connects and the UDP probe succeeds. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case08_overlay_ws_ipv4]'` |
+| Basic case09 UDP over WS overlay IPv6 | Verify IPv6 websocket overlay transport forwards UDP traffic. | IPv6 WS overlay connects and the UDP probe succeeds. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case09_overlay_ws_ipv6]'` |
+| Basic case10 UDP over QUIC overlay IPv4 | Verify QUIC overlay transport forwards UDP traffic. | QUIC overlay connects and the UDP probe succeeds. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case10_overlay_quic_ipv4]'` |
+| Basic case11 UDP over QUIC overlay IPv6 | Verify IPv6 QUIC overlay transport forwards UDP traffic. | IPv6 QUIC overlay connects and the UDP probe succeeds. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic[case11_overlay_quic_ipv6]'` |
 
 #### `tests/integration/test_overlay_e2e.py` reconnect cases
 
 | Scenario | Objective | Test criteria | How to start test |
 |---|---|---|---|
-| Reconnect case01 UDP over own UDP IPv4 | Verify UDP overlay recovers from client and server restarts. | Initial probe succeeds, both restart phases disconnect/reconnect correctly, and the final probe succeeds. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case01_udp_over_own_udp_ipv4]'` |
-| Reconnect case02 UDP overlay IPv6 to IPv4 client service | Verify mixed-family UDP overlay reconnect remains stable. | Both restart cycles recover and UDP probing succeeds before and after each restart. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case02_udp_over_own_udp_overlay_ipv6_clients_ipv4]'` |
-| Reconnect case03 UDP over own UDP IPv6 | Verify IPv6 UDP overlay reconnect remains stable. | Both restart cycles recover and IPv6 UDP probing succeeds before and after each restart. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case03_udp_over_own_udp_overlay_ipv6_clients_ipv6]'` |
-| Reconnect case04 TCP over own UDP IPv4 | Verify TCP-over-UDP overlay recovers across restart cycles. | TCP probing succeeds before and after both restart phases. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case04_tcp_over_own_udp_clients_ipv4]'` |
-| Reconnect case05 TCP over own UDP IPv6 | Verify IPv6 TCP-over-UDP overlay recovers across restart cycles. | IPv6 TCP probing succeeds before and after both restart phases. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case05_tcp_over_own_udp_clients_ipv6]'` |
-| Reconnect case06 UDP over TCP overlay IPv4 | Verify TCP overlay reconnect remains stable. | TCP overlay disconnects and reconnects correctly and UDP probing recovers. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case06_overlay_tcp_ipv4]'` |
-| Reconnect case07 UDP over TCP overlay IPv6 | Verify IPv6 TCP overlay reconnect remains stable. | IPv6 TCP overlay disconnects and reconnects correctly and UDP probing recovers. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case07_overlay_tcp_ipv6]'` |
-| Reconnect case08 UDP over WS overlay IPv4 | Verify WS overlay reconnect remains stable. | WS overlay disconnects and reconnects correctly and UDP probing recovers. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case08_overlay_ws_ipv4]'` |
-| Reconnect case09 UDP over WS overlay IPv6 | Verify IPv6 WS overlay reconnect remains stable. | IPv6 WS overlay disconnects and reconnects correctly and UDP probing recovers. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case09_overlay_ws_ipv6]'` |
-| Reconnect case10 UDP over QUIC overlay IPv4 | Verify QUIC overlay reconnect remains stable. | QUIC overlay disconnects and reconnects correctly and UDP probing recovers. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case10_overlay_quic_ipv4]'` |
-| Reconnect case11 UDP over QUIC overlay IPv6 | Verify IPv6 QUIC overlay reconnect remains stable. | IPv6 QUIC overlay disconnects and reconnects correctly and UDP probing recovers. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case11_overlay_quic_ipv6]'` |
-| Reconnect localhost case01 UDP IPv4 | Verify localhost plus IPv4 resolve policy stays stable across reconnects. | Restart cycles recover and localhost resolves consistently to IPv4. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case01_udp_over_own_udp_localhost_ipv4]'` |
-| Reconnect localhost case01 UDP IPv6 | Verify localhost plus IPv6 resolve policy stays stable across reconnects. | Restart cycles recover and localhost resolves consistently to IPv6. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case01_udp_over_own_udp_localhost_ipv6]'` |
-| Reconnect localhost case06 TCP overlay IPv4 | Verify localhost TCP overlay respects IPv4 resolution through reconnects. | Restart cycles recover and localhost TCP overlay keeps IPv4 addressing. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case06_overlay_tcp_localhost_ipv4]'` |
-| Reconnect localhost case06 TCP overlay IPv6 | Verify localhost TCP overlay respects IPv6 resolution through reconnects. | Restart cycles recover and localhost TCP overlay keeps IPv6 addressing. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case06_overlay_tcp_localhost_ipv6]'` |
-| Reconnect localhost case08 WS overlay IPv4 | Verify localhost WS overlay respects IPv4 resolution through reconnects. | Restart cycles recover and localhost WS overlay keeps IPv4 addressing. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case08_overlay_ws_localhost_ipv4]'` |
-| Reconnect localhost case08 WS overlay IPv6 | Verify localhost WS overlay respects IPv6 resolution through reconnects. | Restart cycles recover and localhost WS overlay keeps IPv6 addressing. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case08_overlay_ws_localhost_ipv6]'` |
-| Reconnect localhost case10 QUIC overlay IPv4 | Verify localhost QUIC overlay respects IPv4 resolution through reconnects. | Restart cycles recover and localhost QUIC overlay keeps IPv4 addressing. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case10_overlay_quic_localhost_ipv4]'` |
-| Reconnect localhost case10 QUIC overlay IPv6 | Verify localhost QUIC overlay respects IPv6 resolution through reconnects. | Restart cycles recover and localhost QUIC overlay keeps IPv6 addressing. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case10_overlay_quic_localhost_ipv6]'` |
+| Reconnect case01 UDP over own UDP IPv4 | Verify UDP overlay recovers from client and server restarts. | Initial probe succeeds, both restart phases disconnect/reconnect correctly, and the final probe succeeds. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case01_udp_over_own_udp_ipv4]'` |
+| Reconnect case02 UDP overlay IPv6 to IPv4 client service | Verify mixed-family UDP overlay reconnect remains stable. | Both restart cycles recover and UDP probing succeeds before and after each restart. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case02_udp_over_own_udp_overlay_ipv6_clients_ipv4]'` |
+| Reconnect case03 UDP over own UDP IPv6 | Verify IPv6 UDP overlay reconnect remains stable. | Both restart cycles recover and IPv6 UDP probing succeeds before and after each restart. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case03_udp_over_own_udp_overlay_ipv6_clients_ipv6]'` |
+| Reconnect case04 TCP over own UDP IPv4 | Verify TCP-over-UDP overlay recovers across restart cycles. | TCP probing succeeds before and after both restart phases. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case04_tcp_over_own_udp_clients_ipv4]'` |
+| Reconnect case05 TCP over own UDP IPv6 | Verify IPv6 TCP-over-UDP overlay recovers across restart cycles. | IPv6 TCP probing succeeds before and after both restart phases. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case05_tcp_over_own_udp_clients_ipv6]'` |
+| Reconnect case06 UDP over TCP overlay IPv4 | Verify TCP overlay reconnect remains stable. | TCP overlay disconnects and reconnects correctly and UDP probing recovers. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case06_overlay_tcp_ipv4]'` |
+| Reconnect case07 UDP over TCP overlay IPv6 | Verify IPv6 TCP overlay reconnect remains stable. | IPv6 TCP overlay disconnects and reconnects correctly and UDP probing recovers. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case07_overlay_tcp_ipv6]'` |
+| Reconnect case08 UDP over WS overlay IPv4 | Verify WS overlay reconnect remains stable. | WS overlay disconnects and reconnects correctly and UDP probing recovers. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case08_overlay_ws_ipv4]'` |
+| Reconnect case09 UDP over WS overlay IPv6 | Verify IPv6 WS overlay reconnect remains stable. | IPv6 WS overlay disconnects and reconnects correctly and UDP probing recovers. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case09_overlay_ws_ipv6]'` |
+| Reconnect case10 UDP over QUIC overlay IPv4 | Verify QUIC overlay reconnect remains stable. | QUIC overlay disconnects and reconnects correctly and UDP probing recovers. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case10_overlay_quic_ipv4]'` |
+| Reconnect case11 UDP over QUIC overlay IPv6 | Verify IPv6 QUIC overlay reconnect remains stable. | IPv6 QUIC overlay disconnects and reconnects correctly and UDP probing recovers. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case11_overlay_quic_ipv6]'` |
+| Reconnect localhost case01 UDP IPv4 | Verify localhost plus IPv4 resolve policy stays stable across reconnects. | Restart cycles recover and localhost resolves consistently to IPv4. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case01_udp_over_own_udp_localhost_ipv4]'` |
+| Reconnect localhost case01 UDP IPv6 | Verify localhost plus IPv6 resolve policy stays stable across reconnects. | Restart cycles recover and localhost resolves consistently to IPv6. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case01_udp_over_own_udp_localhost_ipv6]'` |
+| Reconnect localhost case06 TCP overlay IPv4 | Verify localhost TCP overlay respects IPv4 resolution through reconnects. | Restart cycles recover and localhost TCP overlay keeps IPv4 addressing. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case06_overlay_tcp_localhost_ipv4]'` |
+| Reconnect localhost case06 TCP overlay IPv6 | Verify localhost TCP overlay respects IPv6 resolution through reconnects. | Restart cycles recover and localhost TCP overlay keeps IPv6 addressing. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case06_overlay_tcp_localhost_ipv6]'` |
+| Reconnect localhost case08 WS overlay IPv4 | Verify localhost WS overlay respects IPv4 resolution through reconnects. | Restart cycles recover and localhost WS overlay keeps IPv4 addressing. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case08_overlay_ws_localhost_ipv4]'` |
+| Reconnect localhost case08 WS overlay IPv6 | Verify localhost WS overlay respects IPv6 resolution through reconnects. | Restart cycles recover and localhost WS overlay keeps IPv6 addressing. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case08_overlay_ws_localhost_ipv6]'` |
+| Reconnect localhost case10 QUIC overlay IPv4 | Verify localhost QUIC overlay respects IPv4 resolution through reconnects. | Restart cycles recover and localhost QUIC overlay keeps IPv4 addressing. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case10_overlay_quic_localhost_ipv4]'` |
+| Reconnect localhost case10 QUIC overlay IPv6 | Verify localhost QUIC overlay respects IPv6 resolution through reconnects. | Restart cycles recover and localhost QUIC overlay keeps IPv6 addressing. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect[case10_overlay_quic_localhost_ipv6]'` |
 
 #### `tests/integration/test_overlay_e2e.py` listener and concurrent cases
 
 | Scenario | Objective | Test criteria | How to start test |
 |---|---|---|---|
-| Listener case12 WS listener with two clients | Verify one WS listener can host two peer clients. | Both clients connect, both UDP services answer, and listener peer reporting shows two peer sessions. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_two_clients[case12_overlay_ws_ipv4_listener_two_clients]'` |
-| Concurrent case13 WS single peer mixed channels | Verify one WS peer can carry several concurrent TCP channels and extra UDP mappings. | Five held-open TCP channels and two UDP mappings all succeed with correct connection visibility. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels[case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels]'` |
-| Concurrent case14 WS and myudp two-client listener | Verify a mixed WS plus myudp listener supports two simultaneous peers with TCP and UDP services. | Both clients connect, all TCP/UDP probes succeed, and active TCP rows are visible on the server. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels[case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp]'` |
-| Concurrent case15 myudp two-client listener | Verify a pure-myudp listener supports two simultaneous peers with TCP and UDP services. | Both myudp clients connect, all TCP/UDP probes succeed, and `/api/peers` reports both peer endpoints. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels[case15_overlay_listener_myudp_two_clients_concurrent_udp_tcp]'` |
-| Restart regression on case13 | Verify a server restart closes active TCP but allows UDP to resume on the same client UDP socket. | TCP closes across restart, UDP resumes after reconnect, and the UDP source port stays stable. | `RUN_OVERLAY_E2E=1 pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_server_restart_closes_tcp_preserves_udp[case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels]'` |
+| Listener case12 WS listener with two clients | Verify one WS listener can host two peer clients. | Both clients connect, both UDP services answer, and listener peer reporting shows two peer sessions. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_two_clients[case12_overlay_ws_ipv4_listener_two_clients]'` |
+| Concurrent case13 WS single peer mixed channels | Verify one WS peer can carry several concurrent TCP channels and extra UDP mappings. | Five held-open TCP channels and two UDP mappings all succeed with correct connection visibility. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels[case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels]'` |
+| Concurrent case14 WS and myudp two-client listener | Verify a mixed WS plus myudp listener supports two simultaneous peers with TCP and UDP services. | Both clients connect, all TCP/UDP probes succeed, and active TCP rows are visible on the server. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels[case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp]'` |
+| Concurrent case15 myudp two-client listener | Verify a pure-myudp listener supports two simultaneous peers with TCP and UDP services. | Both myudp clients connect, all TCP/UDP probes succeed, and `/api/peers` reports both peer endpoints. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels[case15_overlay_listener_myudp_two_clients_concurrent_udp_tcp]'` |
+| Restart regression on case13 | Verify a server restart closes active TCP but allows UDP to resume on the same client UDP socket. | TCP closes across restart, UDP resumes after reconnect, and the UDP source port stays stable. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_server_restart_closes_tcp_preserves_udp[case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels]'` |
 
 #### `tests/integration/test_overlay_e2e.py` admin auth cases
 
 | Scenario | Objective | Test criteria | How to start test |
 |---|---|---|---|
-| Admin API available when auth disabled | Verify admin API remains open when auth is explicitly disabled. | `/api/status` returns `200` without login even if username/password are configured. | `RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_available_when_auth_disabled` |
-| Admin API unavailable without correct auth | Verify protected admin API rejects unauthenticated clients. | `/api/status` returns `401` with `authenticated=false` before login. | `RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_unavailable_without_correct_auth` |
-| Admin API available after correct auth | Verify challenge-response login unlocks the protected API. | Successful login returns authenticated state and `/api/status` then returns `200`. | `RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_available_after_correct_auth` |
-| Admin API auth isolated per concurrent HTTP client | Verify one authenticated browser session does not unlock another session. | Authenticated opener gets `200`, second unauthenticated opener still gets `401`. | `RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_auth_isolated_per_concurrent_http_client` |
+| Admin API available when auth disabled | Verify admin API remains open when auth is explicitly disabled. | `/api/status` returns `200` without login even if username/password are configured. | `pytest -q tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_available_when_auth_disabled` |
+| Admin API unavailable without correct auth | Verify protected admin API rejects unauthenticated clients. | `/api/status` returns `401` with `authenticated=false` before login. | `pytest -q tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_unavailable_without_correct_auth` |
+| Admin API available after correct auth | Verify challenge-response login unlocks the protected API. | Successful login returns authenticated state and `/api/status` then returns `200`. | `pytest -q tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_available_after_correct_auth` |
+| Admin API auth isolated per concurrent HTTP client | Verify one authenticated browser session does not unlock another session. | Authenticated opener gets `200`, second unauthenticated opener still gets `401`. | `pytest -q tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_auth_isolated_per_concurrent_http_client` |
 
 #### `tests/integration/test_overlay_e2e.py` lightweight CLI-routing checks
 
