@@ -879,7 +879,8 @@ class SendPort:
 # -------------------- Session --------------------
 OutgoingSegment = Tuple[int, int, bytes]
 class Session:
-    def __init__(self, max_in_flight: int = 32767):
+    def __init__(self, max_in_flight: int = 32767, proto: Optional[Protocol] = None):
+        self.proto = proto or PROTO
         self.next_ctr = 1
         self.send_buf: Dict[int, bytes] = {}
         self.send_meta: Dict[int, OutgoingSegment] = {}
@@ -941,7 +942,7 @@ class Session:
             filtered_missed = [m for m in self.missing if m != 0 and ring_cmp(highest_rx, m) >= 0]
         missed_sorted = Session._sort_missed_for_control(set(filtered_missed), last_in_order)
         payload = ControlPacket.build_payload(last_in_order, highest_rx, missed_sorted)
-        frame = PROTO.build_frame(PTYPE_CONTROL, payload)
+        frame = self.proto.build_frame(PTYPE_CONTROL, payload)
         cp = ControlPacket.parse_full(frame)
         assert cp is not None
         return cp
@@ -970,7 +971,7 @@ class Session:
         self._record_created_if_appdata(ctr, chunk)
         try:
             payload = DataPacket.build_payload(ctr, frame_type, off_or_len, chunk, tx)
-            frame = PROTO.build_frame(PTYPE_DATA, payload)
+            frame = self.proto.build_frame(PTYPE_DATA, payload)
             transport.sendto(frame)
         except Exception:
             self.wait_queue.appendleft(seg)
@@ -1060,18 +1061,18 @@ class Session:
     # ------------- RTT mirrors -------------
     @property
     def rtt_est_ms(self) -> float:
-        return PROTO.rtt_est_ms
+        return self.proto.rtt_est_ms
     @property
     def rtt_sample_ms(self) -> float:
-        return PROTO.rtt_sample_ms
+        return self.proto.rtt_sample_ms
     @property
     def last_rtt_ok_ns(self) -> int:
-        return PROTO.last_rtt_ok_ns
+        return self.proto.last_rtt_ok_ns
     def update_rtt(self, echo_tx_ns: int) -> None:
-        before = (PROTO.rtt_sample_ms, PROTO.rtt_est_ms)
-        PROTO.on_control_echo(echo_tx_ns)
+        before = (self.proto.rtt_sample_ms, self.proto.rtt_est_ms)
+        self.proto.on_control_echo(echo_tx_ns)
         if self.log.isEnabledFor(logging.DEBUG):
-            self.log.debug(f"[RTT] sample_ms={PROTO.rtt_sample_ms:.3f} est_ms={PROTO.rtt_est_ms:.3f} (prev {before[0]:.3f}/{before[1]:.3f})")
+            self.log.debug(f"[RTT] sample_ms={self.proto.rtt_sample_ms:.3f} est_ms={self.proto.rtt_est_ms:.3f} (prev {before[0]:.3f}/{before[1]:.3f})")
     # ------------- RX side (DATA) -------------
     def identify_missing(self):
         pendingkeylist = [k for k in self.pending.keys() if k != 0]
@@ -1226,6 +1227,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
         on_control_needed,
         on_complete,
         peer=None,
+        proto: Optional[Protocol] = None,
         on_peer_set=None,
         on_peer_rx_bytes: Optional[Callable[[int], None]] = None,
         on_peer_tx_bytes: Optional[Callable[[int], None]] = None,
@@ -1233,6 +1235,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
         on_state_change: Optional[Callable[[bool], None]] = None,
     ):
         self.session = session
+        self.proto = proto or getattr(session, "proto", PROTO)
         self.peer = peer
         self.udp_transport: Optional[asyncio.DatagramTransport] = None
         self.send_port: Optional[SendPort] = None
@@ -1249,7 +1252,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
         self._established_ns = 0
         self._unidentified_frames = 0
         # Per-peer runtime for connectivity & idle pings (with logger)
-        self._proto_rt = ProtocolRuntime(PROTO, log=self.session.log.getChild("rt"))
+        self._proto_rt = ProtocolRuntime(self.proto, log=self.session.log.getChild("rt"))
         self._runtime_attached = False
         self._ctl_task = None
         self._retx_task = None
@@ -1349,8 +1352,8 @@ class PeerProtocol(asyncio.DatagramProtocol):
         cur = self.send_port.peer_addr
 
         try:
-            proto_connected = bool(PROTO.is_connected())
-            last_ok = int(PROTO.last_rtt_ok_ns)
+            proto_connected = bool(self.proto.is_connected())
+            last_ok = int(self.proto.last_rtt_ok_ns)
         except Exception:
             proto_connected, last_ok = False, 0
 
@@ -1417,7 +1420,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
                 )
 
     def _parse_and_count(self, data: bytes):
-        parsed = PROTO.parse_frame_with_times(data)
+        parsed = self.proto.parse_frame_with_times(data)
         if not parsed:
             self._unidentified_frames += 1
             return None, None, 0, 0
@@ -1428,13 +1431,13 @@ class PeerProtocol(asyncio.DatagramProtocol):
                 self._unidentified_frames += 1
                 return None, None, 0, 0
             return "data", dp, tx_ns, echo_ns
-        if ptype == PROTO.PTYPE_CONTROL:
+        if ptype == self.proto.PTYPE_CONTROL:
             cp = ControlPacket.parse_payload(payload, data)
             if cp is None:
                 self._unidentified_frames += 1
                 return None, None, 0, 0
             return "control", cp, tx_ns, echo_ns
-        if ptype == PROTO.PTYPE_IDLE:
+        if ptype == self.proto.PTYPE_IDLE:
             return "idle", None, tx_ns, echo_ns
         self._unidentified_frames += 1
         return None, None, 0, 0
@@ -1468,13 +1471,13 @@ class PeerProtocol(asyncio.DatagramProtocol):
         if miss_count == 0:
             if ring_cmp(last_in_order, self._last_sent_last_in_order) > 0:
                 ref = self._last_control_sent_ns or self._established_ns
-                interval = int(0.5 * (PROTO.rtt_est_ms / 1000.0) * 1e9)
+                interval = int(0.5 * (self.proto.rtt_est_ms / 1000.0) * 1e9)
                 elapsed = (now_t - ref) >= interval if ref else True
                 if elapsed:
                     self._emit_control(now_t, reason="advanced_in_order")
                 return
         if miss_count > 0:
-            interval = int(0.5 * (PROTO.rtt_est_ms / 1000.0) * 1e9)
+            interval = int(0.5 * (self.proto.rtt_est_ms / 1000.0) * 1e9)
             last = self._last_control_sent_ns
             elapsed = (now_t - last) >= interval if last else True
             if elapsed:
@@ -1486,12 +1489,12 @@ class PeerProtocol(asyncio.DatagramProtocol):
         if miss_count == 0:
             if ring_cmp(last_in_order, self._last_sent_last_in_order) > 0:
                 ref = self._last_control_sent_ns or self._established_ns
-                interval = int(0.5 * (PROTO.rtt_est_ms / 1000.0) * 1e9)
+                interval = int(0.5 * (self.proto.rtt_est_ms / 1000.0) * 1e9)
                 if ref and (now_t - ref) >= interval:
                     self._emit_control(now_t, reason="timer_paced_clear_miss")
                 return
         if miss_count > 0:
-            interval = int(0.5 * (PROTO.rtt_est_ms / 1000.0) * 1e9)
+            interval = int(0.5 * (self.proto.rtt_est_ms / 1000.0) * 1e9)
             last = self._last_control_sent_ns
             elapsed = (now_t - last) >= interval if last else True
             if elapsed:
@@ -1531,7 +1534,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
                 continue
             frame_type, off_or_len, chunk = meta
             payload = DataPacket.build_payload(cnt, frame_type, off_or_len, chunk, now)
-            frame = PROTO.build_frame(PTYPE_DATA, payload)
+            frame = self.proto.build_frame(PTYPE_DATA, payload)
             try:
                 self.send_port.sendto(frame)
             except Exception:
@@ -1573,7 +1576,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
                 continue
             frame_type, off_or_len, chunk = meta
             payload = DataPacket.build_payload(cnt, frame_type, off_or_len, chunk, now)
-            frame = PROTO.build_frame(PTYPE_DATA, payload)
+            frame = self.proto.build_frame(PTYPE_DATA, payload)
             try:
                 self.send_port.sendto(frame)
             except Exception:
@@ -1617,8 +1620,8 @@ class PeerProtocol(asyncio.DatagramProtocol):
             addr,
             cur_peer_before,
             self._runtime_attached,
-            PROTO.is_connected(),
-            getattr(PROTO, "last_rtt_ok_ns", 0),
+            self.proto.is_connected(),
+            getattr(self.proto, "last_rtt_ok_ns", 0),
         )            
 
         try:
@@ -1659,11 +1662,11 @@ class PeerProtocol(asyncio.DatagramProtocol):
             type(pkt).__name__ if pkt is not None else None,
         )
 
-        PROTO.on_frame_received(tx_ns, now_t)
+        self.proto.on_frame_received(tx_ns, now_t)
         if echo_ns:
             self.session.log.debug(
                 "[PEER/RX/RTT-SUCCESS-PATH] from=%r tx_ns=%d echo_ns=%d proto_connected_before=%s",
-                addr, tx_ns, echo_ns, PROTO.is_connected()
+                addr, tx_ns, echo_ns, self.proto.is_connected()
             )
             prev_sample = getattr(self.session, "rtt_sample_ms", 0.0)
             prev_est = getattr(self.session, "rtt_est_ms", 0.0)
@@ -1700,13 +1703,13 @@ class PeerProtocol(asyncio.DatagramProtocol):
             if echo_ns == 0:
                 try:
                     # reflect WITHOUT initial flag => echo gets filled
-                    frame = PROTO.build_frame(PROTO.PTYPE_IDLE, b"", initial=False)
+                    frame = self.proto.build_frame(self.proto.PTYPE_IDLE, b"", initial=False)
                     self.session.log.debug(
                         "[PEER/TX/FRAME] reason=idle-reflect to=%r ptype=%s tx_ns=%d echo_ns=%d current_peer=%r frame_len=%d",
                         (self.send_port.peer_addr if self.send_port else None),
-                        PROTO.PTYPE_IDLE,
-                        getattr(PROTO, "last_send_ns", 0),
-                        getattr(PROTO, "_last_rx_tx_ns", 0),
+                        self.proto.PTYPE_IDLE,
+                        getattr(self.proto, "last_send_ns", 0),
+                        getattr(self.proto, "_last_rx_tx_ns", 0),
                         (self.send_port.peer_addr if self.send_port else None),
                         len(frame),
                     )
@@ -1847,12 +1850,23 @@ class UdpSession(ISession):
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._transport: Optional[asyncio.DatagramTransport] = None
+        self._proto_state = PROTO.__class__(BaseFrameV2)
         self._proto: Optional[PeerProtocol] = None
+        self.peer_proto: Optional[PeerProtocol] = None
         self._peer_host: str = ""
         self._peer_port: int = 0
+        self._listener_mode: bool = False
+        self._listener_connected: bool = False
+        self._server_connected_evt: asyncio.Event = asyncio.Event()
+        self._server_peers: Dict[int, dict] = {}
+        self._server_peer_by_addr: Dict[Tuple[str, int], int] = {}
+        self._server_next_peer_id: int = 1
+        self._server_chan_to_peer: Dict[int, Tuple[int, int]] = {}
+        self._server_peer_chan_to_mux: Dict[Tuple[int, int], int] = {}
+        self._server_next_mux_chan: int = 1
 
-        # Inner reliability/session engine remains the same one from base module. 
-        self.inner_session = Session(max_in_flight=args.max_inflight)
+        # Inner reliability/session engine remains the same one from base module.
+        self.inner_session = Session(max_in_flight=args.max_inflight, proto=self._proto_state)
 
         # Callbacks
         self._on_app: Optional[Callable[[bytes], None]] = None
@@ -1860,6 +1874,7 @@ class UdpSession(ISession):
         self._on_peer_rx: Optional[Callable[[int], None]] = None
         self._on_peer_tx: Optional[Callable[[int], None]] = None
         self._on_peer_set_cb: Optional[Callable[[str, int], None]] = None
+        self._on_peer_disconnect_cb: Optional[Callable[[int], None]] = None
         self._on_app_from_peer_bytes: Optional[Callable[[int], None]] = None
         self._on_transport_epoch_change: Optional[Callable[[int], None]] = None
 
@@ -1931,6 +1946,9 @@ class UdpSession(ISession):
         self._log.debug("[UDP/SESSION] set_on_peer_set wired: cb=%r on session id=%x", cb, id(self))
         self._on_peer_set_cb = cb
 
+    def set_on_peer_disconnect(self, cb: Callable[[int], None]) -> None:
+        self._on_peer_disconnect_cb = cb
+
     def set_on_app_from_peer_bytes(self, cb: Callable[[int], None]) -> None:
         self._log.debug("[UDP/SESSION] set_on_app_from_peer_bytes wired: cb=%r on session id=%x", cb, id(self))
         self._on_app_from_peer_bytes = cb
@@ -1940,7 +1958,23 @@ class UdpSession(ISession):
 
 
     def get_metrics(self) -> SessionMetrics:
-        s = self.inner_session  # Session
+        if self._listener_mode and self._server_peers:
+            try:
+                sessions = [ctx["session"] for ctx in self._server_peers.values() if isinstance(ctx, dict) and ctx.get("session") is not None]
+                rtt_candidates = [float(getattr(s, "rtt_est_ms", 0.0) or 0.0) for s in sessions if getattr(s, "last_rtt_ok_ns", 0)]
+                last_rtt_ok = max((int(getattr(s, "last_rtt_ok_ns", 0) or 0) for s in sessions), default=0)
+                return SessionMetrics(
+                    rtt_est_ms=max(rtt_candidates) if rtt_candidates else None,
+                    last_rtt_ok_ns=last_rtt_ok or None,
+                    inflight=sum(int(s.in_flight()) for s in sessions if hasattr(s, "in_flight")),
+                    max_inflight=sum(int(getattr(s, "max_in_flight", 0) or 0) for s in sessions),
+                    waiting_count=sum(int(s.waiting_count()) for s in sessions if hasattr(s, "waiting_count")),
+                    peer_missed_count=sum(int(getattr(s, "peer_missed_count", 0) or 0) for s in sessions),
+                    our_missed_count=sum(len(getattr(s, "missing", [])) for s in sessions if hasattr(s, "missing")),
+                )
+            except Exception as e:
+                self._log.debug("[UdpSession] aggregated get_metrics failed %r", e)
+        s = self.inner_session
         try:
             return SessionMetrics(
                 rtt_sample_ms     = getattr(s, "rtt_sample_ms", None),
@@ -1973,6 +2007,29 @@ class UdpSession(ISession):
             return None
 
     def get_overlay_peers_snapshot(self) -> list[dict]:
+        if self._listener_mode:
+            rows: list[dict] = []
+            mux_by_peer: Dict[int, list[int]] = {}
+            for mux_chan, mapped in self._server_chan_to_peer.items():
+                try:
+                    peer_id, _peer_chan = mapped
+                    mux_by_peer.setdefault(int(peer_id), []).append(int(mux_chan))
+                except Exception:
+                    continue
+            for peer_id in sorted(self._server_peers.keys()):
+                ctx = self._server_peers.get(peer_id, {})
+                addr = ctx.get("addr") if isinstance(ctx, dict) else None
+                host = addr[0] if isinstance(addr, tuple) and len(addr) >= 2 else None
+                port = addr[1] if isinstance(addr, tuple) and len(addr) >= 2 else None
+                session = ctx.get("session") if isinstance(ctx, dict) else None
+                rows.append({
+                    "peer_id": peer_id,
+                    "connected": bool(ctx.get("connected")) if isinstance(ctx, dict) else False,
+                    "peer": self._format_peer_label(host, port),
+                    "mux_chans": sorted(mux_by_peer.get(peer_id, [])),
+                    "rtt_est_ms": getattr(session, "rtt_est_ms", None),
+                })
+            return rows
         peer_label = None
         with contextlib.suppress(Exception):
             if self._proto is not None and self._proto.send_port is not None:
@@ -2007,6 +2064,7 @@ class UdpSession(ISession):
         if peer_info is not None:
             peer_host, peer_port, peer_family = peer_info
             peer = (peer_host, peer_port)
+        self._listener_mode = peer is None
 
         if (
             not _prefer_unspec_listener_family()
@@ -2020,12 +2078,15 @@ class UdpSession(ISession):
         listen = (listen_host, listen_port)
 
         def _factory():
+            if self._listener_mode:
+                return self._ListenerDatagramProtocol(self)
             self._log.debug(f"[UDP/SESSION] Initiate Peerprotocol with peer {peer}")
             return PeerProtocol(
                 self.inner_session,
                 self._on_control_needed,
                 self._on_complete,
                 peer=peer,
+                proto=self._proto_state,
                 on_peer_set=self._on_peer_set,
                 on_peer_rx_bytes=self._on_peer_rx_bytes,
                 on_peer_tx_bytes=self._on_peer_tx_bytes,
@@ -2087,11 +2148,15 @@ class UdpSession(ISession):
             return
 
         self._transport = transport
-        self._proto = protocol
+        if self._listener_mode:
+            self._proto = None
+        else:
+            self._proto = protocol
+            self.peer_proto = protocol
 
         # Model B:
         # Seed only the protocol-layer peer. The UDP socket itself stays unconnected.
-        if peer is not None:
+        if (not self._listener_mode) and peer is not None:
             try:
                 host, port = peer
                 self._on_peer_set(host, port)
@@ -2103,25 +2168,53 @@ class UdpSession(ISession):
 
     async def stop(self) -> None:
         try:
+            for peer_id in list(self._server_peers.keys()):
+                await self._close_server_peer(peer_id)
             if self._transport:
                 self._transport.close()
         finally:
             self._transport = None
             self._proto = None
+            self.peer_proto = None
+            self._server_connected_evt.clear()
+            self._listener_connected = False
         
     async def wait_connected(self, timeout: Optional[float] = None) -> bool:
+        if self._listener_mode:
+            if self.is_connected():
+                return True
+            try:
+                await asyncio.wait_for(self._server_connected_evt.wait(), timeout)
+                return True
+            except asyncio.TimeoutError:
+                return False
         return await (self._proto.wait_connected(timeout) if self._proto else asyncio.sleep(timeout or 0, result=False))
 
     def is_connected(self) -> bool:
-        # Keep using PROTO for Milestone A parity (dashboard semantics unchanged). 
-        return PROTO.is_connected()
+        if self._listener_mode:
+            return any(bool(ctx.get("connected")) for ctx in self._server_peers.values())
+        return self._proto_state.is_connected()
 
     # ---- ISession: data path ----
-    def send_app(self, payload: bytes) -> int:
+    def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
         self._log.debug(f"[UdpSession] send_app len {len(payload)}  on session id=%x", id(self))
-        if not payload or not self._proto or not self._proto.send_port:
+        if not payload:
             return 0
-        # identical to old call path: Session -> (build frames) -> SendPort.sendto(...) 
+        if self._listener_mode:
+            target = self._resolve_server_send_target(payload, peer_id=peer_id)
+            if target is None:
+                return 0
+            target_peer_id, routed_payload = target
+            ctx = self._server_peers.get(target_peer_id)
+            if not ctx:
+                return 0
+            proto = ctx.get("peer_proto")
+            session = ctx.get("session")
+            if proto is None or session is None or getattr(proto, "send_port", None) is None:
+                return 0
+            return session.send_application_payload(routed_payload, proto.send_port)
+        if not self._proto or not self._proto.send_port:
+            return 0
         return self.inner_session.send_application_payload(payload, self._proto.send_port)
 
     # ---- Internals (callbacks given to PeerProtocol) ----
@@ -2150,6 +2243,23 @@ class UdpSession(ISession):
             except Exception as e:
                 self._log.debug(f"[UdpSession] _on_complete failed on _on_app %r", e)
 
+    def _on_complete_for_peer(self, peer_id: int, datagram: bytes) -> None:
+        self._log.debug("[UdpSession] On Complete Datagram len %d peer_id=%s on session id=%x", len(datagram), peer_id, id(self))
+        try:
+            if datagram and self._on_app_from_peer_bytes:
+                self._on_app_from_peer_bytes(len(datagram))
+        except Exception as e:
+            self._log.debug("[UdpSession] _on_complete_for_peer failed on _on_app_from_peer_bytes %r", e)
+        if callable(self._on_app):
+            try:
+                rewritten = self._server_rewrite_inbound_app(peer_id, datagram)
+                try:
+                    self._on_app(rewritten, peer_id=peer_id)
+                except TypeError:
+                    self._on_app(rewritten)
+            except Exception as e:
+                self._log.debug("[UdpSession] _on_complete_for_peer failed on _on_app %r", e)
+
     def _on_peer_set(self, host: str, port: int) -> None:
         self._log.debug(f"[UdpSession] On Peer Set {host}:{port} on session id=%x", id(self))
         with contextlib.suppress(Exception):
@@ -2161,6 +2271,18 @@ class UdpSession(ISession):
                 self._on_peer_set_cb(host, port)
             except Exception as e:
                 self._log.debug(f"[UdpSession] _on_peer_set failed on _on_peer_set_cb %r", e)
+
+    def _on_peer_set_for_peer(self, peer_id: int, host: str, port: int) -> None:
+        self._log.debug("[UdpSession] On Peer Set %s:%s peer_id=%s on session id=%x", host, port, peer_id, id(self))
+        ctx = self._server_peers.get(peer_id)
+        if ctx is not None:
+            old_addr = ctx.get("addr")
+            new_addr = (str(host or ""), int(port or 0))
+            if isinstance(old_addr, tuple) and self._server_peer_by_addr.get(old_addr) == peer_id and old_addr != new_addr:
+                self._server_peer_by_addr.pop(old_addr, None)
+            ctx["addr"] = new_addr
+            self._server_peer_by_addr[new_addr] = peer_id
+        self._on_peer_set(host, port)
 
     def _on_peer_rx_bytes(self, n: int) -> None:
         self._log.debug(f"[UdpSession] On Peer Rx bytes {n} on session id=%x", id(self))
@@ -2182,6 +2304,10 @@ class UdpSession(ISession):
         # Runner dashboard already reads RTT via PROTO mirrored stats; nothing needed here.  
         self._log.debug(f"[UdpSession] On RTT success {echo_tx_ns} on session id=%x", id(self))
         return
+
+    def _on_rtt_success_for_peer(self, peer_id: int, echo_tx_ns: int) -> None:
+        self.peer_proto = self._server_peers.get(peer_id, {}).get("peer_proto") or self.peer_proto
+        self._on_rtt_success(echo_tx_ns)
 
     def _on_state_change(self, connected: bool):
         try:
@@ -2207,6 +2333,220 @@ class UdpSession(ISession):
                 self._on_state(connected)
             except Exception as e:
                 self._log.debug("[UDP/SESSION/STATE] _on_state_change failed on _on_state %r", e)
+
+    def _on_state_change_for_peer(self, peer_id: int, connected: bool) -> None:
+        ctx = self._server_peers.get(peer_id)
+        if ctx is not None:
+            ctx["connected"] = bool(connected)
+            self.peer_proto = ctx.get("peer_proto") or self.peer_proto
+        self._update_server_connected_state()
+        if not connected:
+            try:
+                self._loop.create_task(self._close_server_peer(peer_id))  # type: ignore[union-attr]
+            except Exception as e:
+                self._log.debug("[UDP/SESSION/STATE] failed scheduling close for peer_id=%s: %r", peer_id, e)
+
+    class _ListenerDatagramProtocol(asyncio.DatagramProtocol):
+        def __init__(self, owner: "UdpSession"):
+            self.owner = owner
+
+        def connection_made(self, transport: asyncio.BaseTransport):
+            self.owner._transport = transport  # type: ignore[assignment]
+
+        def datagram_received(self, data: bytes, addr):
+            self.owner._dispatch_listener_datagram(data, addr)
+
+        def error_received(self, exc):
+            self.owner._log.debug("[UDP/LISTENER] error_received exc=%r", exc)
+
+        def connection_lost(self, exc: Optional[Exception]) -> None:
+            self.owner._log.debug("[UDP/LISTENER] connection_lost exc=%r", exc)
+            for peer_id in list(self.owner._server_peers.keys()):
+                ctx = self.owner._server_peers.get(peer_id)
+                pp = ctx.get("peer_proto") if isinstance(ctx, dict) else None
+                if pp is not None:
+                    with contextlib.suppress(Exception):
+                        pp.connection_lost(exc)
+
+    def _dispatch_listener_datagram(self, data: bytes, addr) -> None:
+        try:
+            host, port = str(addr[0]), int(addr[1])
+        except Exception:
+            return
+        key = (host, port)
+        peer_id = self._server_peer_by_addr.get(key)
+        if peer_id is None:
+            peer_id = self._alloc_server_peer_id()
+            proto_state = PROTO.__class__(BaseFrameV2)
+            session = Session(max_in_flight=self._args.max_inflight, proto=proto_state)
+            peer_proto = PeerProtocol(
+                session,
+                lambda _peer_id=peer_id: self._on_control_needed_for_peer(_peer_id),
+                lambda datagram, _peer_id=peer_id: self._on_complete_for_peer(_peer_id, datagram),
+                peer=key,
+                proto=proto_state,
+                on_peer_set=lambda h, p, _peer_id=peer_id: self._on_peer_set_for_peer(_peer_id, h, p),
+                on_peer_rx_bytes=self._on_peer_rx_bytes,
+                on_peer_tx_bytes=self._on_peer_tx_bytes,
+                on_rtt_success=lambda echo_tx_ns, _peer_id=peer_id: self._on_rtt_success_for_peer(_peer_id, echo_tx_ns),
+                on_state_change=lambda connected, _peer_id=peer_id: self._on_state_change_for_peer(_peer_id, connected),
+            )
+            self._server_peers[peer_id] = {
+                "peer_id": peer_id,
+                "addr": key,
+                "session": session,
+                "peer_proto": peer_proto,
+                "connected": False,
+            }
+            self._server_peer_by_addr[key] = peer_id
+            self.peer_proto = peer_proto
+            if self._transport is not None:
+                peer_proto.connection_made(self._transport)
+            self._log.info("[UDP/SESSION] listener accepted peer_id=%s peer=%s", peer_id, key)
+            self._on_peer_set_for_peer(peer_id, host, port)
+        ctx = self._server_peers.get(peer_id)
+        peer_proto = ctx.get("peer_proto") if isinstance(ctx, dict) else None
+        if peer_proto is not None:
+            peer_proto.datagram_received(data, key)
+
+    def _alloc_server_peer_id(self) -> int:
+        peer_id = self._server_next_peer_id
+        while peer_id in self._server_peers:
+            peer_id += 1
+            if peer_id > 0xFFFF:
+                peer_id = 1
+        self._server_next_peer_id = 1 if peer_id >= 0xFFFF else (peer_id + 1)
+        return peer_id
+
+    def _alloc_server_mux_chan(self) -> int:
+        chan = self._server_next_mux_chan
+        while chan in self._server_chan_to_peer:
+            chan += 2
+            if chan > 0xFFFF:
+                chan = 1
+        self._server_next_mux_chan = 1 if chan >= 0xFFFF else (chan + 2)
+        return chan
+
+    def _rewrite_mux_chan_id(self, payload: bytes, new_chan: int) -> bytes:
+        hdr = ChannelMux.MUX_HDR
+        if len(payload) < hdr.size:
+            return payload
+        try:
+            _old_chan, proto, counter, mtype, dlen = hdr.unpack(payload[:hdr.size])
+        except Exception:
+            return payload
+        if len(payload) < hdr.size + dlen:
+            return payload
+        return hdr.pack(new_chan, proto, counter, mtype, dlen) + payload[hdr.size:hdr.size + dlen]
+
+    def _server_rewrite_inbound_app(self, peer_id: int, payload: bytes) -> bytes:
+        hdr = ChannelMux.MUX_HDR
+        if len(payload) < hdr.size:
+            return payload
+        try:
+            peer_chan, _proto, _counter, _mtype, dlen = hdr.unpack(payload[:hdr.size])
+        except Exception:
+            return payload
+        if len(payload) < hdr.size + dlen:
+            return payload
+        key = (int(peer_id), int(peer_chan))
+        mux_chan = self._server_peer_chan_to_mux.get(key)
+        if mux_chan is None:
+            mux_chan = int(peer_chan)
+            mapped = self._server_chan_to_peer.get(mux_chan)
+            if mapped is not None and mapped != key:
+                mux_chan = self._alloc_server_mux_chan()
+            self._server_peer_chan_to_mux[key] = mux_chan
+            self._server_chan_to_peer[mux_chan] = key
+        return self._rewrite_mux_chan_id(payload, mux_chan)
+
+    def _server_unregister_peer_channels(self, peer_id: int) -> None:
+        for key, mux_chan in list(self._server_peer_chan_to_mux.items()):
+            if int(key[0]) != int(peer_id):
+                continue
+            self._server_peer_chan_to_mux.pop(key, None)
+            self._server_chan_to_peer.pop(mux_chan, None)
+
+    def _resolve_server_send_target(self, payload: bytes, peer_id: Optional[int] = None) -> Optional[Tuple[int, bytes]]:
+        hdr = ChannelMux.MUX_HDR
+        if len(payload) < hdr.size:
+            return None
+        try:
+            mux_chan, _proto, _counter, _mtype, dlen = hdr.unpack(payload[:hdr.size])
+        except Exception:
+            return None
+        if len(payload) < hdr.size + dlen:
+            return None
+        target_peer_id = int(peer_id) if peer_id is not None else None
+        mapped = self._server_chan_to_peer.get(int(mux_chan))
+        if target_peer_id is None and mapped is not None:
+            target_peer_id = int(mapped[0])
+        if target_peer_id is None:
+            if len(self._server_peers) == 1:
+                target_peer_id = next(iter(self._server_peers.keys()))
+            else:
+                return None
+        target_ctx = self._server_peers.get(target_peer_id)
+        if not target_ctx:
+            return None
+        peer_chan = int(mux_chan)
+        if mapped is not None:
+            if int(mapped[0]) != target_peer_id:
+                return None
+            peer_chan = int(mapped[1])
+        else:
+            key = (target_peer_id, int(mux_chan))
+            self._server_peer_chan_to_mux[key] = int(mux_chan)
+            self._server_chan_to_peer[int(mux_chan)] = key
+        return target_peer_id, self._rewrite_mux_chan_id(payload, peer_chan) if peer_chan != int(mux_chan) else payload
+
+    def _update_server_connected_state(self) -> None:
+        connected = any(bool(ctx.get("connected")) for ctx in self._server_peers.values())
+        if connected:
+            self._server_connected_evt.set()
+        else:
+            self._server_connected_evt.clear()
+        if connected == self._listener_connected:
+            return
+        self._listener_connected = connected
+        if callable(self._on_state):
+            try:
+                self._on_state(connected)
+            except Exception as e:
+                self._log.debug("[UDP/SESSION/STATE] _update_server_connected_state failed on _on_state %r", e)
+
+    async def _close_server_peer(self, peer_id: int) -> None:
+        ctx = self._server_peers.pop(peer_id, None)
+        if not ctx:
+            return
+        addr = ctx.get("addr")
+        if isinstance(addr, tuple) and self._server_peer_by_addr.get(addr) == peer_id:
+            self._server_peer_by_addr.pop(addr, None)
+        self._server_unregister_peer_channels(peer_id)
+        pp = ctx.get("peer_proto")
+        if pp is not None:
+            with contextlib.suppress(Exception):
+                pp.connection_lost(None)
+        if callable(self._on_peer_disconnect_cb):
+            try:
+                self._on_peer_disconnect_cb(peer_id)
+            except Exception as e:
+                self._log.debug("[UDP/SESSION] peer_disconnect callback err: %r", e)
+        self._update_server_connected_state()
+
+    def _on_control_needed_for_peer(self, peer_id: int) -> None:
+        ctx = self._server_peers.get(peer_id)
+        if not ctx:
+            return
+        session = ctx.get("session")
+        pp = ctx.get("peer_proto")
+        if session is None or pp is None or getattr(pp, "send_port", None) is None:
+            return
+        ctl = session.build_control()
+        try:
+            pp.send_port.sendto(ctl.raw)
+        except Exception as e:
+            self._log.debug("[UdpSession] _on_control_needed_for_peer failed peer_id=%s err=%r", peer_id, e)
 
 # -----------------------------------------------------------------------------
 
@@ -5952,11 +6292,12 @@ class ChannelMux:
         self._mux_connection_seq: int = 1
         self._peer_mux_epochs: dict[int, tuple[int, int]] = {}
         # OPEN dedupe maps (full tuple keying)
-        # key: (peer_id, svc_id, l_proto_i, l_bind, l_port, r_proto_i, r_host, r_port)
-        self._udp_open_key_by_chan: dict[int, tuple[int, int, int, str, int, int, str, int]] = {}
-        self._udp_chan_by_open_key: dict[tuple[int, int, int, str, int, int, str, int], int] = {}
+        # key: (peer_id, chan_id, svc_id, l_proto_i, l_bind, l_port, r_proto_i, r_host, r_port)
+        self._udp_open_key_by_chan: dict[int, tuple[int, int, int, int, str, int, int, str, int]] = {}
+        self._udp_chan_by_open_key: dict[tuple[int, int, int, int, str, int, int, str, int], int] = {}
         self._tcp_open_key_by_chan: dict[int, tuple[int, int, int, str, int, int, str, int]] = {}
         self._tcp_chan_by_open_key: dict[tuple[int, int, int, str, int, int, str, int], int] = {}
+        self._chan_owner_peer_id: dict[int, int] = {}
 
         # Per-channel stats (readable counters + CRC)
         self._chan_stats: dict[tuple[int,Proto], _ChanCtr] = {}
@@ -6189,6 +6530,7 @@ class ChannelMux:
                     tr.close()
                 except Exception:
                     pass
+            self._chan_owner_peer_id.pop(chan, None)
             self._forget_udp_open_key(chan)
             self.log.info("[MUX] peer=%s epoch reset -> drop UDP chan=%s", peer_key, chan)
 
@@ -6206,6 +6548,7 @@ class ChannelMux:
                     writer.close()
                 except Exception:
                     pass
+            self._chan_owner_peer_id.pop(chan, None)
             self._forget_tcp_open_key(chan)
             self.log.info("[MUX] peer=%s epoch reset -> drop TCP chan=%s", peer_key, chan)
     # ---------- start/stop ----------
@@ -6303,6 +6646,7 @@ class ChannelMux:
         self._tcp_role_by_chan.clear()
         self._tcp_open_key_by_chan.clear()
         self._tcp_chan_by_open_key.clear()
+        self._chan_owner_peer_id.clear()
         # UDP server maps
         self._udp_by_client.clear()
         self._udp_by_chan.clear()
@@ -6364,6 +6708,8 @@ class ChannelMux:
             chan = self._alloc_udp_id()
             self._udp_by_client[key] = (chan, now)
             self._udp_by_chan[chan] = (svc_key, addr)
+            if str(svc_key[0]) == "peer":
+                self._chan_owner_peer_id[chan] = int(svc_key[1])
             self.log.debug("[UDP/SRV] learn %s -> chan=%s svc=%s:%s", addr, chan, svc_key[0], spec.svc_id)
             try:
                 self._send_mux(chan, ChannelMux.Proto.UDP, ChannelMux.MType.OPEN, self._build_open_v4(spec))
@@ -6412,6 +6758,7 @@ class ChannelMux:
                 for chan in stale_cli:
                     tr = self._udp_client_transports.pop(chan, None)
                     self._udp_client_last_ts.pop(chan, None)
+                    self._chan_owner_peer_id.pop(chan, None)
                     if tr:
                         try: tr.close()
                         except Exception: pass
@@ -6558,7 +6905,11 @@ class ChannelMux:
             try: self._on_local_rx(len(wire))
             except Exception: pass
         try:
-            self.session.send_app(wire)
+            owner_peer_id = self._chan_owner_peer_id.get(int(chan_id))
+            try:
+                self.session.send_app(wire, peer_id=owner_peer_id)
+            except TypeError:
+                self.session.send_app(wire)
         except Exception as e:
             self.log.debug("[MUX] send_app error: %r", e)
         try:
@@ -6690,7 +7041,7 @@ class ChannelMux:
         if int(r_proto) != int(ChannelMux.Proto.UDP):
             self.log.warning("[UDP/CLI] chan=%s OPEN requests non-UDP r_proto=%s (ignored)", chan, r_proto)
             return
-        open_key = (peer_key, int(svc_id), int(l_proto), str(l_bind), int(l_port), int(r_proto), str(host), int(r_port))
+        open_key = (peer_key, int(chan), int(svc_id), int(l_proto), str(l_bind), int(l_port), int(r_proto), str(host), int(r_port))
         existing_chan = self._udp_chan_by_open_key.get(open_key)
         if existing_chan is not None and existing_chan != chan:
             active = existing_chan in self._udp_client_transports
@@ -6853,6 +7204,7 @@ class ChannelMux:
         tr = self._udp_client_transports.pop(chan, None)
         self._udp_client_last_ts.pop(chan, None)
         self._chan_stats.pop((chan, ChannelMux.Proto.UDP), None)
+        self._chan_owner_peer_id.pop(chan, None)
         if tr:
             try: tr.close()
             except Exception: pass
@@ -6920,6 +7272,8 @@ class ChannelMux:
             self._tcp_by_chan[chan] = (spec.svc_id, writer)
             self._tcp_by_writer[writer] = (spec.svc_id, chan)
             self._tcp_role_by_chan[chan] = "server"      
+            if str(svc_key[0]) == "peer":
+                self._chan_owner_peer_id[chan] = int(svc_key[1])
             self.log.info(
                 "[TCP/SRV] accept peer=%s -> chan=%s svc=%s map_size=%s",
                 peer,
@@ -6974,6 +7328,7 @@ class ChannelMux:
                         pass
                     self._tcp_by_writer.pop(writer, None)
                     self._tcp_by_chan.pop(chan, None)
+                    self._chan_owner_peer_id.pop(chan, None)
                     self._forget_tcp_open_key(chan)
                     self.log.info("[TCP/SRV] chan=%s CLOSE teardown complete map_size=%s", chan, len(self._tcp_by_chan))
 
@@ -7179,6 +7534,7 @@ class ChannelMux:
                 self._tcp_pending_data.pop(chan, None)
                 self._tcp_by_writer.pop(writer, None)
                 self._tcp_role_by_chan.pop(chan, None)
+                self._chan_owner_peer_id.pop(chan, None)
                 try:
                     writer.close()
                 except Exception:
