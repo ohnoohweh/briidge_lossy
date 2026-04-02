@@ -375,6 +375,33 @@ What is visible in the included snapshots:
 - Multi-transport mode is currently intended for listening instances without configured transport peers (for example no `--udp-peer`, `--tcp-peer`, `--quic-peer`, or `--ws-peer`).
 - WebSocket listener mode supports multiple simultaneous peers with per-peer mux-channel rewriting so that peer-local channel IDs do not collide inside the shared mux logic.
 
+## Development environment and procedure
+- Feature development is done on Fedora 42.
+- The primary IDE is Visual Studio Code.
+- ChatGPT 5.4 Codex integration is used for implementation support.
+- Changes are mainly prompt-driven, with comparatively little direct source editing by hand.
+- On each change, the focus is on test feedback and on extending the test environment to cover the functional increase.
+- Integration testing is executed on a local machine running Python 3.13.12.
+- After successful local validation, deployment is tested on a VPS running Ubuntu 24.04.03 LTS with Python 3.12.3 and a Fedora 42 client system.
+- After successful validation there, deployment is also intended for the productive NAS environment running DSM 7.12 with Python 3.9.
+
+## Trouble shooting recommendations
+Debugging in a project like this can be difficult because the behavior emerges from the interaction of different peers, while the relevant evidence is often hidden in a large amount of runtime data.
+
+- Enable logging on the relevant component, generate log files, and analyze them carefully. In practice it is often effective to use AI assistance to summarize the logs and provide reasoning about the likely sequence of events.
+- Avoid guessing. If the evidence is not strong enough, extend the logging so that the next run produces harder facts instead of more assumptions.
+- Keep in mind that the application log only shows what the application is attempting to hand over to the network stack. That does not necessarily prove that the same traffic was actually sent on the network or reached the remote side.
+- When transport behavior is in doubt, capture network traffic with tools such as `tcpdump`. Do this on both peer client and peer server whenever possible so the full picture can be reconstructed from both ends.
+- Try to reproduce problems in a lower-complexity environment such as the local development machine before debugging them in a more distributed or production-like setup.
+- Create integration test cases for controlled reproduction whenever a bug or unclear transport interaction is found.
+- Add those reproduction cases to the regression suite so future releases continue to cover the behavior and the functionality does not silently erode over time.
+
+## Testing strategy
+- Run the regular pytest suite during normal development to cover unit, integration, and overlay harness regression paths.
+- Use the parallel overlay harness for frequent end-to-end validation when transport and socket behavior matter most.
+- Keep reconnect, listener, and concurrent multi-peer coverage in the regular regression flow instead of treating them as occasional manual checks.
+- The full testing catalog, commands, and scenario-by-scenario criteria are documented in `docs/README_TESTING.md`.
+
 ## Repository layout
 - `src/obstacle_bridge/` — main implementation.
 - `tests/unit/` — targeted unit tests.
@@ -385,9 +412,3 @@ What is visible in the included snapshots:
 - `docs/WHITEPAPER.html` — full whitepaper requested for this repository update. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/WHITEPAPER.html`
 - `docs/README_TESTING.md` — consolidated testing catalog, execution commands, and regression coverage notes.
 - `wireshark/` — Wireshark dissectors grouped by framing/version.
-
-## Testing strategy
-- Run the regular pytest suite during normal development to cover unit, integration, and overlay harness regression paths.
-- Use the parallel overlay harness for frequent end-to-end validation when transport and socket behavior matter most.
-- Keep reconnect, listener, and concurrent multi-peer coverage in the regular regression flow instead of treating them as occasional manual checks.
-- The full testing catalog, commands, and scenario-by-scenario criteria are documented in `docs/README_TESTING.md`.
