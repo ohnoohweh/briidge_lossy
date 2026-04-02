@@ -191,6 +191,35 @@ CASES: Dict[str, Case] = {
         server_env={},
         client_env={},
     ),
+    'case16_overlay_listener_tcp_two_clients_concurrent_udp_tcp': Case(
+        name='case16_overlay_listener_tcp_two_clients_concurrent_udp_tcp',
+        bounce_proto='tcp', bounce_bind='0.0.0.0', bounce_port=3448,
+        probe_proto='tcp', probe_host='127.0.0.1', probe_port=3449, probe_bind='0.0.0.0',
+        bridge_server_args=[
+            '--overlay-transport', 'tcp',
+            '--tcp-bind', '0.0.0.0', '--tcp-own-port', '12355',
+            '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
+            '--log-file', 'br_server_listener_tcp_two_clients.txt',
+        ],
+        bridge_client_args=['--overlay-transport', 'tcp'],
+        server_env={},
+        client_env={},
+    ),
+    'case17_overlay_listener_quic_two_clients_concurrent_udp_tcp': Case(
+        name='case17_overlay_listener_quic_two_clients_concurrent_udp_tcp',
+        bounce_proto='tcp', bounce_bind='0.0.0.0', bounce_port=3548,
+        probe_proto='tcp', probe_host='127.0.0.1', probe_port=3549, probe_bind='0.0.0.0',
+        bridge_server_args=[
+            '--overlay-transport', 'quic',
+            '--quic-bind', '0.0.0.0', '--quic-own-port', '4543',
+            '--quic-cert', 'Cert_localhost/cert.pem', '--quic-key', 'Cert_localhost/key.pem',
+            '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
+            '--log-file', 'br_server_listener_quic_two_clients.txt',
+        ],
+        bridge_client_args=['--overlay-transport', 'quic'],
+        server_env={},
+        client_env={},
+    ),
 }
 
 
@@ -393,6 +422,8 @@ CONCURRENT_TCP_CHANNEL_CASES = [
     'case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels',
     'case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp',
     'case15_overlay_listener_myudp_two_clients_concurrent_udp_tcp',
+    'case16_overlay_listener_tcp_two_clients_concurrent_udp_tcp',
+    'case17_overlay_listener_quic_two_clients_concurrent_udp_tcp',
 ]
 
 CASES.update({
@@ -1349,6 +1380,38 @@ def wait_peer_endpoint_visible(admin_port: int, timeout: float = 12.0, label: st
     )
 
 
+def wait_distinct_peer_endpoints(
+    admin_port: int,
+    *,
+    transport: str,
+    minimum_count: int = 2,
+    timeout: float = 12.0,
+    label: str = '',
+) -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    normalized_transport = str(transport or '').strip().lower()
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
+        last_doc = doc
+        peers = set()
+        for row in list(doc.get('peers') or []):
+            if str(row.get('transport', '')).strip().lower() != normalized_transport:
+                continue
+            peer = str(row.get('peer') or '').strip()
+            if peer and peer.lower() != 'n/a':
+                peers.add(peer)
+        if len(peers) >= minimum_count:
+            who = f' {label}' if label else ''
+            log.info(f'[PEERS]{who} port={admin_port} transport={normalized_transport} distinct_peers={sorted(peers)!r}')
+            return doc
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'/api/peers did not expose {minimum_count} distinct peer endpoints for transport={normalized_transport} '
+        f'on port {admin_port}; last={last_doc!r}'
+    )
+
+
 def status_state(doc: dict) -> str:
     return str(doc.get('peer_state', '')).strip().upper()
 
@@ -1752,6 +1815,12 @@ def run_case_concurrent_tcp_channels(case: Case, log_dir: Path, case_index: int,
         return
     if case.name == 'case15_overlay_listener_myudp_two_clients_concurrent_udp_tcp':
         run_case_myudp_two_clients_concurrent_udp_tcp(case, log_dir, case_index, settle_s=settle_s)
+        return
+    if case.name == 'case16_overlay_listener_tcp_two_clients_concurrent_udp_tcp':
+        run_case_tcp_two_clients_concurrent_udp_tcp(case, log_dir, case_index, settle_s=settle_s)
+        return
+    if case.name == 'case17_overlay_listener_quic_two_clients_concurrent_udp_tcp':
+        run_case_quic_two_clients_concurrent_udp_tcp(case, log_dir, case_index, settle_s=settle_s)
         return
 
     bounce = BounceBackServer(
@@ -2583,6 +2652,406 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
         for bounce in own_udp_bounces + tcp_bounces:
             bounce.stop()
 
+
+def run_case_tcp_two_clients_concurrent_udp_tcp(
+    case: Case,
+    log_dir: Path,
+    case_index: int,
+    settle_s: Optional[float] = None,
+) -> None:
+    base_tcp_port = case.bounce_port
+    own_udp_bounces = [
+        BounceBackServer(name=f'{case.name}_own_udp_1', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 20, log_path=log_dir / f'{case.name}_own_udp_1.log'),
+        BounceBackServer(name=f'{case.name}_own_udp_2', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 21, log_path=log_dir / f'{case.name}_own_udp_2.log'),
+        BounceBackServer(name=f'{case.name}_own_udp_3', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 22, log_path=log_dir / f'{case.name}_own_udp_3.log'),
+        BounceBackServer(name=f'{case.name}_own_udp_4', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 23, log_path=log_dir / f'{case.name}_own_udp_4.log'),
+    ]
+    tcp_bounces = [
+        BounceBackServer(name=f'{case.name}_tcp_{idx + 1}', proto='tcp', bind_host=case.bounce_bind, port=base_tcp_port + idx, log_path=log_dir / f'{case.name}_tcp_{idx + 1}.log')
+        for idx in range(8)
+    ]
+
+    server_proc: Optional[Proc] = None
+    client1_proc: Optional[Proc] = None
+    client2_proc: Optional[Proc] = None
+    server_admin, client1_admin = alloc_admin_ports(case_index)
+    client2_admin = client1_admin + 1
+    tcp_peer_port = _listener_overlay_port(case, 'tcp')
+
+    py = sys.executable
+    missing_cfg = str(log_dir / f'{case.name}_missing.cfg')
+    server_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_server_args, log_dir, case.name, 'bridge_server')
+    server_cmd += ['--config', missing_cfg, '--admin-web-port', '0']
+    server_cmd += admin_args(server_admin)
+
+    client1_cmd = [py, str(BRIDGE),
+        '--overlay-transport', 'tcp',
+        '--tcp-peer', '127.0.0.1', '--tcp-peer-port', str(tcp_peer_port), '--tcp-bind', '0.0.0.0', '--tcp-own-port', '0',
+        '--own-servers',
+        f'udp,{base_tcp_port + 30},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 20}',
+        f'udp,{base_tcp_port + 31},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 21}',
+        f'tcp,{base_tcp_port + 32},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 0}',
+        f'tcp,{base_tcp_port + 33},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 1}',
+        '--remote-servers',
+        f'tcp,{base_tcp_port + 40},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 2}',
+        f'tcp,{base_tcp_port + 41},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 3}',
+        '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
+        '--log-file', str(log_dir / f'{case.name}_bridge_client_1.txt'),
+        '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
+    ]
+    client1_cmd += admin_args(client1_admin)
+
+    client2_cmd = [py, str(BRIDGE),
+        '--overlay-transport', 'tcp',
+        '--tcp-peer', '127.0.0.1', '--tcp-peer-port', str(tcp_peer_port), '--tcp-bind', '0.0.0.0', '--tcp-own-port', '0',
+        '--own-servers',
+        f'udp,{base_tcp_port + 34},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 22}',
+        f'udp,{base_tcp_port + 35},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 23}',
+        f'tcp,{base_tcp_port + 36},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 4}',
+        f'tcp,{base_tcp_port + 37},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 5}',
+        '--remote-servers',
+        f'tcp,{base_tcp_port + 44},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 6}',
+        f'tcp,{base_tcp_port + 45},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 7}',
+        '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
+        '--log-file', str(log_dir / f'{case.name}_bridge_client_2.txt'),
+        '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
+    ]
+    client2_cmd += admin_args(client2_admin)
+
+    tcp_specs = [
+        ('client1-own-tcp-1', base_tcp_port + 32, b'\x01client1-own-tcp-1'),
+        ('client1-own-tcp-2', base_tcp_port + 33, b'\x01client1-own-tcp-2' * 2),
+        ('client1-remote-tcp-1', base_tcp_port + 40, b'\x01client1-remote-tcp-1' * 3),
+        ('client1-remote-tcp-2', base_tcp_port + 41, b'\x01client1-remote-tcp-2' * 4),
+        ('client2-own-tcp-1', base_tcp_port + 36, b'\x01client2-own-tcp-1' * 5),
+        ('client2-own-tcp-2', base_tcp_port + 37, b'\x01client2-own-tcp-2' * 6),
+        ('client2-remote-tcp-1', base_tcp_port + 44, b'\x01client2-remote-tcp-1' * 7),
+        ('client2-remote-tcp-2', base_tcp_port + 45, b'\x01client2-remote-tcp-2' * 8),
+    ]
+    udp_specs = [
+        (base_tcp_port + 30, b'\x01client1-own-udp-1'),
+        (base_tcp_port + 31, b'\x01client1-own-udp-2' * 2),
+        (base_tcp_port + 34, b'\x01client2-own-udp-1' * 3),
+        (base_tcp_port + 35, b'\x01client2-own-udp-2' * 4),
+    ]
+
+    try:
+        phase('1. Start UDP/TCP bounce-back services')
+        for bounce in own_udp_bounces + tcp_bounces:
+            bounce.start()
+
+        phase('2. Start bridge listener with tcp overlay transport')
+        server_proc = start_proc(f'{case.name}_bridge_server', server_cmd, log_dir, env_extra=case.server_env, admin_port=server_admin)
+        time.sleep(0.5)
+        assert_running(server_proc)
+        wait_admin_up(server_admin, timeout=10.0)
+
+        phase('3. Start two tcp peer clients')
+        client1_proc = start_proc(f'{case.name}_bridge_client_1', client1_cmd, log_dir, env_extra=case.client_env, admin_port=client1_admin)
+        client2_proc = start_proc(f'{case.name}_bridge_client_2', client2_cmd, log_dir, env_extra=case.client_env, admin_port=client2_admin)
+        time.sleep(0.8)
+        assert_running(client1_proc)
+        assert_running(client2_proc)
+        wait_admin_up(client1_admin, timeout=10.0)
+        wait_admin_up(client2_admin, timeout=10.0)
+        client1_proc = ensure_proc_up(client1_proc, log_dir)
+        client2_proc = ensure_proc_up(client2_proc, log_dir)
+        server_proc = ensure_proc_up(server_proc, log_dir)
+
+        time.sleep(case.settle_seconds if settle_s is None else settle_s)
+
+        phase('4. Verify both tcp peer clients connect to the same listener')
+        wait_peers_count(server_admin, minimum_count=2, timeout=12.0, label='server')
+        wait_distinct_peer_endpoints(server_admin, transport='tcp', minimum_count=2, timeout=12.0, label='server')
+
+        phase('5. Open 8 concurrent TCP channels and hold them during /api/connections polling')
+        start_evt = threading.Event()
+        release_close_evt = threading.Event()
+        ready_lock = threading.Lock()
+        ready_count = 0
+        tcp_results: list[Optional[bytes]] = [None] * len(tcp_specs)
+        tcp_errors: list[tuple[int, Exception]] = []
+
+        def _before_close() -> None:
+            nonlocal ready_count
+            with ready_lock:
+                ready_count += 1
+            if not release_close_evt.wait(timeout=8.0):
+                raise TimeoutError('Timed out waiting to release TCP channel close')
+
+        def _tcp_worker(idx: int, target_port: int, payload: bytes) -> None:
+            try:
+                start_evt.wait(timeout=5.0)
+                tcp_results[idx] = probe_tcp(case.probe_host, target_port, case.probe_bind, payload, timeout=4.0, before_close=_before_close)
+            except Exception as e:
+                tcp_errors.append((idx, e))
+
+        tcp_threads = [threading.Thread(target=_tcp_worker, args=(idx, port, payload), daemon=True) for idx, (_name, port, payload) in enumerate(tcp_specs)]
+        for t in tcp_threads:
+            t.start()
+        start_evt.set()
+
+        try:
+            poll_end = time.time() + 8.0
+            observed = False
+            last_docs: dict[str, dict] = {}
+            while time.time() < poll_end:
+                _code, conn_doc = fetch_json(f'http://127.0.0.1:{server_admin}/api/connections', timeout=1.5)
+                last_docs['server'] = conn_doc
+                connected_rows = _connected_tcp_rows(conn_doc)
+                if len(connected_rows) == 8:
+                    observed = True
+                    break
+                time.sleep(0.1)
+            if not observed:
+                raise RuntimeError(
+                    f'/api/connections on server did not expose 8 active TCP rows; '
+                    f'ready_count={ready_count}/{len(tcp_specs)} last_docs={last_docs!r}'
+                )
+        finally:
+            release_close_evt.set()
+
+        for t in tcp_threads:
+            t.join(timeout=8.0)
+        if tcp_errors:
+            raise RuntimeError(f'Concurrent TCP probes failed: {tcp_errors!r}')
+
+        phase('6. Verify all TCP replies and 4 concurrent UDP probes with unique payload lengths')
+        for idx, (_name, _port, payload) in enumerate(tcp_specs):
+            expected = response_payload(payload)
+            if tcp_results[idx] != expected:
+                raise RuntimeError(f'TCP channel {idx} mismatch: got={tcp_results[idx]!r} expected={expected!r}')
+
+        udp_results: list[Optional[bytes]] = [None] * len(udp_specs)
+        udp_errors: list[tuple[int, Exception]] = []
+
+        def _udp_worker(idx: int, target_port: int, payload: bytes) -> None:
+            try:
+                udp_results[idx] = probe_udp(case.probe_host, target_port, case.probe_bind, payload, timeout=2.0)
+            except Exception as e:
+                udp_errors.append((idx, e))
+
+        udp_threads = [threading.Thread(target=_udp_worker, args=(idx, port, payload), daemon=True) for idx, (port, payload) in enumerate(udp_specs)]
+        for t in udp_threads:
+            t.start()
+        for t in udp_threads:
+            t.join(timeout=4.0)
+        if udp_errors:
+            raise RuntimeError(f'Concurrent UDP probes failed: {udp_errors!r}')
+        for idx, (_port, payload) in enumerate(udp_specs):
+            expected = response_payload(payload)
+            if udp_results[idx] != expected:
+                raise RuntimeError(f'UDP channel {idx} mismatch: got={udp_results[idx]!r} expected={expected!r}')
+    finally:
+        if client2_proc is not None:
+            stop_proc(client2_proc)
+        if client1_proc is not None:
+            stop_proc(client1_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+        for bounce in own_udp_bounces + tcp_bounces:
+            bounce.stop()
+
+
+def run_case_quic_two_clients_concurrent_udp_tcp(
+    case: Case,
+    log_dir: Path,
+    case_index: int,
+    settle_s: Optional[float] = None,
+) -> None:
+    base_tcp_port = case.bounce_port
+    own_udp_bounces = [
+        BounceBackServer(name=f'{case.name}_own_udp_1', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 20, log_path=log_dir / f'{case.name}_own_udp_1.log'),
+        BounceBackServer(name=f'{case.name}_own_udp_2', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 21, log_path=log_dir / f'{case.name}_own_udp_2.log'),
+        BounceBackServer(name=f'{case.name}_own_udp_3', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 22, log_path=log_dir / f'{case.name}_own_udp_3.log'),
+        BounceBackServer(name=f'{case.name}_own_udp_4', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 23, log_path=log_dir / f'{case.name}_own_udp_4.log'),
+    ]
+    tcp_bounces = [
+        BounceBackServer(name=f'{case.name}_tcp_{idx + 1}', proto='tcp', bind_host=case.bounce_bind, port=base_tcp_port + idx, log_path=log_dir / f'{case.name}_tcp_{idx + 1}.log')
+        for idx in range(8)
+    ]
+
+    server_proc: Optional[Proc] = None
+    client1_proc: Optional[Proc] = None
+    client2_proc: Optional[Proc] = None
+    server_admin, client1_admin = alloc_admin_ports(case_index)
+    client2_admin = client1_admin + 1
+    quic_peer_port = _listener_overlay_port(case, 'quic')
+
+    py = sys.executable
+    missing_cfg = str(log_dir / f'{case.name}_missing.cfg')
+    server_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_server_args, log_dir, case.name, 'bridge_server')
+    server_cmd += ['--config', missing_cfg, '--admin-web-port', '0']
+    server_cmd += admin_args(server_admin)
+
+    client1_cmd = [py, str(BRIDGE),
+        '--overlay-transport', 'quic',
+        '--quic-peer', '127.0.0.1', '--quic-peer-port', str(quic_peer_port), '--quic-bind', '0.0.0.0', '--quic-own-port', '0', '--quic-insecure',
+        '--own-servers',
+        f'udp,{base_tcp_port + 30},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 20}',
+        f'udp,{base_tcp_port + 31},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 21}',
+        f'tcp,{base_tcp_port + 32},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 0}',
+        f'tcp,{base_tcp_port + 33},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 1}',
+        '--remote-servers',
+        f'tcp,{base_tcp_port + 40},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 2}',
+        f'tcp,{base_tcp_port + 41},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 3}',
+        '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
+        '--log-file', str(log_dir / f'{case.name}_bridge_client_1.txt'),
+        '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
+    ]
+    client1_cmd += admin_args(client1_admin)
+
+    client2_cmd = [py, str(BRIDGE),
+        '--overlay-transport', 'quic',
+        '--quic-peer', '127.0.0.1', '--quic-peer-port', str(quic_peer_port), '--quic-bind', '0.0.0.0', '--quic-own-port', '0', '--quic-insecure',
+        '--own-servers',
+        f'udp,{base_tcp_port + 34},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 22}',
+        f'udp,{base_tcp_port + 35},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 23}',
+        f'tcp,{base_tcp_port + 36},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 4}',
+        f'tcp,{base_tcp_port + 37},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 5}',
+        '--remote-servers',
+        f'tcp,{base_tcp_port + 44},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 6}',
+        f'tcp,{base_tcp_port + 45},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 7}',
+        '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
+        '--log-file', str(log_dir / f'{case.name}_bridge_client_2.txt'),
+        '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
+    ]
+    client2_cmd += admin_args(client2_admin)
+
+    tcp_specs = [
+        ('client1-own-tcp-1', base_tcp_port + 32, b'\x01client1-own-tcp-1'),
+        ('client1-own-tcp-2', base_tcp_port + 33, b'\x01client1-own-tcp-2' * 2),
+        ('client1-remote-tcp-1', base_tcp_port + 40, b'\x01client1-remote-tcp-1' * 3),
+        ('client1-remote-tcp-2', base_tcp_port + 41, b'\x01client1-remote-tcp-2' * 4),
+        ('client2-own-tcp-1', base_tcp_port + 36, b'\x01client2-own-tcp-1' * 5),
+        ('client2-own-tcp-2', base_tcp_port + 37, b'\x01client2-own-tcp-2' * 6),
+        ('client2-remote-tcp-1', base_tcp_port + 44, b'\x01client2-remote-tcp-1' * 7),
+        ('client2-remote-tcp-2', base_tcp_port + 45, b'\x01client2-remote-tcp-2' * 8),
+    ]
+    udp_specs = [
+        (base_tcp_port + 30, b'\x01client1-own-udp-1'),
+        (base_tcp_port + 31, b'\x01client1-own-udp-2' * 2),
+        (base_tcp_port + 34, b'\x01client2-own-udp-1' * 3),
+        (base_tcp_port + 35, b'\x01client2-own-udp-2' * 4),
+    ]
+
+    try:
+        phase('1. Start UDP/TCP bounce-back services')
+        for bounce in own_udp_bounces + tcp_bounces:
+            bounce.start()
+
+        phase('2. Start bridge listener with quic overlay transport')
+        server_proc = start_proc(f'{case.name}_bridge_server', server_cmd, log_dir, env_extra=case.server_env, admin_port=server_admin)
+        time.sleep(0.5)
+        assert_running(server_proc)
+        wait_admin_up(server_admin, timeout=10.0)
+
+        phase('3. Start two quic peer clients')
+        client1_proc = start_proc(f'{case.name}_bridge_client_1', client1_cmd, log_dir, env_extra=case.client_env, admin_port=client1_admin)
+        client2_proc = start_proc(f'{case.name}_bridge_client_2', client2_cmd, log_dir, env_extra=case.client_env, admin_port=client2_admin)
+        time.sleep(0.8)
+        assert_running(client1_proc)
+        assert_running(client2_proc)
+        wait_admin_up(client1_admin, timeout=10.0)
+        wait_admin_up(client2_admin, timeout=10.0)
+        client1_proc = ensure_proc_up(client1_proc, log_dir)
+        client2_proc = ensure_proc_up(client2_proc, log_dir)
+        server_proc = ensure_proc_up(server_proc, log_dir)
+
+        time.sleep(case.settle_seconds if settle_s is None else settle_s)
+
+        phase('4. Verify both quic peer clients connect to the same listener')
+        wait_peers_count(server_admin, minimum_count=2, timeout=12.0, label='server')
+        wait_distinct_peer_endpoints(server_admin, transport='quic', minimum_count=2, timeout=12.0, label='server')
+
+        phase('5. Open 8 concurrent TCP channels and hold them during /api/connections polling')
+        start_evt = threading.Event()
+        release_close_evt = threading.Event()
+        ready_lock = threading.Lock()
+        ready_count = 0
+        tcp_results: list[Optional[bytes]] = [None] * len(tcp_specs)
+        tcp_errors: list[tuple[int, Exception]] = []
+
+        def _before_close() -> None:
+            nonlocal ready_count
+            with ready_lock:
+                ready_count += 1
+            if not release_close_evt.wait(timeout=8.0):
+                raise TimeoutError('Timed out waiting to release TCP channel close')
+
+        def _tcp_worker(idx: int, target_port: int, payload: bytes) -> None:
+            try:
+                start_evt.wait(timeout=5.0)
+                tcp_results[idx] = probe_tcp(case.probe_host, target_port, case.probe_bind, payload, timeout=4.0, before_close=_before_close)
+            except Exception as e:
+                tcp_errors.append((idx, e))
+
+        tcp_threads = [threading.Thread(target=_tcp_worker, args=(idx, port, payload), daemon=True) for idx, (_name, port, payload) in enumerate(tcp_specs)]
+        for t in tcp_threads:
+            t.start()
+        start_evt.set()
+
+        try:
+            poll_end = time.time() + 8.0
+            observed = False
+            last_docs: dict[str, dict] = {}
+            while time.time() < poll_end:
+                _code, conn_doc = fetch_json(f'http://127.0.0.1:{server_admin}/api/connections', timeout=1.5)
+                last_docs['server'] = conn_doc
+                connected_rows = _connected_tcp_rows(conn_doc)
+                if len(connected_rows) == 8:
+                    observed = True
+                    break
+                time.sleep(0.1)
+            if not observed:
+                raise RuntimeError(
+                    f'/api/connections on server did not expose 8 active TCP rows; '
+                    f'ready_count={ready_count}/{len(tcp_specs)} last_docs={last_docs!r}'
+                )
+        finally:
+            release_close_evt.set()
+            for t in tcp_threads:
+                t.join(timeout=6.0)
+
+        if tcp_errors:
+            raise RuntimeError(f'Concurrent TCP probes failed: {tcp_errors!r}')
+        for idx, (_name, _port, payload) in enumerate(tcp_specs):
+            expected = response_payload(payload)
+            if tcp_results[idx] != expected:
+                raise RuntimeError(f'TCP channel {idx} mismatch: got={tcp_results[idx]!r} expected={expected!r}')
+
+        phase('6. Probe all 4 UDP services')
+        udp_results: list[Optional[bytes]] = [None] * len(udp_specs)
+        udp_errors: list[tuple[int, Exception]] = []
+
+        def _udp_worker(idx: int, target_port: int, payload: bytes) -> None:
+            try:
+                udp_results[idx] = probe_udp(case.probe_host, target_port, case.probe_bind, payload, timeout=3.0)
+            except Exception as e:
+                udp_errors.append((idx, e))
+
+        udp_threads = [threading.Thread(target=_udp_worker, args=(idx, port, payload), daemon=True) for idx, (port, payload) in enumerate(udp_specs)]
+        for t in udp_threads:
+            t.start()
+        for t in udp_threads:
+            t.join(timeout=5.0)
+
+        if udp_errors:
+            raise RuntimeError(f'Concurrent UDP probes failed: {udp_errors!r}')
+        for idx, (_port, payload) in enumerate(udp_specs):
+            expected = response_payload(payload)
+            if udp_results[idx] != expected:
+                raise RuntimeError(f'UDP channel {idx} mismatch: got={udp_results[idx]!r} expected={expected!r}')
+    finally:
+        if client2_proc is not None:
+            stop_proc(client2_proc)
+        if client1_proc is not None:
+            stop_proc(client1_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+        for bounce in own_udp_bounces + tcp_bounces:
+            bounce.stop()
+
 def wait_both_connected(
     server_proc: Proc,
     client_proc: Proc,
@@ -2858,6 +3327,22 @@ def test_overlay_e2e_cli_routing_infers_concurrent_mode_from_case15() -> None:
     selected_cases, selected_mode = resolve_selected_cases_and_mode(args)
 
     assert selected_cases == ['case15_overlay_listener_myudp_two_clients_concurrent_udp_tcp']
+    assert selected_mode == 'concurrent-tcp-channels'
+
+
+def test_overlay_e2e_cli_routing_infers_concurrent_mode_from_case16() -> None:
+    args = parse_args(['--cases', 'case16_overlay_listener_tcp_two_clients_concurrent_udp_tcp'])
+    selected_cases, selected_mode = resolve_selected_cases_and_mode(args)
+
+    assert selected_cases == ['case16_overlay_listener_tcp_two_clients_concurrent_udp_tcp']
+    assert selected_mode == 'concurrent-tcp-channels'
+
+
+def test_overlay_e2e_cli_routing_infers_concurrent_mode_from_case17() -> None:
+    args = parse_args(['--cases', 'case17_overlay_listener_quic_two_clients_concurrent_udp_tcp'])
+    selected_cases, selected_mode = resolve_selected_cases_and_mode(args)
+
+    assert selected_cases == ['case17_overlay_listener_quic_two_clients_concurrent_udp_tcp']
     assert selected_mode == 'concurrent-tcp-channels'
 
 

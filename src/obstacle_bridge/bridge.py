@@ -1820,7 +1820,7 @@ class ISession(Protocol):
     def is_connected(self) -> bool: ...
 
     # application payload (Mux -> Session)
-    def send_app(self, payload: bytes) -> int: ...
+    def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int: ...
 
     # callback wiring
     def set_on_app_payload(self, cb: Callable[[bytes], None]) -> None: ...
@@ -2005,6 +2005,26 @@ class UdpSession(ISession):
             return f"[{host_s}]:{port_i}" if ":" in host_s and not host_s.startswith("[") else f"{host_s}:{port_i}"
         except Exception:
             return None
+
+    @staticmethod
+    def _extract_quic_peer_addr(proto: Any) -> Tuple[Optional[str], Optional[int]]:
+        try:
+            quic = getattr(proto, "_quic", None)
+            paths = getattr(quic, "_network_paths", None) if quic is not None else None
+            if paths:
+                addr = getattr(paths[0], "addr", None)
+                if isinstance(addr, tuple) and len(addr) >= 2:
+                    return str(addr[0]), int(addr[1])
+        except Exception:
+            pass
+        try:
+            transport = getattr(proto, "_transport", None)
+            peer = transport.get_extra_info("peername") if transport is not None else None
+            if isinstance(peer, tuple) and len(peer) >= 2:
+                return str(peer[0]), int(peer[1])
+        except Exception:
+            pass
+        return None, None
 
     def get_overlay_peers_snapshot(self) -> list[dict]:
         if self._listener_mode:
@@ -2813,6 +2833,7 @@ class TcpStreamSession(ISession):
         self._on_peer_rx: Optional[Callable[[int], None]] = None
         self._on_peer_tx: Optional[Callable[[int], None]] = None
         self._on_peer_set_cb: Optional[Callable[[str, int], None]] = None
+        self._on_peer_disconnect_cb: Optional[Callable[[int], None]] = None
         self._on_app_from_peer_bytes: Optional[Callable[[int], None]] = None
         self._on_transport_epoch_change: Optional[Callable[[int], None]] = None
 
@@ -2836,6 +2857,12 @@ class TcpStreamSession(ISession):
             (peer_info[0], peer_info[1]) if peer_info is not None else None
         )
         self._peer_host, self._peer_port = "", 0
+        self._server_connected_evt: asyncio.Event = asyncio.Event()
+        self._server_peers: Dict[int, dict] = {}
+        self._server_next_peer_id: int = 1
+        self._server_chan_to_peer: Dict[int, Tuple[int, int]] = {}
+        self._server_peer_chan_to_mux: Dict[Tuple[int, int], int] = {}
+        self._server_next_mux_chan: int = 1
 
         # framing
         self._LEN = struct.Struct(">I")
@@ -2879,6 +2906,7 @@ class TcpStreamSession(ISession):
     def set_on_peer_rx(self, cb): self._on_peer_rx = cb
     def set_on_peer_tx(self, cb): self._on_peer_tx = cb
     def set_on_peer_set(self, cb): self._on_peer_set_cb = cb
+    def set_on_peer_disconnect(self, cb): self._on_peer_disconnect_cb = cb
     def set_on_app_from_peer_bytes(self, cb): self._on_app_from_peer_bytes = cb
     def set_on_transport_epoch_change(self, cb): self._on_transport_epoch_change = cb
 
@@ -2887,16 +2915,14 @@ class TcpStreamSession(ISession):
         self._loop = asyncio.get_running_loop()
         self._run_flag = True
 
-        # attach RTT runtime; we’ll provide send_ping function once a writer exists
-        self._rtt_rt.attach(send_ping_fn=None, on_state_change=self._on_rtt_state_change)
-
         if self._peer_tuple:
             # CLIENT: proactive connect so RTT can flow immediately
+            self._rtt_rt.attach(send_ping_fn=None, on_state_change=self._on_rtt_state_change)
             self._peer_host, self._peer_port = self._peer_tuple
             self._log.info(f"[TCP-SESSION] ({self._probe_id}) start; CLIENT bind={self._listen_host}:{self._listen_port} peer={self._peer_tuple}")
             self._ensure_connect_once()
         else:
-            # SERVER: listen and accept one overlay peer at a time
+            # SERVER: listen and accept multiple overlay peers
             self._log.info(f"[TCP-SESSION] ({self._probe_id}) start; SERVER bind={self._listen_host}:{self._listen_port}")
             async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
                 await self._on_accept(reader, writer)
@@ -2919,6 +2945,10 @@ class TcpStreamSession(ISession):
             if t: t.cancel()
         self._connecting_task = None
         self._reconnect_task = None
+
+        for peer_id in list(self._server_peers.keys()):
+            await self._close_server_peer(peer_id)
+        self._server_connected_evt.clear()
 
         if self._bp_task:
             self._bp_task.cancel()
@@ -2952,9 +2982,19 @@ class TcpStreamSession(ISession):
         self._set_overlay_connected(False)
 
     async def wait_connected(self, timeout: Optional[float] = None) -> bool:
+        if not self._peer_tuple:
+            if self._server_peers:
+                return True
+            try:
+                await asyncio.wait_for(self._server_connected_evt.wait(), timeout)
+                return True
+            except asyncio.TimeoutError:
+                return False
         return await self._rtt_rt.wait_connected(timeout)
 
     def is_connected(self) -> bool:
+        if not self._peer_tuple:
+            return bool(self._server_peers)
         return self._rtt.is_connected()
 
     # ---- metrics surface for StatsBoard (RTT plumbing) ----
@@ -2986,6 +3026,26 @@ class TcpStreamSession(ISession):
         except Exception:
             return None
 
+    @staticmethod
+    def _extract_quic_peer_addr(proto: Any) -> Tuple[Optional[str], Optional[int]]:
+        try:
+            quic = getattr(proto, "_quic", None)
+            paths = getattr(quic, "_network_paths", None) if quic is not None else None
+            if paths:
+                addr = getattr(paths[0], "addr", None)
+                if isinstance(addr, tuple) and len(addr) >= 2:
+                    return str(addr[0]), int(addr[1])
+        except Exception:
+            pass
+        try:
+            transport = getattr(proto, "_transport", None)
+            peer = transport.get_extra_info("peername") if transport is not None else None
+            if isinstance(peer, tuple) and len(peer) >= 2:
+                return str(peer[0]), int(peer[1])
+        except Exception:
+            pass
+        return None, None
+
     def get_overlay_peers_snapshot(self) -> list[dict]:
         if self._peer_tuple:
             return [{
@@ -3006,22 +3066,145 @@ class TcpStreamSession(ISession):
             "rtt_est_ms": None,
             "listening": True,
         }]
-        peer_label = self._format_peer_label(self._peer_host, self._peer_port)
-        if peer_label or self.is_connected():
+        mux_by_peer: Dict[int, list[int]] = {}
+        for mux_chan, mapped in self._server_chan_to_peer.items():
+            try:
+                peer_id, _peer_chan = mapped
+                mux_by_peer.setdefault(int(peer_id), []).append(int(mux_chan))
+            except Exception:
+                continue
+        for peer_id in sorted(self._server_peers.keys()):
+            ctx = self._server_peers.get(peer_id, {})
+            addr = ctx.get("addr") if isinstance(ctx, dict) else None
+            host = addr[0] if isinstance(addr, tuple) and len(addr) >= 2 else None
+            port = addr[1] if isinstance(addr, tuple) and len(addr) >= 2 else None
+            rtt = ctx.get("rtt") if isinstance(ctx, dict) else None
             rows.append({
-                "peer_id": 0,
-                "connected": bool(self.is_connected()),
-                "state": "connected" if self.is_connected() else "connecting",
-                "peer": peer_label,
-                "mux_chans": [],
-                "rtt_est_ms": getattr(self._rtt, "rtt_est_ms", None),
+                "peer_id": peer_id,
+                "connected": bool(ctx.get("connected")) if isinstance(ctx, dict) else False,
+                "state": "connected" if bool(ctx.get("connected")) else "connecting",
+                "peer": self._format_peer_label(host, port),
+                "mux_chans": sorted(mux_by_peer.get(peer_id, [])),
+                "rtt_est_ms": getattr(rtt, "rtt_est_ms", None),
             })
         return rows
 
+    def _alloc_server_peer_id(self) -> int:
+        peer_id = self._server_next_peer_id
+        while peer_id in self._server_peers:
+            peer_id += 1
+            if peer_id > 0xFFFF:
+                peer_id = 1
+        self._server_next_peer_id = 1 if peer_id >= 0xFFFF else (peer_id + 1)
+        return peer_id
+
+    def _alloc_server_mux_chan(self) -> int:
+        chan = self._server_next_mux_chan
+        while chan in self._server_chan_to_peer:
+            chan += 2
+            if chan > 0xFFFF:
+                chan = 1
+        self._server_next_mux_chan = 1 if chan >= 0xFFFF else (chan + 2)
+        return chan
+
+    def _rewrite_mux_chan_id(self, payload: bytes, new_chan: int) -> bytes:
+        hdr = ChannelMux.MUX_HDR
+        if len(payload) < hdr.size:
+            return payload
+        try:
+            _old_chan, proto, counter, mtype, dlen = hdr.unpack(payload[:hdr.size])
+        except Exception:
+            return payload
+        if len(payload) < hdr.size + dlen:
+            return payload
+        return hdr.pack(new_chan, proto, counter, mtype, dlen) + payload[hdr.size:hdr.size + dlen]
+
+    def _server_rewrite_inbound_app(self, peer_id: int, payload: bytes) -> bytes:
+        hdr = ChannelMux.MUX_HDR
+        if len(payload) < hdr.size:
+            return payload
+        try:
+            peer_chan, _proto, _counter, _mtype, dlen = hdr.unpack(payload[:hdr.size])
+        except Exception:
+            return payload
+        if len(payload) < hdr.size + dlen:
+            return payload
+        key = (int(peer_id), int(peer_chan))
+        mux_chan = self._server_peer_chan_to_mux.get(key)
+        if mux_chan is None:
+            mux_chan = int(peer_chan)
+            mapped = self._server_chan_to_peer.get(mux_chan)
+            if mapped is not None and mapped != key:
+                mux_chan = self._alloc_server_mux_chan()
+            self._server_peer_chan_to_mux[key] = mux_chan
+            self._server_chan_to_peer[mux_chan] = key
+        return self._rewrite_mux_chan_id(payload, mux_chan)
+
+    def _server_unregister_peer_channels(self, peer_id: int) -> None:
+        for key, mux_chan in list(self._server_peer_chan_to_mux.items()):
+            if int(key[0]) != int(peer_id):
+                continue
+            self._server_peer_chan_to_mux.pop(key, None)
+            self._server_chan_to_peer.pop(mux_chan, None)
+
+    def _resolve_server_send_target(self, payload: bytes, peer_id: Optional[int] = None) -> Optional[Tuple[int, bytes]]:
+        hdr = ChannelMux.MUX_HDR
+        if len(payload) < hdr.size:
+            return None
+        try:
+            mux_chan, _proto, _counter, _mtype, dlen = hdr.unpack(payload[:hdr.size])
+        except Exception:
+            return None
+        if len(payload) < hdr.size + dlen:
+            return None
+        target_peer_id = int(peer_id) if peer_id is not None else None
+        mapped = self._server_chan_to_peer.get(int(mux_chan))
+        if target_peer_id is None and mapped is not None:
+            target_peer_id = int(mapped[0])
+        if target_peer_id is None:
+            if len(self._server_peers) == 1:
+                target_peer_id = next(iter(self._server_peers.keys()))
+            else:
+                return None
+        target_ctx = self._server_peers.get(target_peer_id)
+        if not target_ctx:
+            return None
+        peer_chan = int(mux_chan)
+        if mapped is not None:
+            if int(mapped[0]) != target_peer_id:
+                return None
+            peer_chan = int(mapped[1])
+        else:
+            key = (target_peer_id, int(mux_chan))
+            self._server_peer_chan_to_mux[key] = int(mux_chan)
+            self._server_chan_to_peer[int(mux_chan)] = key
+        return target_peer_id, self._rewrite_mux_chan_id(payload, peer_chan) if peer_chan != int(mux_chan) else payload
+
     # ---- ISession: data path (APP) ----
-    def send_app(self, payload: bytes) -> int:
+    def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
         if not payload:
             return 0
+        if not self._peer_tuple:
+            target = self._resolve_server_send_target(payload, peer_id=peer_id)
+            if target is None:
+                return 0
+            target_peer_id, routed_payload = target
+            ctx = self._server_peers.get(target_peer_id)
+            writer = ctx.get("writer") if isinstance(ctx, dict) else None
+            if writer is None:
+                return 0
+            wire = self._LEN.pack(len(routed_payload) + 1) + bytes([self._K_APP]) + routed_payload
+            try:
+                writer.write(wire)
+                if ctx is not None:
+                    self._bump_tx_for_ctx(ctx, wire)
+                if self._on_peer_tx:
+                    try: self._on_peer_tx(len(wire))
+                    except Exception: pass
+                return len(payload)
+            except Exception as e:
+                self._log.info(f"[TCP/TX] ({self._probe_id}) server write error peer_id={target_peer_id}: {e!r}")
+                return 0
         frame = bytes([self._K_APP]) + payload
         body_len = len(frame)
         wire = self._LEN.pack(body_len) + frame
@@ -3048,6 +3231,44 @@ class TcpStreamSession(ISession):
 
     # ---- accept/connect wiring ----
     async def _on_accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        p = writer.get_extra_info("peername")
+        sockname = writer.get_extra_info("sockname")
+        if not self._peer_tuple:
+            peer_id = self._alloc_server_peer_id()
+            rtt = StreamRTT(log=self._log.getChild(f"rtt.{peer_id}"))
+            rtt_rt = StreamRTTRuntime(rtt)
+            ctx = {
+                "peer_id": peer_id,
+                "reader": reader,
+                "writer": writer,
+                "addr": p if isinstance(p, tuple) and len(p) >= 2 else None,
+                "connected": False,
+                "rtt": rtt,
+                "rtt_rt": rtt_rt,
+                "rx_bytes": 0,
+                "tx_bytes": 0,
+                "rx_crc32": 0,
+                "tx_crc32": 0,
+                "rx_task": None,
+            }
+            self._server_peers[peer_id] = ctx
+            self._log.info(f"[TCP-SESSION] ({self._probe_id}) accept: peer_id={peer_id} local={sockname} peer={p}")
+            try:
+                if isinstance(p, tuple) and len(p) >= 2:
+                    self._peer_host, self._peer_port = p[0], int(p[1])
+                    if callable(self._on_peer_set_cb):
+                        self._on_peer_set_cb(self._peer_host, self._peer_port)
+            except Exception:
+                pass
+            self._enable_os_keepalive(writer)
+            rtt_rt.attach(
+                send_ping_fn=lambda payload, _peer_id=peer_id: self._send_ping_frame_for_peer(_peer_id, payload),
+                on_state_change=lambda connected, _peer_id=peer_id: self._on_state_change_for_peer(_peer_id, connected),
+            )
+            ctx["rx_task"] = self._loop.create_task(self._rx_pump_for_peer(peer_id))  # type: ignore[union-attr]
+            self._update_server_overlay_connected()
+            return
+
         # Replace any previous peer
         if self._writer is not None:
             try:
@@ -3057,8 +3278,6 @@ class TcpStreamSession(ISession):
             except Exception: pass
 
         self._reader, self._writer = reader, writer
-        p = writer.get_extra_info("peername")
-        sockname = writer.get_extra_info("sockname")
         self._log.info(f"[TCP-SESSION] ({self._probe_id}) accept: local={sockname} peer={p}")
         try:
             if isinstance(p, tuple) and len(p) >= 2:
@@ -3340,6 +3559,47 @@ class TcpStreamSession(ISession):
         except Exception as e:
             self._log.info(f"[TCP/TX] ({self._probe_id}) PONG write error: {e!r}")
 
+    def _bump_tx_for_ctx(self, ctx: dict, data: bytes) -> None:
+        ctx["tx_bytes"] = int(ctx.get("tx_bytes", 0) or 0) + len(data)
+        ctx["tx_crc32"] = self._zlib.crc32(data, int(ctx.get("tx_crc32", 0) or 0)) & 0xFFFFFFFF
+
+    def _bump_rx_for_ctx(self, ctx: dict, data: bytes) -> None:
+        ctx["rx_bytes"] = int(ctx.get("rx_bytes", 0) or 0) + len(data)
+        ctx["rx_crc32"] = self._zlib.crc32(data, int(ctx.get("rx_crc32", 0) or 0)) & 0xFFFFFFFF
+
+    def _send_ping_frame_for_peer(self, peer_id: int, ping_payload: bytes) -> None:
+        ctx = self._server_peers.get(peer_id)
+        writer = ctx.get("writer") if isinstance(ctx, dict) else None
+        if writer is None:
+            return
+        body = bytes([self._K_PING]) + ping_payload
+        wire = self._LEN.pack(len(body)) + body
+        try:
+            writer.write(wire)
+            self._bump_tx_for_ctx(ctx, wire)
+            if self._on_peer_tx:
+                try: self._on_peer_tx(len(wire))
+                except Exception: pass
+        except Exception as e:
+            self._log.info(f"[TCP/TX] ({self._probe_id}) PING write error peer_id={peer_id}: {e!r}")
+
+    def _send_pong_frame_for_peer(self, peer_id: int, echo_tx_ns: int) -> None:
+        ctx = self._server_peers.get(peer_id)
+        writer = ctx.get("writer") if isinstance(ctx, dict) else None
+        rtt = ctx.get("rtt") if isinstance(ctx, dict) else None
+        if writer is None or rtt is None:
+            return
+        body = bytes([self._K_PONG]) + rtt.build_pong_bytes(echo_tx_ns)
+        wire = self._LEN.pack(len(body)) + body
+        try:
+            writer.write(wire)
+            self._bump_tx_for_ctx(ctx, wire)
+            if self._on_peer_tx:
+                try: self._on_peer_tx(len(wire))
+                except Exception: pass
+        except Exception as e:
+            self._log.info(f"[TCP/TX] ({self._probe_id}) PONG write error peer_id={peer_id}: {e!r}")
+
     async def _rx_pump(self) -> None:
         self._log.debug(f"[TCP/RX] ({self._probe_id}) pump start")
         try:
@@ -3430,6 +3690,71 @@ class TcpStreamSession(ISession):
 
             self._log.debug(f"[TCP/RX] ({self._probe_id}) pump stop")
 
+    async def _rx_pump_for_peer(self, peer_id: int) -> None:
+        ctx = self._server_peers.get(peer_id)
+        if not ctx:
+            return
+        reader = ctx.get("reader")
+        writer = ctx.get("writer")
+        rtt = ctx.get("rtt")
+        self._log.debug(f"[TCP/RX] ({self._probe_id}) server pump start peer_id={peer_id}")
+        try:
+            while True:
+                hdr = await reader.readexactly(self._LEN.size)
+                if not hdr:
+                    break
+                self._bump_rx_for_ctx(ctx, hdr)
+                (n,) = self._LEN.unpack(hdr)
+                if n <= 0:
+                    continue
+                body = await reader.readexactly(n)
+                self._bump_rx_for_ctx(ctx, body)
+                kind = body[0]
+                payload = body[1:]
+
+                if self._on_peer_rx:
+                    try: self._on_peer_rx(len(hdr) + len(body))
+                    except Exception: pass
+
+                if kind == self._K_APP:
+                    if self._on_app_from_peer_bytes:
+                        try: self._on_app_from_peer_bytes(len(payload))
+                        except Exception: pass
+                    if callable(self._on_app):
+                        try:
+                            rewritten = self._server_rewrite_inbound_app(peer_id, payload)
+                            try: self._on_app(rewritten, peer_id=peer_id)
+                            except TypeError: self._on_app(rewritten)
+                        except Exception as e:
+                            self._log.debug(f"[TCP/RX] ({self._probe_id}) server app callback err peer_id={peer_id}: {e!r}")
+                elif kind == self._K_PING:
+                    if len(payload) >= 16 and rtt is not None:
+                        tx_ns, echo_ns = struct.unpack(">QQ", payload[:16])
+                        rtt.on_ping_received(tx_ns)
+                        if echo_ns:
+                            rtt.on_pong_received(echo_ns)
+                        self._send_pong_frame_for_peer(peer_id, tx_ns)
+                elif kind == self._K_PONG:
+                    if len(payload) >= 8 and rtt is not None:
+                        (echo_tx_ns,) = struct.unpack(">Q", payload[:8])
+                        rtt.on_pong_received(echo_tx_ns)
+        except asyncio.IncompleteReadError:
+            pass
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            self._log.info(f"[TCP/RX] ({self._probe_id}) server pump error peer_id={peer_id}: {e!r}")
+        finally:
+            try:
+                if writer:
+                    writer.close()
+                    aw = getattr(writer, "wait_closed", None)
+                    if callable(aw): await aw()
+            except Exception:
+                pass
+            await self._close_server_peer(peer_id)
+            self._log.debug(f"[TCP/RX] ({self._probe_id}) server pump stop peer_id={peer_id}")
+
     # ---- overlay state (RTT-driven) ----
     def _on_rtt_state_change(self, connected: bool) -> None:
         # Called by RTT runtime tick
@@ -3450,6 +3775,50 @@ class TcpStreamSession(ISession):
         if callable(self._on_state):
             try: self._on_state(v)
             except Exception: pass
+
+    def _on_state_change_for_peer(self, peer_id: int, connected: bool) -> None:
+        ctx = self._server_peers.get(peer_id)
+        if ctx is not None:
+            ctx["connected"] = bool(connected)
+        self._update_server_overlay_connected()
+
+    def _update_server_overlay_connected(self) -> None:
+        connected = bool(self._server_peers)
+        if connected:
+            self._server_connected_evt.set()
+        else:
+            self._server_connected_evt.clear()
+        self._set_overlay_connected(connected)
+
+    async def _close_server_peer(self, peer_id: int) -> None:
+        ctx = self._server_peers.pop(peer_id, None)
+        if not ctx:
+            return
+        self._server_unregister_peer_channels(peer_id)
+        rtt_rt = ctx.get("rtt_rt")
+        if rtt_rt is not None:
+            with contextlib.suppress(Exception):
+                rtt_rt.detach()
+        rx_task = ctx.get("rx_task")
+        if rx_task and rx_task is not asyncio.current_task():
+            rx_task.cancel()
+        writer = ctx.get("writer")
+        if writer is self._writer:
+            self._writer = None
+            self._reader = None
+        if callable(self._on_peer_disconnect_cb):
+            try:
+                self._on_peer_disconnect_cb(peer_id)
+            except Exception:
+                pass
+        try:
+            if writer:
+                writer.close()
+                aw = getattr(writer, "wait_closed", None)
+                if callable(aw): await aw()
+        except Exception:
+            pass
+        self._update_server_overlay_connected()
 
 
 # -----------------------------------------------------------------------------
@@ -3562,6 +3931,7 @@ class QuicSession(ISession):
         self._on_peer_rx: Optional[Callable[[int], None]] = None
         self._on_peer_tx: Optional[Callable[[int], None]] = None
         self._on_peer_set_cb: Optional[Callable[[str, int], None]] = None
+        self._on_peer_disconnect_cb: Optional[Callable[[int], None]] = None
         self._on_app_from_peer_bytes: Optional[Callable[[int], None]] = None
         self._on_transport_epoch_change: Optional[Callable[[int], None]] = None
 
@@ -3590,6 +3960,13 @@ class QuicSession(ISession):
         self._connecting_task: Optional[asyncio.Task] = None
         self._reconnect_task: Optional[asyncio.Task] = None
         self._run_flag: bool = False
+        self._server_connected_evt = asyncio.Event()
+        self._server_peers: Dict[int, dict] = {}
+        self._server_proto_to_peer_id: Dict[int, int] = {}
+        self._server_next_peer_id: int = 1
+        self._server_chan_to_peer: Dict[int, Tuple[int, int]] = {}
+        self._server_peer_chan_to_mux: Dict[Tuple[int, int], int] = {}
+        self._server_next_mux_chan: int = 1
         self._quic_serve = aioquic["quic_serve"]
         self._quic_connect = aioquic["quic_connect"]
         self._quic_protocol_cls = aioquic["QuicConnectionProtocol"]
@@ -3634,6 +4011,7 @@ class QuicSession(ISession):
     def set_on_peer_rx(self, cb): self._on_peer_rx = cb
     def set_on_peer_tx(self, cb): self._on_peer_tx = cb
     def set_on_peer_set(self, cb): self._on_peer_set_cb = cb
+    def set_on_peer_disconnect(self, cb): self._on_peer_disconnect_cb = cb
     def set_on_app_from_peer_bytes(self, cb): self._on_app_from_peer_bytes = cb
     def set_on_transport_epoch_change(self, cb): self._on_transport_epoch_change = cb
 
@@ -3641,10 +4019,9 @@ class QuicSession(ISession):
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._run_flag = True
-        # Attach RTT driver; we’ll attach send_pings once we have a stream
-        self._rtt_rt.attach(send_ping_fn=None, on_state_change=self._on_rtt_state_change)
-
         if self._peer_tuple:
+            # Attach RTT driver; we’ll attach send_pings once we have a stream
+            self._rtt_rt.attach(send_ping_fn=None, on_state_change=self._on_rtt_state_change)
             # CLIENT
             self._peer_host = self._peer_name_host or self._peer_tuple[0]
             self._peer_port = self._peer_name_port or self._peer_tuple[1]
@@ -3662,7 +4039,8 @@ class QuicSession(ISession):
     async def stop(self) -> None:
         self._log.info(f"[QUIC-SESSION] ({self._probe_id}) stopping")
         self._run_flag = False
-        self._rtt_rt.detach()
+        if self._peer_tuple:
+            self._rtt_rt.detach()
         for t in (self._connecting_task, self._reconnect_task):
             if t: t.cancel()
         self._connecting_task = None
@@ -3672,15 +4050,19 @@ class QuicSession(ISession):
         except Exception: pass
         self._rx_task = None
 
-        # close connection (both roles)
-        try:
-            if self._proto:
-                self._proto.close()
-        except Exception:
-            pass
-        self._proto = None
-        self._quic = None
-        self._stream_id = None
+        if not self._peer_tuple:
+            for peer_id in list(self._server_peers.keys()):
+                await self._close_server_peer(peer_id)
+        else:
+            # close connection (client role)
+            try:
+                if self._proto:
+                    self._proto.close()
+            except Exception:
+                pass
+            self._proto = None
+            self._quic = None
+            self._stream_id = None
 
         # close server (server role)
         try:
@@ -3694,9 +4076,19 @@ class QuicSession(ISession):
         self._set_overlay_connected(False)
 
     async def wait_connected(self, timeout: Optional[float] = None) -> bool:
+        if not self._peer_tuple:
+            if self._server_peers:
+                return True
+            try:
+                await asyncio.wait_for(self._server_connected_evt.wait(), timeout)
+                return True
+            except asyncio.TimeoutError:
+                return False
         return await self._rtt_rt.wait_connected(timeout)
 
     def is_connected(self) -> bool:
+        if not self._peer_tuple:
+            return bool(self._server_peers)
         return self._rtt.is_connected()
 
     # ---- metrics (for dashboard) ----
@@ -3724,6 +4116,26 @@ class QuicSession(ISession):
         except Exception:
             return None
 
+    @staticmethod
+    def _extract_quic_peer_addr(proto: Any) -> Tuple[Optional[str], Optional[int]]:
+        try:
+            quic = getattr(proto, "_quic", None)
+            paths = getattr(quic, "_network_paths", None) if quic is not None else None
+            if paths:
+                addr = getattr(paths[0], "addr", None)
+                if isinstance(addr, tuple) and len(addr) >= 2:
+                    return str(addr[0]), int(addr[1])
+        except Exception:
+            pass
+        try:
+            transport = getattr(proto, "_transport", None)
+            peer = transport.get_extra_info("peername") if transport is not None else None
+            if isinstance(peer, tuple) and len(peer) >= 2:
+                return str(peer[0]), int(peer[1])
+        except Exception:
+            pass
+        return None, None
+
     def get_overlay_peers_snapshot(self) -> list[dict]:
         if self._peer_tuple:
             return [{
@@ -3744,25 +4156,156 @@ class QuicSession(ISession):
             "rtt_est_ms": None,
             "listening": True,
         }]
-        peer_label = self._format_peer_label(self._peer_host, self._peer_port)
-        if peer_label or self.is_connected():
+        mux_by_peer: Dict[int, list[int]] = {}
+        for mux_chan, mapped in self._server_chan_to_peer.items():
+            try:
+                peer_id, _peer_chan = mapped
+                mux_by_peer.setdefault(int(peer_id), []).append(int(mux_chan))
+            except Exception:
+                continue
+
+        peer_ids: set[int] = set(int(p) for p in self._server_peers.keys())
+        peer_ids.update(int(p) for p in mux_by_peer.keys())
+        for peer_id in sorted(peer_ids):
+            ctx = self._server_peers.get(peer_id, {})
+            host = ctx.get("peer_host") if isinstance(ctx, dict) else None
+            port = ctx.get("peer_port") if isinstance(ctx, dict) else None
+            if (host is None or port is None) and isinstance(ctx, dict):
+                proto = ctx.get("proto")
+                host, port = self._extract_quic_peer_addr(proto)
+                if host is not None and port is not None:
+                    ctx["peer_host"], ctx["peer_port"] = host, port
+            peer_label = self._format_peer_label(host, port)
+            rtt = ctx.get("rtt") if isinstance(ctx, dict) else None
             rows.append({
-                "peer_id": 0,
-                "connected": bool(self.is_connected()),
-                "state": "connected" if self.is_connected() else "connecting",
+                "peer_id": peer_id,
+                "connected": bool(peer_id in self._server_peers),
+                "state": "connected" if peer_id in self._server_peers else "connecting",
                 "peer": peer_label,
-                "mux_chans": [],
-                "rtt_est_ms": getattr(self._rtt, "rtt_est_ms", None),
+                "mux_chans": sorted(mux_by_peer.get(peer_id, [])),
+                "rtt_est_ms": getattr(rtt, "rtt_est_ms", None),
             })
         return rows
 
+    def _alloc_server_peer_id(self) -> int:
+        peer_id = self._server_next_peer_id
+        while peer_id in self._server_peers:
+            peer_id += 1
+            if peer_id > 0xFFFF:
+                peer_id = 1
+        self._server_next_peer_id = 1 if peer_id >= 0xFFFF else (peer_id + 1)
+        return peer_id
+
+    def _alloc_server_mux_chan(self) -> int:
+        chan = self._server_next_mux_chan
+        while chan in self._server_chan_to_peer:
+            chan += 2
+            if chan > 0xFFFF:
+                chan = 1
+        self._server_next_mux_chan = 1 if chan >= 0xFFFF else (chan + 2)
+        return chan
+
+    def _rewrite_mux_chan_id(self, payload: bytes, new_chan: int) -> bytes:
+        mux_hdr = struct.Struct(">HBHBH")
+        if len(payload) < mux_hdr.size:
+            return payload
+        try:
+            _old_chan, proto, counter, mtype, dlen = mux_hdr.unpack(payload[:mux_hdr.size])
+        except Exception:
+            return payload
+        if len(payload) < mux_hdr.size + dlen:
+            return payload
+        return mux_hdr.pack(new_chan, proto, counter, mtype, dlen) + payload[mux_hdr.size:mux_hdr.size + dlen]
+
+    def _server_rewrite_inbound_app(self, peer_id: int, payload: bytes) -> bytes:
+        mux_hdr = struct.Struct(">HBHBH")
+        if len(payload) < mux_hdr.size:
+            return payload
+        try:
+            peer_chan, _proto, _counter, _mtype, dlen = mux_hdr.unpack(payload[:mux_hdr.size])
+        except Exception:
+            return payload
+        if len(payload) < mux_hdr.size + dlen:
+            return payload
+        key = (int(peer_id), int(peer_chan))
+        mux_chan = self._server_peer_chan_to_mux.get(key)
+        if mux_chan is None:
+            mux_chan = int(peer_chan)
+            mapped = self._server_chan_to_peer.get(mux_chan)
+            if mapped is not None and mapped != key:
+                mux_chan = self._alloc_server_mux_chan()
+            self._server_peer_chan_to_mux[key] = mux_chan
+            self._server_chan_to_peer[mux_chan] = key
+        return self._rewrite_mux_chan_id(payload, mux_chan)
+
+    def _server_unregister_peer_channels(self, peer_id: int) -> None:
+        for key, mux_chan in list(self._server_peer_chan_to_mux.items()):
+            if int(key[0]) != int(peer_id):
+                continue
+            self._server_peer_chan_to_mux.pop(key, None)
+            self._server_chan_to_peer.pop(mux_chan, None)
+
+    def _resolve_server_send_target(self, payload: bytes, peer_id: Optional[int] = None) -> Optional[Tuple[int, bytes]]:
+        mux_hdr = struct.Struct(">HBHBH")
+        if len(payload) < mux_hdr.size:
+            return None
+        try:
+            mux_chan, _proto, _counter, _mtype, dlen = mux_hdr.unpack(payload[:mux_hdr.size])
+        except Exception:
+            return None
+        if len(payload) < mux_hdr.size + dlen:
+            return None
+        target_peer_id = int(peer_id) if peer_id is not None else None
+        mapped = self._server_chan_to_peer.get(int(mux_chan))
+        if target_peer_id is None and mapped is not None:
+            target_peer_id = int(mapped[0])
+        if target_peer_id is None:
+            if len(self._server_peers) == 1:
+                target_peer_id = next(iter(self._server_peers.keys()))
+            else:
+                return None
+        target_ctx = self._server_peers.get(target_peer_id)
+        if not target_ctx:
+            return None
+        peer_chan = int(mux_chan)
+        if mapped is not None:
+            if int(mapped[0]) != target_peer_id:
+                return None
+            peer_chan = int(mapped[1])
+        else:
+            key = (target_peer_id, int(mux_chan))
+            self._server_peer_chan_to_mux[key] = int(mux_chan)
+            self._server_chan_to_peer[int(mux_chan)] = key
+        return target_peer_id, self._rewrite_mux_chan_id(payload, peer_chan) if peer_chan != int(mux_chan) else payload
+
+    def _update_server_overlay_connected(self) -> None:
+        connected = bool(self._server_peers)
+        if connected:
+            self._server_connected_evt.set()
+        else:
+            self._server_connected_evt.clear()
+        self._set_overlay_connected(connected)
+
     # ---- data path (APP) ----
-    def send_app(self, payload: bytes) -> int:
+    def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
         if not payload:
             return 0
         if len(payload) > self._max_app:
             self._log.error(f"[QUIC/TX] ({self._probe_id}) app payload too large ({len(payload)} > {self._max_app}); drop")
             return 0
+        if not self._peer_tuple:
+            target = self._resolve_server_send_target(payload, peer_id=peer_id)
+            if target is None:
+                self._log.debug(f"[QUIC/TX] ({self._probe_id}) drop unroutable server APP len={len(payload)} peer_id={peer_id}")
+                return 0
+            target_peer_id, routed_payload = target
+            ctx = self._server_peers.get(target_peer_id)
+            if not ctx:
+                return 0
+            wire = self._LEN.pack(len(routed_payload) + 1) + bytes([self._K_APP]) + routed_payload
+            if not self._send_wire_ctx(ctx, wire):
+                return 0
+            return len(payload)
         body = bytes([self._K_APP]) + payload
         wire = self._LEN.pack(len(body)) + body
 
@@ -3946,6 +4489,41 @@ class QuicSession(ISession):
         Adopt the live QUIC connection. Only the CLIENT proactively opens a stream;
         the SERVER waits and adopts the first incoming stream id.
         """
+        if not self._peer_tuple:
+            peer_id = self._alloc_server_peer_id()
+            ctx = {
+                "peer_id": peer_id,
+                "proto": proto,
+                "quic": getattr(proto, "_quic", None),
+                "stream_id": None,
+                "rx_buf": bytearray(),
+                "rtt": StreamRTT(log=self._log.getChild(f"rtt.{peer_id}")),
+                "connected": True,
+                "peer_host": None,
+                "peer_port": None,
+            }
+            self._server_peers[peer_id] = ctx
+            self._server_proto_to_peer_id[id(proto)] = peer_id
+            try:
+                tr = getattr(proto, "_transport", None)
+                laddr = tr.get_extra_info("sockname") if tr else None
+                rhost, rport = self._extract_quic_peer_addr(proto)
+                raddr = (rhost, rport) if rhost is not None and rport is not None else None
+            except Exception:
+                laddr = raddr = None
+            self._log.info(f"[QUIC-SESSION] ({self._probe_id}) accept: peer_id={peer_id} local={laddr} peer={raddr}")
+            try:
+                if isinstance(raddr, tuple) and len(raddr) >= 2:
+                    ctx["peer_host"], ctx["peer_port"] = raddr[0], int(raddr[1])
+                    self._peer_host, self._peer_port = raddr[0], int(raddr[1])
+                    if callable(self._on_peer_set_cb):
+                        try: self._on_peer_set_cb(self._peer_host, self._peer_port)
+                        except Exception: pass
+            except Exception:
+                pass
+            self._update_server_overlay_connected()
+            return
+
         # Close any previous overlay peer
         try:
             if self._proto:
@@ -4011,6 +4589,45 @@ class QuicSession(ISession):
         don't have one yet; if we already picked a different id, switch to the incoming
         id so both peers use the *same* bidirectional stream.
         """
+        if not self._peer_tuple:
+            peer_id = self._server_proto_to_peer_id.get(id(proto))
+            if peer_id is None:
+                return
+            ctx = self._server_peers.get(peer_id)
+            if ctx is None:
+                return
+
+            if isinstance(event, self._quic_event_negotiated):
+                self._log.info(f"[QUIC/RX] ({self._probe_id}) peer_id={peer_id} ALPN negotiated: {getattr(event, 'alpn_protocol', '?')}")
+                return
+
+            if isinstance(event, self._quic_event_handshake):
+                self._log.debug(f"[QUIC/RX] ({self._probe_id}) peer_id={peer_id} handshake completed")
+                return
+
+            if isinstance(event, self._quic_event_stream_data):
+                sid = event.stream_id
+                if ctx.get("peer_host") is None or ctx.get("peer_port") is None:
+                    host, port = self._extract_quic_peer_addr(proto)
+                    if host is not None and port is not None:
+                        ctx["peer_host"], ctx["peer_port"] = host, port
+                if ctx.get("stream_id") is None:
+                    ctx["stream_id"] = sid
+                    self._log.info(f"[QUIC/STREAM] ({self._probe_id}) peer_id={peer_id} adopted incoming stream_id={sid}")
+                elif sid != ctx.get("stream_id"):
+                    old = ctx.get("stream_id")
+                    ctx["stream_id"] = sid
+                    self._log.info(f"[QUIC/STREAM] ({self._probe_id}) peer_id={peer_id} switching stream_id {old} -> {sid} to match peer")
+                self._on_stream_bytes(event.data, ctx=ctx, peer_id=peer_id)
+                return
+
+            if isinstance(event, self._quic_event_terminated):
+                self._log.info(f"[QUIC/RX] ({self._probe_id}) peer_id={peer_id} connection terminated: {event.error_code} {event.reason_phrase!r}")
+                if self._loop is not None:
+                    self._loop.create_task(self._close_server_peer(peer_id))
+                return
+            return
+
         if self._proto is not proto:
             return
 
@@ -4057,7 +4674,7 @@ class QuicSession(ISession):
             self._start_reconnect_loop()
 
     # ---- stream reassembly (LEN + KIND) ----
-    def _on_stream_bytes(self, data: bytes) -> None:
+    def _on_stream_bytes(self, data: bytes, ctx: Optional[dict] = None, peer_id: Optional[int] = None) -> None:
         if not data:
             return
         self._bump_rx(data)
@@ -4065,19 +4682,20 @@ class QuicSession(ISession):
             try: self._on_peer_rx(len(data))
             except Exception: pass
 
-        self._rx_buf += data
+        rx_buf = self._rx_buf if ctx is None else ctx.setdefault("rx_buf", bytearray())
+        rx_buf += data
         while True:
-            if len(self._rx_buf) < self._LEN.size:
+            if len(rx_buf) < self._LEN.size:
                 return
-            (n,) = self._LEN.unpack_from(self._rx_buf, 0)
+            (n,) = self._LEN.unpack_from(rx_buf, 0)
             if n <= 0:
-                del self._rx_buf[:self._LEN.size]
+                del rx_buf[:self._LEN.size]
                 continue
             need = self._LEN.size + n
-            if len(self._rx_buf) < need:
+            if len(rx_buf) < need:
                 return
-            body = bytes(self._rx_buf[self._LEN.size:need])
-            del self._rx_buf[:need]
+            body = bytes(rx_buf[self._LEN.size:need])
+            del rx_buf[:need]
 
             kind = body[0]
             payload = body[1:]
@@ -4087,28 +4705,46 @@ class QuicSession(ISession):
                     try: self._on_app_from_peer_bytes(len(payload))
                     except Exception: pass
                 if callable(self._on_app):
-                    try: self._on_app(payload)
+                    try:
+                        if peer_id is not None:
+                            payload = self._server_rewrite_inbound_app(peer_id, payload)
+                            self._on_app(payload, peer_id=peer_id)
+                        else:
+                            self._on_app(payload)
+                    except TypeError:
+                        try:
+                            self._on_app(payload)
+                        except Exception as e:
+                            self._log.debug(f"[QUIC/RX] ({self._probe_id}) app callback err: {e!r}")
                     except Exception as e:
                         self._log.debug(f"[QUIC/RX] ({self._probe_id}) app callback err: {e!r}")
 
             elif kind == self._K_PING:
                 if len(payload) >= 16:
                     tx_ns, echo_ns = struct.unpack(">QQ", payload[:16])
-                    self._rtt.on_ping_received(tx_ns)
-                    if echo_ns:
-                        self._rtt.on_pong_received(echo_ns)
-                    self._send_pong_frame(tx_ns)
+                    rtt = self._rtt if ctx is None else ctx.get("rtt")
+                    if rtt is not None:
+                        rtt.on_ping_received(tx_ns)
+                        if echo_ns:
+                            rtt.on_pong_received(echo_ns)
+                    if ctx is None:
+                        self._send_pong_frame(tx_ns)
+                    else:
+                        self._send_pong_frame_for_peer(ctx, tx_ns)
                 else:
                     self._log.debug(f"[QUIC/RX] ({self._probe_id}) malformed PING len={len(payload)}")
 
             elif kind == self._K_PONG:
                 if len(payload) >= 8:
                     (echo_tx_ns,) = struct.unpack(">Q", payload[:8])
-                    self._rtt.on_pong_received(echo_tx_ns)
-                    was = self._overlay_connected
-                    now = self._rtt.is_connected()
-                    if now != was:
-                        self._set_overlay_connected(now)
+                    rtt = self._rtt if ctx is None else ctx.get("rtt")
+                    if rtt is not None:
+                        rtt.on_pong_received(echo_tx_ns)
+                    if ctx is None:
+                        was = self._overlay_connected
+                        now = self._rtt.is_connected()
+                        if now != was:
+                            self._set_overlay_connected(now)
                 else:
                     self._log.debug(f"[QUIC/RX] ({self._probe_id}) malformed PONG len={len(payload)}")
 
@@ -4116,6 +4752,24 @@ class QuicSession(ISession):
                 self._log.debug(f"[QUIC/RX] ({self._probe_id}) unknown KIND=0x{kind:02x} n={n}")
 
     # ---- sending helpers ----
+    def _send_wire_ctx(self, ctx: dict, wire: bytes) -> bool:
+        quic = ctx.get("quic")
+        stream_id = ctx.get("stream_id")
+        proto = ctx.get("proto")
+        if quic is None or stream_id is None or proto is None or not wire:
+            return False
+        try:
+            quic.send_stream_data(int(stream_id), wire, end_stream=False)
+            proto.transmit()
+            self._bump_tx(wire)
+            if self._on_peer_tx:
+                try: self._on_peer_tx(len(wire))
+                except Exception: pass
+            return True
+        except Exception as e:
+            self._log.debug(f"[QUIC/TX] ({self._probe_id}) server send_stream_data error peer_id={ctx.get('peer_id')}: {e!r}")
+            return False
+
     def _send_wire(self, wire: bytes) -> None:
         if not self._quic or self._stream_id is None or not wire:
             return
@@ -4173,6 +4827,12 @@ class QuicSession(ISession):
             except Exception as e: 
                 pass
         self._log.debug(f"[QUIC/TX] ({self._probe_id}) PONG")
+
+    def _send_pong_frame_for_peer(self, ctx: dict, echo_tx_ns: int) -> None:
+        body = bytes([self._K_PONG]) + self._rtt.build_pong_bytes(echo_tx_ns)
+        wire = self._LEN.pack(len(body)) + body
+        self._log.debug(f"[QUIC/GUARD] ({self._probe_id}) PONG tx peer_id={ctx.get('peer_id')}: echo_tx_ns={echo_tx_ns}")
+        self._send_wire_ctx(ctx, wire)
 
     # ---- counters/logging ----
     def _reset_counters(self) -> None:
@@ -4235,13 +4895,34 @@ class QuicSession(ISession):
         if self._overlay_connected == v:
             return
         self._overlay_connected = v
-        self._log.info(f"[QUIC-SESSION] ({self._probe_id}) overlay -> {'CONNECTED' if v else 'DISCONNECTED'} (RTT)")
+        mode = "RTT" if self._peer_tuple else "peer-count"
+        self._log.info(f"[QUIC-SESSION] ({self._probe_id}) overlay -> {'CONNECTED' if v else 'DISCONNECTED'} ({mode})")
         if v and callable(self._on_peer_set_cb):
             try: self._on_peer_set_cb(self._peer_host, self._peer_port)
             except Exception: pass
         if callable(self._on_state):
             try: self._on_state(v)
             except Exception: pass
+
+    async def _close_server_peer(self, peer_id: int) -> None:
+        ctx = self._server_peers.pop(peer_id, None)
+        if not ctx:
+            return
+        proto = ctx.get("proto")
+        if proto is not None:
+            self._server_proto_to_peer_id.pop(id(proto), None)
+        self._server_unregister_peer_channels(peer_id)
+        if callable(self._on_peer_disconnect_cb):
+            try:
+                self._on_peer_disconnect_cb(peer_id)
+            except Exception as e:
+                self._log.debug(f"[QUIC-SESSION] ({self._probe_id}) peer_disconnect callback err: {e!r}")
+        try:
+            if proto is not None:
+                proto.close()
+        except Exception:
+            pass
+        self._update_server_overlay_connected()
 
 # -----------------------------------------------------------------------------
 
@@ -4596,7 +5277,7 @@ class WebSocketSession(ISession):
             return SessionMetrics()
 
     # ---- Data path (APP) ------------------------------------------------------
-    def send_app(self, payload: bytes) -> int:
+    def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
         if not payload:
             return 0
         wire = bytes([self._K_APP]) + payload

@@ -112,7 +112,7 @@ python tests/integration/test_overlay_e2e.py --log-dir /tmp/overlay-e2e-logs
 
 Mode inference when `--mode` is omitted:
 
-- if only concurrent TCP case(s) are selected (currently `case13_*`, `case14_*`, or `case15_*`), the concurrent runner is used,
+- if only concurrent TCP case(s) are selected (currently `case13_*`, `case14_*`, `case15_*`, `case16_*`, or `case17_*`), the concurrent runner is used,
 - if selected cases are reconnect-only localhost variants, reconnect runner is used,
 - otherwise the basic suite path is used.
 
@@ -359,23 +359,47 @@ For every case in `RECONNECT_CASES`, the reconnect runner validates this sequenc
 
 This is the suite that validates restart resilience and admin-plane state transitions, distinct from the dedicated TCP-close/UDP-resume regression above.
 
+### Case 16: `case16_overlay_listener_tcp_two_clients_concurrent_udp_tcp`
+
+- Scope: listener mode with two peer clients, both on TCP, both carrying mixed UDP and TCP services.
+- What is under test: multi-client TCP listener behavior, concurrent TCP channels, multiple own/remote service publications, and dual-client coexistence on one TCP listener socket.
+- Pass criteria:
+- both peer clients connect to the same listener
+- all configured TCP probes across both clients return the correct responses
+- all configured UDP probes across both clients return the correct responses
+- server `/api/connections` exposes the expected active TCP rows during the held-open phase
+- listener `/api/peers` reports both TCP peers with distinct peer endpoints
+- Current status:
+- documented as expected-failure coverage, because the current TCP listener implementation keeps one accepted overlay peer session at a time instead of separate per-peer listener-side state
+
+### Case 17: `case17_overlay_listener_quic_two_clients_concurrent_udp_tcp`
+
+- Scope: listener mode with two peer clients, both on QUIC, both carrying mixed UDP and TCP services.
+- What is under test: multi-client QUIC listener behavior, concurrent TCP channels, multiple own/remote service publications, and dual-client coexistence on one QUIC listener socket.
+- Pass criteria:
+- both peer clients connect to the same listener
+- all configured TCP probes across both clients return the correct responses
+- all configured UDP probes across both clients return the correct responses
+- server `/api/connections` exposes the expected active TCP rows during the held-open phase
+- listener `/api/peers` reports both QUIC peers with distinct peer endpoints
+
 ---
 
 ## Consolidated test catalog
 
-This repository currently collects **94 pytest tests**.
+This repository currently collects **99 pytest tests**.
 
 Observed execution modes:
 
 - Default run: `pytest -q`
 - Overlay-only run: `pytest -q tests/integration/test_overlay_e2e.py`
-- Parallel overlay run: `pytest -q -n 16 tests/integration/test_overlay_e2e.py` -> **46 passed in about 2 minutes**
+- Parallel overlay run: `pytest -q -n 16 tests/integration/test_overlay_e2e.py`
 
 Interpretation:
 
 - the default run now includes the overlay subprocess/socket tests instead of skipping them behind an environment flag
 - whether all tests pass depends on the execution environment supporting subprocesses, sockets, and the required transport dependencies
-- the overlay integration file currently collects **46 pytest tests**
+- the overlay integration file currently collects **50 pytest tests**
 
 ### Unit tests
 
@@ -529,6 +553,8 @@ All rows in this section use the overlay subprocess/socket harness.
 | Concurrent case13 WS single peer mixed channels | Verify one WS peer can carry several concurrent TCP channels and extra UDP mappings. | Five held-open TCP channels and two UDP mappings all succeed with correct connection visibility. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels[case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels]'` |
 | Concurrent case14 WS and myudp two-client listener | Verify a mixed WS plus myudp listener supports two simultaneous peers with TCP and UDP services. | Both clients connect, all TCP/UDP probes succeed, and active TCP rows are visible on the server. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels[case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp]'` |
 | Concurrent case15 myudp two-client listener | Verify a pure-myudp listener supports two simultaneous peers with TCP and UDP services. | Both myudp clients connect, all TCP/UDP probes succeed, and `/api/peers` reports both peer endpoints. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels[case15_overlay_listener_myudp_two_clients_concurrent_udp_tcp]'` |
+| Concurrent case16 TCP two-client listener | Verify a pure-TCP listener can host two simultaneous peers with mixed TCP and UDP services. | Expected-failure coverage today: target behavior is both TCP clients connect, all probes succeed, active TCP rows are visible, and `/api/peers` reports two distinct TCP peer endpoints. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels[case16_overlay_listener_tcp_two_clients_concurrent_udp_tcp]'` |
+| Concurrent case17 QUIC two-client listener | Verify a pure-QUIC listener can host two simultaneous peers with mixed TCP and UDP services. | Both QUIC clients connect, all TCP/UDP probes succeed, active TCP rows are visible, and `/api/peers` reports two distinct QUIC peer endpoints. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels[case17_overlay_listener_quic_two_clients_concurrent_udp_tcp]'` |
 | Restart regression on case13 | Verify a server restart closes active TCP but allows UDP to resume on the same client UDP socket. | TCP closes across restart, UDP resumes after reconnect, and the UDP source port stays stable. | `pytest -q 'tests/integration/test_overlay_e2e.py::test_overlay_e2e_server_restart_closes_tcp_preserves_udp[case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels]'` |
 
 #### `tests/integration/test_overlay_e2e.py` admin auth cases
@@ -547,4 +573,6 @@ All rows in this section use the overlay subprocess/socket harness.
 | CLI routing infers concurrent mode from case13 | Verify selecting case13 auto-picks concurrent mode. | Parsed CLI args select `case13` and infer the concurrent runner. | `pytest -q tests/integration/test_overlay_e2e.py::test_overlay_e2e_cli_routing_infers_concurrent_mode_from_case13` |
 | CLI routing infers concurrent mode from case14 | Verify selecting case14 auto-picks concurrent mode. | Parsed CLI args select `case14` and infer the concurrent runner. | `pytest -q tests/integration/test_overlay_e2e.py::test_overlay_e2e_cli_routing_infers_concurrent_mode_from_case14` |
 | CLI routing infers concurrent mode from case15 | Verify selecting case15 auto-picks concurrent mode. | Parsed CLI args select `case15` and infer the concurrent runner. | `pytest -q tests/integration/test_overlay_e2e.py::test_overlay_e2e_cli_routing_infers_concurrent_mode_from_case15` |
+| CLI routing infers concurrent mode from case16 | Verify selecting case16 auto-picks concurrent mode. | Parsed CLI args select `case16` and infer the concurrent runner. | `pytest -q tests/integration/test_overlay_e2e.py::test_overlay_e2e_cli_routing_infers_concurrent_mode_from_case16` |
+| CLI routing infers concurrent mode from case17 | Verify selecting case17 auto-picks concurrent mode. | Parsed CLI args select `case17` and infer the concurrent runner. | `pytest -q tests/integration/test_overlay_e2e.py::test_overlay_e2e_cli_routing_infers_concurrent_mode_from_case17` |
 | CLI routing keeps explicit mode override | Verify explicit `--mode` is not replaced by inference. | Parsed CLI args preserve the caller-specified mode override. | `pytest -q tests/integration/test_overlay_e2e.py::test_overlay_e2e_cli_routing_keeps_explicit_mode_override` |
