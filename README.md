@@ -79,6 +79,14 @@ This setup fits a NAS or home server that can make outgoing connections but cann
 
 Use a small VPS listener config first, then finish the published service mapping in WebAdmin:
 
+Issue before ObstacleBridge:
+
+![NAS issue example](docs/NAS_Issue.svg)
+
+Solution with a public ObstacleBridge server:
+
+![NAS solution example](docs/NAS_solution.svg)
+
 **Public VPS initial config**
 ```ini
 overlay_transport = myudp
@@ -115,6 +123,14 @@ This fits environments where raw VPN UDP is blocked or degraded, but HTTP(S)-sha
 
 Start with a WebSocket-based config and then use WebAdmin to define the local UDP service recreation:
 
+Issue before ObstacleBridge:
+
+![Client issue example](docs/Client_issue.svg)
+
+Solution with an ObstacleBridge WebSocket bridge:
+
+![Client solution example](docs/Client_solution.svg)
+
 **Public bridge config**
 ```ini
 overlay_transport = ws
@@ -146,6 +162,14 @@ Then use WebAdmin to add an `own_servers` entry that recreates the local WireGua
 This fits paths where UDP still passes, but loss and retransmission pressure make conventional transports perform badly.
 
 Start with `myudp` in the config file and use WebAdmin to finish the local service mapping:
+
+Issue before ObstacleBridge:
+
+![Client2 issue example](docs/Client2_issue.svg)
+
+Solution with an ObstacleBridge `myudp` bridge:
+
+![Client2 solution example](docs/Client2_solution.svg)
 
 **Public bridge config**
 ```ini
