@@ -473,44 +473,90 @@ function configValueToEditor(value) {
   return JSON.stringify(value);
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function configValueToPreview(value) {
+  if (value == null) return 'null';
+  return configValueToEditor(value);
+}
+
+function isStructuredConfigValue(value) {
+  return Array.isArray(value) || (value != null && typeof value === 'object');
+}
+
+function isLongConfigValue(rawValue) {
+  return String(rawValue || '').length > 72 || String(rawValue || '').includes('\\n');
+}
+
 function renderSecretInput(key) {
   return `<input type="password" class="config-editor mono" data-config-key="${key}" data-secret="true" placeholder="Leave blank to keep current value" />`;
+}
+
+function renderTextConfigEditor(key, currentValue) {
+  const currentRaw = configValueToEditor(currentValue);
+  const escapedValue = escapeHtml(currentRaw);
+  const multiline = isStructuredConfigValue(currentValue) || isLongConfigValue(currentRaw);
+  if (multiline) {
+    return `<textarea class="config-editor config-editor-textarea mono" data-config-key="${key}" rows="4">${escapedValue}</textarea>`;
+  }
+  return `<input class="config-editor mono" data-config-key="${key}" value="${escapedValue}" />`;
+}
+
+function renderConfigValueCell(item, current) {
+  const key = item.key;
+  const isSecret = Boolean(item.secret);
+  const isLevelSetting = isLoggingLevelSetting(key, current, item.default);
+  const isLogFileSetting = isLogFileConfigSetting(key);
+  const isDirectEntrySetting = isDirectEntryConfigSetting(key);
+  const isBooleanSetting = isBooleanConfigSetting(current, item.default);
+  const hasChoices = !isLogFileSetting
+    && !isDirectEntrySetting
+    && Array.isArray(item.choices)
+    && item.choices.length > 0;
+  const previewText = isSecret ? 'hidden' : configValueToPreview(current);
+  const previewClass = isSecret ? 'config-value-preview config-secret-value' : 'config-value-preview mono';
+  const editorHtml = isSecret
+    ? renderSecretInput(key)
+    : hasChoices
+      ? renderChoiceSelect(key, current, item.choices)
+      : (isBooleanSetting
+        ? renderBooleanSelect(key, current)
+        : (isLevelSetting
+          ? renderLogLevelSelect(key, current)
+          : renderTextConfigEditor(key, current)));
+  return `
+    <div class="config-value-cell" data-config-cell="${key}">
+      <button class="config-value-display" type="button" data-config-activate="${key}" aria-label="Edit ${key}">
+        <span class="${previewClass}" data-config-preview="${key}" title="${escapeHtml(previewText)}">${escapeHtml(previewText)}</span>
+      </button>
+      <div class="config-value-editor hidden" data-config-editor-wrap="${key}">
+        ${editorHtml}
+        <div class="config-inline-actions">
+          <button class="btn btn-secondary config-inline-btn" type="button" data-config-cancel="${key}">Cancel</button>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function renderConfigRows(items, config) {
   return (items || []).map((item) => {
     const key = item.key;
     const current = Object.prototype.hasOwnProperty.call(config, key) ? config[key] : null;
-    const isSecret = Boolean(item.secret);
-    const currentRaw = isSecret ? '' : configValueToEditor(current);
     const defaultRaw = configValueToEditor(item.default);
-    const isLevelSetting = isLoggingLevelSetting(key, current, item.default);
-    const isLogFileSetting = isLogFileConfigSetting(key);
-    const isDirectEntrySetting = isDirectEntryConfigSetting(key);
-    const isBooleanSetting = isBooleanConfigSetting(current, item.default);
-    const hasChoices = !isLogFileSetting
-      && !isDirectEntrySetting
-      && Array.isArray(item.choices)
-      && item.choices.length > 0;
-    const editorHtml = isSecret
-      ? renderSecretInput(key)
-      : hasChoices
-      ? renderChoiceSelect(key, current, item.choices)
-      : (isBooleanSetting
-        ? renderBooleanSelect(key, current)
-        : (isLevelSetting
-          ? renderLogLevelSelect(key, current)
-          : `<input class="config-editor mono" data-config-key="${key}" value="${currentRaw.replace(/"/g, '&quot;')}" />`));
-    const currentValueHtml = isSecret
-      ? '<span class="config-secret-value">hidden</span>'
-      : currentRaw;
     return `
-      <tr>
+      <tr data-config-row="${key}">
         <td class="mono">${key}</td>
         <td>${item.description || '(no description)'}</td>
         <td class="mono">${defaultRaw}</td>
-        <td class="mono">${currentValueHtml}</td>
-        <td>${editorHtml}</td>
+        <td>${renderConfigValueCell(item, current)}</td>
       </tr>
     `;
   }).join('');
@@ -531,8 +577,7 @@ function renderConfigCard(title, rowsHtml) {
               <th>Key</th>
               <th>Description</th>
               <th>Default</th>
-              <th>Current</th>
-              <th>Edit</th>
+              <th>Value</th>
             </tr>
           </thead>
           <tbody>${rowsHtml}</tbody>
@@ -561,6 +606,7 @@ function renderConfigSections(schema, config) {
   });
 
   root.innerHTML = cards.join('');
+  initConfigEditors();
 }
 
 const LOG_LEVEL_OPTIONS = ['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG', 'NOTSET'];
@@ -629,6 +675,117 @@ function renderChoiceSelect(key, currentValue, choices) {
     return `<option value="${value}"${selected}>${label}</option>`;
   }).join('');
   return `<select class="config-editor mono" data-config-key="${key}">${options}</select>`;
+}
+
+function setConfigRowEditing(key, editing) {
+  const row = document.querySelector(`[data-config-row="${CSS.escape(key)}"]`);
+  if (!row) return;
+  row.classList.toggle('config-row-editing', editing);
+  const editorWrap = row.querySelector(`[data-config-editor-wrap="${CSS.escape(key)}"]`);
+  const display = row.querySelector(`[data-config-activate="${CSS.escape(key)}"]`);
+  editorWrap?.classList.toggle('hidden', !editing);
+  display?.classList.toggle('hidden', editing);
+  if (editing) {
+    const input = row.querySelector('.config-editor');
+    input?.focus();
+    if (input?.tagName === 'TEXTAREA') {
+      input.selectionStart = input.value.length;
+      input.selectionEnd = input.value.length;
+    }
+  }
+}
+
+function resetConfigEditorValue(key) {
+  const input = document.querySelector(`.config-editor[data-config-key="${CSS.escape(key)}"]`);
+  if (!input) return;
+  const isSecret = input.getAttribute('data-secret') === 'true';
+  if (isSecret) {
+    input.value = '';
+    return;
+  }
+  input.value = configValueToEditor(configState.config ? configState.config[key] : null);
+}
+
+function refreshConfigPreview(key) {
+  const preview = document.querySelector(`[data-config-preview="${CSS.escape(key)}"]`);
+  const input = document.querySelector(`.config-editor[data-config-key="${CSS.escape(key)}"]`);
+  const row = document.querySelector(`[data-config-row="${CSS.escape(key)}"]`);
+  if (!preview || !input || !row) return;
+
+  const isSecret = input.getAttribute('data-secret') === 'true';
+  if (isSecret) {
+    const dirty = Boolean(input.value);
+    preview.textContent = dirty ? 'updated' : 'hidden';
+    preview.title = dirty ? 'updated' : 'hidden';
+    row.classList.toggle('config-row-dirty', dirty);
+    return;
+  }
+
+  const raw = input.value || '';
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (_err) {
+    preview.textContent = raw || '(invalid JSON)';
+    preview.title = raw || '(invalid JSON)';
+    row.classList.add('config-row-invalid');
+    row.classList.remove('config-row-dirty');
+    return;
+  }
+
+  const previewText = configValueToPreview(parsed);
+  const current = configState.config ? configState.config[key] : undefined;
+  const dirty = JSON.stringify(parsed) !== JSON.stringify(current);
+  preview.textContent = previewText;
+  preview.title = previewText;
+  row.classList.toggle('config-row-dirty', dirty);
+  row.classList.remove('config-row-invalid');
+}
+
+function initConfigEditors() {
+  document.querySelectorAll('[data-config-activate]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const key = button.getAttribute('data-config-activate');
+      if (key) setConfigRowEditing(key, true);
+    });
+  });
+
+  document.querySelectorAll('[data-config-cancel]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const key = button.getAttribute('data-config-cancel');
+      if (!key) return;
+      resetConfigEditorValue(key);
+      refreshConfigPreview(key);
+      setConfigRowEditing(key, false);
+    });
+  });
+
+  document.querySelectorAll('.config-editor[data-config-key]').forEach((input) => {
+    const key = input.getAttribute('data-config-key');
+    if (!key) return;
+    const onInput = () => refreshConfigPreview(key);
+    input.addEventListener('input', onInput);
+    input.addEventListener('change', onInput);
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        resetConfigEditorValue(key);
+        refreshConfigPreview(key);
+        setConfigRowEditing(key, false);
+      }
+    });
+    if (input.tagName !== 'SELECT') {
+      input.addEventListener('blur', () => {
+        window.setTimeout(() => {
+          const row = document.querySelector(`[data-config-row="${CSS.escape(key)}"]`);
+          if (!row) return;
+          if (row.contains(document.activeElement)) return;
+          setConfigRowEditing(key, false);
+        }, 0);
+      });
+    }
+    refreshConfigPreview(key);
+  });
 }
 
 async function loadLogs() {

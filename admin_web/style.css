@@ -500,6 +500,12 @@ h1 {
   padding: 8px 10px;
 }
 
+.config-editor-textarea {
+  min-height: 120px;
+  resize: vertical;
+  white-space: pre;
+}
+
 .config-message {
   min-height: 20px;
   margin: 0 0 10px;
@@ -510,6 +516,68 @@ h1 {
 .config-secret-value {
   color: var(--muted);
   font-style: italic;
+}
+
+.config-value-cell {
+  min-width: 320px;
+}
+
+.config-value-display {
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.config-value-preview {
+  display: block;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(120, 170, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 10px;
+  white-space: pre-wrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.45;
+  max-height: 4.6em;
+}
+
+.config-value-display:hover .config-value-preview,
+.config-row-editing .config-value-preview {
+  border-color: rgba(79, 209, 197, 0.3);
+  background: rgba(79, 209, 197, 0.06);
+}
+
+.config-value-editor {
+  display: grid;
+  gap: 10px;
+}
+
+.config-inline-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.config-inline-btn {
+  padding: 8px 12px;
+}
+
+.config-row-editing td {
+  vertical-align: top;
+}
+
+.config-row-dirty .config-value-preview {
+  border-color: rgba(79, 209, 197, 0.4);
+  box-shadow: inset 0 0 0 1px rgba(79, 209, 197, 0.12);
+}
+
+.config-row-invalid .config-editor,
+.config-row-invalid .config-value-preview {
+  border-color: rgba(239, 68, 68, 0.5);
 }
 
 .meta-box {
@@ -562,6 +630,10 @@ h1 {
 
   .metric-value {
     font-size: 28px;
+  }
+
+  .config-value-cell {
+    min-width: 240px;
   }
 }
 
