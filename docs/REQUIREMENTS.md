@@ -22,6 +22,16 @@ ObstacleBridge is expected to:
 - `REQ-OVL-006`: Supported overlay transports shall work on both IPv4 and IPv6 where the specific transport mode is configured for that address family.
 - `REQ-OVL-007`: Localhost-based peer resolution shall behave deterministically for reconnect scenarios on both IPv4 and IPv6.
 
+## Scoped next-step requirements
+
+The following requirements describe the next planned capability boundary. They are intentionally scoped more narrowly than the general transport requirements above.
+
+- `REQ-WSP-001`: A WebSocket peer client running on Windows shall be able to establish its outbound websocket transport through an HTTP proxy that requires `Negotiate` / NTLM-style authentication.
+- `REQ-WSP-002`: The proxy-authenticated WebSocket capability shall be scoped to peer-client mode only; it shall not imply listener-side proxy support.
+- `REQ-WSP-003`: The proxy-authenticated WebSocket capability shall be scoped to the WebSocket transport only; it shall not imply equivalent support for `myudp`, `tcp`, or `quic`.
+- `REQ-WSP-004`: When proxy tunneling is enabled for the WebSocket peer client, the transport bootstrap shall establish the proxy tunnel before the websocket handshake begins.
+- `REQ-WSP-005`: When proxy discovery or proxy authentication fails, the WebSocket peer client shall report a connection failure without corrupting the overlay state machine.
+
 ## Reconnect and restart requirements
 
 - `REQ-LIFE-001`: When one side disconnects or is restarted, the remaining side shall eventually report the overlay as not connected.
