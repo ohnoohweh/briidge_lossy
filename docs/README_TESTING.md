@@ -38,6 +38,27 @@ pytest -h | grep '\-n'
 
 If `-n` appears in pytest help, `pytest-xdist` is available.
 
+### Documentation guard
+
+This repository now treats `docs/README_TESTING.md` as required companion documentation for test-suite changes.
+
+Enforcement layers:
+
+- CI runs `python scripts/check_readme_testing_guard.py --base-ref <base>` on every push and pull request.
+- The guard fails if any file under `tests/` changed but `docs/README_TESTING.md` did not.
+- Contributors can run the same rule locally before committing with `python scripts/check_readme_testing_guard.py --staged`.
+
+### bridge.py integration gate
+
+Changes to `src/obstacle_bridge/bridge.py` are now expected to pass the full integration suite before merge.
+
+Enforcement layers:
+
+- CI publishes the stable check `bridge.py Integration Gate`.
+- That check runs `pytest -q -n 16 tests/integration/test_overlay_e2e.py` whenever `src/obstacle_bridge/bridge.py` changed.
+- When `src/obstacle_bridge/bridge.py` did not change, the same check reports success without running the heavy suite.
+- To make merge impossible on failures, configure branch protection in GitHub to require the `bridge.py Integration Gate` status check.
+
 ### What to run for regression testing
 
 Recommended full regression flow:
@@ -212,12 +233,12 @@ This deeper mapping links concrete integration scenarios to requirement IDs. It 
 
 | Scenario | Requirement IDs | Objective | Test criteria | How to start |
 |---|---|---|---|---|
-| `case12_overlay_ws_ipv4_listener_two_clients` | `REQ-LST-001`, `REQ-LST-005`, `REQ-ADM-006` | Verify one WS listener can serve two clients | Both clients connect, both UDP services answer, `/api/status` keeps `overlay.peer=n/a`, and `/api/peers` reports both peers | `pytest -q tests/integration/test_overlay_e2e.py -k case12_overlay_ws_ipv4_listener_two_clients` |
+| `case12_overlay_ws_ipv4_listener_two_clients` | `REQ-LST-001`, `REQ-LST-005`, `REQ-ADM-006` | Verify one WS listener can serve two clients | Both clients connect, both UDP services answer, `/api/status` keeps `overlay.peer=n/a`, `/api/peers` reports both peers, and the passive listening row stays zeroed with `rtt=n/a`, `udp/tcp open=0`, `rx/tx bytes=0`, `decode_errors=0`, `inflight=0`, and zero myudp counters | `pytest -q tests/integration/test_overlay_e2e.py -k case12_overlay_ws_ipv4_listener_two_clients` |
 | `case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels` | `REQ-MUX-001`, `REQ-MUX-002`, `REQ-ADM-006` | Verify several concurrent TCP channels plus extra UDP mappings on one WS peer | Five TCP channels remain observable in `/api/connections`, replies are correct, UDP mappings work, and counters update | `pytest -q tests/integration/test_overlay_e2e.py -k case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels` |
-| `case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp` | `REQ-LST-001`, `REQ-LST-002`, `REQ-LST-005`, `REQ-MUX-001`, `REQ-MUX-002`, `REQ-MUX-003`, `REQ-MUX-004`, `REQ-ADM-006` | Verify mixed WS and myudp clients on one listener | Both clients connect, all TCP/UDP probes succeed, and server `/api/connections` shows expected active TCP rows | `pytest -q tests/integration/test_overlay_e2e.py -k case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp` |
-| `case15_overlay_listener_myudp_two_clients_concurrent_udp_tcp` | `REQ-LST-002`, `REQ-LST-005`, `REQ-LST-006`, `REQ-MUX-001`, `REQ-MUX-002`, `REQ-MUX-003`, `REQ-MUX-004`, `REQ-ADM-006` | Verify two myudp clients on one listener | Both myudp clients connect, all configured UDP/TCP services work, and distinct peer endpoints are visible | `pytest -q tests/integration/test_overlay_e2e.py -k case15_overlay_listener_myudp_two_clients_concurrent_udp_tcp` |
-| `case16_overlay_listener_tcp_two_clients_concurrent_udp_tcp` | `REQ-LST-003`, `REQ-LST-005`, `REQ-LST-006`, `REQ-MUX-001`, `REQ-MUX-002`, `REQ-MUX-003`, `REQ-MUX-004`, `REQ-ADM-006` | Verify two TCP overlay clients on one listener | Both TCP clients connect, all configured UDP/TCP services work, and distinct peer endpoints are visible | `pytest -q tests/integration/test_overlay_e2e.py -k case16_overlay_listener_tcp_two_clients_concurrent_udp_tcp` |
-| `case17_overlay_listener_quic_two_clients_concurrent_udp_tcp` | `REQ-LST-004`, `REQ-LST-005`, `REQ-LST-006`, `REQ-MUX-001`, `REQ-MUX-002`, `REQ-MUX-003`, `REQ-MUX-004`, `REQ-ADM-006` | Verify two QUIC overlay clients on one listener | Both QUIC clients connect, all configured UDP/TCP services work, and distinct peer endpoints are visible | `pytest -q tests/integration/test_overlay_e2e.py -k case17_overlay_listener_quic_two_clients_concurrent_udp_tcp` |
+| `case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp` | `REQ-LST-001`, `REQ-LST-002`, `REQ-LST-005`, `REQ-MUX-001`, `REQ-MUX-002`, `REQ-MUX-003`, `REQ-MUX-004`, `REQ-ADM-006` | Verify mixed WS and myudp clients on one listener | Both clients connect, all TCP/UDP probes succeed, server `/api/connections` shows expected active TCP rows, and the passive listening row in `/api/peers` stays zeroed with `rtt=n/a`, `udp/tcp open=0`, `rx/tx bytes=0`, `decode_errors=0`, `inflight=0`, and zero myudp counters | `pytest -q tests/integration/test_overlay_e2e.py -k case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp` |
+| `case15_overlay_listener_myudp_two_clients_concurrent_udp_tcp` | `REQ-LST-002`, `REQ-LST-005`, `REQ-LST-006`, `REQ-MUX-001`, `REQ-MUX-002`, `REQ-MUX-003`, `REQ-MUX-004`, `REQ-ADM-006` | Verify two myudp clients on one listener | Both myudp clients connect, all configured UDP/TCP services work, distinct peer endpoints are visible, and the passive listening row in `/api/peers` stays zeroed with `rtt=n/a`, `udp/tcp open=0`, `rx/tx bytes=0`, `decode_errors=0`, `inflight=0`, and zero myudp counters | `pytest -q tests/integration/test_overlay_e2e.py -k case15_overlay_listener_myudp_two_clients_concurrent_udp_tcp` |
+| `case16_overlay_listener_tcp_two_clients_concurrent_udp_tcp` | `REQ-LST-003`, `REQ-LST-005`, `REQ-LST-006`, `REQ-MUX-001`, `REQ-MUX-002`, `REQ-MUX-003`, `REQ-MUX-004`, `REQ-ADM-006` | Verify two TCP overlay clients on one listener | Both TCP clients connect, all configured UDP/TCP services work, distinct peer endpoints are visible, and the passive listening row in `/api/peers` stays zeroed with `rtt=n/a`, `udp/tcp open=0`, `rx/tx bytes=0`, `decode_errors=0`, `inflight=0`, and zero myudp counters | `pytest -q tests/integration/test_overlay_e2e.py -k case16_overlay_listener_tcp_two_clients_concurrent_udp_tcp` |
+| `case17_overlay_listener_quic_two_clients_concurrent_udp_tcp` | `REQ-LST-004`, `REQ-LST-005`, `REQ-LST-006`, `REQ-MUX-001`, `REQ-MUX-002`, `REQ-MUX-003`, `REQ-MUX-004`, `REQ-ADM-006` | Verify two QUIC overlay clients on one listener | Both QUIC clients connect, all configured UDP/TCP services work, distinct peer endpoints are visible, and the passive listening row in `/api/peers` stays zeroed with `rtt=n/a`, `udp/tcp open=0`, `rx/tx bytes=0`, `decode_errors=0`, `inflight=0`, and zero myudp counters | `pytest -q tests/integration/test_overlay_e2e.py -k case17_overlay_listener_quic_two_clients_concurrent_udp_tcp` |
 | `case13` restart regression | `REQ-LIFE-004`, `REQ-MUX-001`, `REQ-MUX-002` | Verify TCP channels close correctly while UDP service survives server restart handling | Restart-specific expectations hold for the concurrent WS scenario | `pytest -q tests/integration/test_overlay_e2e.py -k server_restart_closes_tcp_preserves_udp` |
 
 #### myudp delay/loss scenarios
@@ -267,7 +288,7 @@ The component view they support is described in [ARCHITECTURE.md](/home/ohnoohwe
 |---|---|---|---|---|
 | `tests/unit/test_channel_mux_listener_mode.py` | `ARC-CMP-003` | `REQ-MUX-003`, `REQ-MUX-004`, `REQ-TST-002` | Listener mode must ignore ambiguous local publishing, parse service specs consistently, and manage remote catalog install/replace/cleanup correctly | `pytest -q tests/unit/test_channel_mux_listener_mode.py` |
 | `tests/unit/test_channel_mux_peer_catalog.py` | `ARC-CMP-003` | `REQ-MUX-003`, `REQ-MUX-004`, `REQ-TST-002` | Peer-scoped remote service state must remain isolated and must be cleaned up per disconnected peer | `pytest -q tests/unit/test_channel_mux_peer_catalog.py` |
-| `tests/unit/test_connection_snapshots.py` | `ARC-CMP-005` | `REQ-LST-006`, `REQ-ADM-006`, `REQ-TST-002` | Snapshot rendering must distinguish passive listeners from active connections and must expose listener rows correctly | `pytest -q tests/unit/test_connection_snapshots.py` |
+| `tests/unit/test_connection_snapshots.py` | `ARC-CMP-005` | `REQ-LST-006`, `REQ-ADM-006`, `REQ-TST-002` | Snapshot rendering must distinguish passive listeners from active connections, keep passive listener rows zeroed, and expose per-peer session stats on active listener-side peers correctly | `pytest -q tests/unit/test_connection_snapshots.py` |
 | `tests/unit/test_debug_logging_aliases.py` | `ARC-CMP-005` | `REQ-TST-002` | Logging alias configuration must reach the intended websocket-related loggers | `pytest -q tests/unit/test_debug_logging_aliases.py` |
 | `tests/unit/test_peer_resolution.py` | `ARC-CMP-004` | `REQ-OVL-007`, `REQ-TST-002` | Localhost resolution fallback must behave deterministically while non-localhost failures still propagate | `pytest -q tests/unit/test_peer_resolution.py` |
 | `tests/unit/test_runner_config_persistence.py` | `ARC-CMP-004` | `REQ-TST-002` | Runtime config updates must persist back to the configured file correctly | `pytest -q tests/unit/test_runner_config_persistence.py` |
@@ -282,7 +303,7 @@ The component view they support is described in [ARCHITECTURE.md](/home/ohnoohwe
 |---|---|---|---|
 | `tests/unit/test_channel_mux_listener_mode.py` | ChannelMux listener semantics | Verify listener mode ignores ambiguous local config, parses service specs correctly, and manages remote catalogs/lifecycle correctly | `pytest -q tests/unit/test_channel_mux_listener_mode.py` |
 | `tests/unit/test_channel_mux_peer_catalog.py` | Per-peer remote service state | Verify peer-specific listener state is scoped and cleaned up per peer | `pytest -q tests/unit/test_channel_mux_peer_catalog.py` |
-| `tests/unit/test_connection_snapshots.py` | Admin snapshot formatting | Verify connection and peer snapshot rendering, including listener rows and active-vs-idle distinctions | `pytest -q tests/unit/test_connection_snapshots.py` |
+| `tests/unit/test_connection_snapshots.py` | Admin snapshot formatting | Verify connection and peer snapshot rendering, including listener rows, active-vs-idle distinctions, zeroed passive-listener stats, and correct per-peer listener-side myudp counters | `pytest -q tests/unit/test_connection_snapshots.py` |
 | `tests/unit/test_debug_logging_aliases.py` | Logging alias wiring | Verify websocket logging aliases configure the intended library loggers | `pytest -q tests/unit/test_debug_logging_aliases.py` |
 | `tests/unit/test_peer_resolution.py` | Host resolution behavior | Verify localhost fallback and non-localhost resolution error behavior | `pytest -q tests/unit/test_peer_resolution.py` |
 | `tests/unit/test_runner_config_persistence.py` | Config update persistence | Verify config updates are written back to the configured file correctly | `pytest -q tests/unit/test_runner_config_persistence.py` |

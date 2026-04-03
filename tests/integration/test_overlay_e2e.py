@@ -1606,6 +1606,73 @@ def wait_peers_count(admin_port: int, minimum_count: int, timeout: float = 12.0,
     raise RuntimeError(f'/api/peers did not reach {minimum_count} rows on port {admin_port}; last={last_doc!r}')
 
 
+def wait_listener_peer_rows_zeroed(admin_port: int, timeout: float = 12.0, label: str = '') -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
+        last_doc = doc
+        rows = list(doc.get('peers') or [])
+        listening_rows = [row for row in rows if str(row.get('state', '')).strip().lower() == 'listening']
+        if not listening_rows:
+            time.sleep(0.25)
+            continue
+
+        valid = True
+        for row in listening_rows:
+            if row.get('connected'):
+                valid = False
+                break
+            rtt = row.get('rtt_est_ms')
+            if rtt not in (None, '', 'n/a', 'N/A'):
+                valid = False
+                break
+            open_connections = row.get('open_connections') or {}
+            traffic = row.get('traffic') or {}
+            myudp = row.get('myudp') or {}
+            if int(open_connections.get('udp', -1) or 0) != 0:
+                valid = False
+                break
+            if int(open_connections.get('tcp', -1) or 0) != 0:
+                valid = False
+                break
+            if int(traffic.get('rx_bytes', -1) or 0) != 0:
+                valid = False
+                break
+            if int(traffic.get('tx_bytes', -1) or 0) != 0:
+                valid = False
+                break
+            if int(row.get('decode_errors', -1) or 0) != 0:
+                valid = False
+                break
+            if int(row.get('inflight', -1) or 0) != 0:
+                valid = False
+                break
+            if int(myudp.get('buffered_frames', -1) or 0) != 0:
+                valid = False
+                break
+            if int(myudp.get('confirmed_total', -1) or 0) != 0:
+                valid = False
+                break
+            if int(myudp.get('first_pass', -1) or 0) != 0:
+                valid = False
+                break
+            if int(myudp.get('repeated_once', -1) or 0) != 0:
+                valid = False
+                break
+            if int(myudp.get('repeated_multiple', -1) or 0) != 0:
+                valid = False
+                break
+        if valid:
+            who = f' {label}' if label else ''
+            log.info(f'[PEERS]{who} port={admin_port} listening_rows_zeroed={len(listening_rows)}')
+            return doc
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'/api/peers listening rows were not fully zeroed on port {admin_port}; last={last_doc!r}'
+    )
+
+
 def wait_peer_endpoint_visible(admin_port: int, timeout: float = 12.0, label: str = '', transport: str = 'myudp') -> dict:
     end = time.time() + timeout
     last_doc = None
@@ -2221,6 +2288,7 @@ def run_case_two_peer_clients_listener(case: Case, log_dir: Path, case_index: in
 
         phase('7. Verify listener admin peers API shows two peer sessions')
         peers_doc = wait_peers_count(server_proc.admin_port or 0, minimum_count=2, timeout=12.0, label='server')
+        wait_listener_peer_rows_zeroed(server_proc.admin_port or 0, timeout=12.0, label='server')
         rows = list(peers_doc.get('peers') or [])
         with_ip = [row for row in rows if row.get('peer') not in (None, '', 'n/a')]
         if len(with_ip) < 2:
@@ -2988,6 +3056,7 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
 
         phase('4. Verify both myudp peer clients connect to the same listener')
         wait_peers_count(server_admin, minimum_count=2, timeout=12.0, label='server')
+        wait_listener_peer_rows_zeroed(server_admin, timeout=12.0, label='server')
 
         phase('5. Open 8 concurrent TCP channels and hold them during /api/connections polling')
         start_evt = threading.Event()
@@ -3190,6 +3259,7 @@ def run_case_tcp_two_clients_concurrent_udp_tcp(
 
         phase('4. Verify both tcp peer clients connect to the same listener')
         wait_peers_count(server_admin, minimum_count=2, timeout=12.0, label='server')
+        wait_listener_peer_rows_zeroed(server_admin, timeout=12.0, label='server')
         wait_distinct_peer_endpoints(server_admin, transport='tcp', minimum_count=2, timeout=12.0, label='server')
 
         phase('5. Open 8 concurrent TCP channels and hold them during /api/connections polling')
@@ -3390,6 +3460,7 @@ def run_case_quic_two_clients_concurrent_udp_tcp(
 
         phase('4. Verify both quic peer clients connect to the same listener')
         wait_peers_count(server_admin, minimum_count=2, timeout=12.0, label='server')
+        wait_listener_peer_rows_zeroed(server_admin, timeout=12.0, label='server')
         wait_distinct_peer_endpoints(server_admin, transport='quic', minimum_count=2, timeout=12.0, label='server')
 
         phase('5. Open 8 concurrent TCP channels and hold them during /api/connections polling')
