@@ -2,7 +2,7 @@
 
 This repository currently collects:
 
-- `63` integration tests in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+- `66` integration tests in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
 - `49` unit tests in `tests/unit/`
 
 ## Get started
@@ -150,7 +150,7 @@ The catalog is ordered as:
 
 ## Integration tests
 
-Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py) and collects `63` tests.
+Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py) and collects `66` tests.
 
 The supporting project-level intent documents are:
 
@@ -168,7 +168,7 @@ The supporting project-level intent documents are:
 | `test_overlay_e2e_concurrent_tcp_channels` | Mixed service concurrency | Verify concurrent TCP channels, additional UDP mappings, and multi-client coexistence on shared listeners | `pytest -q tests/integration/test_overlay_e2e.py -k concurrent_tcp_channels` |
 | `test_overlay_e2e_myudp_delay_loss` | Delayed/lossy myudp behavior | Verify retransmission, large payload handling, and control/data loss behavior through a real loopback MITM proxy | `pytest -q tests/integration/test_overlay_e2e.py -k myudp_delay_loss` |
 | `test_overlay_e2e_server_restart_closes_tcp_preserves_udp` | Restart-specific regression | Verify the special restart behavior for the concurrent WS case | `pytest -q tests/integration/test_overlay_e2e.py -k server_restart_closes_tcp_preserves_udp` |
-| `test_overlay_e2e_admin_api_*` | Admin web auth/API | Verify auth-disabled, auth-required, authenticated, and session-isolated API behavior | `pytest -q tests/integration/test_overlay_e2e.py -k admin_api` |
+| `test_overlay_e2e_admin_api_*` | Admin web auth/API | Verify auth-disabled, auth-required, authenticated, session-isolated API behavior, and live WebSocket telemetry availability for both open and cookie-authenticated sessions | `pytest -q tests/integration/test_overlay_e2e.py -k admin_api` |
 | `test_overlay_e2e_cli_routing_*` and allocator checks | Harness self-tests | Verify CLI mode inference and worker-safe port allocation logic | `pytest -q tests/integration/test_overlay_e2e.py -k "cli_routing or alloc_admin_ports or materialize_case_ports or case_port_offset"` |
 
 ### First traceability mapping for the integration suite
@@ -187,6 +187,9 @@ This first mapping is intentionally coarse. It links current integration entrypo
 | `test_overlay_e2e_admin_api_unavailable_without_correct_auth` | `REQ-ADM-003` | Auth-required API lockout behavior |
 | `test_overlay_e2e_admin_api_available_after_correct_auth` | `REQ-ADM-004` | Successful challenge/login unlock behavior |
 | `test_overlay_e2e_admin_api_auth_isolated_per_concurrent_http_client` | `REQ-ADM-005` | Session isolation across concurrent HTTP clients |
+| `test_overlay_e2e_admin_live_ws_available_when_auth_disabled` | `REQ-ADM-006` | Live admin WebSocket stream availability and snapshot payload coverage when auth is disabled |
+| `test_overlay_e2e_admin_live_ws_unavailable_without_correct_auth` | `REQ-ADM-003`, `REQ-ADM-006` | Live admin WebSocket stream must reject unauthenticated clients when auth is enabled |
+| `test_overlay_e2e_admin_live_ws_available_after_correct_auth` | `REQ-ADM-004`, `REQ-ADM-006` | Live admin WebSocket stream must accept authenticated clients carrying the admin session cookie |
 | `test_overlay_e2e_cli_routing_*` and allocator checks | `REQ-TST-001`, `REQ-TST-003`, `REQ-TST-004` | Harness self-tests that protect the integrity and repeatability of the integration test system itself |
 
 ### Scenario-level traceability
@@ -267,6 +270,9 @@ This deeper mapping links concrete integration scenarios to requirement IDs. It 
 | `test_overlay_e2e_admin_api_unavailable_without_correct_auth` | `REQ-ADM-003` | Verify locked API rejects unauthenticated access | API remains unavailable until correct auth completes | `pytest -q tests/integration/test_overlay_e2e.py -k unavailable_without_correct_auth` |
 | `test_overlay_e2e_admin_api_available_after_correct_auth` | `REQ-ADM-004` | Verify challenge/login unlocks API | Correct authentication enables API access | `pytest -q tests/integration/test_overlay_e2e.py -k available_after_correct_auth` |
 | `test_overlay_e2e_admin_api_auth_isolated_per_concurrent_http_client` | `REQ-ADM-005` | Verify session isolation | One authenticated HTTP client does not unlock another client session | `pytest -q tests/integration/test_overlay_e2e.py -k auth_isolated` |
+| `test_overlay_e2e_admin_live_ws_available_when_auth_disabled` | `REQ-ADM-006` | Verify live admin WebSocket telemetry is reachable | Auth-disabled server exposes `/api/live`, and the client receives `status`, `connections`, `peers`, and `meta` snapshots over one WebSocket session | `pytest -q tests/integration/test_overlay_e2e.py -k admin_live_ws_available_when_auth_disabled` |
+| `test_overlay_e2e_admin_live_ws_unavailable_without_correct_auth` | `REQ-ADM-003`, `REQ-ADM-006` | Verify live admin WebSocket telemetry is protected by admin auth | Auth-enabled server rejects `/api/live` until the client completes the normal admin login flow | `pytest -q tests/integration/test_overlay_e2e.py -k admin_live_ws_unavailable_without_correct_auth` |
+| `test_overlay_e2e_admin_live_ws_available_after_correct_auth` | `REQ-ADM-004`, `REQ-ADM-006` | Verify authenticated live admin WebSocket telemetry | After HTTP challenge/login sets the session cookie, `/api/live` accepts the client and streams `status`, `connections`, `peers`, and `meta` snapshots | `pytest -q tests/integration/test_overlay_e2e.py -k admin_live_ws_available_after_correct_auth` |
 | `test_overlay_e2e_cli_routing_*` | `REQ-TST-001`, `REQ-TST-004` | Verify CLI routing logic | Selected cases infer the right harness mode and explicit override is preserved | `pytest -q tests/integration/test_overlay_e2e.py -k cli_routing` |
 | `test_overlay_e2e_materialize_case_ports_shifts_overlay_and_service_ports` | `REQ-TST-004` | Verify port rewriting | Overlay, bounce, probe, and service ports shift consistently | `pytest -q tests/integration/test_overlay_e2e.py -k materialize_case_ports` |
 | `test_overlay_e2e_alloc_admin_ports_isolates_xdist_workers` | `REQ-TST-004` | Verify admin port worker isolation | Admin ports stay in the dedicated admin band and differ across workers | `pytest -q tests/integration/test_overlay_e2e.py -k alloc_admin_ports` |

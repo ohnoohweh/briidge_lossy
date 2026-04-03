@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
+import asyncio
 import heapq
 import hashlib
+import inspect
 import http.cookiejar
 import json
 import os
@@ -1358,6 +1360,52 @@ def admin_authenticate(
         opener=op,
     )
     return login_code, login_doc, op
+
+
+async def _admin_ws_collect_messages(
+    admin_port: int,
+    *,
+    opener: Optional[urllib.request.OpenerDirector] = None,
+    subscribe: Optional[list[str]] = None,
+    want_types: Optional[set[str]] = None,
+    timeout: float = 5.0,
+) -> list[dict]:
+    import websockets
+
+    headers = {}
+    if opener is not None:
+        cookiejar = None
+        for handler in getattr(opener, "handlers", []):
+            if isinstance(handler, urllib.request.HTTPCookieProcessor):
+                cookiejar = getattr(handler, "cookiejar", None)
+                break
+        if cookiejar is not None:
+            cookies = []
+            for cookie in cookiejar:
+                cookies.append(f"{cookie.name}={cookie.value}")
+            if cookies:
+                headers["Cookie"] = "; ".join(cookies)
+
+    connect_sig = inspect.signature(websockets.connect)
+    connect_kwargs = {}
+    header_key = "additional_headers" if "additional_headers" in connect_sig.parameters else "extra_headers"
+    if headers:
+        connect_kwargs[header_key] = headers
+
+    url = f"ws://127.0.0.1:{admin_port}/api/live"
+    seen: list[dict] = []
+    targets = set(want_types or set())
+    async with websockets.connect(url, **connect_kwargs) as ws:
+        if subscribe:
+            await ws.send(json.dumps({"subscribe": subscribe, "request": subscribe}))
+        end = time.time() + timeout
+        while time.time() < end:
+            raw = await asyncio.wait_for(ws.recv(), timeout=max(0.1, end - time.time()))
+            msg = json.loads(raw)
+            seen.append(msg)
+            if targets and targets.issubset({str(item.get("type") or "") for item in seen}):
+                return seen
+    return seen
 
 
 def _conn_rows_with_traffic(doc: dict) -> list[dict]:
@@ -3811,6 +3859,115 @@ def test_overlay_e2e_admin_api_auth_isolated_per_concurrent_http_client(tmp_path
         assert 'peer_state' in body1
         assert code2 == 401
         assert body2.get('authenticated') is False
+    finally:
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            _stop_proc_without_admin(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_admin_live_ws_available_when_auth_disabled(tmp_path: Path) -> None:
+    case = CASES['case01_udp_over_own_udp_ipv4']
+    auth_args = [
+        '--admin-web-auth-disable',
+        '--admin-web-username', 'admin',
+        '--admin-web-password', 'secret-pass',
+    ]
+    bounce = None
+    server_proc = client_proc = None
+    try:
+        bounce, server_proc, client_proc = _start_case_with_client_admin_auth(case, tmp_path, case_index=260, client_auth_args=auth_args)
+        docs = asyncio.run(
+            _admin_ws_collect_messages(
+                client_proc.admin_port or 0,
+                subscribe=['status', 'connections', 'peers', 'meta'],
+                want_types={'status', 'connections', 'peers', 'meta'},
+                timeout=5.0,
+            )
+        )
+        by_type = {str(item.get('type') or ''): item.get('data') for item in docs if item.get('type') != 'hello'}
+        assert 'peer_state' in (by_type.get('status') or {})
+        assert 'udp' in (by_type.get('connections') or {})
+        assert 'peers' in (by_type.get('peers') or {})
+        assert 'admin_web_name' in (by_type.get('meta') or {})
+    finally:
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            _stop_proc_without_admin(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_admin_live_ws_unavailable_without_correct_auth(tmp_path: Path) -> None:
+    import websockets
+
+    case = CASES['case01_udp_over_own_udp_ipv4']
+    auth_args = [
+        '--admin-web-username', 'admin',
+        '--admin-web-password', 'secret-pass',
+    ]
+    bounce = None
+    server_proc = client_proc = None
+    try:
+        bounce, server_proc, client_proc = _start_case_with_client_admin_auth(case, tmp_path, case_index=261, client_auth_args=auth_args)
+
+        async def _attempt() -> None:
+            await _admin_ws_collect_messages(
+                client_proc.admin_port or 0,
+                subscribe=['status'],
+                want_types={'status'},
+                timeout=2.0,
+            )
+
+        with pytest.raises(Exception, match='401|Unauthorized|server rejected WebSocket connection'):
+            asyncio.run(_attempt())
+    finally:
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            _stop_proc_without_admin(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_admin_live_ws_available_after_correct_auth(tmp_path: Path) -> None:
+    case = CASES['case01_udp_over_own_udp_ipv4']
+    username = 'admin'
+    password = 'secret-pass'
+    auth_args = [
+        '--admin-web-username', username,
+        '--admin-web-password', password,
+    ]
+    bounce = None
+    server_proc = client_proc = None
+    try:
+        bounce, server_proc, client_proc = _start_case_with_client_admin_auth(case, tmp_path, case_index=262, client_auth_args=auth_args)
+        login_code, login_doc, opener = admin_authenticate(client_proc.admin_port or 0, username, password)
+        assert login_code == 200
+        assert login_doc.get('authenticated') is True
+        docs = asyncio.run(
+            _admin_ws_collect_messages(
+                client_proc.admin_port or 0,
+                opener=opener,
+                subscribe=['status', 'connections', 'peers', 'meta'],
+                want_types={'status', 'connections', 'peers', 'meta'},
+                timeout=5.0,
+            )
+        )
+        by_type = {str(item.get('type') or ''): item.get('data') for item in docs if item.get('type') != 'hello'}
+        assert 'peer_state' in (by_type.get('status') or {})
+        assert 'udp' in (by_type.get('connections') or {})
+        assert 'peers' in (by_type.get('peers') or {})
+        assert 'admin_web_name' in (by_type.get('meta') or {})
     finally:
         if bounce is not None:
             bounce.stop()
