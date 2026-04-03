@@ -21,7 +21,7 @@ import urllib.request
 import pytest
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / 'src'
@@ -248,6 +248,15 @@ def _replace_arg(args: List[str], option: str, value: str) -> List[str]:
     idx = out.index(option)
     out[idx + 1] = value
     return out
+
+
+def _replace_last_arg(args: List[str], option: str, value: str) -> List[str]:
+    out = list(args)
+    for idx in range(len(out) - 2, -1, -1):
+        if out[idx] == option:
+            out[idx + 1] = value
+            return out
+    raise ValueError(f'missing option {option!r}')
 
 
 def _append_args(args: List[str], extra: List[str]) -> List[str]:
@@ -884,12 +893,17 @@ def restart_proc(proc: Proc, log_dir: Path) -> Proc:
     if not proc.cmd:
         raise RuntimeError(f'{proc.name} cannot be restarted: missing cmd')
     log.info(f'[PROC] self-restart detected for {proc.name} rc={RESTART_EXIT_CODE}; relaunching')
+    cmd = list(proc.cmd)
+    admin_port = proc.admin_port
+    if admin_port:
+        admin_port = alloc_admin_port({int(admin_port)})
+        cmd = _replace_last_arg(cmd, '--admin-web-port', str(admin_port))
     return start_proc(
         proc.name,
-        proc.cmd,
+        cmd,
         log_dir,
         env_extra=proc.env_extra,
-        admin_port=proc.admin_port,
+        admin_port=admin_port,
     )
 
 def stop_proc(proc: Proc) -> None:
@@ -1139,12 +1153,22 @@ def _listener_overlay_port(case: Case, transport: str) -> int:
 
 
 def alloc_admin_ports(case_index: int, base: int = ADMIN_PORT_BASE) -> Tuple[int, int]:
-    worker_index = _xdist_worker_index()
-    slot_count = ADMIN_PORTS_PER_WORKER // ADMIN_PORTS_PER_CASE
-    slot = int(case_index) % max(1, slot_count)
-    server = base + worker_index * ADMIN_PORTS_PER_WORKER + slot * ADMIN_PORTS_PER_CASE
-    client = server + 1
+    del case_index, base
+    server = alloc_admin_port()
+    client = alloc_admin_port({server})
     return server, client
+
+
+def alloc_admin_port(exclude: Optional[Set[int]] = None) -> int:
+    blocked = set(exclude or ())
+    for _ in range(64):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(('127.0.0.1', 0))
+            port = int(s.getsockname()[1])
+        if port not in blocked:
+            return port
+    raise RuntimeError('failed to allocate a free admin web port')
 
 
 def admin_args(port: int) -> List[str]:
@@ -2677,7 +2701,7 @@ def run_case_mixed_overlay_two_clients_concurrent_udp_tcp(
     ws_client_proc: Optional[Proc] = None
     udp_client_proc: Optional[Proc] = None
     server_admin, ws_client_admin = alloc_admin_ports(case_index)
-    udp_client_admin = ws_client_admin + 1
+    udp_client_admin = alloc_admin_port({server_admin, ws_client_admin})
     ws_peer_port = _listener_overlay_port(case, 'ws')
     udp_peer_port = _listener_overlay_port(case, 'myudp')
 
@@ -2877,7 +2901,7 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
     client1_proc: Optional[Proc] = None
     client2_proc: Optional[Proc] = None
     server_admin, client1_admin = alloc_admin_ports(case_index)
-    client2_admin = client1_admin + 1
+    client2_admin = alloc_admin_port({server_admin, client1_admin})
     udp_peer_port = _listener_overlay_port(case, 'myudp')
 
     py = sys.executable
@@ -3079,7 +3103,7 @@ def run_case_tcp_two_clients_concurrent_udp_tcp(
     client1_proc: Optional[Proc] = None
     client2_proc: Optional[Proc] = None
     server_admin, client1_admin = alloc_admin_ports(case_index)
-    client2_admin = client1_admin + 1
+    client2_admin = alloc_admin_port({server_admin, client1_admin})
     tcp_peer_port = _listener_overlay_port(case, 'tcp')
 
     py = sys.executable
@@ -3279,7 +3303,7 @@ def run_case_quic_two_clients_concurrent_udp_tcp(
     client1_proc: Optional[Proc] = None
     client2_proc: Optional[Proc] = None
     server_admin, client1_admin = alloc_admin_ports(case_index)
-    client2_admin = client1_admin + 1
+    client2_admin = alloc_admin_port({server_admin, client1_admin})
     quic_peer_port = _listener_overlay_port(case, 'quic')
 
     py = sys.executable
@@ -3796,9 +3820,11 @@ def test_overlay_e2e_alloc_admin_ports_isolates_xdist_workers(monkeypatch: pytes
     monkeypatch.setenv('PYTEST_XDIST_WORKER', 'gw3')
     server_port, client_port = alloc_admin_ports(4)
 
-    assert server_port == ADMIN_PORT_BASE + 3 * ADMIN_PORTS_PER_WORKER + 4 * ADMIN_PORTS_PER_CASE
-    assert client_port == server_port + 1
-    assert server_port >= SERVICE_PORT_CEILING
+    assert server_port != client_port
+    assert server_port > 0
+    assert client_port > 0
+    assert server_port < 65535
+    assert client_port < 65535
 
 
 def test_overlay_e2e_case_port_offset_stays_in_range_for_many_workers(monkeypatch: pytest.MonkeyPatch) -> None:

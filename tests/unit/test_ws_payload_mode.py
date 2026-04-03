@@ -26,6 +26,10 @@ def _args(ws_payload_mode: str) -> argparse.Namespace:
         ws_send_timeout=3.0,
         ws_tcp_user_timeout_ms=10000,
         ws_reconnect_grace=3.0,
+        ws_proxy_mode="off",
+        ws_proxy_host="",
+        ws_proxy_port=8080,
+        ws_proxy_auth="none",
     )
 
 
@@ -424,6 +428,69 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
         preflight.assert_awaited_once()
         on_accept.assert_awaited_once_with(fake_ws)
         self.assertEqual(connect.await_args.kwargs["compression"], None)
+
+    async def test_connect_uses_proxy_socket_when_proxy_mode_enabled(self):
+        args = _args("binary")
+        args.ws_peer = "127.0.0.1"
+        args.ws_peer_port = 54321
+        args.ws_proxy_mode = "manual"
+        args.ws_proxy_host = "proxy.example"
+        args.ws_proxy_port = 8080
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+        session._peer_tuple = ("127.0.0.1", 54321)
+        session._peer_name_host = "overlay.example"
+        session._peer_name_port = 54321
+
+        fake_sock = mock.Mock()
+        fake_ws = types.SimpleNamespace(
+            local_address=("127.0.0.1", 40000),
+            remote_address=("127.0.0.1", 54321),
+        )
+        connect = mock.AsyncMock(return_value=fake_ws)
+        fake_websockets = types.SimpleNamespace(connect=connect)
+
+        with mock.patch.dict(sys.modules, {"websockets": fake_websockets}):
+            with mock.patch.object(session, "_open_ws_proxy_socket", mock.AsyncMock(return_value=fake_sock)) as open_proxy:
+                with mock.patch.object(session, "_load_default_http_page", mock.AsyncMock()) as preflight:
+                    with mock.patch.object(session, "_on_accept", mock.AsyncMock()) as on_accept:
+                        with mock.patch.object(session, "_get_ws_proxy_endpoint", return_value=("proxy.example", 8080)):
+                            await session._connect_to("127.0.0.1", 54321)
+
+        open_proxy.assert_awaited_once_with("overlay.example", 54321)
+        preflight.assert_not_awaited()
+        on_accept.assert_awaited_once_with(fake_ws)
+        self.assertIs(connect.await_args.kwargs["sock"], fake_sock)
+        self.assertNotIn("host", connect.await_args.kwargs)
+        self.assertNotIn("port", connect.await_args.kwargs)
+
+
+class WebSocketProxyHelpersTests(unittest.TestCase):
+    def test_parse_proxy_spec_prefers_matching_scheme(self):
+        parsed = WebSocketSession._parse_proxy_spec("http=proxy-http:8080;https=proxy-https:8443", secure=True)
+        self.assertEqual(parsed, ("proxy-https", 8443))
+
+    def test_build_proxy_connect_request_includes_authorization(self):
+        session = WebSocketSession(_args("binary"))
+        request = session._build_proxy_connect_request("2001:db8::1", 443, auth_header="Negotiate abc123").decode("ascii")
+        self.assertIn("CONNECT [2001:db8::1]:443 HTTP/1.1\r\n", request)
+        self.assertIn("Host: [2001:db8::1]:443\r\n", request)
+        self.assertIn("Proxy-Authorization: Negotiate abc123\r\n", request)
+
+    def test_manual_proxy_mode_is_rejected_off_windows(self):
+        args = _args("binary")
+        args.ws_peer = "127.0.0.1"
+        args.ws_peer_port = 54321
+        args.ws_proxy_mode = "manual"
+        args.ws_proxy_host = "proxy.example"
+        args.ws_proxy_port = 8080
+        session = WebSocketSession(args)
+        session._peer_tuple = ("127.0.0.1", 54321)
+
+        with mock.patch.object(sys, "platform", "linux"):
+            with self.assertRaisesRegex(RuntimeError, "Windows only"):
+                session._get_ws_proxy_endpoint("overlay.example", 54321)
 
 
 class WebSocketStaticHttpDebugTests(unittest.IsolatedAsyncioTestCase):

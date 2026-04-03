@@ -262,6 +262,17 @@ The tables below are generated from the current parser registrations in `bridge.
 | `--ws-send-timeout` | `3.0` | Seconds to wait for a WebSocket frame send before forcing reconnect (default 3.0). |
 | `--ws-tcp-user-timeout-ms` | `10000` | TCP_USER_TIMEOUT in milliseconds for WebSocket sockets (default 10000, 0 disables). |
 | `--ws-reconnect-grace` | `3.0` | Seconds to wait before reporting DISCONNECTED after WS transport loss (default 3.0). |
+| `--ws-proxy-mode` | `off` | WebSocket peer-client proxy mode: `off`, `manual`, or `system` (Windows only). |
+| `--ws-proxy-host` | `` | Manual WebSocket proxy host for `--ws-proxy-mode manual` (Windows only). |
+| `--ws-proxy-port` | `8080` | Manual WebSocket proxy port for `--ws-proxy-mode manual` (Windows only). |
+| `--ws-proxy-auth` | `none` | WebSocket proxy auth mode: `none` or `negotiate` (Windows only). |
+
+WebSocket proxy tunneling is currently scoped narrowly:
+
+- Windows only
+- WebSocket peer client only
+- HTTP proxy traversal via `CONNECT`
+- optional `Negotiate` proxy authentication using the current Windows logon context
 
 ### TCP overlay
 | Option(s) | Default | Description |

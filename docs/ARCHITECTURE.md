@@ -41,10 +41,15 @@ Important behaviors:
 - single-peer client mode
 - listener mode
 - multi-peer listener behavior for transports that support multiple concurrent peer clients
+- transport-specific client bootstrap, such as proxy tunnel establishment, before higher protocol handshakes
 
 Representative implementation area:
 
 - [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py)
+
+Planned next step:
+
+- add a Windows-only, WebSocket-client-only proxy bootstrap path that performs HTTP `CONNECT` and `Negotiate` / NTLM-style authentication before `WebSocketSession` starts the websocket handshake
 
 ## 2. Reliability and framing layer
 
@@ -138,6 +143,7 @@ Expected to own:
 - transport-specific sockets/connections
 - connect/listen behavior
 - per-peer transport state where required
+- transport-specific client bootstrap steps such as proxy discovery, tunnel setup, or transport preflight when those are needed before the overlay session can start
 
 Expected not to own:
 
@@ -177,6 +183,7 @@ Expected to own:
 - composition
 - startup/shutdown lifecycle
 - config and argument integration
+- platform-gated enablement of optional transport features such as Windows-only websocket proxy support
 
 Expected not to own:
 
@@ -194,6 +201,30 @@ Expected to own:
 Expected not to own:
 
 - transport behavior itself
+
+## Planned architecture extension: websocket proxy tunneling
+
+The next planned extension is a narrowly scoped addition to `WebSocketSession` client mode.
+
+Scope:
+
+- Windows only
+- WebSocket peer client only
+- HTTP proxy traversal with `CONNECT`
+- proxy authentication via `Negotiate` / NTLM-style Windows credentials
+
+Intended layering:
+
+1. the runner/configuration layer decides whether proxy tunneling is enabled for the websocket client
+2. the transport/session layer performs proxy discovery or uses configured proxy settings
+3. the transport/session layer establishes a TCP tunnel to the proxy target
+4. after the tunnel is established, the existing websocket handshake continues over the tunneled socket
+5. the higher reliability, mux, and admin layers remain unchanged
+
+Architectural consequence:
+
+- proxy support belongs in the websocket client bootstrap path, not in the overlay framing or channel mux logic
+- this capability should be isolated so it does not accidentally appear as a cross-transport or listener-side feature before those variants are explicitly designed
 
 ## Test implications
 
