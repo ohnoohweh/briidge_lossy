@@ -54,6 +54,14 @@ const restartState = {
   intervalId: null,
 };
 
+const liveState = {
+  socket: null,
+  reconnectTimerId: null,
+  connected: false,
+  pollingStarted: false,
+  pollingStops: [],
+};
+
 function isApiEnabled() {
   return !authState.required || authState.authenticated;
 }
@@ -245,10 +253,7 @@ async function loadMeta() {
   try {
     const r = await apiFetch('/api/meta', { cache: 'no-store' });
     const j = await r.json();
-    applyAdminInstanceName(j.admin_web_name);
-    setText('uptimeSec', fmtUptime(j.uptime_sec));
-    const meta = document.getElementById('meta');
-    if (meta) meta.textContent = JSON.stringify(j, null, 2);
+    applyMetaDoc(j);
   } catch (e) {
     const meta = document.getElementById('meta');
     if (meta) meta.textContent = 'meta load failed: ' + e;
@@ -318,31 +323,7 @@ async function loadStatus() {
     const r = await apiFetch('/api/status', { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
-    applyAdminInstanceName(j.admin_web_name);
-    setText('uptimeSec', fmtUptime(j.uptime_sec));
-
-    applyPeerState(j.peer_state);
-    setText('udpOpen', fmtInteger(j.open_connections?.udp));
-    setText('tcpOpen', fmtInteger(j.open_connections?.tcp));
-
-    const appRx = j.traffic?.rates_kBps?.app_rx ?? 0;
-    const appTx = j.traffic?.rates_kBps?.app_tx ?? 0;
-    const peerRx = j.traffic?.rates_kBps?.peer_rx ?? 0;
-    const peerTx = j.traffic?.rates_kBps?.peer_tx ?? 0;
-
-    setText('appRxRate', fmtNumber(appRx));
-    setText('appTxRate', fmtNumber(appTx));
-    setText('peerRxRate', fmtNumber(peerRx));
-    setText('peerTxRate', fmtNumber(peerTx));
-
-    setProgress('barAppRx', appRx);
-    setProgress('barAppTx', appTx);
-    setProgress('barPeerRx', peerRx);
-    setProgress('barPeerTx', peerTx);
-
-    const errors = j.decode_errors?.unidentified_frames ?? 0;
-
-    setText('decodeErrors', fmtInteger(errors));
+    applyStatusDoc(j);
   } catch (e) {
     console.error('status load failed', e);
   }
@@ -394,13 +375,7 @@ async function loadConnections() {
     const r = await apiFetch('/api/connections', { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
-
-    renderConnectionTable('udpConnectionsBody', j.udp || []);
-    renderConnectionTable('tcpConnectionsBody', j.tcp || []);
-    setText('udpOpen', fmtInteger(j.counts?.udp ?? (j.udp || []).length));
-    setText('tcpOpen', fmtInteger(j.counts?.tcp ?? (j.tcp || []).length));
-    setText('udpListening', fmtInteger(j.counts?.udp_listening ?? 0));
-    setText('tcpListening', fmtInteger(j.counts?.tcp_listening ?? 0));
+    applyConnectionsDoc(j);
   } catch (e) {
     console.error('connections load failed', e);
   }
@@ -411,10 +386,57 @@ async function loadPeers() {
     const r = await apiFetch('/api/peers', { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
-    renderPeerTable(j.peers || []);
+    applyPeersDoc(j);
   } catch (e) {
     console.error('peers load failed', e);
   }
+}
+
+function applyMetaDoc(j) {
+  applyAdminInstanceName(j.admin_web_name);
+  setText('uptimeSec', fmtUptime(j.uptime_sec));
+  const meta = document.getElementById('meta');
+  if (meta) meta.textContent = JSON.stringify(j, null, 2);
+}
+
+function applyStatusDoc(j) {
+  applyAdminInstanceName(j.admin_web_name);
+  setText('uptimeSec', fmtUptime(j.uptime_sec));
+
+  applyPeerState(j.peer_state);
+  setText('udpOpen', fmtInteger(j.open_connections?.udp));
+  setText('tcpOpen', fmtInteger(j.open_connections?.tcp));
+
+  const appRx = j.traffic?.rates_kBps?.app_rx ?? 0;
+  const appTx = j.traffic?.rates_kBps?.app_tx ?? 0;
+  const peerRx = j.traffic?.rates_kBps?.peer_rx ?? 0;
+  const peerTx = j.traffic?.rates_kBps?.peer_tx ?? 0;
+
+  setText('appRxRate', fmtNumber(appRx));
+  setText('appTxRate', fmtNumber(appTx));
+  setText('peerRxRate', fmtNumber(peerRx));
+  setText('peerTxRate', fmtNumber(peerTx));
+
+  setProgress('barAppRx', appRx);
+  setProgress('barAppTx', appTx);
+  setProgress('barPeerRx', peerRx);
+  setProgress('barPeerTx', peerTx);
+
+  const errors = j.decode_errors?.unidentified_frames ?? 0;
+  setText('decodeErrors', fmtInteger(errors));
+}
+
+function applyConnectionsDoc(j) {
+  renderConnectionTable('udpConnectionsBody', j.udp || []);
+  renderConnectionTable('tcpConnectionsBody', j.tcp || []);
+  setText('udpOpen', fmtInteger(j.counts?.udp ?? (j.udp || []).length));
+  setText('tcpOpen', fmtInteger(j.counts?.tcp ?? (j.tcp || []).length));
+  setText('udpListening', fmtInteger(j.counts?.udp_listening ?? 0));
+  setText('tcpListening', fmtInteger(j.counts?.tcp_listening ?? 0));
+}
+
+function applyPeersDoc(j) {
+  renderPeerTable(j.peers || []);
 }
 
 async function loadConfig() {
@@ -829,16 +851,157 @@ function initTabs() {
       const target = tab.dataset.tab;
       tabs.forEach((t) => t.classList.toggle('active', t === tab));
       panels.forEach((p) => p.classList.toggle('active', p.id === `tab-${target}`));
+      updateLiveSubscriptions();
       if (!isApiEnabled()) return;
-      if (target === 'status') {
+      if (target === 'status' && !liveState.connected) {
         loadConnections();
         loadPeers();
       }
-      if (target === 'misc') {
+      if (target === 'misc' && !liveState.connected) {
         loadMeta();
       }
     });
   });
+}
+
+function buildLiveWsUrl() {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${window.location.host}/api/live`;
+}
+
+function currentLiveTopics() {
+  const topics = ['status'];
+  if (isTabActive('status')) {
+    topics.push('connections', 'peers');
+  }
+  if (isTabActive('misc')) {
+    topics.push('meta');
+  }
+  return topics;
+}
+
+function sendLiveMessage(obj) {
+  const socket = liveState.socket;
+  if (!socket || socket.readyState !== window.WebSocket.OPEN) return;
+  socket.send(JSON.stringify(obj));
+}
+
+function updateLiveSubscriptions() {
+  if (!liveState.connected) return;
+  const activeTabs = [];
+  if (isTabActive('status')) activeTabs.push('status');
+  if (isTabActive('misc')) activeTabs.push('misc');
+  sendLiveMessage({
+    subscribe: currentLiveTopics(),
+    active_tabs: activeTabs,
+  });
+}
+
+function stopHttpPollingFallback() {
+  if (!liveState.pollingStarted) return;
+  liveState.pollingStops.forEach((stop) => {
+    try {
+      stop();
+    } catch (e) {
+      console.error('poll stop failed', e);
+    }
+  });
+  liveState.pollingStops = [];
+  liveState.pollingStarted = false;
+}
+
+function startHttpPollingFallback() {
+  if (liveState.pollingStarted) return;
+  liveState.pollingStarted = true;
+  liveState.pollingStops = [
+    startPolling(loadStatus, 1000),
+    startPolling(async () => {
+      if (!isTabActive('status')) return;
+      await loadConnections();
+    }, 1000),
+    startPolling(async () => {
+      if (!isTabActive('status')) return;
+      await loadPeers();
+    }, 1000),
+    startPolling(async () => {
+      if (!isTabActive('misc')) return;
+      await loadMeta();
+    }, 5000),
+  ];
+}
+
+function scheduleLiveReconnect(delayMs = 1500) {
+  if (liveState.reconnectTimerId || !isApiEnabled()) return;
+  liveState.reconnectTimerId = window.setTimeout(() => {
+    liveState.reconnectTimerId = null;
+    connectLiveUpdates();
+  }, delayMs);
+}
+
+function handleLiveMessage(event) {
+  let msg;
+  try {
+    msg = JSON.parse(String(event.data || '{}'));
+  } catch (e) {
+    console.error('live message parse failed', e);
+    return;
+  }
+  if (msg.type === 'status') {
+    applyStatusDoc(msg.data || {});
+    return;
+  }
+  if (msg.type === 'connections') {
+    applyConnectionsDoc(msg.data || {});
+    return;
+  }
+  if (msg.type === 'peers') {
+    applyPeersDoc(msg.data || {});
+    return;
+  }
+  if (msg.type === 'meta') {
+    applyMetaDoc(msg.data || {});
+  }
+}
+
+function connectLiveUpdates() {
+  if (!window.WebSocket) {
+    startHttpPollingFallback();
+    return;
+  }
+  const existing = liveState.socket;
+  if (existing && (existing.readyState === window.WebSocket.OPEN || existing.readyState === window.WebSocket.CONNECTING)) {
+    return;
+  }
+  try {
+    const socket = new window.WebSocket(buildLiveWsUrl());
+    liveState.socket = socket;
+    socket.addEventListener('open', () => {
+      liveState.connected = true;
+      stopHttpPollingFallback();
+      updateLiveSubscriptions();
+      sendLiveMessage({ request: currentLiveTopics() });
+    });
+    socket.addEventListener('message', handleLiveMessage);
+    socket.addEventListener('close', async () => {
+      liveState.connected = false;
+      if (liveState.socket === socket) {
+        liveState.socket = null;
+      }
+      startHttpPollingFallback();
+      try {
+        await refreshAuthState();
+      } catch (_err) {
+        handleAuthRequired('Session expired. Please sign in again.');
+      }
+      scheduleLiveReconnect();
+    });
+    socket.addEventListener('error', (e) => {
+      console.error('live socket failed', e);
+    });
+  } catch (e) {
+    console.error('live socket init failed', e);
+    startHttpPollingFallback();
+  }
 }
 
 async function loginAdmin(event) {
@@ -896,6 +1059,16 @@ async function logoutAdmin() {
   } catch (e) {
     console.error('logout failed', e);
   }
+  if (liveState.reconnectTimerId) {
+    window.clearTimeout(liveState.reconnectTimerId);
+    liveState.reconnectTimerId = null;
+  }
+  if (liveState.socket) {
+    liveState.socket.close();
+    liveState.socket = null;
+  }
+  liveState.connected = false;
+  startHttpPollingFallback();
   authState.authenticated = false;
   updateAuthUi();
   setAuthMessage('Signed out.');
@@ -907,33 +1080,26 @@ async function startAdminApp() {
     loadStatus();
     loadConnections();
     loadPeers();
+    loadMeta();
     loadConfig();
-    startPolling(loadStatus, 1000);
-    startPolling(async () => {
-      if (!isTabActive('status')) return;
-      await loadConnections();
-    }, 1000);
-    startPolling(async () => {
-      if (!isTabActive('status')) return;
-      await loadPeers();
-    }, 1000);
-    startPolling(async () => {
-      if (!isTabActive('misc')) return;
-      await loadMeta();
-    }, 5000);
+    startHttpPollingFallback();
+    connectLiveUpdates();
     return;
   }
+  connectLiveUpdates();
   if (isTabActive('status')) {
     await loadStatus();
-    await loadConnections();
-    await loadPeers();
+    if (!liveState.connected) {
+      await loadConnections();
+      await loadPeers();
+    }
     return;
   }
   if (isTabActive('configuration')) {
     await loadConfig();
     return;
   }
-  if (isTabActive('misc')) {
+  if (isTabActive('misc') && !liveState.connected) {
     await loadMeta();
   }
 }

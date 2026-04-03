@@ -10844,6 +10844,8 @@ class Runner:
 class AdminWebUI:
     AUTH_CHALLENGE_TTL_SEC = 90
     AUTH_SESSION_TTL_SEC = 8 * 60 * 60
+    LIVE_WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+    LIVE_TOPICS = ("status", "connections", "peers", "meta")
 
     @staticmethod
     def register_cli(p):
@@ -10979,6 +10981,19 @@ class AdminWebUI:
             path = raw_path.split("?", 1)[0]
             self.log.info("ADMIN REQUEST method=%s path=%s", method, path)
 
+            if (
+                method == "GET"
+                and path == "/api/live"
+                and str(headers.get("upgrade", "")).strip().lower() == "websocket"
+            ):
+                if not self._is_authenticated(headers):
+                    payload = {"ok": False, "authenticated": False, "error": "authentication required"}
+                    self._log_api_response(path, 401, payload, summary="auth required")
+                    await self._send_json(writer, 401, payload)
+                    return
+                await self._handle_live_websocket(reader, writer, headers)
+                return
+
             if path == "/api/auth/state":
                 await self._handle_auth_state(writer, headers)
                 return
@@ -11050,15 +11065,19 @@ class AdminWebUI:
                 writer.close()
                 await writer.wait_closed()
 
-    async def _handle_connections(self, writer):
+    def _build_connections_payload(self) -> dict:
         payload = self.runner.get_connections_snapshot()
         payload["app"] = "udp-bidirectional-mux"
         payload["milestone"] = "C"
+        return payload
+
+    async def _handle_connections(self, writer):
+        payload = self._build_connections_payload()
         self._log_api_response("/api/connections", 200, payload)
         await self._send_json(writer, 200, payload)
 
-    async def _handle_meta(self, writer):
-        payload = {
+    def _build_meta_payload(self) -> dict:
+        return {
             "app": "udp-bidirectional-mux",
             "pid": os.getpid(),
             "uptime_sec": int(time.monotonic() - self.started_monotonic),
@@ -11067,6 +11086,9 @@ class AdminWebUI:
             "dashboard_enabled": getattr(self.runner.args, "dashboard", None),
             "milestone": "C",
         }
+
+    async def _handle_meta(self, writer):
+        payload = self._build_meta_payload()
         self._log_api_response("/api/meta", 200, payload)
         await self._send_json(writer, 200, payload)
 
@@ -11118,9 +11140,13 @@ class AdminWebUI:
         self._log_api_response("/api/logs", 200, payload, summary=f"count={len(lines)}")
         await self._send_json(writer, 200, payload)
 
-    async def _handle_peers(self, writer):
+    def _build_peers_payload(self) -> dict:
         payload = self.runner.get_peer_connections_snapshot()
         payload["ok"] = True
+        return payload
+
+    async def _handle_peers(self, writer):
+        payload = self._build_peers_payload()
         self._log_api_response("/api/peers", 200, payload, summary=f"count={payload.get('count', 0)}")
         await self._send_json(writer, 200, payload)
 
@@ -11343,14 +11369,175 @@ class AdminWebUI:
             ctype or "application/octet-stream",
         )
 
-    async def _handle_status(self, writer):
+    def _build_status_payload(self) -> dict:
         payload = self.runner.get_status_snapshot()
         payload["admin_web_name"] = str(getattr(self.runner.args, "admin_web_name", "") or "")
         payload["uptime_sec"] = int(time.monotonic() - self.started_monotonic)
         payload["app"] = "udp-bidirectional-mux"
         payload["milestone"] = "B"
+        return payload
+
+    async def _handle_status(self, writer):
+        payload = self._build_status_payload()
         self._log_api_response("/api/status", 200, payload)
         await self._send_json(writer, 200, payload)
+
+    def _live_topic_interval_s(self, topic: str) -> float:
+        t = str(topic or "").strip().lower()
+        if t == "meta":
+            return 5.0
+        return 1.0
+
+    def _live_topic_payload(self, topic: str) -> Optional[dict]:
+        t = str(topic or "").strip().lower()
+        if t == "status":
+            return self._build_status_payload()
+        if t == "connections":
+            return self._build_connections_payload()
+        if t == "peers":
+            return self._build_peers_payload()
+        if t == "meta":
+            return self._build_meta_payload()
+        return None
+
+    def _parse_live_topics(self, value: Any) -> Set[str]:
+        topics: Set[str] = set()
+        if isinstance(value, str):
+            value = [value]
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                topic = str(item or "").strip().lower()
+                if topic in self.LIVE_TOPICS:
+                    topics.add(topic)
+        return topics
+
+    async def _handle_live_websocket(self, reader, writer, headers: dict) -> None:
+        key = str(headers.get("sec-websocket-key", "") or "").strip()
+        version = str(headers.get("sec-websocket-version", "") or "").strip()
+        if not key or version != "13":
+            await self._send(writer, 400, b"Bad WebSocket Request", "text/plain; charset=utf-8")
+            return
+        accept = base64.b64encode(
+            hashlib.sha1((key + self.LIVE_WS_GUID).encode("utf-8")).digest()
+        ).decode("ascii")
+        response = (
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Accept: {accept}\r\n"
+            "\r\n"
+        ).encode("utf-8")
+        writer.write(response)
+        await writer.drain()
+
+        topics: Set[str] = {"status", "connections", "peers", "meta"}
+        next_due: Dict[str, float] = {topic: 0.0 for topic in self.LIVE_TOPICS}
+        await self._send_ws_json(
+            writer,
+            {
+                "type": "hello",
+                "topics": sorted(topics),
+                "intervals_sec": {topic: self._live_topic_interval_s(topic) for topic in self.LIVE_TOPICS},
+            },
+        )
+        while True:
+            now = time.monotonic()
+            if topics:
+                wait_s = min(max(0.0, next_due.get(topic, 0.0) - now) for topic in topics)
+            else:
+                wait_s = 30.0
+            incoming = None
+            try:
+                incoming = await asyncio.wait_for(self._recv_ws_message(reader, writer), timeout=wait_s)
+            except asyncio.TimeoutError:
+                incoming = None
+            if incoming is False:
+                return
+            if isinstance(incoming, str):
+                try:
+                    msg = json.loads(incoming)
+                except Exception:
+                    msg = {}
+                requested = self._parse_live_topics(msg.get("subscribe"))
+                if requested:
+                    topics = requested
+                active_tabs = set(str(item or "").strip().lower() for item in (msg.get("active_tabs") or []))
+                if active_tabs:
+                    next_topics: Set[str] = {"status"}
+                    if "status" in active_tabs:
+                        next_topics.update({"connections", "peers"})
+                    if "misc" in active_tabs:
+                        next_topics.add("meta")
+                    topics = next_topics
+                request_topics = self._parse_live_topics(msg.get("request"))
+                for topic in sorted(request_topics):
+                    payload = self._live_topic_payload(topic)
+                    if payload is None:
+                        continue
+                    await self._send_ws_json(writer, {"type": topic, "data": payload})
+                    next_due[topic] = time.monotonic() + self._live_topic_interval_s(topic)
+            now = time.monotonic()
+            for topic in sorted(topics):
+                if now < next_due.get(topic, 0.0):
+                    continue
+                payload = self._live_topic_payload(topic)
+                if payload is None:
+                    continue
+                await self._send_ws_json(writer, {"type": topic, "data": payload})
+                next_due[topic] = now + self._live_topic_interval_s(topic)
+
+    async def _recv_ws_message(self, reader, writer) -> Any:
+        try:
+            hdr = await reader.readexactly(2)
+        except asyncio.IncompleteReadError:
+            return False
+        b1, b2 = hdr[0], hdr[1]
+        opcode = b1 & 0x0F
+        masked = bool(b2 & 0x80)
+        length = b2 & 0x7F
+        if length == 126:
+            ext = await reader.readexactly(2)
+            length = struct.unpack("!H", ext)[0]
+        elif length == 127:
+            ext = await reader.readexactly(8)
+            length = struct.unpack("!Q", ext)[0]
+        mask_key = await reader.readexactly(4) if masked else b""
+        payload = await reader.readexactly(length) if length else b""
+        if masked and mask_key:
+            payload = bytes(b ^ mask_key[idx % 4] for idx, b in enumerate(payload))
+        if opcode == 0x8:
+            with contextlib.suppress(Exception):
+                await self._send_ws_frame(writer, 0x8, payload)
+            return False
+        if opcode == 0x9:
+            with contextlib.suppress(Exception):
+                await self._send_ws_frame(writer, 0xA, payload)
+            return None
+        if opcode == 0xA:
+            return None
+        if opcode != 0x1:
+            return None
+        return payload.decode("utf-8", "replace")
+
+    async def _send_ws_json(self, writer, obj: dict) -> None:
+        await self._send_ws_frame(
+            writer,
+            0x1,
+            json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8"),
+        )
+
+    async def _send_ws_frame(self, writer, opcode: int, payload: bytes = b"") -> None:
+        data = payload or b""
+        first = 0x80 | (opcode & 0x0F)
+        length = len(data)
+        if length < 126:
+            header = bytes([first, length])
+        elif length < (1 << 16):
+            header = bytes([first, 126]) + struct.pack("!H", length)
+        else:
+            header = bytes([first, 127]) + struct.pack("!Q", length)
+        writer.write(header + data)
+        await writer.drain()
 
     def _json_one_line(self, payload) -> str:
         try:
