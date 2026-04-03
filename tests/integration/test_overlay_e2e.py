@@ -1155,21 +1155,35 @@ def _listener_overlay_port(case: Case, transport: str) -> int:
 
 
 def alloc_admin_ports(case_index: int, base: int = ADMIN_PORT_BASE) -> Tuple[int, int]:
-    del case_index, base
-    server = alloc_admin_port()
-    client = alloc_admin_port({server})
+    server = alloc_admin_port(case_index=case_index, base=base)
+    client = alloc_admin_port(case_index=case_index + 1, exclude={server}, base=base)
     return server, client
 
 
-def alloc_admin_port(exclude: Optional[Set[int]] = None) -> int:
+def alloc_admin_port(exclude: Optional[Set[int]] = None, *, case_index: int = 0, base: int = ADMIN_PORT_BASE) -> int:
     blocked = set(exclude or ())
-    for _ in range(64):
+    worker_index = _xdist_worker_index()
+    worker_count = _xdist_worker_count()
+    base_i = max(int(base), SERVICE_PORT_CEILING)
+    available = 65535 - base_i
+    if available <= worker_count:
+        raise RuntimeError(f'admin port allocation window too small: base={base_i} workers={worker_count}')
+    per_worker_budget = max(8, available // worker_count)
+    start = base_i + (worker_index * per_worker_budget)
+    stop = min(65535, start + per_worker_budget)
+    span = max(1, stop - start)
+    first = start + (int(case_index) % span)
+    candidates = list(range(first, stop)) + list(range(start, first))
+    for port in candidates:
+        if port in blocked:
+            continue
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(('127.0.0.1', 0))
-            port = int(s.getsockname()[1])
-        if port not in blocked:
-            return port
+            try:
+                s.bind(('127.0.0.1', port))
+            except OSError:
+                continue
+        return port
     raise RuntimeError('failed to allocate a free admin web port')
 
 
@@ -4046,11 +4060,12 @@ def test_overlay_e2e_materialize_case_ports_shifts_overlay_and_service_ports(mon
 
 def test_overlay_e2e_alloc_admin_ports_isolates_xdist_workers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('PYTEST_XDIST_WORKER', 'gw3')
+    monkeypatch.setenv('PYTEST_XDIST_WORKER_COUNT', '16')
     server_port, client_port = alloc_admin_ports(4)
 
     assert server_port != client_port
-    assert server_port > 0
-    assert client_port > 0
+    assert server_port >= ADMIN_PORT_BASE
+    assert client_port >= ADMIN_PORT_BASE
     assert server_port < 65535
     assert client_port < 65535
 
