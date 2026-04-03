@@ -112,6 +112,8 @@ pytest -q -n 16 tests/integration/test_overlay_e2e.py
 
 without different cases colliding on the same local ports.
 
+Admin ports are additionally reserved from a dedicated band starting at `ADMIN_PORT_BASE`, above the normal service-port allocation range. This prevents the admin web listener from colliding with overlay or service sockets during highly parallel `xdist` runs.
+
 ### 3. Delay/loss man-in-the-middle tests
 
 The `myudp` delay/loss coverage is now part of the main integration harness. A loopback UDP proxy sits between peer client and peer server and can:
