@@ -5581,27 +5581,76 @@ class WebSocketSession(ISession):
         return bool(self._peer_tuple) and self._ws_proxy_mode != "off"
 
     def _get_ws_proxy_endpoint(self, target_host: str, target_port: int) -> Optional[Tuple[str, int]]:
+        self._log.debug(
+            "[WS-PROXY] (%s) endpoint lookup target=%s mode=%s peer_configured=%s platform=%s tls=%s",
+            self._probe_id,
+            self._format_connect_authority(target_host, target_port),
+            self._ws_proxy_mode,
+            bool(self._peer_tuple),
+            sys.platform,
+            self._use_tls,
+        )
         if not self._proxy_feature_enabled():
+            self._log.debug("[WS-PROXY] (%s) proxy feature disabled", self._probe_id)
             return None
         if sys.platform != "win32":
+            self._log.debug("[WS-PROXY] (%s) rejecting proxy lookup on unsupported platform=%s", self._probe_id, sys.platform)
             raise RuntimeError("WebSocket proxy support is currently available on Windows only")
         if self._ws_proxy_mode == "manual":
             if not self._ws_proxy_host or self._ws_proxy_port <= 0:
+                self._log.debug(
+                    "[WS-PROXY] (%s) manual mode missing host/port host=%r port=%s",
+                    self._probe_id,
+                    self._ws_proxy_host,
+                    self._ws_proxy_port,
+                )
                 raise RuntimeError("manual WebSocket proxy mode requires --ws-proxy-host and --ws-proxy-port")
+            self._log.debug(
+                "[WS-PROXY] (%s) manual proxy selected endpoint=%s:%d",
+                self._probe_id,
+                self._ws_proxy_host,
+                int(self._ws_proxy_port),
+            )
             return self._ws_proxy_host, int(self._ws_proxy_port)
         if self._ws_proxy_mode == "system":
+            lookup_url = f"http://{self._format_connect_authority(target_host, target_port)}"
+            self._log.debug("[WS-PROXY] (%s) system proxy lookup url=%s secure=%s", self._probe_id, lookup_url, self._use_tls)
             endpoint = self._win_get_proxy_for_url(
-                f"http://{self._format_connect_authority(target_host, target_port)}",
+                lookup_url,
                 secure=self._use_tls,
             )
             if endpoint is None:
+                self._log.debug("[WS-PROXY] (%s) system proxy lookup returned no endpoint", self._probe_id)
                 raise RuntimeError("system proxy mode did not return a proxy for the websocket target")
+            self._log.debug("[WS-PROXY] (%s) system proxy selected endpoint=%s:%d", self._probe_id, endpoint[0], int(endpoint[1]))
             return endpoint
+        self._log.debug("[WS-PROXY] (%s) unsupported mode=%s", self._probe_id, self._ws_proxy_mode)
         raise RuntimeError(f"unsupported --ws-proxy-mode: {self._ws_proxy_mode}")
 
     def _win_get_proxy_for_url(self, url: str, secure: bool = False) -> Optional[Tuple[str, int]]:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         winhttp = ctypes.WinDLL("winhttp", use_last_error=True)
+        HINTERNET = ctypes.c_void_p
+
+        winhttp.WinHttpGetIEProxyConfigForCurrentUser.restype = wintypes.BOOL
+        winhttp.WinHttpGetIEProxyConfigForCurrentUser.argtypes = [ctypes.c_void_p]
+        winhttp.WinHttpOpen.restype = HINTERNET
+        winhttp.WinHttpOpen.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+        ]
+        winhttp.WinHttpGetProxyForUrl.restype = wintypes.BOOL
+        winhttp.WinHttpGetProxyForUrl.argtypes = [
+            HINTERNET,
+            wintypes.LPCWSTR,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+        ]
+        winhttp.WinHttpCloseHandle.restype = wintypes.BOOL
+        winhttp.WinHttpCloseHandle.argtypes = [HINTERNET]
 
         class WINHTTP_CURRENT_USER_IE_PROXY_CONFIG(ctypes.Structure):
             _fields_ = [
@@ -5651,8 +5700,27 @@ class WebSocketSession(ISession):
                 auto_detect = bool(ie_cfg.fAutoDetect)
                 manual_proxy = _wide(ie_cfg.lpszProxy)
                 auto_url = _wide(ie_cfg.lpszAutoConfigUrl)
+                self._log.debug(
+                    "[WS-PROXY] (%s) IE proxy config auto_detect=%s auto_config_url=%r manual_proxy=%r",
+                    self._probe_id,
+                    auto_detect,
+                    auto_url,
+                    manual_proxy,
+                )
+            else:
+                self._log.debug(
+                    "[WS-PROXY] (%s) WinHttpGetIEProxyConfigForCurrentUser failed last_error=%s",
+                    self._probe_id,
+                    ctypes.get_last_error(),
+                )
             parsed = self._parse_proxy_spec(manual_proxy, secure=secure)
             if parsed:
+                self._log.debug(
+                    "[WS-PROXY] (%s) using manual IE proxy endpoint=%s:%d",
+                    self._probe_id,
+                    parsed[0],
+                    int(parsed[1]),
+                )
                 return parsed
         finally:
             _free(getattr(ie_cfg, "lpszAutoConfigUrl", 0))
@@ -5673,17 +5741,40 @@ class WebSocketSession(ISession):
             if auto_url:
                 opts.dwFlags = WINHTTP_AUTOPROXY_CONFIG_URL
                 opts.lpszAutoConfigUrl = auto_url
+                self._log.debug("[WS-PROXY] (%s) WinHTTP auto-proxy using PAC url=%r for %s", self._probe_id, auto_url, url)
             else:
                 opts.dwFlags = WINHTTP_AUTOPROXY_AUTO_DETECT
                 opts.dwAutoDetectFlags = WINHTTP_AUTO_DETECT_TYPE_DHCP | WINHTTP_AUTO_DETECT_TYPE_DNS_A
+                self._log.debug(
+                    "[WS-PROXY] (%s) WinHTTP auto-proxy using auto_detect=%s flags=DHCP|DNS_A for %s",
+                    self._probe_id,
+                    auto_detect,
+                    url,
+                )
             opts.fAutoLogonIfChallenged = True
             info = WINHTTP_PROXY_INFO()
             if not bool(winhttp.WinHttpGetProxyForUrl(session, str(url), ctypes.byref(opts), ctypes.byref(info))):
+                self._log.debug(
+                    "[WS-PROXY] (%s) WinHttpGetProxyForUrl returned no proxy last_error=%s url=%s",
+                    self._probe_id,
+                    ctypes.get_last_error(),
+                    url,
+                )
                 return None
             try:
+                raw_proxy = _wide(info.lpszProxy)
+                self._log.debug(
+                    "[WS-PROXY] (%s) WinHttpGetProxyForUrl access_type=%s raw_proxy=%r",
+                    self._probe_id,
+                    int(info.dwAccessType),
+                    raw_proxy,
+                )
                 if int(info.dwAccessType) != WINHTTP_ACCESS_TYPE_NAMED_PROXY:
+                    self._log.debug("[WS-PROXY] (%s) WinHTTP access type is not named proxy", self._probe_id)
                     return None
-                return self._parse_proxy_spec(_wide(info.lpszProxy), secure=secure)
+                parsed = self._parse_proxy_spec(raw_proxy, secure=secure)
+                self._log.debug("[WS-PROXY] (%s) parsed WinHTTP proxy endpoint=%r", self._probe_id, parsed)
+                return parsed
             finally:
                 _free(getattr(info, "lpszProxy", 0))
                 _free(getattr(info, "lpszProxyBypass", 0))
@@ -5810,12 +5901,26 @@ class WebSocketSession(ISession):
         auth_mode = self._ws_proxy_auth
         challenge_blob = None
         attempts = 0
+        self._log.debug(
+            "[WS-PROXY] (%s) opening proxy tunnel target=%s via=%s:%d auth=%s",
+            self._probe_id,
+            self._format_connect_authority(target_host, target_port),
+            proxy_host,
+            int(proxy_port),
+            auth_mode,
+        )
         while attempts < 3:
             attempts += 1
+            self._log.debug("[WS-PROXY] (%s) CONNECT attempt=%d proxy=%s:%d", self._probe_id, attempts, proxy_host, int(proxy_port))
             sock = socket.create_connection((proxy_host, int(proxy_port)), timeout=30.0)
             try:
                 auth_header = None
                 if auth_mode == "negotiate" and attempts > 1:
+                    self._log.debug(
+                        "[WS-PROXY] (%s) building Negotiate token challenge_present=%s",
+                        self._probe_id,
+                        challenge_blob is not None,
+                    )
                     auth_header = "Negotiate " + self._win_build_negotiate_token(
                         self._build_windows_negotiate_spn(proxy_host),
                         challenge=challenge_blob,
@@ -5823,7 +5928,14 @@ class WebSocketSession(ISession):
                 request = self._build_proxy_connect_request(target_host, target_port, auth_header=auth_header)
                 sock.sendall(request)
                 status_code, headers = self._read_http_proxy_response(sock)
+                self._log.debug(
+                    "[WS-PROXY] (%s) CONNECT response status=%s proxy_authenticate=%s",
+                    self._probe_id,
+                    status_code,
+                    headers.get("proxy-authenticate", []),
+                )
                 if status_code == 200:
+                    self._log.debug("[WS-PROXY] (%s) CONNECT tunnel established on attempt=%d", self._probe_id, attempts)
                     sock.setblocking(False)
                     return sock
                 if status_code != 407:
@@ -5839,7 +5951,10 @@ class WebSocketSession(ISession):
                 challenge_blob = None
                 token = negotiate_headers[0][len("Negotiate"):].strip()
                 if token:
+                    self._log.debug("[WS-PROXY] (%s) proxy supplied Negotiate challenge token", self._probe_id)
                     challenge_blob = base64.b64decode(token)
+                else:
+                    self._log.debug("[WS-PROXY] (%s) proxy requested Negotiate without challenge token", self._probe_id)
             except Exception:
                 sock.close()
                 raise
