@@ -492,6 +492,52 @@ class WebSocketProxyHelpersTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Windows only"):
                 session._get_ws_proxy_endpoint("overlay.example", 54321)
 
+    def test_system_proxy_mode_logs_when_no_endpoint_is_found(self):
+        args = _args("binary")
+        args.ws_peer = "127.0.0.1"
+        args.ws_peer_port = 54321
+        args.ws_proxy_mode = "system"
+        session = WebSocketSession(args)
+        session._peer_tuple = ("127.0.0.1", 54321)
+        session._log = mock.Mock()
+
+        with mock.patch.object(sys, "platform", "win32"):
+            with mock.patch.object(session, "_win_get_proxy_for_url", return_value=None):
+                with self.assertRaisesRegex(RuntimeError, "did not return a proxy"):
+                    session._get_ws_proxy_endpoint("overlay.example", 54321)
+
+        debug_messages = [call.args[0] for call in session._log.debug.call_args_list if call.args]
+        self.assertTrue(any("endpoint lookup" in msg for msg in debug_messages))
+        self.assertTrue(any("system proxy lookup url=" in msg for msg in debug_messages))
+        self.assertTrue(any("returned no endpoint" in msg for msg in debug_messages))
+
+    def test_open_ws_proxy_socket_logs_connect_success(self):
+        args = _args("binary")
+        args.ws_peer = "127.0.0.1"
+        args.ws_peer_port = 54321
+        args.ws_proxy_mode = "manual"
+        args.ws_proxy_host = "proxy.example"
+        args.ws_proxy_port = 8080
+        session = WebSocketSession(args)
+        session._peer_tuple = ("127.0.0.1", 54321)
+        session._log = mock.Mock()
+
+        fake_sock = mock.Mock()
+        with mock.patch.object(session, "_get_ws_proxy_endpoint", return_value=("proxy.example", 8080)):
+            with mock.patch("socket.create_connection", return_value=fake_sock) as create_connection:
+                with mock.patch.object(session, "_read_http_proxy_response", return_value=(200, {})):
+                    sock = session._open_ws_proxy_socket_blocking("overlay.example", 54321)
+
+        self.assertIs(sock, fake_sock)
+        create_connection.assert_called_once_with(("proxy.example", 8080), timeout=30.0)
+        fake_sock.sendall.assert_called_once()
+        fake_sock.setblocking.assert_called_once_with(False)
+        debug_messages = [call.args[0] for call in session._log.debug.call_args_list if call.args]
+        self.assertTrue(any("opening proxy tunnel" in msg for msg in debug_messages))
+        self.assertTrue(any("CONNECT attempt=" in msg for msg in debug_messages))
+        self.assertTrue(any("CONNECT response status=" in msg for msg in debug_messages))
+        self.assertTrue(any("CONNECT tunnel established" in msg for msg in debug_messages))
+
 
 class WebSocketStaticHttpDebugTests(unittest.IsolatedAsyncioTestCase):
     async def test_start_server_schedules_static_http_probes_for_modern_requests(self):
