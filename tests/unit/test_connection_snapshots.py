@@ -226,6 +226,74 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(peer["traffic"]["rx_bytes"], 1234)
         self.assertEqual(peer["traffic"]["tx_bytes"], 4321)
 
+    def test_listener_peer_snapshot_uses_child_myudp_session_stats(self):
+        class _InnerStats:
+            def __init__(self, inflight, confirmed_total):
+                self.max_in_flight = 32
+                self.rtt_est_ms = None
+                self.last_rtt_ok_ns = None
+                self.last_ack_peer = None
+                self.last_sent_ctr = None
+                self.expected = None
+                self.peer_missed_count = None
+                self.missing = []
+                self.stats_hist = {"confirmed_total": confirmed_total}
+                self._inflight = inflight
+
+            def in_flight(self):
+                return self._inflight
+
+            def waiting_count(self):
+                return 0
+
+        class _ListenerSession:
+            def __init__(self):
+                self.inner_session = _InnerStats(inflight=0, confirmed_total=0)
+                self._server_peers = {
+                    1: {
+                        "session": _InnerStats(inflight=7, confirmed_total=11),
+                    }
+                }
+
+            def get_metrics(self):
+                return SessionMetrics(inflight=7)
+
+            def is_connected(self):
+                return True
+
+            def get_overlay_peers_snapshot(self):
+                return [
+                    {
+                        "peer_id": -1,
+                        "connected": False,
+                        "peer": None,
+                        "mux_chans": [],
+                        "rtt_est_ms": None,
+                        "listening": True,
+                    },
+                    {
+                        "peer_id": 1,
+                        "connected": True,
+                        "peer": "198.51.100.1:4433",
+                        "mux_chans": [101],
+                    },
+                ]
+
+        args = argparse.Namespace(no_dashboard=True, overlay_transport="myudp")
+        runner = Runner(args)
+        runner._sessions = [_ListenerSession()]
+        runner._muxes = [_MuxWithListeners()]
+        runner._session_labels = ["myudp"]
+
+        out = runner.get_peer_connections_snapshot()
+        listener = next(p for p in out["peers"] if p["id"] == "0:-1")
+        peer = next(p for p in out["peers"] if p["id"] == "0:1")
+
+        self.assertEqual(listener["inflight"], 0)
+        self.assertEqual(listener["myudp"]["confirmed_total"], 0)
+        self.assertEqual(peer["inflight"], 7)
+        self.assertEqual(peer["myudp"]["confirmed_total"], 11)
+
 
 if __name__ == "__main__":
     unittest.main()

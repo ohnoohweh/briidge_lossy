@@ -10404,16 +10404,39 @@ class Runner:
             return []
         return list(DEBUG_LOG_RING)[-lim:]
 
-    def _session_retransmit_stats(self, session: ISession) -> dict:
+    def _session_metrics_snapshot(self, session_obj, fallback: Optional[SessionMetrics] = None) -> SessionMetrics:
+        if session_obj is None:
+            return fallback or SessionMetrics()
+        getter = getattr(session_obj, "get_metrics", None)
+        if callable(getter):
+            with contextlib.suppress(Exception):
+                return getter()
+        try:
+            return SessionMetrics(
+                rtt_sample_ms=getattr(session_obj, "rtt_sample_ms", None),
+                rtt_est_ms=getattr(session_obj, "rtt_est_ms", None),
+                last_rtt_ok_ns=getattr(session_obj, "last_rtt_ok_ns", None),
+                inflight=int(session_obj.in_flight()) if hasattr(session_obj, "in_flight") else None,
+                max_inflight=getattr(session_obj, "max_in_flight", None),
+                waiting_count=int(session_obj.waiting_count()) if hasattr(session_obj, "waiting_count") else None,
+                last_ack_peer=getattr(session_obj, "last_ack_peer", None),
+                last_sent_ctr=getattr(session_obj, "last_sent_ctr", None),
+                expected=getattr(session_obj, "expected", None),
+                peer_missed_count=getattr(session_obj, "peer_missed_count", None),
+                our_missed_count=len(getattr(session_obj, "missing", [])) if hasattr(session_obj, "missing") else None,
+            )
+        except Exception:
+            return fallback or SessionMetrics()
+
+    def _session_retransmit_stats(self, session_obj) -> dict:
         hist: dict = {}
         buffered_frames = None
         with contextlib.suppress(Exception):
-            if isinstance(session, UdpSession):
-                inner = getattr(session, "inner_session", None)
-                hist = dict(getattr(inner, "stats_hist", {}) or {})
-                waiting_count = getattr(inner, "waiting_count", None)
-                if callable(waiting_count):
-                    buffered_frames = int(waiting_count())
+            inner = getattr(session_obj, "inner_session", session_obj)
+            hist = dict(getattr(inner, "stats_hist", {}) or {})
+            waiting_count = getattr(inner, "waiting_count", None)
+            if callable(waiting_count):
+                buffered_frames = int(waiting_count())
         return {
             "buffered_frames": buffered_frames,
             "first_pass": int(hist.get("once", 0)),
@@ -10446,7 +10469,7 @@ class Runner:
             mux = self._muxes[idx] if idx < len(self._muxes) else None
             label = self._session_labels[idx] if idx < len(self._session_labels) else f"session-{idx}"
             listen_endpoint = self._overlay_listen_label(label, session)
-            m = session.get_metrics()
+            m = self._session_metrics_snapshot(session)
             udp_rows: list = []
             tcp_rows: list = []
             if mux is not None:
@@ -10462,6 +10485,8 @@ class Runner:
             if overlay_rows:
                 for p in overlay_rows:
                     if bool(p.get("listening")):
+                        listener_session = getattr(session, "inner_session", None)
+                        listener_metrics = self._session_metrics_snapshot(listener_session)
                         peers.append({
                             "id": f"{idx}:{p.get('peer_id', 0)}",
                             "transport": label,
@@ -10469,8 +10494,8 @@ class Runner:
                             "connected": False,
                             "listen": listen_endpoint,
                             "peer": p.get("peer"),
-                            "rtt_est_ms": p.get("rtt_est_ms", m.rtt_est_ms),
-                            "inflight": m.inflight,
+                            "rtt_est_ms": p.get("rtt_est_ms", listener_metrics.rtt_est_ms),
+                            "inflight": listener_metrics.inflight,
                             "decode_errors": 0,
                             "open_connections": {
                                 "udp": 0,
@@ -10480,9 +10505,16 @@ class Runner:
                                 "rx_bytes": 0,
                                 "tx_bytes": 0,
                             },
-                            "myudp": self._session_retransmit_stats(session),
+                            "myudp": self._session_retransmit_stats(listener_session),
                         })
                         continue
+                    row_session = session
+                    server_peers = getattr(session, "_server_peers", None)
+                    if isinstance(server_peers, dict):
+                        ctx = server_peers.get(int(p.get("peer_id", 0)))
+                        if isinstance(ctx, dict) and ctx.get("session") is not None:
+                            row_session = ctx.get("session")
+                    row_metrics = self._session_metrics_snapshot(row_session, fallback=m)
                     mux_chans = set(int(c) for c in (p.get("mux_chans") or []))
                     p_rx = 0
                     p_tx = 0
@@ -10522,8 +10554,8 @@ class Runner:
                         "connected": row_connected,
                         "listen": listen_endpoint,
                         "peer": p.get("peer"),
-                        "rtt_est_ms": p.get("rtt_est_ms", m.rtt_est_ms),
-                        "inflight": m.inflight,
+                        "rtt_est_ms": p.get("rtt_est_ms", row_metrics.rtt_est_ms),
+                        "inflight": row_metrics.inflight,
                         "decode_errors": 0,
                         "open_connections": {
                             "udp": udp_open,
@@ -10533,7 +10565,7 @@ class Runner:
                             "rx_bytes": p_rx,
                             "tx_bytes": p_tx,
                         },
-                        "myudp": self._session_retransmit_stats(session),
+                        "myudp": self._session_retransmit_stats(row_session),
                     })
                 continue
 
