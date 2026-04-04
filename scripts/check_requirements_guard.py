@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 README_PATH = "README.md"
 REQUIREMENTS_PATH = "docs/REQUIREMENTS.md"
-TRACEABILITY_PATH = "docs/requirements_traceability.yaml"
+TRACEABILITY_PATH = ".github/requirements_traceability.yaml"
 CONTRACT_CHANGE_PREFIXES = ("src/", "tests/")
 CONTRACT_CHANGE_FILES = {
     "docs/ARCHITECTURE.md",

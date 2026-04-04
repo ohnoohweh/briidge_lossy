@@ -20,7 +20,7 @@ def _filter_ids(ids: set[str], prefix: str | None) -> set[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Report requirement coverage from docs/requirements_traceability.yaml, "
+            "Report requirement coverage from .github/requirements_traceability.yaml, "
             "with emphasis on integration coverage."
         )
     )

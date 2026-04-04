@@ -36,7 +36,7 @@ The recommended workflow is:
 
 This keeps first startup simple and makes larger settings such as `own_servers`, `remote_servers`, auth options, and multi-transport listener combinations much easier to manage than long shell commands.
 
-![WebAdmin Config Editor](docs/WebAdmin%20ConfigEditor.png)
+![WebAdmin Config Editor](docs/refered_docs/WebAdmin%20ConfigEditor.png)
 
 ### Minimal bootstrap pattern
 Create one config file per instance and only keep a few startup arguments on the command line.
@@ -102,11 +102,11 @@ Use a small VPS listener config first, then finish the published service mapping
 
 Issue before ObstacleBridge:
 
-![NAS issue example](docs/NAS_Issue.svg)
+![NAS issue example](docs/refered_docs/NAS_Issue.svg)
 
 Solution with a public ObstacleBridge server:
 
-![NAS solution example](docs/NAS_solution.svg)
+![NAS solution example](docs/refered_docs/NAS_solution.svg)
 
 **Public VPS initial config**
 ```ini
@@ -152,11 +152,11 @@ Start with a WebSocket-based config and then use WebAdmin to define the local UD
 
 Issue before ObstacleBridge:
 
-![Client issue example](docs/Client_issue.svg)
+![Client issue example](docs/refered_docs/Client_issue.svg)
 
 Solution with an ObstacleBridge WebSocket bridge:
 
-![Client solution example](docs/Client_solution.svg)
+![Client solution example](docs/refered_docs/Client_solution.svg)
 
 **Public bridge config**
 ```ini
@@ -198,11 +198,11 @@ Start with `myudp` in the config file and use WebAdmin to finish the local servi
 
 Issue before ObstacleBridge:
 
-![Client2 issue example](docs/Client2_issue.svg)
+![Client2 issue example](docs/refered_docs/Client2_issue.svg)
 
 Solution with an ObstacleBridge `myudp` bridge:
 
-![Client2 solution example](docs/Client2_solution.svg)
+![Client2 solution example](docs/refered_docs/Client2_solution.svg)
 
 **Public bridge config**
 ```ini
@@ -381,12 +381,12 @@ When `--admin-web-username` and `--admin-web-password` are configured and auth i
 
 The repository includes two exported admin web snapshots:
 
-- [docs/ObstacleBridge Client.html](https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/ObstacleBridge%20Client.html) shows a peer/client-side view.
-- [docs/ObstacleBridge Server.html](https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/ObstacleBridge%20Server.html) shows a listener/server-side view.
+- [docs/refered_docs/ObstacleBridge Client.html](https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/refered_docs/ObstacleBridge%20Client.html) shows a peer/client-side view.
+- [docs/refered_docs/ObstacleBridge Server.html](https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/refered_docs/ObstacleBridge%20Server.html) shows a listener/server-side view.
 
 Client admin web screenshot:
 
-![ObstacleBridge client admin web screenshot](docs/ObstaceBridge%20Client.png)
+![ObstacleBridge client admin web screenshot](docs/refered_docs/ObstaceBridge%20Client.png)
 
 What the admin web shows:
 
@@ -442,6 +442,8 @@ Current snapshot from `python scripts/report_requirements_coverage.py`:
 - Tracked in manifest: `42/42 = 100.0%`
 - Requirements without integration coverage: `(none)`
 
+The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
+
 The top-level README is intentionally kept as a contributor-facing coverage snapshot. When requirements, implementation, or the test set changes, update this section so the project entrypoint stays aligned with the current contract and evidence.
 
 ### CI split note
@@ -481,8 +483,11 @@ Debugging in a project like this can be difficult because the behavior emerges f
 - `tests/unit/` — targeted unit tests.
 - `tests/integration/` — end-to-end and subprocess tests.
 - `scripts/` — development helpers.
-- `docs/ObstacleBridge Client.html` — exported example of the admin web UI on a peer/client instance. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/ObstacleBridge%20Client.html`
-- `docs/ObstacleBridge Server.html` — exported example of the admin web UI on a listener/server instance. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/ObstacleBridge%20Server.html`
+- `docs/` — main project documents such as requirements, architecture, development process, system boundary, testing guide, and whitepaper.
+- `docs/refered_docs/` — referenced examples, exported admin snapshots, diagrams, images, and the smoke-test cheat sheet.
+- `.github/requirements_traceability.yaml` — product-requirement to test traceability manifest used by the requirements guard and coverage report.
+- `docs/refered_docs/ObstacleBridge Client.html` — exported example of the admin web UI on a peer/client instance. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/refered_docs/ObstacleBridge%20Client.html`
+- `docs/refered_docs/ObstacleBridge Server.html` — exported example of the admin web UI on a listener/server instance. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/refered_docs/ObstacleBridge%20Server.html`
 - `docs/WHITEPAPER.html` — full whitepaper requested for this repository update. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/WHITEPAPER.html`
 - `docs/README_TESTING.md` — consolidated testing catalog, execution commands, and regression coverage notes.
 - `wireshark/` — Wireshark dissectors grouped by framing/version.
