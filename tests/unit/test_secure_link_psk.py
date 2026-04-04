@@ -298,6 +298,62 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         self.assertEqual(client_payloads, [reply_mux])
 
+    async def test_data_counter_zero_is_rejected_as_lifecycle_violation(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+
+        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
+        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
+
+        await client.start()
+        await server.start()
+
+        server_inner.emit_state(True)
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        state = client._peer_states[0]
+        bad_payload = self._pack_mux(11, b"bad-counter")
+        aad = client._hdr_bytes(client._SL_TYPE_DATA, state.session_id, 0)
+        ciphertext = ChaCha20Poly1305(state.c2s_key).encrypt(client._nonce(0), bad_payload, aad)
+        server._on_inner_payload(aad + ciphertext, peer_id=1)
+        await asyncio.sleep(0)
+
+        server_status = server.get_secure_link_status_snapshot()
+        self.assertEqual(server_status["state"], "failed")
+        self.assertEqual(server_status["failure_code"], client._SL_AUTH_FAIL_LIFECYCLE)
+        self.assertEqual(server_status["failure_reason"], "lifecycle")
+
+    async def test_counter_exhaustion_fails_closed_before_nonce_wrap(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+
+        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
+        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
+
+        await client.start()
+        await server.start()
+
+        server_inner.emit_state(True)
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        state = client._peer_states[0]
+        state.tx_counter = client._SL_MAX_DATA_COUNTER + 1
+        self.assertEqual(client.send_app(self._pack_mux(11, b"too-late")), 0)
+
+        client_peer = client.get_overlay_peers_snapshot()[0]
+        self.assertEqual(client_peer["secure_link"]["state"], "failed")
+        self.assertEqual(client_peer["secure_link"]["failure_code"], client._SL_AUTH_FAIL_LIFECYCLE)
+        self.assertEqual(client_peer["secure_link"]["failure_reason"], "lifecycle")
+        self.assertIn("lifecycle invariant", client_peer["secure_link"]["failure_detail"])
+
 
 if __name__ == '__main__':
     unittest.main()

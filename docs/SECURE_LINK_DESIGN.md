@@ -805,6 +805,14 @@ Acceptance criteria:
 - define counter-overflow behavior
 - define whether any limited out-of-order tolerance is allowed or whether the model stays strictly monotonic
 
+Current Phase 1 runtime decision:
+
+- protected `data` counters are owned per direction and start at `1`
+- counter value `0` is reserved and rejected as a lifecycle violation
+- reconnect and completed rekey install a fresh secure-link session id and reset directional counters to the initial values
+- stale counters and stale session ids are rejected deterministically
+- current counter exhaustion behavior is fail-closed rather than wraparound or implicit reuse
+
 Acceptance criteria:
 
 - no reconnect, restart, or rekey path can reuse an AEAD nonce under the same key

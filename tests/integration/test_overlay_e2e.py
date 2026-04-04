@@ -4288,6 +4288,7 @@ def _start_case_with_secure_link_args(
     secure_slot: Optional[int] = None,
     server_extra_args: Optional[List[str]] = None,
     client_extra_args: Optional[List[str]] = None,
+    client_restart_if_disconnected: float = 5.0,
 ) -> tuple[Case, BounceBackServer, Proc, Proc]:
     case = materialize_secure_link_case_ports(case, secure_slot) if secure_slot is not None else materialize_case_ports(case, case_index)
     bounce = BounceBackServer(
@@ -4308,7 +4309,7 @@ def _start_case_with_secure_link_args(
     server_env = case.server_env
     client_env = case.client_env
     server_cmd += ['--config', missing_cfg, '--admin-web-port', '0']
-    client_cmd += ['--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5']
+    client_cmd += ['--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', str(float(client_restart_if_disconnected))]
     server_cmd += admin_args(server_admin)
     client_cmd += admin_args(client_admin)
     server_cmd = list(server_cmd) + list(server_extra_args or [])
@@ -5028,6 +5029,7 @@ def test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected(tmp_path: Path) -
             secure_slot=1,
             server_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'server-secret'],
             client_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'client-secret'],
+            client_restart_if_disconnected=30,
         )
         wait_status_not_connected(client_proc.admin_port or 0, timeout=20.0, label='client')
         wait_status_not_connected(server_proc.admin_port or 0, timeout=20.0, label='server')

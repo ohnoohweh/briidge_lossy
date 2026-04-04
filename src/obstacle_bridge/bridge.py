@@ -1888,7 +1888,10 @@ class SecureLinkPskSession(ISession):
     _SL_AUTH_FAIL_UNSUPPORTED = 2
     _SL_AUTH_FAIL_REPLAY = 3
     _SL_AUTH_FAIL_DECODE = 4
+    _SL_AUTH_FAIL_LIFECYCLE = 5
     _SL_HDR = struct.Struct(">BBBBQQ")
+    _SL_FIRST_DATA_COUNTER = 1
+    _SL_MAX_DATA_COUNTER = (1 << 64) - 1
 
     @staticmethod
     def register_cli(p: argparse.ArgumentParser) -> None:
@@ -2027,6 +2030,14 @@ class SecureLinkPskSession(ISession):
             hashlib.sha256,
         ).digest()
 
+    @classmethod
+    def _new_session_id(cls, *avoid: int) -> int:
+        blocked = {int(v) for v in avoid if int(v or 0) > 0}
+        session_id = 0
+        while int(session_id or 0) <= 0 or int(session_id) in blocked:
+            session_id = secrets.randbits(64)
+        return int(session_id)
+
     def _peer_key(self, peer_id: Optional[int]) -> int:
         if self._client_mode:
             return 0
@@ -2042,6 +2053,7 @@ class SecureLinkPskSession(ISession):
             cls._SL_AUTH_FAIL_UNSUPPORTED: "unsupported",
             cls._SL_AUTH_FAIL_REPLAY: "replay",
             cls._SL_AUTH_FAIL_DECODE: "decode",
+            cls._SL_AUTH_FAIL_LIFECYCLE: "lifecycle",
         }.get(int(code or 0))
 
     @classmethod
@@ -2051,6 +2063,7 @@ class SecureLinkPskSession(ISession):
             cls._SL_AUTH_FAIL_UNSUPPORTED: "peer requested an unsupported secure-link capability",
             cls._SL_AUTH_FAIL_REPLAY: "replayed or out-of-order protected frame rejected",
             cls._SL_AUTH_FAIL_DECODE: "invalid or unexpected secure-link frame",
+            cls._SL_AUTH_FAIL_LIFECYCLE: "secure-link session or counter lifecycle invariant violated",
         }.get(int(code or 0))
 
     def _mark_auth_fail(self, peer_id: Optional[int], session_id: int, code: int) -> None:
@@ -2065,6 +2078,7 @@ class SecureLinkPskSession(ISession):
         elif int(session_id or 0) > 0:
             state.session_id = int(session_id)
         state.authenticated = False
+        self._clear_pending_rekey(state)
         state.auth_fail_code = int(code or 0)
         state.auth_fail_reason = str(self._auth_fail_reason(code) or "")
         state.auth_fail_detail = str(self._auth_fail_detail(code) or "")
@@ -2135,9 +2149,7 @@ class SecureLinkPskSession(ISession):
     def _start_client_rekey(self, state: _SecureLinkPeerState) -> None:
         if not self._client_mode or not state.authenticated or int(state.pending_session_id or 0) > 0:
             return
-        pending_session_id = random.getrandbits(64)
-        while pending_session_id == int(state.session_id or 0):
-            pending_session_id = random.getrandbits(64)
+        pending_session_id = self._new_session_id(state.session_id, state.pending_session_id)
         pending_client_nonce = secrets.token_bytes(32)
         state.pending_session_id = pending_session_id
         state.pending_client_nonce = pending_client_nonce
@@ -2312,12 +2324,8 @@ class SecureLinkPskSession(ISession):
             pass
 
     def _begin_client_handshake(self) -> None:
-        self._last_auth_fail_code = 0
-        self._last_auth_fail_reason = ""
-        self._last_auth_fail_detail = ""
-        self._last_auth_fail_unix_ts = None
         state = _SecureLinkPeerState(
-            session_id=random.getrandbits(64),
+            session_id=self._new_session_id(),
             client_nonce=secrets.token_bytes(32),
         )
         self._peer_states[0] = state
@@ -2434,7 +2442,7 @@ class SecureLinkPskSession(ISession):
         return target_peer_id, routed
 
     def _handle_client_hello(self, peer_id: Optional[int], session_id: int, body: bytes) -> None:
-        if self._client_mode or len(body) < 34:
+        if self._client_mode or int(session_id or 0) <= 0 or len(body) < 34:
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         client_nonce = body[:32]
@@ -2443,10 +2451,6 @@ class SecureLinkPskSession(ISession):
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_UNSUPPORTED)
             return
         server_nonce = secrets.token_bytes(32)
-        self._last_auth_fail_code = 0
-        self._last_auth_fail_reason = ""
-        self._last_auth_fail_detail = ""
-        self._last_auth_fail_unix_ts = None
         c2s_key, s2c_key = self._derive_keys(session_id, client_nonce, server_nonce)
         key = self._peer_key(peer_id)
         self._peer_states[key] = _SecureLinkPeerState(
@@ -2461,7 +2465,7 @@ class SecureLinkPskSession(ISession):
         self._inner.send_app(self._build_frame(self._SL_TYPE_SERVER_HELLO, session_id, 0, payload), peer_id=peer_id)
 
     def _handle_server_hello(self, session_id: int, body: bytes) -> None:
-        if not self._client_mode or len(body) < 65:
+        if not self._client_mode or int(session_id or 0) <= 0 or len(body) < 65:
             self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         state = self._peer_states.get(0)
@@ -2494,13 +2498,16 @@ class SecureLinkPskSession(ISession):
         self._refresh_connected_state()
 
     def _handle_rekey_hello(self, peer_id: Optional[int], session_id: int, body: bytes) -> None:
-        if self._client_mode or len(body) < 34:
+        if self._client_mode or int(session_id or 0) <= 0 or len(body) < 34:
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         key = self._peer_key(peer_id)
         state = self._peer_states.get(key)
         if state is None or not state.authenticated:
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        if int(state.pending_session_id or 0) > 0 and int(state.pending_session_id or 0) != int(session_id):
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
             return
         client_nonce = body[:32]
         capability = int(body[32])
@@ -2519,7 +2526,7 @@ class SecureLinkPskSession(ISession):
         self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_REPLY, session_id, 0, payload), peer_id=peer_id)
 
     def _handle_rekey_reply(self, session_id: int, body: bytes) -> None:
-        if not self._client_mode or len(body) < 65:
+        if not self._client_mode or int(session_id or 0) <= 0 or len(body) < 65:
             self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         state = self._peer_states.get(0)
@@ -2544,7 +2551,7 @@ class SecureLinkPskSession(ISession):
         self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_COMMIT, session_id, 0, commit))
 
     def _handle_rekey_commit(self, peer_id: Optional[int], session_id: int, body: bytes) -> None:
-        if self._client_mode:
+        if self._client_mode or int(session_id or 0) <= 0:
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         key = self._peer_key(peer_id)
@@ -2561,7 +2568,7 @@ class SecureLinkPskSession(ISession):
         self._refresh_connected_state()
 
     def _handle_rekey_done(self, session_id: int) -> None:
-        if not self._client_mode:
+        if not self._client_mode or int(session_id or 0) <= 0:
             self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         state = self._peer_states.get(0)
@@ -2583,6 +2590,9 @@ class SecureLinkPskSession(ISession):
         state = self._peer_states.get(key)
         if state is None or int(state.session_id) != int(session_id):
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        if int(session_id or 0) <= 0 or int(counter or 0) < self._SL_FIRST_DATA_COUNTER or int(counter) > self._SL_MAX_DATA_COUNTER:
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
             return
         if counter <= int(state.rx_counter):
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_REPLAY)
@@ -2661,6 +2671,9 @@ class SecureLinkPskSession(ISession):
         if not outbound_key:
             return 0
         counter = int(state.tx_counter)
+        if counter < self._SL_FIRST_DATA_COUNTER or counter > self._SL_MAX_DATA_COUNTER:
+            self._send_auth_fail(peer_id, int(state.session_id or 0), self._SL_AUTH_FAIL_LIFECYCLE)
+            return 0
         aad = self._hdr_bytes(self._SL_TYPE_DATA, state.session_id, counter)
         ciphertext = ChaCha20Poly1305(outbound_key).encrypt(self._nonce(counter), routed_payload, aad)
         state.tx_counter += 1
