@@ -150,6 +150,7 @@ After implementing a new feature or fixing a bug:
 - run the most relevant targeted tests early while iterating so regressions are detected from runtime behavior, not from documentation or guard failures
 - when [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py) changes, run the full integration gate `pytest -q -n 16 tests/integration/test_overlay_e2e.py` before pushing or opening a PR
 - when [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py) changes, strongly prefer the same full integration run before pushing or opening a PR, even if targeted `-k` runs were used during iteration
+- when integration requirements are OS-specific, mark them explicitly and keep CI split so Linux runs the shared suite while Windows runs the Windows-only subset
 - record the observable behavior in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
 - keep [requirements_traceability.yaml](/home/ohnoohweh/quic_br/docs/requirements_traceability.yaml) aligned so changed requirements still point at real tests
 - update [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md) if responsibilities changed

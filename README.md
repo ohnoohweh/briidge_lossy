@@ -1,40 +1,32 @@
 # ObstacleBridge
 ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for barrier-resilient networking. It can run over multiple overlay transports (`myudp`, `tcp`, `quic`, `ws`), expose local TCP/UDP listener services through a reliable overlay, and host an admin UI for monitoring active channels.
 
-## Project guidance
-- Requirements: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)
-- Development process: [docs/DEVELOPMENT_PROCESS.md](docs/DEVELOPMENT_PROCESS.md)
-- Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
+## Reader guide
 
-## Current requirements coverage
-Current snapshot from `python scripts/report_requirements_coverage.py`:
+- User: start with `Why this project was developed` and `Quick-start examples`
+- Contributor: start with `Contributor guidance`
 
-- Integration-covered: `45/46 = 97.8%`
-- Unit-covered: `22/46 = 47.8%`
-- Any-test-covered: `46/46 = 100.0%`
-- Tracked in manifest: `46/46 = 100.0%`
-- Requirement without integration coverage: `REQ-TST-002`
+## For Users
 
-The top-level README is intentionally kept as a coverage snapshot. When requirements, implementation, or the test set changes, update this section so the project entrypoint stays aligned with the current contract and evidence.
-
-## Whitepaper
+### Whitepaper
 The complete whitepaper requested for this project update is available as a rendered preview at [`docs/WHITEPAPER.html`](https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/WHITEPAPER.html). It covers:
 - Internet barriers such as NAT, DPI, protocol blocking, traffic shaping, and TLS interception.
 - Transport-level behavior for IP, ICMP, UDP, TCP, QUIC, DNS, HTTP/HTTPS, and WebSockets.
 - The layered overlay architecture used here: RTT/liveness, reliable DATA/CONTROL framing, and ChannelMux OPEN/DATA/CLOSE multiplexing.
 - Why UDP overlays can outperform TCP-over-TCP tunnels on hostile paths.
 - Development-process lessons from AI-supported programming.
-### Whitepaper abstract
+
+#### Whitepaper abstract
 > This whitepaper presents a detailed technical explanation of Internet communication mechanisms and a Python-based UDP overlay protocol designed to work across restrictive network environments. The report explains how modern Internet barriers such as NAT, IPv4/IPv6 asymmetry, deep packet inspection, protocol blocking, traffic shaping, and throttling affect connectivity, and how a layered UDP overlay can reconstruct connection detection, round-trip-time measurement, loss recovery, retransmission, and multi-channel multiplexing in user space.
 
-## Similar projects
+### Similar projects
 - [chisel](https://github.com/jpillora/chisel) — a well-known TCP/UDP tunnel over HTTP/WebSocket implemented in Go.
 
-## Why this project was developed
+### Why this project was developed
 - `chisel` is implemented in Go, and using/building it on Synology NAS environments can be difficult in practice.
 - ObstacleBridge adds the `myudp` transport to better handle network obstacles and traffic degradation conditions seen in large-scale Asian network environments.
 
-## Quick-start examples
+### Quick-start examples
 The recommended workflow is:
 
 1. start each instance with a small config file
@@ -90,8 +82,21 @@ After the first startup, open the Admin Web UI and adjust the remaining details 
 - admin authentication and instance naming
 - logging and log retention settings
 
+User-use-case note:
+
+- the examples below are user-oriented deployment patterns, not project requirements
+- each one depends on assumptions about the surrounding infrastructure, operating systems, libraries, browsers, and reachable network paths
+- the formal separation between use-case, external assumptions, and project responsibilities is documented in [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md)
+
 ### 1) NAS behind outbound-only internet, reached through a public server
 This setup fits a NAS or home server that can make outgoing connections but cannot accept incoming internet traffic directly.
+
+Assumptions:
+
+- a public VPS or similar reachable listener host is available
+- the NAS can open outbound connections to that listener
+- Python and the required runtime dependencies are available on both sides
+- the services you want to expose actually exist on the NAS and are reachable locally
 
 Use a small VPS listener config first, then finish the published service mapping in WebAdmin:
 
@@ -137,6 +142,12 @@ Then use WebAdmin to add the service exposure you want, for example:
 ### 2) WireGuard bridge through inspected internet access
 This fits environments where raw VPN UDP is blocked or degraded, but HTTP(S)-shaped traffic still survives.
 
+Assumptions:
+
+- the surrounding network still permits the chosen fallback transport, for example WebSocket
+- both sides can run ObstacleBridge with the required dependencies
+- the local WireGuard or UDP OpenVPN service already exists and listens on the configured endpoint
+
 Start with a WebSocket-based config and then use WebAdmin to define the local UDP service recreation:
 
 Issue before ObstacleBridge:
@@ -177,6 +188,12 @@ Then use WebAdmin to add an `own_servers` entry that recreates the local WireGua
 ### 3) WireGuard bridge for high-loss obstacle conditions
 This fits paths where UDP still passes, but loss and retransmission pressure make conventional transports perform badly.
 
+Assumptions:
+
+- the network still passes enough UDP for `myudp` to operate
+- both peers can run the selected config and local UDP service recreation
+- the local VPN endpoint or other UDP application already exists on the configured address and port
+
 Start with `myudp` in the config file and use WebAdmin to finish the local service mapping:
 
 Issue before ObstacleBridge:
@@ -216,6 +233,12 @@ Then use WebAdmin to add the same local UDP recreation for WireGuard or UDP Open
 
 ### 4) Peer client with both inspected-path and high-loss-path transports
 If you want one peer config that can use both WebSocket and `myudp`, keep the bootstrap config simple and tune the rest in WebAdmin:
+
+Assumptions:
+
+- both transport paths are meaningful in the target environment
+- the listener side is configured to accept the selected transports
+- the client environment can use the required runtime dependencies for both overlay modes
 
 ```ini
 overlay_transport = ws,myudp
@@ -402,7 +425,31 @@ What is visible in the included snapshots:
 - Multi-transport mode is currently intended for listening instances without configured transport peers (for example no `--udp-peer`, `--tcp-peer`, `--quic-peer`, or `--ws-peer`).
 - WebSocket listener mode supports multiple simultaneous peers with per-peer mux-channel rewriting so that peer-local channel IDs do not collide inside the shared mux logic.
 
-## Development environment and procedure
+## For Contributors
+
+### Contributor guidance
+- Requirements: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)
+- System boundary and assumptions: [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md)
+- Development process: [docs/DEVELOPMENT_PROCESS.md](docs/DEVELOPMENT_PROCESS.md)
+- Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
+
+### Current requirements coverage
+Current snapshot from `python scripts/report_requirements_coverage.py`:
+
+- Integration-covered: `45/46 = 97.8%`
+- Unit-covered: `22/46 = 47.8%`
+- Any-test-covered: `46/46 = 100.0%`
+- Tracked in manifest: `46/46 = 100.0%`
+- Requirement without integration coverage: `REQ-TST-002`
+
+The top-level README is intentionally kept as a contributor-facing coverage snapshot. When requirements, implementation, or the test set changes, update this section so the project entrypoint stays aligned with the current contract and evidence.
+
+### CI split note
+
+- Linux runs the OS-independent integration suite with `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`
+- Windows runs the Windows-specific integration subset with `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"`
+
+### Development environment and procedure
 - Feature development is done on Fedora 42.
 - The primary IDE is Visual Studio Code.
 - ChatGPT 5.4 Codex integration is used for implementation support.
@@ -412,7 +459,7 @@ What is visible in the included snapshots:
 - After successful local validation, deployment is tested on a VPS running Ubuntu 24.04.03 LTS with Python 3.12.3 and a Fedora 42 client system.
 - After successful validation there, deployment is also intended for the productive NAS environment running DSM 7.12 with Python 3.9.
 
-## Trouble shooting recommendations
+### Trouble shooting recommendations
 Debugging in a project like this can be difficult because the behavior emerges from the interaction of different peers, while the relevant evidence is often hidden in a large amount of runtime data.
 
 - Enable logging on the relevant component, generate log files, and analyze them carefully. In practice it is often effective to use AI assistance to summarize the logs and provide reasoning about the likely sequence of events.
@@ -423,13 +470,13 @@ Debugging in a project like this can be difficult because the behavior emerges f
 - Create integration test cases for controlled reproduction whenever a bug or unclear transport interaction is found.
 - Add those reproduction cases to the regression suite so future releases continue to cover the behavior and the functionality does not silently erode over time.
 
-## Testing strategy
+### Testing strategy
 - Run the regular pytest suite during normal development to cover unit, integration, and overlay harness regression paths.
 - Use the parallel overlay harness for frequent end-to-end validation when transport and socket behavior matter most.
 - Keep reconnect, listener, and concurrent multi-peer coverage in the regular regression flow instead of treating them as occasional manual checks.
 - The full testing catalog, commands, and scenario-by-scenario criteria are documented in `docs/README_TESTING.md`.
 
-## Repository layout
+### Repository layout
 - `src/obstacle_bridge/` — main implementation.
 - `tests/unit/` — targeted unit tests.
 - `tests/integration/` — end-to-end and subprocess tests.

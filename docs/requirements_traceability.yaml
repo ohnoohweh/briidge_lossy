@@ -38,6 +38,8 @@ REQ-OVL-007:
 
 # The application-vs-library functional decomposition for REQ-WSP-* is documented in
 # docs/ARCHITECTURE.md under "WebSocket proxy tunneling".
+# The broader separation between user use-cases, external assumptions, and
+# project-owned requirements is documented in docs/SYSTEM_BOUNDARY.md.
 REQ-WSP-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_overlay_uses_http_proxy_env
@@ -263,3 +265,5 @@ REQ-TST-004:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_materialize_case_ports_shifts_overlay_and_service_ports
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_alloc_admin_ports_isolates_xdist_workers
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_case_port_offset_stays_in_range_for_many_workers
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_proxy_system_default_on_windows_uses_system_proxy
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_proxy_negotiate_auth_on_windows

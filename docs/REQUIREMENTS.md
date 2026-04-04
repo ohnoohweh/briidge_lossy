@@ -2,6 +2,8 @@
 
 This document captures black-box requirements for the project. These are intentionally phrased as observable behavior, not implementation detail.
 
+These statements are limited to project-owned behavior. They are not a catalog of end-user goals, deployment recipes, infrastructure prerequisites, operating-system capabilities, browser guarantees, or third-party library contracts. Those boundaries are described in [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md).
+
 ## Scope
 
 ObstacleBridge is expected to:
@@ -11,6 +13,8 @@ ObstacleBridge is expected to:
 - support listener and peer-client deployment modes
 - expose runtime state and configuration through the admin web interface
 - remain testable under reconnect, restart, concurrency, and lossy-path scenarios
+
+The motivating user use-cases and the external assumptions around them are documented separately in [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md) and the user-facing sections of [README.md](/home/ohnoohweh/quic_br/README.md). The requirement IDs below only describe what the project itself is expected to do inside that broader system context.
 
 ## Overlay and transport requirements
 
@@ -82,4 +86,4 @@ ObstacleBridge is expected to:
 - `REQ-TST-001`: User-visible transport behavior shall be protected by integration tests, the relevant regression suites shall be executed as the primary detector of degradation before documentation or repository guards are relied on for consistency checks, and the top-level `README.md` shall keep links to requirements/process guidance plus the current requirement-coverage snapshot aligned with the implemented project state.
 - `REQ-TST-002`: Important local invariants and component contracts shall be protected by unit tests.
 - `REQ-TST-003`: Known bugs and regressions shall be turned into regression tests whenever practical.
-- `REQ-TST-004`: The integration harness shall support regular parallel execution on a local development machine.
+- `REQ-TST-004`: The integration harness shall support regular parallel execution on a local development machine, and CI shall execute OS-independent integration coverage on Linux while running Windows-specific integration requirements on Windows rather than relying on cross-platform skips as the only evidence.
