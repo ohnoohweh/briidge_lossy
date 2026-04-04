@@ -1862,6 +1862,11 @@ class _SecureLinkPeerState:
     authenticated: bool = False
     tx_counter: int = 1
     rx_counter: int = 0
+    pending_session_id: int = 0
+    pending_client_nonce: bytes = b""
+    pending_server_nonce: bytes = b""
+    pending_c2s_key: Optional[bytes] = None
+    pending_s2c_key: Optional[bytes] = None
     auth_fail_code: int = 0
     auth_fail_reason: str = ""
     auth_fail_detail: str = ""
@@ -1874,6 +1879,10 @@ class SecureLinkPskSession(ISession):
     _SL_TYPE_SERVER_HELLO = 2
     _SL_TYPE_AUTH_FAIL = 3
     _SL_TYPE_DATA = 4
+    _SL_TYPE_REKEY_HELLO = 5
+    _SL_TYPE_REKEY_REPLY = 6
+    _SL_TYPE_REKEY_COMMIT = 7
+    _SL_TYPE_REKEY_DONE = 8
     _SL_CAP_PSK_V1 = 1
     _SL_AUTH_FAIL_BAD_PSK = 1
     _SL_AUTH_FAIL_UNSUPPORTED = 2
@@ -1916,6 +1925,13 @@ class SecureLinkPskSession(ISession):
                 default=False,
                 help='Fail closed if secure-link cannot be negotiated or authenticated.'
             )
+        if not _has('--secure-link-rekey-after-frames'):
+            p.add_argument(
+                '--secure-link-rekey-after-frames',
+                type=int,
+                default=0,
+                help='Automatically initiate PSK rekey after this many protected data frames are sent. 0 disables rekeying.'
+            )
 
     def __init__(self, inner: ISession, args: argparse.Namespace, transport_name: str):
         self._inner = inner
@@ -1933,6 +1949,7 @@ class SecureLinkPskSession(ISession):
         self._outer_on_transport_epoch_change: Optional[Callable[[int], None]] = None
         self._client_mode = _has_configured_overlay_peer(args, self._transport_name)
         self._psk = str(getattr(args, "secure_link_psk", "") or "").encode("utf-8")
+        self._rekey_after_frames = max(0, int(getattr(args, "secure_link_rekey_after_frames", 0) or 0))
         self._peer_states: Dict[int, _SecureLinkPeerState] = {}
         self._server_chan_to_peer: Dict[int, Tuple[int, int]] = {}
         self._server_peer_chan_to_mux: Dict[Tuple[int, int], int] = {}
@@ -1994,6 +2011,16 @@ class SecureLinkPskSession(ISession):
         return hmac.new(
             self._psk,
             b"obstaclebridge-securelink-server-proof-v1|"
+            + int(session_id).to_bytes(8, "big")
+            + client_nonce
+            + server_nonce,
+            hashlib.sha256,
+        ).digest()
+
+    def _client_rekey_commit_proof(self, session_id: int, client_nonce: bytes, server_nonce: bytes) -> bytes:
+        return hmac.new(
+            self._psk,
+            b"obstaclebridge-securelink-client-rekey-commit-v1|"
             + int(session_id).to_bytes(8, "big")
             + client_nonce
             + server_nonce,
@@ -2078,6 +2105,57 @@ class SecureLinkPskSession(ISession):
         self._server_peer_chan_to_mux.clear()
         self._server_next_mux_chan = 1
         self._refresh_connected_state()
+
+    @staticmethod
+    def _clear_pending_rekey(state: _SecureLinkPeerState) -> None:
+        state.pending_session_id = 0
+        state.pending_client_nonce = b""
+        state.pending_server_nonce = b""
+        state.pending_c2s_key = None
+        state.pending_s2c_key = None
+
+    def _promote_pending_rekey(self, state: _SecureLinkPeerState) -> bool:
+        if int(state.pending_session_id or 0) <= 0:
+            return False
+        state.session_id = int(state.pending_session_id)
+        state.client_nonce = bytes(state.pending_client_nonce or b"")
+        state.server_nonce = bytes(state.pending_server_nonce or b"")
+        state.c2s_key = bytes(state.pending_c2s_key or b"") or None
+        state.s2c_key = bytes(state.pending_s2c_key or b"") or None
+        state.authenticated = True
+        state.tx_counter = 1
+        state.rx_counter = 0
+        state.auth_fail_code = 0
+        state.auth_fail_reason = ""
+        state.auth_fail_detail = ""
+        state.auth_fail_unix_ts = None
+        self._clear_pending_rekey(state)
+        return True
+
+    def _start_client_rekey(self, state: _SecureLinkPeerState) -> None:
+        if not self._client_mode or not state.authenticated or int(state.pending_session_id or 0) > 0:
+            return
+        pending_session_id = random.getrandbits(64)
+        while pending_session_id == int(state.session_id or 0):
+            pending_session_id = random.getrandbits(64)
+        pending_client_nonce = secrets.token_bytes(32)
+        state.pending_session_id = pending_session_id
+        state.pending_client_nonce = pending_client_nonce
+        state.pending_server_nonce = b""
+        state.pending_c2s_key = None
+        state.pending_s2c_key = None
+        payload = pending_client_nonce + bytes([self._SL_CAP_PSK_V1, 0])
+        self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_HELLO, pending_session_id, 0, payload))
+
+    def _maybe_trigger_rekey(self, state: Optional[_SecureLinkPeerState]) -> None:
+        if not self._client_mode or self._rekey_after_frames <= 0 or state is None or not state.authenticated:
+            return
+        if int(state.pending_session_id or 0) > 0:
+            return
+        sent_frames = max(0, int(state.tx_counter or 1) - 1)
+        if sent_frames < self._rekey_after_frames:
+            return
+        self._start_client_rekey(state)
 
     def set_on_app_payload(self, cb): self._outer_on_app = cb
     def set_on_state_change(self, cb): self._outer_on_state = cb
@@ -2167,6 +2245,7 @@ class SecureLinkPskSession(ISession):
                 "state": secure_state,
                 "authenticated": authenticated,
                 "session_id": session_id,
+                "rekey_in_progress": bool(state is not None and int(state.pending_session_id or 0) > 0),
                 "failure_code": failure_code,
                 "failure_reason": failure_reason,
                 "failure_detail": failure_detail,
@@ -2218,6 +2297,7 @@ class SecureLinkPskSession(ISession):
             "state": overall_state,
             "authenticated": authenticated_peers > 0,
             "authenticated_peers": authenticated_peers,
+            "rekey_in_progress": any(int(state.pending_session_id or 0) > 0 for state in self._peer_states.values()),
             "failure_code": failure_code,
             "failure_reason": failure_reason,
             "failure_detail": failure_detail,
@@ -2413,6 +2493,84 @@ class SecureLinkPskSession(ISession):
         self._last_auth_fail_unix_ts = None
         self._refresh_connected_state()
 
+    def _handle_rekey_hello(self, peer_id: Optional[int], session_id: int, body: bytes) -> None:
+        if self._client_mode or len(body) < 34:
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        key = self._peer_key(peer_id)
+        state = self._peer_states.get(key)
+        if state is None or not state.authenticated:
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        client_nonce = body[:32]
+        capability = int(body[32])
+        if capability != self._SL_CAP_PSK_V1:
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_UNSUPPORTED)
+            return
+        server_nonce = secrets.token_bytes(32)
+        c2s_key, s2c_key = self._derive_keys(session_id, client_nonce, server_nonce)
+        state.pending_session_id = int(session_id)
+        state.pending_client_nonce = client_nonce
+        state.pending_server_nonce = server_nonce
+        state.pending_c2s_key = c2s_key
+        state.pending_s2c_key = s2c_key
+        proof = self._server_proof(session_id, client_nonce, server_nonce)
+        payload = server_nonce + bytes([self._SL_CAP_PSK_V1]) + proof
+        self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_REPLY, session_id, 0, payload), peer_id=peer_id)
+
+    def _handle_rekey_reply(self, session_id: int, body: bytes) -> None:
+        if not self._client_mode or len(body) < 65:
+            self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        state = self._peer_states.get(0)
+        if state is None or int(state.pending_session_id or 0) != int(session_id):
+            self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        server_nonce = body[:32]
+        capability = int(body[32])
+        proof = body[33:65]
+        if capability != self._SL_CAP_PSK_V1:
+            self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_UNSUPPORTED)
+            return
+        expected = self._server_proof(session_id, state.pending_client_nonce, server_nonce)
+        if not hmac.compare_digest(proof, expected):
+            self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_BAD_PSK)
+            return
+        c2s_key, s2c_key = self._derive_keys(session_id, state.pending_client_nonce, server_nonce)
+        state.pending_server_nonce = server_nonce
+        state.pending_c2s_key = c2s_key
+        state.pending_s2c_key = s2c_key
+        commit = self._client_rekey_commit_proof(session_id, state.pending_client_nonce, server_nonce)
+        self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_COMMIT, session_id, 0, commit))
+
+    def _handle_rekey_commit(self, peer_id: Optional[int], session_id: int, body: bytes) -> None:
+        if self._client_mode:
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        key = self._peer_key(peer_id)
+        state = self._peer_states.get(key)
+        if state is None or int(state.pending_session_id or 0) != int(session_id):
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        expected = self._client_rekey_commit_proof(session_id, state.pending_client_nonce, state.pending_server_nonce)
+        if not hmac.compare_digest(bytes(body or b""), expected):
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_BAD_PSK)
+            return
+        self._promote_pending_rekey(state)
+        self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_DONE, session_id, 0, b""), peer_id=peer_id)
+        self._refresh_connected_state()
+
+    def _handle_rekey_done(self, session_id: int) -> None:
+        if not self._client_mode:
+            self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        state = self._peer_states.get(0)
+        if state is None or int(state.pending_session_id or 0) != int(session_id):
+            self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        self._promote_pending_rekey(state)
+        self._refresh_connected_state()
+
     def _deliver_outer_app(self, payload: bytes, peer_id: Optional[int]) -> None:
         if callable(self._outer_on_app):
             try:
@@ -2471,6 +2629,18 @@ class SecureLinkPskSession(ISession):
             code = int(body[0]) if body else self._SL_AUTH_FAIL_DECODE
             self._mark_auth_fail(peer_id, session_id, code)
             return
+        if sl_type == self._SL_TYPE_REKEY_HELLO:
+            self._handle_rekey_hello(peer_id, session_id, body)
+            return
+        if sl_type == self._SL_TYPE_REKEY_REPLY:
+            self._handle_rekey_reply(session_id, body)
+            return
+        if sl_type == self._SL_TYPE_REKEY_COMMIT:
+            self._handle_rekey_commit(peer_id, session_id, body)
+            return
+        if sl_type == self._SL_TYPE_REKEY_DONE:
+            self._handle_rekey_done(session_id)
+            return
         if sl_type == self._SL_TYPE_DATA:
             self._handle_data(peer_id, session_id, counter, body, aad)
             return
@@ -2496,6 +2666,8 @@ class SecureLinkPskSession(ISession):
         state.tx_counter += 1
         wire = aad + ciphertext
         sent = self._inner.send_app(wire, peer_id=peer_id)
+        if sent:
+            self._maybe_trigger_rekey(state)
         return len(payload) if sent else 0
 
 class UdpSession(ISession):
@@ -10738,6 +10910,7 @@ class StatsBoard:
                         "state": "disabled",
                         "authenticated": False,
                         "authenticated_peers": 0,
+                        "rekey_in_progress": False,
                         "failure_code": None,
                         "failure_reason": None,
                         "failure_detail": None,
@@ -10801,6 +10974,7 @@ class RunnerMuxAggregate:
             "state": "disabled",
             "authenticated": False,
             "session_id": None,
+            "rekey_in_progress": False,
             "failure_code": None,
             "failure_reason": None,
             "failure_detail": None,

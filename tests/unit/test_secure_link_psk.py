@@ -87,6 +87,7 @@ def _args(**overrides):
         secure_link_mode='psk',
         secure_link_psk='lab-secret',
         secure_link_require=False,
+        secure_link_rekey_after_frames=0,
         tcp_peer=None,
     )
     base.update(overrides)
@@ -249,6 +250,53 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         out_chan2, _proto2, _ctr2, _mt2, out_body2 = self._unpack_mux(plain2)
         self.assertEqual((out_chan1, out_body1), (11, b"reply-1"))
         self.assertEqual((out_chan2, out_body2), (11, b"reply-2"))
+
+    async def test_psk_rekey_rotates_session_id_and_keeps_data_flowing(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+
+        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1', secure_link_rekey_after_frames=1), 'tcp')
+        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
+
+        server_payloads = []
+        client_payloads = []
+        server.set_on_app_payload(lambda payload, peer_id=None: server_payloads.append(payload))
+        client.set_on_app_payload(lambda payload, peer_id=None: client_payloads.append(payload))
+
+        await client.start()
+        await server.start()
+
+        server_inner.emit_state(True)
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        first_mux = self._pack_mux(11, b"before-rekey")
+        self.assertEqual(client.send_app(first_mux), len(first_mux))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        old_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
+        self.assertTrue(client.get_secure_link_status_snapshot()["rekey_in_progress"])
+
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        self.assertFalse(client.get_secure_link_status_snapshot()["rekey_in_progress"])
+        new_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
+        self.assertNotEqual(old_session_id, new_session_id)
+
+        second_mux = self._pack_mux(11, b"after-rekey", counter=2)
+        self.assertEqual(client.send_app(second_mux), len(second_mux))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        self.assertEqual(server_payloads, [first_mux, second_mux])
+
+        reply_mux = self._pack_mux(11, b"server-after-rekey", counter=3)
+        self.assertEqual(server.send_app(reply_mux, peer_id=1), len(reply_mux))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        self.assertEqual(client_payloads, [reply_mux])
 
 
 if __name__ == '__main__':

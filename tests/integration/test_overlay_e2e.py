@@ -417,9 +417,10 @@ def _max_case_static_port(case: Case) -> int:
 
 def materialize_secure_link_case_ports(case: Case, secure_slot: int) -> Case:
     worker_index = _xdist_worker_index()
-    slot = int(secure_slot) % SECURE_LINK_PORT_SLOTS_PER_WORKER
-    offset = SECURE_LINK_PORT_OFFSET_BASE + (worker_index * SECURE_LINK_PORT_SLOTS_PER_WORKER * SECURE_LINK_PORT_STRIDE) + (slot * SECURE_LINK_PORT_STRIDE)
     highest = _max_case_static_port(case)
+    slots_per_worker = _secure_link_port_slots_per_worker(highest)
+    slot = int(secure_slot) % slots_per_worker
+    offset = SECURE_LINK_PORT_OFFSET_BASE + (worker_index * slots_per_worker * SECURE_LINK_PORT_STRIDE) + (slot * SECURE_LINK_PORT_STRIDE)
     if highest + offset >= SERVICE_PORT_CEILING:
         raise ValueError(
             f'secure-link test port offset out of range: highest={highest} offset={offset} ceiling={SERVICE_PORT_CEILING}'
@@ -627,6 +628,20 @@ SECURE_LINK_ADMIN_BASE = 62000
 SECURE_LINK_PORT_OFFSET_BASE = 5000
 SECURE_LINK_PORT_STRIDE = 64
 SECURE_LINK_PORT_SLOTS_PER_WORKER = 1
+
+
+def _secure_link_port_slots_per_worker(highest_static_port: int) -> int:
+    worker_count = _xdist_worker_count()
+    max_offset = SERVICE_PORT_CEILING - int(highest_static_port) - 1
+    remaining = max_offset - SECURE_LINK_PORT_OFFSET_BASE
+    if remaining < 0:
+        raise ValueError(
+            f'secure-link test port base out of range: highest={highest_static_port} '
+            f'base={SECURE_LINK_PORT_OFFSET_BASE} ceiling={SERVICE_PORT_CEILING}'
+        )
+    total_slots = max(1, (remaining + SECURE_LINK_PORT_STRIDE) // SECURE_LINK_PORT_STRIDE)
+    slots_per_worker = max(1, total_slots // max(1, worker_count))
+    return min(int(SECURE_LINK_PORT_SLOTS_PER_WORKER), slots_per_worker) if SECURE_LINK_PORT_SLOTS_PER_WORKER > 1 else slots_per_worker
 
 EXACT_BYTES_CASES = {
     'case01_udp_over_own_udp_ipv4',
@@ -2092,6 +2107,37 @@ def wait_peer_secure_link_state(
         time.sleep(0.25)
     raise RuntimeError(
         f'/api/peers did not expose secure_link state={expected_state_norm} on port {admin_port}; last={last_doc!r}'
+    )
+
+
+def wait_peer_secure_link_session_change(
+    admin_port: int,
+    *,
+    previous_session_id: int,
+    timeout: float = 12.0,
+    label: str = '',
+    transport: Optional[str] = None,
+) -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    normalized_transport = str(transport or '').strip().lower()
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
+        last_doc = doc
+        for row in list(doc.get('peers') or []):
+            if normalized_transport and str(row.get('transport', '')).strip().lower() != normalized_transport:
+                continue
+            if str(row.get('state', '')).strip().lower() == 'listening':
+                continue
+            secure_link = row.get('secure_link') or {}
+            session_id = int(secure_link.get('session_id') or 0)
+            if session_id > 0 and session_id != int(previous_session_id):
+                who = f' {label}' if label else ''
+                log.info(f'[PEERS]{who} port={admin_port} secure_link_session_changed={secure_link!r}')
+                return doc
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'/api/peers did not expose secure_link session change from {previous_session_id} on port {admin_port}; last={last_doc!r}'
     )
 
 
@@ -5010,6 +5056,65 @@ def test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected(tmp_path: Path) -
 
 @pytest.mark.integration
 @pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic(tmp_path: Path) -> None:
+    case = CASES['case06_overlay_tcp_ipv4']
+    bounce = None
+    server_proc = client_proc = None
+    secure_args = [
+        '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+        '--secure-link-rekey-after-frames', '1',
+    ]
+    try:
+        case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+            case,
+            tmp_path,
+            case_index=284,
+            secure_slot=9,
+            server_extra_args=secure_args,
+            client_extra_args=secure_args,
+        )
+        client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+        first_doc = wait_peer_secure_link_state(
+            client_proc.admin_port or 0,
+            expected_state='authenticated',
+            timeout=12.0,
+            label='client',
+            transport='tcp',
+            authenticated=True,
+        )
+        first_session_id = 0
+        for row in list(first_doc.get('peers') or []):
+            if str(row.get('transport', '')).strip().lower() != 'tcp':
+                continue
+            if str(row.get('state', '')).strip().lower() == 'listening':
+                continue
+            first_session_id = int(((row.get('secure_link') or {}).get('session_id') or 0))
+            if first_session_id:
+                break
+        if first_session_id <= 0:
+            raise RuntimeError(f'Could not determine initial secure-link session id from peers doc: {first_doc!r}')
+        wait_probe(case, payload=b'\x01rekey-one', timeout=12.0)
+        wait_peer_secure_link_session_change(
+            client_proc.admin_port or 0,
+            previous_session_id=first_session_id,
+            timeout=12.0,
+            label='client',
+            transport='tcp',
+        )
+        wait_probe(case, payload=b'\x01rekey-two', timeout=12.0)
+        wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+        wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+    finally:
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("case_name", "case_index", "secure_slot"),
     [
@@ -5205,6 +5310,23 @@ def test_overlay_e2e_case_port_offset_stays_in_range_for_many_workers(monkeypatc
     assert int(_arg_value(case.bridge_server_args, '--udp-own-port', '0')) < 65535
     assert case.bounce_port < SERVICE_PORT_CEILING
     assert case.probe_port < SERVICE_PORT_CEILING
+
+
+def test_overlay_e2e_secure_link_port_slots_expand_locally_and_collapse_under_xdist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    highest = _max_case_static_port(CASES['case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp'])
+
+    monkeypatch.delenv('PYTEST_XDIST_WORKER', raising=False)
+    monkeypatch.delenv('PYTEST_XDIST_WORKER_COUNT', raising=False)
+    local_slots = _secure_link_port_slots_per_worker(highest)
+
+    monkeypatch.setenv('PYTEST_XDIST_WORKER', 'gw15')
+    monkeypatch.setenv('PYTEST_XDIST_WORKER_COUNT', '16')
+    xdist_slots = _secure_link_port_slots_per_worker(highest)
+
+    assert local_slots > 1
+    assert xdist_slots == 1
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:

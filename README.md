@@ -455,6 +455,7 @@ What is visible in the included snapshots:
 | `--secure-link` | `False` | Enable the secure-link prototype. Phase 1 currently supports PSK mode over `myudp`, `tcp`, `ws`, and `quic`. |
 | `--secure-link-mode` | `off` | Secure-link mode. Phase 1 currently supports `off` or `psk`; `cert` remains planned. |
 | `--secure-link-psk` | `` | Pre-shared secret for `secure_link_mode=psk`. Both peers must use the same non-empty value. |
+| `--secure-link-rekey-after-frames` | `0` | Automatically initiate PSK rekey after this many protected data frames are sent. `0` disables rekeying. |
 | `--secure-link-require` | `False` | Fail closed if secure-link cannot be negotiated or authenticated. |
 
 #### Current secure-link quick start
@@ -469,6 +470,7 @@ What works today:
 - `overlay_transport=ws`
 - `overlay_transport=quic`
 - admin/API visibility through `/api/status` and `/api/peers`
+- optional automatic rekey through `secure_link_rekey_after_frames`
 
 What is still planned:
 
@@ -486,6 +488,7 @@ Minimal listener example:
   "secure_link": true,
   "secure_link_mode": "psk",
   "secure_link_psk": "change-this-demo-secret",
+  "secure_link_rekey_after_frames": 0,
   "secure_link_require": true,
   "admin_web": true,
   "admin_web_bind": "127.0.0.1",
@@ -505,6 +508,7 @@ Minimal peer example:
   "secure_link": true,
   "secure_link_mode": "psk",
   "secure_link_psk": "change-this-demo-secret",
+  "secure_link_rekey_after_frames": 0,
   "secure_link_require": true,
   "admin_web": true,
   "admin_web_bind": "127.0.0.1",
@@ -524,6 +528,7 @@ What to look for in WebAdmin or the admin API:
 
 - `/api/status` shows `secure_link.state=authenticated` on both sides after the overlay connects
 - `/api/peers` shows the peer row with `secure_link.authenticated=true`
+- when rekeying is enabled, `/api/status` and `/api/peers` can briefly show `rekey_in_progress=true` while the session rotates to a fresh `secure_link.session_id`
 - if the PSK does not match, the client and server stay disconnected and the failure is reported as:
   - `secure_link.state=failed`
   - `failure_code=1`
@@ -533,6 +538,7 @@ Operator notes:
 
 - use `--secure-link-require` when you want a hard failure instead of falling back to plaintext behavior
 - use a long random PSK for anything beyond local testing
+- leave `secure_link_rekey_after_frames=0` unless you intentionally want to exercise or validate rekey behavior
 - the current PSK mode is a prototype convenience mode, not the final trust model described in [docs/SECURE_LINK_DESIGN.md](docs/SECURE_LINK_DESIGN.md)
 
 ## Notes
@@ -679,10 +685,10 @@ This stays consistent with the current design direction:
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `42/42 = 100.0%`
-- Unit-covered: `20/42 = 47.6%`
-- Any-test-covered: `42/42 = 100.0%`
-- Tracked in manifest: `42/42 = 100.0%`
+- Integration-covered: `48/48 = 100.0%`
+- Unit-covered: `26/48 = 54.2%`
+- Any-test-covered: `48/48 = 100.0%`
+- Tracked in manifest: `48/48 = 100.0%`
 - Requirements without integration coverage: `(none)`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.

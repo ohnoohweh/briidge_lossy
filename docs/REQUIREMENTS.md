@@ -81,6 +81,7 @@ Current implementation note:
 - `REQ-AUT-003`: When peers are configured with different PSKs, the protected data phase shall not start, overlay traffic shall not be forwarded, and the session shall remain observable as an authentication failure rather than a false connected state.
 - `REQ-AUT-004`: The admin web interface and admin API shall expose the secure-link state for the local session and reported peers so an operator can distinguish disabled, handshaking, authenticated, and failed protected-overlay states, including the reported authentication failure category.
 - `REQ-AUT-005`: Multi-peer listener scenarios using secure-link PSK shall preserve peer isolation and distinct authenticated-peer visibility across the supported listener transports, with the deepest concurrent routing slice defended on the TCP listener path.
+- `REQ-AUT-006`: When `secure_link_rekey_after_frames` is configured to a positive value, the PSK secure-link runtime shall rotate to a new secure-link session under live traffic without losing healthy overlay functionality.
 
 - `PLAN-AUT-004`: The deployment trust anchor should be an admin-controlled root public key configured on peer clients and peer servers.
 - `PLAN-AUT-005`: Peer certificates should be issued by that deployment-local admin root and be constrained by machine-enforced roles.

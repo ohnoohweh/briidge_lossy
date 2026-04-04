@@ -307,6 +307,10 @@ Recommended keys:
 - `secure_link_psk`
   - string
   - shared secret input for lab/development PSK mode
+- `secure_link_rekey_after_frames`
+  - integer
+  - default: `0`
+  - when `> 0`, the client side automatically initiates PSK rekey after this many protected data frames have been sent under the current secure-link session
 - `secure_link_require`
   - boolean
   - default: `false`
@@ -316,6 +320,7 @@ Config interpretation rules:
 
 - if `secure_link = false`, the runtime behaves exactly as today
 - if `secure_link = true` and `secure_link_mode = psk`, both sides must have the same `secure_link_psk`
+- if `secure_link_rekey_after_frames > 0`, the current PSK runtime slice initiates client-driven rekey using a fresh secure-link session id and fresh nonces while preserving the overlay connection
 - if `secure_link = true` and `secure_link_mode = cert`, Phase 1 should reject startup or configuration as unsupported
 - `secure_link_require = true` is mainly useful for tests to ensure the path does not silently fall back to plaintext
 
@@ -766,6 +771,78 @@ Layering:
 - implement secure-link framing hooks
 - support optional PSK mode for development and testing
 - validate layering with `ChannelMux` unchanged
+
+### Phase 1.5: PSK hardening checklist
+
+This phase hardens the delivered PSK runtime slice before or alongside broader operational use. The goal is not to change the trust model yet, but to make the existing PSK path safer and more explicit under long runtimes, malformed input, and transport churn.
+
+#### Rekeying
+
+- define a rekey trigger policy:
+  - byte-count threshold
+  - time-based threshold
+  - optional operator-forced rekey hook
+- define a rekey handshake:
+  - who initiates
+  - how both sides confirm the new keys
+  - when old keys stop being accepted
+- define rollback behavior if rekey stalls mid-flight
+
+Acceptance criteria:
+
+- long-lived sessions can rotate traffic keys without disconnecting healthy peers
+- once rekey completes, frames under superseded keys are rejected
+- failed or abandoned rekey attempts do not silently fall back to ambiguous mixed-key operation
+
+#### Nonce and counter lifecycle
+
+- define per-direction counter ownership explicitly
+- define initial counter values for:
+  - fresh session
+  - reconnected session
+  - rekeyed session
+- bind counters to session identity so reconnect does not risk nonce reuse
+- define counter-overflow behavior
+- define whether any limited out-of-order tolerance is allowed or whether the model stays strictly monotonic
+
+Acceptance criteria:
+
+- no reconnect, restart, or rekey path can reuse an AEAD nonce under the same key
+- duplicate frames are rejected deterministically
+- stale frames from an earlier session are rejected deterministically
+- counter exhaustion results in a safe rekey or fail-closed shutdown rather than undefined behavior
+
+#### Failure handling
+
+- enumerate fail-closed behavior for:
+  - malformed handshake frame
+  - unexpected message order
+  - decrypt/tag failure
+  - replayed frame
+  - plaintext frame when secure-link is required
+  - internal secure-link exception
+- define whether each case should:
+  - emit `auth_fail`
+  - log a diagnostic only
+  - close the peer immediately
+  - mark the session as failed and observable in admin/API state
+- define reconnect throttling so persistent auth failures do not create noisy loops
+
+Acceptance criteria:
+
+- no failure path can leave the overlay falsely reported as connected
+- no failure path can silently accept plaintext when secure-link is required
+- admin/API state and logs expose a stable machine reason plus human-readable detail
+- repeated auth failures remain observable without destabilizing the surrounding runner state machine
+
+#### Test additions expected in Phase 1.5
+
+- integration test for rekey under live traffic
+- integration test for reconnect without nonce reuse
+- integration test for replay rejection after reconnect and after rekey
+- unit tests for counter overflow handling
+- integration test for malformed-frame fail-closed behavior
+- integration test for persistent wrong-PSK failure throttling and observability
 
 ### Phase 2: certificate-based mutual authentication
 

@@ -22,6 +22,7 @@ def _args(**overrides):
         secure_link_mode='off',
         secure_link_psk='',
         secure_link_require=False,
+        secure_link_rekey_after_frames=0,
     )
     base.update(overrides)
     return argparse.Namespace(**base)
