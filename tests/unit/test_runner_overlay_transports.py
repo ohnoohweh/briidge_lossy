@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 import argparse
+import pathlib
 import unittest
 from unittest import mock
 
 from obstacle_bridge.bridge import Runner, TcpStreamSession, UdpSession, QuicSession, WebSocketSession, SecureLinkPskSession
+
+FIXTURES = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "secure_link_cert"
 
 
 def _args(**overrides):
@@ -23,6 +26,12 @@ def _args(**overrides):
         secure_link_psk='',
         secure_link_require=False,
         secure_link_rekey_after_frames=0,
+        secure_link_root_pub='',
+        secure_link_cert_body='',
+        secure_link_cert_sig='',
+        secure_link_private_key='',
+        secure_link_revoked_serials='',
+        secure_link_cert_reload_on_restart=True,
     )
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -137,6 +146,46 @@ class RunnerOverlayTransportTests(unittest.TestCase):
                 self.assertEqual([name for name, _ in sessions], [overlay_transport])
                 self.assertIsInstance(sessions[0][1], SecureLinkPskSession)
                 factory.assert_called_once()
+
+    def test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_cert(self):
+        cases = [
+            ('myudp', 'udp_peer', UdpSession, '127.0.0.1'),
+            ('tcp', 'tcp_peer', TcpStreamSession, '127.0.0.1'),
+            ('quic', 'quic_peer', QuicSession, '127.0.0.1'),
+            ('ws', 'ws_peer', WebSocketSession, '127.0.0.1'),
+        ]
+        for overlay_transport, peer_attr, cls, peer_value in cases:
+            with self.subTest(overlay_transport=overlay_transport):
+                args = _args(
+                    overlay_transport=overlay_transport,
+                    secure_link=True,
+                    secure_link_mode='cert',
+                    secure_link_root_pub=str(FIXTURES / 'root_a_pub.pem'),
+                    secure_link_cert_body=str(FIXTURES / 'client_valid_cert_body.json'),
+                    secure_link_cert_sig=str(FIXTURES / 'client_valid_cert.sig'),
+                    secure_link_private_key=str(FIXTURES / 'client_valid_key.pem'),
+                    **{peer_attr: peer_value},
+                )
+                with mock.patch.object(cls, 'from_args', return_value=mock.Mock(spec=cls)) as factory:
+                    sessions = Runner.build_sessions_from_overlay(args)
+                self.assertEqual([name for name, _ in sessions], [overlay_transport])
+                self.assertIsInstance(sessions[0][1], SecureLinkPskSession)
+                factory.assert_called_once()
+
+    def test_build_sessions_from_overlay_rejects_missing_cert_material(self):
+        args = _args(
+            overlay_transport='tcp',
+            secure_link=True,
+            secure_link_mode='cert',
+            tcp_peer='127.0.0.1',
+            secure_link_root_pub=str(FIXTURES / 'root_a_pub.pem'),
+            secure_link_cert_body='',
+            secure_link_cert_sig=str(FIXTURES / 'client_valid_cert.sig'),
+            secure_link_private_key=str(FIXTURES / 'client_valid_key.pem'),
+        )
+        with mock.patch.object(TcpStreamSession, 'from_args', return_value=mock.Mock(spec=TcpStreamSession)):
+            with self.assertRaises(ValueError):
+                Runner.build_sessions_from_overlay(args)
 
 
 if __name__ == '__main__':

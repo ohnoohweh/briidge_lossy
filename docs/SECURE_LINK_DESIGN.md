@@ -321,7 +321,7 @@ Config interpretation rules:
 - if `secure_link = false`, the runtime behaves exactly as today
 - if `secure_link = true` and `secure_link_mode = psk`, both sides must have the same `secure_link_psk`
 - if `secure_link_rekey_after_frames > 0`, the current PSK runtime slice initiates client-driven rekey using a fresh secure-link session id and fresh nonces while preserving the overlay connection
-- if `secure_link = true` and `secure_link_mode = cert`, Phase 1 should reject startup or configuration as unsupported
+- the original Phase 1 plan treated `secure_link_mode = cert` as unsupported until the Phase 2 runtime slice was delivered; that limitation no longer applies on the current branch history
 - `secure_link_require = true` is mainly useful for tests to ensure the path does not silently fall back to plaintext
 
 ### Phase 1 first implementation target
@@ -1083,16 +1083,37 @@ Acceptance criteria:
 
 Current status:
 
-- not fulfilled yet
+- fulfilled for the delivered certificate-mode runtime slice
 
 Evidence:
 
-- planning/design only:
-  - [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md)
+- runtime/config:
+  - [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py)
+    `secure_link_mode=cert`, file-path material loading, detached-signature/root verification, certificate handshake path, cert-mode rekey reuse of the shared secure-link data plane, and peer-scoped trust diagnostics
+- deterministic test material:
+  - [tests/fixtures/secure_link_cert/root_a_pub.pem](/home/ohnoohweh/quic_br/tests/fixtures/secure_link_cert/root_a_pub.pem)
+  - [tests/fixtures/secure_link_cert/root_b_pub.pem](/home/ohnoohweh/quic_br/tests/fixtures/secure_link_cert/root_b_pub.pem)
+  - [tests/fixtures/secure_link_cert/client_valid_cert_body.json](/home/ohnoohweh/quic_br/tests/fixtures/secure_link_cert/client_valid_cert_body.json)
+  - [tests/fixtures/secure_link_cert/server_valid_cert_body.json](/home/ohnoohweh/quic_br/tests/fixtures/secure_link_cert/server_valid_cert_body.json)
+- unit evidence:
+  - [test_secure_link_cert.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_cert.py)
+    happy path, trust-anchor mismatch, wrong-role rejection, expired/not-yet-valid/deployment-mismatch rejection, revoked-serial rejection, and cert-mode operator rekey
+  - [test_runner_overlay_transports.py](/home/ohnoohweh/quic_br/tests/unit/test_runner_overlay_transports.py)
+    cert-mode wrapping and required startup material validation
+  - [test_admin_web_payloads.py](/home/ohnoohweh/quic_br/tests/unit/test_admin_web_payloads.py)
+    peer-scoped cert identity/trust payload shaping
+- integration evidence:
+  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_secure_link_cert_happy_path_transports`
+  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_cert_rejection_matrix`
+  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_cert_operator_forced_rekey`
+- requirements/testing references:
   - [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
-    `PLAN-AUT-004` to `PLAN-AUT-007`
+    `REQ-AUT-011` to `REQ-AUT-014`
   - [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md)
-    `Planned certificate-mode secure-link integration test matrix`
+    `Current certificate-mode secure-link coverage`
 
 ### Phase 3: operational controls
 

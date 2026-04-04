@@ -13,7 +13,7 @@ The current runtime can be understood in six layers:
 5. runner and process orchestration layer
 6. admin web and observability layer
 
-The secure-link layer now exists as a delivered Phase 1 PSK runtime slice between the transport/session layer and the current reliability/framing layer. Certificate-based trust-anchor and certificate-validation behavior remain planned, but the boundary itself is no longer only a reservation.
+The secure-link layer now exists as a delivered runtime slice between the transport/session layer and the current reliability/framing layer. The delivered modes now include both the Phase 1 PSK slice and the Phase 2 certificate-based trust-anchor / certificate-validation slice, so the boundary itself is no longer only a reservation.
 
 ## Stable component IDs
 
@@ -26,7 +26,7 @@ The following component IDs are intended to stay stable so requirements, tests, 
 | `ARC-CMP-003` | Channel and service multiplexing layer | `own_servers`, `remote_servers`, channel routing, and peer-scoped service isolation |
 | `ARC-CMP-004` | Runner and process orchestration layer | CLI/config composition, lifecycle wiring, restart/shutdown coordination, and process startup |
 | `ARC-CMP-005` | Admin web and observability layer | HTTP API/UI, auth/session control, runtime snapshots, logs, and operator visibility |
-| `ARC-CMP-006` | Secure-link layer | Delivered PSK-based authentication, frame protection, replay defense, rekeying, and secure-link diagnostics between transport sessions and `ChannelMux`, with certificate-based follow-up still planned |
+| `ARC-CMP-006` | Secure-link layer | Delivered PSK-based and certificate-based authentication, frame protection, replay defense, rekeying, and secure-link diagnostics between transport sessions and `ChannelMux` |
 
 ## 1. Transport and session layer
 
@@ -84,16 +84,17 @@ Primary responsibility:
 
 Current delivered boundary:
 
-- the delivered Phase 1 PSK runtime sits below `ChannelMux` and above the transport/session layer
+- the delivered secure-link runtime sits below `ChannelMux` and above the transport/session layer
 
 Current contribution:
 
-- PSK-based peer authentication
+- PSK-based and certificate-based peer authentication
 - session-key establishment
 - ciphertext/plaintext transition for mux payloads
 - replay protection and rekey hooks
 - bounded client-side retry/backoff after repeated auth failures
 - secure-link status and failure diagnostics for admin/API consumers
+- certificate-root, detached-signature, role, validity-window, deployment-scope, and revoked-serial enforcement in cert mode
 
 Current boundary contract:
 
@@ -112,7 +113,7 @@ Current ownership decisions:
 - websocket proxy behavior stays in `ARC-CMP-001`; secure-link must not reimplement transport bootstrap
 - retransmission policy and RTT/inflight metrics stay in `ARC-CMP-002` until an implementation phase deliberately reworks that boundary
 - service publication, channel IDs, and remote catalog state stay in `ARC-CMP-003`
-- future secure-link config loading and lifecycle wiring belong to `ARC-CMP-004`
+- secure-link config loading and lifecycle wiring belong to `ARC-CMP-004`
 - peer identity visibility in admin APIs belongs to `ARC-CMP-005`
 - encryption-layer status visibility in WebAdmin/API is a joint function:
   - `ARC-CMP-006` owns the underlying secure-link state machine and failure categories
@@ -129,15 +130,16 @@ Important non-responsibilities:
 
 Current status:
 
-- the PSK-based Phase 1 runtime slice is implemented and defended by unit and integration tests
+- the PSK-based Phase 1 runtime slice and the certificate-based Phase 2 slice are implemented and defended by unit and integration tests
 - delivered runtime behavior currently includes:
   - `secure_link_mode=psk` on `myudp`, `tcp`, `ws`, and `quic`
+  - `secure_link_mode=cert` on `myudp`, `tcp`, `ws`, and `quic`
   - authenticated protected carriage below `ChannelMux`
   - live rekey support
   - fail-closed malformed-input handling
   - bounded reconnect/failure throttling after repeated client-side auth failures
   - admin/API visibility of secure-link state and stronger operational diagnostics
-- certificate-based trust-anchor, certificate-validation, and richer identity semantics remain planned follow-up work
+- certificate-mode trust-anchor validation, detached signature verification, richer peer identity semantics, and trust-failure visibility are now delivered
 - the design baseline and remaining planned work for this component are documented in [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md)
 
 ### Functional decomposition for secure-link status visibility

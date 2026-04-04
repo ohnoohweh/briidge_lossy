@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "serial": "client_wrong_role",
+  "issuer_id": "deployment-admin-a",
+  "subject_id": "bridge-client-wrong-role",
+  "subject_name": "Bridge Client Wrong Role",
+  "deployment_id": "lab-a",
+  "public_key_algorithm": "Ed25519",
+  "public_key": "MCowBQYDK2VwAyEAgNHdZjoTMpx8zRIyWAqM6AxbKtdZ9EJZsVhTbU+uaXQ=",
+  "roles": [
+    "server"
+  ],
+  "issued_at": "2026-04-04T12:00:00Z",
+  "not_before": "2026-04-01T00:00:00Z",
+  "not_after": "2027-04-01T00:00:00Z",
+  "constraints": [],
+  "signature_algorithm": "Ed25519"
+}

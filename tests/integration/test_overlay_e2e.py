@@ -30,6 +30,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / 'src'
+SECURE_LINK_CERT_FIXTURES = ROOT / 'tests' / 'fixtures' / 'secure_link_cert'
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 BRIDGE = ROOT / 'ObstacleBridge.py'
@@ -4409,6 +4410,29 @@ def _start_case_with_secure_link_args(
         raise
 
 
+def _cert_secure_args(
+    *,
+    root_pub: str,
+    cert_body: str,
+    cert_sig: str,
+    private_key: str,
+    revoked_serials: Optional[str] = None,
+    extra: Optional[List[str]] = None,
+) -> List[str]:
+    args = [
+        '--secure-link',
+        '--secure-link-mode', 'cert',
+        '--secure-link-root-pub', str(SECURE_LINK_CERT_FIXTURES / root_pub),
+        '--secure-link-cert-body', str(SECURE_LINK_CERT_FIXTURES / cert_body),
+        '--secure-link-cert-sig', str(SECURE_LINK_CERT_FIXTURES / cert_sig),
+        '--secure-link-private-key', str(SECURE_LINK_CERT_FIXTURES / private_key),
+    ]
+    if revoked_serials:
+        args += ['--secure-link-revoked-serials', str(SECURE_LINK_CERT_FIXTURES / revoked_serials)]
+    args += list(extra or [])
+    return args
+
+
 @pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.parametrize("case_name", BASIC_CASES)
@@ -5103,6 +5127,229 @@ def test_overlay_e2e_tcp_secure_link_psk_happy_path(tmp_path: Path) -> None:
             assert int(client_secure.get('handshake_attempts_total') or 0) >= 1
             assert int(client_secure.get('authenticated_sessions_total') or 0) >= 1
             assert client_secure.get('last_authenticated_unix_ts') is not None
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("case_name", "case_index", "secure_slot", "transport"),
+    [
+        ('case06_overlay_tcp_ipv4', 290, 21, 'tcp'),
+        ('case01_udp_over_own_udp_ipv4', 291, 5, 'myudp'),
+        ('case08_overlay_ws_ipv4', 292, 6, 'ws'),
+        ('case10_overlay_quic_ipv4', 293, 7, 'quic'),
+    ],
+)
+def test_overlay_e2e_secure_link_cert_happy_path_transports(
+    case_name: str,
+    case_index: int,
+    secure_slot: int,
+    transport: str,
+    tmp_path: Path,
+) -> None:
+    with secure_link_test_lock():
+        case = CASES[case_name]
+        bounce = None
+        server_proc = client_proc = None
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=case_index,
+                secure_slot=secure_slot,
+                server_extra_args=_cert_secure_args(
+                    root_pub='root_a_pub.pem',
+                    cert_body='server_valid_cert_body.json',
+                    cert_sig='server_valid_cert.sig',
+                    private_key='server_valid_key.pem',
+                ),
+                client_extra_args=_cert_secure_args(
+                    root_pub='root_a_pub.pem',
+                    cert_body='client_valid_cert_body.json',
+                    cert_sig='client_valid_cert.sig',
+                    private_key='client_valid_key.pem',
+                ),
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            wait_probe(case, timeout=12.0)
+            wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+            client_doc = wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport=transport, authenticated=True)
+            server_doc = wait_peer_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', transport=transport, authenticated=True)
+            client_secure = dict((first_active_secure_link_row(client_doc, transport=transport).get('secure_link') or {}))
+            server_secure = dict((first_active_secure_link_row(server_doc, transport=transport).get('secure_link') or {}))
+            assert client_secure.get('mode') == 'cert'
+            assert client_secure.get('peer_subject_id') == 'bridge-server-01'
+            assert client_secure.get('peer_subject_name') == 'Bridge Server 01'
+            assert client_secure.get('peer_roles') == ['server']
+            assert client_secure.get('peer_deployment_id') == 'lab-a'
+            assert client_secure.get('peer_serial') == 'server_valid'
+            assert client_secure.get('issuer_id') == 'deployment-admin-a'
+            assert client_secure.get('trust_validation_state') == 'trusted'
+            assert client_secure.get('trust_anchor_id')
+            assert server_secure.get('peer_subject_id') == 'bridge-client-01'
+            assert server_secure.get('peer_roles') == ['client']
+            assert server_secure.get('trust_validation_state') == 'trusted'
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("expected_reason", "client_root", "client_body", "client_sig", "client_key", "server_revoked"),
+    [
+        ('unknown_root', 'root_b_pub.pem', 'client_root_b_cert_body.json', 'client_root_b_cert.sig', 'client_root_b_key.pem', None),
+        ('wrong_role', 'root_a_pub.pem', 'client_wrong_role_cert_body.json', 'client_wrong_role_cert.sig', 'client_wrong_role_key.pem', None),
+        ('expired', 'root_a_pub.pem', 'client_expired_cert_body.json', 'client_expired_cert.sig', 'client_expired_key.pem', None),
+        ('not_yet_valid', 'root_a_pub.pem', 'client_future_cert_body.json', 'client_future_cert.sig', 'client_future_key.pem', None),
+        ('deployment_mismatch', 'root_a_pub.pem', 'client_other_deploy_cert_body.json', 'client_other_deploy_cert.sig', 'client_other_deploy_key.pem', None),
+        ('revoked_serial', 'root_a_pub.pem', 'client_valid_cert_body.json', 'client_valid_cert.sig', 'client_valid_key.pem', 'revoked_serials.json'),
+    ],
+)
+def test_overlay_e2e_tcp_secure_link_cert_rejection_matrix(
+    expected_reason: str,
+    client_root: str,
+    client_body: str,
+    client_sig: str,
+    client_key: str,
+    server_revoked: Optional[str],
+    tmp_path: Path,
+) -> None:
+    with secure_link_test_lock():
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=294,
+                secure_slot=25,
+                server_extra_args=_cert_secure_args(
+                    root_pub='root_a_pub.pem',
+                    cert_body='server_valid_cert_body.json',
+                    cert_sig='server_valid_cert.sig',
+                    private_key='server_valid_key.pem',
+                    revoked_serials=server_revoked,
+                ),
+                client_extra_args=_cert_secure_args(
+                    root_pub=client_root,
+                    cert_body=client_body,
+                    cert_sig=client_sig,
+                    private_key=client_key,
+                ),
+                client_restart_if_disconnected=30,
+            )
+            wait_status_not_connected(client_proc.admin_port or 0, timeout=20.0, label='client')
+            wait_status_not_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+            failed_doc = wait_peer_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='failed',
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+                authenticated=False,
+                failure_reason=expected_reason,
+            )
+            secure = dict((first_active_secure_link_row(failed_doc, transport='tcp').get('secure_link') or {}))
+            assert secure.get('mode') == 'cert'
+            assert secure.get('trust_validation_state') == 'failed'
+            assert secure.get('trust_failure_reason') == expected_reason
+            assert secure.get('trust_failure_detail')
+            with pytest.raises(Exception):
+                wait_probe(case, timeout=3.0)
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_cert_operator_forced_rekey(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=295,
+                secure_slot=26,
+                server_extra_args=_cert_secure_args(
+                    root_pub='root_a_pub.pem',
+                    cert_body='server_valid_cert_body.json',
+                    cert_sig='server_valid_cert.sig',
+                    private_key='server_valid_key.pem',
+                ),
+                client_extra_args=_cert_secure_args(
+                    root_pub='root_a_pub.pem',
+                    cert_body='client_valid_cert_body.json',
+                    cert_sig='client_valid_cert.sig',
+                    private_key='client_valid_key.pem',
+                ),
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            first_doc = wait_peer_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+                authenticated=True,
+            )
+            target_peer_id = ""
+            first_session_id = 0
+            for row in list(first_doc.get('peers') or []):
+                if str(row.get('transport', '')).strip().lower() != 'tcp':
+                    continue
+                if str(row.get('state', '')).strip().lower() == 'listening':
+                    continue
+                target_peer_id = str(row.get('id') or "")
+                first_session_id = int(((row.get('secure_link') or {}).get('session_id') or 0))
+                if first_session_id:
+                    break
+            if first_session_id <= 0 or not target_peer_id:
+                raise RuntimeError(f'Could not determine cert-mode peer/session from peers doc: {first_doc!r}')
+            wait_probe(case, payload=b'\x01prime-cert-operator-rekey', timeout=12.0)
+            code, body = request_json(
+                f'http://127.0.0.1:{client_proc.admin_port}/api/secure-link/rekey',
+                method='POST',
+                payload={"peer_id": target_peer_id},
+                timeout=2.0,
+            )
+            assert code == 200
+            assert body.get('ok') is True
+            wait_peer_secure_link_session_change(
+                client_proc.admin_port or 0,
+                previous_session_id=first_session_id,
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+            )
+            wait_probe(case, payload=b'\x01after-cert-operator-rekey', timeout=12.0)
+            client_doc = wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
+            client_secure = dict((first_active_secure_link_row(client_doc, transport='tcp').get('secure_link') or {}))
+            assert client_secure.get('mode') == 'cert'
+            assert client_secure.get('last_event') == 'rekey_completed'
+            assert client_secure.get('last_rekey_trigger') == 'operator'
+            assert int(client_secure.get('rekeys_completed_total') or 0) >= 1
         finally:
             if bounce is not None:
                 bounce.stop()

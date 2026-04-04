@@ -49,7 +49,7 @@ The detailed realization concept remains in [SECURE_LINK_DESIGN.md](/home/ohnooh
 
 ## Authentication and encryption requirements
 
-This section covers the delivered PSK-based Phase 1 secure-link slice and the still-planned certificate-based follow-up.
+This section covers the delivered PSK-based Phase 1 secure-link slice and the delivered Phase 2 certificate-based follow-up.
 
 Functional decomposition note:
 
@@ -58,24 +58,24 @@ Functional decomposition note:
   - the secure-link runtime slice (`ARC-CMP-006`), which owns the underlying authentication/encryption state and failure categories
   - the runner/process orchestration layer (`ARC-CMP-004`), which gathers and shapes snapshot data
   - the admin web and observability layer (`ARC-CMP-005`), which exposes aggregate runtime summary through `/api/status`, peer-scoped secure-link state through `/api/peers`, the live admin feed, and the WebAdmin page
-- `PLAN-AUT-004` through `PLAN-AUT-007` are still planned and are realized jointly by:
-  - the planned secure-link layer (`ARC-CMP-006`), which owns the underlying authentication/encryption state and failure categories
+- `REQ-AUT-011` through `REQ-AUT-014` are realized jointly by:
+  - the secure-link layer (`ARC-CMP-006`), which owns the underlying authentication/encryption state and failure categories
   - the runner/process orchestration layer (`ARC-CMP-004`), which gathers and shapes snapshot data
   - the admin web and observability layer (`ARC-CMP-005`), which exposes aggregate runtime summary through `/api/status`, peer-scoped secure-link state through `/api/peers`, the live admin feed, and the WebAdmin page
 
-The component ownership boundary for these planned secure-link requirements is documented in [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md).
+The component ownership boundary for these secure-link requirements is documented in [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md).
 
 The certificate/profile details that ObstacleBridge expects as input are documented in [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md), because they describe requirements on supplied key material and crypto support rather than black-box delivery of the current runtime.
 
 Current implementation note:
 
-- a narrow Phase 1 prototype exists for `secure_link_mode=psk` on `overlay_transport=myudp`, `tcp`, `ws`, and `quic`
-- that prototype currently proves the first protected happy-path slice across those transports
+- delivered secure-link modes now include `secure_link_mode=psk` and `secure_link_mode=cert`
+- both delivered modes run on `overlay_transport=myudp`, `tcp`, `ws`, and `quic`
 - broader multi-peer listener validation now exists on `ws`, `myudp`, `tcp`, and `quic`, with the deepest concurrent channel-routing slice still exercised on the TCP transport
-- the prototype now exposes aggregate runtime summary through `/api/status` and peer-scoped secure-link observability through `/api/peers`
+- the runtime now exposes aggregate runtime summary through `/api/status` and peer-scoped secure-link observability through `/api/peers`
 - some secure-link subprocess integration tests use a test-only failure-injection seam that is enabled explicitly by the harness and is not reachable in the normal runtime by default; this seam exists only to defend reconnect/replay/fail-closed requirements where pure black-box stimulation would otherwise add disproportionate harness complexity
-- the current user-facing runtime configuration surface is `secure_link`, `secure_link_mode=psk`, `secure_link_psk`, `secure_link_rekey_after_frames`, `secure_link_rekey_after_seconds`, `secure_link_retry_backoff_initial_ms`, `secure_link_retry_backoff_max_ms`, and `secure_link_require`; certificate-mode startup remains intentionally unsupported in the current runtime slice
-- that prototype is intended for development and testing of the layer boundary
+- the current user-facing runtime configuration surface also includes `secure_link_root_pub`, `secure_link_cert_body`, `secure_link_cert_sig`, `secure_link_private_key`, `secure_link_revoked_serials`, and `secure_link_cert_reload_on_restart` for `secure_link_mode=cert`
+- the Phase 1 PSK mode remains useful for development/testing/lab bring-up, while the certificate-based Phase 2 slice provides deployment-rooted mutual authentication and trust validation
 
 - `REQ-AUT-001`: The project shall provide one transport-independent PSK secure-link capability for overlay authentication and protected data carriage across `myudp`, `tcp`, `ws`, and `quic`.
 - `REQ-AUT-002`: When both peers are configured with the same PSK, the secure-link protected data phase shall authenticate successfully before overlay traffic is accepted and forwarded.
@@ -88,10 +88,10 @@ Current implementation note:
 - `REQ-AUT-009`: The peer-scoped admin/API surface shall expose stronger operational diagnostics for the PSK secure-link runtime, including the most recent secure-link event, handshake-attempt count, authenticated-session count, completed-rekey count, last authenticated timestamp, and most recent failed session id so operators can distinguish repeated auth failures from healthy recovery and live-session rotation.
 - `REQ-AUT-010`: The PSK secure-link runtime shall support time-based rekey on authenticated client-side sessions and operator-forced rekey through the admin API and WebAdmin controls; both paths shall rotate to a fresh secure-link session without breaking healthy overlay traffic and shall remain observable through peer-scoped admin/API fields that identify the last rekey trigger and any scheduled rekey deadline. Operator-triggered rekey requests shall target a specific peer row rather than acting as an implicit runtime-wide broadcast.
 
-- `PLAN-AUT-004`: The deployment trust anchor should be an admin-controlled root public key configured on peer clients and peer servers.
-- `PLAN-AUT-005`: Peer certificates should be issued by that deployment-local admin root and be constrained by machine-enforced roles.
-- `PLAN-AUT-006`: Certificate role checks, validity checks, deployment-scope checks, and serial-based revocation checks should be enforced before the protected secure-link data phase is entered.
-- `PLAN-AUT-007`: The certificate-based secure-link mode should preserve the same admin/API visibility model as the current PSK slice while adding richer identity and trust-validation details.
+- `REQ-AUT-011`: The deployment trust anchor shall be an admin-controlled root public key configured on peer clients and peer servers, and `secure_link_mode=cert` shall authenticate successfully only when both peers trust the same deployment root.
+- `REQ-AUT-012`: Peer certificates used by `secure_link_mode=cert` shall be issued by that deployment-local admin root and constrained by machine-enforced roles so that client/server direction mismatches fail closed before protected traffic starts.
+- `REQ-AUT-013`: Certificate role checks, validity checks, deployment-scope checks, and serial-based revocation checks shall be enforced before the protected secure-link data phase is entered, and the failure shall remain observable as a secure-link authentication/trust failure rather than a false connected state.
+- `REQ-AUT-014`: The certificate-based secure-link mode shall preserve the same peer-scoped admin/API visibility model as the current PSK slice while adding peer identity and trust-validation details such as subject id/name, roles, deployment id, serial, issuer, trust-anchor id, trust-validation state, and trust-failure diagnostics.
 
 ## Reconnect and restart requirements
 

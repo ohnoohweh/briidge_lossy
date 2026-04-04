@@ -452,9 +452,15 @@ What is visible in the included snapshots:
 ### Secure-link (PSK mode)
 | Option(s) | Default | Description |
 |---|---:|---|
-| `--secure-link` | `False` | Enable secure-link. The currently delivered Phase 1 mode is PSK over `myudp`, `tcp`, `ws`, and `quic`. |
-| `--secure-link-mode` | `off` | Secure-link mode. Phase 1 currently supports `off` or `psk`; `cert` remains planned. |
+| `--secure-link` | `False` | Enable secure-link. Delivered modes are PSK and certificate-based secure-link over `myudp`, `tcp`, `ws`, and `quic`. |
+| `--secure-link-mode` | `off` | Secure-link mode. Supported values are `off`, `psk`, and `cert`. |
 | `--secure-link-psk` | `` | Pre-shared secret for `secure_link_mode=psk`. Both peers must use the same non-empty value. |
+| `--secure-link-root-pub` | `` | Root public key PEM for `secure_link_mode=cert`. |
+| `--secure-link-cert-body` | `` | Local certificate body JSON for `secure_link_mode=cert`. |
+| `--secure-link-cert-sig` | `` | Detached certificate signature file for `secure_link_mode=cert`. |
+| `--secure-link-private-key` | `` | Local identity private key PEM for `secure_link_mode=cert`. |
+| `--secure-link-revoked-serials` | `` | Optional JSON-array or line-based revoked-serial file for `secure_link_mode=cert`. |
+| `--secure-link-cert-reload-on-restart` | `True` | Reload certificate material on process restart. Live hot-reload is not supported. |
 | `--secure-link-rekey-after-frames` | `0` | Automatically initiate PSK rekey after this many protected data frames are sent. `0` disables frame-triggered rekeying. |
 | `--secure-link-rekey-after-seconds` | `0.0` | Automatically initiate PSK rekey after this many authenticated seconds, once the current session has already carried protected client data. `0` disables time-triggered rekeying. |
 | `--secure-link-retry-backoff-initial-ms` | `1000` | Initial client-side retry backoff after a secure-link authentication failure, in milliseconds. |
@@ -463,11 +469,12 @@ What is visible in the included snapshots:
 
 #### Current secure-link quick start
 
-The current runtime slice is the delivered Phase 1 PSK mode. It is useful for development, testing, and early operator validation of the layer boundary.
+The current runtime now includes the delivered Phase 1 PSK mode and the delivered Phase 2 certificate-based mode.
 
 What works today:
 
 - `secure_link_mode=psk`
+- `secure_link_mode=cert`
 - `overlay_transport=myudp`
 - `overlay_transport=tcp`
 - `overlay_transport=ws`
@@ -476,12 +483,13 @@ What works today:
 - optional automatic rekey through `secure_link_rekey_after_frames`
 - optional time-based rekey through `secure_link_rekey_after_seconds`
 - operator-forced rekey through peer-targeted `POST /api/secure-link/rekey`
+- cert-mode trust-anchor, role, validity-window, deployment-scope, and revoked-serial enforcement before protected traffic starts
+- cert-mode peer identity and trust diagnostics through `/api/peers`
 
 What is still planned:
 
-- certificate-based secure-link mode
-- certificate validation and revocation
-- richer peer identity exposure in WebAdmin
+- operator tooling for certificate issuance/rotation
+- broader operational workflows around revocation management
 
 Minimal listener example:
 
@@ -561,7 +569,7 @@ Operator notes:
 - if you are intentionally testing wrong-PSK or rollout mistakes, `secure_link_retry_backoff_initial_ms` and `secure_link_retry_backoff_max_ms` let you tune how aggressively the client retries after secure-link auth failures
 - the current PSK runtime uses strictly monotonic per-direction protected-data counters starting at `1`; counter `0` is reserved and counter exhaustion fails closed rather than wrapping
 - malformed or unexpected secure-link frames fail closed and remain observable through the admin/API surface; they do not continue forwarding overlay traffic on the affected peer
-- the current PSK mode is the delivered first secure-link mode, not the final certificate-based trust model described in [docs/SECURE_LINK_DESIGN.md](docs/SECURE_LINK_DESIGN.md)
+- the delivered PSK mode remains useful for development/testing/lab bring-up, while the delivered cert mode is the deployment-rooted trust model described in [docs/SECURE_LINK_DESIGN.md](docs/SECURE_LINK_DESIGN.md)
 
 ## Notes
 - Listener mode intentionally ignores `--own-servers`, because a multi-peer listener cannot unambiguously bind one local listener to one remote peer.
@@ -577,11 +585,11 @@ Operator notes:
 - Requirements: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 
-### Planned secure-link certificate preparation
+### Secure-link certificate preparation
 
-The current runtime only implements the Phase 1 PSK mode described above. The following workflow is therefore preparation for the later certificate-based secure-link mode, not a current startup requirement for ObstacleBridge.
+The current runtime supports `secure_link_mode=cert`, and the following workflow is the expected way to prepare the certificate/key material that mode consumes.
 
-The basic trust model is:
+The trust model is:
 
 - one admin root keypair per deployment
 - one leaf keypair per peer client or peer server
@@ -702,20 +710,20 @@ This stays consistent with the current design direction:
 
 - ObstacleBridge uses key material and certificates
 - ObstacleBridge does not generate private keys or sign certificates
-- primitive signature verification and encryption/decryption are expected from the selected crypto library once runtime support is added
+- primitive signature verification and encryption/decryption are delegated to the selected crypto library in the delivered secure-link runtime
 
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `52/52 = 100.0%`
-- Unit-covered: `30/52 = 57.7%`
-- Any-test-covered: `52/52 = 100.0%`
-- Tracked in manifest: `52/52 = 100.0%`
+- Integration-covered: `56/56 = 100.0%`
+- Unit-covered: `34/56 = 60.7%`
+- Any-test-covered: `56/56 = 100.0%`
+- Tracked in manifest: `56/56 = 100.0%`
 - Requirements without integration coverage: `(none)`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
 
-The secure-link topic now has an active `REQ-AUT-*` layer in `docs/REQUIREMENTS.md` for the delivered PSK-based Phase 1 runtime slice, while the certificate/key-material trust-anchor work remains in the planned `PLAN-AUT-*` namespace and the certificate/key-material input profile is documented in `docs/SYSTEM_BOUNDARY.md`. The current PSK runtime slice is defended across `myudp`, `tcp`, `ws`, and `quic`, now including broader multi-peer listener validation across those transports, aggregate runtime summary through `/api/status`, peer-scoped secure-link observability through `/api/peers`, frame-, time-, and peer-targeted operator-triggered rekey coverage, reconnect-with-fresh-session coverage, and subprocess replay/malformed-frame fail-closed coverage. The few subprocess cases that need direct secure-link fault stimulation use the separate test-only `obstacle_bridge.bridge_FI` entrypoint rather than the normal runtime surface.
+The secure-link topic now has an active `REQ-AUT-*` layer in `docs/REQUIREMENTS.md` for both the delivered PSK-based Phase 1 runtime slice and the delivered certificate-based Phase 2 slice, while the certificate/key-material input profile remains documented in `docs/SYSTEM_BOUNDARY.md`. The current runtime is defended across `myudp`, `tcp`, `ws`, and `quic`, now including broader multi-peer listener validation across those transports, aggregate runtime summary through `/api/status`, peer-scoped secure-link observability through `/api/peers`, frame-, time-, and peer-targeted operator-triggered rekey coverage, reconnect-with-fresh-session coverage, subprocess replay/malformed-frame fail-closed coverage, certificate-based trust-anchor/role/validity/deployment/revocation enforcement, and peer-scoped certificate identity/trust diagnostics. The few subprocess cases that need direct secure-link fault stimulation use the separate test-only `obstacle_bridge.bridge_FI` entrypoint rather than the normal runtime surface.
 
 The related architecture decomposition is also linked to tests through `.github/architecture_traceability.yaml`.
 
