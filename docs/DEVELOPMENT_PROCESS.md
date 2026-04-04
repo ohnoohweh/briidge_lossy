@@ -82,6 +82,7 @@ An iteration should normally be considered complete when:
 - the code implements the behavior
 - at least one integration test proves the externally visible result
 - unit tests exist for non-trivial internal invariants when appropriate
+- the relevant test suites have been executed before relying on repository guards
 - the testing catalog or traceability notes reflect the new behavior
 
 ## How to judge the test step
@@ -146,6 +147,9 @@ If a requirement is missing, add it first instead of letting code or tests silen
 
 After implementing a new feature or fixing a bug:
 
+- run the most relevant targeted tests early while iterating so regressions are detected from runtime behavior, not from documentation or guard failures
+- when [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py) changes, run the full integration gate `pytest -q -n 16 tests/integration/test_overlay_e2e.py` before pushing or opening a PR
+- when [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py) changes, strongly prefer the same full integration run before pushing or opening a PR, even if targeted `-k` runs were used during iteration
 - record the observable behavior in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
 - keep [requirements_traceability.yaml](/home/ohnoohweh/quic_br/docs/requirements_traceability.yaml) aligned so changed requirements still point at real tests
 - update [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md) if responsibilities changed
@@ -153,7 +157,7 @@ After implementing a new feature or fixing a bug:
 - add or adjust unit tests if a local invariant changed
 - update [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md) traceability when a new requirement is covered
 
-Repository guards now enforce two parts of this discipline:
+Repository guards now enforce two parts of this discipline, but they should be treated as the final safety net rather than the primary detector of degradation:
 
 - behavior, test, or architecture changes must update [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
 - requirement changes must update [requirements_traceability.yaml](/home/ohnoohweh/quic_br/docs/requirements_traceability.yaml), and the referenced tests must exist
