@@ -16,7 +16,12 @@ ObstacleBridge is expected to:
 
 The motivating user use-cases and the external assumptions around them are documented separately in [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md) and the user-facing sections of [README.md](/home/ohnoohweh/quic_br/README.md). The requirement IDs below describe what the project itself is expected to do inside that broader system context.
 
-Planned secure-link authentication and encryption work now has a reserved future requirement set in this document. The detailed realization concept remains in [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md), and the component ownership boundary remains in [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md). Until runtime behavior and black-box tests exist, the secure-link items below reserve future black-box requirement IDs rather than claiming already-defended shipped behavior.
+Secure-link authentication and encryption work now has two requirement layers in this document:
+
+- active `REQ-AUT-*` items for the delivered and defended PSK-based Phase 1 runtime slice
+- reserved `PLAN-AUT-*` items for the still-pending certificate-based trust model and validation work
+
+The detailed realization concept remains in [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md), and the component ownership boundary remains in [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md).
 
 ## Overlay and transport requirements
 
@@ -42,25 +47,23 @@ Planned secure-link authentication and encryption work now has a reserved future
 - `REQ-WSP-008`: Application configuration shall be able to consciously override the platform-default proxy behavior, including forcing direct connection or using an explicitly configured proxy endpoint.
 - `REQ-WSP-009`: A WebSocket peer client running on Windows shall be able to establish its outbound websocket transport through an HTTP proxy that requires `Negotiate` / NTLM-style authentication.
 
-## Planned authentication and encryption requirement IDs
+## Authentication and encryption requirements
 
-This section reserves the future black-box requirement IDs for the transport-independent secure-link capability.
+This section covers the delivered PSK-based Phase 1 secure-link slice and the still-planned certificate-based follow-up.
 
 Functional decomposition note:
 
-- `PLAN-AUT-001` through `PLAN-AUT-006` are realized primarily by the planned secure-link layer in [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md) (`ARC-CMP-006`), with lifecycle and config wiring contributed by the runner/process orchestration layer (`ARC-CMP-004`).
-- `PLAN-AUT-007` is realized jointly by:
+- `REQ-AUT-001` through `REQ-AUT-004` are realized jointly by the secure-link runtime slice in [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md) (`ARC-CMP-006`), with lifecycle/config/snapshot wiring contributed by the runner/process orchestration layer (`ARC-CMP-004`).
+- `REQ-AUT-004` is realized jointly by:
+  - the secure-link runtime slice (`ARC-CMP-006`), which owns the underlying authentication/encryption state and failure categories
+  - the runner/process orchestration layer (`ARC-CMP-004`), which gathers and shapes snapshot data
+  - the admin web and observability layer (`ARC-CMP-005`), which exposes that state through `/api/status`, `/api/peers`, the live admin feed, and the WebAdmin page
+- `PLAN-AUT-004` through `PLAN-AUT-007` are still planned and are realized jointly by:
   - the planned secure-link layer (`ARC-CMP-006`), which owns the underlying authentication/encryption state and failure categories
   - the runner/process orchestration layer (`ARC-CMP-004`), which gathers and shapes snapshot data
   - the admin web and observability layer (`ARC-CMP-005`), which exposes that state through `/api/status`, `/api/peers`, the live admin feed, and the WebAdmin page
 
 The component ownership boundary for these planned secure-link requirements is documented in [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md).
-
-These IDs intentionally do not use the active `REQ-*` namespace yet, because:
-
-- no secure-link runtime behavior has been delivered
-- no defending integration or unit tests exist yet
-- the current requirement-coverage guard treats `REQ-*` items as active delivered requirements that must already trace to real tests
 
 The certificate/profile details that ObstacleBridge expects as input are documented in [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md), because they describe requirements on supplied key material and crypto support rather than black-box delivery of the current runtime.
 
@@ -72,15 +75,17 @@ Current implementation note:
 - the prototype now exposes first admin/API observability for secure-link state through `/api/status` and `/api/peers`
 - the current user-facing prototype configuration surface is `secure_link`, `secure_link_mode=psk`, `secure_link_psk`, and `secure_link_require`; certificate-mode startup remains intentionally unsupported in the current runtime slice
 - that prototype is intended for development and testing of the layer boundary
-- it does not yet promote these planned IDs into the active delivered `REQ-*` requirement namespace
 
-- `PLAN-AUT-001`: The project should provide one transport-independent secure-link capability for overlay authentication and encryption rather than separate authorization models per transport.
-- `PLAN-AUT-002`: A peer client and peer server should authenticate each other before protected overlay traffic is accepted.
-- `PLAN-AUT-003`: Protected secure-link overlay traffic should provide confidentiality, integrity protection, and replay rejection.
+- `REQ-AUT-001`: The project shall provide one transport-independent PSK secure-link capability for overlay authentication and protected data carriage across `myudp`, `tcp`, `ws`, and `quic`.
+- `REQ-AUT-002`: When both peers are configured with the same PSK, the secure-link protected data phase shall authenticate successfully before overlay traffic is accepted and forwarded.
+- `REQ-AUT-003`: When peers are configured with different PSKs, the protected data phase shall not start, overlay traffic shall not be forwarded, and the session shall remain observable as an authentication failure rather than a false connected state.
+- `REQ-AUT-004`: The admin web interface and admin API shall expose the secure-link state for the local session and reported peers so an operator can distinguish disabled, handshaking, authenticated, and failed protected-overlay states, including the reported authentication failure category.
+- `REQ-AUT-005`: Multi-peer listener scenarios using secure-link PSK shall preserve peer isolation and distinct authenticated-peer visibility across the supported listener transports, with the deepest concurrent routing slice defended on the TCP listener path.
+
 - `PLAN-AUT-004`: The deployment trust anchor should be an admin-controlled root public key configured on peer clients and peer servers.
 - `PLAN-AUT-005`: Peer certificates should be issued by that deployment-local admin root and be constrained by machine-enforced roles.
 - `PLAN-AUT-006`: Certificate role checks, validity checks, deployment-scope checks, and serial-based revocation checks should be enforced before the protected secure-link data phase is entered.
-- `PLAN-AUT-007`: The admin web interface should expose the secure-link / encryption-layer status for the local session and reported peers so an operator can distinguish disabled, handshaking, authenticated, and failed protected-overlay states and understand the reported authentication failure category.
+- `PLAN-AUT-007`: The certificate-based secure-link mode should preserve the same admin/API visibility model as the current PSK slice while adding richer identity and trust-validation details.
 
 ## Reconnect and restart requirements
 

@@ -42,13 +42,62 @@ REQ-OVL-007:
 # The broader separation between user use-cases, external assumptions, and
 # project-owned requirements is documented in docs/SYSTEM_BOUNDARY.md.
 # Planned secure-link work is documented in docs/SECURE_LINK_DESIGN.md.
-# Future secure-link IDs currently use the PLAN-AUT-* namespace in REQUIREMENTS.md,
-# including planned admin/API visibility of secure-link state, so they are
-# intentionally excluded from this active REQ-* traceability manifest.
-# A narrow PSK prototype and its tests may exist before those planned IDs are
-# promoted into the active delivered REQ-* namespace, currently covering
-# myudp/tcp/ws/quic happy-path slices plus a two-peer TCP listener slice used to
-# validate peer-isolated routing at the secure-link layer.
+# The delivered PSK-based Phase 1 runtime slice now uses active REQ-AUT-* IDs,
+# while the still-pending certificate and trust-anchor work remains in the
+# PLAN-AUT-* namespace in REQUIREMENTS.md and is therefore intentionally
+# excluded from this active REQ-* traceability manifest.
+REQ-AUT-001:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_secure_link_psk_happy_path_other_transports
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_listener_two_clients_concurrent_udp_tcp
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_listener_two_clients_concurrent_udp_tcp
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_quic_secure_link_psk_listener_two_clients_concurrent_udp_tcp
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_listener_two_clients
+  unit_tests:
+    - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session
+    - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_psk
+
+REQ-AUT-002:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_secure_link_psk_happy_path_other_transports
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_listener_two_clients_concurrent_udp_tcp
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_listener_two_clients_concurrent_udp_tcp
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_quic_secure_link_psk_listener_two_clients_concurrent_udp_tcp
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_listener_two_clients
+  unit_tests:
+    - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session
+
+REQ-AUT-003:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected
+  unit_tests:
+    - tests/unit/test_secure_link_psk.py::test_wrong_psk_prevents_authenticated_session
+
+REQ-AUT-004:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_secure_link_psk_happy_path_other_transports
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_listener_two_clients_concurrent_udp_tcp
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_listener_two_clients_concurrent_udp_tcp
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_quic_secure_link_psk_listener_two_clients_concurrent_udp_tcp
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_listener_two_clients
+  unit_tests:
+    - tests/unit/test_admin_web_payloads.py::test_build_status_payload_includes_secure_link_summary
+    - tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_secure_link_rows
+    - tests/unit/test_secure_link_psk.py::test_wrong_psk_prevents_authenticated_session
+    - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session
+
+REQ-AUT-005:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_listener_two_clients_concurrent_udp_tcp
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_listener_two_clients_concurrent_udp_tcp
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_quic_secure_link_psk_listener_two_clients_concurrent_udp_tcp
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_listener_two_clients
+  unit_tests:
+    - tests/unit/test_secure_link_psk.py::test_server_rewrites_mux_channels_per_peer_for_multiple_connections
 REQ-WSP-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_overlay_uses_http_proxy_env
