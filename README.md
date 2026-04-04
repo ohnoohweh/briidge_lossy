@@ -455,7 +455,8 @@ What is visible in the included snapshots:
 | `--secure-link` | `False` | Enable secure-link. The currently delivered Phase 1 mode is PSK over `myudp`, `tcp`, `ws`, and `quic`. |
 | `--secure-link-mode` | `off` | Secure-link mode. Phase 1 currently supports `off` or `psk`; `cert` remains planned. |
 | `--secure-link-psk` | `` | Pre-shared secret for `secure_link_mode=psk`. Both peers must use the same non-empty value. |
-| `--secure-link-rekey-after-frames` | `0` | Automatically initiate PSK rekey after this many protected data frames are sent. `0` disables rekeying. |
+| `--secure-link-rekey-after-frames` | `0` | Automatically initiate PSK rekey after this many protected data frames are sent. `0` disables frame-triggered rekeying. |
+| `--secure-link-rekey-after-seconds` | `0.0` | Automatically initiate PSK rekey after this many authenticated seconds, once the current session has already carried protected client data. `0` disables time-triggered rekeying. |
 | `--secure-link-retry-backoff-initial-ms` | `1000` | Initial client-side retry backoff after a secure-link authentication failure, in milliseconds. |
 | `--secure-link-retry-backoff-max-ms` | `5000` | Maximum client-side retry backoff after repeated secure-link authentication failures, in milliseconds. |
 | `--secure-link-require` | `False` | Fail closed if secure-link cannot be negotiated or authenticated. |
@@ -473,6 +474,8 @@ What works today:
 - `overlay_transport=quic`
 - admin/API visibility through `/api/status` and `/api/peers`
 - optional automatic rekey through `secure_link_rekey_after_frames`
+- optional time-based rekey through `secure_link_rekey_after_seconds`
+- operator-forced rekey through `POST /api/secure-link/rekey`
 
 What is still planned:
 
@@ -491,6 +494,7 @@ Minimal listener example:
   "secure_link_mode": "psk",
   "secure_link_psk": "change-this-demo-secret",
   "secure_link_rekey_after_frames": 0,
+  "secure_link_rekey_after_seconds": 0.0,
   "secure_link_require": true,
   "admin_web": true,
   "admin_web_bind": "127.0.0.1",
@@ -511,6 +515,7 @@ Minimal peer example:
   "secure_link_mode": "psk",
   "secure_link_psk": "change-this-demo-secret",
   "secure_link_rekey_after_frames": 0,
+  "secure_link_rekey_after_seconds": 0.0,
   "secure_link_require": true,
   "admin_web": true,
   "admin_web_bind": "127.0.0.1",
@@ -531,18 +536,26 @@ What to look for in WebAdmin or the admin API:
 - `/api/status` shows `secure_link.state=authenticated` on both sides after the overlay connects
 - `/api/peers` shows the peer row with `secure_link.authenticated=true`
 - when rekeying is enabled, `/api/status` and `/api/peers` can briefly show `rekey_in_progress=true` while the session rotates to a fresh `secure_link.session_id`
+- the status payload now also exposes `last_rekey_trigger` and, for client-side time-based rekey, `rekey_due_unix_ts`
 - if the PSK does not match, the client and server stay disconnected and the failure is reported as:
   - `secure_link.state=failed`
   - `failure_code=1`
   - `failure_reason=bad_psk`
   - repeated client-side retries show increasing `consecutive_failures`, a bounded `retry_backoff_sec`, a populated `next_retry_unix_ts`, a populated `failure_session_id`, increasing `handshake_attempts_total`, and `last_event=retry_scheduled`
-- on healthy authenticated runs, `/api/status` also exposes stronger operational diagnostics such as `last_event`, `last_event_unix_ts`, `last_authenticated_unix_ts`, `authenticated_sessions_total`, and `rekeys_completed_total`
+- on healthy authenticated runs, `/api/status` also exposes stronger operational diagnostics such as `last_event`, `last_event_unix_ts`, `last_authenticated_unix_ts`, `authenticated_sessions_total`, `rekeys_completed_total`, and `last_rekey_trigger`
+- operators can force rekey on an authenticated client-side secure-link session with:
+
+```bash
+curl -sS -X POST http://127.0.0.1:18081/api/secure-link/rekey
+```
 
 Operator notes:
 
 - use `--secure-link-require` when you want a hard failure instead of falling back to plaintext behavior
 - use a long random PSK for anything beyond local testing
 - leave `secure_link_rekey_after_frames=0` unless you intentionally want to exercise or validate rekey behavior
+- use `secure_link_rekey_after_seconds` when you want automatic rotation on long-lived authenticated client-side sessions without waiting for a frame-count threshold
+- operator-forced rekey currently applies to authenticated client-side secure-link sessions; if no protected client data has been sent yet, the admin API rejects the request rather than guessing its way past the handshake boundary
 - if you are intentionally testing wrong-PSK or rollout mistakes, `secure_link_retry_backoff_initial_ms` and `secure_link_retry_backoff_max_ms` let you tune how aggressively the client retries after secure-link auth failures
 - the current PSK runtime uses strictly monotonic per-direction protected-data counters starting at `1`; counter `0` is reserved and counter exhaustion fails closed rather than wrapping
 - malformed or unexpected secure-link frames fail closed and remain observable through the admin/API surface; they do not continue forwarding overlay traffic on the affected peer
@@ -692,15 +705,15 @@ This stays consistent with the current design direction:
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `51/51 = 100.0%`
-- Unit-covered: `29/51 = 56.9%`
-- Any-test-covered: `51/51 = 100.0%`
-- Tracked in manifest: `51/51 = 100.0%`
+- Integration-covered: `52/52 = 100.0%`
+- Unit-covered: `30/52 = 57.7%`
+- Any-test-covered: `52/52 = 100.0%`
+- Tracked in manifest: `52/52 = 100.0%`
 - Requirements without integration coverage: `(none)`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
 
-The secure-link topic now has an active `REQ-AUT-*` layer in `docs/REQUIREMENTS.md` for the delivered PSK-based Phase 1 runtime slice, while the certificate/key-material trust-anchor work remains in the planned `PLAN-AUT-*` namespace and the certificate/key-material input profile is documented in `docs/SYSTEM_BOUNDARY.md`. The current PSK runtime slice is defended across `myudp`, `tcp`, `ws`, and `quic`, now including broader multi-peer listener validation across those transports, with the deepest concurrent channel-routing slice still exercised on TCP and first admin/API observability through `/api/status` and `/api/peers`, including clearer runtime failure diagnostics such as failure code, category, detail, and timestamp.
+The secure-link topic now has an active `REQ-AUT-*` layer in `docs/REQUIREMENTS.md` for the delivered PSK-based Phase 1 runtime slice, while the certificate/key-material trust-anchor work remains in the planned `PLAN-AUT-*` namespace and the certificate/key-material input profile is documented in `docs/SYSTEM_BOUNDARY.md`. The current PSK runtime slice is defended across `myudp`, `tcp`, `ws`, and `quic`, now including broader multi-peer listener validation across those transports, with the deepest concurrent channel-routing slice still exercised on TCP, richer admin/API observability through `/api/status` and `/api/peers`, and frame-, time-, and operator-triggered rekey coverage.
 
 The related architecture decomposition is also linked to tests through `.github/architecture_traceability.yaml`.
 

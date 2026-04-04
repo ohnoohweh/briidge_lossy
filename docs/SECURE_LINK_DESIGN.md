@@ -859,22 +859,31 @@ Acceptance criteria:
 Current status:
 
 - fulfilled for the currently delivered client-driven frame-count-triggered rekey path
-- time-based or operator-forced rekey is still not implemented
+- fulfilled for time-based rekey on authenticated client-side sessions after the first protected client-data frame
+- fulfilled for operator-forced rekey through the admin API on authenticated client-side sessions after the first protected client-data frame
 
 Evidence:
 
 - runtime:
   - [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py)
-    rekey hello/reply/commit/done handling and `secure_link_rekey_after_frames`
+    rekey hello/reply/commit/done handling, `secure_link_rekey_after_frames`, `secure_link_rekey_after_seconds`, and `/api/secure-link/rekey`
 - requirements:
   - [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
-    `REQ-AUT-006`
+    `REQ-AUT-006` and `REQ-AUT-010`
 - unit evidence:
   - [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
     `test_psk_rekey_rotates_session_id_and_keeps_data_flowing`
+  - [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    `test_time_based_rekey_rotates_session_without_extra_data_frames`
+  - [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    `test_operator_forced_rekey_rotates_session_and_reports_trigger`
 - integration evidence:
   - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic`
+  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_psk_rekeys_after_time_threshold`
+  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_psk_operator_forced_rekey`
 
 #### Nonce and counter lifecycle
 
@@ -999,6 +1008,18 @@ Already generated:
   - evidence:
     [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic`
+- unit and integration tests for time-based rekey
+  - evidence:
+    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    `test_time_based_rekey_rotates_session_without_extra_data_frames`
+    [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_psk_rekeys_after_time_threshold`
+- unit and integration tests for operator-forced rekey
+  - evidence:
+    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    `test_operator_forced_rekey_rotates_session_and_reports_trigger`
+    [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_psk_operator_forced_rekey`
 - unit tests for counter overflow handling
   - evidence:
     [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)

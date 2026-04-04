@@ -88,6 +88,7 @@ def _args(**overrides):
         secure_link_psk='lab-secret',
         secure_link_require=False,
         secure_link_rekey_after_frames=0,
+        secure_link_rekey_after_seconds=0.0,
         secure_link_retry_backoff_initial_ms=1000,
         secure_link_retry_backoff_max_ms=5000,
         tcp_peer=None,
@@ -408,6 +409,82 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client_status["last_event"], "rekey_completed")
         self.assertGreaterEqual(client_status["rekeys_completed_total"], 1)
         self.assertGreaterEqual(client_status["authenticated_sessions_total"], 2)
+        self.assertEqual(client_status["last_rekey_trigger"], "frame_threshold")
+
+    async def test_time_based_rekey_rotates_session_without_extra_data_frames(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+
+        client = SecureLinkPskSession(
+            client_inner,
+            _args(tcp_peer='127.0.0.1', secure_link_rekey_after_seconds=0.02),
+            'tcp',
+        )
+        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
+
+        await client.start()
+        await server.start()
+
+        server_inner.emit_state(True)
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        first_mux = self._pack_mux(11, b"prime-time-rekey")
+        self.assertEqual(client.send_app(first_mux), len(first_mux))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        old_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
+        await asyncio.sleep(0.08)
+        await asyncio.sleep(0)
+
+        client_status = client.get_secure_link_status_snapshot()
+        new_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
+        self.assertNotEqual(old_session_id, new_session_id)
+        self.assertEqual(client_status["last_event"], "rekey_completed")
+        self.assertEqual(client_status["last_rekey_trigger"], "time_threshold")
+        self.assertGreaterEqual(client_status["rekeys_completed_total"], 1)
+
+    async def test_operator_forced_rekey_rotates_session_and_reports_trigger(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+
+        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
+        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
+
+        await client.start()
+        await server.start()
+
+        server_inner.emit_state(True)
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        first_mux = self._pack_mux(11, b"prime-operator-rekey")
+        self.assertEqual(client.send_app(first_mux), len(first_mux))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        old_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
+        ok, reason = client.request_secure_link_rekey()
+        self.assertTrue(ok)
+        self.assertEqual(reason, "rekey_started")
+        for _ in range(8):
+            await asyncio.sleep(0)
+            if client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"] != old_session_id:
+                break
+
+        client_status = client.get_secure_link_status_snapshot()
+        new_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
+        self.assertNotEqual(old_session_id, new_session_id)
+        self.assertEqual(client_status["last_event"], "rekey_completed")
+        self.assertEqual(client_status["last_rekey_trigger"], "operator")
+        self.assertGreaterEqual(client_status["rekeys_completed_total"], 1)
 
     async def test_data_counter_zero_is_rejected_as_lifecycle_violation(self):
         client_inner = FakeInnerSession()

@@ -1876,6 +1876,8 @@ class _SecureLinkPeerState:
     last_event: str = ""
     last_event_unix_ts: Optional[float] = None
     last_authenticated_unix_ts: Optional[float] = None
+    last_rekey_trigger: str = ""
+    rekey_due_unix_ts: Optional[float] = None
     last_failure_session_id: Optional[int] = None
     authenticated_sessions_total: int = 0
     rekeys_completed_total: int = 0
@@ -1943,6 +1945,13 @@ class SecureLinkPskSession(ISession):
                 default=0,
                 help='Automatically initiate PSK rekey after this many protected data frames are sent. 0 disables rekeying.'
             )
+        if not _has('--secure-link-rekey-after-seconds'):
+            p.add_argument(
+                '--secure-link-rekey-after-seconds',
+                type=float,
+                default=0.0,
+                help='Automatically initiate PSK rekey after this many authenticated seconds. 0 disables time-based rekeying.'
+            )
         if not _has('--secure-link-retry-backoff-initial-ms'):
             p.add_argument(
                 '--secure-link-retry-backoff-initial-ms',
@@ -1975,6 +1984,7 @@ class SecureLinkPskSession(ISession):
         self._client_mode = _has_configured_overlay_peer(args, self._transport_name)
         self._psk = str(getattr(args, "secure_link_psk", "") or "").encode("utf-8")
         self._rekey_after_frames = max(0, int(getattr(args, "secure_link_rekey_after_frames", 0) or 0))
+        self._rekey_after_seconds = max(0.0, float(getattr(args, "secure_link_rekey_after_seconds", 0.0) or 0.0))
         self._retry_backoff_initial_s = max(0.0, float(int(getattr(args, "secure_link_retry_backoff_initial_ms", 1000) or 0)) / 1000.0)
         self._retry_backoff_max_s = max(
             self._retry_backoff_initial_s,
@@ -2000,9 +2010,13 @@ class SecureLinkPskSession(ISession):
         self._authenticated_sessions_total: int = 0
         self._rekeys_completed_total: int = 0
         self._client_retry_task: Optional[asyncio.Task] = None
+        self._client_rekey_task: Optional[asyncio.Task] = None
         self._client_retry_consecutive_failures: int = 0
         self._client_retry_not_before_mono: float = 0.0
         self._client_retry_not_before_unix_ts: Optional[float] = None
+        self._client_rekey_due_mono: float = 0.0
+        self._client_rekey_due_unix_ts: Optional[float] = None
+        self._last_rekey_trigger: str = ""
 
     @staticmethod
     def _require_crypto() -> None:
@@ -2127,8 +2141,10 @@ class SecureLinkPskSession(ISession):
         state.last_failure_session_id = int(state.session_id or 0) or None
         state.last_event = "auth_failed"
         state.last_event_unix_ts = state.auth_fail_unix_ts
+        state.rekey_due_unix_ts = None
         if self._client_mode:
             state.consecutive_failures = max(1, int(self._client_retry_consecutive_failures or 0))
+            self._cancel_client_rekey_task(clear_schedule=True)
         self._last_auth_fail_code = state.auth_fail_code
         self._last_auth_fail_reason = state.auth_fail_reason
         self._last_auth_fail_detail = state.auth_fail_detail
@@ -2166,6 +2182,7 @@ class SecureLinkPskSession(ISession):
                 pass
 
     def _clear_all_states(self) -> None:
+        self._cancel_client_rekey_task(clear_schedule=True)
         self._peer_states.clear()
         self._server_chan_to_peer.clear()
         self._server_peer_chan_to_mux.clear()
@@ -2196,10 +2213,12 @@ class SecureLinkPskSession(ISession):
         state.last_event = str(event)
         state.last_event_unix_ts = now
         state.last_authenticated_unix_ts = now
+        state.rekey_due_unix_ts = None
         state.authenticated_sessions_total = int(state.authenticated_sessions_total or 0) + 1
         if rekey_completed:
             state.rekeys_completed_total = int(state.rekeys_completed_total or 0) + 1
             self._rekeys_completed_total += 1
+            self._last_rekey_trigger = str(state.last_rekey_trigger or "")
         self._authenticated_sessions_total += 1
         self._last_authenticated_unix_ts = now
         self._last_authenticated_session_id = int(session_id or 0) or None
@@ -2209,6 +2228,8 @@ class SecureLinkPskSession(ISession):
         self._last_auth_fail_unix_ts = None
         self._last_auth_fail_session_id = None
         self._record_secure_link_event(event, now)
+        if self._client_mode:
+            self._schedule_client_rekey_timer(state)
         self._reset_client_retry_backoff()
         self._log.info(
             "[SECURE-LINK] %s transport=%s side=%s peer_id=%s session_id=%s authenticated_sessions_total=%s rekeys_completed_total=%s",
@@ -2234,6 +2255,23 @@ class SecureLinkPskSession(ISession):
         if clear_schedule:
             self._client_retry_not_before_mono = 0.0
             self._client_retry_not_before_unix_ts = None
+
+    def _cancel_client_rekey_task(self, *, clear_schedule: bool) -> None:
+        task = self._client_rekey_task
+        self._client_rekey_task = None
+        current = None
+        try:
+            current = asyncio.current_task()
+        except Exception:
+            current = None
+        if task is not None and task is not current and not task.done():
+            task.cancel()
+        if clear_schedule:
+            self._client_rekey_due_mono = 0.0
+            self._client_rekey_due_unix_ts = None
+            state = self._peer_states.get(0) if self._client_mode else None
+            if state is not None:
+                state.rekey_due_unix_ts = None
 
     def _reset_client_retry_backoff(self) -> None:
         self._cancel_client_retry_task(clear_schedule=True)
@@ -2283,6 +2321,58 @@ class SecureLinkPskSession(ISession):
         except Exception:
             self._client_retry_task = None
 
+    async def _delayed_client_rekey(self, target_mono: float, expected_session_id: int) -> None:
+        try:
+            while True:
+                remaining = float(target_mono) - time.monotonic()
+                if remaining <= 0.0:
+                    break
+                await asyncio.sleep(min(remaining, 0.25))
+            if not self._started or not self._client_mode:
+                return
+            if not bool(getattr(self._inner, "is_connected", lambda: False)()):
+                return
+            state = self._peer_states.get(0)
+            if state is None or not state.authenticated:
+                return
+            if int(state.session_id or 0) != int(expected_session_id or 0):
+                return
+            if int(state.pending_session_id or 0) > 0:
+                return
+            self._start_client_rekey(state, trigger="time_threshold")
+        except asyncio.CancelledError:
+            return
+        finally:
+            current = asyncio.current_task()
+            if self._client_rekey_task is current:
+                self._client_rekey_task = None
+
+    def _schedule_client_rekey_timer(self, state: Optional[_SecureLinkPeerState]) -> None:
+        self._cancel_client_rekey_task(clear_schedule=True)
+        if (
+            not self._client_mode
+            or self._rekey_after_seconds <= 0.0
+            or state is None
+            or not state.authenticated
+            or int(state.pending_session_id or 0) > 0
+            or max(0, int(state.tx_counter or 1) - 1) <= 0
+        ):
+            return
+        target_mono = time.monotonic() + self._rekey_after_seconds
+        due_unix_ts = time.time() + self._rekey_after_seconds
+        self._client_rekey_due_mono = target_mono
+        self._client_rekey_due_unix_ts = due_unix_ts
+        state.rekey_due_unix_ts = due_unix_ts
+        try:
+            self._client_rekey_task = asyncio.create_task(
+                self._delayed_client_rekey(target_mono, int(state.session_id or 0))
+            )
+        except Exception:
+            self._client_rekey_task = None
+            self._client_rekey_due_mono = 0.0
+            self._client_rekey_due_unix_ts = None
+            state.rekey_due_unix_ts = None
+
     def _maybe_begin_client_handshake(self) -> None:
         if not self._client_mode or not self._started:
             return
@@ -2327,9 +2417,10 @@ class SecureLinkPskSession(ISession):
         self._clear_pending_rekey(state)
         return True
 
-    def _start_client_rekey(self, state: _SecureLinkPeerState) -> None:
+    def _start_client_rekey(self, state: _SecureLinkPeerState, *, trigger: str) -> None:
         if not self._client_mode or not state.authenticated or int(state.pending_session_id or 0) > 0:
             return
+        self._cancel_client_rekey_task(clear_schedule=True)
         pending_session_id = self._new_session_id(state.session_id, state.pending_session_id)
         pending_client_nonce = secrets.token_bytes(32)
         state.pending_session_id = pending_session_id
@@ -2337,6 +2428,9 @@ class SecureLinkPskSession(ISession):
         state.pending_server_nonce = b""
         state.pending_c2s_key = None
         state.pending_s2c_key = None
+        state.last_rekey_trigger = str(trigger or "")
+        state.rekey_due_unix_ts = None
+        self._last_rekey_trigger = state.last_rekey_trigger
         state.last_event = "rekey_started"
         state.last_event_unix_ts = time.time()
         self._record_secure_link_event("rekey_started", state.last_event_unix_ts)
@@ -2351,7 +2445,20 @@ class SecureLinkPskSession(ISession):
         sent_frames = max(0, int(state.tx_counter or 1) - 1)
         if sent_frames < self._rekey_after_frames:
             return
-        self._start_client_rekey(state)
+        self._start_client_rekey(state, trigger="frame_threshold")
+
+    def request_secure_link_rekey(self) -> Tuple[bool, str]:
+        if not self._client_mode:
+            return (False, "server_side_initiation_not_supported")
+        state = self._peer_states.get(0)
+        if state is None or not state.authenticated:
+            return (False, "not_authenticated")
+        if max(0, int(state.tx_counter or 1) - 1) <= 0:
+            return (False, "protected_data_not_established")
+        if int(state.pending_session_id or 0) > 0:
+            return (False, "rekey_already_in_progress")
+        self._start_client_rekey(state, trigger="operator")
+        return (True, "rekey_started")
 
     def set_on_app_payload(self, cb): self._outer_on_app = cb
     def set_on_state_change(self, cb): self._outer_on_state = cb
@@ -2383,6 +2490,7 @@ class SecureLinkPskSession(ISession):
 
     async def stop(self) -> None:
         self._cancel_client_retry_task(clear_schedule=True)
+        self._cancel_client_rekey_task(clear_schedule=True)
         self._clear_all_states()
         await self._inner.stop()
 
@@ -2443,6 +2551,8 @@ class SecureLinkPskSession(ISession):
                 "authenticated": authenticated,
                 "session_id": session_id,
                 "rekey_in_progress": bool(state is not None and int(state.pending_session_id or 0) > 0),
+                "last_rekey_trigger": str(state.last_rekey_trigger or "") if state is not None else "",
+                "rekey_due_unix_ts": state.rekey_due_unix_ts if state is not None else None,
                 "failure_code": failure_code,
                 "failure_reason": failure_reason,
                 "failure_detail": failure_detail,
@@ -2505,6 +2615,8 @@ class SecureLinkPskSession(ISession):
             "authenticated": authenticated_peers > 0,
             "authenticated_peers": authenticated_peers,
             "rekey_in_progress": any(int(state.pending_session_id or 0) > 0 for state in self._peer_states.values()),
+            "last_rekey_trigger": self._last_rekey_trigger,
+            "rekey_due_unix_ts": self._client_rekey_due_unix_ts if self._client_mode else None,
             "failure_code": failure_code,
             "failure_reason": failure_reason,
             "failure_detail": failure_detail,
@@ -2548,6 +2660,7 @@ class SecureLinkPskSession(ISession):
     def _on_inner_state_change(self, connected: bool) -> None:
         if not connected:
             self._cancel_client_retry_task(clear_schedule=False)
+            self._cancel_client_rekey_task(clear_schedule=False)
             self._clear_all_states()
             return
         if self._client_mode and self._started and not self._peer_states:
@@ -2555,6 +2668,7 @@ class SecureLinkPskSession(ISession):
 
     def _on_inner_transport_epoch_change(self, epoch: int) -> None:
         self._cancel_client_retry_task(clear_schedule=False)
+        self._cancel_client_rekey_task(clear_schedule=False)
         self._clear_all_states()
         if callable(self._outer_on_transport_epoch_change):
             try:
@@ -2739,6 +2853,7 @@ class SecureLinkPskSession(ISession):
         state.pending_server_nonce = server_nonce
         state.pending_c2s_key = c2s_key
         state.pending_s2c_key = s2c_key
+        state.last_rekey_trigger = "remote"
         proof = self._server_proof(session_id, client_nonce, server_nonce)
         payload = server_nonce + bytes([self._SL_CAP_PSK_V1]) + proof
         self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_REPLY, session_id, 0, payload), peer_id=peer_id)
@@ -2910,6 +3025,8 @@ class SecureLinkPskSession(ISession):
         wire = aad + ciphertext
         sent = self._inner.send_app(wire, peer_id=peer_id)
         if sent:
+            if self._client_mode:
+                self._schedule_client_rekey_timer(state)
             self._maybe_trigger_rekey(state)
         return len(payload) if sent else 0
 
@@ -11154,6 +11271,8 @@ class StatsBoard:
                         "authenticated": False,
                         "authenticated_peers": 0,
                         "rekey_in_progress": False,
+                        "last_rekey_trigger": "",
+                        "rekey_due_unix_ts": None,
                         "failure_code": None,
                         "failure_reason": None,
                         "failure_detail": None,
@@ -11229,6 +11348,8 @@ class RunnerMuxAggregate:
             "authenticated": False,
             "session_id": None,
             "rekey_in_progress": False,
+            "last_rekey_trigger": "",
+            "rekey_due_unix_ts": None,
             "failure_code": None,
             "failure_reason": None,
             "failure_detail": None,
@@ -11869,6 +11990,35 @@ class Runner:
             })
         return {"peers": peers, "count": len(peers)}
 
+    def request_secure_link_rekey(self) -> dict:
+        requested = 0
+        skipped = 0
+        results: list[dict] = []
+        for idx, session in enumerate(self._sessions):
+            label = self._session_labels[idx] if idx < len(self._session_labels) else f"session-{idx}"
+            requester = getattr(session, "request_secure_link_rekey", None)
+            if not callable(requester):
+                skipped += 1
+                results.append({"transport": label, "ok": False, "reason": "secure_link_not_enabled"})
+                continue
+            try:
+                ok, reason = requester()
+            except Exception as e:
+                skipped += 1
+                results.append({"transport": label, "ok": False, "reason": f"error:{e}"})
+                continue
+            if ok:
+                requested += 1
+            else:
+                skipped += 1
+            results.append({"transport": label, "ok": bool(ok), "reason": str(reason or "")})
+        return {
+            "ok": requested > 0,
+            "requested": requested,
+            "skipped": skipped,
+            "results": results,
+        }
+
     def _group_config_snapshot(self, config: dict) -> dict:
         sections = getattr(self.args, "_config_sections", {}) or {}
         if not isinstance(sections, dict) or not sections:
@@ -12304,6 +12454,10 @@ class AdminWebUI:
                 await self._handle_shutdown(writer, method, headers)
                 return
 
+            if path == "/api/secure-link/rekey":
+                await self._handle_secure_link_rekey(writer, method)
+                return
+
             if path == "/api/status":
                 await self._handle_status(writer)
                 return
@@ -12409,6 +12563,20 @@ class AdminWebUI:
         payload = {"ok": True, "lines": lines, "count": len(lines)}
         self._log_api_response("/api/logs", 200, payload, summary=f"count={len(lines)}")
         await self._send_json(writer, 200, payload)
+
+    async def _handle_secure_link_rekey(self, writer, method: str):
+        if method != "POST":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+        payload = self.runner.request_secure_link_rekey()
+        code = 200 if bool(payload.get("ok")) else 409
+        self._log_api_response(
+            "/api/secure-link/rekey",
+            code,
+            payload,
+            summary=f"requested={payload.get('requested', 0)} skipped={payload.get('skipped', 0)}",
+        )
+        await self._send_json(writer, code, payload)
 
     def _build_peers_payload(self) -> dict:
         payload = self.runner.get_peer_connections_snapshot()

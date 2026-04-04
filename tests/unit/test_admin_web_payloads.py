@@ -17,6 +17,9 @@ class _RunnerStub:
                 "state": "authenticated",
                 "authenticated": True,
                 "authenticated_peers": 1,
+                "rekey_in_progress": False,
+                "last_rekey_trigger": "time_threshold",
+                "rekey_due_unix_ts": 1700000030.0,
                 "failure_code": None,
                 "failure_reason": None,
                 "failure_detail": None,
@@ -48,6 +51,9 @@ class _RunnerStub:
                         "state": "authenticated",
                         "authenticated": True,
                         "session_id": 42,
+                        "rekey_in_progress": False,
+                        "last_rekey_trigger": "operator",
+                        "rekey_due_unix_ts": None,
                         "failure_code": None,
                         "failure_reason": None,
                         "failure_detail": None,
@@ -88,6 +94,8 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertTrue(payload["secure_link"]["authenticated"])
         self.assertIsNone(payload["secure_link"]["failure_code"])
         self.assertIsNone(payload["secure_link"]["failure_detail"])
+        self.assertEqual(payload["secure_link"]["last_rekey_trigger"], "time_threshold")
+        self.assertEqual(payload["secure_link"]["rekey_due_unix_ts"], 1700000030.0)
         self.assertEqual(payload["secure_link"]["last_event"], "authenticated")
         self.assertEqual(payload["secure_link"]["handshake_attempts_total"], 1)
         self.assertEqual(payload["secure_link"]["authenticated_sessions_total"], 1)
@@ -115,6 +123,8 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(peer["secure_link"]["session_id"], 42)
         self.assertIsNone(peer["secure_link"]["failure_code"])
         self.assertIsNone(peer["secure_link"]["failure_detail"])
+        self.assertEqual(peer["secure_link"]["last_rekey_trigger"], "operator")
+        self.assertIsNone(peer["secure_link"]["rekey_due_unix_ts"])
         self.assertEqual(peer["secure_link"]["last_event"], "authenticated")
         self.assertEqual(peer["secure_link"]["handshake_attempts_total"], 1)
         self.assertEqual(peer["secure_link"]["authenticated_sessions_total"], 1)

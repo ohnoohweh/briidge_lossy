@@ -5218,6 +5218,143 @@ def test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic(tmp_path: Pat
 
 @pytest.mark.integration
 @pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_rekeys_after_time_threshold(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        server_args = [
+            '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+        ]
+        client_args = [
+            '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+            '--secure-link-rekey-after-seconds', '1.0',
+        ]
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=285,
+                secure_slot=10,
+                server_extra_args=server_args,
+                client_extra_args=client_args,
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            first_doc = wait_peer_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+                authenticated=True,
+            )
+            first_session_id = 0
+            for row in list(first_doc.get('peers') or []):
+                if str(row.get('transport', '')).strip().lower() != 'tcp':
+                    continue
+                if str(row.get('state', '')).strip().lower() == 'listening':
+                    continue
+                first_session_id = int(((row.get('secure_link') or {}).get('session_id') or 0))
+                if first_session_id:
+                    break
+            if first_session_id <= 0:
+                raise RuntimeError(f'Could not determine initial secure-link session id from peers doc: {first_doc!r}')
+            wait_probe(case, payload=b'\x01prime-time-rekey', timeout=12.0)
+            wait_peer_secure_link_session_change(
+                client_proc.admin_port or 0,
+                previous_session_id=first_session_id,
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+            )
+            wait_probe(case, payload=b'\x01time-rekey', timeout=12.0)
+            client_doc = wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+            client_secure = dict(client_doc.get('secure_link') or {})
+            assert client_secure.get('last_event') == 'rekey_completed'
+            assert client_secure.get('last_rekey_trigger') == 'time_threshold'
+            assert int(client_secure.get('rekeys_completed_total') or 0) >= 1
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_operator_forced_rekey(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        secure_args = [
+            '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+        ]
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=286,
+                secure_slot=11,
+                server_extra_args=secure_args,
+                client_extra_args=secure_args,
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            first_doc = wait_peer_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+                authenticated=True,
+            )
+            first_session_id = 0
+            for row in list(first_doc.get('peers') or []):
+                if str(row.get('transport', '')).strip().lower() != 'tcp':
+                    continue
+                if str(row.get('state', '')).strip().lower() == 'listening':
+                    continue
+                first_session_id = int(((row.get('secure_link') or {}).get('session_id') or 0))
+                if first_session_id:
+                    break
+            if first_session_id <= 0:
+                raise RuntimeError(f'Could not determine initial secure-link session id from peers doc: {first_doc!r}')
+            wait_probe(case, payload=b'\x01prime-operator-rekey', timeout=12.0)
+            code, body = request_json(
+                f'http://127.0.0.1:{client_proc.admin_port}/api/secure-link/rekey',
+                method='POST',
+                payload={},
+                timeout=2.0,
+            )
+            assert code == 200
+            assert body.get('ok') is True
+            assert int(body.get('requested') or 0) >= 1
+            wait_peer_secure_link_session_change(
+                client_proc.admin_port or 0,
+                previous_session_id=first_session_id,
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+            )
+            wait_probe(case, payload=b'\x01forced-rekey', timeout=12.0)
+            client_doc = wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+            client_secure = dict(client_doc.get('secure_link') or {})
+            assert client_secure.get('last_event') == 'rekey_completed'
+            assert client_secure.get('last_rekey_trigger') == 'operator'
+            assert int(client_secure.get('rekeys_completed_total') or 0) >= 1
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("case_name", "case_index", "secure_slot"),
     [
