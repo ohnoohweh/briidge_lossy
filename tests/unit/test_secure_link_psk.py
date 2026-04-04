@@ -354,6 +354,99 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client_peer["secure_link"]["failure_reason"], "lifecycle")
         self.assertIn("lifecycle invariant", client_peer["secure_link"]["failure_detail"])
 
+    async def test_malformed_frame_after_authentication_fails_closed(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+
+        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
+        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
+
+        await client.start()
+        await server.start()
+
+        server_inner.emit_state(True)
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        first_mux = self._pack_mux(11, b"healthy")
+        self.assertEqual(client.send_app(first_mux), len(first_mux))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        self.assertTrue(server.is_connected())
+
+        server._on_inner_payload(b"\x01\x02\x03", peer_id=1)
+        await asyncio.sleep(0)
+
+        server_status = server.get_secure_link_status_snapshot()
+        self.assertEqual(server_status["state"], "failed")
+        self.assertEqual(server_status["failure_code"], server._SL_AUTH_FAIL_DECODE)
+        self.assertEqual(server_status["failure_reason"], "decode")
+        self.assertFalse(server.is_connected())
+        self.assertEqual(server.send_app(self._pack_mux(11, b"blocked"), peer_id=1), 0)
+
+    async def test_unexpected_rekey_commit_fails_closed(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+
+        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
+        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
+
+        await client.start()
+        await server.start()
+
+        server_inner.emit_state(True)
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        self.assertEqual(client.send_app(self._pack_mux(11, b"healthy")), len(self._pack_mux(11, b"healthy")))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        state = server._peer_states[1]
+        bogus_commit = server._build_frame(server._SL_TYPE_REKEY_COMMIT, state.session_id, 0, b"bogus")
+        server._on_inner_payload(bogus_commit, peer_id=1)
+        await asyncio.sleep(0)
+
+        server_status = server.get_secure_link_status_snapshot()
+        self.assertEqual(server_status["state"], "failed")
+        self.assertEqual(server_status["failure_code"], server._SL_AUTH_FAIL_DECODE)
+        self.assertEqual(server_status["failure_reason"], "decode")
+        self.assertFalse(server.is_connected())
+
+    async def test_auth_failure_unregisters_server_mux_routes(self):
+        server_inner = FakeInnerSession(connected=True)
+        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
+        delivered = []
+        server.set_on_app_payload(lambda payload, peer_id=None: delivered.append((payload, peer_id)))
+
+        await server.start()
+
+        hello = server._build_frame(server._SL_TYPE_CLIENT_HELLO, 5001, 0, b"a" * 32 + bytes([server._SL_CAP_PSK_V1, 0]))
+        server._on_inner_payload(hello, peer_id=101)
+        await asyncio.sleep(0)
+        state = server._peer_states[101]
+        encrypted = ChaCha20Poly1305(state.c2s_key).encrypt(
+            server._nonce(1),
+            self._pack_mux(11, b"peer-101"),
+            server._hdr_bytes(server._SL_TYPE_DATA, 5001, 1),
+        )
+        server._on_inner_payload(server._hdr_bytes(server._SL_TYPE_DATA, 5001, 1) + encrypted, peer_id=101)
+        await asyncio.sleep(0)
+        self.assertTrue(server._server_chan_to_peer)
+        self.assertTrue(server._server_peer_chan_to_mux)
+
+        server._on_inner_payload(b"\x00", peer_id=101)
+        await asyncio.sleep(0)
+
+        self.assertFalse(server._server_chan_to_peer)
+        self.assertFalse(server._server_peer_chan_to_mux)
+
 
 if __name__ == '__main__':
     unittest.main()

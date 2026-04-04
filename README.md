@@ -540,6 +540,7 @@ Operator notes:
 - use a long random PSK for anything beyond local testing
 - leave `secure_link_rekey_after_frames=0` unless you intentionally want to exercise or validate rekey behavior
 - the current PSK runtime uses strictly monotonic per-direction protected-data counters starting at `1`; counter `0` is reserved and counter exhaustion fails closed rather than wrapping
+- malformed or unexpected secure-link frames fail closed and remain observable through the admin/API surface; they do not continue forwarding overlay traffic on the affected peer
 - the current PSK mode is a prototype convenience mode, not the final trust model described in [docs/SECURE_LINK_DESIGN.md](docs/SECURE_LINK_DESIGN.md)
 
 ## Notes
@@ -686,10 +687,10 @@ This stays consistent with the current design direction:
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `48/48 = 100.0%`
-- Unit-covered: `26/48 = 54.2%`
-- Any-test-covered: `48/48 = 100.0%`
-- Tracked in manifest: `48/48 = 100.0%`
+- Integration-covered: `49/49 = 100.0%`
+- Unit-covered: `27/49 = 55.1%`
+- Any-test-covered: `49/49 = 100.0%`
+- Tracked in manifest: `49/49 = 100.0%`
 - Requirements without integration coverage: `(none)`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.

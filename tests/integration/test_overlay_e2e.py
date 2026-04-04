@@ -1443,6 +1443,21 @@ def _listener_overlay_port(case: Case, transport: str) -> int:
     return int(_arg_value(case.bridge_server_args, listen_opt, str(base_default)))
 
 
+def _listener_overlay_bind_host(case: Case, transport: str) -> str:
+    bind_opt = {'myudp': '--udp-bind', 'tcp': '--tcp-bind', 'quic': '--quic-bind', 'ws': '--ws-bind'}[transport]
+    default = '0.0.0.0'
+    return _arg_value(case.bridge_server_args, bind_opt, default)
+
+
+def _connect_host_for_bind(bind_host: str) -> str:
+    host = str(bind_host or '').strip()
+    if host in ('', '0.0.0.0'):
+        return '127.0.0.1'
+    if host == '::':
+        return '::1'
+    return host
+
+
 def alloc_admin_ports(case_index: int, base: int = ADMIN_PORT_BASE) -> Tuple[int, int]:
     server = alloc_admin_port(case_index=case_index, base=base)
     client = alloc_admin_port(case_index=case_index + 1, exclude={server}, base=base)
@@ -4343,6 +4358,11 @@ def _start_case_with_secure_link_args(
     client_cmd = list(client_cmd) + list(client_extra_args or [])
 
     server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, log_dir, env_extra=server_env, admin_port=server_admin)
+    overlay_transport = str(_arg_value(case.bridge_server_args, '--overlay-transport', '')).strip().lower()
+    if overlay_transport in ('tcp', 'ws'):
+        listen_port = _listener_overlay_port(case, overlay_transport)
+        listen_host = _connect_host_for_bind(_listener_overlay_bind_host(case, overlay_transport))
+        wait_tcp_listen(listen_host, listen_port, timeout=10.0)
     client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, log_dir, env_extra=client_env, admin_port=client_admin)
     try:
         wait_admin_up(server_proc.admin_port or 0, timeout=10.0)

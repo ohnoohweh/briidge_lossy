@@ -2079,6 +2079,8 @@ class SecureLinkPskSession(ISession):
             state.session_id = int(session_id)
         state.authenticated = False
         self._clear_pending_rekey(state)
+        if not self._client_mode and peer_id is not None:
+            self._server_unregister_peer_channels(int(peer_id))
         state.auth_fail_code = int(code or 0)
         state.auth_fail_reason = str(self._auth_fail_reason(code) or "")
         state.auth_fail_detail = str(self._auth_fail_detail(code) or "")

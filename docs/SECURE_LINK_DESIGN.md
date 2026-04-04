@@ -836,6 +836,14 @@ Acceptance criteria:
   - mark the session as failed and observable in admin/API state
 - define reconnect throttling so persistent auth failures do not create noisy loops
 
+Current Phase 1 runtime decision:
+
+- malformed secure-link frames are treated as `decode` failures
+- unexpected or out-of-order secure-link control messages are treated as `decode` or `lifecycle` failures depending on whether the violated invariant is structural or state-machine related
+- once a peer enters secure-link failure, overlay forwarding stops for that peer
+- listener/server-side mux routing state for the failed peer is dropped so stale channels cannot continue to route through an unauthenticated peer slot
+- the failure remains observable through `/api/status` and `/api/peers` until a later healthy authenticated session replaces it
+
 Acceptance criteria:
 
 - no failure path can leave the overlay falsely reported as connected
