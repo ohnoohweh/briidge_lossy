@@ -30,6 +30,57 @@ These assumptions apply broadly across the project and should not be mistaken fo
 - the browser used for the admin UI supports the required HTTP and WebSocket behavior
 - third-party libraries such as `websockets` and `aioquic` provide the protocol mechanisms the project builds on
 
+## Secure-link responsibility boundary
+
+For the planned authentication and encryption capability, the surrounding system boundary is:
+
+- External assumption:
+  - suitable crypto-capable libraries are available on the target platform and behave correctly for signature verification, key agreement, and authenticated encryption/decryption
+- Project responsibility:
+  - load configured key material and certificates
+  - apply certificate-policy checks such as issuer, role, validity interval, deployment scope, and serial-based revocation
+  - decide when a peer is authorized to enter the protected secure-link data phase
+  - bind the secure-link policy to the overlay connection lifecycle and the `ChannelMux` boundary
+- Out of scope:
+  - generating private keys on behalf of the operator
+  - signing certificates on behalf of the admin trust anchor
+  - replacing the cryptographic primitive implementations supplied by the selected crypto library
+
+More concretely:
+
+- ObstacleBridge is expected to use key material, certificates, and revocation inputs
+- ObstacleBridge is not expected to be the certificate-authority tool that creates or signs that material
+- the selected crypto library is expected to perform primitive-level signature verification, key agreement, and data-stream encryption/decryption once the project passes it the right inputs
+- ObstacleBridge remains responsible for the policy decision around whether those cryptographic results are acceptable for one overlay peer
+
+### Secure-link certificate input profile
+
+The following fields belong to the certificate/key-material interface that ObstacleBridge expects to consume once secure-link is implemented. They are documented here because they constrain supplied inputs rather than describing already-delivered black-box behavior of the current runtime.
+
+- `version`: certificate format version
+- `serial`: deployment-unique certificate serial number
+- `issuer_id`: identifier of the admin root issuer
+- `subject_id`: stable identifier for the peer identity
+- `subject_name`: human-meaningful label for operator visibility
+- `deployment_id`: identifier binding the certificate to one deployment trust domain
+- `public_key_algorithm`: algorithm identifier for the certified identity key
+- `public_key`: certified peer public key material
+- `roles`: one of `client`, `server`, or `client,server`
+- `issued_at`: issuance timestamp
+- `not_before`: start of validity interval
+- `not_after`: end of validity interval
+- `constraints`: optional future restrictions or permissions
+- `signature_algorithm`: algorithm identifier for the admin-root signature
+- `signature`: admin-root signature over the canonicalized certificate body
+
+Expected semantics of that input profile:
+
+- `serial` is the first revocation identity expected by the project
+- `subject_id` is expected to stay stable across reconnects and normal certificate renewal for one peer identity
+- `deployment_id` is expected to prevent accidental trust crossover between separate installations
+- `roles` are expected to be machine-enforced by the project rather than treated as informational only
+- the signed certificate body is expected to exclude the `signature` field itself and follow one canonical serialization rule
+
 ## Use-case boundary mapping
 
 ### NAS behind outbound-only internet

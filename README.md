@@ -124,28 +124,32 @@ Solution with a public ObstacleBridge server:
 ![NAS solution example](docs/refered_docs/NAS_solution.svg)
 
 **Public VPS initial config**
-```ini
-overlay_transport = myudp
-udp_bind = ::
-udp_own_port = 4443
-admin_web = true
-admin_web_bind = 127.0.0.1
-admin_web_port = 18080
-admin_web_name = VPS
-log = INFO
+```json
+{
+  "overlay_transport": "myudp",
+  "udp_bind": "::",
+  "udp_own_port": 4443,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18080,
+  "admin_web_name": "VPS",
+  "log": "INFO"
+}
 ```
 
 **NAS initial config**
-```ini
-overlay_transport = myudp
-udp_peer = bridge.example.com
-udp_peer_port = 4443
-udp_own_port = 0
-admin_web = true
-admin_web_bind = 127.0.0.1
-admin_web_port = 18081
-admin_web_name = NAS
-log = INFO
+```json
+{
+  "overlay_transport": "myudp",
+  "udp_peer": "bridge.example.com",
+  "udp_peer_port": 4443,
+  "udp_own_port": 0,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18081,
+  "admin_web_name": "NAS",
+  "log": "INFO"
+}
 ```
 
 Then use WebAdmin to add the service exposure you want, for example:
@@ -174,28 +178,32 @@ Solution with an ObstacleBridge WebSocket bridge:
 ![Client solution example](docs/refered_docs/Client_solution.svg)
 
 **Public bridge config**
-```ini
-overlay_transport = ws
-ws_bind = 0.0.0.0
-ws_own_port = 443
-admin_web = true
-admin_web_bind = 127.0.0.1
-admin_web_port = 18080
-admin_web_name = Public WS Bridge
-log = INFO
+```json
+{
+  "overlay_transport": "ws",
+  "ws_bind": "0.0.0.0",
+  "ws_own_port": 443,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18080,
+  "admin_web_name": "Public WS Bridge",
+  "log": "INFO"
+}
 ```
 
 **Restricted-side peer config**
-```ini
-overlay_transport = ws
-ws_peer = bridge.example.com
-ws_peer_port = 443
-ws_own_port = 0
-admin_web = true
-admin_web_bind = 127.0.0.1
-admin_web_port = 18081
-admin_web_name = Restricted Client
-log = INFO
+```json
+{
+  "overlay_transport": "ws",
+  "ws_peer": "bridge.example.com",
+  "ws_peer_port": 443,
+  "ws_own_port": 0,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18081,
+  "admin_web_name": "Restricted Client",
+  "log": "INFO"
+}
 ```
 
 Then use WebAdmin to add an `own_servers` entry that recreates the local WireGuard or UDP OpenVPN endpoint, for example `udp,16666,127.0.0.1,udp,127.0.0.1,16666`.
@@ -220,28 +228,32 @@ Solution with an ObstacleBridge `myudp` bridge:
 ![Client2 solution example](docs/refered_docs/Client2_solution.svg)
 
 **Public bridge config**
-```ini
-overlay_transport = myudp
-udp_bind = 0.0.0.0
-udp_own_port = 4433
-admin_web = true
-admin_web_bind = 127.0.0.1
-admin_web_port = 18080
-admin_web_name = Public myudp Bridge
-log = INFO
+```json
+{
+  "overlay_transport": "myudp",
+  "udp_bind": "0.0.0.0",
+  "udp_own_port": 4433,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18080,
+  "admin_web_name": "Public myudp Bridge",
+  "log": "INFO"
+}
 ```
 
 **Restricted-side peer config**
-```ini
-overlay_transport = myudp
-udp_peer = bridge.example.com
-udp_peer_port = 4433
-udp_own_port = 0
-admin_web = true
-admin_web_bind = 127.0.0.1
-admin_web_port = 18081
-admin_web_name = Lossy Client
-log = INFO
+```json
+{
+  "overlay_transport": "myudp",
+  "udp_peer": "bridge.example.com",
+  "udp_peer_port": 4433,
+  "udp_own_port": 0,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18081,
+  "admin_web_name": "Lossy Client",
+  "log": "INFO"
+}
 ```
 
 Then use WebAdmin to add the same local UDP recreation for WireGuard or UDP OpenVPN, usually on `127.0.0.1:16666`.
@@ -255,19 +267,21 @@ Assumptions:
 - the listener side is configured to accept the selected transports
 - the client environment can use the required runtime dependencies for both overlay modes
 
-```ini
-overlay_transport = ws,myudp
-ws_peer = bridge.example.com
-ws_peer_port = 443
-ws_own_port = 0
-udp_peer = bridge.example.com
-udp_peer_port = 4433
-udp_own_port = 0
-admin_web = true
-admin_web_bind = 127.0.0.1
-admin_web_port = 18081
-admin_web_name = Dual Transport Client
-log = INFO
+```json
+{
+  "overlay_transport": "ws,myudp",
+  "ws_peer": "bridge.example.com",
+  "ws_peer_port": 443,
+  "ws_own_port": 0,
+  "udp_peer": "bridge.example.com",
+  "udp_peer_port": 4433,
+  "udp_own_port": 0,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18081,
+  "admin_web_name": "Dual Transport Client",
+  "log": "INFO"
+}
 ```
 
 Then use WebAdmin to define:
@@ -435,6 +449,118 @@ What is visible in the included snapshots:
 | `--overlay-transport` | `myudp` | Overlay transport between peers: comma-separated list from myudp,tcp,quic,ws. Multiple transports are supported simultaneously for listening instances. |
 | `--client-restart-if-disconnected` | `0.0` | If configured as a peer client (for example --udp-peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables. |
 
+### Secure-link (PSK mode)
+| Option(s) | Default | Description |
+|---|---:|---|
+| `--secure-link` | `False` | Enable secure-link. The currently delivered Phase 1 mode is PSK over `myudp`, `tcp`, `ws`, and `quic`. |
+| `--secure-link-mode` | `off` | Secure-link mode. Phase 1 currently supports `off` or `psk`; `cert` remains planned. |
+| `--secure-link-psk` | `` | Pre-shared secret for `secure_link_mode=psk`. Both peers must use the same non-empty value. |
+| `--secure-link-rekey-after-frames` | `0` | Automatically initiate PSK rekey after this many protected data frames are sent. `0` disables frame-triggered rekeying. |
+| `--secure-link-rekey-after-seconds` | `0.0` | Automatically initiate PSK rekey after this many authenticated seconds, once the current session has already carried protected client data. `0` disables time-triggered rekeying. |
+| `--secure-link-retry-backoff-initial-ms` | `1000` | Initial client-side retry backoff after a secure-link authentication failure, in milliseconds. |
+| `--secure-link-retry-backoff-max-ms` | `5000` | Maximum client-side retry backoff after repeated secure-link authentication failures, in milliseconds. |
+| `--secure-link-require` | `False` | Fail closed if secure-link cannot be negotiated or authenticated. |
+
+#### Current secure-link quick start
+
+The current runtime slice is the delivered Phase 1 PSK mode. It is useful for development, testing, and early operator validation of the layer boundary.
+
+What works today:
+
+- `secure_link_mode=psk`
+- `overlay_transport=myudp`
+- `overlay_transport=tcp`
+- `overlay_transport=ws`
+- `overlay_transport=quic`
+- admin/API visibility through `/api/status` and `/api/peers`
+- optional automatic rekey through `secure_link_rekey_after_frames`
+- optional time-based rekey through `secure_link_rekey_after_seconds`
+- operator-forced rekey through `POST /api/secure-link/rekey`
+
+What is still planned:
+
+- certificate-based secure-link mode
+- certificate validation and revocation
+- richer peer identity exposure in WebAdmin
+
+Minimal listener example:
+
+```json
+{
+  "overlay_transport": "tcp",
+  "tcp_bind": "::",
+  "tcp_own_port": 8081,
+  "secure_link": true,
+  "secure_link_mode": "psk",
+  "secure_link_psk": "change-this-demo-secret",
+  "secure_link_rekey_after_frames": 0,
+  "secure_link_rekey_after_seconds": 0.0,
+  "secure_link_require": true,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18080,
+  "log": "INFO"
+}
+```
+
+Minimal peer example:
+
+```json
+{
+  "overlay_transport": "tcp",
+  "tcp_peer": "127.0.0.1",
+  "tcp_peer_port": 8081,
+  "tcp_own_port": 0,
+  "secure_link": true,
+  "secure_link_mode": "psk",
+  "secure_link_psk": "change-this-demo-secret",
+  "secure_link_rekey_after_frames": 0,
+  "secure_link_rekey_after_seconds": 0.0,
+  "secure_link_require": true,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18081,
+  "log": "INFO"
+}
+```
+
+Start them with:
+
+```bash
+python -m obstacle_bridge --config secure_link_server.json
+python -m obstacle_bridge --config secure_link_client.json
+```
+
+What to look for in WebAdmin or the admin API:
+
+- `/api/status` shows `secure_link.state=authenticated` on both sides after the overlay connects
+- `/api/peers` shows the peer row with `secure_link.authenticated=true`
+- when rekeying is enabled, `/api/status` and `/api/peers` can briefly show `rekey_in_progress=true` while the session rotates to a fresh `secure_link.session_id`
+- the status payload now also exposes `last_rekey_trigger` and, for client-side time-based rekey, `rekey_due_unix_ts`
+- if the PSK does not match, the client and server stay disconnected and the failure is reported as:
+  - `secure_link.state=failed`
+  - `failure_code=1`
+  - `failure_reason=bad_psk`
+  - repeated client-side retries show increasing `consecutive_failures`, a bounded `retry_backoff_sec`, a populated `next_retry_unix_ts`, a populated `failure_session_id`, increasing `handshake_attempts_total`, and `last_event=retry_scheduled`
+- on healthy authenticated runs, `/api/status` also exposes stronger operational diagnostics such as `last_event`, `last_event_unix_ts`, `last_authenticated_unix_ts`, `authenticated_sessions_total`, `rekeys_completed_total`, and `last_rekey_trigger`
+- operators can force rekey on an authenticated client-side secure-link session with:
+
+```bash
+curl -sS -X POST http://127.0.0.1:18081/api/secure-link/rekey
+```
+
+Operator notes:
+
+- use `--secure-link-require` when you want a hard failure instead of falling back to plaintext behavior
+- use a long random PSK for anything beyond local testing
+- leave `secure_link_rekey_after_frames=0` unless you intentionally want to exercise or validate rekey behavior
+- use `secure_link_rekey_after_seconds` when you want automatic rotation on long-lived authenticated client-side sessions without waiting for a frame-count threshold
+- operator-forced rekey currently applies to authenticated client-side secure-link sessions; if no protected client data has been sent yet, the admin API rejects the request rather than guessing its way past the handshake boundary
+- if you are intentionally testing wrong-PSK or rollout mistakes, `secure_link_retry_backoff_initial_ms` and `secure_link_retry_backoff_max_ms` let you tune how aggressively the client retries after secure-link auth failures
+- the current PSK runtime uses strictly monotonic per-direction protected-data counters starting at `1`; counter `0` is reserved and counter exhaustion fails closed rather than wrapping
+- malformed or unexpected secure-link frames fail closed and remain observable through the admin/API surface; they do not continue forwarding overlay traffic on the affected peer
+- the current PSK mode is the delivered first secure-link mode, not the final certificate-based trust model described in [docs/SECURE_LINK_DESIGN.md](docs/SECURE_LINK_DESIGN.md)
+
 ## Notes
 - Listener mode intentionally ignores `--own-servers`, because a multi-peer listener cannot unambiguously bind one local listener to one remote peer.
 - Multi-transport mode is currently intended for listening instances without configured transport peers (for example no `--udp-peer`, `--tcp-peer`, `--quic-peer`, or `--ws-peer`).
@@ -449,16 +575,147 @@ What is visible in the included snapshots:
 - Requirements: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 
+### Planned secure-link certificate preparation
+
+The current runtime only implements the Phase 1 PSK mode described above. The following workflow is therefore preparation for the later certificate-based secure-link mode, not a current startup requirement for ObstacleBridge.
+
+The basic trust model is:
+
+- one admin root keypair per deployment
+- one leaf keypair per peer client or peer server
+- one admin-signed leaf certificate per peer
+
+#### 1. Generate the admin root keypair
+
+```bash
+openssl genpkey -algorithm ED25519 -out admin_root_key.pem
+openssl pkey -in admin_root_key.pem -pubout -out admin_root_pub.pem
+```
+
+Keep:
+
+- `admin_root_key.pem` offline and tightly controlled
+- `admin_root_pub.pem` distributed to the peer client and peer server nodes that should trust this deployment
+
+#### 2. Generate a leaf keypair for one peer
+
+Example for a listener/server identity:
+
+```bash
+openssl genpkey -algorithm ED25519 -out peer_server_key.pem
+openssl pkey -in peer_server_key.pem -pubout -out peer_server_pub.pem
+```
+
+Repeat the same pattern for a client identity, for example:
+
+```bash
+openssl genpkey -algorithm ED25519 -out peer_client_key.pem
+openssl pkey -in peer_client_key.pem -pubout -out peer_client_pub.pem
+```
+
+#### 3. Create the unsigned certificate body
+
+The planned certificate input profile is documented in [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md). A minimal server leaf example looks like:
+
+```json
+{
+  "version": 1,
+  "serial": "srv-0001",
+  "issuer_id": "deployment-admin",
+  "subject_id": "bridge-server-01",
+  "subject_name": "Public Bridge Server",
+  "deployment_id": "lab-a",
+  "public_key_algorithm": "Ed25519",
+  "public_key": "BASE64_ENCODED_PUBLIC_KEY",
+  "roles": ["server"],
+  "issued_at": "2026-04-04T12:00:00Z",
+  "not_before": "2026-04-04T12:00:00Z",
+  "not_after": "2027-04-04T12:00:00Z",
+  "constraints": []
+}
+```
+
+Replace `BASE64_ENCODED_PUBLIC_KEY` with the actual leaf public key material.
+
+Important:
+
+- the file must be one valid JSON object
+- include the opening `{` and closing `}`
+- do not paste multiple JSON objects into the same file
+
+If you want to sanity-check the file before canonicalizing it:
+
+```bash
+python -m json.tool peer_server_cert_body.json > /dev/null
+```
+
+#### 4. Canonicalize the certificate body before signing
+
+One simple dependency-light way is to use Python itself to emit a stable compact JSON form:
+
+```bash
+python -c "import json,sys; print(json.dumps(json.load(open(sys.argv[1], 'r', encoding='utf-8')), sort_keys=True, separators=(',', ':')))" \
+  peer_server_cert_body.json > peer_server_cert_body.c14n.json
+```
+
+If that command fails with `JSONDecodeError: Extra data`, the input file is not a single valid JSON object. A common cause is a missing opening `{` or accidentally pasting extra lines into the file.
+
+The future runtime format is expected to sign the canonicalized certificate body, excluding the `signature` field itself.
+
+#### 5. Sign the canonicalized body with the admin root key
+
+```bash
+openssl pkeyutl -sign -rawin \
+  -inkey admin_root_key.pem \
+  -in peer_server_cert_body.c14n.json \
+  -out peer_server_cert.sig
+```
+
+Optional verification step:
+
+```bash
+openssl pkeyutl -verify -rawin -pubin \
+  -inkey admin_root_pub.pem \
+  -in peer_server_cert_body.c14n.json \
+  -sigfile peer_server_cert.sig
+```
+
+#### 6. Bundle the future certificate artifact
+
+Until the runtime format is finalized, a practical bundle is:
+
+- canonicalized certificate body JSON
+- detached signature file
+- leaf private key PEM on the owning node only
+- admin root public key PEM on all trusting nodes
+
+For example:
+
+- `peer_server_cert_body.c14n.json`
+- `peer_server_cert.sig`
+- `peer_server_key.pem`
+- `admin_root_pub.pem`
+
+This stays consistent with the current design direction:
+
+- ObstacleBridge uses key material and certificates
+- ObstacleBridge does not generate private keys or sign certificates
+- primitive signature verification and encryption/decryption are expected from the selected crypto library once runtime support is added
+
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `42/42 = 100.0%`
-- Unit-covered: `20/42 = 47.6%`
-- Any-test-covered: `42/42 = 100.0%`
-- Tracked in manifest: `42/42 = 100.0%`
+- Integration-covered: `52/52 = 100.0%`
+- Unit-covered: `30/52 = 57.7%`
+- Any-test-covered: `52/52 = 100.0%`
+- Tracked in manifest: `52/52 = 100.0%`
 - Requirements without integration coverage: `(none)`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
+
+The secure-link topic now has an active `REQ-AUT-*` layer in `docs/REQUIREMENTS.md` for the delivered PSK-based Phase 1 runtime slice, while the certificate/key-material trust-anchor work remains in the planned `PLAN-AUT-*` namespace and the certificate/key-material input profile is documented in `docs/SYSTEM_BOUNDARY.md`. The current PSK runtime slice is defended across `myudp`, `tcp`, `ws`, and `quic`, now including broader multi-peer listener validation across those transports, richer admin/API observability through `/api/status` and `/api/peers`, frame-, time-, and operator-triggered rekey coverage, reconnect-with-fresh-session coverage, and subprocess replay/malformed-frame fail-closed coverage. The few subprocess cases that need direct secure-link fault stimulation use the separate test-only `obstacle_bridge.bridge_FI` entrypoint rather than the normal runtime surface.
+
+The related architecture decomposition is also linked to tests through `.github/architecture_traceability.yaml`.
 
 The top-level README is intentionally kept as a contributor-facing coverage snapshot. When requirements, implementation, or the test set changes, update this section so the project entrypoint stays aligned with the current contract and evidence.
 
@@ -500,6 +757,7 @@ Debugging in a project like this can be difficult because the behavior emerges f
 - `tests/integration/` — end-to-end and subprocess tests.
 - `scripts/` — development helpers.
 - `docs/` — main project documents such as requirements, architecture, development process, system boundary, testing guide, and whitepaper.
+- `docs/SECURE_LINK_DESIGN.md` — Phase 0 design baseline for transport-independent tunnel authentication and encryption.
 - `docs/refered_docs/` — referenced examples, exported admin snapshots, diagrams, images, and the smoke-test cheat sheet.
 - `.github/requirements_traceability.yaml` — product-requirement to test traceability manifest used by the requirements guard and coverage report.
 - `docs/refered_docs/ObstacleBridge Client.html` — exported example of the admin web UI on a peer/client instance. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/refered_docs/ObstacleBridge%20Client.html`

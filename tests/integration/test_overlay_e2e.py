@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import base64
 import contextlib
+import errno
 import heapq
 import hashlib
 import inspect
@@ -37,6 +39,11 @@ PAYLOAD_OUT = b'\x02\x30'
 from obstacle_bridge.bridge import CONTROL_MAX_MISSED, PROTO, PTYPE_CONTROL, PTYPE_DATA
 
 log = logging.getLogger()
+
+try:
+    import fcntl
+except Exception:  # pragma: no cover - non-POSIX fallback
+    fcntl = None
 
 
 @dataclass
@@ -76,6 +83,26 @@ class MyudpDelayLossCase:
     drop_client_to_server_control: tuple[int, ...] = ()
     drop_server_to_client_data: tuple[int, ...] = ()
     drop_server_to_client_control: tuple[int, ...] = ()
+
+
+@contextlib.contextmanager
+def secure_link_test_lock():
+    if fcntl is None:
+        yield
+        return
+    lock_path = Path(tempfile.gettempdir()) / "quic_br_secure_link_integration.lock"
+    with lock_path.open("w", encoding="utf-8") as fp:
+        while True:
+            try:
+                fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
+                break
+            except OSError as exc:
+                if exc.errno != errno.EINTR:
+                    raise
+        try:
+            yield
+        finally:
+            fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
 
 
 CASES: Dict[str, Case] = {
@@ -234,7 +261,7 @@ CASES: Dict[str, Case] = {
         probe_proto='tcp', probe_host='127.0.0.1', probe_port=3549, probe_bind='0.0.0.0',
         bridge_server_args=[
             '--overlay-transport', 'quic',
-            '--quic-bind', '0.0.0.0', '--quic-own-port', '4543',
+            '--quic-bind', '0.0.0.0', '--quic-own-port', '14543',
             '--quic-cert', 'Cert_localhost/cert.pem', '--quic-key', 'Cert_localhost/key.pem',
             '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
             '--log-file', 'br_server_listener_quic_two_clients.txt',
@@ -362,6 +389,73 @@ def materialize_case_ports(case: Case, case_index: int) -> Case:
     offset = _case_port_offset(case_index)
     if offset == 0:
         return case
+    return replace(
+        case,
+        bounce_port=_shift_port(case.bounce_port, offset),
+        probe_port=_shift_port(case.probe_port, offset),
+        bridge_server_args=_shift_port_options(case.bridge_server_args, offset),
+        bridge_client_args=_shift_port_options(case.bridge_client_args, offset),
+    )
+
+
+def _max_port_in_shiftable_args(args: List[str]) -> int:
+    port_options = {
+        '--udp-own-port',
+        '--udp-peer-port',
+        '--tcp-own-port',
+        '--tcp-peer-port',
+        '--ws-own-port',
+        '--ws-peer-port',
+        '--quic-own-port',
+        '--quic-peer-port',
+        '--admin-web-port',
+    }
+    service_options = {'--own-servers', '--remote-servers'}
+    highest = 0
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in port_options and i + 1 < len(args):
+            with contextlib.suppress(Exception):
+                highest = max(highest, int(args[i + 1]))
+            i += 2
+            continue
+        if arg in service_options:
+            i += 1
+            while i < len(args) and not str(args[i]).startswith('--'):
+                parts = [p.strip() for p in str(args[i]).split(',')]
+                if len(parts) >= 6:
+                    with contextlib.suppress(Exception):
+                        highest = max(highest, int(parts[1]), int(parts[5]))
+                i += 1
+            continue
+        i += 1
+    return highest
+
+
+def _max_case_static_port(case: Case) -> int:
+    return max(
+        int(case.bounce_port),
+        int(case.probe_port),
+        _max_port_in_shiftable_args(case.bridge_server_args),
+        _max_port_in_shiftable_args(case.bridge_client_args),
+    )
+
+
+def materialize_secure_link_case_ports(case: Case, secure_slot: int) -> Case:
+    highest = _max_case_static_port(case)
+    max_slots = _secure_link_port_slots_per_worker(highest)
+    slot = int(secure_slot)
+    if slot < 0 or slot >= max_slots:
+        raise ValueError(
+            f'secure-link slot out of range: slot={slot} max_slots={max_slots} '
+            f'highest={highest} base={SECURE_LINK_PORT_OFFSET_BASE}'
+        )
+    offset = SECURE_LINK_PORT_OFFSET_BASE + (slot * SECURE_LINK_PORT_STRIDE)
+    if highest + offset >= SERVICE_PORT_CEILING:
+        raise ValueError(
+            f'secure-link test port offset out of range: highest={highest} offset={offset} ceiling={SERVICE_PORT_CEILING}'
+        )
     return replace(
         case,
         bounce_port=_shift_port(case.bounce_port, offset),
@@ -561,6 +655,20 @@ SERVICE_PORT_CEILING = 61000
 ADMIN_PORT_BASE = 61000
 ADMIN_PORTS_PER_WORKER = 256
 ADMIN_PORTS_PER_CASE = 4
+SECURE_LINK_ADMIN_BASE = 62000
+SECURE_LINK_PORT_OFFSET_BASE = 6000
+SECURE_LINK_PORT_STRIDE = 64
+
+
+def _secure_link_port_slots_per_worker(highest_static_port: int) -> int:
+    max_offset = SERVICE_PORT_CEILING - int(highest_static_port) - 1
+    remaining = max_offset - SECURE_LINK_PORT_OFFSET_BASE
+    if remaining < 0:
+        raise ValueError(
+            f'secure-link test port base out of range: highest={highest_static_port} '
+            f'base={SECURE_LINK_PORT_OFFSET_BASE} ceiling={SERVICE_PORT_CEILING}'
+        )
+    return max(1, (remaining // SECURE_LINK_PORT_STRIDE) + 1)
 
 EXACT_BYTES_CASES = {
     'case01_udp_over_own_udp_ipv4',
@@ -1065,6 +1173,13 @@ def start_proc(name: str, cmd: List[str], log_dir: Path, env_extra: Optional[Dic
         env_extra=dict(env_extra or {}),
     )
 
+
+def bridge_entrypoint(*, with_failure_injection: bool = False) -> List[str]:
+    py = sys.executable
+    if with_failure_injection:
+        return [py, '-m', 'obstacle_bridge.bridge_FI']
+    return [py, str(BRIDGE)]
+
 RESTART_EXIT_CODE = 75
 
 def proc_exited_for_restart(proc: Proc) -> bool:
@@ -1334,6 +1449,21 @@ def _listener_overlay_port(case: Case, transport: str) -> int:
     listen_opt = {'myudp': '--udp-own-port', 'tcp': '--tcp-own-port', 'quic': '--quic-own-port', 'ws': '--ws-own-port'}[transport]
     base_default = {'myudp': 4433, 'tcp': 8081, 'quic': 443, 'ws': 8080}[transport]
     return int(_arg_value(case.bridge_server_args, listen_opt, str(base_default)))
+
+
+def _listener_overlay_bind_host(case: Case, transport: str) -> str:
+    bind_opt = {'myudp': '--udp-bind', 'tcp': '--tcp-bind', 'quic': '--quic-bind', 'ws': '--ws-bind'}[transport]
+    default = '0.0.0.0'
+    return _arg_value(case.bridge_server_args, bind_opt, default)
+
+
+def _connect_host_for_bind(bind_host: str) -> str:
+    host = str(bind_host or '').strip()
+    if host in ('', '0.0.0.0'):
+        return '127.0.0.1'
+    if host == '::':
+        return '::1'
+    return host
 
 
 def alloc_admin_ports(case_index: int, base: int = ADMIN_PORT_BASE) -> Tuple[int, int]:
@@ -1984,6 +2114,181 @@ def wait_distinct_peer_endpoints(
     )
 
 
+def wait_peer_secure_link_state(
+    admin_port: int,
+    *,
+    expected_state: str,
+    timeout: float = 12.0,
+    label: str = '',
+    transport: Optional[str] = None,
+    failure_reason: Optional[str] = None,
+    failure_code: Optional[int] = None,
+    failure_detail_substr: Optional[str] = None,
+    authenticated: Optional[bool] = None,
+) -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    normalized_transport = str(transport or '').strip().lower()
+    expected_state_norm = str(expected_state or '').strip().lower()
+    expected_reason = None if failure_reason is None else str(failure_reason).strip().lower()
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
+        last_doc = doc
+        for row in list(doc.get('peers') or []):
+            if normalized_transport and str(row.get('transport', '')).strip().lower() != normalized_transport:
+                continue
+            if str(row.get('state', '')).strip().lower() == 'listening':
+                continue
+            secure_link = row.get('secure_link') or {}
+            if str(secure_link.get('state', '')).strip().lower() != expected_state_norm:
+                continue
+            if expected_reason is not None and str(secure_link.get('failure_reason', '')).strip().lower() != expected_reason:
+                continue
+            if failure_code is not None and int(secure_link.get('failure_code') or 0) != int(failure_code):
+                continue
+            if failure_detail_substr is not None and failure_detail_substr not in str(secure_link.get('failure_detail') or ''):
+                continue
+            if authenticated is not None and bool(secure_link.get('authenticated')) != bool(authenticated):
+                continue
+            who = f' {label}' if label else ''
+            log.info(f'[PEERS]{who} port={admin_port} secure_link_state={secure_link!r}')
+            return doc
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'/api/peers did not expose secure_link state={expected_state_norm} on port {admin_port}; last={last_doc!r}'
+    )
+
+
+def wait_peer_secure_link_session_change(
+    admin_port: int,
+    *,
+    previous_session_id: int,
+    timeout: float = 12.0,
+    label: str = '',
+    transport: Optional[str] = None,
+) -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    normalized_transport = str(transport or '').strip().lower()
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
+        last_doc = doc
+        for row in list(doc.get('peers') or []):
+            if normalized_transport and str(row.get('transport', '')).strip().lower() != normalized_transport:
+                continue
+            if str(row.get('state', '')).strip().lower() == 'listening':
+                continue
+            secure_link = row.get('secure_link') or {}
+            session_id = int(secure_link.get('session_id') or 0)
+            if session_id > 0 and session_id != int(previous_session_id):
+                who = f' {label}' if label else ''
+                log.info(f'[PEERS]{who} port={admin_port} secure_link_session_changed={secure_link!r}')
+                return doc
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'/api/peers did not expose secure_link session change from {previous_session_id} on port {admin_port}; last={last_doc!r}'
+    )
+
+
+def first_active_secure_link_row(doc: dict, *, transport: Optional[str] = None) -> dict:
+    normalized_transport = str(transport or '').strip().lower()
+    for row in list(doc.get('peers') or []):
+        if normalized_transport and str(row.get('transport', '')).strip().lower() != normalized_transport:
+            continue
+        if str(row.get('state', '')).strip().lower() == 'listening':
+            continue
+        return row
+    raise RuntimeError(f'Could not determine active secure-link peer row from peers doc: {doc!r}')
+
+
+def wait_status_secure_link_state(
+    admin_port: int,
+    *,
+    expected_state: str,
+    timeout: float = 12.0,
+    label: str = '',
+    failure_reason: Optional[str] = None,
+    failure_code: Optional[int] = None,
+    failure_detail_substr: Optional[str] = None,
+    authenticated: Optional[bool] = None,
+) -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    expected_state_norm = str(expected_state or '').strip().lower()
+    expected_reason = None if failure_reason is None else str(failure_reason).strip().lower()
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.5)
+        last_doc = doc
+        secure_link = doc.get('secure_link') or {}
+        if str(secure_link.get('state', '')).strip().lower() != expected_state_norm:
+            time.sleep(0.25)
+            continue
+        if expected_reason is not None and str(secure_link.get('failure_reason', '')).strip().lower() != expected_reason:
+            time.sleep(0.25)
+            continue
+        if failure_code is not None and int(secure_link.get('failure_code') or 0) != int(failure_code):
+            time.sleep(0.25)
+            continue
+        if failure_detail_substr is not None and failure_detail_substr not in str(secure_link.get('failure_detail') or ''):
+            time.sleep(0.25)
+            continue
+        if authenticated is not None and bool(secure_link.get('authenticated')) != bool(authenticated):
+            time.sleep(0.25)
+            continue
+        who = f' {label}' if label else ''
+        log.info(f'[STATUS]{who} port={admin_port} secure_link={secure_link!r}')
+        return doc
+    raise RuntimeError(
+        f'/api/status did not expose secure_link state={expected_state_norm} on port {admin_port}; last={last_doc!r}'
+    )
+
+
+def wait_status_secure_link_authenticated_peers(
+    admin_port: int,
+    *,
+    minimum_count: int,
+    timeout: float = 12.0,
+    label: str = '',
+) -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.5)
+        last_doc = doc
+        secure_link = doc.get('secure_link') or {}
+        if int(secure_link.get('authenticated_peers') or 0) >= int(minimum_count):
+            who = f' {label}' if label else ''
+            log.info(f'[STATUS]{who} port={admin_port} secure_link_authenticated_peers={secure_link!r}')
+            return doc
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'/api/status did not expose secure_link authenticated_peers>={minimum_count} on port {admin_port}; last={last_doc!r}'
+    )
+
+
+def wait_status_secure_link_consecutive_failures(
+    admin_port: int,
+    *,
+    minimum_count: int,
+    timeout: float = 12.0,
+    label: str = '',
+) -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.5)
+        last_doc = doc
+        secure_link = doc.get('secure_link') or {}
+        if int(secure_link.get('consecutive_failures') or 0) >= int(minimum_count):
+            who = f' {label}' if label else ''
+            log.info(f'[STATUS]{who} port={admin_port} secure_link_consecutive_failures={secure_link!r}')
+            return doc
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'/api/status did not expose secure_link consecutive_failures>={minimum_count} on port {admin_port}; last={last_doc!r}'
+    )
+
+
 def status_state(doc: dict) -> str:
     return str(doc.get('peer_state', '')).strip().upper()
 
@@ -2141,7 +2446,8 @@ def run_case(case: Case, log_dir: Path, case_index: int, settle_s: Optional[floa
                     )
 
             before_tcp_close = _request_connections_before_close
-        wait_probe(case, timeout=8.0, before_tcp_close=before_tcp_close)
+        probe_timeout = 12.0 if case.name == 'case09_overlay_ws_ipv6' else 8.0
+        wait_probe(case, timeout=probe_timeout, before_tcp_close=before_tcp_close)
         if check_exact_bytes:
             expected_bytes = len(PAYLOAD_IN)
             for proc in procs:
@@ -2485,8 +2791,17 @@ def run_case_reconnect(case: Case, log_dir: Path, case_index: int, settle_s: Opt
         bounce.stop()
 
 
-def run_case_two_peer_clients_listener(case: Case, log_dir: Path, case_index: int, settle_s: Optional[float] = None) -> None:
-    case = materialize_case_ports(case, case_index)
+def run_case_two_peer_clients_listener(
+    case: Case,
+    log_dir: Path,
+    case_index: int,
+    settle_s: Optional[float] = None,
+    secure_slot: Optional[int] = None,
+    server_extra_args: Optional[List[str]] = None,
+    client1_extra_args: Optional[List[str]] = None,
+    client2_extra_args: Optional[List[str]] = None,
+) -> None:
+    case = materialize_secure_link_case_ports(case, secure_slot) if secure_slot is not None else materialize_case_ports(case, case_index)
     bounce = BounceBackServer(
         name=f'{case.name}_bounce',
         proto=case.bounce_proto,
@@ -2498,6 +2813,14 @@ def run_case_two_peer_clients_listener(case: Case, log_dir: Path, case_index: in
     client1_proc: Optional[Proc] = None
     client2_proc: Optional[Proc] = None
     server_spec, client_spec = build_commands(case, log_dir, case_index, enable_admin=True)
+    client2_admin_port = alloc_admin_port(
+        {
+            int(server_spec[3] or 0),
+            int(client_spec[3] or 0),
+        },
+        case_index=case_index + 2,
+        base=SECURE_LINK_ADMIN_BASE if secure_slot is not None else ADMIN_PORT_BASE,
+    ) if secure_slot is not None else None
 
     try:
         phase('1. Start bounce-back server')
@@ -2505,6 +2828,8 @@ def run_case_two_peer_clients_listener(case: Case, log_dir: Path, case_index: in
 
         phase('2. Start listener/server bridge')
         name, cmd, env, admin_port = server_spec
+        if server_extra_args:
+            cmd = list(cmd) + list(server_extra_args)
         server_proc = start_proc(f'{case.name}_{name}', cmd, log_dir, env_extra=env, admin_port=admin_port)
         time.sleep(0.5)
         assert_running(server_proc)
@@ -2512,6 +2837,9 @@ def run_case_two_peer_clients_listener(case: Case, log_dir: Path, case_index: in
 
         phase('3. Start client #1 bridge')
         c_name, c_cmd, c_env, c_admin_port = client_spec
+        client_base_cmd = list(c_cmd)
+        if client1_extra_args:
+            c_cmd = client_base_cmd + list(client1_extra_args)
         client1_proc = start_proc(f'{case.name}_{c_name}_1', c_cmd, log_dir, env_extra=c_env, admin_port=c_admin_port)
         time.sleep(0.5)
         assert_running(client1_proc)
@@ -2519,11 +2847,17 @@ def run_case_two_peer_clients_listener(case: Case, log_dir: Path, case_index: in
 
         phase('4. Start client #2 bridge with a different local UDP service port')
         second_client_local_port = case.probe_port + 1
-        client2_cmd = _replace_own_servers_local_port(c_cmd, second_client_local_port)
+        client2_cmd = _replace_own_servers_local_port(client_base_cmd, second_client_local_port)
+        if client2_extra_args:
+            client2_cmd += list(client2_extra_args)
         client2_cmd += ['--admin-web-port', '0']
-        client2_proc = start_proc(f'{case.name}_{c_name}_2', client2_cmd, log_dir, env_extra=c_env, admin_port=None)
+        if client2_admin_port is not None:
+            client2_cmd += admin_args(client2_admin_port)
+        client2_proc = start_proc(f'{case.name}_{c_name}_2', client2_cmd, log_dir, env_extra=c_env, admin_port=client2_admin_port)
         time.sleep(0.5)
         assert_running(client2_proc)
+        if client2_admin_port is not None:
+            wait_admin_up(client2_proc.admin_port or 0, timeout=10.0)
 
         time.sleep(case.settle_seconds if settle_s is None else settle_s)
         assert_running(server_proc)
@@ -2549,6 +2883,24 @@ def run_case_two_peer_clients_listener(case: Case, log_dir: Path, case_index: in
         with_ip = [row for row in rows if row.get('peer') not in (None, '', 'n/a')]
         if len(with_ip) < 2:
             raise RuntimeError(f'Expected >=2 peer rows with endpoint labels, got rows={rows!r}')
+
+        if secure_slot is not None:
+            transport = 'unknown'
+            for argv in (case.bridge_client_args, case.bridge_server_args):
+                try:
+                    idx = argv.index('--overlay-transport')
+                    transport = str(argv[idx + 1]).split(',')[0].strip().lower()
+                    if transport:
+                        break
+                except Exception:
+                    continue
+            wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+            wait_status_secure_link_authenticated_peers(server_proc.admin_port or 0, minimum_count=2, timeout=12.0, label='server')
+            wait_status_secure_link_state(client1_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client1', authenticated=True)
+            wait_status_secure_link_state(client2_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client2', authenticated=True)
+            wait_peer_secure_link_state(client1_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client1', transport=transport, authenticated=True)
+            wait_peer_secure_link_state(client2_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client2', transport=transport, authenticated=True)
+            wait_peer_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', transport=transport, authenticated=True)
     finally:
         if client2_proc is not None:
             stop_proc(client2_proc)
@@ -3208,6 +3560,10 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
     log_dir: Path,
     case_index: int,
     settle_s: Optional[float] = None,
+    secure_slot: Optional[int] = None,
+    server_extra_args: Optional[List[str]] = None,
+    client1_extra_args: Optional[List[str]] = None,
+    client2_extra_args: Optional[List[str]] = None,
 ) -> None:
     base_tcp_port = case.bounce_port
     own_udp_bounces = [
@@ -3224,14 +3580,16 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
     server_proc: Optional[Proc] = None
     client1_proc: Optional[Proc] = None
     client2_proc: Optional[Proc] = None
-    server_admin, client1_admin = alloc_admin_ports(case_index)
-    client2_admin = alloc_admin_port({server_admin, client1_admin})
+    admin_base = SECURE_LINK_ADMIN_BASE if secure_slot is not None else ADMIN_PORT_BASE
+    server_admin, client1_admin = alloc_admin_ports(case_index, base=admin_base)
+    client2_admin = alloc_admin_port({server_admin, client1_admin}, case_index=case_index + 2, base=admin_base)
     udp_peer_port = _listener_overlay_port(case, 'myudp')
 
     py = sys.executable
     missing_cfg = str(log_dir / f'{case.name}_missing.cfg')
     server_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_server_args, log_dir, case.name, 'bridge_server')
     server_cmd += ['--config', missing_cfg, '--admin-web-port', '0']
+    server_cmd += list(server_extra_args or [])
     server_cmd += admin_args(server_admin)
 
     client1_cmd = [py, str(BRIDGE),
@@ -3249,6 +3607,7 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
         '--log-file', str(log_dir / f'{case.name}_bridge_client_1.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
     ]
+    client1_cmd += list(client1_extra_args or [])
     client1_cmd += admin_args(client1_admin)
 
     client2_cmd = [py, str(BRIDGE),
@@ -3266,6 +3625,7 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
         '--log-file', str(log_dir / f'{case.name}_bridge_client_2.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
     ]
+    client2_cmd += list(client2_extra_args or [])
     client2_cmd += admin_args(client2_admin)
 
     tcp_specs = [
@@ -3313,6 +3673,15 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
         phase('4. Verify both myudp peer clients connect to the same listener')
         wait_peers_count(server_admin, minimum_count=2, timeout=12.0, label='server')
         wait_listener_peer_rows_zeroed(server_admin, timeout=12.0, label='server')
+        wait_distinct_peer_endpoints(server_admin, transport='myudp', minimum_count=2, timeout=12.0, label='server')
+        if secure_slot is not None:
+            wait_status_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+            wait_status_secure_link_authenticated_peers(server_admin, minimum_count=2, timeout=12.0, label='server')
+            wait_status_secure_link_state(client1_admin, expected_state='authenticated', timeout=12.0, label='client1', authenticated=True)
+            wait_status_secure_link_state(client2_admin, expected_state='authenticated', timeout=12.0, label='client2', authenticated=True)
+            wait_peer_secure_link_state(client1_admin, expected_state='authenticated', timeout=12.0, label='client1', transport='myudp', authenticated=True)
+            wait_peer_secure_link_state(client2_admin, expected_state='authenticated', timeout=12.0, label='client2', transport='myudp', authenticated=True)
+            wait_peer_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', transport='myudp', authenticated=True)
 
         phase('5. Open 8 concurrent TCP channels and hold them during /api/connections polling')
         start_evt = threading.Event()
@@ -3411,6 +3780,10 @@ def run_case_tcp_two_clients_concurrent_udp_tcp(
     log_dir: Path,
     case_index: int,
     settle_s: Optional[float] = None,
+    secure_slot: Optional[int] = None,
+    server_extra_args: Optional[List[str]] = None,
+    client1_extra_args: Optional[List[str]] = None,
+    client2_extra_args: Optional[List[str]] = None,
 ) -> None:
     base_tcp_port = case.bounce_port
     own_udp_bounces = [
@@ -3427,14 +3800,16 @@ def run_case_tcp_two_clients_concurrent_udp_tcp(
     server_proc: Optional[Proc] = None
     client1_proc: Optional[Proc] = None
     client2_proc: Optional[Proc] = None
-    server_admin, client1_admin = alloc_admin_ports(case_index)
-    client2_admin = alloc_admin_port({server_admin, client1_admin})
+    admin_base = SECURE_LINK_ADMIN_BASE if secure_slot is not None else ADMIN_PORT_BASE
+    server_admin, client1_admin = alloc_admin_ports(case_index, base=admin_base)
+    client2_admin = alloc_admin_port({server_admin, client1_admin}, case_index=case_index + 2, base=admin_base)
     tcp_peer_port = _listener_overlay_port(case, 'tcp')
 
     py = sys.executable
     missing_cfg = str(log_dir / f'{case.name}_missing.cfg')
     server_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_server_args, log_dir, case.name, 'bridge_server')
     server_cmd += ['--config', missing_cfg, '--admin-web-port', '0']
+    server_cmd += list(server_extra_args or [])
     server_cmd += admin_args(server_admin)
 
     client1_cmd = [py, str(BRIDGE),
@@ -3452,6 +3827,7 @@ def run_case_tcp_two_clients_concurrent_udp_tcp(
         '--log-file', str(log_dir / f'{case.name}_bridge_client_1.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
     ]
+    client1_cmd += list(client1_extra_args or [])
     client1_cmd += admin_args(client1_admin)
 
     client2_cmd = [py, str(BRIDGE),
@@ -3469,6 +3845,7 @@ def run_case_tcp_two_clients_concurrent_udp_tcp(
         '--log-file', str(log_dir / f'{case.name}_bridge_client_2.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
     ]
+    client2_cmd += list(client2_extra_args or [])
     client2_cmd += admin_args(client2_admin)
 
     tcp_specs = [
@@ -3612,6 +3989,10 @@ def run_case_quic_two_clients_concurrent_udp_tcp(
     log_dir: Path,
     case_index: int,
     settle_s: Optional[float] = None,
+    secure_slot: Optional[int] = None,
+    server_extra_args: Optional[List[str]] = None,
+    client1_extra_args: Optional[List[str]] = None,
+    client2_extra_args: Optional[List[str]] = None,
 ) -> None:
     base_tcp_port = case.bounce_port
     own_udp_bounces = [
@@ -3628,14 +4009,16 @@ def run_case_quic_two_clients_concurrent_udp_tcp(
     server_proc: Optional[Proc] = None
     client1_proc: Optional[Proc] = None
     client2_proc: Optional[Proc] = None
-    server_admin, client1_admin = alloc_admin_ports(case_index)
-    client2_admin = alloc_admin_port({server_admin, client1_admin})
+    admin_base = SECURE_LINK_ADMIN_BASE if secure_slot is not None else ADMIN_PORT_BASE
+    server_admin, client1_admin = alloc_admin_ports(case_index, base=admin_base)
+    client2_admin = alloc_admin_port({server_admin, client1_admin}, case_index=case_index + 2, base=admin_base)
     quic_peer_port = _listener_overlay_port(case, 'quic')
 
     py = sys.executable
     missing_cfg = str(log_dir / f'{case.name}_missing.cfg')
     server_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_server_args, log_dir, case.name, 'bridge_server')
     server_cmd += ['--config', missing_cfg, '--admin-web-port', '0']
+    server_cmd += list(server_extra_args or [])
     server_cmd += admin_args(server_admin)
 
     client1_cmd = [py, str(BRIDGE),
@@ -3653,6 +4036,7 @@ def run_case_quic_two_clients_concurrent_udp_tcp(
         '--log-file', str(log_dir / f'{case.name}_bridge_client_1.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
     ]
+    client1_cmd += list(client1_extra_args or [])
     client1_cmd += admin_args(client1_admin)
 
     client2_cmd = [py, str(BRIDGE),
@@ -3670,6 +4054,7 @@ def run_case_quic_two_clients_concurrent_udp_tcp(
         '--log-file', str(log_dir / f'{case.name}_bridge_client_2.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
     ]
+    client2_cmd += list(client2_extra_args or [])
     client2_cmd += admin_args(client2_admin)
 
     tcp_specs = [
@@ -3718,6 +4103,14 @@ def run_case_quic_two_clients_concurrent_udp_tcp(
         wait_peers_count(server_admin, minimum_count=2, timeout=12.0, label='server')
         wait_listener_peer_rows_zeroed(server_admin, timeout=12.0, label='server')
         wait_distinct_peer_endpoints(server_admin, transport='quic', minimum_count=2, timeout=12.0, label='server')
+        if secure_slot is not None:
+            wait_status_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+            wait_status_secure_link_authenticated_peers(server_admin, minimum_count=2, timeout=12.0, label='server')
+            wait_status_secure_link_state(client1_admin, expected_state='authenticated', timeout=12.0, label='client1', authenticated=True)
+            wait_status_secure_link_state(client2_admin, expected_state='authenticated', timeout=12.0, label='client2', authenticated=True)
+            wait_peer_secure_link_state(client1_admin, expected_state='authenticated', timeout=12.0, label='client1', transport='quic', authenticated=True)
+            wait_peer_secure_link_state(client2_admin, expected_state='authenticated', timeout=12.0, label='client2', transport='quic', authenticated=True)
+            wait_peer_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', transport='quic', authenticated=True)
 
         phase('5. Open 8 concurrent TCP channels and hold them during /api/connections polling')
         start_evt = threading.Event()
@@ -3967,6 +4360,59 @@ def _start_ws_case_with_client_env(
             stop_proc(client_proc)
         if server_proc is not None:
             stop_proc(server_proc)
+        bounce.stop()
+        raise
+
+
+def _start_case_with_secure_link_args(
+    case: Case,
+    log_dir: Path,
+    *,
+    case_index: int,
+    secure_slot: Optional[int] = None,
+    server_extra_args: Optional[List[str]] = None,
+    client_extra_args: Optional[List[str]] = None,
+    client_restart_if_disconnected: float = 5.0,
+    use_failure_injection_entrypoint: bool = False,
+) -> tuple[Case, BounceBackServer, Proc, Proc]:
+    case = materialize_secure_link_case_ports(case, secure_slot) if secure_slot is not None else materialize_case_ports(case, case_index)
+    bounce = BounceBackServer(
+        name=f'{case.name}_bounce',
+        proto=case.bounce_proto,
+        bind_host=case.bounce_bind,
+        port=case.bounce_port,
+        log_path=log_dir / f'{case.name}_bounce.log',
+    )
+    bounce.start()
+    server_admin, client_admin = alloc_admin_ports(case_index, base=SECURE_LINK_ADMIN_BASE if secure_slot is not None else ADMIN_PORT_BASE)
+    missing_cfg = str(log_dir / f'{case.name}_missing.cfg')
+    server_name = 'bridge_server'
+    client_name = 'bridge_client'
+    server_cmd = bridge_entrypoint(with_failure_injection=use_failure_injection_entrypoint) + materialize_args(case.bridge_server_args, log_dir, case.name, 'bridge_server')
+    client_cmd = bridge_entrypoint(with_failure_injection=use_failure_injection_entrypoint) + materialize_args(case.bridge_client_args, log_dir, case.name, 'bridge_client')
+    server_env = dict(case.server_env)
+    client_env = dict(case.client_env)
+    server_cmd += ['--config', missing_cfg, '--admin-web-port', '0']
+    client_cmd += ['--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', str(float(client_restart_if_disconnected))]
+    server_cmd += admin_args(server_admin)
+    client_cmd += admin_args(client_admin)
+    server_cmd = list(server_cmd) + list(server_extra_args or [])
+    client_cmd = list(client_cmd) + list(client_extra_args or [])
+
+    server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, log_dir, env_extra=server_env, admin_port=server_admin)
+    overlay_transport = str(_arg_value(case.bridge_server_args, '--overlay-transport', '')).strip().lower()
+    if overlay_transport in ('tcp', 'ws'):
+        listen_port = _listener_overlay_port(case, overlay_transport)
+        listen_host = _connect_host_for_bind(_listener_overlay_bind_host(case, overlay_transport))
+        wait_tcp_listen(listen_host, listen_port, timeout=10.0)
+    client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, log_dir, env_extra=client_env, admin_port=client_admin)
+    try:
+        wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+        wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
+        return case, bounce, server_proc, client_proc
+    except Exception:
+        stop_proc(client_proc)
+        stop_proc(server_proc)
         bounce.stop()
         raise
 
@@ -4627,6 +5073,705 @@ def test_overlay_e2e_ws_proxy_negotiate_auth_on_windows(tmp_path: Path) -> None:
             stop_proc(server_proc)
 
 
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_happy_path(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=275,
+                secure_slot=0,
+                server_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret'],
+                client_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret'],
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            wait_probe(case, timeout=12.0)
+            wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+            wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+            wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+            wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
+            wait_peer_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', transport='tcp', authenticated=True)
+            req = urllib.request.Request(
+                f'http://127.0.0.1:{server_proc.admin_port}/api/secure-link/debug',
+                data=b'{}',
+                method='POST',
+                headers={'Connection': 'close'},
+            )
+            with pytest.raises(urllib.error.HTTPError) as excinfo:
+                urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=1.5)
+            assert excinfo.value.code == 404
+            _code, client_doc = fetch_json(f'http://127.0.0.1:{client_proc.admin_port}/api/status', timeout=1.5)
+            client_secure = dict(client_doc.get('secure_link') or {})
+            assert client_secure.get('last_event') == 'authenticated'
+            assert int(client_secure.get('handshake_attempts_total') or 0) >= 1
+            assert int(client_secure.get('authenticated_sessions_total') or 0) >= 1
+            assert client_secure.get('last_authenticated_unix_ts') is not None
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=276,
+                secure_slot=1,
+                server_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'server-secret'],
+                client_extra_args=[
+                    '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'client-secret',
+                    '--secure-link-retry-backoff-initial-ms', '250',
+                    '--secure-link-retry-backoff-max-ms', '500',
+                ],
+                client_restart_if_disconnected=30,
+            )
+            wait_status_not_connected(client_proc.admin_port or 0, timeout=20.0, label='client')
+            wait_status_not_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+            wait_status_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='failed',
+                timeout=12.0,
+                label='client',
+                authenticated=False,
+                failure_code=1,
+                failure_reason='bad_psk',
+                failure_detail_substr='pre-shared secret mismatch',
+            )
+            failed_doc = wait_status_secure_link_consecutive_failures(
+                client_proc.admin_port or 0,
+                minimum_count=2,
+                timeout=12.0,
+                label='client',
+            )
+            secure_link = dict(failed_doc.get('secure_link') or {})
+            assert float(secure_link.get('retry_backoff_sec') or 0.0) >= 0.0
+            assert secure_link.get('next_retry_unix_ts') is not None
+            assert secure_link.get('last_event') == 'retry_scheduled'
+            assert secure_link.get('failure_session_id') is not None
+            assert int(secure_link.get('handshake_attempts_total') or 0) >= 2
+            with pytest.raises(Exception):
+                wait_probe(case, timeout=3.0)
+            assert_running(server_proc)
+            assert_running(client_proc)
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        secure_args = [
+            '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+            '--secure-link-rekey-after-frames', '1',
+        ]
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=284,
+                secure_slot=9,
+                server_extra_args=secure_args,
+                client_extra_args=secure_args,
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            first_doc = wait_peer_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+                authenticated=True,
+            )
+            first_session_id = 0
+            for row in list(first_doc.get('peers') or []):
+                if str(row.get('transport', '')).strip().lower() != 'tcp':
+                    continue
+                if str(row.get('state', '')).strip().lower() == 'listening':
+                    continue
+                first_session_id = int(((row.get('secure_link') or {}).get('session_id') or 0))
+                if first_session_id:
+                    break
+            if first_session_id <= 0:
+                raise RuntimeError(f'Could not determine initial secure-link session id from peers doc: {first_doc!r}')
+            wait_probe(case, payload=b'\x01rekey-one', timeout=12.0)
+            wait_peer_secure_link_session_change(
+                client_proc.admin_port or 0,
+                previous_session_id=first_session_id,
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+            )
+            wait_probe(case, payload=b'\x01rekey-two', timeout=12.0)
+            client_doc = wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+            server_doc = wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+            client_secure = dict(client_doc.get('secure_link') or {})
+            server_secure = dict(server_doc.get('secure_link') or {})
+            assert client_secure.get('last_event') == 'rekey_completed'
+            assert int(client_secure.get('rekeys_completed_total') or 0) >= 1
+            assert int(client_secure.get('authenticated_sessions_total') or 0) >= 2
+            assert server_secure.get('last_authenticated_unix_ts') is not None
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_rekeys_after_time_threshold(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        server_args = [
+            '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+        ]
+        client_args = [
+            '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+            '--secure-link-rekey-after-seconds', '1.0',
+        ]
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=285,
+                secure_slot=10,
+                server_extra_args=server_args,
+                client_extra_args=client_args,
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            first_doc = wait_peer_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+                authenticated=True,
+            )
+            first_session_id = 0
+            for row in list(first_doc.get('peers') or []):
+                if str(row.get('transport', '')).strip().lower() != 'tcp':
+                    continue
+                if str(row.get('state', '')).strip().lower() == 'listening':
+                    continue
+                first_session_id = int(((row.get('secure_link') or {}).get('session_id') or 0))
+                if first_session_id:
+                    break
+            if first_session_id <= 0:
+                raise RuntimeError(f'Could not determine initial secure-link session id from peers doc: {first_doc!r}')
+            wait_probe(case, payload=b'\x01prime-time-rekey', timeout=12.0)
+            wait_peer_secure_link_session_change(
+                client_proc.admin_port or 0,
+                previous_session_id=first_session_id,
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+            )
+            wait_probe(case, payload=b'\x01time-rekey', timeout=12.0)
+            client_doc = wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+            client_secure = dict(client_doc.get('secure_link') or {})
+            assert client_secure.get('last_event') == 'rekey_completed'
+            assert client_secure.get('last_rekey_trigger') == 'time_threshold'
+            assert int(client_secure.get('rekeys_completed_total') or 0) >= 1
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_operator_forced_rekey(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        secure_args = [
+            '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+        ]
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=286,
+                secure_slot=11,
+                server_extra_args=secure_args,
+                client_extra_args=secure_args,
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            first_doc = wait_peer_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+                authenticated=True,
+            )
+            first_session_id = 0
+            for row in list(first_doc.get('peers') or []):
+                if str(row.get('transport', '')).strip().lower() != 'tcp':
+                    continue
+                if str(row.get('state', '')).strip().lower() == 'listening':
+                    continue
+                first_session_id = int(((row.get('secure_link') or {}).get('session_id') or 0))
+                if first_session_id:
+                    break
+            if first_session_id <= 0:
+                raise RuntimeError(f'Could not determine initial secure-link session id from peers doc: {first_doc!r}')
+            wait_probe(case, payload=b'\x01prime-operator-rekey', timeout=12.0)
+            code, body = request_json(
+                f'http://127.0.0.1:{client_proc.admin_port}/api/secure-link/rekey',
+                method='POST',
+                payload={},
+                timeout=2.0,
+            )
+            assert code == 200
+            assert body.get('ok') is True
+            assert int(body.get('requested') or 0) >= 1
+            wait_peer_secure_link_session_change(
+                client_proc.admin_port or 0,
+                previous_session_id=first_session_id,
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+            )
+            wait_probe(case, payload=b'\x01forced-rekey', timeout=12.0)
+            client_doc = wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+            client_secure = dict(client_doc.get('secure_link') or {})
+            assert client_secure.get('last_event') == 'rekey_completed'
+            assert client_secure.get('last_rekey_trigger') == 'operator'
+            assert int(client_secure.get('rekeys_completed_total') or 0) >= 1
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_reconnects_with_fresh_session(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=287,
+                secure_slot=12,
+                server_extra_args=secure_args,
+                client_extra_args=secure_args,
+                client_restart_if_disconnected=30,
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            client_doc = wait_peer_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+                authenticated=True,
+            )
+            old_session_id = int(((first_active_secure_link_row(client_doc, transport='tcp').get('secure_link') or {}).get('session_id') or 0))
+            if old_session_id <= 0:
+                raise RuntimeError(f'Could not determine initial secure-link session id from client peers doc: {client_doc!r}')
+            wait_probe(case, payload=b'\x01reconnect-prime', timeout=12.0)
+            server_doc = wait_peer_secure_link_state(
+                server_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=12.0,
+                label='server',
+                transport='tcp',
+                authenticated=True,
+            )
+
+            old_client = client_proc
+            stop_proc(client_proc)
+            client_proc = None
+            wait_status_not_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+
+            client_proc = start_proc(
+                old_client.name,
+                list(old_client.cmd or []),
+                tmp_path,
+                env_extra=old_client.env_extra,
+                admin_port=old_client.admin_port,
+            )
+            wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            wait_probe(case, payload=b'\x01reconnect-after-prime', timeout=12.0)
+            server_doc = wait_peer_secure_link_state(
+                server_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=20.0,
+                label='server',
+                transport='tcp',
+                authenticated=True,
+            )
+            new_session_id = int(((first_active_secure_link_row(server_doc, transport='tcp').get('secure_link') or {}).get('session_id') or 0))
+            if new_session_id <= 0:
+                raise RuntimeError(f'Could not determine reconnected secure-link session id from peers doc: {server_doc!r}')
+            assert new_session_id != old_session_id
+            server_status = wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+            server_secure = dict(server_status.get('secure_link') or {})
+            assert int(server_secure.get('authenticated_sessions_total') or 0) >= 2
+            assert int(server_secure.get('last_authenticated_session_id') or 0) == new_session_id
+            wait_probe(case, payload=b'\x01reconnect-after', timeout=12.0)
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_replay_after_reconnect_is_rejected(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=288,
+                secure_slot=13,
+                server_extra_args=secure_args,
+                client_extra_args=secure_args,
+                client_restart_if_disconnected=30,
+                use_failure_injection_entrypoint=True,
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            client_doc = wait_peer_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+                authenticated=True,
+            )
+            old_session_id = int(((first_active_secure_link_row(client_doc, transport='tcp').get('secure_link') or {}).get('session_id') or 0))
+            wait_probe(case, payload=b'\x01replay-reconnect-prime', timeout=12.0)
+
+            old_client = client_proc
+            stop_proc(client_proc)
+            client_proc = None
+            wait_status_not_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+
+            client_proc = start_proc(
+                old_client.name,
+                list(old_client.cmd or []),
+                tmp_path,
+                env_extra=old_client.env_extra,
+                admin_port=old_client.admin_port,
+            )
+            wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            wait_probe(case, payload=b'\x01replay-reconnect-new-prime', timeout=12.0)
+            server_doc = wait_peer_secure_link_state(
+                server_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=20.0,
+                label='server',
+                transport='tcp',
+                authenticated=True,
+            )
+            new_session_id = int(((first_active_secure_link_row(server_doc, transport='tcp').get('secure_link') or {}).get('session_id') or 0))
+            assert new_session_id != old_session_id
+
+            code, body = request_json(
+                f'http://127.0.0.1:{server_proc.admin_port}/api/secure-link/debug',
+                method='POST',
+                payload={'action': 'replay_recent', 'session_id': old_session_id},
+                timeout=2.0,
+            )
+            assert code == 200
+            assert body.get('ok') is True
+            wait_status_secure_link_state(
+                server_proc.admin_port or 0,
+                expected_state='failed',
+                timeout=12.0,
+                label='server',
+                authenticated=False,
+                failure_code=4,
+                failure_reason='decode',
+            )
+            expect_probe_failure(case, payload=b'\x01replay-reconnect-after', timeout=4.0)
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_replay_after_rekey_is_rejected(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        secure_args = [
+            '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+            '--secure-link-rekey-after-frames', '1',
+        ]
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=289,
+                secure_slot=14,
+                server_extra_args=secure_args,
+                client_extra_args=secure_args,
+                use_failure_injection_entrypoint=True,
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            client_doc = wait_peer_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+                authenticated=True,
+            )
+            old_session_id = int(((first_active_secure_link_row(client_doc, transport='tcp').get('secure_link') or {}).get('session_id') or 0))
+            wait_probe(case, payload=b'\x01replay-rekey-prime', timeout=12.0)
+            wait_peer_secure_link_session_change(
+                client_proc.admin_port or 0,
+                previous_session_id=old_session_id,
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+            )
+            wait_probe(case, payload=b'\x01replay-rekey-after', timeout=12.0)
+
+            code, body = request_json(
+                f'http://127.0.0.1:{server_proc.admin_port}/api/secure-link/debug',
+                method='POST',
+                payload={'action': 'replay_recent', 'session_id': old_session_id},
+                timeout=2.0,
+            )
+            assert code == 200
+            assert body.get('ok') is True
+            wait_status_secure_link_state(
+                server_proc.admin_port or 0,
+                expected_state='failed',
+                timeout=12.0,
+                label='server',
+                authenticated=False,
+                failure_code=4,
+                failure_reason='decode',
+            )
+            expect_probe_failure(case, payload=b'\x01replay-rekey-final', timeout=4.0)
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_malformed_frame_fails_closed_subprocess(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=290,
+                secure_slot=15,
+                server_extra_args=secure_args,
+                client_extra_args=secure_args,
+                use_failure_injection_entrypoint=True,
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            wait_probe(case, payload=b'\x01malformed-prime', timeout=12.0)
+            code, body = request_json(
+                f'http://127.0.0.1:{server_proc.admin_port}/api/secure-link/debug',
+                method='POST',
+                payload={'action': 'inject_raw', 'payload_b64': base64.b64encode(b'\x01\x02\x03').decode('ascii')},
+                timeout=2.0,
+            )
+            assert code == 200
+            assert body.get('ok') is True
+            wait_status_secure_link_state(
+                server_proc.admin_port or 0,
+                expected_state='failed',
+                timeout=12.0,
+                label='server',
+                authenticated=False,
+                failure_code=4,
+                failure_reason='decode',
+            )
+            expect_probe_failure(case, payload=b'\x01malformed-after', timeout=4.0)
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("case_name", "case_index", "secure_slot"),
+    [
+        ('case01_udp_over_own_udp_ipv4', 278, 3),
+        ('case08_overlay_ws_ipv4', 279, 4),
+        ('case10_overlay_quic_ipv4', 280, 5),
+    ],
+)
+def test_overlay_e2e_secure_link_psk_happy_path_other_transports(
+    case_name: str,
+    case_index: int,
+    secure_slot: int,
+    tmp_path: Path,
+) -> None:
+    with secure_link_test_lock():
+        case = CASES[case_name]
+        bounce = None
+        server_proc = client_proc = None
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=case_index,
+                secure_slot=secure_slot,
+                server_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret'],
+                client_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret'],
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            wait_probe(case, timeout=12.0)
+            wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+            wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+            wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_listener_two_clients_concurrent_udp_tcp(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = materialize_secure_link_case_ports(CASES['case16_overlay_listener_tcp_two_clients_concurrent_udp_tcp'], 2)
+        secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
+        run_case_tcp_two_clients_concurrent_udp_tcp(
+            case,
+            tmp_path,
+            case_index=277,
+            secure_slot=2,
+            server_extra_args=secure_args,
+            client1_extra_args=secure_args,
+            client2_extra_args=secure_args,
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_ws_secure_link_psk_listener_two_clients(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case12_overlay_ws_ipv4_listener_two_clients']
+        secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
+        run_case_two_peer_clients_listener(
+            case,
+            tmp_path,
+            case_index=281,
+            secure_slot=6,
+            server_extra_args=secure_args,
+            client1_extra_args=secure_args,
+            client2_extra_args=secure_args,
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_myudp_secure_link_psk_listener_two_clients_concurrent_udp_tcp(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = materialize_secure_link_case_ports(CASES['case15_overlay_listener_myudp_two_clients_concurrent_udp_tcp'], 20)
+        secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
+        run_case_myudp_two_clients_concurrent_udp_tcp(
+            case,
+            tmp_path,
+            case_index=282,
+            secure_slot=20,
+            server_extra_args=secure_args,
+            client1_extra_args=secure_args,
+            client2_extra_args=secure_args,
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_quic_secure_link_psk_listener_two_clients_concurrent_udp_tcp(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = materialize_secure_link_case_ports(CASES['case17_overlay_listener_quic_two_clients_concurrent_udp_tcp'], 8)
+        secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
+        run_case_quic_two_clients_concurrent_udp_tcp(
+            case,
+            tmp_path,
+            case_index=283,
+            secure_slot=8,
+            server_extra_args=secure_args,
+            client1_extra_args=secure_args,
+            client2_extra_args=secure_args,
+        )
+
+
 def test_overlay_e2e_cli_routing_infers_concurrent_mode_from_case13() -> None:
     args = parse_args(['--cases', 'case13_overlay_ws_ipv4_single_peer_concurrent_tcp_channels'])
     selected_cases, selected_mode = resolve_selected_cases_and_mode(args)
@@ -4718,6 +5863,17 @@ def test_overlay_e2e_case_port_offset_stays_in_range_for_many_workers(monkeypatc
     assert int(_arg_value(case.bridge_server_args, '--udp-own-port', '0')) < 65535
     assert case.bounce_port < SERVICE_PORT_CEILING
     assert case.probe_port < SERVICE_PORT_CEILING
+
+
+def test_overlay_e2e_secure_link_port_slots_stay_above_regular_band() -> None:
+    highest = _max_case_static_port(CASES['case08_overlay_ws_ipv4'])
+    slots = _secure_link_port_slots_per_worker(highest)
+
+    assert slots >= 7
+    case = materialize_secure_link_case_ports(CASES['case08_overlay_ws_ipv4'], 6)
+    assert case.bounce_port < 65535
+    assert case.probe_port < 65535
+    assert case.bounce_port >= CASES['case08_overlay_ws_ipv4'].bounce_port + SECURE_LINK_PORT_OFFSET_BASE
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:

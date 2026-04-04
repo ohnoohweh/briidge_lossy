@@ -4,13 +4,16 @@ This document describes the main runtime components and how they contribute to t
 
 ## Architectural layers
 
-The system can be understood in five layers:
+The current runtime can be understood in six layers:
 
 1. transport/session layer
-2. reliability and framing layer
-3. channel/service multiplexing layer
-4. runner and process orchestration layer
-5. admin web and observability layer
+2. secure-link layer
+3. reliability and framing layer
+4. channel/service multiplexing layer
+5. runner and process orchestration layer
+6. admin web and observability layer
+
+The secure-link layer now exists as a delivered Phase 1 PSK runtime slice between the transport/session layer and the current reliability/framing layer. Certificate-based trust-anchor and certificate-validation behavior remain planned, but the boundary itself is no longer only a reservation.
 
 ## Stable component IDs
 
@@ -23,6 +26,7 @@ The following component IDs are intended to stay stable so requirements, tests, 
 | `ARC-CMP-003` | Channel and service multiplexing layer | `own_servers`, `remote_servers`, channel routing, and peer-scoped service isolation |
 | `ARC-CMP-004` | Runner and process orchestration layer | CLI/config composition, lifecycle wiring, restart/shutdown coordination, and process startup |
 | `ARC-CMP-005` | Admin web and observability layer | HTTP API/UI, auth/session control, runtime snapshots, logs, and operator visibility |
+| `ARC-CMP-006` | Secure-link layer | Delivered PSK-based authentication, frame protection, replay defense, rekeying, and secure-link diagnostics between transport sessions and `ChannelMux`, with certificate-based follow-up still planned |
 
 ## 1. Transport and session layer
 
@@ -71,6 +75,84 @@ Important behaviors:
 - preserve message integrity for large payloads
 
 This layer is especially important for the `myudp` requirements in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md).
+
+## 2. Secure-link layer
+
+Primary responsibility:
+
+- provide one transport-independent place for overlay authentication, protected carriage, and secure-link diagnostics
+
+Current delivered boundary:
+
+- the delivered Phase 1 PSK runtime sits below `ChannelMux` and above the transport/session layer
+
+Current contribution:
+
+- PSK-based peer authentication
+- session-key establishment
+- ciphertext/plaintext transition for mux payloads
+- replay protection and rekey hooks
+- bounded client-side retry/backoff after repeated auth failures
+- secure-link status and failure diagnostics for admin/API consumers
+
+Current boundary contract:
+
+- input from transport/session layer:
+  - connected byte or datagram path
+  - transport lifecycle events such as connect, disconnect, and reconnect
+- output to transport/session layer:
+  - ciphertext frames or datagrams ready for transport send
+- input from `ChannelMux` / framing side:
+  - plaintext overlay frames after future integration
+- output upward:
+  - authenticated plaintext overlay frames only
+
+Current ownership decisions:
+
+- websocket proxy behavior stays in `ARC-CMP-001`; secure-link must not reimplement transport bootstrap
+- retransmission policy and RTT/inflight metrics stay in `ARC-CMP-002` until an implementation phase deliberately reworks that boundary
+- service publication, channel IDs, and remote catalog state stay in `ARC-CMP-003`
+- future secure-link config loading and lifecycle wiring belong to `ARC-CMP-004`
+- peer identity visibility in admin APIs belongs to `ARC-CMP-005`
+- encryption-layer status visibility in WebAdmin/API is a joint function:
+  - `ARC-CMP-006` owns the underlying secure-link state machine and failure categories
+  - `ARC-CMP-004` contributes snapshot aggregation and process-level wiring
+  - `ARC-CMP-005` contributes HTTP payloads, live admin messages, and webpage rendering
+
+Important non-responsibilities:
+
+- transport-specific socket management remains in the transport/session layer
+- service publication and channel semantics remain in `ChannelMux`
+- admin rendering remains in the admin web layer
+- transport/session implementations remain unaware of certificate policy, identity validation, and traffic ciphers
+- `ChannelMux` remains unaware of certificate contents, peer-authentication policy, and traffic ciphers
+
+Current status:
+
+- the PSK-based Phase 1 runtime slice is implemented and defended by unit and integration tests
+- delivered runtime behavior currently includes:
+  - `secure_link_mode=psk` on `myudp`, `tcp`, `ws`, and `quic`
+  - authenticated protected carriage below `ChannelMux`
+  - live rekey support
+  - fail-closed malformed-input handling
+  - bounded reconnect/failure throttling after repeated client-side auth failures
+  - admin/API visibility of secure-link state and stronger operational diagnostics
+- certificate-based trust-anchor, certificate-validation, and richer identity semantics remain planned follow-up work
+- the design baseline and remaining planned work for this component are documented in [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md)
+
+### Functional decomposition for secure-link status visibility
+
+This decomposition applies to the delivered `REQ-AUT-004`, `REQ-AUT-008`, and `REQ-AUT-009` items in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md), and remains relevant for the planned certificate-mode follow-up.
+
+| Component ID | Contribution to secure-link status visibility |
+|---|---|
+| `ARC-CMP-006` | Determines whether secure-link is disabled, handshaking, authenticated, failed, or listening; determines mode, failure reason, lifecycle event, retry window, and rekey/auth counters |
+| `ARC-CMP-004` | Pulls secure-link state from the wrapped session and places it into process-level status and peer snapshots |
+| `ARC-CMP-005` | Exposes the secure-link state through `/api/status`, `/api/peers`, live admin updates, and the WebAdmin page |
+
+The webpage is therefore an explicit contributor to the overall function, not only the API payloads behind it.
+
+The supporting architecture traceability manifest is maintained in [.github/architecture_traceability.yaml](/home/ohnoohweh/quic_br/.github/architecture_traceability.yaml).
 
 ## 3. Channel and service multiplexing layer
 

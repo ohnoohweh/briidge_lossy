@@ -3,7 +3,7 @@ import argparse
 import unittest
 from unittest import mock
 
-from obstacle_bridge.bridge import Runner, TcpStreamSession, UdpSession, QuicSession, WebSocketSession
+from obstacle_bridge.bridge import Runner, TcpStreamSession, UdpSession, QuicSession, WebSocketSession, SecureLinkPskSession
 
 
 def _args(**overrides):
@@ -18,6 +18,11 @@ def _args(**overrides):
         overlay_port_tcp=None,
         overlay_port_quic=None,
         overlay_port_ws=None,
+        secure_link=False,
+        secure_link_mode='off',
+        secure_link_psk='',
+        secure_link_require=False,
+        secure_link_rekey_after_frames=0,
     )
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -62,6 +67,28 @@ class RunnerOverlayTransportTests(unittest.TestCase):
             [s[1] for s in seen],
             [7000, 7000, 7000, 7000],
         )
+
+    def test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_psk(self):
+        cases = [
+            ('myudp', 'udp_peer', UdpSession, '127.0.0.1'),
+            ('tcp', 'tcp_peer', TcpStreamSession, '127.0.0.1'),
+            ('quic', 'quic_peer', QuicSession, '127.0.0.1'),
+            ('ws', 'ws_peer', WebSocketSession, '127.0.0.1'),
+        ]
+        for overlay_transport, peer_attr, cls, peer_value in cases:
+            with self.subTest(overlay_transport=overlay_transport):
+                args = _args(
+                    overlay_transport=overlay_transport,
+                    secure_link=True,
+                    secure_link_mode='psk',
+                    secure_link_psk='lab-secret',
+                    **{peer_attr: peer_value},
+                )
+                with mock.patch.object(cls, 'from_args', return_value=mock.Mock(spec=cls)) as factory:
+                    sessions = Runner.build_sessions_from_overlay(args)
+                self.assertEqual([name for name, _ in sessions], [overlay_transport])
+                self.assertIsInstance(sessions[0][1], SecureLinkPskSession)
+                factory.assert_called_once()
 
 
 if __name__ == '__main__':

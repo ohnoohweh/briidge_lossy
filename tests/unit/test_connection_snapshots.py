@@ -202,6 +202,15 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
                         "connected": True,
                         "peer": "198.51.100.7:4433",
                         "mux_chans": [101],
+                        "secure_link": {
+                            "enabled": True,
+                            "mode": "psk",
+                            "state": "authenticated",
+                            "authenticated": True,
+                            "session_id": 77,
+                            "failure_reason": None,
+                            "transport": "myudp",
+                        },
                     },
                 ]
 
@@ -220,11 +229,14 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertIsNone(listener["peer"])
         self.assertEqual(listener["open_connections"]["udp"], 0)
         self.assertEqual(listener["open_connections"]["tcp"], 0)
+        self.assertEqual(listener["secure_link"]["state"], "disabled")
 
         self.assertTrue(peer["connected"])
         self.assertEqual(peer["open_connections"]["udp"], 1)
         self.assertEqual(peer["traffic"]["rx_bytes"], 1234)
         self.assertEqual(peer["traffic"]["tx_bytes"], 4321)
+        self.assertEqual(peer["secure_link"]["state"], "authenticated")
+        self.assertTrue(peer["secure_link"]["authenticated"])
 
     def test_listener_peer_snapshot_uses_child_myudp_session_stats(self):
         class _InnerStats:
