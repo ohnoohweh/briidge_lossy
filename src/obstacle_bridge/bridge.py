@@ -11262,37 +11262,6 @@ class StatsBoard:
                     "repeated_over_three_times": int(hist.get("gt3", 0)),
                 },
             },
-            "secure_link": dict(
-                getattr(
-                    self._status_session,
-                    "get_secure_link_status_snapshot",
-                    lambda: {
-                        "enabled": False,
-                        "mode": "off",
-                        "state": "disabled",
-                        "authenticated": False,
-                        "authenticated_peers": 0,
-                        "rekey_in_progress": False,
-                        "last_rekey_trigger": "",
-                        "rekey_due_unix_ts": None,
-                        "failure_code": None,
-                        "failure_reason": None,
-                        "failure_detail": None,
-                        "failure_unix_ts": None,
-                        "failure_session_id": None,
-                        "consecutive_failures": 0,
-                        "retry_backoff_sec": 0.0,
-                        "next_retry_unix_ts": None,
-                        "handshake_attempts_total": 0,
-                        "last_event": "",
-                        "last_event_unix_ts": None,
-                        "last_authenticated_unix_ts": None,
-                        "last_authenticated_session_id": None,
-                        "authenticated_sessions_total": 0,
-                        "rekeys_completed_total": 0,
-                    },
-                )()
-            ),
         }
         
         self.log.debug(
@@ -11992,30 +11961,76 @@ class Runner:
             })
         return {"peers": peers, "count": len(peers)}
 
-    def request_secure_link_rekey(self) -> dict:
+    def _session_peer_row_ids(self, idx: int, session: ISession) -> list[str]:
+        rows: list[str] = []
+        peer_rows_fn = getattr(session, "get_overlay_peers_snapshot", None)
+        if callable(peer_rows_fn):
+            with contextlib.suppress(Exception):
+                for row in list(peer_rows_fn() or []):
+                    peer_id = row.get("peer_id")
+                    if peer_id is None:
+                        continue
+                    rows.append(f"{idx}:{peer_id}")
+        if not rows:
+            rows.append(str(idx))
+        return rows
+
+    def request_secure_link_rekey(self, target_peer_id: Optional[str] = None) -> dict:
+        target = str(target_peer_id or "").strip()
         requested = 0
         skipped = 0
         results: list[dict] = []
+        matched_target = False
         for idx, session in enumerate(self._sessions):
             label = self._session_labels[idx] if idx < len(self._session_labels) else f"session-{idx}"
+            peer_row_ids = self._session_peer_row_ids(idx, session)
+            if target:
+                if target not in peer_row_ids:
+                    continue
+                matched_target = True
             requester = getattr(session, "request_secure_link_rekey", None)
             if not callable(requester):
                 skipped += 1
-                results.append({"transport": label, "ok": False, "reason": "secure_link_not_enabled"})
+                results.append({
+                    "transport": label,
+                    "peer_ids": peer_row_ids,
+                    "ok": False,
+                    "reason": "secure_link_not_enabled",
+                })
                 continue
             try:
                 ok, reason = requester()
             except Exception as e:
                 skipped += 1
-                results.append({"transport": label, "ok": False, "reason": f"error:{e}"})
+                results.append({
+                    "transport": label,
+                    "peer_ids": peer_row_ids,
+                    "ok": False,
+                    "reason": f"error:{e}",
+                })
                 continue
             if ok:
                 requested += 1
             else:
                 skipped += 1
-            results.append({"transport": label, "ok": bool(ok), "reason": str(reason or "")})
+            results.append({
+                "transport": label,
+                "peer_ids": peer_row_ids,
+                "ok": bool(ok),
+                "reason": str(reason or ""),
+            })
+        if target and not matched_target:
+            return {
+                "ok": False,
+                "target_peer_id": target,
+                "requested": 0,
+                "skipped": 0,
+                "results": [],
+                "error": "unknown peer_id",
+            }
         return {
             "ok": requested > 0,
+            "target_peer_id": target or None,
             "requested": requested,
             "skipped": skipped,
             "results": results,
@@ -12457,7 +12472,7 @@ class AdminWebUI:
                 return
 
             if path == "/api/secure-link/rekey":
-                await self._handle_secure_link_rekey(writer, method)
+                await self._handle_secure_link_rekey(writer, method, body)
                 return
 
             if path == "/api/status":
@@ -12566,17 +12581,26 @@ class AdminWebUI:
         self._log_api_response("/api/logs", 200, payload, summary=f"count={len(lines)}")
         await self._send_json(writer, 200, payload)
 
-    async def _handle_secure_link_rekey(self, writer, method: str):
+    async def _handle_secure_link_rekey(self, writer, method: str, body: bytes):
         if method != "POST":
             await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
             return
-        payload = self.runner.request_secure_link_rekey()
+        try:
+            req = json.loads((body or b"{}").decode("utf-8"))
+        except Exception:
+            await self._send_json(writer, 400, {"ok": False, "error": "invalid JSON body"})
+            return
+        target_peer_id = str(req.get("peer_id", "") or "").strip()
+        if not target_peer_id:
+            await self._send_json(writer, 400, {"ok": False, "error": "peer_id is required"})
+            return
+        payload = self.runner.request_secure_link_rekey(target_peer_id=target_peer_id)
         code = 200 if bool(payload.get("ok")) else 409
         self._log_api_response(
             "/api/secure-link/rekey",
             code,
             payload,
-            summary=f"requested={payload.get('requested', 0)} skipped={payload.get('skipped', 0)}",
+            summary=f"peer_id={target_peer_id} requested={payload.get('requested', 0)} skipped={payload.get('skipped', 0)}",
         )
         await self._send_json(writer, code, payload)
 

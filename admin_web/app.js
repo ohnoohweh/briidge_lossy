@@ -16,6 +16,29 @@ function fmtConnectionId(value) {
   return String(value);
 }
 
+function fmtPeerCompositeId(transport, id) {
+  const t = String(transport || '').trim();
+  const ident = fmtConnectionId(id);
+  if (!t) return ident;
+  if (!ident || ident === '-') return t;
+  return `${t}:${ident}`;
+}
+
+function fmtText(value) {
+  if (value == null || value === '') return 'n/a';
+  return String(value);
+}
+
+function fmtBool(value) {
+  if (value == null) return 'n/a';
+  return value ? 'yes' : 'no';
+}
+
+function fmtUnixTs(value) {
+  if (value == null || Number.isNaN(value)) return 'n/a';
+  return String(value);
+}
+
 function fmtBytes(value) {
   if (value == null || Number.isNaN(value)) return 'n/a';
   const bytes = Math.max(0, Number(value));
@@ -230,23 +253,69 @@ function renderConnectionTable(tbodyId, rows) {
   }).join('');
 }
 
-function applyPeerState(state) {
-  const badge = document.getElementById('peerStateBadge');
-  const normalized = String(state || 'UNKNOWN').toUpperCase();
-  if (!badge) return;
+function detailPillClass(value) {
+  const normalized = String(value || '').toLowerCase();
+  if (
+    normalized.includes('auth')
+    || normalized.includes('connect')
+    || normalized === 'yes'
+    || normalized === 'true'
+  ) return 'role-pill role-server';
+  if (
+    normalized.includes('rekey')
+    || normalized.includes('wait')
+    || normalized.includes('handshak')
+    || normalized.includes('progress')
+  ) return 'role-pill role-client';
+  if (
+    normalized.includes('fail')
+    || normalized.includes('reject')
+    || normalized.includes('error')
+    || normalized === 'no'
+    || normalized === 'false'
+  ) return 'role-pill role-unknown';
+  return 'role-pill role-unknown';
+}
 
-  badge.textContent = normalized;
-  badge.classList.remove('state-connected', 'state-degraded', 'state-disconnected', 'state-unknown');
+function renderMetric(label, value, { pill = false } = {}) {
+  const renderedValue = pill
+    ? `<span class="${detailPillClass(value)}">${escapeHtml(fmtText(value))}</span>`
+    : `<span class="peer-detail-value mono">${escapeHtml(fmtText(value))}</span>`;
+  return `
+    <div class="peer-detail-metric">
+      <span class="peer-detail-label">${escapeHtml(label)}</span>
+      ${renderedValue}
+    </div>
+  `;
+}
 
-  if (normalized.includes('CONNECT')) {
-    badge.classList.add('state-connected');
-  } else if (normalized.includes('DEGRADE') || normalized.includes('WAIT') || normalized.includes('RETRY')) {
-    badge.classList.add('state-degraded');
-  } else if (normalized.includes('DISCONNECT') || normalized.includes('DOWN') || normalized.includes('FAIL')) {
-    badge.classList.add('state-disconnected');
-  } else {
-    badge.classList.add('state-unknown');
-  }
+function renderMetricLine(metrics) {
+  return `
+    <div class="peer-detail-line">
+      ${metrics.join('')}
+    </div>
+  `;
+}
+
+function renderMetricStack(lines) {
+  return `
+    <div class="peer-detail-stack">
+      ${lines.map((line) => renderMetricLine(line)).join('')}
+    </div>
+  `;
+}
+
+function renderPeerDetailRow(rowLabel, metrics, extraClass = '') {
+  return `
+    <tr class="peer-detail-row ${extraClass}">
+      <td class="peer-detail-kind">${escapeHtml(rowLabel)}</td>
+      <td>
+        <div class="peer-detail-grid">
+          ${metrics.join('')}
+        </div>
+      </td>
+    </tr>
+  `;
 }
 
 async function loadMeta() {
@@ -271,6 +340,35 @@ async function restart() {
     startRestartCountdown(40);
   } catch (e) {
     window.alert(`Restart failed: ${e}`);
+  }
+}
+
+async function requestSecureLinkRekey(peerId) {
+  const normalizedPeerId = String(peerId || '').trim();
+  if (!normalizedPeerId) {
+    window.alert('Rekey request failed: missing peer id');
+    return;
+  }
+  const buttons = Array.from(document.querySelectorAll('.secure-link-rekey-btn'));
+  try {
+    buttons.forEach((button) => {
+      button.disabled = true;
+    });
+    const r = await apiFetch('/api/secure-link/rekey', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ peer_id: normalizedPeerId }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || `HTTP ${r.status}`);
+    }
+  } catch (e) {
+    window.alert(`Rekey request failed: ${e}`);
+  } finally {
+    buttons.forEach((button) => {
+      button.disabled = false;
+    });
   }
 }
 
@@ -333,41 +431,114 @@ function renderPeerTable(rows) {
   const tbody = document.getElementById('peerConnectionsBody');
   if (!tbody) return;
   if (!rows || rows.length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="17">No peer sessions</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="3">No peer sessions</td></tr>';
     return;
   }
-  const peerStateClass = (state) => {
-    const s = String(state || '').toLowerCase();
-    if (s === 'connected') return 'role-pill role-server';
-    if (s === 'connecting') return 'role-pill role-client';
-    return 'role-pill role-unknown';
-  };
   const fmtMyUdpMetric = (row, value) => {
     const transport = String(row.transport || '').toLowerCase();
     if (transport !== 'myudp') return 'n/a';
     return fmtInteger(value);
   };
-  tbody.innerHTML = rows.map((row) => `
-    <tr>
-      <td class="mono">${fmtInteger(row.id)}</td>
-      <td class="mono">${row.transport || 'n/a'}</td>
-      <td class="mono">${row.listen || 'n/a'}</td>
-      <td><span class="${peerStateClass(row.state)}">${String(row.state || 'unknown').toLowerCase()}</span></td>
-      <td class="mono">${row.peer || 'n/a'}</td>
-      <td class="mono">${fmtNumber(row.rtt_est_ms)}</td>
-      <td class="mono">${fmtInteger(row.open_connections?.udp ?? 0)}</td>
-      <td class="mono">${fmtInteger(row.open_connections?.tcp ?? 0)}</td>
-      <td class="mono">${fmtBytes(row.traffic?.rx_bytes ?? 0)}</td>
-      <td class="mono">${fmtBytes(row.traffic?.tx_bytes ?? 0)}</td>
-      <td class="mono">${fmtInteger(row.decode_errors ?? 0)}</td>
-      <td class="mono">${fmtMyUdpMetric(row, row.myudp?.buffered_frames)}</td>
-      <td class="mono">${fmtInteger(row.inflight)}</td>
-      <td class="mono">${fmtMyUdpMetric(row, row.myudp?.confirmed_total)}</td>
-      <td class="mono">${fmtMyUdpMetric(row, row.myudp?.first_pass)}</td>
-      <td class="mono">${fmtMyUdpMetric(row, row.myudp?.repeated_once)}</td>
-      <td class="mono">${fmtMyUdpMetric(row, row.myudp?.repeated_multiple)}</td>
-    </tr>
-  `).join('');
+  tbody.innerHTML = rows.map((row) => {
+    const transport = String(row.transport || '').toLowerCase();
+    const isMyUdp = transport === 'myudp';
+    const isListeningPeer = String(row.state || '').toLowerCase() === 'listening';
+    const secureLink = row.secure_link || {};
+    const secureLinkEnabled = Boolean(secureLink.enabled);
+    const connectionLine1 = [
+      renderMetric('State', String(row.state || 'unknown').toLowerCase(), { pill: true }),
+    ];
+    if (isListeningPeer) {
+      connectionLine1.push(renderMetric('Listen', row.listen));
+    } else {
+      connectionLine1.push(renderMetric('Peer', row.peer));
+    }
+    const connectionLines = [connectionLine1];
+    if (!isListeningPeer) {
+      connectionLines.push([
+        renderMetric('UDP Open', fmtInteger(row.open_connections?.udp ?? 0)),
+        renderMetric('TCP Open', fmtInteger(row.open_connections?.tcp ?? 0)),
+      ]);
+      connectionLines.push([
+        renderMetric('RTT Est (ms)', fmtNumber(row.rtt_est_ms)),
+        renderMetric('RX Bytes', fmtBytes(row.traffic?.rx_bytes ?? 0)),
+        renderMetric('TX Bytes', fmtBytes(row.traffic?.tx_bytes ?? 0)),
+      ]);
+    }
+    const connectionMetrics = renderMetricStack(connectionLines);
+    const protocolMetrics = isMyUdp
+      ? renderMetricStack([
+        [
+          renderMetric('Decode Errors', fmtInteger(row.decode_errors ?? 0)),
+          renderMetric('Buffered Frames', fmtMyUdpMetric(row, row.myudp?.buffered_frames)),
+          renderMetric('Inflight', fmtInteger(row.inflight)),
+        ],
+        [
+          renderMetric('myUDP Confirmed Total', fmtMyUdpMetric(row, row.myudp?.confirmed_total)),
+          renderMetric('myUDP First Pass', fmtMyUdpMetric(row, row.myudp?.first_pass)),
+          renderMetric('myUDP Repeated Once', fmtMyUdpMetric(row, row.myudp?.repeated_once)),
+          renderMetric('myUDP Repeated Multiple', fmtMyUdpMetric(row, row.myudp?.repeated_multiple)),
+        ],
+      ])
+      : renderMetricStack([
+        [
+          renderMetric('Decode Errors', fmtInteger(row.decode_errors ?? 0)),
+        ],
+      ]);
+    const securityMetrics = secureLinkEnabled ? [
+      renderMetric('secure_link.state', secureLink.state, { pill: true }),
+      renderMetric('secure_link.authenticated', fmtBool(secureLink.authenticated), { pill: true }),
+      renderMetric('rekey_in_progress', fmtBool(secureLink.rekey_in_progress), { pill: true }),
+      renderMetric('session_id', fmtInteger(secureLink.session_id)),
+    ] : [];
+    const allowRekeyAction = String(row.state || '').toLowerCase() !== 'listening';
+    const lifecycleMetrics = secureLinkEnabled ? [
+      renderMetric('last_event', secureLink.last_event),
+      renderMetric('last_event_unix_ts', fmtUnixTs(secureLink.last_event_unix_ts)),
+      renderMetric('last_authenticated_unix_ts', fmtUnixTs(secureLink.last_authenticated_unix_ts)),
+      renderMetric('authenticated_sessions_total', fmtInteger(secureLink.authenticated_sessions_total)),
+      renderMetric('rekeys_completed_total', fmtInteger(secureLink.rekeys_completed_total)),
+      renderMetric('last_rekey_trigger', secureLink.last_rekey_trigger),
+    ] : [];
+    const detailRows = [
+      `
+      <tr class="peer-detail-row peer-detail-row-start ${isListeningPeer && !secureLinkEnabled ? 'peer-detail-row-end' : ''}">
+        <td class="mono peer-id-cell" rowspan="${isListeningPeer && !secureLinkEnabled ? 1 : secureLinkEnabled ? 4 : 2}">${escapeHtml(fmtPeerCompositeId(row.transport, row.id))}</td>
+        <td class="peer-detail-kind">Connection</td>
+        <td>${connectionMetrics}</td>
+      </tr>
+      `,
+    ];
+    if (!isListeningPeer) {
+      detailRows.push(`
+      <tr class="peer-detail-row ${secureLinkEnabled ? '' : 'peer-detail-row-end'}">
+        <td class="peer-detail-kind">Protocol</td>
+        <td>${protocolMetrics}</td>
+      </tr>
+      `);
+    }
+    if (secureLinkEnabled) {
+      detailRows.push(`
+      <tr class="peer-detail-row ">
+        <td class="peer-detail-kind">Security</td>
+        <td>
+          <div class="peer-detail-stack">
+            <div class="peer-detail-grid">${securityMetrics.join('')}</div>
+            ${allowRekeyAction ? `
+              <div class="peer-detail-actions">
+                <button class="btn btn-secondary secure-link-rekey-btn" type="button" data-peer-id="${escapeHtml(fmtText(row.id))}">Rekey Request</button>
+              </div>
+            ` : ''}
+          </div>
+        </td>
+      </tr>
+      `);
+      detailRows.push(renderPeerDetailRow('Lifecycle', lifecycleMetrics, 'peer-detail-row-end'));
+    }
+    return `
+      ${detailRows.join('')}
+    `;
+  }).join('');
 }
 
 async function loadConnections() {
@@ -402,8 +573,6 @@ function applyMetaDoc(j) {
 function applyStatusDoc(j) {
   applyAdminInstanceName(j.admin_web_name);
   setText('uptimeSec', fmtUptime(j.uptime_sec));
-
-  applyPeerState(j.peer_state);
   setText('udpOpen', fmtInteger(j.open_connections?.udp));
   setText('tcpOpen', fmtInteger(j.open_connections?.tcp));
 
@@ -1134,6 +1303,12 @@ document.getElementById('configReloadBtn')?.addEventListener('click', loadConfig
 document.getElementById('configSaveBtn')?.addEventListener('click', saveConfig);
 document.getElementById('logsReloadBtn')?.addEventListener('click', loadLogs);
 document.getElementById('authForm')?.addEventListener('submit', loginAdmin);
+document.getElementById('peerConnectionsBody')?.addEventListener('click', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (!target.classList.contains('secure-link-rekey-btn')) return;
+  requestSecureLinkRekey(target.getAttribute('data-peer-id') || '');
+});
 initTabs();
 initMetaToggle();
 updateAuthUi();

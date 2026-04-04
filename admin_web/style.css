@@ -194,36 +194,6 @@ h1 {
   gap: 16px;
 }
 
-.status-cluster {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.status-label {
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.state-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 124px;
-  padding: 10px 16px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  border: 1px solid transparent;
-}
-
-.state-connected { background: rgba(34, 197, 94, 0.14); color: #8ef0b0; border-color: rgba(34, 197, 94, 0.32); }
-.state-degraded { background: rgba(245, 158, 11, 0.14); color: #ffd084; border-color: rgba(245, 158, 11, 0.32); }
-.state-disconnected { background: rgba(239, 68, 68, 0.14); color: #ff9f9f; border-color: rgba(239, 68, 68, 0.32); }
-.state-unknown { background: rgba(148, 163, 184, 0.16); color: #c7d3e6; border-color: rgba(148, 163, 184, 0.24); }
-
 .layout {
   display: grid;
   grid-template-columns: 300px 1fr;
@@ -679,6 +649,81 @@ h1 {
   border-bottom: none;
 }
 
+.peer-table {
+  min-width: 1100px;
+}
+
+.peer-table tbody tr:hover {
+  background: transparent;
+}
+
+.peer-detail-row td {
+  vertical-align: top;
+}
+
+.peer-detail-row-start td {
+  border-top: 1px solid rgba(120, 170, 255, 0.14);
+}
+
+.peer-detail-row:first-child td {
+  border-top: none;
+}
+
+.peer-id-cell {
+  width: 96px;
+  font-weight: 700;
+  color: #b8d3ff;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.peer-detail-kind {
+  width: 120px;
+  color: var(--muted) !important;
+  font-size: 12px !important;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.peer-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px 14px;
+}
+
+.peer-detail-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.peer-detail-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.peer-detail-line {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px 14px;
+}
+
+.peer-detail-metric {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 170, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.peer-detail-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.peer-detail-value {
+  color: #e8f0ff;
+}
+
 .conn-table .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -724,6 +769,11 @@ h1 {
   overflow-x: auto;
   max-height: 420px;
   overflow-y: auto;
+}
+
+.peer-table-wrap {
+  max-height: none;
+  overflow-y: visible;
 }
 
 .config-table-wrap {

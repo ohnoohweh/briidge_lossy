@@ -11,28 +11,6 @@ class _RunnerStub:
     def get_status_snapshot(self):
         return {
             "peer_state": "CONNECTED",
-            "secure_link": {
-                "enabled": True,
-                "mode": "psk",
-                "state": "authenticated",
-                "authenticated": True,
-                "authenticated_peers": 1,
-                "rekey_in_progress": False,
-                "last_rekey_trigger": "time_threshold",
-                "rekey_due_unix_ts": 1700000030.0,
-                "failure_code": None,
-                "failure_reason": None,
-                "failure_detail": None,
-                "failure_unix_ts": None,
-                "failure_session_id": None,
-                "handshake_attempts_total": 1,
-                "last_event": "authenticated",
-                "last_event_unix_ts": 1700000000.0,
-                "last_authenticated_unix_ts": 1700000000.0,
-                "last_authenticated_session_id": 42,
-                "authenticated_sessions_total": 1,
-                "rekeys_completed_total": 0,
-            },
         }
 
     def get_peer_connections_snapshot(self):
@@ -73,7 +51,7 @@ class _RunnerStub:
 
 
 class AdminWebPayloadTests(unittest.TestCase):
-    def test_build_status_payload_includes_secure_link_summary(self):
+    def test_build_status_payload_omits_peer_scoped_secure_link_summary(self):
         args = argparse.Namespace(
             admin_web=True,
             admin_web_bind="127.0.0.1",
@@ -89,16 +67,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         )
         ui = AdminWebUI(args, _RunnerStub())
         payload = ui._build_status_payload()
-        self.assertIn("secure_link", payload)
-        self.assertEqual(payload["secure_link"]["state"], "authenticated")
-        self.assertTrue(payload["secure_link"]["authenticated"])
-        self.assertIsNone(payload["secure_link"]["failure_code"])
-        self.assertIsNone(payload["secure_link"]["failure_detail"])
-        self.assertEqual(payload["secure_link"]["last_rekey_trigger"], "time_threshold")
-        self.assertEqual(payload["secure_link"]["rekey_due_unix_ts"], 1700000030.0)
-        self.assertEqual(payload["secure_link"]["last_event"], "authenticated")
-        self.assertEqual(payload["secure_link"]["handshake_attempts_total"], 1)
-        self.assertEqual(payload["secure_link"]["authenticated_sessions_total"], 1)
+        self.assertNotIn("secure_link", payload)
         self.assertEqual(payload["admin_web_name"], "Lab Node")
 
     def test_build_peers_payload_includes_secure_link_rows(self):

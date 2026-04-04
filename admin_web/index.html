@@ -41,10 +41,6 @@
         <h1 id="appHeadline">ObstacleBridge</h1>
       </div>
       <div class="topbar-right">
-        <div class="status-cluster">
-          <span class="status-label">State</span>
-          <span id="peerStateBadge" class="state-badge state-unknown">UNKNOWN</span>
-        </div>
         <button id="logoutBtn" class="btn btn-secondary hidden" type="button">Logout</button>
         <button id="restartBtn" class="btn btn-danger" type="button">Restart</button>
       </div>
@@ -131,31 +127,17 @@
               </div>
             </div>
             <div class="table-card card">
-              <div class="table-wrap">
-                <table class="conn-table">
+              <div class="table-wrap peer-table-wrap">
+                <table class="conn-table peer-table">
                   <thead>
                     <tr>
                       <th>ID</th>
-                      <th>Transport</th>
-                      <th>Listen</th>
-                      <th>State</th>
-                      <th>Peer</th>
-                      <th>RTT Est (ms)</th>
-                      <th>UDP Open</th>
-                      <th>TCP Open</th>
-                      <th>RX Bytes</th>
-                      <th>TX Bytes</th>
-                      <th>Decode Errors</th>
-                      <th>Buffered Frames</th>
-                      <th>Inflight</th>
-                      <th>myUDP Confirmed Total</th>
-                      <th>myUDP First Pass</th>
-                      <th>myUDP Repeated Once</th>
-                      <th>myUDP Repeated Multiple</th>
+                      <th>Layer</th>
+                      <th>Details</th>
                     </tr>
                   </thead>
                   <tbody id="peerConnectionsBody">
-                    <tr class="empty-row"><td colspan="17">No peer sessions</td></tr>
+                    <tr class="empty-row"><td colspan="3">No peer sessions</td></tr>
                   </tbody>
                 </table>
               </div>

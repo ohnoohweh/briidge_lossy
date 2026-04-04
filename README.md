@@ -419,11 +419,11 @@ Client admin web screenshot:
 
 What the admin web shows:
 
-- A top status badge with the current overlay state, for example `CONNECTED`.
 - A summary row with the currently open UDP and TCP channel counts.
 - Traffic cards for app-side RX/TX and peer-side RX/TX rates.
-- A peer-session table with transport type, RTT estimate, open channel counts, byte counters, inflight frames, and `myudp` confirmation statistics.
+- A peer-session table that now groups each peer into connection, protocol, security, and lifecycle rows so secure-link state stays with the peer it belongs to.
 - UDP and TCP connection tables that show current mappings, local listening ports, remote endpoints, and per-channel byte/message counters.
+- A peer-scoped rekey action inside each peer security block for operator-triggered secure-link rotation on authenticated client-side sessions.
 - A configuration tab that exposes the live runtime options such as overlay transports, listener ports, `--remote-servers`, admin web settings, and log levels.
 - A debug log tab with recent in-memory log lines, which is especially useful while investigating channel setup, backpressure, reconnects, and late-data cases.
 
@@ -472,10 +472,10 @@ What works today:
 - `overlay_transport=tcp`
 - `overlay_transport=ws`
 - `overlay_transport=quic`
-- admin/API visibility through `/api/status` and `/api/peers`
+- aggregate admin/API visibility through `/api/status` and peer-scoped secure-link visibility through `/api/peers`
 - optional automatic rekey through `secure_link_rekey_after_frames`
 - optional time-based rekey through `secure_link_rekey_after_seconds`
-- operator-forced rekey through `POST /api/secure-link/rekey`
+- operator-forced rekey through peer-targeted `POST /api/secure-link/rekey`
 
 What is still planned:
 
@@ -533,20 +533,22 @@ python -m obstacle_bridge --config secure_link_client.json
 
 What to look for in WebAdmin or the admin API:
 
-- `/api/status` shows `secure_link.state=authenticated` on both sides after the overlay connects
+- WebAdmin shows secure-link details inside each peer block instead of a single legacy headline state
 - `/api/peers` shows the peer row with `secure_link.authenticated=true`
-- when rekeying is enabled, `/api/status` and `/api/peers` can briefly show `rekey_in_progress=true` while the session rotates to a fresh `secure_link.session_id`
-- the status payload now also exposes `last_rekey_trigger` and, for client-side time-based rekey, `rekey_due_unix_ts`
+- when rekeying is enabled, the peer block and `/api/peers` can briefly show `rekey_in_progress=true` while the session rotates to a fresh `secure_link.session_id`
+- `/api/status` remains limited to common runtime summary fields such as uptime, aggregate open-channel counts, and aggregate traffic rates
 - if the PSK does not match, the client and server stay disconnected and the failure is reported as:
   - `secure_link.state=failed`
   - `failure_code=1`
   - `failure_reason=bad_psk`
   - repeated client-side retries show increasing `consecutive_failures`, a bounded `retry_backoff_sec`, a populated `next_retry_unix_ts`, a populated `failure_session_id`, increasing `handshake_attempts_total`, and `last_event=retry_scheduled`
-- on healthy authenticated runs, `/api/status` also exposes stronger operational diagnostics such as `last_event`, `last_event_unix_ts`, `last_authenticated_unix_ts`, `authenticated_sessions_total`, `rekeys_completed_total`, and `last_rekey_trigger`
-- operators can force rekey on an authenticated client-side secure-link session with:
+- on healthy authenticated runs, the peer block and `/api/peers` expose `last_event`, `last_event_unix_ts`, `last_authenticated_unix_ts`, `authenticated_sessions_total`, `rekeys_completed_total`, and `last_rekey_trigger`
+- operators can force rekey on an authenticated client-side secure-link session by targeting the selected peer row id:
 
 ```bash
-curl -sS -X POST http://127.0.0.1:18081/api/secure-link/rekey
+curl -sS -X POST http://127.0.0.1:18081/api/secure-link/rekey \
+  -H 'Content-Type: application/json' \
+  -d '{"peer_id":"0:0"}'
 ```
 
 Operator notes:
@@ -555,7 +557,7 @@ Operator notes:
 - use a long random PSK for anything beyond local testing
 - leave `secure_link_rekey_after_frames=0` unless you intentionally want to exercise or validate rekey behavior
 - use `secure_link_rekey_after_seconds` when you want automatic rotation on long-lived authenticated client-side sessions without waiting for a frame-count threshold
-- operator-forced rekey currently applies to authenticated client-side secure-link sessions; if no protected client data has been sent yet, the admin API rejects the request rather than guessing its way past the handshake boundary
+- operator-forced rekey currently applies to authenticated client-side secure-link sessions for the targeted peer row; if no protected client data has been sent yet, the admin API rejects the request rather than guessing its way past the handshake boundary
 - if you are intentionally testing wrong-PSK or rollout mistakes, `secure_link_retry_backoff_initial_ms` and `secure_link_retry_backoff_max_ms` let you tune how aggressively the client retries after secure-link auth failures
 - the current PSK runtime uses strictly monotonic per-direction protected-data counters starting at `1`; counter `0` is reserved and counter exhaustion fails closed rather than wrapping
 - malformed or unexpected secure-link frames fail closed and remain observable through the admin/API surface; they do not continue forwarding overlay traffic on the affected peer
@@ -713,7 +715,7 @@ Current snapshot from `python scripts/report_requirements_coverage.py`:
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
 
-The secure-link topic now has an active `REQ-AUT-*` layer in `docs/REQUIREMENTS.md` for the delivered PSK-based Phase 1 runtime slice, while the certificate/key-material trust-anchor work remains in the planned `PLAN-AUT-*` namespace and the certificate/key-material input profile is documented in `docs/SYSTEM_BOUNDARY.md`. The current PSK runtime slice is defended across `myudp`, `tcp`, `ws`, and `quic`, now including broader multi-peer listener validation across those transports, richer admin/API observability through `/api/status` and `/api/peers`, frame-, time-, and operator-triggered rekey coverage, reconnect-with-fresh-session coverage, and subprocess replay/malformed-frame fail-closed coverage. The few subprocess cases that need direct secure-link fault stimulation use the separate test-only `obstacle_bridge.bridge_FI` entrypoint rather than the normal runtime surface.
+The secure-link topic now has an active `REQ-AUT-*` layer in `docs/REQUIREMENTS.md` for the delivered PSK-based Phase 1 runtime slice, while the certificate/key-material trust-anchor work remains in the planned `PLAN-AUT-*` namespace and the certificate/key-material input profile is documented in `docs/SYSTEM_BOUNDARY.md`. The current PSK runtime slice is defended across `myudp`, `tcp`, `ws`, and `quic`, now including broader multi-peer listener validation across those transports, aggregate runtime summary through `/api/status`, peer-scoped secure-link observability through `/api/peers`, frame-, time-, and peer-targeted operator-triggered rekey coverage, reconnect-with-fresh-session coverage, and subprocess replay/malformed-frame fail-closed coverage. The few subprocess cases that need direct secure-link fault stimulation use the separate test-only `obstacle_bridge.bridge_FI` entrypoint rather than the normal runtime surface.
 
 The related architecture decomposition is also linked to tests through `.github/architecture_traceability.yaml`.
 
