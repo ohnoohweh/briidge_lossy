@@ -467,6 +467,33 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
 
 
 class WebSocketProxyHelpersTests(unittest.TestCase):
+    def test_register_cli_defaults_ws_proxy_mode_to_env_on_linux(self):
+        parser = argparse.ArgumentParser()
+        with mock.patch.object(sys, "platform", "linux"):
+            WebSocketSession.register_cli(parser)
+
+        args = parser.parse_args([])
+
+        self.assertEqual(args.ws_proxy_mode, "env")
+
+    def test_register_cli_defaults_ws_proxy_mode_to_system_on_windows(self):
+        parser = argparse.ArgumentParser()
+        with mock.patch.object(sys, "platform", "win32"):
+            WebSocketSession.register_cli(parser)
+
+        args = parser.parse_args([])
+
+        self.assertEqual(args.ws_proxy_mode, "system")
+
+    def test_missing_ws_proxy_mode_uses_platform_default_in_constructor(self):
+        args = _args("binary")
+        delattr(args, "ws_proxy_mode")
+
+        with mock.patch.object(sys, "platform", "win32"):
+            session = WebSocketSession(args)
+
+        self.assertEqual(session._ws_proxy_mode, "system")
+
     def test_parse_proxy_spec_prefers_matching_scheme(self):
         parsed = WebSocketSession._parse_proxy_spec("http=proxy-http:8080;https=proxy-https:8443", secure=True)
         self.assertEqual(parsed, ("proxy-https", 8443))
@@ -510,6 +537,50 @@ class WebSocketProxyHelpersTests(unittest.TestCase):
         self.assertTrue(any("endpoint lookup" in msg for msg in debug_messages))
         self.assertTrue(any("system proxy lookup url=" in msg for msg in debug_messages))
         self.assertTrue(any("returned no endpoint" in msg for msg in debug_messages))
+
+    def test_env_proxy_mode_uses_http_proxy_for_ws(self):
+        args = _args("binary")
+        args.ws_peer = "127.0.0.1"
+        args.ws_peer_port = 54321
+        args.ws_proxy_mode = "env"
+        session = WebSocketSession(args)
+        session._peer_tuple = ("127.0.0.1", 54321)
+
+        with mock.patch("obstacle_bridge.bridge.urllib.request.proxy_bypass", return_value=False):
+            with mock.patch("obstacle_bridge.bridge.urllib.request.getproxies", return_value={"http": "http://proxy.example:8080"}):
+                endpoint = session._get_ws_proxy_endpoint("overlay.example", 54321)
+
+        self.assertEqual(endpoint, ("proxy.example", 8080))
+
+    def test_env_proxy_mode_uses_https_proxy_for_wss(self):
+        args = _args("binary")
+        args.ws_peer = "127.0.0.1"
+        args.ws_peer_port = 54321
+        args.ws_proxy_mode = "env"
+        args.ws_tls = True
+        session = WebSocketSession(args)
+        session._peer_tuple = ("127.0.0.1", 54321)
+
+        with mock.patch("obstacle_bridge.bridge.urllib.request.proxy_bypass", return_value=False):
+            with mock.patch("obstacle_bridge.bridge.urllib.request.getproxies", return_value={"https": "https://secure-proxy.example:8443"}):
+                endpoint = session._get_ws_proxy_endpoint("overlay.example", 54321)
+
+        self.assertEqual(endpoint, ("secure-proxy.example", 8443))
+
+    def test_env_proxy_mode_honors_no_proxy_bypass(self):
+        args = _args("binary")
+        args.ws_peer = "127.0.0.1"
+        args.ws_peer_port = 54321
+        args.ws_proxy_mode = "env"
+        session = WebSocketSession(args)
+        session._peer_tuple = ("127.0.0.1", 54321)
+
+        with mock.patch("obstacle_bridge.bridge.urllib.request.proxy_bypass", return_value=True):
+            with mock.patch("obstacle_bridge.bridge.urllib.request.getproxies") as getproxies:
+                endpoint = session._get_ws_proxy_endpoint("overlay.example", 54321)
+
+        self.assertIsNone(endpoint)
+        getproxies.assert_not_called()
 
     def test_open_ws_proxy_socket_logs_connect_success(self):
         args = _args("binary")

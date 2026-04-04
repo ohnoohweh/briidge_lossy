@@ -47,9 +47,9 @@ Representative implementation area:
 
 - [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py)
 
-Planned next step:
+Important proxy expectation:
 
-- add a Windows-only, WebSocket-client-only proxy bootstrap path that performs HTTP `CONNECT` and `Negotiate` / NTLM-style authentication before `WebSocketSession` starts the websocket handshake
+- default WebSocket peer-client proxy behavior should follow platform-native settings unless application configuration explicitly overrides that behavior
 
 ## 2. Reliability and framing layer
 
@@ -183,7 +183,7 @@ Expected to own:
 - composition
 - startup/shutdown lifecycle
 - config and argument integration
-- platform-gated enablement of optional transport features such as Windows-only websocket proxy support
+- platform-gated enablement of optional transport features such as Windows `Negotiate` proxy authentication, while preserving platform-default proxy discovery semantics
 
 Expected not to own:
 
@@ -202,21 +202,19 @@ Expected not to own:
 
 - transport behavior itself
 
-## Planned architecture extension: websocket proxy tunneling
-
-The next planned extension is a narrowly scoped addition to `WebSocketSession` client mode.
+## WebSocket proxy tunneling
 
 Scope:
 
-- Windows only
 - WebSocket peer client only
 - HTTP proxy traversal with `CONNECT`
-- proxy authentication via `Negotiate` / NTLM-style Windows credentials
+- default proxy discovery from platform-native settings
+- proxy authentication via `Negotiate` / NTLM-style Windows credentials where supported
 
 Intended layering:
 
-1. the runner/configuration layer decides whether proxy tunneling is enabled for the websocket client
-2. the transport/session layer performs proxy discovery or uses configured proxy settings
+1. the runner/configuration layer decides whether platform-default proxy behavior is used or consciously overridden for the websocket client
+2. the transport/session layer performs proxy discovery from system settings or uses explicitly configured proxy settings
 3. the transport/session layer establishes a TCP tunnel to the proxy target
 4. after the tunnel is established, the existing websocket handshake continues over the tunneled socket
 5. the higher reliability, mux, and admin layers remain unchanged
@@ -225,6 +223,7 @@ Architectural consequence:
 
 - proxy support belongs in the websocket client bootstrap path, not in the overlay framing or channel mux logic
 - this capability should be isolated so it does not accidentally appear as a cross-transport or listener-side feature before those variants are explicitly designed
+- platform-specific details should stay below the shared websocket client contract: Windows may use system proxy APIs and `Negotiate`, while Linux/POSIX may use `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`
 
 ## Test implications
 

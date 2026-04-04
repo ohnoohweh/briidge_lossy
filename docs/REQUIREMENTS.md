@@ -22,15 +22,17 @@ ObstacleBridge is expected to:
 - `REQ-OVL-006`: Supported overlay transports shall work on both IPv4 and IPv6 where the specific transport mode is configured for that address family.
 - `REQ-OVL-007`: Localhost-based peer resolution shall behave deterministically for reconnect scenarios on both IPv4 and IPv6.
 
-## Scoped next-step requirements
+## WebSocket proxy requirements
 
-The following requirements describe the next planned capability boundary. They are intentionally scoped more narrowly than the general transport requirements above.
-
-- `REQ-WSP-001`: A WebSocket peer client running on Windows shall be able to establish its outbound websocket transport through an HTTP proxy that requires `Negotiate` / NTLM-style authentication.
-- `REQ-WSP-002`: The proxy-authenticated WebSocket capability shall be scoped to peer-client mode only; it shall not imply listener-side proxy support.
-- `REQ-WSP-003`: The proxy-authenticated WebSocket capability shall be scoped to the WebSocket transport only; it shall not imply equivalent support for `myudp`, `tcp`, or `quic`.
+- `REQ-WSP-001`: A WebSocket peer client shall be able to establish its outbound websocket transport through an HTTP proxy when proxy routing is required for the target environment.
+- `REQ-WSP-002`: The WebSocket proxy capability shall be scoped to peer-client mode only; it shall not imply listener-side proxy support.
+- `REQ-WSP-003`: The WebSocket proxy capability shall be scoped to the WebSocket transport only; it shall not imply equivalent support for `myudp`, `tcp`, or `quic`.
 - `REQ-WSP-004`: When proxy tunneling is enabled for the WebSocket peer client, the transport bootstrap shall establish the proxy tunnel before the websocket handshake begins.
-- `REQ-WSP-005`: When proxy discovery or proxy authentication fails, the WebSocket peer client shall report a connection failure without corrupting the overlay state machine.
+- `REQ-WSP-005`: When proxy discovery, proxy connection, or proxy authentication fails, the WebSocket peer client shall report a connection failure without corrupting the overlay state machine.
+- `REQ-WSP-006`: On Windows, the default WebSocket peer-client behavior shall honor the effective system proxy configuration unless the application configuration explicitly overrides it.
+- `REQ-WSP-007`: On Linux and other POSIX-style environments, the default WebSocket peer-client behavior shall honor the effective `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment settings unless the application configuration explicitly overrides it.
+- `REQ-WSP-008`: Application configuration shall be able to consciously override the platform-default proxy behavior, including forcing direct connection or using an explicitly configured proxy endpoint.
+- `REQ-WSP-009`: A WebSocket peer client running on Windows shall be able to establish its outbound websocket transport through an HTTP proxy that requires `Negotiate` / NTLM-style authentication.
 
 ## Reconnect and restart requirements
 
@@ -75,7 +77,7 @@ The following requirements describe the next planned capability boundary. They a
 
 ## Testing requirements
 
-- `REQ-TST-001`: User-visible transport behavior shall be protected by integration tests.
+- `REQ-TST-001`: User-visible transport behavior shall be protected by integration tests, and the relevant regression suites shall be executed as the primary detector of degradation before documentation or repository guards are relied on for consistency checks.
 - `REQ-TST-002`: Important local invariants and component contracts shall be protected by unit tests.
 - `REQ-TST-003`: Known bugs and regressions shall be turned into regression tests whenever practical.
 - `REQ-TST-004`: The integration harness shall support regular parallel execution on a local development machine.
