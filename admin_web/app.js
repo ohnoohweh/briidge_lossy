@@ -372,6 +372,39 @@ async function requestSecureLinkRekey(peerId) {
   }
 }
 
+async function requestSecureLinkReload(scope) {
+  const normalizedScope = String(scope || '').trim();
+  if (!normalizedScope) {
+    window.alert('Secure-link reload failed: missing scope');
+    return;
+  }
+  const buttons = [
+    document.getElementById('secureLinkReloadRevocationBtn'),
+    document.getElementById('secureLinkReloadIdentityBtn'),
+    document.getElementById('secureLinkReloadAllBtn'),
+  ].filter(Boolean);
+  try {
+    buttons.forEach((button) => {
+      button.disabled = true;
+    });
+    const r = await apiFetch('/api/secure-link/reload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: normalizedScope }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || j.reason || `HTTP ${r.status}`);
+    }
+  } catch (e) {
+    window.alert(`Secure-link reload failed: ${e}`);
+  } finally {
+    buttons.forEach((button) => {
+      button.disabled = false;
+    });
+  }
+}
+
 async function exitProgram() {
   const confirmed = window.confirm('Exit the program now?');
   if (!confirmed) return;
@@ -529,6 +562,13 @@ function renderPeerTable(rows) {
       renderMetric('authenticated_sessions_total', fmtInteger(secureLink.authenticated_sessions_total)),
       renderMetric('rekeys_completed_total', fmtInteger(secureLink.rekeys_completed_total)),
       renderMetric('last_rekey_trigger', secureLink.last_rekey_trigger),
+      renderMetric('active_material_generation', fmtInteger(secureLink.active_material_generation)),
+      renderMetric('last_material_reload_unix_ts', fmtUnixTs(secureLink.last_material_reload_unix_ts)),
+      renderMetric('last_material_reload_scope', secureLink.last_material_reload_scope),
+      renderMetric('last_material_reload_result', secureLink.last_material_reload_result),
+      renderMetric('trust_enforced_unix_ts', fmtUnixTs(secureLink.trust_enforced_unix_ts)),
+      renderMetric('disconnect_reason', secureLink.disconnect_reason),
+      renderMetric('disconnect_detail', secureLink.disconnect_detail),
     ] : [];
     const detailRows = [
       `
@@ -620,6 +660,12 @@ function applyStatusDoc(j) {
   setProgress('barAppTx', appTx);
   setProgress('barPeerRx', peerRx);
   setProgress('barPeerTx', peerTx);
+  setText('secureLinkMaterialGeneration', fmtInteger(j.secure_link_material_generation));
+  setText('secureLinkLastReloadUnixTs', fmtUnixTs(j.secure_link_last_reload_unix_ts));
+  setText('secureLinkLastReloadScope', fmtText(j.secure_link_last_reload_scope));
+  setText('secureLinkLastReloadResult', fmtText(j.secure_link_last_reload_result));
+  setText('secureLinkLastReloadDetail', fmtText(j.secure_link_last_reload_detail));
+  setText('secureLinkPeersDroppedTotal', fmtInteger(j.secure_link_peers_dropped_total));
 
   const errors = j.decode_errors?.unidentified_frames ?? 0;
   setText('decodeErrors', fmtInteger(errors));
@@ -1329,6 +1375,9 @@ function initMetaToggle() {
 document.getElementById('restartBtn').addEventListener('click', restart);
 document.getElementById('logoutBtn')?.addEventListener('click', logoutAdmin);
 document.getElementById('exitBtn')?.addEventListener('click', exitProgram);
+document.getElementById('secureLinkReloadRevocationBtn')?.addEventListener('click', () => requestSecureLinkReload('revocation'));
+document.getElementById('secureLinkReloadIdentityBtn')?.addEventListener('click', () => requestSecureLinkReload('local_identity'));
+document.getElementById('secureLinkReloadAllBtn')?.addEventListener('click', () => requestSecureLinkReload('all'));
 document.getElementById('configReloadBtn')?.addEventListener('click', loadConfig);
 document.getElementById('configSaveBtn')?.addEventListener('click', saveConfig);
 document.getElementById('logsReloadBtn')?.addEventListener('click', loadLogs);

@@ -42,9 +42,9 @@ REQ-OVL-007:
 # The broader separation between user use-cases, external assumptions, and
 # project-owned requirements is documented in docs/SYSTEM_BOUNDARY.md.
 # Planned secure-link follow-up work is documented in docs/SECURE_LINK_DESIGN.md.
-# The delivered PSK-based Phase 1 runtime slice uses active REQ-AUT-* IDs,
-# and the delivered Phase 2 certificate/trust-anchor slice is now promoted into
-# active REQ-AUT-011 through REQ-AUT-014 in this manifest.
+# The delivered secure-link slices now use active REQ-AUT-* IDs for:
+# Phase 1 PSK transport-independent protection, Phase 2 certificate/trust-anchor
+# validation, and Phase 3 operational reload/apply controls.
 # The current WebAdmin secure-link model keeps peer-scoped security state and
 # operator rekey actions on the corresponding peer rows, while status/admin
 # views are limited to aggregate runtime summary.
@@ -182,6 +182,46 @@ REQ-AUT-014:
     - tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_cert_identity_and_trust_fields
     - tests/unit/test_secure_link_cert.py::test_cert_mode_happy_path_authenticates_and_exposes_peer_identity
     - tests/unit/test_secure_link_cert.py::test_cert_mode_operator_rekey_rotates_session
+REQ-AUT-015:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_revocation_reload_happy_path
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_revocation_reload_noop
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_full_reload_applies_atomically
+  unit_tests:
+    - tests/unit/test_secure_link_cert.py::test_revocation_reload_drops_existing_authenticated_peer
+REQ-AUT-016:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_revocation_reload_happy_path
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_full_reload_applies_atomically
+  unit_tests:
+    - tests/unit/test_secure_link_cert.py::test_revocation_reload_drops_existing_authenticated_peer
+    - tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_cert_identity_and_trust_fields
+REQ-AUT-017:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_local_identity_reload_happy_path
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_local_identity_reload_rejected
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_full_reload_applies_atomically
+  unit_tests:
+    - tests/unit/test_secure_link_cert.py::test_local_identity_reload_failure_is_atomic
+    - tests/unit/test_secure_link_cert.py::test_local_identity_reload_applies_and_reauthenticates
+REQ-AUT-018:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_local_identity_reload_happy_path
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_full_reload_applies_atomically
+  unit_tests:
+    - tests/unit/test_secure_link_cert.py::test_local_identity_reload_applies_and_reauthenticates
+REQ-AUT-019:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_revocation_reload_happy_path
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_revocation_reload_noop
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_local_identity_reload_happy_path
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_local_identity_reload_rejected
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_full_reload_applies_atomically
+  unit_tests:
+    - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
+    - tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_cert_identity_and_trust_fields
+    - tests/unit/test_runner_overlay_transports.py::test_request_secure_link_reload_targets_matching_peer_id_only
+    - tests/unit/test_runner_overlay_transports.py::test_request_secure_link_reload_rejects_unknown_peer_id
 REQ-WSP-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_overlay_uses_http_proxy_env

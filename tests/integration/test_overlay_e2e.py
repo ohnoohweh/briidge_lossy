@@ -11,6 +11,7 @@ import http.cookiejar
 import json
 import os
 import select
+import shutil
 import signal
 import socket
 import struct
@@ -4367,6 +4368,7 @@ def _start_case_with_secure_link_args(
     client_extra_args: Optional[List[str]] = None,
     client_restart_if_disconnected: float = 5.0,
     use_failure_injection_entrypoint: bool = False,
+    wait_client_admin: bool = True,
 ) -> tuple[Case, BounceBackServer, Proc, Proc]:
     case = materialize_secure_link_case_ports(case, secure_slot) if secure_slot is not None else materialize_case_ports(case, case_index)
     bounce = BounceBackServer(
@@ -4401,7 +4403,8 @@ def _start_case_with_secure_link_args(
     client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, log_dir, env_extra=client_env, admin_port=client_admin)
     try:
         wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
-        wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
+        if wait_client_admin:
+            wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
         return case, bounce, server_proc, client_proc
     except Exception:
         stop_proc(client_proc)
@@ -4419,18 +4422,45 @@ def _cert_secure_args(
     revoked_serials: Optional[str] = None,
     extra: Optional[List[str]] = None,
 ) -> List[str]:
+    return _cert_secure_args_paths(
+        root_pub=str(SECURE_LINK_CERT_FIXTURES / root_pub),
+        cert_body=str(SECURE_LINK_CERT_FIXTURES / cert_body),
+        cert_sig=str(SECURE_LINK_CERT_FIXTURES / cert_sig),
+        private_key=str(SECURE_LINK_CERT_FIXTURES / private_key),
+        revoked_serials=str(SECURE_LINK_CERT_FIXTURES / revoked_serials) if revoked_serials else None,
+        extra=extra,
+    )
+
+
+def _cert_secure_args_paths(
+    *,
+    root_pub: str,
+    cert_body: str,
+    cert_sig: str,
+    private_key: str,
+    revoked_serials: Optional[str] = None,
+    extra: Optional[List[str]] = None,
+) -> List[str]:
     args = [
         '--secure-link',
         '--secure-link-mode', 'cert',
-        '--secure-link-root-pub', str(SECURE_LINK_CERT_FIXTURES / root_pub),
-        '--secure-link-cert-body', str(SECURE_LINK_CERT_FIXTURES / cert_body),
-        '--secure-link-cert-sig', str(SECURE_LINK_CERT_FIXTURES / cert_sig),
-        '--secure-link-private-key', str(SECURE_LINK_CERT_FIXTURES / private_key),
+        '--secure-link-root-pub', str(root_pub),
+        '--secure-link-cert-body', str(cert_body),
+        '--secure-link-cert-sig', str(cert_sig),
+        '--secure-link-private-key', str(private_key),
     ]
     if revoked_serials:
-        args += ['--secure-link-revoked-serials', str(SECURE_LINK_CERT_FIXTURES / revoked_serials)]
+        args += ['--secure-link-revoked-serials', str(revoked_serials)]
     args += list(extra or [])
     return args
+
+
+def _copy_secure_link_cert_fixture_set(target_dir: Path) -> Path:
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for item in SECURE_LINK_CERT_FIXTURES.iterdir():
+        if item.is_file():
+            shutil.copy2(item, target_dir / item.name)
+    return target_dir
 
 
 @pytest.mark.integration
@@ -5226,12 +5256,13 @@ def test_overlay_e2e_tcp_secure_link_cert_rejection_matrix(
     client_key: str,
     server_revoked: Optional[str],
     tmp_path: Path,
-) -> None:
+    ) -> None:
     with secure_link_test_lock():
         case = CASES['case06_overlay_tcp_ipv4']
         bounce = None
         server_proc = client_proc = None
         try:
+            wait_client_admin = expected_reason not in ('expired', 'not_yet_valid')
             case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
                 case,
                 tmp_path,
@@ -5251,23 +5282,36 @@ def test_overlay_e2e_tcp_secure_link_cert_rejection_matrix(
                     private_key=client_key,
                 ),
                 client_restart_if_disconnected=30,
+                wait_client_admin=wait_client_admin,
             )
-            wait_status_not_connected(client_proc.admin_port or 0, timeout=20.0, label='client')
             wait_status_not_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
-            failed_doc = wait_peer_secure_link_state(
-                client_proc.admin_port or 0,
-                expected_state='failed',
-                timeout=12.0,
-                label='client',
-                transport='tcp',
-                authenticated=False,
-                failure_reason=expected_reason,
-            )
-            secure = dict((first_active_secure_link_row(failed_doc, transport='tcp').get('secure_link') or {}))
-            assert secure.get('mode') == 'cert'
-            assert secure.get('trust_validation_state') == 'failed'
-            assert secure.get('trust_failure_reason') == expected_reason
-            assert secure.get('trust_failure_detail')
+            if expected_reason in ('expired', 'not_yet_valid'):
+                deadline = time.time() + 10.0
+                while time.time() < deadline and client_proc.popen.poll() is None:
+                    time.sleep(0.1)
+                rc = client_proc.popen.poll()
+                assert rc not in (None, 0)
+                tail = client_proc.log_path.read_text(errors='replace')[-4000:] if client_proc.log_path.exists() else ''
+                if expected_reason == 'expired':
+                    assert 'local certificate has expired' in tail
+                else:
+                    assert 'local certificate is not valid yet' in tail
+            else:
+                wait_status_not_connected(client_proc.admin_port or 0, timeout=20.0, label='client')
+                failed_doc = wait_peer_secure_link_state(
+                    client_proc.admin_port or 0,
+                    expected_state='failed',
+                    timeout=12.0,
+                    label='client',
+                    transport='tcp',
+                    authenticated=False,
+                    failure_reason=expected_reason,
+                )
+                secure = dict((first_active_secure_link_row(failed_doc, transport='tcp').get('secure_link') or {}))
+                assert secure.get('mode') == 'cert'
+                assert secure.get('trust_validation_state') == 'failed'
+                assert secure.get('trust_failure_reason') == expected_reason
+                assert secure.get('trust_failure_detail')
             with pytest.raises(Exception):
                 wait_probe(case, timeout=3.0)
         finally:
@@ -5350,6 +5394,302 @@ def test_overlay_e2e_tcp_secure_link_cert_operator_forced_rekey(tmp_path: Path) 
             assert client_secure.get('last_event') == 'rekey_completed'
             assert client_secure.get('last_rekey_trigger') == 'operator'
             assert int(client_secure.get('rekeys_completed_total') or 0) >= 1
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_cert_revocation_reload_happy_path(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        runtime_certs = _copy_secure_link_cert_fixture_set(tmp_path / "runtime-certs-revoke")
+        revoked_path = runtime_certs / "revoked_runtime.json"
+        revoked_path.write_text("[]\n", encoding="utf-8")
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=296,
+                secure_slot=27,
+                server_extra_args=_cert_secure_args_paths(
+                    root_pub=str(runtime_certs / 'root_a_pub.pem'),
+                    cert_body=str(runtime_certs / 'server_valid_cert_body.json'),
+                    cert_sig=str(runtime_certs / 'server_valid_cert.sig'),
+                    private_key=str(runtime_certs / 'server_valid_key.pem'),
+                    revoked_serials=str(revoked_path),
+                ),
+                client_extra_args=_cert_secure_args_paths(
+                    root_pub=str(runtime_certs / 'root_a_pub.pem'),
+                    cert_body=str(runtime_certs / 'client_valid_cert_body.json'),
+                    cert_sig=str(runtime_certs / 'client_valid_cert.sig'),
+                    private_key=str(runtime_certs / 'client_valid_key.pem'),
+                    revoked_serials=str(revoked_path),
+                ),
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            wait_probe(case, payload=b'\x01prime-cert-revocation-reload', timeout=12.0)
+            revoked_path.write_text(json.dumps(["server_valid"]), encoding="utf-8")
+            code, body = request_json(
+                f'http://127.0.0.1:{client_proc.admin_port}/api/secure-link/reload',
+                method='POST',
+                payload={"scope": "revocation"},
+                timeout=2.0,
+            )
+            assert code == 200
+            assert body.get('ok') is True
+            assert body.get('scope') == 'revocation'
+            assert int(body.get('dropped') or 0) >= 1
+            failed_doc = wait_peer_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='failed',
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+                authenticated=False,
+                failure_reason='revoked_serial',
+            )
+            secure = dict((first_active_secure_link_row(failed_doc, transport='tcp').get('secure_link') or {}))
+            assert secure.get('disconnect_reason') == 'revocation_applied'
+            assert secure.get('last_material_reload_scope') == 'revocation'
+            assert secure.get('last_material_reload_result') == 'applied'
+            _status_code, status_doc = fetch_json(f'http://127.0.0.1:{client_proc.admin_port}/api/status', timeout=1.5)
+            assert status_doc.get('secure_link_last_reload_scope') == 'revocation'
+            assert status_doc.get('secure_link_last_reload_result') == 'applied'
+            assert int(status_doc.get('secure_link_peers_dropped_total') or 0) >= 1
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_cert_revocation_reload_noop(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        runtime_certs = _copy_secure_link_cert_fixture_set(tmp_path / "runtime-certs-revoke-noop")
+        revoked_path = runtime_certs / "revoked_runtime.json"
+        revoked_path.write_text("[]\n", encoding="utf-8")
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=297,
+                secure_slot=28,
+                server_extra_args=_cert_secure_args_paths(
+                    root_pub=str(runtime_certs / 'root_a_pub.pem'),
+                    cert_body=str(runtime_certs / 'server_valid_cert_body.json'),
+                    cert_sig=str(runtime_certs / 'server_valid_cert.sig'),
+                    private_key=str(runtime_certs / 'server_valid_key.pem'),
+                    revoked_serials=str(revoked_path),
+                ),
+                client_extra_args=_cert_secure_args_paths(
+                    root_pub=str(runtime_certs / 'root_a_pub.pem'),
+                    cert_body=str(runtime_certs / 'client_valid_cert_body.json'),
+                    cert_sig=str(runtime_certs / 'client_valid_cert.sig'),
+                    private_key=str(runtime_certs / 'client_valid_key.pem'),
+                    revoked_serials=str(revoked_path),
+                ),
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            code, body = request_json(
+                f'http://127.0.0.1:{client_proc.admin_port}/api/secure-link/reload',
+                method='POST',
+                payload={"scope": "revocation"},
+                timeout=2.0,
+            )
+            assert code == 200
+            assert body.get('ok') is True
+            assert int(body.get('dropped') or 0) == 0
+            wait_probe(case, payload=b'\x01cert-revocation-noop', timeout=12.0)
+            doc = wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
+            secure = dict((first_active_secure_link_row(doc, transport='tcp').get('secure_link') or {}))
+            assert secure.get('last_material_reload_scope') == 'revocation'
+            assert secure.get('last_material_reload_result') == 'applied'
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_cert_local_identity_reload_happy_path(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        runtime_certs = _copy_secure_link_cert_fixture_set(tmp_path / "runtime-certs-local-reload")
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=298,
+                secure_slot=29,
+                server_extra_args=_cert_secure_args_paths(
+                    root_pub=str(runtime_certs / 'root_a_pub.pem'),
+                    cert_body=str(runtime_certs / 'server_valid_cert_body.json'),
+                    cert_sig=str(runtime_certs / 'server_valid_cert.sig'),
+                    private_key=str(runtime_certs / 'server_valid_key.pem'),
+                ),
+                client_extra_args=_cert_secure_args_paths(
+                    root_pub=str(runtime_certs / 'root_a_pub.pem'),
+                    cert_body=str(runtime_certs / 'client_valid_cert_body.json'),
+                    cert_sig=str(runtime_certs / 'client_valid_cert.sig'),
+                    private_key=str(runtime_certs / 'client_valid_key.pem'),
+                ),
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            first_doc = wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
+            first_secure = dict((first_active_secure_link_row(first_doc, transport='tcp').get('secure_link') or {}))
+            first_generation = int(first_secure.get('active_material_generation') or 0)
+            wait_probe(case, payload=b'\x01prime-cert-local-identity-reload', timeout=12.0)
+            code, body = request_json(
+                f'http://127.0.0.1:{client_proc.admin_port}/api/secure-link/reload',
+                method='POST',
+                payload={"scope": "local_identity"},
+                timeout=2.0,
+            )
+            assert code == 200
+            assert body.get('ok') is True
+            assert body.get('scope') == 'local_identity'
+            assert int(body.get('dropped') or 0) >= 1
+            client_doc = wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
+            secure = dict((first_active_secure_link_row(client_doc, transport='tcp').get('secure_link') or {}))
+            assert secure.get('last_material_reload_scope') == 'local_identity'
+            assert secure.get('last_material_reload_result') == 'applied'
+            assert int(secure.get('active_material_generation') or 0) > first_generation
+            assert int(secure.get('handshake_attempts_total') or 0) >= 2
+            wait_probe(case, payload=b'\x01after-cert-local-identity-reload', timeout=12.0)
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_cert_local_identity_reload_rejected(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        runtime_certs = _copy_secure_link_cert_fixture_set(tmp_path / "runtime-certs-local-reload-fail")
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=299,
+                secure_slot=30,
+                server_extra_args=_cert_secure_args_paths(
+                    root_pub=str(runtime_certs / 'root_a_pub.pem'),
+                    cert_body=str(runtime_certs / 'server_valid_cert_body.json'),
+                    cert_sig=str(runtime_certs / 'server_valid_cert.sig'),
+                    private_key=str(runtime_certs / 'server_valid_key.pem'),
+                ),
+                client_extra_args=_cert_secure_args_paths(
+                    root_pub=str(runtime_certs / 'root_a_pub.pem'),
+                    cert_body=str(runtime_certs / 'client_valid_cert_body.json'),
+                    cert_sig=str(runtime_certs / 'client_valid_cert.sig'),
+                    private_key=str(runtime_certs / 'client_valid_key.pem'),
+                ),
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            wait_probe(case, payload=b'\x01prime-cert-local-identity-reload-fail', timeout=12.0)
+            (runtime_certs / 'client_valid_cert_body.json').write_text('{bad json', encoding='utf-8')
+            code, body = request_json(
+                f'http://127.0.0.1:{client_proc.admin_port}/api/secure-link/reload',
+                method='POST',
+                payload={"scope": "local_identity"},
+                timeout=2.0,
+            )
+            assert code == 409
+            assert body.get('ok') is False
+            doc = wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
+            secure = dict((first_active_secure_link_row(doc, transport='tcp').get('secure_link') or {}))
+            assert secure.get('last_material_reload_result') == 'failed'
+            wait_probe(case, payload=b'\x01after-cert-local-identity-reload-fail', timeout=12.0)
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_cert_full_reload_applies_atomically(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        runtime_certs = _copy_secure_link_cert_fixture_set(tmp_path / "runtime-certs-full-reload")
+        revoked_path = runtime_certs / "revoked_runtime.txt"
+        revoked_path.write_text("", encoding="utf-8")
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=300,
+                secure_slot=31,
+                server_extra_args=_cert_secure_args_paths(
+                    root_pub=str(runtime_certs / 'root_a_pub.pem'),
+                    cert_body=str(runtime_certs / 'server_valid_cert_body.json'),
+                    cert_sig=str(runtime_certs / 'server_valid_cert.sig'),
+                    private_key=str(runtime_certs / 'server_valid_key.pem'),
+                    revoked_serials=str(revoked_path),
+                ),
+                client_extra_args=_cert_secure_args_paths(
+                    root_pub=str(runtime_certs / 'root_a_pub.pem'),
+                    cert_body=str(runtime_certs / 'client_valid_cert_body.json'),
+                    cert_sig=str(runtime_certs / 'client_valid_cert.sig'),
+                    private_key=str(runtime_certs / 'client_valid_key.pem'),
+                    revoked_serials=str(revoked_path),
+                ),
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            wait_probe(case, payload=b'\x01prime-cert-full-reload', timeout=12.0)
+            revoked_path.write_text("unused-serial\n", encoding="utf-8")
+            code, body = request_json(
+                f'http://127.0.0.1:{client_proc.admin_port}/api/secure-link/reload',
+                method='POST',
+                payload={"scope": "all"},
+                timeout=2.0,
+            )
+            assert code == 200
+            assert body.get('ok') is True
+            assert body.get('scope') == 'all'
+            assert int(body.get('dropped') or 0) >= 1
+            client_doc = wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
+            secure = dict((first_active_secure_link_row(client_doc, transport='tcp').get('secure_link') or {}))
+            assert secure.get('last_material_reload_scope') == 'all'
+            assert secure.get('last_material_reload_result') == 'applied'
+            assert int(secure.get('active_material_generation') or 0) >= 2
+            _status_code, status_doc = fetch_json(f'http://127.0.0.1:{client_proc.admin_port}/api/status', timeout=1.5)
+            assert status_doc.get('secure_link_last_reload_scope') == 'all'
+            assert status_doc.get('secure_link_last_reload_result') == 'applied'
+            wait_probe(case, payload=b'\x01after-cert-full-reload', timeout=12.0)
         finally:
             if bounce is not None:
                 bounce.stop()

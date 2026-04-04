@@ -460,7 +460,7 @@ What is visible in the included snapshots:
 | `--secure-link-cert-sig` | `` | Detached certificate signature file for `secure_link_mode=cert`. |
 | `--secure-link-private-key` | `` | Local identity private key PEM for `secure_link_mode=cert`. |
 | `--secure-link-revoked-serials` | `` | Optional JSON-array or line-based revoked-serial file for `secure_link_mode=cert`. |
-| `--secure-link-cert-reload-on-restart` | `True` | Reload certificate material on process restart. Live hot-reload is not supported. |
+| `--secure-link-cert-reload-on-restart` | `True` | Reload certificate material on process restart. In `secure_link_mode=cert`, operators can also trigger live reload through the admin API or WebAdmin. |
 | `--secure-link-rekey-after-frames` | `0` | Automatically initiate PSK rekey after this many protected data frames are sent. `0` disables frame-triggered rekeying. |
 | `--secure-link-rekey-after-seconds` | `0.0` | Automatically initiate PSK rekey after this many authenticated seconds, once the current session has already carried protected client data. `0` disables time-triggered rekeying. |
 | `--secure-link-retry-backoff-initial-ms` | `1000` | Initial client-side retry backoff after a secure-link authentication failure, in milliseconds. |
@@ -485,11 +485,14 @@ What works today:
 - operator-forced rekey through peer-targeted `POST /api/secure-link/rekey`
 - cert-mode trust-anchor, role, validity-window, deployment-scope, and revoked-serial enforcement before protected traffic starts
 - cert-mode peer identity and trust diagnostics through `/api/peers`
+- cert-mode live `POST /api/secure-link/reload` with `scope=revocation`, `scope=local_identity`, or `scope=all`
+- aggregate reload/apply summaries through `/api/status`
+- peer-scoped reload/disconnect/trust-enforcement diagnostics through `/api/peers`
 
 What is still planned:
 
 - operator tooling for certificate issuance/rotation
-- broader operational workflows around revocation management
+- in-product certificate/key generation and signing workflows
 
 Minimal listener example:
 
@@ -510,6 +513,29 @@ Minimal listener example:
   "log": "INFO"
 }
 ```
+
+Cert-mode operators can also apply updated trust material without process restart:
+
+```bash
+curl -sS -X POST http://127.0.0.1:18080/api/secure-link/reload \
+  -H 'Content-Type: application/json' \
+  -d '{"scope":"revocation"}'
+
+curl -sS -X POST http://127.0.0.1:18080/api/secure-link/reload \
+  -H 'Content-Type: application/json' \
+  -d '{"scope":"local_identity"}'
+
+curl -sS -X POST http://127.0.0.1:18080/api/secure-link/reload \
+  -H 'Content-Type: application/json' \
+  -d '{"scope":"all"}'
+```
+
+When a cert-mode reload succeeds:
+
+- `/api/status` reports the aggregate reload result, scope, timestamp, active material generation, and cumulative dropped-peer count
+- `/api/peers` reports peer-scoped reload/enforcement details such as active material generation, trust-enforcement timestamp, and disconnect reason/detail
+- peers invalidated by a new revocation set are dropped immediately
+- peers authenticated under superseded local identity material are dropped and must re-authenticate under the new generation
 
 Minimal peer example:
 

@@ -78,6 +78,30 @@
             </article>
           </section>
 
+          <section class="section-block">
+            <div class="section-header">
+              <div>
+                <h2>Secure-Link Material</h2>
+                <p>Operator controls for live cert-mode revocation and local identity apply</p>
+              </div>
+            </div>
+            <div class="card">
+              <div class="kv-list">
+                <div class="kv-row"><span>Material generation</span><strong id="secureLinkMaterialGeneration">0</strong></div>
+                <div class="kv-row"><span>Last reload</span><strong id="secureLinkLastReloadUnixTs">n/a</strong></div>
+                <div class="kv-row"><span>Last reload scope</span><strong id="secureLinkLastReloadScope">n/a</strong></div>
+                <div class="kv-row"><span>Last reload result</span><strong id="secureLinkLastReloadResult">n/a</strong></div>
+                <div class="kv-row"><span>Last reload detail</span><strong id="secureLinkLastReloadDetail">n/a</strong></div>
+                <div class="kv-row"><span>Peers dropped total</span><strong id="secureLinkPeersDroppedTotal">0</strong></div>
+              </div>
+              <div class="peer-detail-actions" style="margin-top:12px;">
+                <button id="secureLinkReloadRevocationBtn" class="btn btn-secondary" type="button">Reload Revocation</button>
+                <button id="secureLinkReloadIdentityBtn" class="btn btn-secondary" type="button">Reload Local Identity</button>
+                <button id="secureLinkReloadAllBtn" class="btn btn-secondary" type="button">Reload All</button>
+              </div>
+            </div>
+          </section>
+
           
 
           <section class="section-block">

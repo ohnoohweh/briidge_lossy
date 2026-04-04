@@ -16,10 +16,11 @@ ObstacleBridge is expected to:
 
 The motivating user use-cases and the external assumptions around them are documented separately in [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md) and the user-facing sections of [README.md](/home/ohnoohweh/quic_br/README.md). The requirement IDs below describe what the project itself is expected to do inside that broader system context.
 
-Secure-link authentication and encryption work now has two requirement layers in this document:
+Secure-link authentication and encryption work now has three delivered requirement slices in this document:
 
 - active `REQ-AUT-*` items for the delivered and defended PSK-based Phase 1 runtime slice
-- reserved `PLAN-AUT-*` items for the still-pending certificate-based trust model and validation work
+- active `REQ-AUT-*` items for the delivered certificate-based Phase 2 trust model and validation slice
+- active `REQ-AUT-*` items for the delivered Phase 3 operational-control slice around live certificate/revocation reload and enforcement
 
 The detailed realization concept remains in [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md), and the component ownership boundary remains in [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md).
 
@@ -58,7 +59,7 @@ Functional decomposition note:
   - the secure-link runtime slice (`ARC-CMP-006`), which owns the underlying authentication/encryption state and failure categories
   - the runner/process orchestration layer (`ARC-CMP-004`), which gathers and shapes snapshot data
   - the admin web and observability layer (`ARC-CMP-005`), which exposes aggregate runtime summary through `/api/status`, peer-scoped secure-link state through `/api/peers`, the live admin feed, and the WebAdmin page
-- `REQ-AUT-011` through `REQ-AUT-014` are realized jointly by:
+- `REQ-AUT-011` through `REQ-AUT-019` are realized jointly by:
   - the secure-link layer (`ARC-CMP-006`), which owns the underlying authentication/encryption state and failure categories
   - the runner/process orchestration layer (`ARC-CMP-004`), which gathers and shapes snapshot data
   - the admin web and observability layer (`ARC-CMP-005`), which exposes aggregate runtime summary through `/api/status`, peer-scoped secure-link state through `/api/peers`, the live admin feed, and the WebAdmin page
@@ -73,9 +74,10 @@ Current implementation note:
 - both delivered modes run on `overlay_transport=myudp`, `tcp`, `ws`, and `quic`
 - broader multi-peer listener validation now exists on `ws`, `myudp`, `tcp`, and `quic`, with the deepest concurrent channel-routing slice still exercised on the TCP transport
 - the runtime now exposes aggregate runtime summary through `/api/status` and peer-scoped secure-link observability through `/api/peers`
+- in `secure_link_mode=cert`, operators can now trigger live `revocation`, `local_identity`, or `all` reload/apply actions through `POST /api/secure-link/reload` and the WebAdmin controls without restarting the process
 - some secure-link subprocess integration tests use a test-only failure-injection seam that is enabled explicitly by the harness and is not reachable in the normal runtime by default; this seam exists only to defend reconnect/replay/fail-closed requirements where pure black-box stimulation would otherwise add disproportionate harness complexity
 - the current user-facing runtime configuration surface also includes `secure_link_root_pub`, `secure_link_cert_body`, `secure_link_cert_sig`, `secure_link_private_key`, `secure_link_revoked_serials`, and `secure_link_cert_reload_on_restart` for `secure_link_mode=cert`
-- the Phase 1 PSK mode remains useful for development/testing/lab bring-up, while the certificate-based Phase 2 slice provides deployment-rooted mutual authentication and trust validation
+- the Phase 1 PSK mode remains useful for development/testing/lab bring-up, while the certificate-based Phase 2/3 slices provide deployment-rooted mutual authentication, trust validation, and operator-driven live trust-material application
 
 - `REQ-AUT-001`: The project shall provide one transport-independent PSK secure-link capability for overlay authentication and protected data carriage across `myudp`, `tcp`, `ws`, and `quic`.
 - `REQ-AUT-002`: When both peers are configured with the same PSK, the secure-link protected data phase shall authenticate successfully before overlay traffic is accepted and forwarded.
@@ -92,6 +94,11 @@ Current implementation note:
 - `REQ-AUT-012`: Peer certificates used by `secure_link_mode=cert` shall be issued by that deployment-local admin root and constrained by machine-enforced roles so that client/server direction mismatches fail closed before protected traffic starts.
 - `REQ-AUT-013`: Certificate role checks, validity checks, deployment-scope checks, and serial-based revocation checks shall be enforced before the protected secure-link data phase is entered, and the failure shall remain observable as a secure-link authentication/trust failure rather than a false connected state.
 - `REQ-AUT-014`: The certificate-based secure-link mode shall preserve the same peer-scoped admin/API visibility model as the current PSK slice while adding peer identity and trust-validation details such as subject id/name, roles, deployment id, serial, issuer, trust-anchor id, trust-validation state, and trust-failure diagnostics.
+- `REQ-AUT-015`: The certificate-based secure-link runtime shall support operator-triggered live reload of revocation material from the configured revoked-serial source without requiring a process restart.
+- `REQ-AUT-016`: After a successful live revocation reload, peers whose certificates are now revoked shall be disconnected immediately and shall remain observable as peer-scoped secure-link trust failures rather than silently continuing on superseded trust state.
+- `REQ-AUT-017`: The certificate-based secure-link runtime shall support operator-triggered live reload of local root/certificate/private-key material from the configured files, and it shall validate the full replacement bundle atomically before activation so that a broken bundle does not partially replace the active material.
+- `REQ-AUT-018`: After a successful live local-identity reload, already-authenticated certificate-mode peers shall not continue indefinitely on the superseded local identity; they shall be disconnected and required to re-authenticate under the new material generation.
+- `REQ-AUT-019`: The admin API and WebAdmin shall expose aggregate reload/apply results at the runtime level and peer-scoped enforcement/disconnect diagnostics at the peer level so operators can tell what changed, when it changed, and why a peer was dropped or re-authenticated.
 
 ## Reconnect and restart requirements
 

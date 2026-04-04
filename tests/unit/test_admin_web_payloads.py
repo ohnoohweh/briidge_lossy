@@ -11,6 +11,12 @@ class _RunnerStub:
     def get_status_snapshot(self):
         return {
             "peer_state": "CONNECTED",
+            "secure_link_material_generation": 3,
+            "secure_link_last_reload_unix_ts": 1700000100.0,
+            "secure_link_last_reload_scope": "revocation",
+            "secure_link_last_reload_result": "applied",
+            "secure_link_last_reload_detail": "revoked_serials=1",
+            "secure_link_peers_dropped_total": 2,
         }
 
     def get_peer_connections_snapshot(self):
@@ -84,6 +90,14 @@ class _RunnerCertStub(_RunnerStub):
             "trust_validation_state": "trusted",
             "trust_failure_reason": "",
             "trust_failure_detail": "",
+            "active_material_generation": 3,
+            "last_material_reload_unix_ts": 1700000100.0,
+            "last_material_reload_scope": "revocation",
+            "last_material_reload_result": "applied",
+            "last_material_reload_detail": "revoked_serials=1",
+            "trust_enforced_unix_ts": None,
+            "disconnect_reason": "",
+            "disconnect_detail": "",
         }
         return payload
 
@@ -107,6 +121,10 @@ class AdminWebPayloadTests(unittest.TestCase):
         payload = ui._build_status_payload()
         self.assertNotIn("secure_link", payload)
         self.assertEqual(payload["admin_web_name"], "Lab Node")
+        self.assertEqual(payload["secure_link_material_generation"], 3)
+        self.assertEqual(payload["secure_link_last_reload_scope"], "revocation")
+        self.assertEqual(payload["secure_link_last_reload_result"], "applied")
+        self.assertEqual(payload["secure_link_peers_dropped_total"], 2)
 
     def test_build_peers_payload_includes_secure_link_rows(self):
         args = argparse.Namespace(
@@ -161,3 +179,6 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(secure["issuer_id"], "deployment-admin-a")
         self.assertEqual(secure["trust_anchor_id"], "abc123root")
         self.assertEqual(secure["trust_validation_state"], "trusted")
+        self.assertEqual(secure["active_material_generation"], 3)
+        self.assertEqual(secure["last_material_reload_scope"], "revocation")
+        self.assertEqual(secure["last_material_reload_result"], "applied")
