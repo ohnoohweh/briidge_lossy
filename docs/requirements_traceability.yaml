@@ -21,3 +21,8 @@ REQ-WSP-009:
   tests:
     - tests/unit/test_ws_payload_mode.py::test_build_proxy_connect_request_includes_authorization
     - tests/unit/test_ws_payload_mode.py::test_system_proxy_mode_logs_when_no_endpoint_is_found
+
+REQ-TST-001:
+  tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_overlay_uses_http_proxy_env
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_overlay_honors_no_proxy_env

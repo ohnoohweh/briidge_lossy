@@ -77,7 +77,7 @@ ObstacleBridge is expected to:
 
 ## Testing requirements
 
-- `REQ-TST-001`: User-visible transport behavior shall be protected by integration tests.
+- `REQ-TST-001`: User-visible transport behavior shall be protected by integration tests, and the relevant regression suites shall be executed as the primary detector of degradation before documentation or repository guards are relied on for consistency checks.
 - `REQ-TST-002`: Important local invariants and component contracts shall be protected by unit tests.
 - `REQ-TST-003`: Known bugs and regressions shall be turned into regression tests whenever practical.
 - `REQ-TST-004`: The integration harness shall support regular parallel execution on a local development machine.
