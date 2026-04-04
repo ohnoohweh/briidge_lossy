@@ -1930,6 +1930,9 @@ class SecureLinkPskSession(ISession):
         self._client_mode = _has_configured_overlay_peer(args, self._transport_name)
         self._psk = str(getattr(args, "secure_link_psk", "") or "").encode("utf-8")
         self._peer_states: Dict[int, _SecureLinkPeerState] = {}
+        self._server_chan_to_peer: Dict[int, Tuple[int, int]] = {}
+        self._server_peer_chan_to_mux: Dict[Tuple[int, int], int] = {}
+        self._server_next_mux_chan: int = 1
         self._connected_evt = asyncio.Event()
         self._started = False
         self._last_connected = False
@@ -2014,6 +2017,9 @@ class SecureLinkPskSession(ISession):
 
     def _clear_all_states(self) -> None:
         self._peer_states.clear()
+        self._server_chan_to_peer.clear()
+        self._server_peer_chan_to_mux.clear()
+        self._server_next_mux_chan = 1
         self._refresh_connected_state()
 
     def set_on_app_payload(self, cb): self._outer_on_app = cb
@@ -2101,12 +2107,97 @@ class SecureLinkPskSession(ISession):
 
     def _on_inner_peer_disconnect(self, peer_id: int) -> None:
         self._peer_states.pop(self._peer_key(peer_id), None)
+        self._server_unregister_peer_channels(peer_id)
         self._refresh_connected_state()
         if callable(self._outer_on_peer_disconnect):
             try:
                 self._outer_on_peer_disconnect(peer_id)
             except Exception:
                 pass
+
+    def _alloc_server_mux_chan(self) -> int:
+        chan = self._server_next_mux_chan
+        while chan in self._server_chan_to_peer:
+            chan += 2
+            if chan > 0xFFFF:
+                chan = 1
+        self._server_next_mux_chan = 1 if chan >= 0xFFFF else (chan + 2)
+        return chan
+
+    @staticmethod
+    def _rewrite_mux_chan_id(payload: bytes, new_chan: int) -> bytes:
+        hdr = struct.Struct(">HBHBH")
+        if len(payload) < hdr.size:
+            return payload
+        try:
+            _old_chan, proto, counter, mtype, dlen = hdr.unpack(payload[:hdr.size])
+        except Exception:
+            return payload
+        if len(payload) < hdr.size + dlen:
+            return payload
+        return hdr.pack(new_chan, proto, counter, mtype, dlen) + payload[hdr.size:hdr.size + dlen]
+
+    def _server_rewrite_inbound_app(self, peer_id: int, payload: bytes) -> bytes:
+        hdr = struct.Struct(">HBHBH")
+        if len(payload) < hdr.size:
+            return payload
+        try:
+            peer_chan, _proto, _counter, _mtype, dlen = hdr.unpack(payload[:hdr.size])
+        except Exception:
+            return payload
+        if len(payload) < hdr.size + dlen:
+            return payload
+        key = (int(peer_id), int(peer_chan))
+        mux_chan = self._server_peer_chan_to_mux.get(key)
+        if mux_chan is None:
+            mux_chan = int(peer_chan)
+            mapped = self._server_chan_to_peer.get(mux_chan)
+            if mapped is not None and mapped != key:
+                mux_chan = self._alloc_server_mux_chan()
+            self._server_peer_chan_to_mux[key] = mux_chan
+            self._server_chan_to_peer[mux_chan] = key
+        return self._rewrite_mux_chan_id(payload, mux_chan)
+
+    def _server_unregister_peer_channels(self, peer_id: int) -> None:
+        for key, mux_chan in list(self._server_peer_chan_to_mux.items()):
+            if int(key[0]) != int(peer_id):
+                continue
+            self._server_peer_chan_to_mux.pop(key, None)
+            self._server_chan_to_peer.pop(mux_chan, None)
+
+    def _resolve_server_send_target(self, payload: bytes, peer_id: Optional[int] = None) -> Optional[Tuple[int, bytes]]:
+        hdr = struct.Struct(">HBHBH")
+        if len(payload) < hdr.size:
+            return None
+        try:
+            mux_chan, _proto, _counter, _mtype, dlen = hdr.unpack(payload[:hdr.size])
+        except Exception:
+            return None
+        if len(payload) < hdr.size + dlen:
+            return None
+        target_peer_id = int(peer_id) if peer_id is not None else None
+        mapped = self._server_chan_to_peer.get(int(mux_chan))
+        if target_peer_id is None and mapped is not None:
+            target_peer_id = int(mapped[0])
+        if target_peer_id is None:
+            if len(self._peer_states) == 1:
+                target_peer_id = next(iter(self._peer_states.keys()))
+            else:
+                return None
+        state = self._peer_states.get(int(target_peer_id))
+        if state is None or not state.authenticated:
+            return None
+        peer_chan = int(mux_chan)
+        if mapped is not None:
+            if int(mapped[0]) != target_peer_id:
+                return None
+            peer_chan = int(mapped[1])
+        else:
+            key = (target_peer_id, int(mux_chan))
+            self._server_peer_chan_to_mux[key] = int(mux_chan)
+            self._server_chan_to_peer[int(mux_chan)] = key
+        routed = self._rewrite_mux_chan_id(payload, peer_chan) if peer_chan != int(mux_chan) else payload
+        return target_peer_id, routed
 
     def _handle_client_hello(self, peer_id: Optional[int], session_id: int, body: bytes) -> None:
         if self._client_mode or len(body) < 34:
@@ -2189,6 +2280,8 @@ class SecureLinkPskSession(ISession):
         if not state.authenticated:
             state.authenticated = True
             self._refresh_connected_state()
+        if not self._client_mode and peer_id is not None:
+            plaintext = self._server_rewrite_inbound_app(int(peer_id), plaintext)
         self._deliver_outer_app(plaintext, None if self._client_mode else peer_id)
 
     def _on_inner_payload(self, payload: bytes, peer_id: Optional[int] = None) -> None:
@@ -2215,21 +2308,22 @@ class SecureLinkPskSession(ISession):
         self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_UNSUPPORTED)
 
     def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
-        if not self._client_mode and peer_id is None and len(self._peer_states) == 1:
-            try:
-                peer_id = next(iter(self._peer_states.keys()))
-            except Exception:
-                peer_id = None
+        routed_payload = payload
+        if not self._client_mode:
+            target = self._resolve_server_send_target(payload, peer_id=peer_id)
+            if target is None:
+                return 0
+            peer_id, routed_payload = target
         key = self._peer_key(peer_id)
         state = self._peer_states.get(key)
-        if not payload or state is None or not state.authenticated:
+        if not routed_payload or state is None or not state.authenticated:
             return 0
         outbound_key = state.c2s_key if self._client_mode else state.s2c_key
         if not outbound_key:
             return 0
         counter = int(state.tx_counter)
         aad = self._hdr_bytes(self._SL_TYPE_DATA, state.session_id, counter)
-        ciphertext = ChaCha20Poly1305(outbound_key).encrypt(self._nonce(counter), payload, aad)
+        ciphertext = ChaCha20Poly1305(outbound_key).encrypt(self._nonce(counter), routed_payload, aad)
         state.tx_counter += 1
         wire = aad + ciphertext
         sent = self._inner.send_app(wire, peer_id=peer_id)

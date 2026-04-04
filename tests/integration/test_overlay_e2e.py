@@ -371,6 +371,68 @@ def materialize_case_ports(case: Case, case_index: int) -> Case:
     )
 
 
+def _max_port_in_shiftable_args(args: List[str]) -> int:
+    port_options = {
+        '--udp-own-port',
+        '--udp-peer-port',
+        '--tcp-own-port',
+        '--tcp-peer-port',
+        '--ws-own-port',
+        '--ws-peer-port',
+        '--quic-own-port',
+        '--quic-peer-port',
+        '--admin-web-port',
+    }
+    service_options = {'--own-servers', '--remote-servers'}
+    highest = 0
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in port_options and i + 1 < len(args):
+            with contextlib.suppress(Exception):
+                highest = max(highest, int(args[i + 1]))
+            i += 2
+            continue
+        if arg in service_options:
+            i += 1
+            while i < len(args) and not str(args[i]).startswith('--'):
+                parts = [p.strip() for p in str(args[i]).split(',')]
+                if len(parts) >= 6:
+                    with contextlib.suppress(Exception):
+                        highest = max(highest, int(parts[1]), int(parts[5]))
+                i += 1
+            continue
+        i += 1
+    return highest
+
+
+def _max_case_static_port(case: Case) -> int:
+    return max(
+        int(case.bounce_port),
+        int(case.probe_port),
+        _max_port_in_shiftable_args(case.bridge_server_args),
+        _max_port_in_shiftable_args(case.bridge_client_args),
+    )
+
+
+def materialize_secure_link_case_ports(case: Case, secure_slot: int) -> Case:
+    worker_index = _xdist_worker_index()
+    slot = int(secure_slot) % SECURE_LINK_PORT_SLOTS_PER_WORKER
+    offset = SECURE_LINK_PORT_OFFSET_BASE + (worker_index * SECURE_LINK_PORT_SLOTS_PER_WORKER * SECURE_LINK_PORT_STRIDE) + (slot * SECURE_LINK_PORT_STRIDE)
+    highest = _max_case_static_port(case)
+    if highest + offset >= SERVICE_PORT_CEILING:
+        raise ValueError(
+            f'secure-link test port offset out of range: highest={highest} offset={offset} ceiling={SERVICE_PORT_CEILING}'
+        )
+    return replace(
+        case,
+        bounce_port=_shift_port(case.bounce_port, offset),
+        probe_port=_shift_port(case.probe_port, offset),
+        bridge_server_args=_shift_port_options(case.bridge_server_args, offset),
+        bridge_client_args=_shift_port_options(case.bridge_client_args, offset),
+    )
+
+
 def _replace_own_servers_local_port(args: List[str], local_port: int) -> List[str]:
     out = list(args)
     if '--own-servers' not in out:
@@ -561,6 +623,10 @@ SERVICE_PORT_CEILING = 61000
 ADMIN_PORT_BASE = 61000
 ADMIN_PORTS_PER_WORKER = 256
 ADMIN_PORTS_PER_CASE = 4
+SECURE_LINK_ADMIN_BASE = 62000
+SECURE_LINK_PORT_OFFSET_BASE = 8000
+SECURE_LINK_PORT_STRIDE = 64
+SECURE_LINK_PORT_SLOTS_PER_WORKER = 8
 
 EXACT_BYTES_CASES = {
     'case01_udp_over_own_udp_ipv4',
@@ -3411,6 +3477,10 @@ def run_case_tcp_two_clients_concurrent_udp_tcp(
     log_dir: Path,
     case_index: int,
     settle_s: Optional[float] = None,
+    secure_slot: Optional[int] = None,
+    server_extra_args: Optional[List[str]] = None,
+    client1_extra_args: Optional[List[str]] = None,
+    client2_extra_args: Optional[List[str]] = None,
 ) -> None:
     base_tcp_port = case.bounce_port
     own_udp_bounces = [
@@ -3427,14 +3497,16 @@ def run_case_tcp_two_clients_concurrent_udp_tcp(
     server_proc: Optional[Proc] = None
     client1_proc: Optional[Proc] = None
     client2_proc: Optional[Proc] = None
-    server_admin, client1_admin = alloc_admin_ports(case_index)
-    client2_admin = alloc_admin_port({server_admin, client1_admin})
+    admin_base = SECURE_LINK_ADMIN_BASE if secure_slot is not None else ADMIN_PORT_BASE
+    server_admin, client1_admin = alloc_admin_ports(case_index, base=admin_base)
+    client2_admin = alloc_admin_port({server_admin, client1_admin}, case_index=case_index + 2, base=admin_base)
     tcp_peer_port = _listener_overlay_port(case, 'tcp')
 
     py = sys.executable
     missing_cfg = str(log_dir / f'{case.name}_missing.cfg')
     server_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_server_args, log_dir, case.name, 'bridge_server')
     server_cmd += ['--config', missing_cfg, '--admin-web-port', '0']
+    server_cmd += list(server_extra_args or [])
     server_cmd += admin_args(server_admin)
 
     client1_cmd = [py, str(BRIDGE),
@@ -3452,6 +3524,7 @@ def run_case_tcp_two_clients_concurrent_udp_tcp(
         '--log-file', str(log_dir / f'{case.name}_bridge_client_1.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
     ]
+    client1_cmd += list(client1_extra_args or [])
     client1_cmd += admin_args(client1_admin)
 
     client2_cmd = [py, str(BRIDGE),
@@ -3469,6 +3542,7 @@ def run_case_tcp_two_clients_concurrent_udp_tcp(
         '--log-file', str(log_dir / f'{case.name}_bridge_client_2.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
     ]
+    client2_cmd += list(client2_extra_args or [])
     client2_cmd += admin_args(client2_admin)
 
     tcp_specs = [
@@ -3976,10 +4050,11 @@ def _start_tcp_case_with_secure_link_args(
     log_dir: Path,
     *,
     case_index: int,
+    secure_slot: Optional[int] = None,
     server_extra_args: Optional[List[str]] = None,
     client_extra_args: Optional[List[str]] = None,
 ) -> tuple[Case, BounceBackServer, Proc, Proc]:
-    case = materialize_case_ports(case, case_index)
+    case = materialize_secure_link_case_ports(case, secure_slot) if secure_slot is not None else materialize_case_ports(case, case_index)
     bounce = BounceBackServer(
         name=f'{case.name}_bounce',
         proto=case.bounce_proto,
@@ -3988,9 +4063,19 @@ def _start_tcp_case_with_secure_link_args(
         log_path=log_dir / f'{case.name}_bounce.log',
     )
     bounce.start()
-    specs = build_commands(case, log_dir, case_index, enable_admin=True)
-    server_name, server_cmd, server_env, server_admin = specs[0]
-    client_name, client_cmd, client_env, client_admin = specs[1]
+    py = sys.executable
+    server_admin, client_admin = alloc_admin_ports(case_index, base=SECURE_LINK_ADMIN_BASE if secure_slot is not None else ADMIN_PORT_BASE)
+    missing_cfg = str(log_dir / f'{case.name}_missing.cfg')
+    server_name = 'bridge_server'
+    client_name = 'bridge_client'
+    server_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_server_args, log_dir, case.name, 'bridge_server')
+    client_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_client_args, log_dir, case.name, 'bridge_client')
+    server_env = case.server_env
+    client_env = case.client_env
+    server_cmd += ['--config', missing_cfg, '--admin-web-port', '0']
+    client_cmd += ['--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5']
+    server_cmd += admin_args(server_admin)
+    client_cmd += admin_args(client_admin)
     server_cmd = list(server_cmd) + list(server_extra_args or [])
     client_cmd = list(client_cmd) + list(client_extra_args or [])
 
@@ -4674,6 +4759,7 @@ def test_overlay_e2e_tcp_secure_link_psk_happy_path(tmp_path: Path) -> None:
             case,
             tmp_path,
             case_index=275,
+            secure_slot=0,
             server_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret'],
             client_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret'],
         )
@@ -4700,6 +4786,7 @@ def test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected(tmp_path: Path) -
             case,
             tmp_path,
             case_index=276,
+            secure_slot=1,
             server_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'server-secret'],
             client_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'client-secret', '--secure-link-require'],
         )
@@ -4716,6 +4803,22 @@ def test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected(tmp_path: Path) -
             stop_proc(client_proc)
         if server_proc is not None:
             stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_listener_two_clients_concurrent_udp_tcp(tmp_path: Path) -> None:
+    case = materialize_secure_link_case_ports(CASES['case16_overlay_listener_tcp_two_clients_concurrent_udp_tcp'], 2)
+    secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
+    run_case_tcp_two_clients_concurrent_udp_tcp(
+        case,
+        tmp_path,
+        case_index=277,
+        secure_slot=2,
+        server_extra_args=secure_args,
+        client1_extra_args=secure_args,
+        client2_extra_args=secure_args,
+    )
 
 
 def test_overlay_e2e_cli_routing_infers_concurrent_mode_from_case13() -> None:
