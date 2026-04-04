@@ -46,6 +46,16 @@ Planned secure-link authentication and encryption work now has a reserved future
 
 This section reserves the future black-box requirement IDs for the transport-independent secure-link capability.
 
+Functional decomposition note:
+
+- `PLAN-AUT-001` through `PLAN-AUT-006` are realized primarily by the planned secure-link layer in [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md) (`ARC-CMP-006`), with lifecycle and config wiring contributed by the runner/process orchestration layer (`ARC-CMP-004`).
+- `PLAN-AUT-007` is realized jointly by:
+  - the planned secure-link layer (`ARC-CMP-006`), which owns the underlying authentication/encryption state and failure categories
+  - the runner/process orchestration layer (`ARC-CMP-004`), which gathers and shapes snapshot data
+  - the admin web and observability layer (`ARC-CMP-005`), which exposes that state through `/api/status`, `/api/peers`, the live admin feed, and the WebAdmin page
+
+The component ownership boundary for these planned secure-link requirements is documented in [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md).
+
 These IDs intentionally do not use the active `REQ-*` namespace yet, because:
 
 - no secure-link runtime behavior has been delivered
@@ -59,6 +69,7 @@ Current implementation note:
 - a narrow Phase 1 prototype exists for `secure_link_mode=psk` on `overlay_transport=myudp`, `tcp`, `ws`, and `quic`
 - that prototype currently proves the first protected happy-path slice across those transports
 - a deeper two-peer listener routing slice currently exists on the TCP transport
+- the prototype now exposes first admin/API observability for secure-link state through `/api/status` and `/api/peers`
 - that prototype is intended for development and testing of the layer boundary
 - it does not yet promote these planned IDs into the active delivered `REQ-*` requirement namespace
 
@@ -68,6 +79,7 @@ Current implementation note:
 - `PLAN-AUT-004`: The deployment trust anchor should be an admin-controlled root public key configured on peer clients and peer servers.
 - `PLAN-AUT-005`: Peer certificates should be issued by that deployment-local admin root and be constrained by machine-enforced roles.
 - `PLAN-AUT-006`: Certificate role checks, validity checks, deployment-scope checks, and serial-based revocation checks should be enforced before the protected secure-link data phase is entered.
+- `PLAN-AUT-007`: The admin web interface should expose the secure-link / encryption-layer status for the local session and reported peers so an operator can distinguish disabled, handshaking, authenticated, and failed protected-overlay states.
 
 ## Reconnect and restart requirements
 

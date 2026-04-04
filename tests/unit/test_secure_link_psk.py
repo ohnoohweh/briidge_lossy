@@ -65,6 +65,16 @@ class FakeInnerSession:
         from obstacle_bridge.bridge import SessionMetrics
         return SessionMetrics()
 
+    def get_overlay_peers_snapshot(self):
+        return [{
+            "peer_id": 0,
+            "connected": bool(self._connected),
+            "state": "connected" if self._connected else "connecting",
+            "peer": "127.0.0.1:4433",
+            "mux_chans": [],
+            "rtt_est_ms": None,
+        }]
+
     def emit_state(self, connected: bool):
         self._connected = connected
         if callable(self._on_state):
@@ -143,6 +153,11 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn(True, client_states)
         self.assertIn(True, server_states)
+        client_peer = client.get_overlay_peers_snapshot()[0]
+        self.assertEqual(client_peer["secure_link"]["state"], "authenticated")
+        self.assertTrue(client_peer["secure_link"]["authenticated"])
+        self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
+        self.assertEqual(server.get_secure_link_status_snapshot()["state"], "authenticated")
 
     async def test_wrong_psk_prevents_authenticated_session(self):
         client_inner = FakeInnerSession()
@@ -160,10 +175,16 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         client_inner.emit_state(True)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
+        await asyncio.sleep(0)
 
         self.assertFalse(client.is_connected())
         self.assertFalse(server.is_connected())
         self.assertEqual(client.send_app(b"blocked"), 0)
+        client_peer = client.get_overlay_peers_snapshot()[0]
+        self.assertEqual(client_peer["secure_link"]["state"], "failed")
+        self.assertEqual(client_peer["secure_link"]["failure_reason"], "bad_psk")
+        self.assertEqual(client.get_secure_link_status_snapshot()["state"], "failed")
+        self.assertEqual(client.get_secure_link_status_snapshot()["failure_reason"], "bad_psk")
 
     async def test_server_rewrites_mux_channels_per_peer_for_multiple_connections(self):
         server_inner = FakeInnerSession(connected=True)

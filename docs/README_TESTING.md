@@ -3,7 +3,7 @@
 This repository currently collects:
 
 - `84` integration tests in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
-- `66` unit tests in `tests/unit/`
+- `68` unit tests in `tests/unit/`
 
 ## Get started
 
@@ -206,7 +206,7 @@ This first mapping is intentionally coarse. It links current integration entrypo
 | `test_overlay_e2e_admin_live_ws_available_when_auth_disabled` | `REQ-ADM-006` | Live admin WebSocket stream availability and snapshot payload coverage when auth is disabled |
 | `test_overlay_e2e_admin_live_ws_unavailable_without_correct_auth` | `REQ-ADM-003`, `REQ-ADM-006` | Live admin WebSocket stream must reject unauthenticated clients when auth is enabled |
 | `test_overlay_e2e_admin_live_ws_available_after_correct_auth` | `REQ-ADM-004`, `REQ-ADM-006` | Live admin WebSocket stream must accept authenticated clients carrying the admin session cookie |
-| `test_overlay_e2e_tcp_secure_link_psk_happy_path`, `test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected`, `test_overlay_e2e_tcp_secure_link_psk_listener_two_clients_concurrent_udp_tcp`, and `test_overlay_e2e_secure_link_psk_happy_path_other_transports` | `PLAN-AUT-001`, `PLAN-AUT-002`, `PLAN-AUT-003` | First real subprocess validation of the PSK secure-link boundary slice across `myudp`, `tcp`, `ws`, and `quic`, with multi-peer listener routing currently exercised on TCP; still prototype coverage rather than active `REQ-*` traceability |
+| `test_overlay_e2e_tcp_secure_link_psk_happy_path`, `test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected`, `test_overlay_e2e_tcp_secure_link_psk_listener_two_clients_concurrent_udp_tcp`, and `test_overlay_e2e_secure_link_psk_happy_path_other_transports` | `PLAN-AUT-001`, `PLAN-AUT-002`, `PLAN-AUT-003`, `PLAN-AUT-007` | First real subprocess validation of the PSK secure-link boundary slice across `myudp`, `tcp`, `ws`, and `quic`, with multi-peer listener routing currently exercised on TCP and first admin/API observability of secure-link state; still prototype coverage rather than active `REQ-*` traceability |
 | `test_overlay_e2e_ws_overlay_uses_http_proxy_env` | `REQ-WSP-001`, `REQ-WSP-007`, `PROC-TST-001` | WS peer clients must honor `HTTP_PROXY` and establish proxy-routed overlay traffic successfully |
 | `test_overlay_e2e_ws_proxy_is_scoped_to_peer_client_only` | `REQ-WSP-002` | Proxy behavior must stay scoped to WS peer-client mode and not imply listener-side proxy use |
 | `test_overlay_e2e_http_proxy_env_does_not_apply_to_non_ws_transports` | `REQ-WSP-003` | HTTP proxy configuration must not silently become cross-transport behavior for `myudp`, `tcp`, or `quic` |
@@ -327,16 +327,18 @@ The table captures the intended:
 | `PLAN-AUT-004` | Run one pair with the same admin root trust anchor and further pairs with mismatched or unknown roots | Only same-root peers authenticate successfully; mismatched-root or unknown-root peers are rejected before protected traffic starts |
 | `PLAN-AUT-005` | Use correct `client`/`server` role certificates, then swap roles incorrectly, then try a dual-role `client,server` certificate where appropriate | Correct role pairings authenticate; wrong-role certificates are rejected even if otherwise valid; dual-role certificates work only where both roles are acceptable |
 | `PLAN-AUT-006` | Attempt connection with an expired certificate, a not-yet-valid certificate, a wrong-`deployment_id` certificate, a revoked-`serial` certificate, and a fully valid control certificate | Expired, premature, wrong-deployment, and revoked credentials are each rejected before the protected data phase; the valid control case succeeds |
+| `PLAN-AUT-007` | Query `/api/status` and `/api/peers` during disabled, handshaking, authenticated, and failed secure-link runs | WebAdmin/API exposes secure-link state for the local session and peers, including mode and failure reason where available, so operators can distinguish protected-overlay state transitions |
 
 ### Planned secure-link test criteria notes
 
-The planned secure-link tests will be easier to write and maintain if the admin/API surface eventually exposes a small amount of secure-link state, for example:
+The first Phase 1 PSK prototype now exposes a small amount of secure-link state through the admin/API surface:
 
-- secure-link state such as `disabled`, `handshaking`, `authenticated`, or `failed`
-- peer identity metadata such as `subject_id` or `subject_name`
-- failure reason categories such as invalid issuer, wrong role, expiry, deployment mismatch, or revocation hit
+- `/api/status` exposes a top-level `secure_link` block for the local session
+- `/api/peers` exposes a per-peer `secure_link` block
+- current states include `disabled`, `waiting_transport`, `waiting_hello`, `handshaking`, `authenticated`, `failed`, and `listening`
+- current observability includes mode, authenticated flag, and failure reason
 
-Those API shapes are not required to start implementation, but they would give the future integration tests much stronger and cleaner black-box assertions.
+Future certificate-based work will still benefit from richer fields such as peer identity metadata (`subject_id`, `subject_name`) and trust-validation failure categories.
 
 ### Current secure-link prototype coverage
 
@@ -352,9 +354,9 @@ This is still development/testing coverage rather than active delivered `REQ-*` 
 
 | Test | Planned requirement IDs exercised | Objective | Test criteria | How to start |
 |---|---|---|---|---|
-| `test_overlay_e2e_tcp_secure_link_psk_happy_path` | `PLAN-AUT-001`, `PLAN-AUT-002`, `PLAN-AUT-003` | Verify the first TCP secure-link wrapper can complete a PSK handshake and carry protected overlay traffic | Both admin endpoints come up, client and server reach `CONNECTED`, and the usual UDP probe over `case06_overlay_tcp_ipv4` succeeds with secure-link enabled on both sides | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk_happy_path` |
-| `test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected` | `PLAN-AUT-002`, `PLAN-AUT-003` | Verify mismatched PSKs prevent the protected data phase | Client and server stay not connected, the probe does not succeed, and both processes remain alive and observable for debugging | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk_wrong_secret_rejected` |
-| `test_overlay_e2e_secure_link_psk_happy_path_other_transports` | `PLAN-AUT-001`, `PLAN-AUT-002`, `PLAN-AUT-003` | Verify the same PSK secure-link boundary can carry protected overlay traffic over `myudp`, `ws`, and `quic` in addition to the original TCP slice | Each supported transport reaches `CONNECTED`, the protected overlay probe succeeds, and the processes remain healthy and observable throughout the run | `pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk_happy_path_other_transports` |
+| `test_overlay_e2e_tcp_secure_link_psk_happy_path` | `PLAN-AUT-001`, `PLAN-AUT-002`, `PLAN-AUT-003`, `PLAN-AUT-007` | Verify the first TCP secure-link wrapper can complete a PSK handshake and carry protected overlay traffic | Both admin endpoints come up, client and server reach `CONNECTED`, `/api/status` and `/api/peers` report `secure_link.state=authenticated`, and the usual UDP probe over `case06_overlay_tcp_ipv4` succeeds with secure-link enabled on both sides | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk_happy_path` |
+| `test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected` | `PLAN-AUT-002`, `PLAN-AUT-003`, `PLAN-AUT-007` | Verify mismatched PSKs prevent the protected data phase | Client and server stay not connected, the probe does not succeed, and the admin/API reports `secure_link.state=failed` with `failure_reason=bad_psk` while both processes remain alive and observable for debugging | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk_wrong_secret_rejected` |
+| `test_overlay_e2e_secure_link_psk_happy_path_other_transports` | `PLAN-AUT-001`, `PLAN-AUT-002`, `PLAN-AUT-003`, `PLAN-AUT-007` | Verify the same PSK secure-link boundary can carry protected overlay traffic over `myudp`, `ws`, and `quic` in addition to the original TCP slice | Each supported transport reaches `CONNECTED`, `/api/status` reports `secure_link.state=authenticated`, the protected overlay probe succeeds, and the processes remain healthy and observable throughout the run | `pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk_happy_path_other_transports` |
 | `test_overlay_e2e_tcp_secure_link_psk_listener_two_clients_concurrent_udp_tcp` | `PLAN-AUT-001`, `PLAN-AUT-002`, `PLAN-AUT-003` | Verify the TCP secure-link prototype preserves peer isolation when a listener serves two PSK-authenticated clients concurrently | Listener reports two distinct connected peers, eight concurrent TCP channels and four UDP probes succeed across both clients, and no cross-peer channel mix-up occurs while secure-link is enabled on all processes | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk_listener_two_clients_concurrent_udp_tcp` |
 | `test_overlay_e2e_cli_routing_*` | `PROC-TST-001`, `PROC-TST-004` | Verify CLI routing logic | Selected cases infer the right harness mode and explicit override is preserved | `pytest -q tests/integration/test_overlay_e2e.py -k cli_routing` |
 | `test_overlay_e2e_materialize_case_ports_shifts_overlay_and_service_ports` | `PROC-TST-004` | Verify port rewriting | Overlay, bounce, probe, and service ports shift consistently | `pytest -q tests/integration/test_overlay_e2e.py -k materialize_case_ports` |
@@ -363,7 +365,7 @@ This is still development/testing coverage rather than active delivered `REQ-*` 
 
 ## Unit tests
 
-Unit coverage currently collects `54` tests from `tests/unit/`.
+Unit coverage currently collects `68` tests from `tests/unit/`.
 
 ### Unit-side traceability
 
@@ -378,6 +380,7 @@ The component view they support is described in [ARCHITECTURE.md](/home/ohnoohwe
 | `tests/unit/test_channel_mux_listener_mode.py` | `ARC-CMP-003` | `REQ-MUX-003`, `REQ-MUX-004`, `PROC-TST-002` | Listener mode must ignore ambiguous local publishing, parse service specs consistently, and manage remote catalog install/replace/cleanup correctly | `pytest -q tests/unit/test_channel_mux_listener_mode.py` |
 | `tests/unit/test_channel_mux_peer_catalog.py` | `ARC-CMP-003` | `REQ-MUX-003`, `REQ-MUX-004`, `PROC-TST-002` | Peer-scoped remote service state must remain isolated and must be cleaned up per disconnected peer | `pytest -q tests/unit/test_channel_mux_peer_catalog.py` |
 | `tests/unit/test_connection_snapshots.py` | `ARC-CMP-005` | `REQ-LST-006`, `REQ-ADM-006`, `PROC-TST-002` | Snapshot rendering must distinguish passive listeners from active connections, keep passive listener rows zeroed, and expose per-peer session stats on active listener-side peers correctly | `pytest -q tests/unit/test_connection_snapshots.py` |
+| `tests/unit/test_admin_web_payloads.py` | `ARC-CMP-005` | `PLAN-AUT-007`, `PROC-TST-002` | Admin status and peer payload builders must preserve secure-link visibility fields so WebAdmin rendering can expose encryption-layer state consistently | `pytest -q tests/unit/test_admin_web_payloads.py` |
 | `tests/unit/test_debug_logging_aliases.py` | `ARC-CMP-005` | `PROC-TST-002` | Logging alias configuration must reach the intended websocket-related loggers | `pytest -q tests/unit/test_debug_logging_aliases.py` |
 | `tests/unit/test_peer_resolution.py` | `ARC-CMP-004` | `REQ-OVL-007`, `PROC-TST-002` | Localhost resolution fallback must behave deterministically while non-localhost failures still propagate | `pytest -q tests/unit/test_peer_resolution.py` |
 | `tests/unit/test_runner_config_persistence.py` | `ARC-CMP-004` | `PROC-TST-002` | Runtime config updates must persist back to the configured file correctly | `pytest -q tests/unit/test_runner_config_persistence.py` |
@@ -393,6 +396,7 @@ The component view they support is described in [ARCHITECTURE.md](/home/ohnoohwe
 | `tests/unit/test_channel_mux_listener_mode.py` | ChannelMux listener semantics | Verify listener mode ignores ambiguous local config, parses service specs correctly, and manages remote catalogs/lifecycle correctly | `pytest -q tests/unit/test_channel_mux_listener_mode.py` |
 | `tests/unit/test_channel_mux_peer_catalog.py` | Per-peer remote service state | Verify peer-specific listener state is scoped and cleaned up per peer | `pytest -q tests/unit/test_channel_mux_peer_catalog.py` |
 | `tests/unit/test_connection_snapshots.py` | Admin snapshot formatting | Verify connection and peer snapshot rendering, including listener rows, active-vs-idle distinctions, zeroed passive-listener stats, and correct per-peer listener-side myudp counters | `pytest -q tests/unit/test_connection_snapshots.py` |
+| `tests/unit/test_admin_web_payloads.py` | Admin payload shaping | Verify `/api/status` and `/api/peers` payload builders keep secure-link visibility fields intact for WebAdmin/API consumers | `pytest -q tests/unit/test_admin_web_payloads.py` |
 | `tests/unit/test_debug_logging_aliases.py` | Logging alias wiring | Verify websocket logging aliases configure the intended library loggers | `pytest -q tests/unit/test_debug_logging_aliases.py` |
 | `tests/unit/test_peer_resolution.py` | Host resolution behavior | Verify localhost fallback and non-localhost resolution error behavior | `pytest -q tests/unit/test_peer_resolution.py` |
 | `tests/unit/test_runner_config_persistence.py` | Config update persistence | Verify config updates are written back to the configured file correctly | `pytest -q tests/unit/test_runner_config_persistence.py` |

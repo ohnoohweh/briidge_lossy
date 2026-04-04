@@ -10,13 +10,16 @@ ROOT = Path(__file__).resolve().parents[1]
 README_PATH = "README.md"
 REQUIREMENTS_PATH = "docs/REQUIREMENTS.md"
 TRACEABILITY_PATH = ".github/requirements_traceability.yaml"
+ARCH_TRACEABILITY_PATH = ".github/architecture_traceability.yaml"
 CONTRACT_CHANGE_PREFIXES = ("src/", "tests/")
 CONTRACT_CHANGE_FILES = {
     "docs/ARCHITECTURE.md",
     "docs/DEVELOPMENT_PROCESS.md",
 }
 REQ_ID_RE = re.compile(r"`(REQ-[A-Z]+-\d+)`")
+ARC_ID_RE = re.compile(r"`(ARC-CMP-\d+)`")
 YAML_REQ_RE = re.compile(r"^(REQ-[A-Z]+-\d+):\s*$")
+YAML_ARC_RE = re.compile(r"^(ARC-CMP-\d+):\s*$")
 YAML_TEST_RE = re.compile(r"^\s*-\s+(.+?)\s*$")
 TEST_DEF_RE = re.compile(r"^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.MULTILINE)
 TRACEABILITY_TEST_KEYS = ("tests", "integration_tests", "unit_tests")
@@ -42,14 +45,26 @@ def _load_requirement_ids() -> set[str]:
     return set(REQ_ID_RE.findall(text))
 
 
+def _load_architecture_ids() -> set[str]:
+    text = (ROOT / "docs/ARCHITECTURE.md").read_text(encoding="utf-8")
+    return set(ARC_ID_RE.findall(text))
+
+
 def _load_traceability() -> dict[str, dict[str, list[str]]]:
-    path = ROOT / TRACEABILITY_PATH
+    return _load_yaml_traceability(ROOT / TRACEABILITY_PATH, YAML_REQ_RE)
+
+
+def _load_architecture_traceability() -> dict[str, dict[str, list[str]]]:
+    return _load_yaml_traceability(ROOT / ARCH_TRACEABILITY_PATH, YAML_ARC_RE)
+
+
+def _load_yaml_traceability(path: Path, key_re: re.Pattern[str]) -> dict[str, dict[str, list[str]]]:
     lines = path.read_text(encoding="utf-8").splitlines()
     out: dict[str, dict[str, list[str]]] = {}
     current_req = None
     current_key = None
     for line in lines:
-        req_match = YAML_REQ_RE.match(line)
+        req_match = key_re.match(line)
         if req_match:
             current_req = req_match.group(1)
             out.setdefault(current_req, {key: [] for key in TRACEABILITY_TEST_KEYS})
@@ -100,6 +115,32 @@ def _validate_traceability(requirement_ids: set[str], traceability: dict[str, di
     return errors
 
 
+def _validate_architecture_traceability(architecture_ids: set[str], traceability: dict[str, dict[str, list[str]]]) -> list[str]:
+    errors: list[str] = []
+    for arc_id, groups in sorted(traceability.items()):
+        if arc_id not in architecture_ids:
+            errors.append(f"{ARCH_TRACEABILITY_PATH}: unknown architecture id {arc_id}")
+        tests = []
+        for key in TRACEABILITY_TEST_KEYS:
+            tests.extend(groups.get(key, []))
+        if not tests:
+            errors.append(f"{ARCH_TRACEABILITY_PATH}: {arc_id} must list at least one test")
+        for test_ref in tests:
+            if "::" not in test_ref:
+                errors.append(f"{ARCH_TRACEABILITY_PATH}: invalid test reference {test_ref!r} for {arc_id}")
+                continue
+            rel_path, test_name = test_ref.split("::", 1)
+            file_path = ROOT / rel_path
+            if not file_path.exists():
+                errors.append(f"{ARCH_TRACEABILITY_PATH}: missing test file {rel_path} for {arc_id}")
+                continue
+            text = file_path.read_text(encoding="utf-8")
+            defs = set(TEST_DEF_RE.findall(text))
+            if test_name not in defs:
+                errors.append(f"{ARCH_TRACEABILITY_PATH}: missing test {test_name} in {rel_path} for {arc_id}")
+    return errors
+
+
 def _is_contract_change(path: str) -> bool:
     return path.startswith(CONTRACT_CHANGE_PREFIXES) or path in CONTRACT_CHANGE_FILES
 
@@ -136,6 +177,7 @@ def main() -> int:
     changed_contract = [path for path in changed if _is_contract_change(path)]
     requirements_touched = REQUIREMENTS_PATH in changed
     traceability_touched = TRACEABILITY_PATH in changed
+    arch_traceability_touched = ARCH_TRACEABILITY_PATH in changed
     readme_touched = README_PATH in changed
 
     if changed_contract and not requirements_touched:
@@ -161,9 +203,19 @@ def main() -> int:
         )
         return 1
 
+    if "docs/ARCHITECTURE.md" in changed and not arch_traceability_touched:
+        sys.stderr.write(
+            "architecture_traceability.yaml must be updated when ARCHITECTURE.md changes.\n"
+            f"Expected updated file: {ARCH_TRACEABILITY_PATH}\n"
+        )
+        return 1
+
     requirement_ids = _load_requirement_ids()
     traceability = _load_traceability()
+    architecture_ids = _load_architecture_ids()
+    architecture_traceability = _load_architecture_traceability()
     errors = _validate_traceability(requirement_ids, traceability)
+    errors.extend(_validate_architecture_traceability(architecture_ids, architecture_traceability))
     if errors:
         sys.stderr.write("\n".join(errors) + "\n")
         return 1

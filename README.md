@@ -587,7 +587,9 @@ Current snapshot from `python scripts/report_requirements_coverage.py`:
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
 
-The secure-link topic now has reserved future requirement IDs in `docs/REQUIREMENTS.md`, while the certificate/key-material input profile is documented in `docs/SYSTEM_BOUNDARY.md`. A narrow PSK prototype now exists for development/testing of the layer boundary across `myudp`, `tcp`, `ws`, and `quic`, with an additional two-peer listener routing slice on TCP, but the numeric coverage snapshot above still reflects only the currently defended delivered `REQ-*` requirements.
+The secure-link topic now has reserved future requirement IDs in `docs/REQUIREMENTS.md`, including WebAdmin visibility of secure-link / encryption-layer state, while the certificate/key-material input profile is documented in `docs/SYSTEM_BOUNDARY.md`. A narrow PSK prototype now exists for development/testing of the layer boundary across `myudp`, `tcp`, `ws`, and `quic`, with an additional two-peer listener routing slice on TCP and first admin/API observability through `/api/status` and `/api/peers`, but the numeric coverage snapshot above still reflects only the currently defended delivered `REQ-*` requirements.
+
+The related architecture decomposition is also linked to tests through `.github/architecture_traceability.yaml`.
 
 The top-level README is intentionally kept as a contributor-facing coverage snapshot. When requirements, implementation, or the test set changes, update this section so the project entrypoint stays aligned with the current contract and evidence.
 

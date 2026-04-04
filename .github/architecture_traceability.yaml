@@ -1,0 +1,28 @@
+# This manifest links stable architecture component IDs to defending tests.
+# It is intentionally narrower than the product-requirement traceability file:
+# it captures component-level evidence where the architecture decomposition
+# itself matters, especially for joint-function responsibilities.
+
+ARC-CMP-004:
+  unit_tests:
+    - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_psk
+    - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_uses_child_myudp_session_stats
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected
+
+ARC-CMP-005:
+  unit_tests:
+    - tests/unit/test_admin_web_payloads.py::test_build_status_payload_includes_secure_link_summary
+    - tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_secure_link_rows
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected
+
+ARC-CMP-006:
+  unit_tests:
+    - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session
+    - tests/unit/test_secure_link_psk.py::test_wrong_psk_prevents_authenticated_session
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_secure_link_psk_happy_path_other_transports

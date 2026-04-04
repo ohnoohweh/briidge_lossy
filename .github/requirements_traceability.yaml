@@ -43,7 +43,8 @@ REQ-OVL-007:
 # project-owned requirements is documented in docs/SYSTEM_BOUNDARY.md.
 # Planned secure-link work is documented in docs/SECURE_LINK_DESIGN.md.
 # Future secure-link IDs currently use the PLAN-AUT-* namespace in REQUIREMENTS.md,
-# so they are intentionally excluded from this active REQ-* traceability manifest.
+# including planned admin/API visibility of secure-link state, so they are
+# intentionally excluded from this active REQ-* traceability manifest.
 # A narrow PSK prototype and its tests may exist before those planned IDs are
 # promoted into the active delivered REQ-* namespace, currently covering
 # myudp/tcp/ws/quic happy-path slices plus a two-peer TCP listener slice used to

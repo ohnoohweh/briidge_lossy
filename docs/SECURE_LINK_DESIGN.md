@@ -99,6 +99,7 @@ The following points are considered finalized for Phase 0.
 - the secure-link layer owns handshake state, certificate validation, identity proof, session-key derivation, ciphertext/plaintext transition, replay protection, and rekey hooks
 - `ChannelMux` remains unaware of certificates, identity policy, and traffic ciphers
 - admin APIs may later expose peer identity metadata, but admin rendering is not part of the secure-link layer itself
+- WebAdmin visibility of secure-link state is a joint function of the secure-link layer, runner snapshot wiring, and the admin web/observability layer
 
 ### Dependency policy
 

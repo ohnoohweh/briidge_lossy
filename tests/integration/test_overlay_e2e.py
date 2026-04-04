@@ -2050,6 +2050,79 @@ def wait_distinct_peer_endpoints(
     )
 
 
+def wait_peer_secure_link_state(
+    admin_port: int,
+    *,
+    expected_state: str,
+    timeout: float = 12.0,
+    label: str = '',
+    transport: Optional[str] = None,
+    failure_reason: Optional[str] = None,
+    authenticated: Optional[bool] = None,
+) -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    normalized_transport = str(transport or '').strip().lower()
+    expected_state_norm = str(expected_state or '').strip().lower()
+    expected_reason = None if failure_reason is None else str(failure_reason).strip().lower()
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
+        last_doc = doc
+        for row in list(doc.get('peers') or []):
+            if normalized_transport and str(row.get('transport', '')).strip().lower() != normalized_transport:
+                continue
+            if str(row.get('state', '')).strip().lower() == 'listening':
+                continue
+            secure_link = row.get('secure_link') or {}
+            if str(secure_link.get('state', '')).strip().lower() != expected_state_norm:
+                continue
+            if expected_reason is not None and str(secure_link.get('failure_reason', '')).strip().lower() != expected_reason:
+                continue
+            if authenticated is not None and bool(secure_link.get('authenticated')) != bool(authenticated):
+                continue
+            who = f' {label}' if label else ''
+            log.info(f'[PEERS]{who} port={admin_port} secure_link_state={secure_link!r}')
+            return doc
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'/api/peers did not expose secure_link state={expected_state_norm} on port {admin_port}; last={last_doc!r}'
+    )
+
+
+def wait_status_secure_link_state(
+    admin_port: int,
+    *,
+    expected_state: str,
+    timeout: float = 12.0,
+    label: str = '',
+    failure_reason: Optional[str] = None,
+    authenticated: Optional[bool] = None,
+) -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    expected_state_norm = str(expected_state or '').strip().lower()
+    expected_reason = None if failure_reason is None else str(failure_reason).strip().lower()
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.5)
+        last_doc = doc
+        secure_link = doc.get('secure_link') or {}
+        if str(secure_link.get('state', '')).strip().lower() != expected_state_norm:
+            time.sleep(0.25)
+            continue
+        if expected_reason is not None and str(secure_link.get('failure_reason', '')).strip().lower() != expected_reason:
+            time.sleep(0.25)
+            continue
+        if authenticated is not None and bool(secure_link.get('authenticated')) != bool(authenticated):
+            time.sleep(0.25)
+            continue
+        who = f' {label}' if label else ''
+        log.info(f'[STATUS]{who} port={admin_port} secure_link={secure_link!r}')
+        return doc
+    raise RuntimeError(
+        f'/api/status did not expose secure_link state={expected_state_norm} on port {admin_port}; last={last_doc!r}'
+    )
+
+
 def status_state(doc: dict) -> str:
     return str(doc.get('peer_state', '')).strip().upper()
 
@@ -4766,6 +4839,10 @@ def test_overlay_e2e_tcp_secure_link_psk_happy_path(tmp_path: Path) -> None:
         client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
         wait_probe(case, timeout=12.0)
         wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+        wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+        wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+        wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
+        wait_peer_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', transport='tcp', authenticated=True)
     finally:
         if bounce is not None:
             bounce.stop()
@@ -4792,6 +4869,14 @@ def test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected(tmp_path: Path) -
         )
         wait_status_not_connected(client_proc.admin_port or 0, timeout=20.0, label='client')
         wait_status_not_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+        wait_status_secure_link_state(
+            server_proc.admin_port or 0,
+            expected_state='failed',
+            timeout=12.0,
+            label='server',
+            authenticated=False,
+            failure_reason='bad_psk',
+        )
         with pytest.raises(Exception):
             wait_probe(case, timeout=3.0)
         assert_running(server_proc)
@@ -4836,6 +4921,8 @@ def test_overlay_e2e_secure_link_psk_happy_path_other_transports(
         client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
         wait_probe(case, timeout=12.0)
         wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+        wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+        wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
     finally:
         if bounce is not None:
             bounce.stop()

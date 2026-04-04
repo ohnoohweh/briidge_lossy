@@ -1862,6 +1862,8 @@ class _SecureLinkPeerState:
     authenticated: bool = False
     tx_counter: int = 1
     rx_counter: int = 0
+    auth_fail_code: int = 0
+    auth_fail_reason: str = ""
 
 
 class SecureLinkPskSession(ISession):
@@ -1936,6 +1938,8 @@ class SecureLinkPskSession(ISession):
         self._connected_evt = asyncio.Event()
         self._started = False
         self._last_connected = False
+        self._last_auth_fail_code: int = 0
+        self._last_auth_fail_reason: str = ""
 
     @staticmethod
     def _require_crypto() -> None:
@@ -1999,6 +2003,33 @@ class SecureLinkPskSession(ISession):
 
     def _compute_connected(self) -> bool:
         return any(state.authenticated for state in self._peer_states.values())
+
+    @classmethod
+    def _auth_fail_reason(cls, code: int) -> Optional[str]:
+        return {
+            cls._SL_AUTH_FAIL_BAD_PSK: "bad_psk",
+            cls._SL_AUTH_FAIL_UNSUPPORTED: "unsupported",
+            cls._SL_AUTH_FAIL_REPLAY: "replay",
+            cls._SL_AUTH_FAIL_DECODE: "decode",
+        }.get(int(code or 0))
+
+    def _mark_auth_fail(self, peer_id: Optional[int], session_id: int, code: int) -> None:
+        key = self._peer_key(peer_id)
+        state = self._peer_states.get(key)
+        if state is None:
+            state = _SecureLinkPeerState(
+                session_id=int(session_id or 0),
+                client_nonce=b"",
+            )
+            self._peer_states[key] = state
+        elif int(session_id or 0) > 0:
+            state.session_id = int(session_id)
+        state.authenticated = False
+        state.auth_fail_code = int(code or 0)
+        state.auth_fail_reason = str(self._auth_fail_reason(code) or "")
+        self._last_auth_fail_code = state.auth_fail_code
+        self._last_auth_fail_reason = state.auth_fail_reason
+        self._refresh_connected_state()
 
     def _refresh_connected_state(self) -> None:
         connected = self._compute_connected()
@@ -2071,17 +2102,91 @@ class SecureLinkPskSession(ISession):
 
     def get_overlay_peers_snapshot(self) -> list[dict]:
         getter = getattr(self._inner, "get_overlay_peers_snapshot", None)
-        if callable(getter):
-            return getter()
-        return []
+        rows = list(getter() or []) if callable(getter) else []
+        out: list[dict] = []
+        inner_is_connected = bool(getattr(self._inner, "is_connected", lambda: False)())
+        for row in rows:
+            r = dict(row)
+            listening = bool(r.get("listening")) or str(r.get("state") or "").strip().lower() == "listening"
+            peer_id = int(r.get("peer_id", 0) or 0)
+            key = self._peer_key(None if self._client_mode else peer_id)
+            state = self._peer_states.get(key)
+            authenticated = False
+            failure_reason = None
+            session_id = None
+            if listening:
+                secure_state = "listening"
+            elif state is None:
+                secure_state = "handshaking" if inner_is_connected else "waiting_transport"
+            elif state.authenticated:
+                secure_state = "authenticated"
+                authenticated = True
+                session_id = int(state.session_id or 0) or None
+            elif state.auth_fail_code:
+                secure_state = "failed"
+                failure_reason = state.auth_fail_reason or self._auth_fail_reason(state.auth_fail_code)
+                session_id = int(state.session_id or 0) or None
+            else:
+                secure_state = "handshaking" if inner_is_connected else "waiting_transport"
+                session_id = int(state.session_id or 0) or None
+            r["secure_link"] = {
+                "enabled": True,
+                "mode": "psk",
+                "state": secure_state,
+                "authenticated": authenticated,
+                "session_id": session_id,
+                "failure_reason": failure_reason,
+                "transport": self._transport_name,
+            }
+            out.append(r)
+        return out
+
+    def get_secure_link_status_snapshot(self) -> dict:
+        any_failed = False
+        failure_reason = None
+        any_handshaking = False
+        authenticated_peers = 0
+        for state in self._peer_states.values():
+            if state.authenticated:
+                authenticated_peers += 1
+            elif state.auth_fail_code:
+                any_failed = True
+                failure_reason = failure_reason or state.auth_fail_reason or self._auth_fail_reason(state.auth_fail_code)
+            else:
+                any_handshaking = True
+        if authenticated_peers > 0:
+            overall_state = "authenticated"
+        elif any_failed:
+            overall_state = "failed"
+        elif self._last_auth_fail_code:
+            overall_state = "failed"
+            failure_reason = self._last_auth_fail_reason or self._auth_fail_reason(self._last_auth_fail_code)
+        elif any_handshaking:
+            overall_state = "handshaking"
+        elif bool(getattr(self._inner, "is_connected", lambda: False)()):
+            overall_state = "waiting_hello"
+        else:
+            overall_state = "waiting_transport"
+        return {
+            "enabled": True,
+            "mode": "psk",
+            "transport": self._transport_name,
+            "state": overall_state,
+            "authenticated": authenticated_peers > 0,
+            "authenticated_peers": authenticated_peers,
+            "failure_reason": failure_reason,
+        }
 
     def _send_auth_fail(self, peer_id: Optional[int], session_id: int, code: int) -> None:
+        self._mark_auth_fail(peer_id, session_id, code)
         try:
             self._inner.send_app(self._build_frame(self._SL_TYPE_AUTH_FAIL, session_id, 0, bytes([int(code) & 0xFF])), peer_id=peer_id)
         except Exception:
             pass
 
     def _begin_client_handshake(self) -> None:
+        self._last_auth_fail_code = 0
+        self._last_auth_fail_reason = ""
         state = _SecureLinkPeerState(
             session_id=random.getrandbits(64),
             client_nonce=secrets.token_bytes(32),
@@ -2209,6 +2314,8 @@ class SecureLinkPskSession(ISession):
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_UNSUPPORTED)
             return
         server_nonce = secrets.token_bytes(32)
+        self._last_auth_fail_code = 0
+        self._last_auth_fail_reason = ""
         c2s_key, s2c_key = self._derive_keys(session_id, client_nonce, server_nonce)
         key = self._peer_key(peer_id)
         self._peer_states[key] = _SecureLinkPeerState(
@@ -2235,20 +2342,20 @@ class SecureLinkPskSession(ISession):
         proof = body[33:65]
         if capability != self._SL_CAP_PSK_V1:
             self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_UNSUPPORTED)
-            self._peer_states.pop(0, None)
-            self._refresh_connected_state()
             return
         expected = self._server_proof(session_id, state.client_nonce, server_nonce)
         if not hmac.compare_digest(proof, expected):
             self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_BAD_PSK)
-            self._peer_states.pop(0, None)
-            self._refresh_connected_state()
             return
         c2s_key, s2c_key = self._derive_keys(session_id, state.client_nonce, server_nonce)
         state.server_nonce = server_nonce
         state.c2s_key = c2s_key
         state.s2c_key = s2c_key
         state.authenticated = True
+        state.auth_fail_code = 0
+        state.auth_fail_reason = ""
+        self._last_auth_fail_code = 0
+        self._last_auth_fail_reason = ""
         self._refresh_connected_state()
 
     def _deliver_outer_app(self, payload: bytes, peer_id: Optional[int]) -> None:
@@ -2279,6 +2386,10 @@ class SecureLinkPskSession(ISession):
         state.rx_counter = counter
         if not state.authenticated:
             state.authenticated = True
+            state.auth_fail_code = 0
+            state.auth_fail_reason = ""
+            self._last_auth_fail_code = 0
+            self._last_auth_fail_reason = ""
             self._refresh_connected_state()
         if not self._client_mode and peer_id is not None:
             plaintext = self._server_rewrite_inbound_app(int(peer_id), plaintext)
@@ -2298,9 +2409,8 @@ class SecureLinkPskSession(ISession):
             self._handle_server_hello(session_id, body)
             return
         if sl_type == self._SL_TYPE_AUTH_FAIL:
-            key = self._peer_key(peer_id)
-            self._peer_states.pop(key, None)
-            self._refresh_connected_state()
+            code = int(body[0]) if body else self._SL_AUTH_FAIL_DECODE
+            self._mark_auth_fail(peer_id, session_id, code)
             return
         if sl_type == self._SL_TYPE_DATA:
             self._handle_data(peer_id, session_id, counter, body, aad)
@@ -10166,6 +10276,7 @@ class StatsBoard:
 
         # References provided by Runner
         self.session: Optional[Session] = None     # for RTT/inflight/ACK counters
+        self._status_session: Optional[ISession] = None
         self.mux: Optional["ChannelMux"] = None         # for open connection counts
         self.peer_proto: Optional[PeerProtocol] = None  # for decode error counters (optional)
 
@@ -10256,6 +10367,7 @@ class StatsBoard:
 
 
     def bind_session(self, session: ISession):
+        self._status_session = session
         self.session_is_connected = session.is_connected
         self.session_get_metrics  = session.get_metrics
 
@@ -10557,6 +10669,20 @@ class StatsBoard:
                     "repeated_over_three_times": int(hist.get("gt3", 0)),
                 },
             },
+            "secure_link": dict(
+                getattr(
+                    self._status_session,
+                    "get_secure_link_status_snapshot",
+                    lambda: {
+                        "enabled": False,
+                        "mode": "off",
+                        "state": "disabled",
+                        "authenticated": False,
+                        "authenticated_peers": 0,
+                        "failure_reason": None,
+                    },
+                )()
+            ),
         }
         
         self.log.debug(
@@ -10603,6 +10729,18 @@ class RunnerMuxAggregate:
                 "udp_listening": udp_listening,
                 "tcp_listening": tcp_listening,
             },
+        }
+
+    @staticmethod
+    def _default_secure_link_snapshot() -> dict:
+        return {
+            "enabled": False,
+            "mode": "off",
+            "state": "disabled",
+            "authenticated": False,
+            "session_id": None,
+            "failure_reason": None,
+            "transport": None,
         }
 
 
@@ -11111,6 +11249,7 @@ class Runner:
                                 "tx_bytes": 0,
                             },
                             "myudp": self._session_retransmit_stats(listener_session),
+                            "secure_link": dict(p.get("secure_link") or RunnerMuxAggregate._default_secure_link_snapshot()),
                         })
                         continue
                     row_session = session
@@ -11171,6 +11310,7 @@ class Runner:
                             "tx_bytes": p_tx,
                         },
                         "myudp": self._session_retransmit_stats(row_session),
+                        "secure_link": dict(p.get("secure_link") or RunnerMuxAggregate._default_secure_link_snapshot()),
                     })
                 continue
 
@@ -11216,6 +11356,13 @@ class Runner:
                     "tx_bytes": tx_bytes,
                 },
                 "myudp": self._session_retransmit_stats(session),
+                "secure_link": dict(
+                    getattr(
+                        session,
+                        "get_secure_link_status_snapshot",
+                        RunnerMuxAggregate._default_secure_link_snapshot,
+                    )()
+                ),
             })
         return {"peers": peers, "count": len(peers)}
 

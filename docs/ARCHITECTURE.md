@@ -111,6 +111,10 @@ Phase 0 fixed ownership decisions:
 - service publication, channel IDs, and remote catalog state stay in `ARC-CMP-003`
 - future secure-link config loading and lifecycle wiring belong to `ARC-CMP-004`
 - peer identity visibility in admin APIs belongs to `ARC-CMP-005`
+- encryption-layer status visibility in WebAdmin/API is a joint function:
+  - `ARC-CMP-006` owns the underlying secure-link state machine and failure categories
+  - `ARC-CMP-004` contributes snapshot aggregation and process-level wiring
+  - `ARC-CMP-005` contributes HTTP payloads, live admin messages, and webpage rendering
 
 Important non-responsibilities:
 
@@ -126,6 +130,20 @@ Current status:
 - no runtime secure-link behavior is claimed by the project yet
 - the design baseline for this component is documented in [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md)
 - the Phase 0 finalized trust model, certificate profile, and dependency policy are also documented there
+
+### Functional decomposition for secure-link status visibility
+
+This decomposition applies to `PLAN-AUT-007` in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md).
+
+| Component ID | Contribution to secure-link status visibility |
+|---|---|
+| `ARC-CMP-006` | Determines whether secure-link is disabled, handshaking, authenticated, failed, or listening; determines mode and failure reason |
+| `ARC-CMP-004` | Pulls secure-link state from the wrapped session and places it into process-level status and peer snapshots |
+| `ARC-CMP-005` | Exposes the secure-link state through `/api/status`, `/api/peers`, live admin updates, and the WebAdmin page |
+
+The webpage is therefore an explicit contributor to the overall function, not only the API payloads behind it.
+
+The supporting architecture traceability manifest is maintained in [.github/architecture_traceability.yaml](/home/ohnoohweh/quic_br/.github/architecture_traceability.yaml).
 
 ## 3. Channel and service multiplexing layer
 
