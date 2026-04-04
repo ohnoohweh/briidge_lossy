@@ -445,6 +445,10 @@ function renderPeerTable(rows) {
     const isListeningPeer = String(row.state || '').toLowerCase() === 'listening';
     const secureLink = row.secure_link || {};
     const secureLinkEnabled = Boolean(secureLink.enabled);
+    const secureLinkMode = String(secureLink.mode || '').toLowerCase();
+    const isCertMode = secureLinkMode === 'cert';
+    const trustFailureReason = String(secureLink.trust_failure_reason || '').trim();
+    const trustFailureDetail = String(secureLink.trust_failure_detail || '').trim();
     const connectionLine1 = [
       renderMetric('State', String(row.state || 'unknown').toLowerCase(), { pill: true }),
     ];
@@ -485,12 +489,38 @@ function renderPeerTable(rows) {
           renderMetric('Decode Errors', fmtInteger(row.decode_errors ?? 0)),
         ],
       ]);
-    const securityMetrics = secureLinkEnabled ? [
-      renderMetric('secure_link.state', secureLink.state, { pill: true }),
-      renderMetric('secure_link.authenticated', fmtBool(secureLink.authenticated), { pill: true }),
-      renderMetric('rekey_in_progress', fmtBool(secureLink.rekey_in_progress), { pill: true }),
-      renderMetric('session_id', fmtInteger(secureLink.session_id)),
-    ] : [];
+    const securityLines = [];
+    if (secureLinkEnabled) {
+      securityLines.push([
+        renderMetric('secure_link.state', secureLink.state, { pill: true }),
+        renderMetric('secure_link.authenticated', fmtBool(secureLink.authenticated), { pill: true }),
+        renderMetric('rekey_in_progress', fmtBool(secureLink.rekey_in_progress), { pill: true }),
+        renderMetric('session_id', fmtInteger(secureLink.session_id)),
+      ]);
+      if (isCertMode) {
+        securityLines.push([
+          renderMetric('peer_subject_id', secureLink.peer_subject_id),
+          renderMetric('peer_subject_name', secureLink.peer_subject_name),
+          renderMetric('peer_roles', Array.isArray(secureLink.peer_roles) && secureLink.peer_roles.length ? secureLink.peer_roles.join(', ') : 'n/a'),
+        ]);
+        securityLines.push([
+          renderMetric('peer_deployment_id', secureLink.peer_deployment_id),
+          renderMetric('peer_serial', secureLink.peer_serial),
+          renderMetric('issuer_id', secureLink.issuer_id),
+        ]);
+        securityLines.push([
+          renderMetric('trust_validation_state', secureLink.trust_validation_state, { pill: true }),
+          renderMetric('trust_anchor_id', secureLink.trust_anchor_id),
+        ]);
+        if (trustFailureReason || trustFailureDetail) {
+          securityLines.push([
+            renderMetric('trust_failure_reason', trustFailureReason || 'n/a', { pill: true }),
+            renderMetric('trust_failure_detail', trustFailureDetail || 'n/a'),
+          ]);
+        }
+      }
+    }
+    const securityMetrics = secureLinkEnabled ? renderMetricStack(securityLines) : '';
     const allowRekeyAction = String(row.state || '').toLowerCase() !== 'listening';
     const lifecycleMetrics = secureLinkEnabled ? [
       renderMetric('last_event', secureLink.last_event),
@@ -523,7 +553,7 @@ function renderPeerTable(rows) {
         <td class="peer-detail-kind">Security</td>
         <td>
           <div class="peer-detail-stack">
-            <div class="peer-detail-grid">${securityMetrics.join('')}</div>
+            ${securityMetrics}
             ${allowRekeyAction ? `
               <div class="peer-detail-actions">
                 <button class="btn btn-secondary secure-link-rekey-btn" type="button" data-peer-id="${escapeHtml(fmtText(row.id))}">Rekey Request</button>

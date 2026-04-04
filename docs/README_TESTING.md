@@ -349,7 +349,7 @@ The first Phase 1 PSK prototype now exposes its secure-link state through the pe
 
 `/api/status` remains intentionally limited to common runtime summary information such as uptime, aggregate open-channel counts, and aggregate traffic rates.
 
-Certificate mode now uses those richer fields directly, including peer identity metadata and trust-validation failure categories.
+Certificate mode now uses those richer fields directly, including peer identity metadata and trust-validation failure categories, and the WebAdmin peer security block renders those cert-specific fields instead of leaving them API-only.
 
 ### Current secure-link PSK coverage
 

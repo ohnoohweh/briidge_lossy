@@ -85,8 +85,8 @@ python -m obstacle_bridge --config bridge_client.json
 Windows tip:
 
 - save the examples as `bridge_server.json` and `bridge_client.json`
-- then run `py -m obstacle_bridge --config bridge_server.json`
-- and `py -m obstacle_bridge --config bridge_client.json`
+- then run `python -m obstacle_bridge --config bridge_server.json`
+- and `python -m obstacle_bridge --config bridge_client.json`
 - if you prefer to generate a valid JSON template from the tool itself, use `python -m obstacle_bridge --dump-config json`
 
 After the first startup, open the Admin Web UI and adjust the remaining details there:
@@ -542,6 +542,7 @@ python -m obstacle_bridge --config secure_link_client.json
 What to look for in WebAdmin or the admin API:
 
 - WebAdmin shows secure-link details inside each peer block instead of a single legacy headline state
+- when `secure_link.mode=cert`, WebAdmin and `/api/peers` also show peer identity and trust details such as subject id/name, roles, deployment id, serial, issuer, trust-anchor id, and trust-validation status
 - `/api/peers` shows the peer row with `secure_link.authenticated=true`
 - when rekeying is enabled, the peer block and `/api/peers` can briefly show `rekey_in_progress=true` while the session rotates to a fresh `secure_link.session_id`
 - `/api/status` remains limited to common runtime summary fields such as uptime, aggregate open-channel counts, and aggregate traffic rates
@@ -571,21 +572,7 @@ Operator notes:
 - malformed or unexpected secure-link frames fail closed and remain observable through the admin/API surface; they do not continue forwarding overlay traffic on the affected peer
 - the delivered PSK mode remains useful for development/testing/lab bring-up, while the delivered cert mode is the deployment-rooted trust model described in [docs/SECURE_LINK_DESIGN.md](docs/SECURE_LINK_DESIGN.md)
 
-## Notes
-- Listener mode intentionally ignores `--own-servers`, because a multi-peer listener cannot unambiguously bind one local listener to one remote peer.
-- Multi-transport mode is currently intended for listening instances without configured transport peers (for example no `--udp-peer`, `--tcp-peer`, `--quic-peer`, or `--ws-peer`).
-- WebSocket listener mode supports multiple simultaneous peers with per-peer mux-channel rewriting so that peer-local channel IDs do not collide inside the shared mux logic.
-
-## For Contributors
-
-### Contributor guidance
-- Development process: [docs/DEVELOPMENT_PROCESS.md](docs/DEVELOPMENT_PROCESS.md)
-- User use-cases in the README: [README.md](/home/ohnoohweh/quic_br/README.md)
-- System boundary and assumptions: [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md)
-- Requirements: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)
-- Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
-
-### Secure-link certificate preparation
+#### Secure-link certificate setup
 
 The current runtime supports `secure_link_mode=cert`, and the following workflow is the expected way to prepare the certificate/key material that mode consumes.
 
@@ -625,7 +612,7 @@ openssl pkey -in peer_client_key.pem -pubout -out peer_client_pub.pem
 
 #### 3. Create the unsigned certificate body
 
-The planned certificate input profile is documented in [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md). A minimal server leaf example looks like:
+The certificate input profile is documented in [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md). A minimal server leaf example looks like:
 
 ```json
 {
@@ -670,7 +657,7 @@ python -c "import json,sys; print(json.dumps(json.load(open(sys.argv[1], 'r', en
 
 If that command fails with `JSONDecodeError: Extra data`, the input file is not a single valid JSON object. A common cause is a missing opening `{` or accidentally pasting extra lines into the file.
 
-The future runtime format is expected to sign the canonicalized certificate body, excluding the `signature` field itself.
+The runtime signs the canonicalized certificate body, excluding the `signature` field itself.
 
 #### 5. Sign the canonicalized body with the admin root key
 
@@ -690,27 +677,35 @@ openssl pkeyutl -verify -rawin -pubin \
   -sigfile peer_server_cert.sig
 ```
 
-#### 6. Bundle the future certificate artifact
+#### 6. Provide the runtime inputs
 
-Until the runtime format is finalized, a practical bundle is:
+For cert mode, each node needs:
 
-- canonicalized certificate body JSON
-- detached signature file
-- leaf private key PEM on the owning node only
-- admin root public key PEM on all trusting nodes
+- its own certificate body JSON
+- its own detached certificate signature
+- its own private key PEM
+- the deployment root public key PEM
+- optionally a revoked-serials file
 
-For example:
-
-- `peer_server_cert_body.c14n.json`
-- `peer_server_cert.sig`
-- `peer_server_key.pem`
-- `admin_root_pub.pem`
-
-This stays consistent with the current design direction:
+This stays consistent with the current runtime boundary:
 
 - ObstacleBridge uses key material and certificates
 - ObstacleBridge does not generate private keys or sign certificates
 - primitive signature verification and encryption/decryption are delegated to the selected crypto library in the delivered secure-link runtime
+
+## Notes
+- Listener mode intentionally ignores `--own-servers`, because a multi-peer listener cannot unambiguously bind one local listener to one remote peer.
+- Multi-transport mode is currently intended for listening instances without configured transport peers (for example no `--udp-peer`, `--tcp-peer`, `--quic-peer`, or `--ws-peer`).
+- WebSocket listener mode supports multiple simultaneous peers with per-peer mux-channel rewriting so that peer-local channel IDs do not collide inside the shared mux logic.
+
+## For Contributors
+
+### Contributor guidance
+- Development process: [docs/DEVELOPMENT_PROCESS.md](docs/DEVELOPMENT_PROCESS.md)
+- User use-cases in the README: [README.md](/home/ohnoohweh/quic_br/README.md)
+- System boundary and assumptions: [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md)
+- Requirements: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)
+- Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
