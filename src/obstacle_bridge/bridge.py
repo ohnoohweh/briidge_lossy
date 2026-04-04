@@ -1894,27 +1894,27 @@ class SecureLinkPskSession(ISession):
                 '--secure-link',
                 action='store_true',
                 default=False,
-                help='Enable the planned secure-link layer. Phase 1 currently supports TCP + PSK mode only.'
+                help='Enable the secure-link prototype. Phase 1 currently supports PSK mode over myudp, tcp, ws, and quic.'
             )
         if not _has('--secure-link-mode'):
             p.add_argument(
                 '--secure-link-mode',
                 choices=('off', 'psk', 'cert'),
                 default='off',
-                help='Secure-link mode. Phase 1 currently supports only off or psk.'
+                help='Secure-link mode. Phase 1 currently supports off or psk; cert remains planned.'
             )
         if not _has('--secure-link-psk'):
             p.add_argument(
                 '--secure-link-psk',
                 default='',
-                help='Pre-shared secret for secure-link PSK mode.'
+                help='Pre-shared secret for secure-link PSK mode. Both peers must use the same non-empty value.'
             )
         if not _has('--secure-link-require'):
             p.add_argument(
                 '--secure-link-require',
                 action='store_true',
                 default=False,
-                help='Fail closed if secure-link cannot be negotiated.'
+                help='Fail closed if secure-link cannot be negotiated or authenticated.'
             )
 
     def __init__(self, inner: ISession, args: argparse.Namespace, transport_name: str):

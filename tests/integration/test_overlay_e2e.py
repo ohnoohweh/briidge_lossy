@@ -2137,6 +2137,29 @@ def wait_status_secure_link_state(
     )
 
 
+def wait_status_secure_link_authenticated_peers(
+    admin_port: int,
+    *,
+    minimum_count: int,
+    timeout: float = 12.0,
+    label: str = '',
+) -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.5)
+        last_doc = doc
+        secure_link = doc.get('secure_link') or {}
+        if int(secure_link.get('authenticated_peers') or 0) >= int(minimum_count):
+            who = f' {label}' if label else ''
+            log.info(f'[STATUS]{who} port={admin_port} secure_link_authenticated_peers={secure_link!r}')
+            return doc
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'/api/status did not expose secure_link authenticated_peers>={minimum_count} on port {admin_port}; last={last_doc!r}'
+    )
+
+
 def status_state(doc: dict) -> str:
     return str(doc.get('peer_state', '')).strip().upper()
 
@@ -2638,8 +2661,17 @@ def run_case_reconnect(case: Case, log_dir: Path, case_index: int, settle_s: Opt
         bounce.stop()
 
 
-def run_case_two_peer_clients_listener(case: Case, log_dir: Path, case_index: int, settle_s: Optional[float] = None) -> None:
-    case = materialize_case_ports(case, case_index)
+def run_case_two_peer_clients_listener(
+    case: Case,
+    log_dir: Path,
+    case_index: int,
+    settle_s: Optional[float] = None,
+    secure_slot: Optional[int] = None,
+    server_extra_args: Optional[List[str]] = None,
+    client1_extra_args: Optional[List[str]] = None,
+    client2_extra_args: Optional[List[str]] = None,
+) -> None:
+    case = materialize_secure_link_case_ports(case, secure_slot) if secure_slot is not None else materialize_case_ports(case, case_index)
     bounce = BounceBackServer(
         name=f'{case.name}_bounce',
         proto=case.bounce_proto,
@@ -2651,6 +2683,14 @@ def run_case_two_peer_clients_listener(case: Case, log_dir: Path, case_index: in
     client1_proc: Optional[Proc] = None
     client2_proc: Optional[Proc] = None
     server_spec, client_spec = build_commands(case, log_dir, case_index, enable_admin=True)
+    client2_admin_port = alloc_admin_port(
+        {
+            int(server_spec[3] or 0),
+            int(client_spec[3] or 0),
+        },
+        case_index=case_index + 2,
+        base=SECURE_LINK_ADMIN_BASE if secure_slot is not None else ADMIN_PORT_BASE,
+    ) if secure_slot is not None else None
 
     try:
         phase('1. Start bounce-back server')
@@ -2658,6 +2698,8 @@ def run_case_two_peer_clients_listener(case: Case, log_dir: Path, case_index: in
 
         phase('2. Start listener/server bridge')
         name, cmd, env, admin_port = server_spec
+        if server_extra_args:
+            cmd = list(cmd) + list(server_extra_args)
         server_proc = start_proc(f'{case.name}_{name}', cmd, log_dir, env_extra=env, admin_port=admin_port)
         time.sleep(0.5)
         assert_running(server_proc)
@@ -2665,6 +2707,9 @@ def run_case_two_peer_clients_listener(case: Case, log_dir: Path, case_index: in
 
         phase('3. Start client #1 bridge')
         c_name, c_cmd, c_env, c_admin_port = client_spec
+        client_base_cmd = list(c_cmd)
+        if client1_extra_args:
+            c_cmd = client_base_cmd + list(client1_extra_args)
         client1_proc = start_proc(f'{case.name}_{c_name}_1', c_cmd, log_dir, env_extra=c_env, admin_port=c_admin_port)
         time.sleep(0.5)
         assert_running(client1_proc)
@@ -2672,11 +2717,17 @@ def run_case_two_peer_clients_listener(case: Case, log_dir: Path, case_index: in
 
         phase('4. Start client #2 bridge with a different local UDP service port')
         second_client_local_port = case.probe_port + 1
-        client2_cmd = _replace_own_servers_local_port(c_cmd, second_client_local_port)
+        client2_cmd = _replace_own_servers_local_port(client_base_cmd, second_client_local_port)
+        if client2_extra_args:
+            client2_cmd += list(client2_extra_args)
         client2_cmd += ['--admin-web-port', '0']
-        client2_proc = start_proc(f'{case.name}_{c_name}_2', client2_cmd, log_dir, env_extra=c_env, admin_port=None)
+        if client2_admin_port is not None:
+            client2_cmd += admin_args(client2_admin_port)
+        client2_proc = start_proc(f'{case.name}_{c_name}_2', client2_cmd, log_dir, env_extra=c_env, admin_port=client2_admin_port)
         time.sleep(0.5)
         assert_running(client2_proc)
+        if client2_admin_port is not None:
+            wait_admin_up(client2_proc.admin_port or 0, timeout=10.0)
 
         time.sleep(case.settle_seconds if settle_s is None else settle_s)
         assert_running(server_proc)
@@ -2702,6 +2753,24 @@ def run_case_two_peer_clients_listener(case: Case, log_dir: Path, case_index: in
         with_ip = [row for row in rows if row.get('peer') not in (None, '', 'n/a')]
         if len(with_ip) < 2:
             raise RuntimeError(f'Expected >=2 peer rows with endpoint labels, got rows={rows!r}')
+
+        if secure_slot is not None:
+            transport = 'unknown'
+            for argv in (case.bridge_client_args, case.bridge_server_args):
+                try:
+                    idx = argv.index('--overlay-transport')
+                    transport = str(argv[idx + 1]).split(',')[0].strip().lower()
+                    if transport:
+                        break
+                except Exception:
+                    continue
+            wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+            wait_status_secure_link_authenticated_peers(server_proc.admin_port or 0, minimum_count=2, timeout=12.0, label='server')
+            wait_status_secure_link_state(client1_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client1', authenticated=True)
+            wait_status_secure_link_state(client2_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client2', authenticated=True)
+            wait_peer_secure_link_state(client1_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client1', transport=transport, authenticated=True)
+            wait_peer_secure_link_state(client2_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client2', transport=transport, authenticated=True)
+            wait_peer_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', transport=transport, authenticated=True)
     finally:
         if client2_proc is not None:
             stop_proc(client2_proc)
@@ -3361,6 +3430,10 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
     log_dir: Path,
     case_index: int,
     settle_s: Optional[float] = None,
+    secure_slot: Optional[int] = None,
+    server_extra_args: Optional[List[str]] = None,
+    client1_extra_args: Optional[List[str]] = None,
+    client2_extra_args: Optional[List[str]] = None,
 ) -> None:
     base_tcp_port = case.bounce_port
     own_udp_bounces = [
@@ -3377,14 +3450,16 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
     server_proc: Optional[Proc] = None
     client1_proc: Optional[Proc] = None
     client2_proc: Optional[Proc] = None
-    server_admin, client1_admin = alloc_admin_ports(case_index)
-    client2_admin = alloc_admin_port({server_admin, client1_admin})
+    admin_base = SECURE_LINK_ADMIN_BASE if secure_slot is not None else ADMIN_PORT_BASE
+    server_admin, client1_admin = alloc_admin_ports(case_index, base=admin_base)
+    client2_admin = alloc_admin_port({server_admin, client1_admin}, case_index=case_index + 2, base=admin_base)
     udp_peer_port = _listener_overlay_port(case, 'myudp')
 
     py = sys.executable
     missing_cfg = str(log_dir / f'{case.name}_missing.cfg')
     server_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_server_args, log_dir, case.name, 'bridge_server')
     server_cmd += ['--config', missing_cfg, '--admin-web-port', '0']
+    server_cmd += list(server_extra_args or [])
     server_cmd += admin_args(server_admin)
 
     client1_cmd = [py, str(BRIDGE),
@@ -3402,6 +3477,7 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
         '--log-file', str(log_dir / f'{case.name}_bridge_client_1.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
     ]
+    client1_cmd += list(client1_extra_args or [])
     client1_cmd += admin_args(client1_admin)
 
     client2_cmd = [py, str(BRIDGE),
@@ -3419,6 +3495,7 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
         '--log-file', str(log_dir / f'{case.name}_bridge_client_2.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
     ]
+    client2_cmd += list(client2_extra_args or [])
     client2_cmd += admin_args(client2_admin)
 
     tcp_specs = [
@@ -3466,6 +3543,15 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
         phase('4. Verify both myudp peer clients connect to the same listener')
         wait_peers_count(server_admin, minimum_count=2, timeout=12.0, label='server')
         wait_listener_peer_rows_zeroed(server_admin, timeout=12.0, label='server')
+        wait_distinct_peer_endpoints(server_admin, transport='myudp', minimum_count=2, timeout=12.0, label='server')
+        if secure_slot is not None:
+            wait_status_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+            wait_status_secure_link_authenticated_peers(server_admin, minimum_count=2, timeout=12.0, label='server')
+            wait_status_secure_link_state(client1_admin, expected_state='authenticated', timeout=12.0, label='client1', authenticated=True)
+            wait_status_secure_link_state(client2_admin, expected_state='authenticated', timeout=12.0, label='client2', authenticated=True)
+            wait_peer_secure_link_state(client1_admin, expected_state='authenticated', timeout=12.0, label='client1', transport='myudp', authenticated=True)
+            wait_peer_secure_link_state(client2_admin, expected_state='authenticated', timeout=12.0, label='client2', transport='myudp', authenticated=True)
+            wait_peer_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', transport='myudp', authenticated=True)
 
         phase('5. Open 8 concurrent TCP channels and hold them during /api/connections polling')
         start_evt = threading.Event()
@@ -3773,6 +3859,10 @@ def run_case_quic_two_clients_concurrent_udp_tcp(
     log_dir: Path,
     case_index: int,
     settle_s: Optional[float] = None,
+    secure_slot: Optional[int] = None,
+    server_extra_args: Optional[List[str]] = None,
+    client1_extra_args: Optional[List[str]] = None,
+    client2_extra_args: Optional[List[str]] = None,
 ) -> None:
     base_tcp_port = case.bounce_port
     own_udp_bounces = [
@@ -3789,14 +3879,16 @@ def run_case_quic_two_clients_concurrent_udp_tcp(
     server_proc: Optional[Proc] = None
     client1_proc: Optional[Proc] = None
     client2_proc: Optional[Proc] = None
-    server_admin, client1_admin = alloc_admin_ports(case_index)
-    client2_admin = alloc_admin_port({server_admin, client1_admin})
+    admin_base = SECURE_LINK_ADMIN_BASE if secure_slot is not None else ADMIN_PORT_BASE
+    server_admin, client1_admin = alloc_admin_ports(case_index, base=admin_base)
+    client2_admin = alloc_admin_port({server_admin, client1_admin}, case_index=case_index + 2, base=admin_base)
     quic_peer_port = _listener_overlay_port(case, 'quic')
 
     py = sys.executable
     missing_cfg = str(log_dir / f'{case.name}_missing.cfg')
     server_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_server_args, log_dir, case.name, 'bridge_server')
     server_cmd += ['--config', missing_cfg, '--admin-web-port', '0']
+    server_cmd += list(server_extra_args or [])
     server_cmd += admin_args(server_admin)
 
     client1_cmd = [py, str(BRIDGE),
@@ -3814,6 +3906,7 @@ def run_case_quic_two_clients_concurrent_udp_tcp(
         '--log-file', str(log_dir / f'{case.name}_bridge_client_1.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
     ]
+    client1_cmd += list(client1_extra_args or [])
     client1_cmd += admin_args(client1_admin)
 
     client2_cmd = [py, str(BRIDGE),
@@ -3831,6 +3924,7 @@ def run_case_quic_two_clients_concurrent_udp_tcp(
         '--log-file', str(log_dir / f'{case.name}_bridge_client_2.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
     ]
+    client2_cmd += list(client2_extra_args or [])
     client2_cmd += admin_args(client2_admin)
 
     tcp_specs = [
@@ -3879,6 +3973,14 @@ def run_case_quic_two_clients_concurrent_udp_tcp(
         wait_peers_count(server_admin, minimum_count=2, timeout=12.0, label='server')
         wait_listener_peer_rows_zeroed(server_admin, timeout=12.0, label='server')
         wait_distinct_peer_endpoints(server_admin, transport='quic', minimum_count=2, timeout=12.0, label='server')
+        if secure_slot is not None:
+            wait_status_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+            wait_status_secure_link_authenticated_peers(server_admin, minimum_count=2, timeout=12.0, label='server')
+            wait_status_secure_link_state(client1_admin, expected_state='authenticated', timeout=12.0, label='client1', authenticated=True)
+            wait_status_secure_link_state(client2_admin, expected_state='authenticated', timeout=12.0, label='client2', authenticated=True)
+            wait_peer_secure_link_state(client1_admin, expected_state='authenticated', timeout=12.0, label='client1', transport='quic', authenticated=True)
+            wait_peer_secure_link_state(client2_admin, expected_state='authenticated', timeout=12.0, label='client2', transport='quic', authenticated=True)
+            wait_peer_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', transport='quic', authenticated=True)
 
         phase('5. Open 8 concurrent TCP channels and hold them during /api/connections polling')
         start_evt = threading.Event()
@@ -4958,6 +5060,54 @@ def test_overlay_e2e_tcp_secure_link_psk_listener_two_clients_concurrent_udp_tcp
         tmp_path,
         case_index=277,
         secure_slot=2,
+        server_extra_args=secure_args,
+        client1_extra_args=secure_args,
+        client2_extra_args=secure_args,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_ws_secure_link_psk_listener_two_clients(tmp_path: Path) -> None:
+    case = CASES['case12_overlay_ws_ipv4_listener_two_clients']
+    secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
+    run_case_two_peer_clients_listener(
+        case,
+        tmp_path,
+        case_index=281,
+        secure_slot=6,
+        server_extra_args=secure_args,
+        client1_extra_args=secure_args,
+        client2_extra_args=secure_args,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_myudp_secure_link_psk_listener_two_clients_concurrent_udp_tcp(tmp_path: Path) -> None:
+    case = materialize_secure_link_case_ports(CASES['case15_overlay_listener_myudp_two_clients_concurrent_udp_tcp'], 7)
+    secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
+    run_case_myudp_two_clients_concurrent_udp_tcp(
+        case,
+        tmp_path,
+        case_index=282,
+        secure_slot=7,
+        server_extra_args=secure_args,
+        client1_extra_args=secure_args,
+        client2_extra_args=secure_args,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_quic_secure_link_psk_listener_two_clients_concurrent_udp_tcp(tmp_path: Path) -> None:
+    case = materialize_secure_link_case_ports(CASES['case17_overlay_listener_quic_two_clients_concurrent_udp_tcp'], 8)
+    secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
+    run_case_quic_two_clients_concurrent_udp_tcp(
+        case,
+        tmp_path,
+        case_index=283,
+        secure_slot=8,
         server_extra_args=secure_args,
         client1_extra_args=secure_args,
         client2_extra_args=secure_args,

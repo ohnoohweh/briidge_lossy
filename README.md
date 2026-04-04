@@ -124,28 +124,32 @@ Solution with a public ObstacleBridge server:
 ![NAS solution example](docs/refered_docs/NAS_solution.svg)
 
 **Public VPS initial config**
-```ini
-overlay_transport = myudp
-udp_bind = ::
-udp_own_port = 4443
-admin_web = true
-admin_web_bind = 127.0.0.1
-admin_web_port = 18080
-admin_web_name = VPS
-log = INFO
+```json
+{
+  "overlay_transport": "myudp",
+  "udp_bind": "::",
+  "udp_own_port": 4443,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18080,
+  "admin_web_name": "VPS",
+  "log": "INFO"
+}
 ```
 
 **NAS initial config**
-```ini
-overlay_transport = myudp
-udp_peer = bridge.example.com
-udp_peer_port = 4443
-udp_own_port = 0
-admin_web = true
-admin_web_bind = 127.0.0.1
-admin_web_port = 18081
-admin_web_name = NAS
-log = INFO
+```json
+{
+  "overlay_transport": "myudp",
+  "udp_peer": "bridge.example.com",
+  "udp_peer_port": 4443,
+  "udp_own_port": 0,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18081,
+  "admin_web_name": "NAS",
+  "log": "INFO"
+}
 ```
 
 Then use WebAdmin to add the service exposure you want, for example:
@@ -174,28 +178,32 @@ Solution with an ObstacleBridge WebSocket bridge:
 ![Client solution example](docs/refered_docs/Client_solution.svg)
 
 **Public bridge config**
-```ini
-overlay_transport = ws
-ws_bind = 0.0.0.0
-ws_own_port = 443
-admin_web = true
-admin_web_bind = 127.0.0.1
-admin_web_port = 18080
-admin_web_name = Public WS Bridge
-log = INFO
+```json
+{
+  "overlay_transport": "ws",
+  "ws_bind": "0.0.0.0",
+  "ws_own_port": 443,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18080,
+  "admin_web_name": "Public WS Bridge",
+  "log": "INFO"
+}
 ```
 
 **Restricted-side peer config**
-```ini
-overlay_transport = ws
-ws_peer = bridge.example.com
-ws_peer_port = 443
-ws_own_port = 0
-admin_web = true
-admin_web_bind = 127.0.0.1
-admin_web_port = 18081
-admin_web_name = Restricted Client
-log = INFO
+```json
+{
+  "overlay_transport": "ws",
+  "ws_peer": "bridge.example.com",
+  "ws_peer_port": 443,
+  "ws_own_port": 0,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18081,
+  "admin_web_name": "Restricted Client",
+  "log": "INFO"
+}
 ```
 
 Then use WebAdmin to add an `own_servers` entry that recreates the local WireGuard or UDP OpenVPN endpoint, for example `udp,16666,127.0.0.1,udp,127.0.0.1,16666`.
@@ -220,28 +228,32 @@ Solution with an ObstacleBridge `myudp` bridge:
 ![Client2 solution example](docs/refered_docs/Client2_solution.svg)
 
 **Public bridge config**
-```ini
-overlay_transport = myudp
-udp_bind = 0.0.0.0
-udp_own_port = 4433
-admin_web = true
-admin_web_bind = 127.0.0.1
-admin_web_port = 18080
-admin_web_name = Public myudp Bridge
-log = INFO
+```json
+{
+  "overlay_transport": "myudp",
+  "udp_bind": "0.0.0.0",
+  "udp_own_port": 4433,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18080,
+  "admin_web_name": "Public myudp Bridge",
+  "log": "INFO"
+}
 ```
 
 **Restricted-side peer config**
-```ini
-overlay_transport = myudp
-udp_peer = bridge.example.com
-udp_peer_port = 4433
-udp_own_port = 0
-admin_web = true
-admin_web_bind = 127.0.0.1
-admin_web_port = 18081
-admin_web_name = Lossy Client
-log = INFO
+```json
+{
+  "overlay_transport": "myudp",
+  "udp_peer": "bridge.example.com",
+  "udp_peer_port": 4433,
+  "udp_own_port": 0,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18081,
+  "admin_web_name": "Lossy Client",
+  "log": "INFO"
+}
 ```
 
 Then use WebAdmin to add the same local UDP recreation for WireGuard or UDP OpenVPN, usually on `127.0.0.1:16666`.
@@ -255,19 +267,21 @@ Assumptions:
 - the listener side is configured to accept the selected transports
 - the client environment can use the required runtime dependencies for both overlay modes
 
-```ini
-overlay_transport = ws,myudp
-ws_peer = bridge.example.com
-ws_peer_port = 443
-ws_own_port = 0
-udp_peer = bridge.example.com
-udp_peer_port = 4433
-udp_own_port = 0
-admin_web = true
-admin_web_bind = 127.0.0.1
-admin_web_port = 18081
-admin_web_name = Dual Transport Client
-log = INFO
+```json
+{
+  "overlay_transport": "ws,myudp",
+  "ws_peer": "bridge.example.com",
+  "ws_peer_port": 443,
+  "ws_own_port": 0,
+  "udp_peer": "bridge.example.com",
+  "udp_peer_port": 4433,
+  "udp_own_port": 0,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18081,
+  "admin_web_name": "Dual Transport Client",
+  "log": "INFO"
+}
 ```
 
 Then use WebAdmin to define:
@@ -435,6 +449,92 @@ What is visible in the included snapshots:
 | `--overlay-transport` | `myudp` | Overlay transport between peers: comma-separated list from myudp,tcp,quic,ws. Multiple transports are supported simultaneously for listening instances. |
 | `--client-restart-if-disconnected` | `0.0` | If configured as a peer client (for example --udp-peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables. |
 
+### Secure-link prototype
+| Option(s) | Default | Description |
+|---|---:|---|
+| `--secure-link` | `False` | Enable the secure-link prototype. Phase 1 currently supports PSK mode over `myudp`, `tcp`, `ws`, and `quic`. |
+| `--secure-link-mode` | `off` | Secure-link mode. Phase 1 currently supports `off` or `psk`; `cert` remains planned. |
+| `--secure-link-psk` | `` | Pre-shared secret for `secure_link_mode=psk`. Both peers must use the same non-empty value. |
+| `--secure-link-require` | `False` | Fail closed if secure-link cannot be negotiated or authenticated. |
+
+#### Current secure-link quick start
+
+The current runtime slice is a Phase 1 PSK prototype. It is useful for development, testing, and early operator validation of the layer boundary.
+
+What works today:
+
+- `secure_link_mode=psk`
+- `overlay_transport=myudp`
+- `overlay_transport=tcp`
+- `overlay_transport=ws`
+- `overlay_transport=quic`
+- admin/API visibility through `/api/status` and `/api/peers`
+
+What is still planned:
+
+- certificate-based secure-link mode
+- certificate validation and revocation
+- richer peer identity exposure in WebAdmin
+
+Minimal listener example:
+
+```json
+{
+  "overlay_transport": "tcp",
+  "tcp_bind": "::",
+  "tcp_own_port": 8081,
+  "secure_link": true,
+  "secure_link_mode": "psk",
+  "secure_link_psk": "change-this-demo-secret",
+  "secure_link_require": true,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18080,
+  "log": "INFO"
+}
+```
+
+Minimal peer example:
+
+```json
+{
+  "overlay_transport": "tcp",
+  "tcp_peer": "127.0.0.1",
+  "tcp_peer_port": 8081,
+  "tcp_own_port": 0,
+  "secure_link": true,
+  "secure_link_mode": "psk",
+  "secure_link_psk": "change-this-demo-secret",
+  "secure_link_require": true,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18081,
+  "log": "INFO"
+}
+```
+
+Start them with:
+
+```bash
+python -m obstacle_bridge --config secure_link_server.json
+python -m obstacle_bridge --config secure_link_client.json
+```
+
+What to look for in WebAdmin or the admin API:
+
+- `/api/status` shows `secure_link.state=authenticated` on both sides after the overlay connects
+- `/api/peers` shows the peer row with `secure_link.authenticated=true`
+- if the PSK does not match, the client and server stay disconnected and the failure is reported as:
+  - `secure_link.state=failed`
+  - `failure_code=1`
+  - `failure_reason=bad_psk`
+
+Operator notes:
+
+- use `--secure-link-require` when you want a hard failure instead of falling back to plaintext behavior
+- use a long random PSK for anything beyond local testing
+- the current PSK mode is a prototype convenience mode, not the final trust model described in [docs/SECURE_LINK_DESIGN.md](docs/SECURE_LINK_DESIGN.md)
+
 ## Notes
 - Listener mode intentionally ignores `--own-servers`, because a multi-peer listener cannot unambiguously bind one local listener to one remote peer.
 - Multi-transport mode is currently intended for listening instances without configured transport peers (for example no `--udp-peer`, `--tcp-peer`, `--quic-peer`, or `--ws-peer`).
@@ -451,7 +551,7 @@ What is visible in the included snapshots:
 
 ### Planned secure-link certificate preparation
 
-The secure-link feature is not wired into the runtime yet. The following workflow is therefore a preparation/example flow for future secure-link material, not a current startup requirement for ObstacleBridge.
+The current runtime only implements the Phase 1 PSK prototype described above. The following workflow is therefore preparation for the later certificate-based secure-link mode, not a current startup requirement for ObstacleBridge.
 
 The basic trust model is:
 
@@ -587,7 +687,7 @@ Current snapshot from `python scripts/report_requirements_coverage.py`:
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
 
-The secure-link topic now has reserved future requirement IDs in `docs/REQUIREMENTS.md`, including WebAdmin visibility of secure-link / encryption-layer state, while the certificate/key-material input profile is documented in `docs/SYSTEM_BOUNDARY.md`. A narrow PSK prototype now exists for development/testing of the layer boundary across `myudp`, `tcp`, `ws`, and `quic`, with an additional two-peer listener routing slice on TCP and first admin/API observability through `/api/status` and `/api/peers`, now including clearer runtime failure diagnostics such as failure code, category, detail, and timestamp, but the numeric coverage snapshot above still reflects only the currently defended delivered `REQ-*` requirements.
+The secure-link topic now has reserved future requirement IDs in `docs/REQUIREMENTS.md`, including WebAdmin visibility of secure-link / encryption-layer state, while the certificate/key-material input profile is documented in `docs/SYSTEM_BOUNDARY.md`. A narrow PSK prototype now exists for development/testing of the layer boundary across `myudp`, `tcp`, `ws`, and `quic`, now including broader multi-peer listener validation across those transports, with the deepest concurrent channel-routing slice still exercised on TCP and first admin/API observability through `/api/status` and `/api/peers`, now including clearer runtime failure diagnostics such as failure code, category, detail, and timestamp, but the numeric coverage snapshot above still reflects only the currently defended delivered `REQ-*` requirements.
 
 The related architecture decomposition is also linked to tests through `.github/architecture_traceability.yaml`.
 

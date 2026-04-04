@@ -68,8 +68,9 @@ Current implementation note:
 
 - a narrow Phase 1 prototype exists for `secure_link_mode=psk` on `overlay_transport=myudp`, `tcp`, `ws`, and `quic`
 - that prototype currently proves the first protected happy-path slice across those transports
-- a deeper two-peer listener routing slice currently exists on the TCP transport
+- broader multi-peer listener validation now exists on `ws`, `myudp`, `tcp`, and `quic`, with the deepest concurrent channel-routing slice still exercised on the TCP transport
 - the prototype now exposes first admin/API observability for secure-link state through `/api/status` and `/api/peers`
+- the current user-facing prototype configuration surface is `secure_link`, `secure_link_mode=psk`, `secure_link_psk`, and `secure_link_require`; certificate-mode startup remains intentionally unsupported in the current runtime slice
 - that prototype is intended for development and testing of the layer boundary
 - it does not yet promote these planned IDs into the active delivered `REQ-*` requirement namespace
 
