@@ -442,6 +442,8 @@ Current snapshot from `python scripts/report_requirements_coverage.py`:
 - Tracked in manifest: `42/42 = 100.0%`
 - Requirements without integration coverage: `(none)`
 
+The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
+
 The top-level README is intentionally kept as a contributor-facing coverage snapshot. When requirements, implementation, or the test set changes, update this section so the project entrypoint stays aligned with the current contract and evidence.
 
 ### CI split note
