@@ -5607,6 +5607,21 @@ class WebSocketSession(ISession):
             return _strip_brackets(parsed.hostname), int(parsed.port or 8080)
         return self._parse_proxy_authority(proxy_url)
 
+    def _test_system_proxy_override(self, secure: bool = False) -> Optional[Tuple[str, int]]:
+        spec = str(os.environ.get("OBSTACLEBRIDGE_TEST_SYSTEM_PROXY", "") or "").strip()
+        if not spec:
+            return None
+        parsed = self._parse_proxy_spec(spec, secure=secure)
+        if parsed is None:
+            raise RuntimeError("invalid OBSTACLEBRIDGE_TEST_SYSTEM_PROXY value")
+        self._log.debug(
+            "[WS-PROXY] (%s) using test system proxy override endpoint=%s:%d",
+            self._probe_id,
+            parsed[0],
+            int(parsed[1]),
+        )
+        return parsed
+
     def _get_ws_proxy_endpoint(self, target_host: str, target_port: int) -> Optional[Tuple[str, int]]:
         self._log.debug(
             "[WS-PROXY] (%s) endpoint lookup target=%s mode=%s peer_configured=%s platform=%s tls=%s",
@@ -5627,9 +5642,6 @@ class WebSocketSession(ISession):
                 return None
             self._log.debug("[WS-PROXY] (%s) env proxy selected endpoint=%s:%d", self._probe_id, endpoint[0], int(endpoint[1]))
             return endpoint
-        if sys.platform != "win32":
-            self._log.debug("[WS-PROXY] (%s) rejecting proxy lookup on unsupported platform=%s", self._probe_id, sys.platform)
-            raise RuntimeError("WebSocket proxy support is currently available on Windows only")
         if self._ws_proxy_mode == "manual":
             if not self._ws_proxy_host or self._ws_proxy_port <= 0:
                 self._log.debug(
@@ -5646,6 +5658,13 @@ class WebSocketSession(ISession):
                 int(self._ws_proxy_port),
             )
             return self._ws_proxy_host, int(self._ws_proxy_port)
+        if self._ws_proxy_mode == "system":
+            test_override = self._test_system_proxy_override(secure=self._use_tls)
+            if test_override is not None:
+                return test_override
+        if sys.platform != "win32":
+            self._log.debug("[WS-PROXY] (%s) rejecting proxy lookup on unsupported platform=%s", self._probe_id, sys.platform)
+            raise RuntimeError("WebSocket proxy support is currently available on Windows only")
         if self._ws_proxy_mode == "system":
             lookup_url = f"http://{self._format_connect_authority(target_host, target_port)}"
             self._log.debug("[WS-PROXY] (%s) system proxy lookup url=%s secure=%s", self._probe_id, lookup_url, self._use_tls)

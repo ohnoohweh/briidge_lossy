@@ -852,17 +852,28 @@ class UdpDelayLossProxy:
 
 
 class HttpConnectProxy:
-    def __init__(self, *, name: str, listen_host: str, listen_port: int, log_path: Path):
+    def __init__(
+        self,
+        *,
+        name: str,
+        listen_host: str,
+        listen_port: int,
+        log_path: Path,
+        require_negotiate: bool = False,
+    ):
         self.name = name
         self.listen_host = listen_host
         self.listen_port = int(listen_port)
         self.log_path = log_path
+        self.require_negotiate = bool(require_negotiate)
         self.sock: Optional[socket.socket] = None
         self.thread: Optional[threading.Thread] = None
         self.ready_event = threading.Event()
         self.stop_event = threading.Event()
         self._lock = threading.Lock()
         self.connect_requests: list[str] = []
+        self.proxy_authorizations: list[str] = []
+        self.first_tunnel_request_line: Optional[str] = None
 
     def _log(self, msg: str) -> None:
         with self.log_path.open('a', encoding='utf-8', errors='replace') as fp:
@@ -901,6 +912,28 @@ class HttpConnectProxy:
     def _record_connect(self, authority: str) -> None:
         with self._lock:
             self.connect_requests.append(authority)
+
+    def _record_proxy_authorization(self, value: str) -> None:
+        with self._lock:
+            self.proxy_authorizations.append(value)
+
+    def _record_first_tunnel_request_line(self, value: str) -> None:
+        with self._lock:
+            if self.first_tunnel_request_line is None:
+                self.first_tunnel_request_line = value
+
+    def _extract_proxy_authorization(self, head: bytes) -> Optional[str]:
+        for raw_line in head.splitlines()[1:]:
+            try:
+                line = raw_line.decode('ascii', 'replace')
+            except Exception:
+                continue
+            if ':' not in line:
+                continue
+            key, value = line.split(':', 1)
+            if key.strip().lower() == 'proxy-authorization':
+                return value.strip()
+        return None
 
     def _relay(self, src: socket.socket, dst: socket.socket) -> None:
         try:
@@ -942,10 +975,27 @@ class HttpConnectProxy:
                 if maybe_port.isdigit():
                     host = base
                     port = int(maybe_port)
+            auth_header = self._extract_proxy_authorization(head)
             self._record_connect(authority)
+            if auth_header:
+                self._record_proxy_authorization(auth_header)
             self._log(f'CONNECT {authority} from={addr!r}')
+            if self.require_negotiate and not (auth_header or '').lower().startswith('negotiate '):
+                conn.sendall(
+                    b'HTTP/1.1 407 Proxy Authentication Required\r\n'
+                    b'Proxy-Authenticate: Negotiate\r\n'
+                    b'Connection: close\r\n\r\n'
+                )
+                return
             upstream = socket.create_connection((str(host).strip('[]'), int(port)), timeout=5.0)
             conn.sendall(b'HTTP/1.1 200 Connection Established\r\nConnection: close\r\n\r\n')
+            first_upstream = self._recv_headers(conn)
+            if first_upstream:
+                first_head, _, first_rest = first_upstream.partition(b'\r\n\r\n')
+                first_line = first_head.splitlines()[0].decode('ascii', 'replace') if first_head else ''
+                if first_line:
+                    self._record_first_tunnel_request_line(first_line)
+                upstream.sendall(first_upstream)
             conn.settimeout(None)
             upstream.settimeout(None)
             t1 = threading.Thread(target=self._relay, args=(conn, upstream), daemon=True)
@@ -3846,7 +3896,7 @@ def _stop_proc_without_admin(proc: Proc) -> None:
         proc.admin_port = saved
 
 
-def _proxy_env(proxy_port: int, *, no_proxy: Optional[str]) -> Dict[str, str]:
+def _proxy_env(proxy_port: int, *, no_proxy: Optional[str], include_system_override: bool = False) -> Dict[str, str]:
     env = {
         'HTTP_PROXY': f'http://127.0.0.1:{int(proxy_port)}',
         'http_proxy': f'http://127.0.0.1:{int(proxy_port)}',
@@ -3858,6 +3908,8 @@ def _proxy_env(proxy_port: int, *, no_proxy: Optional[str]) -> Dict[str, str]:
     if no_proxy is not None:
         env['NO_PROXY'] = no_proxy
         env['no_proxy'] = no_proxy
+    if include_system_override:
+        env['OBSTACLEBRIDGE_TEST_SYSTEM_PROXY'] = f'http=127.0.0.1:{int(proxy_port)};https=127.0.0.1:{int(proxy_port)}'
     return env
 
 
@@ -3867,6 +3919,8 @@ def _start_ws_case_with_client_env(
     *,
     case_index: int,
     client_env_extra: Dict[str, str],
+    client_extra_args: Optional[List[str]] = None,
+    server_env_extra: Optional[Dict[str, str]] = None,
 ) -> tuple[BounceBackServer, Proc, Proc]:
     case = materialize_case_ports(case, case_index)
     bounce = BounceBackServer(
@@ -3880,8 +3934,11 @@ def _start_ws_case_with_client_env(
     specs = build_commands(case, log_dir, case_index, enable_admin=True)
     server_name, server_cmd, server_env, server_admin = specs[0]
     client_name, client_cmd, client_env, client_admin = specs[1]
+    server_env = dict(server_env)
+    server_env.update(server_env_extra or {})
     client_env = dict(client_env)
     client_env.update(client_env_extra)
+    client_cmd = list(client_cmd) + list(client_extra_args or [])
 
     server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, log_dir, env_extra=server_env, admin_port=server_admin)
     client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, log_dir, env_extra=client_env, admin_port=client_admin)
@@ -4233,6 +4290,317 @@ def test_overlay_e2e_ws_overlay_honors_no_proxy_env(tmp_path: Path) -> None:
         time.sleep(1.0)
         wait_probe(materialize_case_ports(case, 264), timeout=8.0)
         assert proxy.connect_count == 0
+    finally:
+        proxy.stop()
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_ws_proxy_is_scoped_to_peer_client_only(tmp_path: Path) -> None:
+    case = CASES['case08_overlay_ws_ipv4']
+    proxy_port = alloc_admin_port()
+    proxy = HttpConnectProxy(
+        name='ws_listener_scope_proxy',
+        listen_host='127.0.0.1',
+        listen_port=proxy_port,
+        log_path=tmp_path / 'ws_listener_scope_proxy.log',
+    )
+    bounce = None
+    server_proc = client_proc = None
+    try:
+        proxy.start()
+        bounce, server_proc, client_proc = _start_ws_case_with_client_env(
+            case,
+            tmp_path,
+            case_index=265,
+            client_env_extra={'NO_PROXY': '127.0.0.1', 'no_proxy': '127.0.0.1'},
+            server_env_extra=_proxy_env(proxy_port, no_proxy=''),
+        )
+        wait_probe(materialize_case_ports(case, 265), timeout=8.0)
+        time.sleep(1.0)
+        assert proxy.connect_count == 0
+    finally:
+        proxy.stop()
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("case_name", "case_index"),
+    [
+        ('case01_udp_over_own_udp_ipv4', 266),
+        ('case06_overlay_tcp_ipv4', 267),
+        ('case10_overlay_quic_ipv4', 268),
+    ],
+)
+def test_overlay_e2e_http_proxy_env_does_not_apply_to_non_ws_transports(case_name: str, case_index: int, tmp_path: Path) -> None:
+    case = CASES[case_name]
+    proxy_port = alloc_admin_port()
+    proxy = HttpConnectProxy(
+        name=f'{case_name}_non_ws_proxy',
+        listen_host='127.0.0.1',
+        listen_port=proxy_port,
+        log_path=tmp_path / f'{case_name}_non_ws_proxy.log',
+    )
+    bounce = None
+    server_proc = client_proc = None
+    try:
+        proxy.start()
+        case = materialize_case_ports(case, case_index)
+        bounce = BounceBackServer(
+            name=f'{case.name}_bounce',
+            proto=case.bounce_proto,
+            bind_host=case.bounce_bind,
+            port=case.bounce_port,
+            log_path=tmp_path / f'{case.name}_bounce.log',
+        )
+        bounce.start()
+        specs = build_commands(case, tmp_path, case_index, enable_admin=True)
+        server_name, server_cmd, server_env, server_admin = specs[0]
+        client_name, client_cmd, client_env, client_admin = specs[1]
+        client_env = dict(client_env)
+        client_env.update(_proxy_env(proxy_port, no_proxy=''))
+        server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, tmp_path, env_extra=server_env, admin_port=server_admin)
+        client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, tmp_path, env_extra=client_env, admin_port=client_admin)
+        wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+        wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
+        client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+        wait_probe(case, timeout=12.0)
+        time.sleep(1.0)
+        assert proxy.connect_count == 0
+    finally:
+        proxy.stop()
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_ws_proxy_tunnel_precedes_websocket_handshake(tmp_path: Path) -> None:
+    case = CASES['case08_overlay_ws_ipv4']
+    proxy_port = alloc_admin_port()
+    proxy = HttpConnectProxy(
+        name='ws_proxy_handshake_order',
+        listen_host='127.0.0.1',
+        listen_port=proxy_port,
+        log_path=tmp_path / 'ws_proxy_handshake_order.log',
+    )
+    bounce = None
+    server_proc = client_proc = None
+    try:
+        proxy.start()
+        bounce, server_proc, client_proc = _start_ws_case_with_client_env(
+            case,
+            tmp_path,
+            case_index=269,
+            client_env_extra=_proxy_env(proxy_port, no_proxy=''),
+        )
+        wait_http_proxy_connects(proxy, minimum_count=1, timeout=8.0)
+        assert proxy.first_tunnel_request_line is not None
+        assert proxy.first_tunnel_request_line.startswith('GET ')
+        wait_probe(materialize_case_ports(case, 269), timeout=8.0)
+    finally:
+        proxy.stop()
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_ws_proxy_failure_keeps_overlay_state_machine_healthy(tmp_path: Path) -> None:
+    case = materialize_case_ports(CASES['case08_overlay_ws_ipv4'], 270)
+    bad_proxy_port = alloc_admin_port()
+    bounce = BounceBackServer(
+        name=f'{case.name}_bounce',
+        proto=case.bounce_proto,
+        bind_host=case.bounce_bind,
+        port=case.bounce_port,
+        log_path=tmp_path / f'{case.name}_bounce.log',
+    )
+    server_proc = client_proc = None
+    try:
+        bounce.start()
+        specs = build_commands(case, tmp_path, 270, enable_admin=True)
+        server_name, server_cmd, server_env, server_admin = specs[0]
+        client_name, client_cmd, client_env, client_admin = specs[1]
+        client_env = dict(client_env)
+        client_env.update(_proxy_env(bad_proxy_port, no_proxy=''))
+        server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, tmp_path, env_extra=server_env, admin_port=server_admin)
+        client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, tmp_path, env_extra=client_env, admin_port=client_admin)
+        wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+        wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
+        time.sleep(2.0)
+        assert_running(server_proc)
+        assert_running(client_proc)
+        client_status = get_status(client_proc.admin_port or 0)
+        server_status = get_status(server_proc.admin_port or 0)
+        assert status_state(client_status) != 'CONNECTED'
+        assert status_state(server_status) != 'CONNECTED'
+        expect_probe_failure(case, PAYLOAD_IN, timeout=3.0)
+    finally:
+        bounce.stop()
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_ws_proxy_manual_override_uses_explicit_proxy(tmp_path: Path) -> None:
+    case = CASES['case08_overlay_ws_ipv4']
+    proxy_port = alloc_admin_port()
+    proxy = HttpConnectProxy(
+        name='ws_manual_proxy_override',
+        listen_host='127.0.0.1',
+        listen_port=proxy_port,
+        log_path=tmp_path / 'ws_manual_proxy_override.log',
+    )
+    bounce = None
+    server_proc = client_proc = None
+    try:
+        proxy.start()
+        bounce, server_proc, client_proc = _start_ws_case_with_client_env(
+            case,
+            tmp_path,
+            case_index=271,
+            client_env_extra={'NO_PROXY': '127.0.0.1', 'no_proxy': '127.0.0.1'},
+            client_extra_args=[
+                '--ws-proxy-mode', 'manual',
+                '--ws-proxy-host', '127.0.0.1',
+                '--ws-proxy-port', str(proxy_port),
+            ],
+        )
+        wait_http_proxy_connects(proxy, minimum_count=1, timeout=8.0)
+        wait_probe(materialize_case_ports(case, 271), timeout=8.0)
+        assert proxy.connect_count >= 1
+    finally:
+        proxy.stop()
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_ws_proxy_off_override_disables_platform_default_proxy(tmp_path: Path) -> None:
+    case = CASES['case08_overlay_ws_ipv4']
+    proxy_port = alloc_admin_port()
+    proxy = HttpConnectProxy(
+        name='ws_proxy_off_override',
+        listen_host='127.0.0.1',
+        listen_port=proxy_port,
+        log_path=tmp_path / 'ws_proxy_off_override.log',
+    )
+    bounce = None
+    server_proc = client_proc = None
+    try:
+        proxy.start()
+        bounce, server_proc, client_proc = _start_ws_case_with_client_env(
+            case,
+            tmp_path,
+            case_index=272,
+            client_env_extra=_proxy_env(proxy_port, no_proxy=''),
+            client_extra_args=['--ws-proxy-mode', 'off'],
+        )
+        wait_probe(materialize_case_ports(case, 272), timeout=8.0)
+        time.sleep(1.0)
+        assert proxy.connect_count == 0
+    finally:
+        proxy.stop()
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.skipif(sys.platform != 'win32', reason='Windows-only system proxy default behavior')
+def test_overlay_e2e_ws_proxy_system_default_on_windows_uses_system_proxy(tmp_path: Path) -> None:
+    case = CASES['case08_overlay_ws_ipv4']
+    proxy_port = alloc_admin_port()
+    proxy = HttpConnectProxy(
+        name='ws_system_default_windows',
+        listen_host='127.0.0.1',
+        listen_port=proxy_port,
+        log_path=tmp_path / 'ws_system_default_windows.log',
+    )
+    bounce = None
+    server_proc = client_proc = None
+    try:
+        proxy.start()
+        bounce, server_proc, client_proc = _start_ws_case_with_client_env(
+            case,
+            tmp_path,
+            case_index=273,
+            client_env_extra=_proxy_env(proxy_port, no_proxy='', include_system_override=True),
+        )
+        wait_http_proxy_connects(proxy, minimum_count=1, timeout=8.0)
+        wait_probe(materialize_case_ports(case, 273), timeout=8.0)
+        assert proxy.connect_count >= 1
+    finally:
+        proxy.stop()
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.skipif(sys.platform != 'win32', reason='Windows-only Negotiate proxy behavior')
+def test_overlay_e2e_ws_proxy_negotiate_auth_on_windows(tmp_path: Path) -> None:
+    case = CASES['case08_overlay_ws_ipv4']
+    proxy_port = alloc_admin_port()
+    proxy = HttpConnectProxy(
+        name='ws_negotiate_windows',
+        listen_host='127.0.0.1',
+        listen_port=proxy_port,
+        log_path=tmp_path / 'ws_negotiate_windows.log',
+        require_negotiate=True,
+    )
+    bounce = None
+    server_proc = client_proc = None
+    try:
+        proxy.start()
+        bounce, server_proc, client_proc = _start_ws_case_with_client_env(
+            case,
+            tmp_path,
+            case_index=274,
+            client_env_extra=_proxy_env(proxy_port, no_proxy='', include_system_override=True),
+            client_extra_args=['--ws-proxy-auth', 'negotiate'],
+        )
+        wait_http_proxy_connects(proxy, minimum_count=2, timeout=8.0)
+        wait_probe(materialize_case_ports(case, 274), timeout=8.0)
+        assert any(value.lower().startswith('negotiate ') for value in proxy.proxy_authorizations)
     finally:
         proxy.stop()
         if bounce is not None:

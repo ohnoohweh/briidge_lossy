@@ -1,28 +1,261 @@
+REQ-OVL-001:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic
+
+REQ-OVL-002:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic
+
+REQ-OVL-003:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic
+  unit_tests:
+    - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_uses_per_transport_ports
+
+REQ-OVL-004:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic
+  unit_tests:
+    - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_uses_per_transport_ports
+    - tests/unit/test_ws_payload_mode.py::test_connect_disables_websocket_compression
+
+REQ-OVL-005:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic
+  unit_tests:
+    - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_uses_per_transport_ports
+
+REQ-OVL-006:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic
+
+REQ-OVL-007:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
+  unit_tests:
+    - tests/unit/test_peer_resolution.py::test_resolve_localhost_ipv4_uses_loopback_fallback_on_gaierror
+    - tests/unit/test_peer_resolution.py::test_resolve_localhost_ipv6_uses_loopback_fallback_on_gaierror
+
+REQ-WSP-001:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_overlay_uses_http_proxy_env
+  unit_tests:
+    - tests/unit/test_ws_payload_mode.py::test_build_proxy_connect_request_includes_authorization
+
+REQ-WSP-002:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_proxy_is_scoped_to_peer_client_only
+  unit_tests:
+    - tests/unit/test_ws_payload_mode.py::test_connect_uses_proxy_socket_when_proxy_mode_enabled
+
+REQ-WSP-003:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_http_proxy_env_does_not_apply_to_non_ws_transports
+  unit_tests:
+    - tests/unit/test_ws_payload_mode.py::test_connect_uses_proxy_socket_when_proxy_mode_enabled
+
+REQ-WSP-004:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_proxy_tunnel_precedes_websocket_handshake
+  unit_tests:
+    - tests/unit/test_ws_payload_mode.py::test_connect_uses_proxy_socket_when_proxy_mode_enabled
+
+REQ-WSP-005:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_proxy_failure_keeps_overlay_state_machine_healthy
+  unit_tests:
+    - tests/unit/test_ws_payload_mode.py::test_system_proxy_mode_logs_when_no_endpoint_is_found
+
 REQ-WSP-006:
-  tests:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_proxy_system_default_on_windows_uses_system_proxy
+  unit_tests:
     - tests/unit/test_ws_payload_mode.py::test_register_cli_defaults_ws_proxy_mode_to_system_on_windows
     - tests/unit/test_ws_payload_mode.py::test_missing_ws_proxy_mode_uses_platform_default_in_constructor
 
 REQ-WSP-007:
-  tests:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_overlay_uses_http_proxy_env
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_overlay_honors_no_proxy_env
+  unit_tests:
     - tests/unit/test_ws_payload_mode.py::test_register_cli_defaults_ws_proxy_mode_to_env_on_linux
     - tests/unit/test_ws_payload_mode.py::test_env_proxy_mode_uses_http_proxy_for_ws
     - tests/unit/test_ws_payload_mode.py::test_env_proxy_mode_uses_https_proxy_for_wss
     - tests/unit/test_ws_payload_mode.py::test_env_proxy_mode_honors_no_proxy_bypass
-    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_overlay_uses_http_proxy_env
-    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_overlay_honors_no_proxy_env
 
 REQ-WSP-008:
-  tests:
-    - tests/unit/test_ws_payload_mode.py::test_manual_proxy_mode_is_rejected_off_windows
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_proxy_manual_override_uses_explicit_proxy
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_proxy_off_override_disables_platform_default_proxy
+  unit_tests:
+    - tests/unit/test_ws_payload_mode.py::test_manual_proxy_mode_returns_endpoint_off_windows
     - tests/unit/test_ws_payload_mode.py::test_connect_uses_proxy_socket_when_proxy_mode_enabled
 
 REQ-WSP-009:
-  tests:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_proxy_negotiate_auth_on_windows
+  unit_tests:
     - tests/unit/test_ws_payload_mode.py::test_build_proxy_connect_request_includes_authorization
     - tests/unit/test_ws_payload_mode.py::test_system_proxy_mode_logs_when_no_endpoint_is_found
 
+REQ-LIFE-001:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
+
+REQ-LIFE-002:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
+  unit_tests:
+    - tests/unit/test_ws_payload_mode.py::test_quick_reconnect_cancels_pending_disconnect
+
+REQ-LIFE-003:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
+
+REQ-LIFE-004:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_server_restart_closes_tcp_preserves_udp
+
+REQ-LST-001:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_two_clients
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+  unit_tests:
+    - tests/unit/test_ws_multi_peer.py::test_inbound_mux_rewrite_allocates_distinct_server_channels_per_peer
+
+REQ-LST-002:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+
+REQ-LST-003:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+
+REQ-LST-004:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+
+REQ-LST-005:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_two_clients
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+
+REQ-LST-006:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+  unit_tests:
+    - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_uses_child_myudp_session_stats
+
+REQ-MUX-001:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_server_restart_closes_tcp_preserves_udp
+  unit_tests:
+    - tests/unit/test_ws_multi_peer.py::test_inbound_mux_rewrite_allocates_distinct_server_channels_per_peer
+
+REQ-MUX-002:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_server_restart_closes_tcp_preserves_udp
+
+REQ-MUX-003:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+  unit_tests:
+    - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_state_is_scoped_by_peer_id
+    - tests/unit/test_ws_multi_peer.py::test_inbound_mux_rewrite_allocates_distinct_server_channels_per_peer
+
+REQ-MUX-004:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+  unit_tests:
+    - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
+    - tests/unit/test_channel_mux_peer_catalog.py::test_peer_disconnect_closes_tcp_udp_listeners_for_that_peer
+
+REQ-MYU-001:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss
+
+REQ-MYU-002:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss
+
+REQ-MYU-003:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss
+
+REQ-MYU-004:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss
+
+REQ-MYU-005:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss
+
+REQ-MYU-006:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss
+
+REQ-ADM-001:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_available_when_auth_disabled
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_when_auth_disabled
+
+REQ-ADM-002:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_available_when_auth_disabled
+
+REQ-ADM-003:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_unavailable_without_correct_auth
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_unavailable_without_correct_auth
+
+REQ-ADM-004:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_available_after_correct_auth
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_after_correct_auth
+
+REQ-ADM-005:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_auth_isolated_per_concurrent_http_client
+
+REQ-ADM-006:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_two_clients
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_when_auth_disabled
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_unavailable_without_correct_auth
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_after_correct_auth
+  unit_tests:
+    - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_uses_child_myudp_session_stats
+
 REQ-TST-001:
-  tests:
+  integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_overlay_uses_http_proxy_env
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_overlay_honors_no_proxy_env
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_cli_routing_keeps_explicit_mode_override
+
+REQ-TST-002:
+  unit_tests:
+    - tests/unit/test_channel_mux_listener_mode.py::test_listener_mode_ignores_own_servers_and_remote_servers
+    - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_state_is_scoped_by_peer_id
+    - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_uses_child_myudp_session_stats
+    - tests/unit/test_debug_logging_aliases.py::test_log_ws_session_applies_to_websockets_library_loggers
+    - tests/unit/test_peer_resolution.py::test_resolve_localhost_ipv4_uses_loopback_fallback_on_gaierror
+    - tests/unit/test_runner_config_persistence.py::test_update_config_persists_to_config_file
+    - tests/unit/test_runner_events.py::test_restart_event_binds_to_running_loop
+    - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_uses_per_transport_ports
+    - tests/unit/test_ws_multi_peer.py::test_inbound_mux_rewrite_allocates_distinct_server_channels_per_peer
+    - tests/unit/test_ws_payload_mode.py::test_register_cli_defaults_ws_proxy_mode_to_env_on_linux
+
+REQ-TST-003:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_server_restart_closes_tcp_preserves_udp
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_cli_routing_infers_concurrent_mode_from_case13
+
+REQ-TST-004:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_cli_routing_infers_concurrent_mode_from_case13
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_materialize_case_ports_shifts_overlay_and_service_ports
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_alloc_admin_ports_isolates_xdist_workers
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_case_port_offset_stays_in_range_for_many_workers
