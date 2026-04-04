@@ -1054,12 +1054,19 @@ Already generated:
     `test_overlay_e2e_tcp_secure_link_psk_happy_path`
     `test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected`
     `test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic`
-
-Still missing:
-
 - integration test for reconnect without nonce reuse
-- integration test for replay rejection after reconnect and after rekey
-- integration test for malformed-frame fail-closed behavior as a full subprocess case, not only unit-level verification
+  - evidence:
+    [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_psk_reconnects_with_fresh_session`
+- integration tests for replay rejection after reconnect and after rekey
+  - evidence:
+    [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_psk_replay_after_reconnect_is_rejected`
+    `test_overlay_e2e_tcp_secure_link_psk_replay_after_rekey_is_rejected`
+- integration test for malformed-frame fail-closed behavior as a full subprocess case
+  - evidence:
+    [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_psk_malformed_frame_fails_closed_subprocess`
 
 ### Phase 2: certificate-based mutual authentication
 
