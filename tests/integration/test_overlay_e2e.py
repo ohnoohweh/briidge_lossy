@@ -624,9 +624,9 @@ ADMIN_PORT_BASE = 61000
 ADMIN_PORTS_PER_WORKER = 256
 ADMIN_PORTS_PER_CASE = 4
 SECURE_LINK_ADMIN_BASE = 62000
-SECURE_LINK_PORT_OFFSET_BASE = 8000
+SECURE_LINK_PORT_OFFSET_BASE = 5000
 SECURE_LINK_PORT_STRIDE = 64
-SECURE_LINK_PORT_SLOTS_PER_WORKER = 8
+SECURE_LINK_PORT_SLOTS_PER_WORKER = 1
 
 EXACT_BYTES_CASES = {
     'case01_udp_over_own_udp_ipv4',
@@ -4045,7 +4045,7 @@ def _start_ws_case_with_client_env(
         raise
 
 
-def _start_tcp_case_with_secure_link_args(
+def _start_case_with_secure_link_args(
     case: Case,
     log_dir: Path,
     *,
@@ -4755,7 +4755,7 @@ def test_overlay_e2e_tcp_secure_link_psk_happy_path(tmp_path: Path) -> None:
     bounce = None
     server_proc = client_proc = None
     try:
-        case, bounce, server_proc, client_proc = _start_tcp_case_with_secure_link_args(
+        case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
             case,
             tmp_path,
             case_index=275,
@@ -4782,7 +4782,7 @@ def test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected(tmp_path: Path) -
     bounce = None
     server_proc = client_proc = None
     try:
-        case, bounce, server_proc, client_proc = _start_tcp_case_with_secure_link_args(
+        case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
             case,
             tmp_path,
             case_index=276,
@@ -4796,6 +4796,46 @@ def test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected(tmp_path: Path) -
             wait_probe(case, timeout=3.0)
         assert_running(server_proc)
         assert_running(client_proc)
+    finally:
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("case_name", "case_index", "secure_slot"),
+    [
+        ('case01_udp_over_own_udp_ipv4', 278, 3),
+        ('case08_overlay_ws_ipv4', 279, 4),
+        ('case10_overlay_quic_ipv4', 280, 5),
+    ],
+)
+def test_overlay_e2e_secure_link_psk_happy_path_other_transports(
+    case_name: str,
+    case_index: int,
+    secure_slot: int,
+    tmp_path: Path,
+) -> None:
+    case = CASES[case_name]
+    bounce = None
+    server_proc = client_proc = None
+    try:
+        case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+            case,
+            tmp_path,
+            case_index=case_index,
+            secure_slot=secure_slot,
+            server_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret'],
+            client_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret'],
+        )
+        client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+        wait_probe(case, timeout=12.0)
+        wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
     finally:
         if bounce is not None:
             bounce.stop()

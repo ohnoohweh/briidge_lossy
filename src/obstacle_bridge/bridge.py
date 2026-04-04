@@ -2357,6 +2357,7 @@ class UdpSession(ISession):
         self._server_chan_to_peer: Dict[int, Tuple[int, int]] = {}
         self._server_peer_chan_to_mux: Dict[Tuple[int, int], int] = {}
         self._server_next_mux_chan: int = 1
+        self._app_payload_passthrough: bool = False
 
         # Inner reliability/session engine remains the same one from base module.
         self.inner_session = Session(max_in_flight=args.max_inflight, proto=self._proto_state)
@@ -2448,6 +2449,8 @@ class UdpSession(ISession):
 
     def set_on_transport_epoch_change(self, cb: Callable[[int], None]) -> None:
         self._on_transport_epoch_change = cb
+    def set_app_payload_passthrough(self, enabled: bool) -> None:
+        self._app_payload_passthrough = bool(enabled)
 
 
     def get_metrics(self) -> SessionMetrics:
@@ -2722,6 +2725,15 @@ class UdpSession(ISession):
         if not payload:
             return 0
         if self._listener_mode:
+            if self._app_payload_passthrough and peer_id is not None:
+                ctx = self._server_peers.get(int(peer_id))
+                if not ctx:
+                    return 0
+                proto = ctx.get("peer_proto")
+                session = ctx.get("session")
+                if proto is None or session is None or getattr(proto, "send_port", None) is None:
+                    return 0
+                return session.send_application_payload(payload, proto.send_port)
             target = self._resolve_server_send_target(payload, peer_id=peer_id)
             if target is None:
                 return 0
@@ -2773,7 +2785,7 @@ class UdpSession(ISession):
             self._log.debug("[UdpSession] _on_complete_for_peer failed on _on_app_from_peer_bytes %r", e)
         if callable(self._on_app):
             try:
-                rewritten = self._server_rewrite_inbound_app(peer_id, datagram)
+                rewritten = datagram if self._app_payload_passthrough else self._server_rewrite_inbound_app(peer_id, datagram)
                 try:
                     self._on_app(rewritten, peer_id=peer_id)
                 except TypeError:
@@ -4499,6 +4511,7 @@ class QuicSession(ISession):
         self._rtt_rt = StreamRTTRuntime(self._rtt)
         self._overlay_connected: bool = False
         self._probe_id = f"{id(self)&0xFFFF:04x}"
+        self._app_payload_passthrough: bool = False
 
         # TLS/ALPN
         self._alpn = getattr(args, "quic_alpn", "hq-29") or "hq-29"
@@ -4515,6 +4528,7 @@ class QuicSession(ISession):
     def set_on_peer_disconnect(self, cb): self._on_peer_disconnect_cb = cb
     def set_on_app_from_peer_bytes(self, cb): self._on_app_from_peer_bytes = cb
     def set_on_transport_epoch_change(self, cb): self._on_transport_epoch_change = cb
+    def set_app_payload_passthrough(self, enabled: bool) -> None: self._app_payload_passthrough = bool(enabled)
 
     # ---- lifecycle ----
     async def start(self) -> None:
@@ -4795,6 +4809,14 @@ class QuicSession(ISession):
             self._log.error(f"[QUIC/TX] ({self._probe_id}) app payload too large ({len(payload)} > {self._max_app}); drop")
             return 0
         if not self._peer_tuple:
+            if self._app_payload_passthrough and peer_id is not None:
+                ctx = self._server_peers.get(int(peer_id))
+                if not ctx:
+                    return 0
+                wire = self._LEN.pack(len(payload) + 1) + bytes([self._K_APP]) + payload
+                if not self._send_wire_ctx(ctx, wire):
+                    return 0
+                return len(payload)
             target = self._resolve_server_send_target(payload, peer_id=peer_id)
             if target is None:
                 self._log.debug(f"[QUIC/TX] ({self._probe_id}) drop unroutable server APP len={len(payload)} peer_id={peer_id}")
@@ -5208,7 +5230,8 @@ class QuicSession(ISession):
                 if callable(self._on_app):
                     try:
                         if peer_id is not None:
-                            payload = self._server_rewrite_inbound_app(peer_id, payload)
+                            if not self._app_payload_passthrough:
+                                payload = self._server_rewrite_inbound_app(peer_id, payload)
                             self._on_app(payload, peer_id=peer_id)
                         else:
                             self._on_app(payload)
@@ -5814,6 +5837,13 @@ class WebSocketSession(ISession):
         wire = bytes([self._K_APP]) + payload
 
         if not self._peer_tuple:
+            if self._app_payload_passthrough and peer_id is not None:
+                ctx = self._server_peers.get(int(peer_id))
+                if not ctx:
+                    self._log.debug(f"[WS/TX] ({self._probe_id}) drop APP for missing peer_id={peer_id}")
+                    return 0
+                self._schedule_server_send(ctx, wire, on_sent=lambda: self._notify_peer_tx(len(wire)))
+                return len(payload)
             if not self._server_peers and self._ws is not None:
                 self._schedule_send(wire, on_sent=lambda: self._notify_peer_tx(len(wire)))
                 return len(payload)
@@ -11397,8 +11427,8 @@ class Runner:
             return session
         if mode != "psk":
             raise ValueError(f"secure_link_mode={mode} is not implemented yet")
-        if transport_name != "tcp":
-            raise ValueError("secure_link_mode=psk is currently implemented only for overlay_transport=tcp")
+        if transport_name not in {"myudp", "tcp", "ws", "quic"}:
+            raise ValueError(f"secure_link_mode=psk is not supported for overlay_transport={transport_name}")
         if not str(getattr(args, "secure_link_psk", "") or ""):
             raise ValueError("secure_link_mode=psk requires --secure-link-psk")
         return SecureLinkPskSession(session, args, transport_name)
@@ -11418,10 +11448,6 @@ class Runner:
             session_args.peer = getattr(session_args, peer_attr, getattr(session_args, "peer", None))
             session_args.peer_port = int(getattr(session_args, peer_port_attr, getattr(session_args, "peer_port", 443)) or 443)
             setattr(session_args, listen_port_attr, Runner._overlay_port_for(args, choice, len(choices)))
-            if bool(getattr(session_args, "secure_link", False)):
-                mode = str(getattr(session_args, "secure_link_mode", "off") or "off").strip().lower()
-                if mode == "psk" and choice != "tcp":
-                    raise ValueError("secure_link_mode=psk is currently implemented only for overlay_transport=tcp")
             if choice == "tcp":
                 session = TcpStreamSession.from_args(session_args)
             elif choice == "quic":

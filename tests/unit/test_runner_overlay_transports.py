@@ -67,18 +67,27 @@ class RunnerOverlayTransportTests(unittest.TestCase):
             [7000, 7000, 7000, 7000],
         )
 
-    def test_build_sessions_from_overlay_wraps_tcp_with_secure_link_psk(self):
-        args = _args(overlay_transport='tcp', secure_link=True, secure_link_mode='psk', secure_link_psk='lab-secret', tcp_peer='127.0.0.1')
-        with mock.patch.object(TcpStreamSession, 'from_args', return_value=mock.Mock(spec=TcpStreamSession)) as factory:
-            sessions = Runner.build_sessions_from_overlay(args)
-        self.assertEqual([name for name, _ in sessions], ['tcp'])
-        self.assertIsInstance(sessions[0][1], SecureLinkPskSession)
-        factory.assert_called_once()
-
-    def test_build_sessions_from_overlay_rejects_secure_link_psk_for_non_tcp_transport(self):
-        args = _args(overlay_transport='ws', secure_link=True, secure_link_mode='psk', secure_link_psk='lab-secret', ws_peer='127.0.0.1')
-        with self.assertRaises(ValueError):
-            Runner.build_sessions_from_overlay(args)
+    def test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_psk(self):
+        cases = [
+            ('myudp', 'udp_peer', UdpSession, '127.0.0.1'),
+            ('tcp', 'tcp_peer', TcpStreamSession, '127.0.0.1'),
+            ('quic', 'quic_peer', QuicSession, '127.0.0.1'),
+            ('ws', 'ws_peer', WebSocketSession, '127.0.0.1'),
+        ]
+        for overlay_transport, peer_attr, cls, peer_value in cases:
+            with self.subTest(overlay_transport=overlay_transport):
+                args = _args(
+                    overlay_transport=overlay_transport,
+                    secure_link=True,
+                    secure_link_mode='psk',
+                    secure_link_psk='lab-secret',
+                    **{peer_attr: peer_value},
+                )
+                with mock.patch.object(cls, 'from_args', return_value=mock.Mock(spec=cls)) as factory:
+                    sessions = Runner.build_sessions_from_overlay(args)
+                self.assertEqual([name for name, _ in sessions], [overlay_transport])
+                self.assertIsInstance(sessions[0][1], SecureLinkPskSession)
+                factory.assert_called_once()
 
 
 if __name__ == '__main__':

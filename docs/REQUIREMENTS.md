@@ -56,8 +56,9 @@ The certificate/profile details that ObstacleBridge expects as input are documen
 
 Current implementation note:
 
-- a narrow Phase 1 prototype exists for `overlay_transport=tcp` with `secure_link_mode=psk`
-- that prototype now covers both single-peer and two-peer listener routing on the TCP transport
+- a narrow Phase 1 prototype exists for `secure_link_mode=psk` on `overlay_transport=myudp`, `tcp`, `ws`, and `quic`
+- that prototype currently proves the first protected happy-path slice across those transports
+- a deeper two-peer listener routing slice currently exists on the TCP transport
 - that prototype is intended for development and testing of the layer boundary
 - it does not yet promote these planned IDs into the active delivered `REQ-*` requirement namespace
 

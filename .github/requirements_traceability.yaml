@@ -44,9 +44,10 @@ REQ-OVL-007:
 # Planned secure-link work is documented in docs/SECURE_LINK_DESIGN.md.
 # Future secure-link IDs currently use the PLAN-AUT-* namespace in REQUIREMENTS.md,
 # so they are intentionally excluded from this active REQ-* traceability manifest.
-# A narrow TCP+PSK prototype and its tests may exist before those planned IDs are
-# promoted into the active delivered REQ-* namespace, including a two-peer TCP
-# listener slice used to validate peer-isolated routing at the secure-link layer.
+# A narrow PSK prototype and its tests may exist before those planned IDs are
+# promoted into the active delivered REQ-* namespace, currently covering
+# myudp/tcp/ws/quic happy-path slices plus a two-peer TCP listener slice used to
+# validate peer-isolated routing at the secure-link layer.
 REQ-WSP-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_overlay_uses_http_proxy_env

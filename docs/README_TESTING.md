@@ -2,8 +2,8 @@
 
 This repository currently collects:
 
-- `81` integration tests in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
-- `59` unit tests in `tests/unit/`
+- `84` integration tests in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+- `66` unit tests in `tests/unit/`
 
 ## Get started
 
@@ -180,7 +180,7 @@ The supporting project-level intent documents are:
 | `test_overlay_e2e_myudp_delay_loss` | Delayed/lossy myudp behavior | Verify retransmission, large payload handling, and control/data loss behavior through a real loopback MITM proxy | `pytest -q tests/integration/test_overlay_e2e.py -k myudp_delay_loss` |
 | `test_overlay_e2e_server_restart_closes_tcp_preserves_udp` | Restart-specific regression | Verify the special restart behavior for the concurrent WS case | `pytest -q tests/integration/test_overlay_e2e.py -k server_restart_closes_tcp_preserves_udp` |
 | `test_overlay_e2e_admin_api_*` | Admin web auth/API | Verify auth-disabled, auth-required, authenticated, session-isolated API behavior, and live WebSocket telemetry availability for both open and cookie-authenticated sessions | `pytest -q tests/integration/test_overlay_e2e.py -k admin_api` |
-| `test_overlay_e2e_tcp_secure_link_psk_*` | Secure-link Phase 1 TCP prototype | Verify the first TCP+PSK secure-link slice reaches protected connected state, rejects mismatched PSKs, and preserves peer isolation for multiple concurrent listener connections | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk` |
+| `test_overlay_e2e_*secure_link_psk*` | Secure-link Phase 1 PSK prototype | Verify the first PSK secure-link slice reaches protected connected state across supported transports, rejects mismatched PSKs, and preserves peer isolation for multiple concurrent TCP listener connections | `pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` |
 | `test_overlay_e2e_ws_proxy_*` | WebSocket proxy behavior | Verify proxy success, bypass, scope, handshake ordering, failure handling, and explicit override behavior for WS peer clients, with Windows-only cases for system-default and Negotiate auth | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_` |
 | `test_overlay_e2e_ws_overlay_*proxy_env` | WebSocket proxy env behavior | Verify WS peer clients honor `HTTP_PROXY` and `NO_PROXY` in real subprocess runs | `pytest -q tests/integration/test_overlay_e2e.py -k "proxy_env"` |
 | `test_overlay_e2e_cli_routing_*` and allocator checks | Harness self-tests | Verify CLI mode inference and worker-safe port allocation logic | `pytest -q tests/integration/test_overlay_e2e.py -k "cli_routing or alloc_admin_ports or materialize_case_ports or case_port_offset"` |
@@ -206,7 +206,7 @@ This first mapping is intentionally coarse. It links current integration entrypo
 | `test_overlay_e2e_admin_live_ws_available_when_auth_disabled` | `REQ-ADM-006` | Live admin WebSocket stream availability and snapshot payload coverage when auth is disabled |
 | `test_overlay_e2e_admin_live_ws_unavailable_without_correct_auth` | `REQ-ADM-003`, `REQ-ADM-006` | Live admin WebSocket stream must reject unauthenticated clients when auth is enabled |
 | `test_overlay_e2e_admin_live_ws_available_after_correct_auth` | `REQ-ADM-004`, `REQ-ADM-006` | Live admin WebSocket stream must accept authenticated clients carrying the admin session cookie |
-| `test_overlay_e2e_tcp_secure_link_psk_happy_path`, `test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected`, and `test_overlay_e2e_tcp_secure_link_psk_listener_two_clients_concurrent_udp_tcp` | `PLAN-AUT-001`, `PLAN-AUT-002`, `PLAN-AUT-003` | First real subprocess validation of the TCP+PSK secure-link boundary slice, now including multi-peer listener routing; still prototype coverage rather than active `REQ-*` traceability |
+| `test_overlay_e2e_tcp_secure_link_psk_happy_path`, `test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected`, `test_overlay_e2e_tcp_secure_link_psk_listener_two_clients_concurrent_udp_tcp`, and `test_overlay_e2e_secure_link_psk_happy_path_other_transports` | `PLAN-AUT-001`, `PLAN-AUT-002`, `PLAN-AUT-003` | First real subprocess validation of the PSK secure-link boundary slice across `myudp`, `tcp`, `ws`, and `quic`, with multi-peer listener routing currently exercised on TCP; still prototype coverage rather than active `REQ-*` traceability |
 | `test_overlay_e2e_ws_overlay_uses_http_proxy_env` | `REQ-WSP-001`, `REQ-WSP-007`, `PROC-TST-001` | WS peer clients must honor `HTTP_PROXY` and establish proxy-routed overlay traffic successfully |
 | `test_overlay_e2e_ws_proxy_is_scoped_to_peer_client_only` | `REQ-WSP-002` | Proxy behavior must stay scoped to WS peer-client mode and not imply listener-side proxy use |
 | `test_overlay_e2e_http_proxy_env_does_not_apply_to_non_ws_transports` | `REQ-WSP-003` | HTTP proxy configuration must not silently become cross-transport behavior for `myudp`, `tcp`, or `quic` |
@@ -342,7 +342,10 @@ Those API shapes are not required to start implementation, but they would give t
 
 The repository now contains a narrow Phase 1 prototype for:
 
+- `overlay_transport=myudp`
 - `overlay_transport=tcp`
+- `overlay_transport=ws`
+- `overlay_transport=quic`
 - `secure_link_mode=psk`
 
 This is still development/testing coverage rather than active delivered `REQ-*` coverage.
@@ -351,6 +354,7 @@ This is still development/testing coverage rather than active delivered `REQ-*` 
 |---|---|---|---|---|
 | `test_overlay_e2e_tcp_secure_link_psk_happy_path` | `PLAN-AUT-001`, `PLAN-AUT-002`, `PLAN-AUT-003` | Verify the first TCP secure-link wrapper can complete a PSK handshake and carry protected overlay traffic | Both admin endpoints come up, client and server reach `CONNECTED`, and the usual UDP probe over `case06_overlay_tcp_ipv4` succeeds with secure-link enabled on both sides | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk_happy_path` |
 | `test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected` | `PLAN-AUT-002`, `PLAN-AUT-003` | Verify mismatched PSKs prevent the protected data phase | Client and server stay not connected, the probe does not succeed, and both processes remain alive and observable for debugging | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk_wrong_secret_rejected` |
+| `test_overlay_e2e_secure_link_psk_happy_path_other_transports` | `PLAN-AUT-001`, `PLAN-AUT-002`, `PLAN-AUT-003` | Verify the same PSK secure-link boundary can carry protected overlay traffic over `myudp`, `ws`, and `quic` in addition to the original TCP slice | Each supported transport reaches `CONNECTED`, the protected overlay probe succeeds, and the processes remain healthy and observable throughout the run | `pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk_happy_path_other_transports` |
 | `test_overlay_e2e_tcp_secure_link_psk_listener_two_clients_concurrent_udp_tcp` | `PLAN-AUT-001`, `PLAN-AUT-002`, `PLAN-AUT-003` | Verify the TCP secure-link prototype preserves peer isolation when a listener serves two PSK-authenticated clients concurrently | Listener reports two distinct connected peers, eight concurrent TCP channels and four UDP probes succeed across both clients, and no cross-peer channel mix-up occurs while secure-link is enabled on all processes | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk_listener_two_clients_concurrent_udp_tcp` |
 | `test_overlay_e2e_cli_routing_*` | `PROC-TST-001`, `PROC-TST-004` | Verify CLI routing logic | Selected cases infer the right harness mode and explicit override is preserved | `pytest -q tests/integration/test_overlay_e2e.py -k cli_routing` |
 | `test_overlay_e2e_materialize_case_ports_shifts_overlay_and_service_ports` | `PROC-TST-004` | Verify port rewriting | Overlay, bounce, probe, and service ports shift consistently | `pytest -q tests/integration/test_overlay_e2e.py -k materialize_case_ports` |
