@@ -17,7 +17,10 @@ class _RunnerStub:
                 "state": "authenticated",
                 "authenticated": True,
                 "authenticated_peers": 1,
+                "failure_code": None,
                 "failure_reason": None,
+                "failure_detail": None,
+                "failure_unix_ts": None,
             },
         }
 
@@ -37,7 +40,10 @@ class _RunnerStub:
                         "state": "authenticated",
                         "authenticated": True,
                         "session_id": 42,
+                        "failure_code": None,
                         "failure_reason": None,
+                        "failure_detail": None,
+                        "failure_unix_ts": None,
                         "transport": "tcp",
                     },
                 }
@@ -65,6 +71,8 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn("secure_link", payload)
         self.assertEqual(payload["secure_link"]["state"], "authenticated")
         self.assertTrue(payload["secure_link"]["authenticated"])
+        self.assertIsNone(payload["secure_link"]["failure_code"])
+        self.assertIsNone(payload["secure_link"]["failure_detail"])
         self.assertEqual(payload["admin_web_name"], "Lab Node")
 
     def test_build_peers_payload_includes_secure_link_rows(self):
@@ -87,3 +95,5 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn("secure_link", peer)
         self.assertEqual(peer["secure_link"]["state"], "authenticated")
         self.assertEqual(peer["secure_link"]["session_id"], 42)
+        self.assertIsNone(peer["secure_link"]["failure_code"])
+        self.assertIsNone(peer["secure_link"]["failure_detail"])

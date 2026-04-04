@@ -79,7 +79,7 @@ Current implementation note:
 - `PLAN-AUT-004`: The deployment trust anchor should be an admin-controlled root public key configured on peer clients and peer servers.
 - `PLAN-AUT-005`: Peer certificates should be issued by that deployment-local admin root and be constrained by machine-enforced roles.
 - `PLAN-AUT-006`: Certificate role checks, validity checks, deployment-scope checks, and serial-based revocation checks should be enforced before the protected secure-link data phase is entered.
-- `PLAN-AUT-007`: The admin web interface should expose the secure-link / encryption-layer status for the local session and reported peers so an operator can distinguish disabled, handshaking, authenticated, and failed protected-overlay states.
+- `PLAN-AUT-007`: The admin web interface should expose the secure-link / encryption-layer status for the local session and reported peers so an operator can distinguish disabled, handshaking, authenticated, and failed protected-overlay states and understand the reported authentication failure category.
 
 ## Reconnect and restart requirements
 

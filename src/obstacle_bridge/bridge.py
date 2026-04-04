@@ -1864,6 +1864,8 @@ class _SecureLinkPeerState:
     rx_counter: int = 0
     auth_fail_code: int = 0
     auth_fail_reason: str = ""
+    auth_fail_detail: str = ""
+    auth_fail_unix_ts: Optional[float] = None
 
 
 class SecureLinkPskSession(ISession):
@@ -1940,6 +1942,8 @@ class SecureLinkPskSession(ISession):
         self._last_connected = False
         self._last_auth_fail_code: int = 0
         self._last_auth_fail_reason: str = ""
+        self._last_auth_fail_detail: str = ""
+        self._last_auth_fail_unix_ts: Optional[float] = None
 
     @staticmethod
     def _require_crypto() -> None:
@@ -2013,6 +2017,15 @@ class SecureLinkPskSession(ISession):
             cls._SL_AUTH_FAIL_DECODE: "decode",
         }.get(int(code or 0))
 
+    @classmethod
+    def _auth_fail_detail(cls, code: int) -> Optional[str]:
+        return {
+            cls._SL_AUTH_FAIL_BAD_PSK: "pre-shared secret mismatch or protected-frame authentication failure",
+            cls._SL_AUTH_FAIL_UNSUPPORTED: "peer requested an unsupported secure-link capability",
+            cls._SL_AUTH_FAIL_REPLAY: "replayed or out-of-order protected frame rejected",
+            cls._SL_AUTH_FAIL_DECODE: "invalid or unexpected secure-link frame",
+        }.get(int(code or 0))
+
     def _mark_auth_fail(self, peer_id: Optional[int], session_id: int, code: int) -> None:
         key = self._peer_key(peer_id)
         state = self._peer_states.get(key)
@@ -2027,8 +2040,21 @@ class SecureLinkPskSession(ISession):
         state.authenticated = False
         state.auth_fail_code = int(code or 0)
         state.auth_fail_reason = str(self._auth_fail_reason(code) or "")
+        state.auth_fail_detail = str(self._auth_fail_detail(code) or "")
+        state.auth_fail_unix_ts = time.time()
         self._last_auth_fail_code = state.auth_fail_code
         self._last_auth_fail_reason = state.auth_fail_reason
+        self._last_auth_fail_detail = state.auth_fail_detail
+        self._last_auth_fail_unix_ts = state.auth_fail_unix_ts
+        self._log.warning(
+            "[SECURE-LINK] auth failure transport=%s side=%s peer_id=%s session_id=%s reason=%s detail=%s",
+            self._transport_name,
+            "client" if self._client_mode else "server",
+            "local" if self._client_mode else str(peer_id),
+            int(state.session_id or 0),
+            state.auth_fail_reason or "unknown",
+            state.auth_fail_detail or "unknown secure-link authentication failure",
+        )
         self._refresh_connected_state()
 
     def _refresh_connected_state(self) -> None:
@@ -2112,7 +2138,10 @@ class SecureLinkPskSession(ISession):
             key = self._peer_key(None if self._client_mode else peer_id)
             state = self._peer_states.get(key)
             authenticated = False
+            failure_code = None
             failure_reason = None
+            failure_detail = None
+            failure_unix_ts = None
             session_id = None
             if listening:
                 secure_state = "listening"
@@ -2124,7 +2153,10 @@ class SecureLinkPskSession(ISession):
                 session_id = int(state.session_id or 0) or None
             elif state.auth_fail_code:
                 secure_state = "failed"
+                failure_code = int(state.auth_fail_code or 0) or None
                 failure_reason = state.auth_fail_reason or self._auth_fail_reason(state.auth_fail_code)
+                failure_detail = state.auth_fail_detail or self._auth_fail_detail(state.auth_fail_code)
+                failure_unix_ts = state.auth_fail_unix_ts
                 session_id = int(state.session_id or 0) or None
             else:
                 secure_state = "handshaking" if inner_is_connected else "waiting_transport"
@@ -2135,7 +2167,10 @@ class SecureLinkPskSession(ISession):
                 "state": secure_state,
                 "authenticated": authenticated,
                 "session_id": session_id,
+                "failure_code": failure_code,
                 "failure_reason": failure_reason,
+                "failure_detail": failure_detail,
+                "failure_unix_ts": failure_unix_ts,
                 "transport": self._transport_name,
             }
             out.append(r)
@@ -2143,7 +2178,10 @@ class SecureLinkPskSession(ISession):
 
     def get_secure_link_status_snapshot(self) -> dict:
         any_failed = False
+        failure_code = None
         failure_reason = None
+        failure_detail = None
+        failure_unix_ts = None
         any_handshaking = False
         authenticated_peers = 0
         for state in self._peer_states.values():
@@ -2151,7 +2189,10 @@ class SecureLinkPskSession(ISession):
                 authenticated_peers += 1
             elif state.auth_fail_code:
                 any_failed = True
+                failure_code = failure_code or int(state.auth_fail_code or 0) or None
                 failure_reason = failure_reason or state.auth_fail_reason or self._auth_fail_reason(state.auth_fail_code)
+                failure_detail = failure_detail or state.auth_fail_detail or self._auth_fail_detail(state.auth_fail_code)
+                failure_unix_ts = failure_unix_ts or state.auth_fail_unix_ts
             else:
                 any_handshaking = True
         if authenticated_peers > 0:
@@ -2160,7 +2201,10 @@ class SecureLinkPskSession(ISession):
             overall_state = "failed"
         elif self._last_auth_fail_code:
             overall_state = "failed"
+            failure_code = failure_code or int(self._last_auth_fail_code or 0) or None
             failure_reason = self._last_auth_fail_reason or self._auth_fail_reason(self._last_auth_fail_code)
+            failure_detail = self._last_auth_fail_detail or self._auth_fail_detail(self._last_auth_fail_code)
+            failure_unix_ts = self._last_auth_fail_unix_ts
         elif any_handshaking:
             overall_state = "handshaking"
         elif bool(getattr(self._inner, "is_connected", lambda: False)()):
@@ -2174,7 +2218,10 @@ class SecureLinkPskSession(ISession):
             "state": overall_state,
             "authenticated": authenticated_peers > 0,
             "authenticated_peers": authenticated_peers,
+            "failure_code": failure_code,
             "failure_reason": failure_reason,
+            "failure_detail": failure_detail,
+            "failure_unix_ts": failure_unix_ts,
         }
 
     def _send_auth_fail(self, peer_id: Optional[int], session_id: int, code: int) -> None:
@@ -2187,6 +2234,8 @@ class SecureLinkPskSession(ISession):
     def _begin_client_handshake(self) -> None:
         self._last_auth_fail_code = 0
         self._last_auth_fail_reason = ""
+        self._last_auth_fail_detail = ""
+        self._last_auth_fail_unix_ts = None
         state = _SecureLinkPeerState(
             session_id=random.getrandbits(64),
             client_nonce=secrets.token_bytes(32),
@@ -2316,6 +2365,8 @@ class SecureLinkPskSession(ISession):
         server_nonce = secrets.token_bytes(32)
         self._last_auth_fail_code = 0
         self._last_auth_fail_reason = ""
+        self._last_auth_fail_detail = ""
+        self._last_auth_fail_unix_ts = None
         c2s_key, s2c_key = self._derive_keys(session_id, client_nonce, server_nonce)
         key = self._peer_key(peer_id)
         self._peer_states[key] = _SecureLinkPeerState(
@@ -2354,8 +2405,12 @@ class SecureLinkPskSession(ISession):
         state.authenticated = True
         state.auth_fail_code = 0
         state.auth_fail_reason = ""
+        state.auth_fail_detail = ""
+        state.auth_fail_unix_ts = None
         self._last_auth_fail_code = 0
         self._last_auth_fail_reason = ""
+        self._last_auth_fail_detail = ""
+        self._last_auth_fail_unix_ts = None
         self._refresh_connected_state()
 
     def _deliver_outer_app(self, payload: bytes, peer_id: Optional[int]) -> None:
@@ -2388,8 +2443,12 @@ class SecureLinkPskSession(ISession):
             state.authenticated = True
             state.auth_fail_code = 0
             state.auth_fail_reason = ""
+            state.auth_fail_detail = ""
+            state.auth_fail_unix_ts = None
             self._last_auth_fail_code = 0
             self._last_auth_fail_reason = ""
+            self._last_auth_fail_detail = ""
+            self._last_auth_fail_unix_ts = None
             self._refresh_connected_state()
         if not self._client_mode and peer_id is not None:
             plaintext = self._server_rewrite_inbound_app(int(peer_id), plaintext)
@@ -10679,7 +10738,10 @@ class StatsBoard:
                         "state": "disabled",
                         "authenticated": False,
                         "authenticated_peers": 0,
+                        "failure_code": None,
                         "failure_reason": None,
+                        "failure_detail": None,
+                        "failure_unix_ts": None,
                     },
                 )()
             ),
@@ -10739,7 +10801,10 @@ class RunnerMuxAggregate:
             "state": "disabled",
             "authenticated": False,
             "session_id": None,
+            "failure_code": None,
             "failure_reason": None,
+            "failure_detail": None,
+            "failure_unix_ts": None,
             "transport": None,
         }
 

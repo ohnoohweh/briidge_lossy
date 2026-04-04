@@ -2058,6 +2058,8 @@ def wait_peer_secure_link_state(
     label: str = '',
     transport: Optional[str] = None,
     failure_reason: Optional[str] = None,
+    failure_code: Optional[int] = None,
+    failure_detail_substr: Optional[str] = None,
     authenticated: Optional[bool] = None,
 ) -> dict:
     end = time.time() + timeout
@@ -2078,6 +2080,10 @@ def wait_peer_secure_link_state(
                 continue
             if expected_reason is not None and str(secure_link.get('failure_reason', '')).strip().lower() != expected_reason:
                 continue
+            if failure_code is not None and int(secure_link.get('failure_code') or 0) != int(failure_code):
+                continue
+            if failure_detail_substr is not None and failure_detail_substr not in str(secure_link.get('failure_detail') or ''):
+                continue
             if authenticated is not None and bool(secure_link.get('authenticated')) != bool(authenticated):
                 continue
             who = f' {label}' if label else ''
@@ -2096,6 +2102,8 @@ def wait_status_secure_link_state(
     timeout: float = 12.0,
     label: str = '',
     failure_reason: Optional[str] = None,
+    failure_code: Optional[int] = None,
+    failure_detail_substr: Optional[str] = None,
     authenticated: Optional[bool] = None,
 ) -> dict:
     end = time.time() + timeout
@@ -2110,6 +2118,12 @@ def wait_status_secure_link_state(
             time.sleep(0.25)
             continue
         if expected_reason is not None and str(secure_link.get('failure_reason', '')).strip().lower() != expected_reason:
+            time.sleep(0.25)
+            continue
+        if failure_code is not None and int(secure_link.get('failure_code') or 0) != int(failure_code):
+            time.sleep(0.25)
+            continue
+        if failure_detail_substr is not None and failure_detail_substr not in str(secure_link.get('failure_detail') or ''):
             time.sleep(0.25)
             continue
         if authenticated is not None and bool(secure_link.get('authenticated')) != bool(authenticated):
@@ -4865,17 +4879,19 @@ def test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected(tmp_path: Path) -
             case_index=276,
             secure_slot=1,
             server_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'server-secret'],
-            client_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'client-secret', '--secure-link-require'],
+            client_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'client-secret'],
         )
         wait_status_not_connected(client_proc.admin_port or 0, timeout=20.0, label='client')
         wait_status_not_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
         wait_status_secure_link_state(
-            server_proc.admin_port or 0,
+            client_proc.admin_port or 0,
             expected_state='failed',
             timeout=12.0,
-            label='server',
+            label='client',
             authenticated=False,
+            failure_code=1,
             failure_reason='bad_psk',
+            failure_detail_substr='pre-shared secret mismatch',
         )
         with pytest.raises(Exception):
             wait_probe(case, timeout=3.0)

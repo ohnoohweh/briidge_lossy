@@ -156,6 +156,8 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         client_peer = client.get_overlay_peers_snapshot()[0]
         self.assertEqual(client_peer["secure_link"]["state"], "authenticated")
         self.assertTrue(client_peer["secure_link"]["authenticated"])
+        self.assertIsNone(client_peer["secure_link"]["failure_code"])
+        self.assertIsNone(client_peer["secure_link"]["failure_detail"])
         self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
         self.assertEqual(server.get_secure_link_status_snapshot()["state"], "authenticated")
 
@@ -182,9 +184,15 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.send_app(b"blocked"), 0)
         client_peer = client.get_overlay_peers_snapshot()[0]
         self.assertEqual(client_peer["secure_link"]["state"], "failed")
+        self.assertEqual(client_peer["secure_link"]["failure_code"], 1)
         self.assertEqual(client_peer["secure_link"]["failure_reason"], "bad_psk")
+        self.assertIn("pre-shared secret mismatch", client_peer["secure_link"]["failure_detail"])
+        self.assertIsNotNone(client_peer["secure_link"]["failure_unix_ts"])
         self.assertEqual(client.get_secure_link_status_snapshot()["state"], "failed")
+        self.assertEqual(client.get_secure_link_status_snapshot()["failure_code"], 1)
         self.assertEqual(client.get_secure_link_status_snapshot()["failure_reason"], "bad_psk")
+        self.assertIn("pre-shared secret mismatch", client.get_secure_link_status_snapshot()["failure_detail"])
+        self.assertIsNotNone(client.get_secure_link_status_snapshot()["failure_unix_ts"])
 
     async def test_server_rewrites_mux_channels_per_peer_for_multiple_connections(self):
         server_inner = FakeInnerSession(connected=True)
