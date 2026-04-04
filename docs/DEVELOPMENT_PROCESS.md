@@ -175,7 +175,7 @@ After implementing a new feature or fixing a bug:
 - when [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py) changes, strongly prefer the same full integration run before pushing or opening a PR, even if targeted `-k` runs were used during iteration
 - when integration requirements are OS-specific, mark them explicitly and keep CI split so Linux runs the shared suite while Windows runs the Windows-only subset
 - record the observable behavior in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
-- keep [requirements_traceability.yaml](/home/ohnoohweh/quic_br/docs/requirements_traceability.yaml) aligned so changed requirements still point at real tests
+- keep [requirements_traceability.yaml](/home/ohnoohweh/quic_br/.github/requirements_traceability.yaml) aligned so changed requirements still point at real tests
 - update [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md) if responsibilities changed
 - add or adjust integration tests in [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
 - add or adjust unit tests if a local invariant changed
@@ -186,6 +186,6 @@ Repository guards now enforce three parts of this discipline, but they should be
 
 - behavior, test, or architecture changes must update [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
 - requirements, implementation, or test-set changes must update [README.md](/home/ohnoohweh/quic_br/README.md)
-- requirement changes must update [requirements_traceability.yaml](/home/ohnoohweh/quic_br/docs/requirements_traceability.yaml), and the referenced tests must exist
+- requirement changes must update [requirements_traceability.yaml](/home/ohnoohweh/quic_br/.github/requirements_traceability.yaml), and the referenced tests must exist
 
 This keeps the project understandable even when development continues in prompt-driven iterations.

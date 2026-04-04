@@ -1,4 +1,4 @@
-# Testbed command cookbook
+# Smoke test cheat sheet
 
 This file replaces the old `testbed.txt` format with Markdown and uses the current CLI option names from `python -m obstacle_bridge --help`.
 
@@ -9,9 +9,9 @@ This file replaces the old `testbed.txt` format with Markdown and uses the curre
 ```bash
 python -m obstacle_bridge.tools.overlay_tty --proto tcp --role server --port 3128
 ```
-- **Purpose:** Connect a local TCP test client to a bridge-exposed TCP listener on port `3129`.
+- **Purpose:** Connect a local TCP test client to the same local TCP test port `3128`.
 ```bash
-python -m obstacle_bridge.tools.overlay_tty --proto tcp --role client --host 127.0.0.1 --connect-port 3129
+python -m obstacle_bridge.tools.overlay_tty --proto tcp --role client --host 127.0.0.1 --connect-port 3128
 ```
 
 ### IPv4 UDP
@@ -19,9 +19,9 @@ python -m obstacle_bridge.tools.overlay_tty --proto tcp --role client --host 127
 ```bash
 python -m obstacle_bridge.tools.overlay_tty --proto udp --role server --port 16666
 ```
-- **Purpose:** Connect a local UDP test client to a bridge-exposed UDP listener on port `16667`.
+- **Purpose:** Connect a local UDP test client to the same local UDP test port `16666`.
 ```bash
-python -m obstacle_bridge.tools.overlay_tty --proto udp --role client --host 127.0.0.1 --connect-port 16667
+python -m obstacle_bridge.tools.overlay_tty --proto udp --role client --host 127.0.0.1 --connect-port 16666
 ```
 
 ### IPv6 UDP
@@ -29,9 +29,9 @@ python -m obstacle_bridge.tools.overlay_tty --proto udp --role client --host 127
 ```bash
 python -m obstacle_bridge.tools.overlay_tty --proto udp --role server --listen-bind :: --port 16666
 ```
-- **Purpose:** Connect an IPv6 UDP test client to local bridge listener port `16667`.
+- **Purpose:** Connect an IPv6 UDP test client to the same local UDP test port `16666`.
 ```bash
-python -m obstacle_bridge.tools.overlay_tty --proto udp --role client --host ::1 --bind :: --connect-port 16667
+python -m obstacle_bridge.tools.overlay_tty --proto udp --role client --host ::1 --bind :: --connect-port 16666
 ```
 
 ### IPv6 TCP
@@ -39,9 +39,9 @@ python -m obstacle_bridge.tools.overlay_tty --proto udp --role client --host ::1
 ```bash
 python -m obstacle_bridge.tools.overlay_tty --proto tcp --role server --listen-bind :: --port 3128
 ```
-- **Purpose:** Connect an IPv6 TCP test client to local bridge listener port `3129`.
+- **Purpose:** Connect an IPv6 TCP test client to the same local TCP test port `3128`.
 ```bash
-python -m obstacle_bridge.tools.overlay_tty --proto tcp --role client --host ::1 --bind :: --connect-port 3129
+python -m obstacle_bridge.tools.overlay_tty --proto tcp --role client --host ::1 --bind :: --connect-port 3128
 ```
 
 ## 2) Default UDP-overlay bridge examples (myudp)
