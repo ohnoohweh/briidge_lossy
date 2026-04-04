@@ -4555,6 +4555,7 @@ def test_overlay_e2e_ws_proxy_off_override_disables_platform_default_proxy(tmp_p
 
 @pytest.mark.integration
 @pytest.mark.slow
+@pytest.mark.windows_only
 @pytest.mark.skipif(sys.platform != 'win32', reason='Windows-only system proxy default behavior')
 def test_overlay_e2e_ws_proxy_system_default_on_windows_uses_system_proxy(tmp_path: Path) -> None:
     case = CASES['case08_overlay_ws_ipv4']
@@ -4590,6 +4591,7 @@ def test_overlay_e2e_ws_proxy_system_default_on_windows_uses_system_proxy(tmp_pa
 
 @pytest.mark.integration
 @pytest.mark.slow
+@pytest.mark.windows_only
 @pytest.mark.skipif(sys.platform != 'win32', reason='Windows-only Negotiate proxy behavior')
 def test_overlay_e2e_ws_proxy_negotiate_auth_on_windows(tmp_path: Path) -> None:
     case = CASES['case08_overlay_ws_ipv4']

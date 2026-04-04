@@ -55,9 +55,11 @@ Changes to `src/obstacle_bridge/bridge.py` are now expected to pass the full int
 Enforcement layers:
 
 - CI publishes the stable check `bridge.py Integration Gate`.
-- That check runs `pytest -q -n 16 tests/integration/test_overlay_e2e.py` whenever `src/obstacle_bridge/bridge.py` changed.
-- When `src/obstacle_bridge/bridge.py` did not change, the same check reports success without running the heavy suite.
-- To make merge impossible on failures, configure branch protection in GitHub to require the `bridge.py Integration Gate` status check.
+- When `src/obstacle_bridge/bridge.py` changed, CI now runs two jobs:
+  - Linux shared coverage: `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`
+  - Windows-specific coverage: `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"`
+- When `src/obstacle_bridge/bridge.py` did not change, the gate reports success without running the heavy suites.
+- To make merge impossible on failures, configure branch protection in GitHub to require both `Integration Gate (Linux shared)` and `Integration Gate (Windows-specific)`.
 
 ### What to run for regression testing
 
@@ -84,6 +86,13 @@ For frequent full end-to-end regression on a capable development machine, the pr
 
 ```bash
 pytest -q -n 16 tests/integration/test_overlay_e2e.py
+```
+
+For CI-aligned OS splitting, use:
+
+```bash
+pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"
+pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"
 ```
 
 ## Test patterns
@@ -174,6 +183,8 @@ The supporting project-level intent documents are:
 | `test_overlay_e2e_ws_proxy_*` | WebSocket proxy behavior | Verify proxy success, bypass, scope, handshake ordering, failure handling, and explicit override behavior for WS peer clients, with Windows-only cases for system-default and Negotiate auth | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_` |
 | `test_overlay_e2e_ws_overlay_*proxy_env` | WebSocket proxy env behavior | Verify WS peer clients honor `HTTP_PROXY` and `NO_PROXY` in real subprocess runs | `pytest -q tests/integration/test_overlay_e2e.py -k "proxy_env"` |
 | `test_overlay_e2e_cli_routing_*` and allocator checks | Harness self-tests | Verify CLI mode inference and worker-safe port allocation logic | `pytest -q tests/integration/test_overlay_e2e.py -k "cli_routing or alloc_admin_ports or materialize_case_ports or case_port_offset"` |
+| `pytest -m "not windows_only"` | Linux shared CI subset | Run all OS-independent integration scenarios on Linux without masking Windows-specific obligations behind skips | `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` |
+| `pytest -m "windows_only"` | Windows-specific CI subset | Run integration scenarios that require Windows system proxy behavior or Windows Negotiate proxy auth | `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"` |
 
 ### First traceability mapping for the integration suite
 
