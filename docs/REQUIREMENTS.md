@@ -73,6 +73,7 @@ Current implementation note:
 - that prototype currently proves the first protected happy-path slice across those transports
 - broader multi-peer listener validation now exists on `ws`, `myudp`, `tcp`, and `quic`, with the deepest concurrent channel-routing slice still exercised on the TCP transport
 - the prototype now exposes first admin/API observability for secure-link state through `/api/status` and `/api/peers`
+- some secure-link subprocess integration tests use a test-only failure-injection seam that is enabled explicitly by the harness and is not reachable in the normal runtime by default; this seam exists only to defend reconnect/replay/fail-closed requirements where pure black-box stimulation would otherwise add disproportionate harness complexity
 - the current user-facing runtime configuration surface is `secure_link`, `secure_link_mode=psk`, `secure_link_psk`, `secure_link_rekey_after_frames`, `secure_link_rekey_after_seconds`, `secure_link_retry_backoff_initial_ms`, `secure_link_retry_backoff_max_ms`, and `secure_link_require`; certificate-mode startup remains intentionally unsupported in the current runtime slice
 - that prototype is intended for development and testing of the layer boundary
 
