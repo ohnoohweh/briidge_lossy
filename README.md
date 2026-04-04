@@ -449,6 +449,133 @@ What is visible in the included snapshots:
 - Requirements: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 
+### Planned secure-link certificate preparation
+
+The secure-link feature is not wired into the runtime yet. The following workflow is therefore a preparation/example flow for future secure-link material, not a current startup requirement for ObstacleBridge.
+
+The basic trust model is:
+
+- one admin root keypair per deployment
+- one leaf keypair per peer client or peer server
+- one admin-signed leaf certificate per peer
+
+#### 1. Generate the admin root keypair
+
+```bash
+openssl genpkey -algorithm ED25519 -out admin_root_key.pem
+openssl pkey -in admin_root_key.pem -pubout -out admin_root_pub.pem
+```
+
+Keep:
+
+- `admin_root_key.pem` offline and tightly controlled
+- `admin_root_pub.pem` distributed to the peer client and peer server nodes that should trust this deployment
+
+#### 2. Generate a leaf keypair for one peer
+
+Example for a listener/server identity:
+
+```bash
+openssl genpkey -algorithm ED25519 -out peer_server_key.pem
+openssl pkey -in peer_server_key.pem -pubout -out peer_server_pub.pem
+```
+
+Repeat the same pattern for a client identity, for example:
+
+```bash
+openssl genpkey -algorithm ED25519 -out peer_client_key.pem
+openssl pkey -in peer_client_key.pem -pubout -out peer_client_pub.pem
+```
+
+#### 3. Create the unsigned certificate body
+
+The planned certificate input profile is documented in [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md). A minimal server leaf example looks like:
+
+```json
+{
+  "version": 1,
+  "serial": "srv-0001",
+  "issuer_id": "deployment-admin",
+  "subject_id": "bridge-server-01",
+  "subject_name": "Public Bridge Server",
+  "deployment_id": "lab-a",
+  "public_key_algorithm": "Ed25519",
+  "public_key": "BASE64_ENCODED_PUBLIC_KEY",
+  "roles": ["server"],
+  "issued_at": "2026-04-04T12:00:00Z",
+  "not_before": "2026-04-04T12:00:00Z",
+  "not_after": "2027-04-04T12:00:00Z",
+  "constraints": []
+}
+```
+
+Replace `BASE64_ENCODED_PUBLIC_KEY` with the actual leaf public key material.
+
+Important:
+
+- the file must be one valid JSON object
+- include the opening `{` and closing `}`
+- do not paste multiple JSON objects into the same file
+
+If you want to sanity-check the file before canonicalizing it:
+
+```bash
+python -m json.tool peer_server_cert_body.json > /dev/null
+```
+
+#### 4. Canonicalize the certificate body before signing
+
+One simple dependency-light way is to use Python itself to emit a stable compact JSON form:
+
+```bash
+python -c "import json,sys; print(json.dumps(json.load(open(sys.argv[1], 'r', encoding='utf-8')), sort_keys=True, separators=(',', ':')))" \
+  peer_server_cert_body.json > peer_server_cert_body.c14n.json
+```
+
+If that command fails with `JSONDecodeError: Extra data`, the input file is not a single valid JSON object. A common cause is a missing opening `{` or accidentally pasting extra lines into the file.
+
+The future runtime format is expected to sign the canonicalized certificate body, excluding the `signature` field itself.
+
+#### 5. Sign the canonicalized body with the admin root key
+
+```bash
+openssl pkeyutl -sign -rawin \
+  -inkey admin_root_key.pem \
+  -in peer_server_cert_body.c14n.json \
+  -out peer_server_cert.sig
+```
+
+Optional verification step:
+
+```bash
+openssl pkeyutl -verify -rawin -pubin \
+  -inkey admin_root_pub.pem \
+  -in peer_server_cert_body.c14n.json \
+  -sigfile peer_server_cert.sig
+```
+
+#### 6. Bundle the future certificate artifact
+
+Until the runtime format is finalized, a practical bundle is:
+
+- canonicalized certificate body JSON
+- detached signature file
+- leaf private key PEM on the owning node only
+- admin root public key PEM on all trusting nodes
+
+For example:
+
+- `peer_server_cert_body.c14n.json`
+- `peer_server_cert.sig`
+- `peer_server_key.pem`
+- `admin_root_pub.pem`
+
+This stays consistent with the current design direction:
+
+- ObstacleBridge uses key material and certificates
+- ObstacleBridge does not generate private keys or sign certificates
+- primitive signature verification and encryption/decryption are expected from the selected crypto library once runtime support is added
+
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
@@ -459,6 +586,8 @@ Current snapshot from `python scripts/report_requirements_coverage.py`:
 - Requirements without integration coverage: `(none)`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
+
+The secure-link topic now has reserved future requirement IDs in `docs/REQUIREMENTS.md`, while the certificate/key-material input profile is documented in `docs/SYSTEM_BOUNDARY.md`. Until runtime code and black-box tests exist, the numeric coverage snapshot above continues to reflect only the currently defended delivered `REQ-*` requirements.
 
 The top-level README is intentionally kept as a contributor-facing coverage snapshot. When requirements, implementation, or the test set changes, update this section so the project entrypoint stays aligned with the current contract and evidence.
 
@@ -500,6 +629,7 @@ Debugging in a project like this can be difficult because the behavior emerges f
 - `tests/integration/` — end-to-end and subprocess tests.
 - `scripts/` — development helpers.
 - `docs/` — main project documents such as requirements, architecture, development process, system boundary, testing guide, and whitepaper.
+- `docs/SECURE_LINK_DESIGN.md` — Phase 0 design baseline for transport-independent tunnel authentication and encryption.
 - `docs/refered_docs/` — referenced examples, exported admin snapshots, diagrams, images, and the smoke-test cheat sheet.
 - `.github/requirements_traceability.yaml` — product-requirement to test traceability manifest used by the requirements guard and coverage report.
 - `docs/refered_docs/ObstacleBridge Client.html` — exported example of the admin web UI on a peer/client instance. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/refered_docs/ObstacleBridge%20Client.html`

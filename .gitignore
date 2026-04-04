@@ -3,3 +3,4 @@ __pycache__
 .codex
 run.sh
 *.egg-info/
+Cert_SecureLink/

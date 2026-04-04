@@ -307,6 +307,34 @@ This deeper mapping links concrete integration scenarios to requirement IDs. It 
 | `test_overlay_e2e_ws_proxy_off_override_disables_platform_default_proxy` | `REQ-WSP-008` | Verify explicit direct-connect override disables platform-default proxy routing | Even with `HTTP_PROXY` set, `--ws-proxy-mode off` keeps the WS client on a direct path and the proxy records zero CONNECT requests | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_off_override_disables_platform_default_proxy` |
 | `test_overlay_e2e_ws_proxy_system_default_on_windows_uses_system_proxy` | `REQ-WSP-006` | Verify Windows default system proxy mode through the integration harness | On Windows, the default WS peer-client path uses system proxy discovery and successfully reaches the listener through the proxy | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_system_default_on_windows_uses_system_proxy` |
 | `test_overlay_e2e_ws_proxy_negotiate_auth_on_windows` | `REQ-WSP-009` | Verify Windows Negotiate-authenticated proxy traversal | On Windows, a proxy that challenges with `Proxy-Authenticate: Negotiate` is satisfied and the overlay still reaches `CONNECTED` | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_negotiate_auth_on_windows` |
+
+### Planned secure-link integration test matrix
+
+The `PLAN-AUT-*` items in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md) are not implemented yet, so the following entries are planned tests rather than current suite members.
+
+The table captures the intended:
+
+- stimulation: how the system should be exercised
+- criteria: what must be observable from outside the implementation
+
+| Planned requirement ID | Planned stimulation | Planned observable criteria |
+|---|---|---|
+| `PLAN-AUT-001` | Start the same secure-link-enabled listener/client scenario over `myudp`, `tcp`, `ws`, and `quic`, then run the usual UDP/TCP overlay probes | Secure-link handshake succeeds on each supported transport, protected overlay reaches connected state, and the same protected service probes succeed independent of the underlying transport |
+| `PLAN-AUT-002` | Run four pairings: valid client to valid server, valid client to invalid server, invalid client to valid server, and missing/unusable client credential material | Only the valid/valid pair enters the protected connected state; all other combinations are rejected; no application traffic is forwarded before mutual authentication completes |
+| `PLAN-AUT-003` | Establish a protected session, pass known payloads, then inject modified ciphertext and replay an already-seen protected frame | Normal protected traffic is delivered correctly, plaintext is not visible on the protected wire path, modified ciphertext is rejected, replayed frames are rejected, and no tampered/replayed payload is delivered upward |
+| `PLAN-AUT-004` | Run one pair with the same admin root trust anchor and further pairs with mismatched or unknown roots | Only same-root peers authenticate successfully; mismatched-root or unknown-root peers are rejected before protected traffic starts |
+| `PLAN-AUT-005` | Use correct `client`/`server` role certificates, then swap roles incorrectly, then try a dual-role `client,server` certificate where appropriate | Correct role pairings authenticate; wrong-role certificates are rejected even if otherwise valid; dual-role certificates work only where both roles are acceptable |
+| `PLAN-AUT-006` | Attempt connection with an expired certificate, a not-yet-valid certificate, a wrong-`deployment_id` certificate, a revoked-`serial` certificate, and a fully valid control certificate | Expired, premature, wrong-deployment, and revoked credentials are each rejected before the protected data phase; the valid control case succeeds |
+
+### Planned secure-link test criteria notes
+
+The planned secure-link tests will be easier to write and maintain if the admin/API surface eventually exposes a small amount of secure-link state, for example:
+
+- secure-link state such as `disabled`, `handshaking`, `authenticated`, or `failed`
+- peer identity metadata such as `subject_id` or `subject_name`
+- failure reason categories such as invalid issuer, wrong role, expiry, deployment mismatch, or revocation hit
+
+Those API shapes are not required to start implementation, but they would give the future integration tests much stronger and cleaner black-box assertions.
 | `test_overlay_e2e_cli_routing_*` | `PROC-TST-001`, `PROC-TST-004` | Verify CLI routing logic | Selected cases infer the right harness mode and explicit override is preserved | `pytest -q tests/integration/test_overlay_e2e.py -k cli_routing` |
 | `test_overlay_e2e_materialize_case_ports_shifts_overlay_and_service_ports` | `PROC-TST-004` | Verify port rewriting | Overlay, bounce, probe, and service ports shift consistently | `pytest -q tests/integration/test_overlay_e2e.py -k materialize_case_ports` |
 | `test_overlay_e2e_alloc_admin_ports_isolates_xdist_workers` | `PROC-TST-004` | Verify admin port worker isolation | Admin ports stay in the dedicated admin band and differ across workers | `pytest -q tests/integration/test_overlay_e2e.py -k alloc_admin_ports` |

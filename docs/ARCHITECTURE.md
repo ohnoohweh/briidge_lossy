@@ -4,13 +4,15 @@ This document describes the main runtime components and how they contribute to t
 
 ## Architectural layers
 
-The system can be understood in five layers:
+The current runtime can be understood in five implemented layers:
 
 1. transport/session layer
 2. reliability and framing layer
 3. channel/service multiplexing layer
 4. runner and process orchestration layer
 5. admin web and observability layer
+
+A planned secure-link layer is reserved between the transport/session layer and the current reliability/framing layer. That boundary is not implemented yet, but it is intentionally documented now so future security work does not leak responsibilities into `ChannelMux` or the transport runtimes.
 
 ## Stable component IDs
 
@@ -23,6 +25,7 @@ The following component IDs are intended to stay stable so requirements, tests, 
 | `ARC-CMP-003` | Channel and service multiplexing layer | `own_servers`, `remote_servers`, channel routing, and peer-scoped service isolation |
 | `ARC-CMP-004` | Runner and process orchestration layer | CLI/config composition, lifecycle wiring, restart/shutdown coordination, and process startup |
 | `ARC-CMP-005` | Admin web and observability layer | HTTP API/UI, auth/session control, runtime snapshots, logs, and operator visibility |
+| `ARC-CMP-006` | Planned secure-link layer | Future mutual authentication, key establishment, frame protection, and replay defense between transport sessions and `ChannelMux` |
 
 ## 1. Transport and session layer
 
@@ -71,6 +74,58 @@ Important behaviors:
 - preserve message integrity for large payloads
 
 This layer is especially important for the `myudp` requirements in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md).
+
+## Planned secure-link layer
+
+Primary responsibility:
+
+- provide one future transport-independent place for overlay authentication and encryption
+
+Phase 0 architectural decision:
+
+- if secure-link is implemented, it shall sit below `ChannelMux` and above the transport/session layer
+
+Planned contribution:
+
+- peer identity verification
+- session-key establishment
+- ciphertext/plaintext transition for mux payloads
+- replay protection and rekey hooks
+
+Phase 0 fixed boundary contract:
+
+- input from transport/session layer:
+  - connected byte or datagram path
+  - transport lifecycle events such as connect, disconnect, and reconnect
+- output to transport/session layer:
+  - ciphertext frames or datagrams ready for transport send
+- input from `ChannelMux` / framing side:
+  - plaintext overlay frames after future integration
+- output upward:
+  - authenticated plaintext overlay frames only
+
+Phase 0 fixed ownership decisions:
+
+- websocket proxy behavior stays in `ARC-CMP-001`; secure-link must not reimplement transport bootstrap
+- retransmission policy and RTT/inflight metrics stay in `ARC-CMP-002` until an implementation phase deliberately reworks that boundary
+- service publication, channel IDs, and remote catalog state stay in `ARC-CMP-003`
+- future secure-link config loading and lifecycle wiring belong to `ARC-CMP-004`
+- peer identity visibility in admin APIs belongs to `ARC-CMP-005`
+
+Important non-responsibilities:
+
+- transport-specific socket management remains in the transport/session layer
+- service publication and channel semantics remain in `ChannelMux`
+- admin rendering remains in the admin web layer
+- transport/session implementations remain unaware of certificate policy, identity validation, and traffic ciphers
+- `ChannelMux` remains unaware of certificate contents, peer-authentication policy, and traffic ciphers
+
+Current status:
+
+- this component is a documented architectural reservation only
+- no runtime secure-link behavior is claimed by the project yet
+- the design baseline for this component is documented in [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md)
+- the Phase 0 finalized trust model, certificate profile, and dependency policy are also documented there
 
 ## 3. Channel and service multiplexing layer
 

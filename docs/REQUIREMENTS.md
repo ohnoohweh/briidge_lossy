@@ -14,7 +14,9 @@ ObstacleBridge is expected to:
 - expose runtime state and configuration through the admin web interface
 - remain testable under reconnect, restart, concurrency, and lossy-path scenarios
 
-The motivating user use-cases and the external assumptions around them are documented separately in [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md) and the user-facing sections of [README.md](/home/ohnoohweh/quic_br/README.md). The requirement IDs below only describe what the project itself is expected to do inside that broader system context.
+The motivating user use-cases and the external assumptions around them are documented separately in [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md) and the user-facing sections of [README.md](/home/ohnoohweh/quic_br/README.md). The requirement IDs below describe what the project itself is expected to do inside that broader system context.
+
+Planned secure-link authentication and encryption work now has a reserved future requirement set in this document. The detailed realization concept remains in [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md), and the component ownership boundary remains in [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md). Until runtime behavior and black-box tests exist, the secure-link items below reserve future black-box requirement IDs rather than claiming already-defended shipped behavior.
 
 ## Overlay and transport requirements
 
@@ -39,6 +41,25 @@ The motivating user use-cases and the external assumptions around them are docum
 - `REQ-WSP-007`: On Linux and other POSIX-style environments, the default WebSocket peer-client behavior shall honor the effective `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment settings unless the application configuration explicitly overrides it.
 - `REQ-WSP-008`: Application configuration shall be able to consciously override the platform-default proxy behavior, including forcing direct connection or using an explicitly configured proxy endpoint.
 - `REQ-WSP-009`: A WebSocket peer client running on Windows shall be able to establish its outbound websocket transport through an HTTP proxy that requires `Negotiate` / NTLM-style authentication.
+
+## Planned authentication and encryption requirement IDs
+
+This section reserves the future black-box requirement IDs for the transport-independent secure-link capability.
+
+These IDs intentionally do not use the active `REQ-*` namespace yet, because:
+
+- no secure-link runtime behavior has been delivered
+- no defending integration or unit tests exist yet
+- the current requirement-coverage guard treats `REQ-*` items as active delivered requirements that must already trace to real tests
+
+The certificate/profile details that ObstacleBridge expects as input are documented in [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md), because they describe requirements on supplied key material and crypto support rather than black-box delivery of the current runtime.
+
+- `PLAN-AUT-001`: The project should provide one transport-independent secure-link capability for overlay authentication and encryption rather than separate authorization models per transport.
+- `PLAN-AUT-002`: A peer client and peer server should authenticate each other before protected overlay traffic is accepted.
+- `PLAN-AUT-003`: Protected secure-link overlay traffic should provide confidentiality, integrity protection, and replay rejection.
+- `PLAN-AUT-004`: The deployment trust anchor should be an admin-controlled root public key configured on peer clients and peer servers.
+- `PLAN-AUT-005`: Peer certificates should be issued by that deployment-local admin root and be constrained by machine-enforced roles.
+- `PLAN-AUT-006`: Certificate role checks, validity checks, deployment-scope checks, and serial-based revocation checks should be enforced before the protected secure-link data phase is entered.
 
 ## Reconnect and restart requirements
 
