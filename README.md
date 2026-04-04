@@ -29,50 +29,65 @@ The complete whitepaper requested for this project update is available as a rend
 ### Quick-start examples
 The recommended workflow is:
 
-1. start each instance with a small config file
+1. start each instance with a small JSON config file
 2. enable the Admin Web UI from the beginning
 3. tune transports, peers, published services, auth, and logging in the Config tab
 4. save the resulting config and use it as the durable runtime definition
 
 This keeps first startup simple and makes larger settings such as `own_servers`, `remote_servers`, auth options, and multi-transport listener combinations much easier to manage than long shell commands.
 
+Important config-format note:
+
+- `--config` / `-c` currently expects a JSON file, not an INI file
+- the examples below are therefore shown as JSON so they can be copied directly into a file and loaded without surprises on Linux or Windows
+- flat JSON works well for hand-written bootstrap files
+
 ![WebAdmin Config Editor](docs/refered_docs/WebAdmin%20ConfigEditor.png)
 
 ### Minimal bootstrap pattern
-Create one config file per instance and only keep a few startup arguments on the command line.
+Create one JSON config file per instance and only keep a few startup arguments on the command line.
 
 **Listener / server bootstrap**
-```ini
-# bridge_server.ini
-overlay_transport = myudp
-udp_bind = ::
-udp_own_port = 4443
-admin_web = true
-admin_web_bind = 127.0.0.1
-admin_web_port = 18080
-log = INFO
+```json
+{
+  "overlay_transport": "myudp",
+  "udp_bind": "::",
+  "udp_own_port": 4443,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18080,
+  "log": "INFO"
+}
 ```
 
 ```bash
-python -m obstacle_bridge --config bridge_server.ini
+python -m obstacle_bridge --config bridge_server.json
 ```
 
 **Peer / client bootstrap**
-```ini
-# bridge_client.ini
-overlay_transport = myudp
-udp_peer = bridge.example.com
-udp_peer_port = 4443
-udp_own_port = 0
-admin_web = true
-admin_web_bind = 127.0.0.1
-admin_web_port = 18081
-log = INFO
+```json
+{
+  "overlay_transport": "myudp",
+  "udp_peer": "bridge.example.com",
+  "udp_peer_port": 4443,
+  "udp_own_port": 0,
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18081,
+  "log": "INFO"
+}
 ```
 
 ```bash
-python -m obstacle_bridge --config bridge_client.ini
+python -m obstacle_bridge --config bridge_client.json
 ```
+
+Windows tip:
+
+- save the examples as `bridge_server.json` and `bridge_client.json`
+- then run `py -m obstacle_bridge --config bridge_server.json`
+- and `py -m obstacle_bridge --config bridge_client.json`
+- if you prefer to generate a valid JSON template from the tool itself, use `python -m obstacle_bridge --dump-config json`
 
 After the first startup, open the Admin Web UI and adjust the remaining details there:
 
@@ -428,9 +443,10 @@ What is visible in the included snapshots:
 ## For Contributors
 
 ### Contributor guidance
-- Requirements: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)
-- System boundary and assumptions: [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md)
 - Development process: [docs/DEVELOPMENT_PROCESS.md](docs/DEVELOPMENT_PROCESS.md)
+- User use-cases in the README: [README.md](/home/ohnoohweh/quic_br/README.md)
+- System boundary and assumptions: [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md)
+- Requirements: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 
 ### Current requirements coverage
