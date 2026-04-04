@@ -3971,6 +3971,42 @@ def _start_ws_case_with_client_env(
         raise
 
 
+def _start_tcp_case_with_secure_link_args(
+    case: Case,
+    log_dir: Path,
+    *,
+    case_index: int,
+    server_extra_args: Optional[List[str]] = None,
+    client_extra_args: Optional[List[str]] = None,
+) -> tuple[Case, BounceBackServer, Proc, Proc]:
+    case = materialize_case_ports(case, case_index)
+    bounce = BounceBackServer(
+        name=f'{case.name}_bounce',
+        proto=case.bounce_proto,
+        bind_host=case.bounce_bind,
+        port=case.bounce_port,
+        log_path=log_dir / f'{case.name}_bounce.log',
+    )
+    bounce.start()
+    specs = build_commands(case, log_dir, case_index, enable_admin=True)
+    server_name, server_cmd, server_env, server_admin = specs[0]
+    client_name, client_cmd, client_env, client_admin = specs[1]
+    server_cmd = list(server_cmd) + list(server_extra_args or [])
+    client_cmd = list(client_cmd) + list(client_extra_args or [])
+
+    server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, log_dir, env_extra=server_env, admin_port=server_admin)
+    client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, log_dir, env_extra=client_env, admin_port=client_admin)
+    try:
+        wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+        wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
+        return case, bounce, server_proc, client_proc
+    except Exception:
+        stop_proc(client_proc)
+        stop_proc(server_proc)
+        bounce.stop()
+        raise
+
+
 @pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.parametrize("case_name", BASIC_CASES)
@@ -4619,6 +4655,61 @@ def test_overlay_e2e_ws_proxy_negotiate_auth_on_windows(tmp_path: Path) -> None:
         assert any(value.lower().startswith('negotiate ') for value in proxy.proxy_authorizations)
     finally:
         proxy.stop()
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_happy_path(tmp_path: Path) -> None:
+    case = CASES['case06_overlay_tcp_ipv4']
+    bounce = None
+    server_proc = client_proc = None
+    try:
+        case, bounce, server_proc, client_proc = _start_tcp_case_with_secure_link_args(
+            case,
+            tmp_path,
+            case_index=275,
+            server_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret'],
+            client_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret'],
+        )
+        client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+        wait_probe(case, timeout=12.0)
+        wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+    finally:
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected(tmp_path: Path) -> None:
+    case = CASES['case06_overlay_tcp_ipv4']
+    bounce = None
+    server_proc = client_proc = None
+    try:
+        case, bounce, server_proc, client_proc = _start_tcp_case_with_secure_link_args(
+            case,
+            tmp_path,
+            case_index=276,
+            server_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'server-secret'],
+            client_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'client-secret', '--secure-link-require'],
+        )
+        wait_status_not_connected(client_proc.admin_port or 0, timeout=20.0, label='client')
+        wait_status_not_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+        with pytest.raises(Exception):
+            wait_probe(case, timeout=3.0)
+        assert_running(server_proc)
+        assert_running(client_proc)
+    finally:
         if bounce is not None:
             bounce.stop()
         if client_proc is not None:

@@ -57,12 +57,22 @@ import os
 import pathlib
 import random
 import hashlib
+import hmac
 import secrets
 import urllib.request
 import urllib.parse
 from dataclasses import dataclass
 from collections import deque
 from typing import Dict, Optional, Tuple, List, Set, Deque, Any, Callable, Literal
+
+try:
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+except Exception:
+    hashes = None
+    ChaCha20Poly1305 = None
+    HKDF = None
 
 # ===== ANSI sequences (dashboard) =====
 ANSI_HIDE_CURSOR = "\x1b[?25l"
@@ -1841,6 +1851,390 @@ class ISession(Protocol):
 
     def get_metrics(self) -> SessionMetrics: ...
 
+
+@dataclass
+class _SecureLinkPeerState:
+    session_id: int
+    client_nonce: bytes
+    server_nonce: bytes = b""
+    c2s_key: Optional[bytes] = None
+    s2c_key: Optional[bytes] = None
+    authenticated: bool = False
+    tx_counter: int = 1
+    rx_counter: int = 0
+
+
+class SecureLinkPskSession(ISession):
+    _SL_VERSION = 1
+    _SL_TYPE_CLIENT_HELLO = 1
+    _SL_TYPE_SERVER_HELLO = 2
+    _SL_TYPE_AUTH_FAIL = 3
+    _SL_TYPE_DATA = 4
+    _SL_CAP_PSK_V1 = 1
+    _SL_AUTH_FAIL_BAD_PSK = 1
+    _SL_AUTH_FAIL_UNSUPPORTED = 2
+    _SL_AUTH_FAIL_REPLAY = 3
+    _SL_AUTH_FAIL_DECODE = 4
+    _SL_HDR = struct.Struct(">BBBBQQ")
+
+    @staticmethod
+    def register_cli(p: argparse.ArgumentParser) -> None:
+        def _has(opt: str) -> bool:
+            try:
+                return any(opt in a.option_strings for a in p._actions)
+            except Exception:
+                return False
+
+        if not _has('--secure-link'):
+            p.add_argument(
+                '--secure-link',
+                action='store_true',
+                default=False,
+                help='Enable the planned secure-link layer. Phase 1 currently supports TCP + PSK mode only.'
+            )
+        if not _has('--secure-link-mode'):
+            p.add_argument(
+                '--secure-link-mode',
+                choices=('off', 'psk', 'cert'),
+                default='off',
+                help='Secure-link mode. Phase 1 currently supports only off or psk.'
+            )
+        if not _has('--secure-link-psk'):
+            p.add_argument(
+                '--secure-link-psk',
+                default='',
+                help='Pre-shared secret for secure-link PSK mode.'
+            )
+        if not _has('--secure-link-require'):
+            p.add_argument(
+                '--secure-link-require',
+                action='store_true',
+                default=False,
+                help='Fail closed if secure-link cannot be negotiated.'
+            )
+
+    def __init__(self, inner: ISession, args: argparse.Namespace, transport_name: str):
+        self._inner = inner
+        self._real = getattr(inner, "_real", inner)
+        self._args = args
+        self._transport_name = str(transport_name)
+        self._log = logging.getLogger("secure_link")
+        self._outer_on_app: Optional[Callable[..., None]] = None
+        self._outer_on_state: Optional[Callable[[bool], None]] = None
+        self._outer_on_peer_rx: Optional[Callable[[int], None]] = None
+        self._outer_on_peer_tx: Optional[Callable[[int], None]] = None
+        self._outer_on_peer_set: Optional[Callable[[str, int], None]] = None
+        self._outer_on_peer_disconnect: Optional[Callable[[int], None]] = None
+        self._outer_on_app_from_peer_bytes: Optional[Callable[[int], None]] = None
+        self._outer_on_transport_epoch_change: Optional[Callable[[int], None]] = None
+        self._client_mode = _has_configured_overlay_peer(args, self._transport_name)
+        self._psk = str(getattr(args, "secure_link_psk", "") or "").encode("utf-8")
+        self._peer_states: Dict[int, _SecureLinkPeerState] = {}
+        self._connected_evt = asyncio.Event()
+        self._started = False
+        self._last_connected = False
+
+    @staticmethod
+    def _require_crypto() -> None:
+        if ChaCha20Poly1305 is None or HKDF is None or hashes is None:
+            raise RuntimeError(
+                "secure_link_mode=psk requires optional dependency 'cryptography'. "
+                "Install the project in an environment where cryptography is available."
+            )
+
+    @classmethod
+    def _hdr_bytes(cls, sl_type: int, session_id: int, counter: int, flags: int = 0) -> bytes:
+        return cls._SL_HDR.pack(cls._SL_VERSION, int(sl_type), int(flags), 0, int(session_id) & 0xFFFFFFFFFFFFFFFF, int(counter) & 0xFFFFFFFFFFFFFFFF)
+
+    @classmethod
+    def _build_frame(cls, sl_type: int, session_id: int, counter: int, payload: bytes, flags: int = 0) -> bytes:
+        return cls._hdr_bytes(sl_type, session_id, counter, flags) + bytes(payload or b"")
+
+    @classmethod
+    def _parse_frame(cls, payload: bytes) -> Optional[Tuple[int, int, int, bytes]]:
+        if not isinstance(payload, (bytes, bytearray, memoryview)) or len(payload) < cls._SL_HDR.size:
+            return None
+        version, sl_type, _flags, _reserved, session_id, counter = cls._SL_HDR.unpack(bytes(payload[:cls._SL_HDR.size]))
+        if int(version) != cls._SL_VERSION:
+            return None
+        return int(sl_type), int(session_id), int(counter), bytes(payload[cls._SL_HDR.size:])
+
+    @staticmethod
+    def _nonce(counter: int) -> bytes:
+        return b"\x00\x00\x00\x00" + int(counter).to_bytes(8, "big")
+
+    def _derive_keys(self, session_id: int, client_nonce: bytes, server_nonce: bytes) -> Tuple[bytes, bytes]:
+        transcript = (
+            b"obstaclebridge-securelink-psk-v1|"
+            + int(session_id).to_bytes(8, "big")
+            + client_nonce
+            + server_nonce
+        )
+        hkdf = HKDF(
+            algorithm=hashes.SHA256(),
+            length=64,
+            salt=hashlib.sha256(self._psk).digest(),
+            info=transcript,
+        )
+        material = hkdf.derive(self._psk + client_nonce + server_nonce)
+        return material[:32], material[32:]
+
+    def _server_proof(self, session_id: int, client_nonce: bytes, server_nonce: bytes) -> bytes:
+        return hmac.new(
+            self._psk,
+            b"obstaclebridge-securelink-server-proof-v1|"
+            + int(session_id).to_bytes(8, "big")
+            + client_nonce
+            + server_nonce,
+            hashlib.sha256,
+        ).digest()
+
+    def _peer_key(self, peer_id: Optional[int]) -> int:
+        if self._client_mode:
+            return 0
+        return int(peer_id) if peer_id is not None else 1
+
+    def _compute_connected(self) -> bool:
+        return any(state.authenticated for state in self._peer_states.values())
+
+    def _refresh_connected_state(self) -> None:
+        connected = self._compute_connected()
+        if connected:
+            self._connected_evt.set()
+        else:
+            self._connected_evt.clear()
+        if connected == self._last_connected:
+            return
+        self._last_connected = connected
+        if callable(self._outer_on_state):
+            try:
+                self._outer_on_state(connected)
+            except Exception:
+                pass
+
+    def _clear_all_states(self) -> None:
+        self._peer_states.clear()
+        self._refresh_connected_state()
+
+    def set_on_app_payload(self, cb): self._outer_on_app = cb
+    def set_on_state_change(self, cb): self._outer_on_state = cb
+    def set_on_peer_rx(self, cb): self._outer_on_peer_rx = cb
+    def set_on_peer_tx(self, cb): self._outer_on_peer_tx = cb
+    def set_on_peer_set(self, cb): self._outer_on_peer_set = cb
+    def set_on_peer_disconnect(self, cb): self._outer_on_peer_disconnect = cb
+    def set_on_app_from_peer_bytes(self, cb): self._outer_on_app_from_peer_bytes = cb
+    def set_on_transport_epoch_change(self, cb): self._outer_on_transport_epoch_change = cb
+
+    async def start(self) -> None:
+        self._require_crypto()
+        setter = getattr(self._inner, "set_app_payload_passthrough", None)
+        if callable(setter):
+            setter(True)
+        self._inner.set_on_app_payload(self._on_inner_payload)
+        self._inner.set_on_state_change(self._on_inner_state_change)
+        self._inner.set_on_peer_rx(self._outer_on_peer_rx)
+        self._inner.set_on_peer_tx(self._outer_on_peer_tx)
+        self._inner.set_on_peer_set(self._outer_on_peer_set)
+        self._inner.set_on_app_from_peer_bytes(self._outer_on_app_from_peer_bytes)
+        self._inner.set_on_transport_epoch_change(self._on_inner_transport_epoch_change)
+        try:
+            self._inner.set_on_peer_disconnect(self._on_inner_peer_disconnect)
+        except Exception:
+            pass
+        self._started = True
+        await self._inner.start()
+
+    async def stop(self) -> None:
+        self._clear_all_states()
+        await self._inner.stop()
+
+    async def wait_connected(self, timeout: Optional[float] = None) -> bool:
+        if self.is_connected():
+            return True
+        try:
+            await asyncio.wait_for(self._connected_evt.wait(), timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
+    def is_connected(self) -> bool:
+        return self._compute_connected()
+
+    def get_metrics(self) -> SessionMetrics:
+        return self._inner.get_metrics()
+
+    def get_overlay_peers_snapshot(self) -> list[dict]:
+        getter = getattr(self._inner, "get_overlay_peers_snapshot", None)
+        if callable(getter):
+            return getter()
+        return []
+
+    def _send_auth_fail(self, peer_id: Optional[int], session_id: int, code: int) -> None:
+        try:
+            self._inner.send_app(self._build_frame(self._SL_TYPE_AUTH_FAIL, session_id, 0, bytes([int(code) & 0xFF])), peer_id=peer_id)
+        except Exception:
+            pass
+
+    def _begin_client_handshake(self) -> None:
+        state = _SecureLinkPeerState(
+            session_id=random.getrandbits(64),
+            client_nonce=secrets.token_bytes(32),
+        )
+        self._peer_states[0] = state
+        payload = state.client_nonce + bytes([self._SL_CAP_PSK_V1, 0])
+        self._inner.send_app(self._build_frame(self._SL_TYPE_CLIENT_HELLO, state.session_id, 0, payload))
+
+    def _on_inner_state_change(self, connected: bool) -> None:
+        if not connected:
+            self._clear_all_states()
+            return
+        if self._client_mode and self._started and not self._peer_states:
+            self._begin_client_handshake()
+
+    def _on_inner_transport_epoch_change(self, epoch: int) -> None:
+        self._clear_all_states()
+        if callable(self._outer_on_transport_epoch_change):
+            try:
+                self._outer_on_transport_epoch_change(epoch)
+            except Exception:
+                pass
+
+    def _on_inner_peer_disconnect(self, peer_id: int) -> None:
+        self._peer_states.pop(self._peer_key(peer_id), None)
+        self._refresh_connected_state()
+        if callable(self._outer_on_peer_disconnect):
+            try:
+                self._outer_on_peer_disconnect(peer_id)
+            except Exception:
+                pass
+
+    def _handle_client_hello(self, peer_id: Optional[int], session_id: int, body: bytes) -> None:
+        if self._client_mode or len(body) < 34:
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        client_nonce = body[:32]
+        capability = int(body[32])
+        if capability != self._SL_CAP_PSK_V1:
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_UNSUPPORTED)
+            return
+        server_nonce = secrets.token_bytes(32)
+        c2s_key, s2c_key = self._derive_keys(session_id, client_nonce, server_nonce)
+        key = self._peer_key(peer_id)
+        self._peer_states[key] = _SecureLinkPeerState(
+            session_id=session_id,
+            client_nonce=client_nonce,
+            server_nonce=server_nonce,
+            c2s_key=c2s_key,
+            s2c_key=s2c_key,
+        )
+        proof = self._server_proof(session_id, client_nonce, server_nonce)
+        payload = server_nonce + bytes([self._SL_CAP_PSK_V1]) + proof
+        self._inner.send_app(self._build_frame(self._SL_TYPE_SERVER_HELLO, session_id, 0, payload), peer_id=peer_id)
+
+    def _handle_server_hello(self, session_id: int, body: bytes) -> None:
+        if not self._client_mode or len(body) < 65:
+            self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        state = self._peer_states.get(0)
+        if state is None or int(state.session_id) != int(session_id):
+            self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        server_nonce = body[:32]
+        capability = int(body[32])
+        proof = body[33:65]
+        if capability != self._SL_CAP_PSK_V1:
+            self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_UNSUPPORTED)
+            self._peer_states.pop(0, None)
+            self._refresh_connected_state()
+            return
+        expected = self._server_proof(session_id, state.client_nonce, server_nonce)
+        if not hmac.compare_digest(proof, expected):
+            self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_BAD_PSK)
+            self._peer_states.pop(0, None)
+            self._refresh_connected_state()
+            return
+        c2s_key, s2c_key = self._derive_keys(session_id, state.client_nonce, server_nonce)
+        state.server_nonce = server_nonce
+        state.c2s_key = c2s_key
+        state.s2c_key = s2c_key
+        state.authenticated = True
+        self._refresh_connected_state()
+
+    def _deliver_outer_app(self, payload: bytes, peer_id: Optional[int]) -> None:
+        if callable(self._outer_on_app):
+            try:
+                self._outer_on_app(payload, peer_id=peer_id)
+            except TypeError:
+                self._outer_on_app(payload)
+
+    def _handle_data(self, peer_id: Optional[int], session_id: int, counter: int, body: bytes, aad: bytes) -> None:
+        key = self._peer_key(peer_id)
+        state = self._peer_states.get(key)
+        if state is None or int(state.session_id) != int(session_id):
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        if counter <= int(state.rx_counter):
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_REPLAY)
+            return
+        inbound_key = state.s2c_key if self._client_mode else state.c2s_key
+        if not inbound_key:
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        try:
+            plaintext = ChaCha20Poly1305(inbound_key).decrypt(self._nonce(counter), body, aad)
+        except Exception:
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_BAD_PSK)
+            return
+        state.rx_counter = counter
+        if not state.authenticated:
+            state.authenticated = True
+            self._refresh_connected_state()
+        self._deliver_outer_app(plaintext, None if self._client_mode else peer_id)
+
+    def _on_inner_payload(self, payload: bytes, peer_id: Optional[int] = None) -> None:
+        parsed = self._parse_frame(payload)
+        if parsed is None:
+            self._send_auth_fail(peer_id, 0, self._SL_AUTH_FAIL_DECODE)
+            return
+        sl_type, session_id, counter, body = parsed
+        aad = self._hdr_bytes(sl_type, session_id, counter)
+        if sl_type == self._SL_TYPE_CLIENT_HELLO:
+            self._handle_client_hello(peer_id, session_id, body)
+            return
+        if sl_type == self._SL_TYPE_SERVER_HELLO:
+            self._handle_server_hello(session_id, body)
+            return
+        if sl_type == self._SL_TYPE_AUTH_FAIL:
+            key = self._peer_key(peer_id)
+            self._peer_states.pop(key, None)
+            self._refresh_connected_state()
+            return
+        if sl_type == self._SL_TYPE_DATA:
+            self._handle_data(peer_id, session_id, counter, body, aad)
+            return
+        self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_UNSUPPORTED)
+
+    def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
+        if not self._client_mode and peer_id is None and len(self._peer_states) == 1:
+            try:
+                peer_id = next(iter(self._peer_states.keys()))
+            except Exception:
+                peer_id = None
+        key = self._peer_key(peer_id)
+        state = self._peer_states.get(key)
+        if not payload or state is None or not state.authenticated:
+            return 0
+        outbound_key = state.c2s_key if self._client_mode else state.s2c_key
+        if not outbound_key:
+            return 0
+        counter = int(state.tx_counter)
+        aad = self._hdr_bytes(self._SL_TYPE_DATA, state.session_id, counter)
+        ciphertext = ChaCha20Poly1305(outbound_key).encrypt(self._nonce(counter), payload, aad)
+        state.tx_counter += 1
+        wire = aad + ciphertext
+        sent = self._inner.send_app(wire, peer_id=peer_id)
+        return len(payload) if sent else 0
+
 class UdpSession(ISession):
     """
     Adapter that owns the existing UDP overlay:
@@ -2904,6 +3298,7 @@ class TcpStreamSession(ISession):
 
         # overlay "connected" view is RTT-driven
         self._overlay_connected: bool = False
+        self._app_payload_passthrough: bool = False
 
     # ---- ISession: callback wiring ----
     def set_on_app_payload(self, cb): self._on_app = cb
@@ -2914,6 +3309,7 @@ class TcpStreamSession(ISession):
     def set_on_peer_disconnect(self, cb): self._on_peer_disconnect_cb = cb
     def set_on_app_from_peer_bytes(self, cb): self._on_app_from_peer_bytes = cb
     def set_on_transport_epoch_change(self, cb): self._on_transport_epoch_change = cb
+    def set_app_payload_passthrough(self, enabled: bool) -> None: self._app_payload_passthrough = bool(enabled)
 
     # ---- ISession: lifecycle ----
     async def start(self) -> None:
@@ -3153,6 +3549,12 @@ class TcpStreamSession(ISession):
             self._server_chan_to_peer.pop(mux_chan, None)
 
     def _resolve_server_send_target(self, payload: bytes, peer_id: Optional[int] = None) -> Optional[Tuple[int, bytes]]:
+        if self._app_payload_passthrough and peer_id is not None:
+            target_peer_id = int(peer_id)
+            target_ctx = self._server_peers.get(target_peer_id)
+            if not target_ctx:
+                return None
+            return target_peer_id, payload
         hdr = ChannelMux.MUX_HDR
         if len(payload) < hdr.size:
             return None
@@ -5199,6 +5601,7 @@ class WebSocketSession(ISession):
         self._rtt_rt = StreamRTTRuntime(self._rtt)
         self._overlay_connected = False
         self.connection_epoch: int = 0
+        self._app_payload_passthrough: bool = False
 
         # Static HTTP root
         self._ws_static_dir: Optional[str] = getattr(self._args, "ws_static_dir", "./web") or None
@@ -5213,6 +5616,7 @@ class WebSocketSession(ISession):
     def set_on_peer_disconnect(self, cb): self._on_peer_disconnect_cb = cb
     def set_on_app_from_peer_bytes(self, cb): self._on_app_from_peer_bytes = cb
     def set_on_transport_epoch_change(self, cb): self._on_transport_epoch_change = cb
+    def set_app_payload_passthrough(self, enabled: bool) -> None: self._app_payload_passthrough = bool(enabled)
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -7118,7 +7522,7 @@ class WebSocketSession(ISession):
                 payload = b[1:]
 
                 if kind == self._K_APP:
-                    if not client_mode and peer_id is not None:
+                    if not client_mode and peer_id is not None and not self._app_payload_passthrough:
                         payload = self._server_rewrite_inbound_app(peer_id, payload)
                     if self._on_app_from_peer_bytes:
                         try: self._on_app_from_peer_bytes(len(payload))
@@ -10892,6 +11296,20 @@ class Runner:
         return int(getattr(args, listen_attr, base_default))
 
     @staticmethod
+    def _maybe_wrap_secure_link(args: argparse.Namespace, transport_name: str, session: ISession) -> ISession:
+        enabled = bool(getattr(args, "secure_link", False))
+        mode = str(getattr(args, "secure_link_mode", "off") or "off").strip().lower()
+        if not enabled or mode == "off":
+            return session
+        if mode != "psk":
+            raise ValueError(f"secure_link_mode={mode} is not implemented yet")
+        if transport_name != "tcp":
+            raise ValueError("secure_link_mode=psk is currently implemented only for overlay_transport=tcp")
+        if not str(getattr(args, "secure_link_psk", "") or ""):
+            raise ValueError("secure_link_mode=psk requires --secure-link-psk")
+        return SecureLinkPskSession(session, args, transport_name)
+
+    @staticmethod
     def build_sessions_from_overlay(args: argparse.Namespace) -> List[Tuple[str, ISession]]:
         """
         Return the ISession(s) that implement the chosen overlay transport(s).
@@ -10906,14 +11324,19 @@ class Runner:
             session_args.peer = getattr(session_args, peer_attr, getattr(session_args, "peer", None))
             session_args.peer_port = int(getattr(session_args, peer_port_attr, getattr(session_args, "peer_port", 443)) or 443)
             setattr(session_args, listen_port_attr, Runner._overlay_port_for(args, choice, len(choices)))
+            if bool(getattr(session_args, "secure_link", False)):
+                mode = str(getattr(session_args, "secure_link_mode", "off") or "off").strip().lower()
+                if mode == "psk" and choice != "tcp":
+                    raise ValueError("secure_link_mode=psk is currently implemented only for overlay_transport=tcp")
             if choice == "tcp":
-                out.append((choice, TcpStreamSession.from_args(session_args)))
+                session = TcpStreamSession.from_args(session_args)
             elif choice == "quic":
-                out.append((choice, QuicSession.from_args(session_args)))
+                session = QuicSession.from_args(session_args)
             elif choice == "ws":
-                out.append((choice, WebSocketSession.from_args(session_args)))
+                session = WebSocketSession.from_args(session_args)
             else:
-                out.append((choice, UdpSession.from_args(session_args)))
+                session = UdpSession.from_args(session_args)
+            out.append((choice, Runner._maybe_wrap_secure_link(session_args, choice, session)))
         return out
 
 # ------------ Admin Webinterface ------------
@@ -12147,6 +12570,7 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     registrars: List[Tuple[str, Callable[[argparse.ArgumentParser], None]]] = [
         ("stats_board",        StatsBoard.register_cli),
+        ("secure_link",       SecureLinkPskSession.register_cli),
         ("udp_session",        UdpSession.register_cli),
         ("ws_session",         WebSocketSession.register_cli),
         ("tcp_session",        TcpStreamSession.register_cli),

@@ -54,6 +54,12 @@ These IDs intentionally do not use the active `REQ-*` namespace yet, because:
 
 The certificate/profile details that ObstacleBridge expects as input are documented in [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md), because they describe requirements on supplied key material and crypto support rather than black-box delivery of the current runtime.
 
+Current implementation note:
+
+- a narrow Phase 1 prototype exists for `overlay_transport=tcp` with `secure_link_mode=psk`
+- that prototype is intended for development and testing of the layer boundary
+- it does not yet promote these planned IDs into the active delivered `REQ-*` requirement namespace
+
 - `PLAN-AUT-001`: The project should provide one transport-independent secure-link capability for overlay authentication and encryption rather than separate authorization models per transport.
 - `PLAN-AUT-002`: A peer client and peer server should authenticate each other before protected overlay traffic is accepted.
 - `PLAN-AUT-003`: Protected secure-link overlay traffic should provide confidentiality, integrity protection, and replay rejection.

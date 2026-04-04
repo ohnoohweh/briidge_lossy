@@ -9,6 +9,7 @@ description = "Lossy overlay bridge utilities and test tooling"
 requires-python = ">=3.9"
 dependencies = [
     "aioquic",
+    "cryptography",
     "websockets",
 ]
 

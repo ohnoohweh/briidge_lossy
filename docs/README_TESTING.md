@@ -2,15 +2,15 @@
 
 This repository currently collects:
 
-- `78` integration tests in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
-- `54` unit tests in `tests/unit/`
+- `80` integration tests in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+- `58` unit tests in `tests/unit/`
 
 ## Get started
 
 ### Environment and install constraints
 
 - Python `>= 3.9` is required, as declared in [pyproject.toml](/home/ohnoohweh/quic_br/pyproject.toml).
-- Runtime dependencies include `aioquic` and `websockets`.
+- Runtime dependencies include `aioquic`, `cryptography`, and `websockets`.
 - Test execution additionally uses `pytest` and `pytest-xdist`.
 - The integration suite opens real sockets, starts subprocesses, and is intended to run on a local machine where loopback networking and subprocess creation are available.
 
@@ -161,7 +161,7 @@ The catalog is ordered as:
 
 ## Integration tests
 
-Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py) and collects `78` tests.
+Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py) and collects `80` tests.
 
 The supporting project-level intent documents are:
 
@@ -180,6 +180,7 @@ The supporting project-level intent documents are:
 | `test_overlay_e2e_myudp_delay_loss` | Delayed/lossy myudp behavior | Verify retransmission, large payload handling, and control/data loss behavior through a real loopback MITM proxy | `pytest -q tests/integration/test_overlay_e2e.py -k myudp_delay_loss` |
 | `test_overlay_e2e_server_restart_closes_tcp_preserves_udp` | Restart-specific regression | Verify the special restart behavior for the concurrent WS case | `pytest -q tests/integration/test_overlay_e2e.py -k server_restart_closes_tcp_preserves_udp` |
 | `test_overlay_e2e_admin_api_*` | Admin web auth/API | Verify auth-disabled, auth-required, authenticated, session-isolated API behavior, and live WebSocket telemetry availability for both open and cookie-authenticated sessions | `pytest -q tests/integration/test_overlay_e2e.py -k admin_api` |
+| `test_overlay_e2e_tcp_secure_link_psk_*` | Secure-link Phase 1 TCP prototype | Verify the first TCP+PSK secure-link slice reaches protected connected state with matching PSKs and stays disconnected when secrets differ | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk` |
 | `test_overlay_e2e_ws_proxy_*` | WebSocket proxy behavior | Verify proxy success, bypass, scope, handshake ordering, failure handling, and explicit override behavior for WS peer clients, with Windows-only cases for system-default and Negotiate auth | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_` |
 | `test_overlay_e2e_ws_overlay_*proxy_env` | WebSocket proxy env behavior | Verify WS peer clients honor `HTTP_PROXY` and `NO_PROXY` in real subprocess runs | `pytest -q tests/integration/test_overlay_e2e.py -k "proxy_env"` |
 | `test_overlay_e2e_cli_routing_*` and allocator checks | Harness self-tests | Verify CLI mode inference and worker-safe port allocation logic | `pytest -q tests/integration/test_overlay_e2e.py -k "cli_routing or alloc_admin_ports or materialize_case_ports or case_port_offset"` |
@@ -205,6 +206,7 @@ This first mapping is intentionally coarse. It links current integration entrypo
 | `test_overlay_e2e_admin_live_ws_available_when_auth_disabled` | `REQ-ADM-006` | Live admin WebSocket stream availability and snapshot payload coverage when auth is disabled |
 | `test_overlay_e2e_admin_live_ws_unavailable_without_correct_auth` | `REQ-ADM-003`, `REQ-ADM-006` | Live admin WebSocket stream must reject unauthenticated clients when auth is enabled |
 | `test_overlay_e2e_admin_live_ws_available_after_correct_auth` | `REQ-ADM-004`, `REQ-ADM-006` | Live admin WebSocket stream must accept authenticated clients carrying the admin session cookie |
+| `test_overlay_e2e_tcp_secure_link_psk_happy_path` and `test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected` | `PLAN-AUT-001`, `PLAN-AUT-002`, `PLAN-AUT-003` | First real subprocess validation of the TCP+PSK secure-link boundary slice; still prototype coverage rather than active `REQ-*` traceability |
 | `test_overlay_e2e_ws_overlay_uses_http_proxy_env` | `REQ-WSP-001`, `REQ-WSP-007`, `PROC-TST-001` | WS peer clients must honor `HTTP_PROXY` and establish proxy-routed overlay traffic successfully |
 | `test_overlay_e2e_ws_proxy_is_scoped_to_peer_client_only` | `REQ-WSP-002` | Proxy behavior must stay scoped to WS peer-client mode and not imply listener-side proxy use |
 | `test_overlay_e2e_http_proxy_env_does_not_apply_to_non_ws_transports` | `REQ-WSP-003` | HTTP proxy configuration must not silently become cross-transport behavior for `myudp`, `tcp`, or `quic` |
@@ -335,6 +337,20 @@ The planned secure-link tests will be easier to write and maintain if the admin/
 - failure reason categories such as invalid issuer, wrong role, expiry, deployment mismatch, or revocation hit
 
 Those API shapes are not required to start implementation, but they would give the future integration tests much stronger and cleaner black-box assertions.
+
+### Current secure-link prototype coverage
+
+The repository now contains a narrow Phase 1 prototype for:
+
+- `overlay_transport=tcp`
+- `secure_link_mode=psk`
+
+This is still development/testing coverage rather than active delivered `REQ-*` coverage.
+
+| Test | Planned requirement IDs exercised | Objective | Test criteria | How to start |
+|---|---|---|---|---|
+| `test_overlay_e2e_tcp_secure_link_psk_happy_path` | `PLAN-AUT-001`, `PLAN-AUT-002`, `PLAN-AUT-003` | Verify the first TCP secure-link wrapper can complete a PSK handshake and carry protected overlay traffic | Both admin endpoints come up, client and server reach `CONNECTED`, and the usual UDP probe over `case06_overlay_tcp_ipv4` succeeds with secure-link enabled on both sides | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk_happy_path` |
+| `test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected` | `PLAN-AUT-002`, `PLAN-AUT-003` | Verify mismatched PSKs prevent the protected data phase | Client and server stay not connected, the probe does not succeed, and both processes remain alive and observable for debugging | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk_wrong_secret_rejected` |
 | `test_overlay_e2e_cli_routing_*` | `PROC-TST-001`, `PROC-TST-004` | Verify CLI routing logic | Selected cases infer the right harness mode and explicit override is preserved | `pytest -q tests/integration/test_overlay_e2e.py -k cli_routing` |
 | `test_overlay_e2e_materialize_case_ports_shifts_overlay_and_service_ports` | `PROC-TST-004` | Verify port rewriting | Overlay, bounce, probe, and service ports shift consistently | `pytest -q tests/integration/test_overlay_e2e.py -k materialize_case_ports` |
 | `test_overlay_e2e_alloc_admin_ports_isolates_xdist_workers` | `PROC-TST-004` | Verify admin port worker isolation | Admin ports stay in the dedicated admin band and differ across workers | `pytest -q tests/integration/test_overlay_e2e.py -k alloc_admin_ports` |

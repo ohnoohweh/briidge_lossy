@@ -3,7 +3,7 @@ import argparse
 import unittest
 from unittest import mock
 
-from obstacle_bridge.bridge import Runner, TcpStreamSession, UdpSession, QuicSession, WebSocketSession
+from obstacle_bridge.bridge import Runner, TcpStreamSession, UdpSession, QuicSession, WebSocketSession, SecureLinkPskSession
 
 
 def _args(**overrides):
@@ -18,6 +18,10 @@ def _args(**overrides):
         overlay_port_tcp=None,
         overlay_port_quic=None,
         overlay_port_ws=None,
+        secure_link=False,
+        secure_link_mode='off',
+        secure_link_psk='',
+        secure_link_require=False,
     )
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -62,6 +66,19 @@ class RunnerOverlayTransportTests(unittest.TestCase):
             [s[1] for s in seen],
             [7000, 7000, 7000, 7000],
         )
+
+    def test_build_sessions_from_overlay_wraps_tcp_with_secure_link_psk(self):
+        args = _args(overlay_transport='tcp', secure_link=True, secure_link_mode='psk', secure_link_psk='lab-secret', tcp_peer='127.0.0.1')
+        with mock.patch.object(TcpStreamSession, 'from_args', return_value=mock.Mock(spec=TcpStreamSession)) as factory:
+            sessions = Runner.build_sessions_from_overlay(args)
+        self.assertEqual([name for name, _ in sessions], ['tcp'])
+        self.assertIsInstance(sessions[0][1], SecureLinkPskSession)
+        factory.assert_called_once()
+
+    def test_build_sessions_from_overlay_rejects_secure_link_psk_for_non_tcp_transport(self):
+        args = _args(overlay_transport='ws', secure_link=True, secure_link_mode='psk', secure_link_psk='lab-secret', ws_peer='127.0.0.1')
+        with self.assertRaises(ValueError):
+            Runner.build_sessions_from_overlay(args)
 
 
 if __name__ == '__main__':

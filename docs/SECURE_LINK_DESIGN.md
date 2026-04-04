@@ -108,6 +108,227 @@ The following points are considered finalized for Phase 0.
 - stdlib helpers may be used for configuration, serialization, hashing support, and HKDF-related glue, but not as a substitute for modern asymmetric crypto and AEAD primitives
 - transport-specific TLS libraries are not the primary dependency strategy for secure-link
 
+## Phase 1 mini-spec
+
+Phase 1 is the smallest runtime slice intended to validate the secure-link layer boundary before certificate-based authentication is introduced.
+
+Goals:
+
+- implement secure-link framing hooks
+- support an optional PSK mode for development and testing
+- validate layering with `ChannelMux` unchanged
+
+Non-goals for Phase 1:
+
+- certificate parsing
+- certificate validation
+- revocation
+- admin issuance tooling
+- final long-term wire compatibility guarantees
+
+### Phase 1 operating mode
+
+Phase 1 adds one explicit lab/development mode:
+
+- `secure_link_mode = psk`
+
+Behavioral intent:
+
+- both peers are manually provisioned with the same pre-shared secret
+- the PSK mode is explicit and opt-in
+- PSK mode exists to validate layering, handshake flow, and ciphertext/plaintext transitions before the certificate-based mode is built
+- PSK mode is not the long-term production trust model
+
+### Phase 1 frame envelope
+
+The Phase 1 secure-link layer wraps bytes exchanged between the transport/session layer and the current overlay framing/mux path.
+
+Conceptual envelope fields:
+
+- `sl_version`
+  - secure-link wire version
+  - Phase 1 value: `1`
+- `sl_type`
+  - one of:
+    - `client_hello`
+    - `server_hello`
+    - `auth_fail`
+    - `data`
+- `sl_flags`
+  - reserved for later negotiation or rekey bits
+  - Phase 1 default: `0`
+- `sl_session_id`
+  - random session identifier chosen by the initiator
+  - used to bind the handshake and later data frames to one secure-link session
+- `sl_counter`
+  - per-direction monotonic counter
+  - `0` for initial handshake messages
+  - increments for protected `data` frames
+- `sl_payload`
+  - handshake payload or ciphertext payload depending on `sl_type`
+
+Phase 1 boundary rule:
+
+- transport/session code carries this envelope opaquely
+- `ChannelMux` does not see the envelope directly
+
+Phase 1 serialization guidance:
+
+- a compact binary encoding is preferred for the actual implementation
+- however, the first implementation may use a simple deterministic struct/length-prefix format as long as it is versioned and testable
+- the exact byte layout is intentionally deferred until code starts
+
+### Phase 1 PSK handshake messages
+
+The Phase 1 PSK handshake is intentionally small and symmetric enough to validate the new layer without introducing certificate logic.
+
+#### `client_hello`
+
+Sent by the initiating peer.
+
+Payload contents:
+
+- `client_nonce`
+  - random 32-byte nonce
+- `client_capabilities`
+  - initial fixed value identifying `psk-v1`
+- `key_schedule_hint`
+  - reserved field for later compatibility
+  - Phase 1 fixed value: `0`
+
+Meaning:
+
+- announces the intent to start a PSK secure-link session
+- contributes entropy to the derived session keys
+
+#### `server_hello`
+
+Sent by the accepting peer in response to `client_hello`.
+
+Payload contents:
+
+- `server_nonce`
+  - random 32-byte nonce
+- `selected_capability`
+  - `psk-v1`
+- `server_proof`
+  - HMAC over the handshake transcript so far using the configured PSK
+
+Meaning:
+
+- confirms that the responder knows the PSK
+- commits the responder to the handshake transcript
+
+#### client handshake confirmation
+
+The initiator does not need a third explicit handshake frame in Phase 1.
+
+Instead:
+
+- the first protected `data` frame from the client acts as proof that the initiator derived the same traffic keys
+- if the responder cannot authenticate that first protected frame, the secure-link session is rejected
+
+This keeps Phase 1 smaller while still validating both directions.
+
+#### `auth_fail`
+
+Sent optionally when failure can be signaled cleanly.
+
+Payload contents:
+
+- failure code such as:
+  - `bad_psk`
+  - `unsupported_mode`
+  - `replay_detected`
+  - `decode_error`
+
+Meaning:
+
+- makes lab/debug failures easier to observe
+- is not required on every failure path if the safer action is to close the session immediately
+
+### Phase 1 key derivation
+
+Inputs:
+
+- configured PSK bytes
+- `client_nonce`
+- `server_nonce`
+- transcript bytes for `client_hello` and `server_hello`
+
+Derivation shape:
+
+- derive a handshake secret from `PSK + client_nonce + server_nonce`
+- derive directional traffic keys with HKDF-SHA256
+- derive separate keys for:
+  - client-to-server traffic
+  - server-to-client traffic
+
+Phase 1 replay and nonce rule:
+
+- each protected `data` frame uses the directional `sl_counter` as AEAD nonce/counter input
+- counters are monotonic per direction
+- duplicate or older counters are rejected
+
+### Phase 1 protected data frames
+
+After successful PSK handshake:
+
+- `sl_type = data`
+- `sl_payload` carries AEAD-protected bytes
+- plaintext input to the AEAD is exactly the byte stream or frame sequence that would otherwise continue upward to the existing overlay logic
+
+Phase 1 layering validation rule:
+
+- secure-link decrypts before bytes reach the current overlay framing/mux path
+- secure-link encrypts after bytes leave the current overlay framing/mux path toward the transport/session layer
+- `ChannelMux` remains unchanged
+
+### Phase 1 config keys
+
+The first implementation should introduce only a minimal explicit config surface.
+
+Recommended keys:
+
+- `secure_link`
+  - boolean
+  - default: `false`
+  - enables the secure-link layer
+- `secure_link_mode`
+  - string
+  - one of:
+    - `off`
+    - `psk`
+    - `cert`
+  - Phase 1 supported values:
+    - `off`
+    - `psk`
+- `secure_link_psk`
+  - string
+  - shared secret input for lab/development PSK mode
+- `secure_link_require`
+  - boolean
+  - default: `false`
+  - when `true`, fail closed if secure-link cannot be negotiated
+
+Config interpretation rules:
+
+- if `secure_link = false`, the runtime behaves exactly as today
+- if `secure_link = true` and `secure_link_mode = psk`, both sides must have the same `secure_link_psk`
+- if `secure_link = true` and `secure_link_mode = cert`, Phase 1 should reject startup or configuration as unsupported
+- `secure_link_require = true` is mainly useful for tests to ensure the path does not silently fall back to plaintext
+
+### Phase 1 first implementation target
+
+To reduce risk, the first runtime slice should aim for:
+
+- one transport first, preferably `tcp` or `ws`
+- one happy-path integration test
+- one wrong-PSK rejection test
+- one ciphertext tamper test
+
+Once that slice is stable, the same secure-link envelope and PSK mode can be exercised across the remaining transports.
+
 ## Design goals
 
 - keep the transport/session layer mostly unchanged
