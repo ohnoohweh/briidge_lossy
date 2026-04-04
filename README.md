@@ -1,6 +1,22 @@
 # ObstacleBridge
 ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for barrier-resilient networking. It can run over multiple overlay transports (`myudp`, `tcp`, `quic`, `ws`), expose local TCP/UDP listener services through a reliable overlay, and host an admin UI for monitoring active channels.
 
+## Project guidance
+- Requirements: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)
+- Development process: [docs/DEVELOPMENT_PROCESS.md](docs/DEVELOPMENT_PROCESS.md)
+- Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
+
+## Current requirements coverage
+Current snapshot from `python scripts/report_requirements_coverage.py`:
+
+- Integration-covered: `45/46 = 97.8%`
+- Unit-covered: `22/46 = 47.8%`
+- Any-test-covered: `46/46 = 100.0%`
+- Tracked in manifest: `46/46 = 100.0%`
+- Requirement without integration coverage: `REQ-TST-002`
+
+The top-level README is intentionally kept as a coverage snapshot. When requirements, implementation, or the test set changes, update this section so the project entrypoint stays aligned with the current contract and evidence.
+
 ## Whitepaper
 The complete whitepaper requested for this project update is available as a rendered preview at [`docs/WHITEPAPER.html`](https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/WHITEPAPER.html). It covers:
 - Internet barriers such as NAT, DPI, protocol blocking, traffic shaping, and TLS interception.

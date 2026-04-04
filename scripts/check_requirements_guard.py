@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+README_PATH = "README.md"
 REQUIREMENTS_PATH = "docs/REQUIREMENTS.md"
 TRACEABILITY_PATH = "docs/requirements_traceability.yaml"
 CONTRACT_CHANGE_PREFIXES = ("src/", "tests/")
@@ -135,12 +136,21 @@ def main() -> int:
     changed_contract = [path for path in changed if _is_contract_change(path)]
     requirements_touched = REQUIREMENTS_PATH in changed
     traceability_touched = TRACEABILITY_PATH in changed
+    readme_touched = README_PATH in changed
 
     if changed_contract and not requirements_touched:
         sys.stderr.write(
             "REQUIREMENTS.md must be updated when implementation, tests, or architecture docs change.\n"
             f"Changed contract files: {', '.join(changed_contract)}\n"
             f"Expected updated file: {REQUIREMENTS_PATH}\n"
+        )
+        return 1
+
+    if (changed_contract or requirements_touched) and not readme_touched:
+        sys.stderr.write(
+            "README.md must be updated when requirements, implementation, or the test set changes.\n"
+            f"Changed contract files: {', '.join(changed_contract) if changed_contract else '(requirements only)'}\n"
+            f"Expected updated file: {README_PATH}\n"
         )
         return 1
 
