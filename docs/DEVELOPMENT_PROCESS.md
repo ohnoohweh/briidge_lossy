@@ -147,9 +147,15 @@ If a requirement is missing, add it first instead of letting code or tests silen
 After implementing a new feature or fixing a bug:
 
 - record the observable behavior in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
+- keep [requirements_traceability.yaml](/home/ohnoohweh/quic_br/docs/requirements_traceability.yaml) aligned so changed requirements still point at real tests
 - update [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md) if responsibilities changed
 - add or adjust integration tests in [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
 - add or adjust unit tests if a local invariant changed
 - update [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md) traceability when a new requirement is covered
+
+Repository guards now enforce two parts of this discipline:
+
+- behavior, test, or architecture changes must update [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
+- requirement changes must update [requirements_traceability.yaml](/home/ohnoohweh/quic_br/docs/requirements_traceability.yaml), and the referenced tests must exist
 
 This keeps the project understandable even when development continues in prompt-driven iterations.

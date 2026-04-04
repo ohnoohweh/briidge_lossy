@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import contextlib
 import heapq
 import hashlib
 import inspect
@@ -848,6 +849,137 @@ class UdpDelayLossProxy:
                         continue
                     self._schedule(self.listen_sock, self.client_addr, data)
         self._flush_pending()
+
+
+class HttpConnectProxy:
+    def __init__(self, *, name: str, listen_host: str, listen_port: int, log_path: Path):
+        self.name = name
+        self.listen_host = listen_host
+        self.listen_port = int(listen_port)
+        self.log_path = log_path
+        self.sock: Optional[socket.socket] = None
+        self.thread: Optional[threading.Thread] = None
+        self.ready_event = threading.Event()
+        self.stop_event = threading.Event()
+        self._lock = threading.Lock()
+        self.connect_requests: list[str] = []
+
+    def _log(self, msg: str) -> None:
+        with self.log_path.open('a', encoding='utf-8', errors='replace') as fp:
+            fp.write(f'{time.strftime("%Y-%m-%d %H:%M:%S")} {msg}\n')
+
+    @property
+    def connect_count(self) -> int:
+        with self._lock:
+            return len(self.connect_requests)
+
+    def start(self) -> None:
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+        if not self.ready_event.wait(5.0):
+            raise RuntimeError(f'HTTP proxy {self.name} failed to start')
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        try:
+            if self.sock is not None:
+                self.sock.close()
+        except Exception:
+            pass
+        if self.thread is not None:
+            self.thread.join(timeout=2.0)
+
+    def _recv_headers(self, conn: socket.socket) -> bytes:
+        buf = b''
+        while b'\r\n\r\n' not in buf and len(buf) < 65536:
+            chunk = conn.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+        return buf
+
+    def _record_connect(self, authority: str) -> None:
+        with self._lock:
+            self.connect_requests.append(authority)
+
+    def _relay(self, src: socket.socket, dst: socket.socket) -> None:
+        try:
+            while not self.stop_event.is_set():
+                data = src.recv(65535)
+                if not data:
+                    return
+                dst.sendall(data)
+        except Exception:
+            return
+        finally:
+            with contextlib.suppress(Exception):
+                dst.shutdown(socket.SHUT_WR)
+
+    def _handle_conn(self, conn: socket.socket, addr) -> None:
+        upstream = None
+        try:
+            conn.settimeout(5.0)
+            raw = self._recv_headers(conn)
+            head, _, _rest = raw.partition(b'\r\n\r\n')
+            line = head.splitlines()[0].decode('ascii', 'replace') if head else ''
+            parts = line.split()
+            if len(parts) < 3 or parts[0].upper() != 'CONNECT':
+                self._log(f'reject non-CONNECT from {addr!r}: {line!r}')
+                conn.sendall(b'HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n')
+                return
+            authority = parts[1].strip()
+            host = authority
+            port = 80
+            if authority.startswith('['):
+                end = authority.find(']')
+                if end != -1:
+                    host = authority[1:end]
+                    rest = authority[end + 1:]
+                    if rest.startswith(':') and rest[1:].isdigit():
+                        port = int(rest[1:])
+            elif ':' in authority:
+                base, maybe_port = authority.rsplit(':', 1)
+                if maybe_port.isdigit():
+                    host = base
+                    port = int(maybe_port)
+            self._record_connect(authority)
+            self._log(f'CONNECT {authority} from={addr!r}')
+            upstream = socket.create_connection((str(host).strip('[]'), int(port)), timeout=5.0)
+            conn.sendall(b'HTTP/1.1 200 Connection Established\r\nConnection: close\r\n\r\n')
+            conn.settimeout(None)
+            upstream.settimeout(None)
+            t1 = threading.Thread(target=self._relay, args=(conn, upstream), daemon=True)
+            t2 = threading.Thread(target=self._relay, args=(upstream, conn), daemon=True)
+            t1.start()
+            t2.start()
+            t1.join()
+            t2.join()
+        except Exception as e:
+            self._log(f'handler error from={addr!r}: {e!r}')
+        finally:
+            with contextlib.suppress(Exception):
+                conn.close()
+            if upstream is not None:
+                with contextlib.suppress(Exception):
+                    upstream.close()
+
+    def _run(self) -> None:
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind((self.listen_host, self.listen_port))
+        self.sock.listen(16)
+        self.sock.settimeout(0.5)
+        self._log(f'HTTP CONNECT proxy listening on {self.listen_host}:{self.listen_port}')
+        self.ready_event.set()
+        while not self.stop_event.is_set():
+            try:
+                conn, addr = self.sock.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            t = threading.Thread(target=self._handle_conn, args=(conn, addr), daemon=True)
+            t.start()
 
 
 def merge_env(extra: Dict[str, str]) -> Dict[str, str]:
@@ -1718,6 +1850,18 @@ def wait_listener_peer_rows_zeroed(admin_port: int, timeout: float = 12.0, label
         time.sleep(0.25)
     raise RuntimeError(
         f'/api/peers listening rows were not fully zeroed on port {admin_port}; last={last_doc!r}'
+    )
+
+
+def wait_http_proxy_connects(proxy: HttpConnectProxy, minimum_count: int = 1, timeout: float = 8.0) -> None:
+    end = time.time() + timeout
+    while time.time() < end:
+        if proxy.connect_count >= minimum_count:
+            return
+        time.sleep(0.1)
+    raise RuntimeError(
+        f'HTTP proxy did not observe {minimum_count} CONNECT request(s); '
+        f'observed={proxy.connect_count} requests={proxy.connect_requests!r}'
     )
 
 
@@ -3702,6 +3846,60 @@ def _stop_proc_without_admin(proc: Proc) -> None:
         proc.admin_port = saved
 
 
+def _proxy_env(proxy_port: int, *, no_proxy: Optional[str]) -> Dict[str, str]:
+    env = {
+        'HTTP_PROXY': f'http://127.0.0.1:{int(proxy_port)}',
+        'http_proxy': f'http://127.0.0.1:{int(proxy_port)}',
+        'HTTPS_PROXY': '',
+        'https_proxy': '',
+        'ALL_PROXY': '',
+        'all_proxy': '',
+    }
+    if no_proxy is not None:
+        env['NO_PROXY'] = no_proxy
+        env['no_proxy'] = no_proxy
+    return env
+
+
+def _start_ws_case_with_client_env(
+    case: Case,
+    log_dir: Path,
+    *,
+    case_index: int,
+    client_env_extra: Dict[str, str],
+) -> tuple[BounceBackServer, Proc, Proc]:
+    case = materialize_case_ports(case, case_index)
+    bounce = BounceBackServer(
+        name=f'{case.name}_bounce',
+        proto=case.bounce_proto,
+        bind_host=case.bounce_bind,
+        port=case.bounce_port,
+        log_path=log_dir / f'{case.name}_bounce.log',
+    )
+    bounce.start()
+    specs = build_commands(case, log_dir, case_index, enable_admin=True)
+    server_name, server_cmd, server_env, server_admin = specs[0]
+    client_name, client_cmd, client_env, client_admin = specs[1]
+    client_env = dict(client_env)
+    client_env.update(client_env_extra)
+
+    server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, log_dir, env_extra=server_env, admin_port=server_admin)
+    client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, log_dir, env_extra=client_env, admin_port=client_admin)
+    try:
+        wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+        wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
+        client_proc = wait_status_connected_proc(client_proc, log_dir, timeout=20.0, label='client')
+        wait_probe(case, timeout=12.0)
+        return bounce, server_proc, client_proc
+    except Exception:
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+        bounce.stop()
+        raise
+
+
 @pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.parametrize("case_name", BASIC_CASES)
@@ -3973,6 +4171,74 @@ def test_overlay_e2e_admin_live_ws_available_after_correct_auth(tmp_path: Path) 
             bounce.stop()
         if client_proc is not None:
             _stop_proc_without_admin(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_ws_overlay_uses_http_proxy_env(tmp_path: Path) -> None:
+    case = CASES['case08_overlay_ws_ipv4']
+    proxy_port = alloc_admin_port()
+    proxy = HttpConnectProxy(
+        name='ws_http_proxy_env',
+        listen_host='127.0.0.1',
+        listen_port=proxy_port,
+        log_path=tmp_path / 'ws_http_proxy_env.log',
+    )
+    bounce = None
+    server_proc = client_proc = None
+    try:
+        proxy.start()
+        bounce, server_proc, client_proc = _start_ws_case_with_client_env(
+            case,
+            tmp_path,
+            case_index=263,
+            client_env_extra=_proxy_env(proxy_port, no_proxy=''),
+        )
+        wait_http_proxy_connects(proxy, minimum_count=1, timeout=8.0)
+        wait_probe(materialize_case_ports(case, 263), timeout=8.0)
+        assert proxy.connect_count >= 1
+    finally:
+        proxy.stop()
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_ws_overlay_honors_no_proxy_env(tmp_path: Path) -> None:
+    case = CASES['case08_overlay_ws_ipv4']
+    proxy_port = alloc_admin_port()
+    proxy = HttpConnectProxy(
+        name='ws_no_proxy_env',
+        listen_host='127.0.0.1',
+        listen_port=proxy_port,
+        log_path=tmp_path / 'ws_no_proxy_env.log',
+    )
+    bounce = None
+    server_proc = client_proc = None
+    try:
+        proxy.start()
+        bounce, server_proc, client_proc = _start_ws_case_with_client_env(
+            case,
+            tmp_path,
+            case_index=264,
+            client_env_extra=_proxy_env(proxy_port, no_proxy='127.0.0.1'),
+        )
+        time.sleep(1.0)
+        wait_probe(materialize_case_ports(case, 264), timeout=8.0)
+        assert proxy.connect_count == 0
+    finally:
+        proxy.stop()
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            stop_proc(client_proc)
         if server_proc is not None:
             stop_proc(server_proc)
 

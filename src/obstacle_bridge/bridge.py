@@ -57,6 +57,8 @@ import pathlib
 import random
 import hashlib
 import secrets
+import urllib.request
+import urllib.parse
 from dataclasses import dataclass
 from collections import deque
 from typing import Dict, Optional, Tuple, List, Set, Deque, Any, Callable, Literal
@@ -5013,6 +5015,10 @@ class WebSocketSession(ISession):
     }
 
     @staticmethod
+    def _default_ws_proxy_mode() -> str:
+        return "system" if sys.platform == "win32" else "env"
+
+    @staticmethod
     def register_cli(p: argparse.ArgumentParser) -> None:
         # WS-specific knobs:
         def _has(opt: str) -> bool:
@@ -5077,12 +5083,12 @@ class WebSocketSession(ISession):
         if not _has('--ws-proxy-mode'):
             p.add_argument(
                 '--ws-proxy-mode',
-                choices=('off', 'manual', 'system'),
-                default='off',
-                help='WebSocket client proxy mode: off (default), manual, or system (Windows only).',
+                choices=('off', 'env', 'manual', 'system'),
+                default=WebSocketSession._default_ws_proxy_mode(),
+                help='WebSocket client proxy mode: platform-default (`system` on Windows, `env` on Linux/POSIX), off, manual, or system (Windows only).',
             )
         if not _has('--ws-proxy-host'):
-            p.add_argument('--ws-proxy-host', default='', help='Manual WebSocket proxy host (Windows only).')
+            p.add_argument('--ws-proxy-host', default='', help='Manual WebSocket proxy host.')
         if not _has('--ws-proxy-port'):
             p.add_argument('--ws-proxy-port', type=int, default=8080, help='Manual WebSocket proxy port (default 8080).')
         if not _has('--ws-proxy-auth'):
@@ -5090,7 +5096,7 @@ class WebSocketSession(ISession):
                 '--ws-proxy-auth',
                 choices=('none', 'negotiate'),
                 default='none',
-                help='WebSocket proxy authentication mode (Windows only): none or Negotiate.',
+                help='WebSocket proxy authentication mode: none or Negotiate (Negotiate is Windows-only).',
             )
 
 
@@ -5139,7 +5145,9 @@ class WebSocketSession(ISession):
         self._ws_send_timeout_s: float = max(0.0, float(getattr(self._args, "ws_send_timeout", 3.0) or 0.0))
         self._ws_tcp_user_timeout_ms: int = max(0, int(getattr(self._args, "ws_tcp_user_timeout_ms", 10000) or 0))
         self._ws_reconnect_grace_s: float = max(0.0, float(getattr(self._args, "ws_reconnect_grace", 3.0) or 0.0))
-        self._ws_proxy_mode: str = str(getattr(self._args, "ws_proxy_mode", "off") or "off").lower()
+        self._ws_proxy_mode: str = str(
+            getattr(self._args, "ws_proxy_mode", self._default_ws_proxy_mode()) or self._default_ws_proxy_mode()
+        ).lower()
         self._ws_proxy_host: str = _strip_brackets(str(getattr(self._args, "ws_proxy_host", "") or ""))
         self._ws_proxy_port: int = max(0, int(getattr(self._args, "ws_proxy_port", 8080) or 0))
         self._ws_proxy_auth: str = str(getattr(self._args, "ws_proxy_auth", "none") or "none").lower()
@@ -5580,6 +5588,25 @@ class WebSocketSession(ISession):
     def _proxy_feature_enabled(self) -> bool:
         return bool(self._peer_tuple) and self._ws_proxy_mode != "off"
 
+    def _env_get_proxy_for_target(self, target_host: str, secure: bool = False) -> Optional[Tuple[str, int]]:
+        host = _strip_brackets(str(target_host or "")).strip()
+        if not host:
+            return None
+        if urllib.request.proxy_bypass(host):
+            self._log.debug("[WS-PROXY] (%s) env bypass matched host=%s", self._probe_id, host)
+            return None
+        proxies = urllib.request.getproxies()
+        proxy_url = proxies.get("https" if secure else "http")
+        if not proxy_url:
+            self._log.debug("[WS-PROXY] (%s) env mode found no %s proxy", self._probe_id, "HTTPS_PROXY" if secure else "HTTP_PROXY")
+            return None
+        parsed = urllib.parse.urlsplit(proxy_url)
+        if parsed.scheme and parsed.scheme.lower() not in ("http", "https", "ws", "wss"):
+            raise RuntimeError(f"unsupported websocket proxy scheme in environment: {parsed.scheme}")
+        if parsed.hostname:
+            return _strip_brackets(parsed.hostname), int(parsed.port or 8080)
+        return self._parse_proxy_authority(proxy_url)
+
     def _get_ws_proxy_endpoint(self, target_host: str, target_port: int) -> Optional[Tuple[str, int]]:
         self._log.debug(
             "[WS-PROXY] (%s) endpoint lookup target=%s mode=%s peer_configured=%s platform=%s tls=%s",
@@ -5593,6 +5620,13 @@ class WebSocketSession(ISession):
         if not self._proxy_feature_enabled():
             self._log.debug("[WS-PROXY] (%s) proxy feature disabled", self._probe_id)
             return None
+        if self._ws_proxy_mode == "env":
+            endpoint = self._env_get_proxy_for_target(target_host, secure=self._use_tls)
+            if endpoint is None:
+                self._log.debug("[WS-PROXY] (%s) env proxy lookup returned no endpoint", self._probe_id)
+                return None
+            self._log.debug("[WS-PROXY] (%s) env proxy selected endpoint=%s:%d", self._probe_id, endpoint[0], int(endpoint[1]))
+            return endpoint
         if sys.platform != "win32":
             self._log.debug("[WS-PROXY] (%s) rejecting proxy lookup on unsupported platform=%s", self._probe_id, sys.platform)
             raise RuntimeError("WebSocket proxy support is currently available on Windows only")
@@ -6586,7 +6620,10 @@ class WebSocketSession(ISession):
         proxy_sock = None
         proxy_target_host = _strip_brackets(self._peer_name_host or host)
         proxy_target_port = uri_port
+        proxy_endpoint = None
         if self._proxy_feature_enabled():
+            proxy_endpoint = self._get_ws_proxy_endpoint(proxy_target_host, proxy_target_port)
+        if proxy_endpoint is not None:
             connect_kwargs["sock"] = proxy_sock = await self._open_ws_proxy_socket(proxy_target_host, proxy_target_port)
             if ssl_ctx is not None:
                 connect_kwargs["server_hostname"] = proxy_target_host
@@ -6599,7 +6636,6 @@ class WebSocketSession(ISession):
         try:
             had_previous_connection = self.connection_epoch > 0
             if connect_kwargs.get("sock") is not None:
-                proxy_endpoint = self._get_ws_proxy_endpoint(proxy_target_host, proxy_target_port)
                 self._log.info(
                     f"[WS-SESSION] ({self._probe_id}) connecting to {uri} through proxy "
                     f"{proxy_endpoint[0]}:{proxy_endpoint[1]} auth={self._ws_proxy_auth}"

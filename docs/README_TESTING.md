@@ -2,8 +2,8 @@
 
 This repository currently collects:
 
-- `66` integration tests in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
-- `49` unit tests in `tests/unit/`
+- `68` integration tests in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+- `54` unit tests in `tests/unit/`
 
 ## Get started
 
@@ -138,7 +138,7 @@ Unit tests cover narrowly scoped logic that is easier and faster to validate wit
 - config parsing
 - per-peer channel catalog logic
 - connection snapshot formatting
-- websocket payload and reconnect behavior
+- websocket payload, proxy-env handling, and reconnect behavior
 - runner event/config helpers
 
 ## Test catalog
@@ -150,7 +150,7 @@ The catalog is ordered as:
 
 ## Integration tests
 
-Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py) and collects `66` tests.
+Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py) and collects `68` tests.
 
 The supporting project-level intent documents are:
 
@@ -169,6 +169,7 @@ The supporting project-level intent documents are:
 | `test_overlay_e2e_myudp_delay_loss` | Delayed/lossy myudp behavior | Verify retransmission, large payload handling, and control/data loss behavior through a real loopback MITM proxy | `pytest -q tests/integration/test_overlay_e2e.py -k myudp_delay_loss` |
 | `test_overlay_e2e_server_restart_closes_tcp_preserves_udp` | Restart-specific regression | Verify the special restart behavior for the concurrent WS case | `pytest -q tests/integration/test_overlay_e2e.py -k server_restart_closes_tcp_preserves_udp` |
 | `test_overlay_e2e_admin_api_*` | Admin web auth/API | Verify auth-disabled, auth-required, authenticated, session-isolated API behavior, and live WebSocket telemetry availability for both open and cookie-authenticated sessions | `pytest -q tests/integration/test_overlay_e2e.py -k admin_api` |
+| `test_overlay_e2e_ws_overlay_*proxy_env` | WebSocket proxy env behavior | Verify WS peer clients honor `HTTP_PROXY` and `NO_PROXY` in real subprocess runs | `pytest -q tests/integration/test_overlay_e2e.py -k "proxy_env"` |
 | `test_overlay_e2e_cli_routing_*` and allocator checks | Harness self-tests | Verify CLI mode inference and worker-safe port allocation logic | `pytest -q tests/integration/test_overlay_e2e.py -k "cli_routing or alloc_admin_ports or materialize_case_ports or case_port_offset"` |
 
 ### First traceability mapping for the integration suite
@@ -190,6 +191,7 @@ This first mapping is intentionally coarse. It links current integration entrypo
 | `test_overlay_e2e_admin_live_ws_available_when_auth_disabled` | `REQ-ADM-006` | Live admin WebSocket stream availability and snapshot payload coverage when auth is disabled |
 | `test_overlay_e2e_admin_live_ws_unavailable_without_correct_auth` | `REQ-ADM-003`, `REQ-ADM-006` | Live admin WebSocket stream must reject unauthenticated clients when auth is enabled |
 | `test_overlay_e2e_admin_live_ws_available_after_correct_auth` | `REQ-ADM-004`, `REQ-ADM-006` | Live admin WebSocket stream must accept authenticated clients carrying the admin session cookie |
+| `test_overlay_e2e_ws_overlay_uses_http_proxy_env` and `test_overlay_e2e_ws_overlay_honors_no_proxy_env` | `REQ-WSP-007`, `REQ-TST-001` | WS peer clients must honor `HTTP_PROXY` for CONNECT tunneling and bypass it when `NO_PROXY` matches the target |
 | `test_overlay_e2e_cli_routing_*` and allocator checks | `REQ-TST-001`, `REQ-TST-003`, `REQ-TST-004` | Harness self-tests that protect the integrity and repeatability of the integration test system itself |
 
 ### Scenario-level traceability
@@ -273,6 +275,8 @@ This deeper mapping links concrete integration scenarios to requirement IDs. It 
 | `test_overlay_e2e_admin_live_ws_available_when_auth_disabled` | `REQ-ADM-006` | Verify live admin WebSocket telemetry is reachable | Auth-disabled server exposes `/api/live`, and the client receives `status`, `connections`, `peers`, and `meta` snapshots over one WebSocket session | `pytest -q tests/integration/test_overlay_e2e.py -k admin_live_ws_available_when_auth_disabled` |
 | `test_overlay_e2e_admin_live_ws_unavailable_without_correct_auth` | `REQ-ADM-003`, `REQ-ADM-006` | Verify live admin WebSocket telemetry is protected by admin auth | Auth-enabled server rejects `/api/live` until the client completes the normal admin login flow | `pytest -q tests/integration/test_overlay_e2e.py -k admin_live_ws_unavailable_without_correct_auth` |
 | `test_overlay_e2e_admin_live_ws_available_after_correct_auth` | `REQ-ADM-004`, `REQ-ADM-006` | Verify authenticated live admin WebSocket telemetry | After HTTP challenge/login sets the session cookie, `/api/live` accepts the client and streams `status`, `connections`, `peers`, and `meta` snapshots | `pytest -q tests/integration/test_overlay_e2e.py -k admin_live_ws_available_after_correct_auth` |
+| `test_overlay_e2e_ws_overlay_uses_http_proxy_env` | `REQ-WSP-007` | Verify WS overlay honors `HTTP_PROXY` in a real client subprocess | Client connects through a local HTTP CONNECT proxy, the overlay reaches `CONNECTED`, UDP probes succeed, and the proxy records at least one CONNECT request | `pytest -q tests/integration/test_overlay_e2e.py -k ws_overlay_uses_http_proxy_env` |
+| `test_overlay_e2e_ws_overlay_honors_no_proxy_env` | `REQ-WSP-007` | Verify `NO_PROXY` bypasses `HTTP_PROXY` for loopback WS targets | Client still reaches `CONNECTED` and serves probes while the local HTTP CONNECT proxy records zero CONNECT requests | `pytest -q tests/integration/test_overlay_e2e.py -k ws_overlay_honors_no_proxy_env` |
 | `test_overlay_e2e_cli_routing_*` | `REQ-TST-001`, `REQ-TST-004` | Verify CLI routing logic | Selected cases infer the right harness mode and explicit override is preserved | `pytest -q tests/integration/test_overlay_e2e.py -k cli_routing` |
 | `test_overlay_e2e_materialize_case_ports_shifts_overlay_and_service_ports` | `REQ-TST-004` | Verify port rewriting | Overlay, bounce, probe, and service ports shift consistently | `pytest -q tests/integration/test_overlay_e2e.py -k materialize_case_ports` |
 | `test_overlay_e2e_alloc_admin_ports_isolates_xdist_workers` | `REQ-TST-004` | Verify admin port worker isolation | Admin ports stay in the dedicated admin band and differ across workers | `pytest -q tests/integration/test_overlay_e2e.py -k alloc_admin_ports` |
@@ -280,7 +284,7 @@ This deeper mapping links concrete integration scenarios to requirement IDs. It 
 
 ## Unit tests
 
-Unit coverage currently collects `49` tests from `tests/unit/`.
+Unit coverage currently collects `54` tests from `tests/unit/`.
 
 ### Unit-side traceability
 
@@ -301,7 +305,7 @@ The component view they support is described in [ARCHITECTURE.md](/home/ohnoohwe
 | `tests/unit/test_runner_events.py` | `ARC-CMP-004` | `REQ-TST-002` | Restart and shutdown events must bind to the active event loop correctly | `pytest -q tests/unit/test_runner_events.py` |
 | `tests/unit/test_runner_overlay_transports.py` | `ARC-CMP-004`, `ARC-CMP-001` | `REQ-OVL-003`, `REQ-OVL-004`, `REQ-OVL-005`, `REQ-TST-002` | Overlay transport parsing and per-transport session/port construction must remain consistent with supported transport rules | `pytest -q tests/unit/test_runner_overlay_transports.py` |
 | `tests/unit/test_ws_multi_peer.py` | `ARC-CMP-001`, `ARC-CMP-003` | `REQ-LST-001`, `REQ-MUX-001`, `REQ-MUX-003`, `REQ-TST-002` | WS multi-peer mux rewriting and outbound routing must remain peer-safe and channel-safe | `pytest -q tests/unit/test_ws_multi_peer.py` |
-| `tests/unit/test_ws_payload_mode.py` | `ARC-CMP-001`, `ARC-CMP-005` | `REQ-OVL-004`, `REQ-LIFE-002`, `REQ-TST-002` | WS payload encoding, tx timing, reconnect grace, preflight behavior, compression config, and debug static HTTP behavior must stay internally consistent | `pytest -q tests/unit/test_ws_payload_mode.py` |
+| `tests/unit/test_ws_payload_mode.py` | `ARC-CMP-001`, `ARC-CMP-005` | `REQ-OVL-004`, `REQ-LIFE-002`, `REQ-TST-002` | WS payload encoding, tx timing, reconnect grace, HTTP preflight, platform-default proxy resolution, compression config, and debug static HTTP behavior must stay internally consistent | `pytest -q tests/unit/test_ws_payload_mode.py` |
 
 ### Unit test catalog
 
@@ -316,7 +320,7 @@ The component view they support is described in [ARCHITECTURE.md](/home/ohnoohwe
 | `tests/unit/test_runner_events.py` | Runner event binding | Verify restart and shutdown events bind to the running loop correctly | `pytest -q tests/unit/test_runner_events.py` |
 | `tests/unit/test_runner_overlay_transports.py` | Overlay transport parsing/building | Verify transport list parsing and per-transport session/port creation behavior | `pytest -q tests/unit/test_runner_overlay_transports.py` |
 | `tests/unit/test_ws_multi_peer.py` | WebSocket multi-peer mux logic | Verify inbound and outbound mux rewriting and peer-specific send routing | `pytest -q tests/unit/test_ws_multi_peer.py` |
-| `tests/unit/test_ws_payload_mode.py` | WebSocket framing/runtime behavior | Verify payload encoding modes, tx loop behavior, socket config, reconnect grace, HTTP preflight, compression, and debug static HTTP behavior | `pytest -q tests/unit/test_ws_payload_mode.py` |
+| `tests/unit/test_ws_payload_mode.py` | WebSocket framing/runtime behavior | Verify payload encoding modes, tx loop behavior, socket config, reconnect grace, HTTP preflight, platform-default proxy handling (`system` on Windows and `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` on Linux/POSIX), compression, and debug static HTTP behavior | `pytest -q tests/unit/test_ws_payload_mode.py` |
 
 ### Run the full unit suite
 
