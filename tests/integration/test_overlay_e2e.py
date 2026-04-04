@@ -2212,34 +2212,15 @@ def wait_status_secure_link_state(
     failure_detail_substr: Optional[str] = None,
     authenticated: Optional[bool] = None,
 ) -> dict:
-    end = time.time() + timeout
-    last_doc = None
-    expected_state_norm = str(expected_state or '').strip().lower()
-    expected_reason = None if failure_reason is None else str(failure_reason).strip().lower()
-    while time.time() < end:
-        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.5)
-        last_doc = doc
-        secure_link = doc.get('secure_link') or {}
-        if str(secure_link.get('state', '')).strip().lower() != expected_state_norm:
-            time.sleep(0.25)
-            continue
-        if expected_reason is not None and str(secure_link.get('failure_reason', '')).strip().lower() != expected_reason:
-            time.sleep(0.25)
-            continue
-        if failure_code is not None and int(secure_link.get('failure_code') or 0) != int(failure_code):
-            time.sleep(0.25)
-            continue
-        if failure_detail_substr is not None and failure_detail_substr not in str(secure_link.get('failure_detail') or ''):
-            time.sleep(0.25)
-            continue
-        if authenticated is not None and bool(secure_link.get('authenticated')) != bool(authenticated):
-            time.sleep(0.25)
-            continue
-        who = f' {label}' if label else ''
-        log.info(f'[STATUS]{who} port={admin_port} secure_link={secure_link!r}')
-        return doc
-    raise RuntimeError(
-        f'/api/status did not expose secure_link state={expected_state_norm} on port {admin_port}; last={last_doc!r}'
+    return wait_peer_secure_link_state(
+        admin_port,
+        expected_state=expected_state,
+        timeout=timeout,
+        label=label,
+        failure_reason=failure_reason,
+        failure_code=failure_code,
+        failure_detail_substr=failure_detail_substr,
+        authenticated=authenticated,
     )
 
 
@@ -2253,16 +2234,22 @@ def wait_status_secure_link_authenticated_peers(
     end = time.time() + timeout
     last_doc = None
     while time.time() < end:
-        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.5)
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
         last_doc = doc
-        secure_link = doc.get('secure_link') or {}
-        if int(secure_link.get('authenticated_peers') or 0) >= int(minimum_count):
+        authenticated_count = 0
+        for row in list(doc.get('peers') or []):
+            if str(row.get('state', '')).strip().lower() == 'listening':
+                continue
+            secure_link = row.get('secure_link') or {}
+            if bool(secure_link.get('authenticated')):
+                authenticated_count += 1
+        if authenticated_count >= int(minimum_count):
             who = f' {label}' if label else ''
-            log.info(f'[STATUS]{who} port={admin_port} secure_link_authenticated_peers={secure_link!r}')
+            log.info(f'[PEERS]{who} port={admin_port} secure_link_authenticated_peers={authenticated_count!r}')
             return doc
         time.sleep(0.25)
     raise RuntimeError(
-        f'/api/status did not expose secure_link authenticated_peers>={minimum_count} on port {admin_port}; last={last_doc!r}'
+        f'/api/peers did not expose secure_link authenticated peers>={minimum_count} on port {admin_port}; last={last_doc!r}'
     )
 
 
@@ -2276,16 +2263,21 @@ def wait_status_secure_link_consecutive_failures(
     end = time.time() + timeout
     last_doc = None
     while time.time() < end:
-        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.5)
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
         last_doc = doc
-        secure_link = doc.get('secure_link') or {}
-        if int(secure_link.get('consecutive_failures') or 0) >= int(minimum_count):
+        max_failures = 0
+        for row in list(doc.get('peers') or []):
+            if str(row.get('state', '')).strip().lower() == 'listening':
+                continue
+            secure_link = row.get('secure_link') or {}
+            max_failures = max(max_failures, int(secure_link.get('consecutive_failures') or 0))
+        if max_failures >= int(minimum_count):
             who = f' {label}' if label else ''
-            log.info(f'[STATUS]{who} port={admin_port} secure_link_consecutive_failures={secure_link!r}')
+            log.info(f'[PEERS]{who} port={admin_port} secure_link_consecutive_failures={max_failures!r}')
             return doc
         time.sleep(0.25)
     raise RuntimeError(
-        f'/api/status did not expose secure_link consecutive_failures>={minimum_count} on port {admin_port}; last={last_doc!r}'
+        f'/api/peers did not expose secure_link consecutive_failures>={minimum_count} on port {admin_port}; last={last_doc!r}'
     )
 
 
@@ -5105,8 +5097,8 @@ def test_overlay_e2e_tcp_secure_link_psk_happy_path(tmp_path: Path) -> None:
             with pytest.raises(urllib.error.HTTPError) as excinfo:
                 urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=1.5)
             assert excinfo.value.code == 404
-            _code, client_doc = fetch_json(f'http://127.0.0.1:{client_proc.admin_port}/api/status', timeout=1.5)
-            client_secure = dict(client_doc.get('secure_link') or {})
+            _code, client_doc = fetch_json(f'http://127.0.0.1:{client_proc.admin_port}/api/peers', timeout=1.5)
+            client_secure = dict((first_active_secure_link_row(client_doc, transport='tcp').get('secure_link') or {}))
             assert client_secure.get('last_event') == 'authenticated'
             assert int(client_secure.get('handshake_attempts_total') or 0) >= 1
             assert int(client_secure.get('authenticated_sessions_total') or 0) >= 1
@@ -5159,7 +5151,7 @@ def test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected(tmp_path: Path) -
                 timeout=12.0,
                 label='client',
             )
-            secure_link = dict(failed_doc.get('secure_link') or {})
+            secure_link = dict((first_active_secure_link_row(failed_doc, transport='tcp').get('secure_link') or {}))
             assert float(secure_link.get('retry_backoff_sec') or 0.0) >= 0.0
             assert secure_link.get('next_retry_unix_ts') is not None
             assert secure_link.get('last_event') == 'retry_scheduled'
@@ -5227,10 +5219,10 @@ def test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic(tmp_path: Pat
                 transport='tcp',
             )
             wait_probe(case, payload=b'\x01rekey-two', timeout=12.0)
-            client_doc = wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
-            server_doc = wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
-            client_secure = dict(client_doc.get('secure_link') or {})
-            server_secure = dict(server_doc.get('secure_link') or {})
+            client_doc = wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
+            server_doc = wait_peer_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', transport='tcp', authenticated=True)
+            client_secure = dict((first_active_secure_link_row(client_doc, transport='tcp').get('secure_link') or {}))
+            server_secure = dict((first_active_secure_link_row(server_doc, transport='tcp').get('secure_link') or {}))
             assert client_secure.get('last_event') == 'rekey_completed'
             assert int(client_secure.get('rekeys_completed_total') or 0) >= 1
             assert int(client_secure.get('authenticated_sessions_total') or 0) >= 2
@@ -5296,8 +5288,8 @@ def test_overlay_e2e_tcp_secure_link_psk_rekeys_after_time_threshold(tmp_path: P
                 transport='tcp',
             )
             wait_probe(case, payload=b'\x01time-rekey', timeout=12.0)
-            client_doc = wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
-            client_secure = dict(client_doc.get('secure_link') or {})
+            client_doc = wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
+            client_secure = dict((first_active_secure_link_row(client_doc, transport='tcp').get('secure_link') or {}))
             assert client_secure.get('last_event') == 'rekey_completed'
             assert client_secure.get('last_rekey_trigger') == 'time_threshold'
             assert int(client_secure.get('rekeys_completed_total') or 0) >= 1
@@ -5339,25 +5331,30 @@ def test_overlay_e2e_tcp_secure_link_psk_operator_forced_rekey(tmp_path: Path) -
                 authenticated=True,
             )
             first_session_id = 0
+            target_peer_id = ""
             for row in list(first_doc.get('peers') or []):
                 if str(row.get('transport', '')).strip().lower() != 'tcp':
                     continue
                 if str(row.get('state', '')).strip().lower() == 'listening':
                     continue
+                target_peer_id = str(row.get('id') or "")
                 first_session_id = int(((row.get('secure_link') or {}).get('session_id') or 0))
                 if first_session_id:
                     break
             if first_session_id <= 0:
                 raise RuntimeError(f'Could not determine initial secure-link session id from peers doc: {first_doc!r}')
+            if not target_peer_id:
+                raise RuntimeError(f'Could not determine target peer id from peers doc: {first_doc!r}')
             wait_probe(case, payload=b'\x01prime-operator-rekey', timeout=12.0)
             code, body = request_json(
                 f'http://127.0.0.1:{client_proc.admin_port}/api/secure-link/rekey',
                 method='POST',
-                payload={},
+                payload={"peer_id": target_peer_id},
                 timeout=2.0,
             )
             assert code == 200
             assert body.get('ok') is True
+            assert body.get('target_peer_id') == target_peer_id
             assert int(body.get('requested') or 0) >= 1
             wait_peer_secure_link_session_change(
                 client_proc.admin_port or 0,
@@ -5367,8 +5364,8 @@ def test_overlay_e2e_tcp_secure_link_psk_operator_forced_rekey(tmp_path: Path) -
                 transport='tcp',
             )
             wait_probe(case, payload=b'\x01forced-rekey', timeout=12.0)
-            client_doc = wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
-            client_secure = dict(client_doc.get('secure_link') or {})
+            client_doc = wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
+            client_secure = dict((first_active_secure_link_row(client_doc, transport='tcp').get('secure_link') or {}))
             assert client_secure.get('last_event') == 'rekey_completed'
             assert client_secure.get('last_rekey_trigger') == 'operator'
             assert int(client_secure.get('rekeys_completed_total') or 0) >= 1
@@ -5448,10 +5445,6 @@ def test_overlay_e2e_tcp_secure_link_psk_reconnects_with_fresh_session(tmp_path:
             if new_session_id <= 0:
                 raise RuntimeError(f'Could not determine reconnected secure-link session id from peers doc: {server_doc!r}')
             assert new_session_id != old_session_id
-            server_status = wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
-            server_secure = dict(server_status.get('secure_link') or {})
-            assert int(server_secure.get('authenticated_sessions_total') or 0) >= 2
-            assert int(server_secure.get('last_authenticated_session_id') or 0) == new_session_id
             wait_probe(case, payload=b'\x01reconnect-after', timeout=12.0)
         finally:
             if bounce is not None:

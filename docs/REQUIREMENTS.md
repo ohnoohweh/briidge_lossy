@@ -57,11 +57,11 @@ Functional decomposition note:
 - `REQ-AUT-004`, `REQ-AUT-008`, `REQ-AUT-009`, and `REQ-AUT-010` are realized jointly by:
   - the secure-link runtime slice (`ARC-CMP-006`), which owns the underlying authentication/encryption state and failure categories
   - the runner/process orchestration layer (`ARC-CMP-004`), which gathers and shapes snapshot data
-  - the admin web and observability layer (`ARC-CMP-005`), which exposes that state through `/api/status`, `/api/peers`, the live admin feed, and the WebAdmin page
+  - the admin web and observability layer (`ARC-CMP-005`), which exposes aggregate runtime summary through `/api/status`, peer-scoped secure-link state through `/api/peers`, the live admin feed, and the WebAdmin page
 - `PLAN-AUT-004` through `PLAN-AUT-007` are still planned and are realized jointly by:
   - the planned secure-link layer (`ARC-CMP-006`), which owns the underlying authentication/encryption state and failure categories
   - the runner/process orchestration layer (`ARC-CMP-004`), which gathers and shapes snapshot data
-  - the admin web and observability layer (`ARC-CMP-005`), which exposes that state through `/api/status`, `/api/peers`, the live admin feed, and the WebAdmin page
+  - the admin web and observability layer (`ARC-CMP-005`), which exposes aggregate runtime summary through `/api/status`, peer-scoped secure-link state through `/api/peers`, the live admin feed, and the WebAdmin page
 
 The component ownership boundary for these planned secure-link requirements is documented in [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md).
 
@@ -72,7 +72,7 @@ Current implementation note:
 - a narrow Phase 1 prototype exists for `secure_link_mode=psk` on `overlay_transport=myudp`, `tcp`, `ws`, and `quic`
 - that prototype currently proves the first protected happy-path slice across those transports
 - broader multi-peer listener validation now exists on `ws`, `myudp`, `tcp`, and `quic`, with the deepest concurrent channel-routing slice still exercised on the TCP transport
-- the prototype now exposes first admin/API observability for secure-link state through `/api/status` and `/api/peers`
+- the prototype now exposes aggregate runtime summary through `/api/status` and peer-scoped secure-link observability through `/api/peers`
 - some secure-link subprocess integration tests use a test-only failure-injection seam that is enabled explicitly by the harness and is not reachable in the normal runtime by default; this seam exists only to defend reconnect/replay/fail-closed requirements where pure black-box stimulation would otherwise add disproportionate harness complexity
 - the current user-facing runtime configuration surface is `secure_link`, `secure_link_mode=psk`, `secure_link_psk`, `secure_link_rekey_after_frames`, `secure_link_rekey_after_seconds`, `secure_link_retry_backoff_initial_ms`, `secure_link_retry_backoff_max_ms`, and `secure_link_require`; certificate-mode startup remains intentionally unsupported in the current runtime slice
 - that prototype is intended for development and testing of the layer boundary
@@ -80,13 +80,13 @@ Current implementation note:
 - `REQ-AUT-001`: The project shall provide one transport-independent PSK secure-link capability for overlay authentication and protected data carriage across `myudp`, `tcp`, `ws`, and `quic`.
 - `REQ-AUT-002`: When both peers are configured with the same PSK, the secure-link protected data phase shall authenticate successfully before overlay traffic is accepted and forwarded.
 - `REQ-AUT-003`: When peers are configured with different PSKs, the protected data phase shall not start, overlay traffic shall not be forwarded, and the session shall remain observable as an authentication failure rather than a false connected state.
-- `REQ-AUT-004`: The admin web interface and admin API shall expose the secure-link state for the local session and reported peers so an operator can distinguish disabled, handshaking, authenticated, and failed protected-overlay states, including the reported authentication failure category.
+- `REQ-AUT-004`: The admin web interface and admin API shall expose secure-link state in an operator-usable way: peer-scoped secure-link state shall be reported with the corresponding peer rows and peer views so an operator can distinguish disabled, handshaking, authenticated, and failed protected-overlay states, including the reported authentication failure category.
 - `REQ-AUT-005`: Multi-peer listener scenarios using secure-link PSK shall preserve peer isolation and distinct authenticated-peer visibility across the supported listener transports, with the deepest concurrent routing slice defended on the TCP listener path.
 - `REQ-AUT-006`: The PSK secure-link runtime shall preserve a deterministic session and counter lifecycle: protected data counters start at `1`, remain strictly monotonic per direction, reject stale or reserved counters, and when `secure_link_rekey_after_frames` is configured to a positive value the runtime shall rotate to a fresh secure-link session under live traffic without losing healthy overlay functionality.
 - `REQ-AUT-007`: Malformed, unexpected, or out-of-order secure-link control/data frames shall fail closed: the affected secure-link peer state shall stop forwarding overlay traffic, remain observable as a secure-link failure, and drop any server-side peer-channel routing state that belonged to the failed peer.
-- `REQ-AUT-008`: Repeated client-side PSK authentication failures shall be retried with bounded backoff rather than an immediate tight loop, and the admin/API surface shall expose the current consecutive failure count and next retry window so operators can diagnose persistent secret mismatch or similar auth failures.
-- `REQ-AUT-009`: The admin/API surface shall expose stronger operational diagnostics for the PSK secure-link runtime, including the most recent secure-link event, handshake-attempt count, authenticated-session count, completed-rekey count, last authenticated timestamp, and most recent failed session id so operators can distinguish repeated auth failures from healthy recovery and live-session rotation.
-- `REQ-AUT-010`: The PSK secure-link runtime shall support time-based rekey on authenticated client-side sessions and operator-forced rekey through the admin API; both paths shall rotate to a fresh secure-link session without breaking healthy overlay traffic and shall remain observable through admin/API fields that identify the last rekey trigger and any scheduled rekey deadline.
+- `REQ-AUT-008`: Repeated client-side PSK authentication failures shall be retried with bounded backoff rather than an immediate tight loop, and the peer-scoped admin/API surface shall expose the current consecutive failure count and next retry window so operators can diagnose persistent secret mismatch or similar auth failures.
+- `REQ-AUT-009`: The peer-scoped admin/API surface shall expose stronger operational diagnostics for the PSK secure-link runtime, including the most recent secure-link event, handshake-attempt count, authenticated-session count, completed-rekey count, last authenticated timestamp, and most recent failed session id so operators can distinguish repeated auth failures from healthy recovery and live-session rotation.
+- `REQ-AUT-010`: The PSK secure-link runtime shall support time-based rekey on authenticated client-side sessions and operator-forced rekey through the admin API and WebAdmin controls; both paths shall rotate to a fresh secure-link session without breaking healthy overlay traffic and shall remain observable through peer-scoped admin/API fields that identify the last rekey trigger and any scheduled rekey deadline. Operator-triggered rekey requests shall target a specific peer row rather than acting as an implicit runtime-wide broadcast.
 
 - `PLAN-AUT-004`: The deployment trust anchor should be an admin-controlled root public key configured on peer clients and peer servers.
 - `PLAN-AUT-005`: Peer certificates should be issued by that deployment-local admin root and be constrained by machine-enforced roles.

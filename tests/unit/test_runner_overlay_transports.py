@@ -29,6 +29,54 @@ def _args(**overrides):
 
 
 class RunnerOverlayTransportTests(unittest.TestCase):
+    def test_request_secure_link_rekey_targets_matching_peer_id_only(self):
+        class _Session:
+            def __init__(self, peer_ids):
+                self._peer_ids = peer_ids
+                self.requests = 0
+
+            def get_overlay_peers_snapshot(self):
+                return [{"peer_id": peer_id} for peer_id in self._peer_ids]
+
+            def request_secure_link_rekey(self):
+                self.requests += 1
+                return (True, "rekey_started")
+
+        runner = Runner.__new__(Runner)
+        runner._sessions = [_Session([1]), _Session([2])]
+        runner._session_labels = ["tcp", "ws"]
+
+        payload = Runner.request_secure_link_rekey(runner, target_peer_id="1:2")
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["target_peer_id"], "1:2")
+        self.assertEqual(payload["requested"], 1)
+        self.assertEqual(payload["skipped"], 0)
+        self.assertEqual(runner._sessions[0].requests, 0)
+        self.assertEqual(runner._sessions[1].requests, 1)
+        self.assertEqual(payload["results"][0]["peer_ids"], ["1:2"])
+
+    def test_request_secure_link_rekey_rejects_unknown_peer_id(self):
+        class _Session:
+            def get_overlay_peers_snapshot(self):
+                return [{"peer_id": 1}]
+
+            def request_secure_link_rekey(self):
+                raise AssertionError("should not be called for unknown peer")
+
+        runner = Runner.__new__(Runner)
+        runner._sessions = [_Session()]
+        runner._session_labels = ["tcp"]
+
+        payload = Runner.request_secure_link_rekey(runner, target_peer_id="0:99")
+
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["target_peer_id"], "0:99")
+        self.assertEqual(payload["requested"], 0)
+        self.assertEqual(payload["skipped"], 0)
+        self.assertEqual(payload["results"], [])
+        self.assertEqual(payload["error"], "unknown peer_id")
+
     def test_parse_overlay_transports_accepts_comma_separated_values(self):
         args = _args(overlay_transport='myudp, tcp,quic,ws')
         self.assertEqual(Runner._parse_overlay_transports(args), ['myudp', 'tcp', 'quic', 'ws'])
