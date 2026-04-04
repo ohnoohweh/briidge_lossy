@@ -5077,6 +5077,12 @@ def test_overlay_e2e_tcp_secure_link_psk_happy_path(tmp_path: Path) -> None:
             wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
             wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
             wait_peer_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', transport='tcp', authenticated=True)
+            _code, client_doc = fetch_json(f'http://127.0.0.1:{client_proc.admin_port}/api/status', timeout=1.5)
+            client_secure = dict(client_doc.get('secure_link') or {})
+            assert client_secure.get('last_event') == 'authenticated'
+            assert int(client_secure.get('handshake_attempts_total') or 0) >= 1
+            assert int(client_secure.get('authenticated_sessions_total') or 0) >= 1
+            assert client_secure.get('last_authenticated_unix_ts') is not None
         finally:
             if bounce is not None:
                 bounce.stop()
@@ -5128,6 +5134,9 @@ def test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected(tmp_path: Path) -
             secure_link = dict(failed_doc.get('secure_link') or {})
             assert float(secure_link.get('retry_backoff_sec') or 0.0) >= 0.0
             assert secure_link.get('next_retry_unix_ts') is not None
+            assert secure_link.get('last_event') == 'retry_scheduled'
+            assert secure_link.get('failure_session_id') is not None
+            assert int(secure_link.get('handshake_attempts_total') or 0) >= 2
             with pytest.raises(Exception):
                 wait_probe(case, timeout=3.0)
             assert_running(server_proc)
@@ -5190,8 +5199,14 @@ def test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic(tmp_path: Pat
                 transport='tcp',
             )
             wait_probe(case, payload=b'\x01rekey-two', timeout=12.0)
-            wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
-            wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+            client_doc = wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+            server_doc = wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+            client_secure = dict(client_doc.get('secure_link') or {})
+            server_secure = dict(server_doc.get('secure_link') or {})
+            assert client_secure.get('last_event') == 'rekey_completed'
+            assert int(client_secure.get('rekeys_completed_total') or 0) >= 1
+            assert int(client_secure.get('authenticated_sessions_total') or 0) >= 2
+            assert server_secure.get('last_authenticated_unix_ts') is not None
         finally:
             if bounce is not None:
                 bounce.stop()

@@ -449,10 +449,10 @@ What is visible in the included snapshots:
 | `--overlay-transport` | `myudp` | Overlay transport between peers: comma-separated list from myudp,tcp,quic,ws. Multiple transports are supported simultaneously for listening instances. |
 | `--client-restart-if-disconnected` | `0.0` | If configured as a peer client (for example --udp-peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables. |
 
-### Secure-link prototype
+### Secure-link (PSK mode)
 | Option(s) | Default | Description |
 |---|---:|---|
-| `--secure-link` | `False` | Enable the secure-link prototype. Phase 1 currently supports PSK mode over `myudp`, `tcp`, `ws`, and `quic`. |
+| `--secure-link` | `False` | Enable secure-link. The currently delivered Phase 1 mode is PSK over `myudp`, `tcp`, `ws`, and `quic`. |
 | `--secure-link-mode` | `off` | Secure-link mode. Phase 1 currently supports `off` or `psk`; `cert` remains planned. |
 | `--secure-link-psk` | `` | Pre-shared secret for `secure_link_mode=psk`. Both peers must use the same non-empty value. |
 | `--secure-link-rekey-after-frames` | `0` | Automatically initiate PSK rekey after this many protected data frames are sent. `0` disables rekeying. |
@@ -462,7 +462,7 @@ What is visible in the included snapshots:
 
 #### Current secure-link quick start
 
-The current runtime slice is a Phase 1 PSK prototype. It is useful for development, testing, and early operator validation of the layer boundary.
+The current runtime slice is the delivered Phase 1 PSK mode. It is useful for development, testing, and early operator validation of the layer boundary.
 
 What works today:
 
@@ -535,7 +535,8 @@ What to look for in WebAdmin or the admin API:
   - `secure_link.state=failed`
   - `failure_code=1`
   - `failure_reason=bad_psk`
-  - repeated client-side retries show increasing `consecutive_failures`, a bounded `retry_backoff_sec`, and a populated `next_retry_unix_ts`
+  - repeated client-side retries show increasing `consecutive_failures`, a bounded `retry_backoff_sec`, a populated `next_retry_unix_ts`, a populated `failure_session_id`, increasing `handshake_attempts_total`, and `last_event=retry_scheduled`
+- on healthy authenticated runs, `/api/status` also exposes stronger operational diagnostics such as `last_event`, `last_event_unix_ts`, `last_authenticated_unix_ts`, `authenticated_sessions_total`, and `rekeys_completed_total`
 
 Operator notes:
 
@@ -545,7 +546,7 @@ Operator notes:
 - if you are intentionally testing wrong-PSK or rollout mistakes, `secure_link_retry_backoff_initial_ms` and `secure_link_retry_backoff_max_ms` let you tune how aggressively the client retries after secure-link auth failures
 - the current PSK runtime uses strictly monotonic per-direction protected-data counters starting at `1`; counter `0` is reserved and counter exhaustion fails closed rather than wrapping
 - malformed or unexpected secure-link frames fail closed and remain observable through the admin/API surface; they do not continue forwarding overlay traffic on the affected peer
-- the current PSK mode is a prototype convenience mode, not the final trust model described in [docs/SECURE_LINK_DESIGN.md](docs/SECURE_LINK_DESIGN.md)
+- the current PSK mode is the delivered first secure-link mode, not the final certificate-based trust model described in [docs/SECURE_LINK_DESIGN.md](docs/SECURE_LINK_DESIGN.md)
 
 ## Notes
 - Listener mode intentionally ignores `--own-servers`, because a multi-peer listener cannot unambiguously bind one local listener to one remote peer.
@@ -563,7 +564,7 @@ Operator notes:
 
 ### Planned secure-link certificate preparation
 
-The current runtime only implements the Phase 1 PSK prototype described above. The following workflow is therefore preparation for the later certificate-based secure-link mode, not a current startup requirement for ObstacleBridge.
+The current runtime only implements the Phase 1 PSK mode described above. The following workflow is therefore preparation for the later certificate-based secure-link mode, not a current startup requirement for ObstacleBridge.
 
 The basic trust model is:
 
@@ -691,10 +692,10 @@ This stays consistent with the current design direction:
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `50/50 = 100.0%`
-- Unit-covered: `28/50 = 56.0%`
-- Any-test-covered: `50/50 = 100.0%`
-- Tracked in manifest: `50/50 = 100.0%`
+- Integration-covered: `51/51 = 100.0%`
+- Unit-covered: `29/51 = 56.9%`
+- Any-test-covered: `51/51 = 100.0%`
+- Tracked in manifest: `51/51 = 100.0%`
 - Requirements without integration coverage: `(none)`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.

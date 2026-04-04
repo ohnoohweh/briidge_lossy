@@ -1872,6 +1872,13 @@ class _SecureLinkPeerState:
     auth_fail_detail: str = ""
     auth_fail_unix_ts: Optional[float] = None
     consecutive_failures: int = 0
+    handshake_attempts_total: int = 0
+    last_event: str = ""
+    last_event_unix_ts: Optional[float] = None
+    last_authenticated_unix_ts: Optional[float] = None
+    last_failure_session_id: Optional[int] = None
+    authenticated_sessions_total: int = 0
+    rekeys_completed_total: int = 0
 
 
 class SecureLinkPskSession(ISession):
@@ -1984,6 +1991,14 @@ class SecureLinkPskSession(ISession):
         self._last_auth_fail_reason: str = ""
         self._last_auth_fail_detail: str = ""
         self._last_auth_fail_unix_ts: Optional[float] = None
+        self._last_auth_fail_session_id: Optional[int] = None
+        self._last_secure_link_event: str = ""
+        self._last_secure_link_event_unix_ts: Optional[float] = None
+        self._last_authenticated_unix_ts: Optional[float] = None
+        self._last_authenticated_session_id: Optional[int] = None
+        self._handshake_attempts_total: int = 0
+        self._authenticated_sessions_total: int = 0
+        self._rekeys_completed_total: int = 0
         self._client_retry_task: Optional[asyncio.Task] = None
         self._client_retry_consecutive_failures: int = 0
         self._client_retry_not_before_mono: float = 0.0
@@ -2109,20 +2124,27 @@ class SecureLinkPskSession(ISession):
         state.auth_fail_reason = str(self._auth_fail_reason(code) or "")
         state.auth_fail_detail = str(self._auth_fail_detail(code) or "")
         state.auth_fail_unix_ts = time.time()
+        state.last_failure_session_id = int(state.session_id or 0) or None
+        state.last_event = "auth_failed"
+        state.last_event_unix_ts = state.auth_fail_unix_ts
         if self._client_mode:
             state.consecutive_failures = max(1, int(self._client_retry_consecutive_failures or 0))
         self._last_auth_fail_code = state.auth_fail_code
         self._last_auth_fail_reason = state.auth_fail_reason
         self._last_auth_fail_detail = state.auth_fail_detail
         self._last_auth_fail_unix_ts = state.auth_fail_unix_ts
+        self._last_auth_fail_session_id = int(state.session_id or 0) or None
+        self._record_secure_link_event("auth_failed", state.auth_fail_unix_ts)
         self._log.warning(
-            "[SECURE-LINK] auth failure transport=%s side=%s peer_id=%s session_id=%s reason=%s detail=%s",
+            "[SECURE-LINK] auth failure transport=%s side=%s peer_id=%s session_id=%s reason=%s detail=%s failures=%s retry_backoff_sec=%.3f",
             self._transport_name,
             "client" if self._client_mode else "server",
             "local" if self._client_mode else str(peer_id),
             int(state.session_id or 0),
             state.auth_fail_reason or "unknown",
             state.auth_fail_detail or "unknown secure-link authentication failure",
+            int(state.consecutive_failures or 0),
+            max(0.0, self._client_retry_not_before_mono - time.monotonic()) if self._client_mode else 0.0,
         )
         if self._client_mode and self._started and bool(getattr(self._inner, "is_connected", lambda: False)()):
             self._schedule_client_retry()
@@ -2149,6 +2171,55 @@ class SecureLinkPskSession(ISession):
         self._server_peer_chan_to_mux.clear()
         self._server_next_mux_chan = 1
         self._refresh_connected_state()
+
+    def _record_secure_link_event(self, event: str, when: Optional[float] = None) -> None:
+        ts = float(when if when is not None else time.time())
+        self._last_secure_link_event = str(event or "")
+        self._last_secure_link_event_unix_ts = ts
+
+    def _record_authenticated_session(
+        self,
+        state: _SecureLinkPeerState,
+        *,
+        session_id: int,
+        peer_id: Optional[int],
+        event: str,
+        rekey_completed: bool,
+    ) -> None:
+        now = time.time()
+        state.authenticated = True
+        state.consecutive_failures = 0
+        state.auth_fail_code = 0
+        state.auth_fail_reason = ""
+        state.auth_fail_detail = ""
+        state.auth_fail_unix_ts = None
+        state.last_event = str(event)
+        state.last_event_unix_ts = now
+        state.last_authenticated_unix_ts = now
+        state.authenticated_sessions_total = int(state.authenticated_sessions_total or 0) + 1
+        if rekey_completed:
+            state.rekeys_completed_total = int(state.rekeys_completed_total or 0) + 1
+            self._rekeys_completed_total += 1
+        self._authenticated_sessions_total += 1
+        self._last_authenticated_unix_ts = now
+        self._last_authenticated_session_id = int(session_id or 0) or None
+        self._last_auth_fail_code = 0
+        self._last_auth_fail_reason = ""
+        self._last_auth_fail_detail = ""
+        self._last_auth_fail_unix_ts = None
+        self._last_auth_fail_session_id = None
+        self._record_secure_link_event(event, now)
+        self._reset_client_retry_backoff()
+        self._log.info(
+            "[SECURE-LINK] %s transport=%s side=%s peer_id=%s session_id=%s authenticated_sessions_total=%s rekeys_completed_total=%s",
+            str(event).replace("_", " "),
+            self._transport_name,
+            "client" if self._client_mode else "server",
+            "local" if self._client_mode else str(peer_id),
+            int(session_id or 0),
+            int(self._authenticated_sessions_total or 0),
+            int(self._rekeys_completed_total or 0),
+        )
 
     def _cancel_client_retry_task(self, *, clear_schedule: bool) -> None:
         task = self._client_retry_task
@@ -2202,6 +2273,11 @@ class SecureLinkPskSession(ISession):
         self._client_retry_not_before_mono = target_mono
         self._client_retry_not_before_unix_ts = time.time() + delay_s
         self._cancel_client_retry_task(clear_schedule=False)
+        state = self._peer_states.get(0) if self._client_mode else None
+        if state is not None:
+            state.last_event = "retry_scheduled"
+            state.last_event_unix_ts = time.time()
+        self._record_secure_link_event("retry_scheduled")
         try:
             self._client_retry_task = asyncio.create_task(self._delayed_client_retry(target_mono))
         except Exception:
@@ -2261,6 +2337,9 @@ class SecureLinkPskSession(ISession):
         state.pending_server_nonce = b""
         state.pending_c2s_key = None
         state.pending_s2c_key = None
+        state.last_event = "rekey_started"
+        state.last_event_unix_ts = time.time()
+        self._record_secure_link_event("rekey_started", state.last_event_unix_ts)
         payload = pending_client_nonce + bytes([self._SL_CAP_PSK_V1, 0])
         self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_HELLO, pending_session_id, 0, payload))
 
@@ -2368,9 +2447,16 @@ class SecureLinkPskSession(ISession):
                 "failure_reason": failure_reason,
                 "failure_detail": failure_detail,
                 "failure_unix_ts": failure_unix_ts,
+                "failure_session_id": state.last_failure_session_id if state is not None else None,
                 "consecutive_failures": int(state.consecutive_failures or 0) if state is not None else 0,
                 "retry_backoff_sec": max(0.0, self._client_retry_not_before_mono - time.monotonic()) if self._client_mode and self._client_retry_not_before_mono > 0.0 else 0.0,
                 "next_retry_unix_ts": self._client_retry_not_before_unix_ts if self._client_mode else None,
+                "handshake_attempts_total": int(state.handshake_attempts_total or 0) if state is not None else 0,
+                "last_event": str(state.last_event or "") if state is not None else "",
+                "last_event_unix_ts": state.last_event_unix_ts if state is not None else None,
+                "last_authenticated_unix_ts": state.last_authenticated_unix_ts if state is not None else None,
+                "authenticated_sessions_total": int(state.authenticated_sessions_total or 0) if state is not None else 0,
+                "rekeys_completed_total": int(state.rekeys_completed_total or 0) if state is not None else 0,
                 "transport": self._transport_name,
             }
             out.append(r)
@@ -2423,9 +2509,17 @@ class SecureLinkPskSession(ISession):
             "failure_reason": failure_reason,
             "failure_detail": failure_detail,
             "failure_unix_ts": failure_unix_ts,
+            "failure_session_id": self._last_auth_fail_session_id,
             "consecutive_failures": int(self._client_retry_consecutive_failures or 0) if self._client_mode else 0,
             "retry_backoff_sec": max(0.0, self._client_retry_not_before_mono - time.monotonic()) if self._client_mode and self._client_retry_not_before_mono > 0.0 else 0.0,
             "next_retry_unix_ts": self._client_retry_not_before_unix_ts if self._client_mode else None,
+            "handshake_attempts_total": int(self._handshake_attempts_total or 0),
+            "last_event": self._last_secure_link_event,
+            "last_event_unix_ts": self._last_secure_link_event_unix_ts,
+            "last_authenticated_unix_ts": self._last_authenticated_unix_ts,
+            "last_authenticated_session_id": self._last_authenticated_session_id,
+            "authenticated_sessions_total": int(self._authenticated_sessions_total or 0),
+            "rekeys_completed_total": int(self._rekeys_completed_total or 0),
         }
 
     def _send_auth_fail(self, peer_id: Optional[int], session_id: int, code: int) -> None:
@@ -2437,12 +2531,17 @@ class SecureLinkPskSession(ISession):
 
     def _begin_client_handshake(self) -> None:
         self._cancel_client_retry_task(clear_schedule=True)
+        self._handshake_attempts_total += 1
         state = _SecureLinkPeerState(
             session_id=self._new_session_id(),
             client_nonce=secrets.token_bytes(32),
             consecutive_failures=int(self._client_retry_consecutive_failures or 0),
+            handshake_attempts_total=int(self._handshake_attempts_total or 0),
         )
+        state.last_event = "handshake_started"
+        state.last_event_unix_ts = time.time()
         self._peer_states[0] = state
+        self._record_secure_link_event("handshake_started", state.last_event_unix_ts)
         payload = state.client_nonce + bytes([self._SL_CAP_PSK_V1, 0])
         self._inner.send_app(self._build_frame(self._SL_TYPE_CLIENT_HELLO, state.session_id, 0, payload))
 
@@ -2569,13 +2668,18 @@ class SecureLinkPskSession(ISession):
         server_nonce = secrets.token_bytes(32)
         c2s_key, s2c_key = self._derive_keys(session_id, client_nonce, server_nonce)
         key = self._peer_key(peer_id)
+        self._handshake_attempts_total += 1
         self._peer_states[key] = _SecureLinkPeerState(
             session_id=session_id,
             client_nonce=client_nonce,
             server_nonce=server_nonce,
             c2s_key=c2s_key,
             s2c_key=s2c_key,
+            handshake_attempts_total=int(self._handshake_attempts_total or 0),
         )
+        self._peer_states[key].last_event = "handshake_started"
+        self._peer_states[key].last_event_unix_ts = time.time()
+        self._record_secure_link_event("server_hello_sent", self._peer_states[key].last_event_unix_ts)
         proof = self._server_proof(session_id, client_nonce, server_nonce)
         payload = server_nonce + bytes([self._SL_CAP_PSK_V1]) + proof
         self._inner.send_app(self._build_frame(self._SL_TYPE_SERVER_HELLO, session_id, 0, payload), peer_id=peer_id)
@@ -2602,17 +2706,13 @@ class SecureLinkPskSession(ISession):
         state.server_nonce = server_nonce
         state.c2s_key = c2s_key
         state.s2c_key = s2c_key
-        state.authenticated = True
-        state.consecutive_failures = 0
-        state.auth_fail_code = 0
-        state.auth_fail_reason = ""
-        state.auth_fail_detail = ""
-        state.auth_fail_unix_ts = None
-        self._last_auth_fail_code = 0
-        self._last_auth_fail_reason = ""
-        self._last_auth_fail_detail = ""
-        self._last_auth_fail_unix_ts = None
-        self._reset_client_retry_backoff()
+        self._record_authenticated_session(
+            state,
+            session_id=session_id,
+            peer_id=None,
+            event="authenticated",
+            rekey_completed=False,
+        )
         self._refresh_connected_state()
 
     def _handle_rekey_hello(self, peer_id: Optional[int], session_id: int, body: bytes) -> None:
@@ -2682,6 +2782,13 @@ class SecureLinkPskSession(ISession):
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_BAD_PSK)
             return
         self._promote_pending_rekey(state)
+        self._record_authenticated_session(
+            state,
+            session_id=session_id,
+            peer_id=peer_id,
+            event="rekey_completed",
+            rekey_completed=True,
+        )
         self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_DONE, session_id, 0, b""), peer_id=peer_id)
         self._refresh_connected_state()
 
@@ -2694,6 +2801,13 @@ class SecureLinkPskSession(ISession):
             self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         self._promote_pending_rekey(state)
+        self._record_authenticated_session(
+            state,
+            session_id=session_id,
+            peer_id=None,
+            event="rekey_completed",
+            rekey_completed=True,
+        )
         self._refresh_connected_state()
 
     def _deliver_outer_app(self, payload: bytes, peer_id: Optional[int]) -> None:
@@ -2726,17 +2840,13 @@ class SecureLinkPskSession(ISession):
             return
         state.rx_counter = counter
         if not state.authenticated:
-            state.authenticated = True
-            state.consecutive_failures = 0
-            state.auth_fail_code = 0
-            state.auth_fail_reason = ""
-            state.auth_fail_detail = ""
-            state.auth_fail_unix_ts = None
-            self._last_auth_fail_code = 0
-            self._last_auth_fail_reason = ""
-            self._last_auth_fail_detail = ""
-            self._last_auth_fail_unix_ts = None
-            self._reset_client_retry_backoff()
+            self._record_authenticated_session(
+                state,
+                session_id=session_id,
+                peer_id=peer_id,
+                event="authenticated",
+                rekey_completed=False,
+            )
             self._refresh_connected_state()
         if not self._client_mode and peer_id is not None:
             plaintext = self._server_rewrite_inbound_app(int(peer_id), plaintext)
@@ -11048,9 +11158,17 @@ class StatsBoard:
                         "failure_reason": None,
                         "failure_detail": None,
                         "failure_unix_ts": None,
+                        "failure_session_id": None,
                         "consecutive_failures": 0,
                         "retry_backoff_sec": 0.0,
                         "next_retry_unix_ts": None,
+                        "handshake_attempts_total": 0,
+                        "last_event": "",
+                        "last_event_unix_ts": None,
+                        "last_authenticated_unix_ts": None,
+                        "last_authenticated_session_id": None,
+                        "authenticated_sessions_total": 0,
+                        "rekeys_completed_total": 0,
                     },
                 )()
             ),
@@ -11115,9 +11233,16 @@ class RunnerMuxAggregate:
             "failure_reason": None,
             "failure_detail": None,
             "failure_unix_ts": None,
+            "failure_session_id": None,
             "consecutive_failures": 0,
             "retry_backoff_sec": 0.0,
             "next_retry_unix_ts": None,
+            "handshake_attempts_total": 0,
+            "last_event": "",
+            "last_event_unix_ts": None,
+            "last_authenticated_unix_ts": None,
+            "authenticated_sessions_total": 0,
+            "rekeys_completed_total": 0,
             "transport": None,
         }
 

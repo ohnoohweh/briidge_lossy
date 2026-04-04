@@ -170,8 +170,17 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(client_peer["secure_link"]["authenticated"])
         self.assertIsNone(client_peer["secure_link"]["failure_code"])
         self.assertIsNone(client_peer["secure_link"]["failure_detail"])
-        self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
-        self.assertEqual(server.get_secure_link_status_snapshot()["state"], "authenticated")
+        self.assertEqual(client_peer["secure_link"]["last_event"], "authenticated")
+        self.assertEqual(client_peer["secure_link"]["handshake_attempts_total"], 1)
+        self.assertEqual(client_peer["secure_link"]["authenticated_sessions_total"], 1)
+        client_status = client.get_secure_link_status_snapshot()
+        server_status = server.get_secure_link_status_snapshot()
+        self.assertEqual(client_status["state"], "authenticated")
+        self.assertEqual(server_status["state"], "authenticated")
+        self.assertEqual(client_status["last_event"], "authenticated")
+        self.assertEqual(client_status["handshake_attempts_total"], 1)
+        self.assertEqual(client_status["authenticated_sessions_total"], 1)
+        self.assertIsNotNone(client_status["last_authenticated_unix_ts"])
 
     async def test_wrong_psk_prevents_authenticated_session(self):
         client_inner = FakeInnerSession()
@@ -205,6 +214,8 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.get_secure_link_status_snapshot()["failure_reason"], "bad_psk")
         self.assertIn("pre-shared secret mismatch", client.get_secure_link_status_snapshot()["failure_detail"])
         self.assertIsNotNone(client.get_secure_link_status_snapshot()["failure_unix_ts"])
+        self.assertIsNotNone(client.get_secure_link_status_snapshot()["failure_session_id"])
+        self.assertEqual(client.get_secure_link_status_snapshot()["last_event"], "retry_scheduled")
 
     async def test_wrong_psk_retries_with_bounded_backoff_and_reports_retry_window(self):
         client_inner = FakeInnerSession()
@@ -249,6 +260,7 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         second_snapshot = client.get_secure_link_status_snapshot()
         self.assertGreaterEqual(int(second_snapshot["consecutive_failures"] or 0), 2)
         self.assertEqual(second_snapshot["failure_reason"], "bad_psk")
+        self.assertGreaterEqual(int(second_snapshot["handshake_attempts_total"] or 0), 2)
 
     async def test_reconnect_respects_remaining_retry_backoff_after_auth_failure(self):
         client_inner = FakeInnerSession()
@@ -392,6 +404,10 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         self.assertEqual(client_payloads, [reply_mux])
+        client_status = client.get_secure_link_status_snapshot()
+        self.assertEqual(client_status["last_event"], "rekey_completed")
+        self.assertGreaterEqual(client_status["rekeys_completed_total"], 1)
+        self.assertGreaterEqual(client_status["authenticated_sessions_total"], 2)
 
     async def test_data_counter_zero_is_rejected_as_lifecycle_violation(self):
         client_inner = FakeInnerSession()

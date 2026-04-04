@@ -4,15 +4,16 @@ This document describes the main runtime components and how they contribute to t
 
 ## Architectural layers
 
-The current runtime can be understood in five implemented layers:
+The current runtime can be understood in six layers:
 
 1. transport/session layer
-2. reliability and framing layer
-3. channel/service multiplexing layer
-4. runner and process orchestration layer
-5. admin web and observability layer
+2. secure-link layer
+3. reliability and framing layer
+4. channel/service multiplexing layer
+5. runner and process orchestration layer
+6. admin web and observability layer
 
-A planned secure-link layer is reserved between the transport/session layer and the current reliability/framing layer. That boundary is not implemented yet, but it is intentionally documented now so future security work does not leak responsibilities into `ChannelMux` or the transport runtimes.
+The secure-link layer now exists as a delivered Phase 1 PSK runtime slice between the transport/session layer and the current reliability/framing layer. Certificate-based trust-anchor and certificate-validation behavior remain planned, but the boundary itself is no longer only a reservation.
 
 ## Stable component IDs
 
@@ -25,7 +26,7 @@ The following component IDs are intended to stay stable so requirements, tests, 
 | `ARC-CMP-003` | Channel and service multiplexing layer | `own_servers`, `remote_servers`, channel routing, and peer-scoped service isolation |
 | `ARC-CMP-004` | Runner and process orchestration layer | CLI/config composition, lifecycle wiring, restart/shutdown coordination, and process startup |
 | `ARC-CMP-005` | Admin web and observability layer | HTTP API/UI, auth/session control, runtime snapshots, logs, and operator visibility |
-| `ARC-CMP-006` | Planned secure-link layer | Future mutual authentication, key establishment, frame protection, and replay defense between transport sessions and `ChannelMux` |
+| `ARC-CMP-006` | Secure-link layer | Delivered PSK-based authentication, frame protection, replay defense, rekeying, and secure-link diagnostics between transport sessions and `ChannelMux`, with certificate-based follow-up still planned |
 
 ## 1. Transport and session layer
 
@@ -75,24 +76,26 @@ Important behaviors:
 
 This layer is especially important for the `myudp` requirements in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md).
 
-## Planned secure-link layer
+## 2. Secure-link layer
 
 Primary responsibility:
 
-- provide one future transport-independent place for overlay authentication and encryption
+- provide one transport-independent place for overlay authentication, protected carriage, and secure-link diagnostics
 
-Phase 0 architectural decision:
+Current delivered boundary:
 
-- if secure-link is implemented, it shall sit below `ChannelMux` and above the transport/session layer
+- the delivered Phase 1 PSK runtime sits below `ChannelMux` and above the transport/session layer
 
-Planned contribution:
+Current contribution:
 
-- peer identity verification
+- PSK-based peer authentication
 - session-key establishment
 - ciphertext/plaintext transition for mux payloads
 - replay protection and rekey hooks
+- bounded client-side retry/backoff after repeated auth failures
+- secure-link status and failure diagnostics for admin/API consumers
 
-Phase 0 fixed boundary contract:
+Current boundary contract:
 
 - input from transport/session layer:
   - connected byte or datagram path
@@ -104,7 +107,7 @@ Phase 0 fixed boundary contract:
 - output upward:
   - authenticated plaintext overlay frames only
 
-Phase 0 fixed ownership decisions:
+Current ownership decisions:
 
 - websocket proxy behavior stays in `ARC-CMP-001`; secure-link must not reimplement transport bootstrap
 - retransmission policy and RTT/inflight metrics stay in `ARC-CMP-002` until an implementation phase deliberately reworks that boundary
@@ -126,18 +129,24 @@ Important non-responsibilities:
 
 Current status:
 
-- this component is a documented architectural reservation only
-- no runtime secure-link behavior is claimed by the project yet
-- the design baseline for this component is documented in [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md)
-- the Phase 0 finalized trust model, certificate profile, and dependency policy are also documented there
+- the PSK-based Phase 1 runtime slice is implemented and defended by unit and integration tests
+- delivered runtime behavior currently includes:
+  - `secure_link_mode=psk` on `myudp`, `tcp`, `ws`, and `quic`
+  - authenticated protected carriage below `ChannelMux`
+  - live rekey support
+  - fail-closed malformed-input handling
+  - bounded reconnect/failure throttling after repeated client-side auth failures
+  - admin/API visibility of secure-link state and stronger operational diagnostics
+- certificate-based trust-anchor, certificate-validation, and richer identity semantics remain planned follow-up work
+- the design baseline and remaining planned work for this component are documented in [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md)
 
 ### Functional decomposition for secure-link status visibility
 
-This decomposition applies to `PLAN-AUT-007` in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md).
+This decomposition applies to the delivered `REQ-AUT-004`, `REQ-AUT-008`, and `REQ-AUT-009` items in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md), and remains relevant for the planned certificate-mode follow-up.
 
 | Component ID | Contribution to secure-link status visibility |
 |---|---|
-| `ARC-CMP-006` | Determines whether secure-link is disabled, handshaking, authenticated, failed, or listening; determines mode and failure reason |
+| `ARC-CMP-006` | Determines whether secure-link is disabled, handshaking, authenticated, failed, or listening; determines mode, failure reason, lifecycle event, retry window, and rekey/auth counters |
 | `ARC-CMP-004` | Pulls secure-link state from the wrapped session and places it into process-level status and peer snapshots |
 | `ARC-CMP-005` | Exposes the secure-link state through `/api/status`, `/api/peers`, live admin updates, and the WebAdmin page |
 

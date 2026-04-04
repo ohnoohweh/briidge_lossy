@@ -766,11 +766,73 @@ Layering:
 - decide dependency policy
 - record those decisions in architecture and contributor-facing project documents without claiming delivery of secure-link runtime behavior
 
+Acceptance criteria:
+
+- the trust model, certificate/profile expectations, layer boundary, and dependency policy are documented and internally consistent
+- the architecture docs state clearly which responsibilities belong to the secure-link layer versus transport/session, `ChannelMux`, runner wiring, and admin/web observability
+- no product requirement claims delivered secure-link runtime behavior before code and black-box tests exist
+
+Current status:
+
+- fulfilled
+
+Evidence:
+
+- [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md):
+  - `Phase 0 outcome`
+  - `Phase 0 decision summary`
+  - trust model, dependency policy, and certificate-profile sections
+- [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md):
+  - `2. Secure-link layer`
+  - component decomposition and ownership boundary
+- [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md):
+  - secure-link certificate input profile and external responsibility split
+- [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md):
+  - active `REQ-AUT-*` versus planned `PLAN-AUT-*` separation
+
 ### Phase 1: PSK secure-link prototype
 
 - implement secure-link framing hooks
 - support optional PSK mode for development and testing
 - validate layering with `ChannelMux` unchanged
+
+Acceptance criteria:
+
+- a delivered secure-link runtime slice exists below `ChannelMux` and above the transport/session layer
+- `secure_link_mode=psk` works across the supported overlay transports
+- the protected data phase authenticates and encrypts traffic without requiring `ChannelMux` changes
+- wrong-PSK peers fail instead of reaching a false connected state
+- the admin/API surface exposes first secure-link state visibility for operators
+
+Current status:
+
+- fulfilled for the PSK runtime slice
+- certificate mode remains out of scope for this phase
+
+Evidence:
+
+- runtime:
+  - [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py)
+    `SecureLinkPskSession`
+- architecture:
+  - [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md)
+    `2. Secure-link layer`
+- requirements:
+  - [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
+    `REQ-AUT-001` to `REQ-AUT-005`
+- unit evidence:
+  - [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+  - [test_runner_overlay_transports.py](/home/ohnoohweh/quic_br/tests/unit/test_runner_overlay_transports.py)
+  - [test_admin_web_payloads.py](/home/ohnoohweh/quic_br/tests/unit/test_admin_web_payloads.py)
+- integration evidence:
+  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py):
+    - `test_overlay_e2e_tcp_secure_link_psk_happy_path`
+    - `test_overlay_e2e_secure_link_psk_happy_path_other_transports`
+    - `test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected`
+    - listener multi-peer secure-link cases
+- traceability:
+  - [.github/requirements_traceability.yaml](/home/ohnoohweh/quic_br/.github/requirements_traceability.yaml)
+    `REQ-AUT-001` to `REQ-AUT-005`
 
 ### Phase 1.5: PSK hardening checklist
 
@@ -793,6 +855,26 @@ Acceptance criteria:
 - long-lived sessions can rotate traffic keys without disconnecting healthy peers
 - once rekey completes, frames under superseded keys are rejected
 - failed or abandoned rekey attempts do not silently fall back to ambiguous mixed-key operation
+
+Current status:
+
+- fulfilled for the currently delivered client-driven frame-count-triggered rekey path
+- time-based or operator-forced rekey is still not implemented
+
+Evidence:
+
+- runtime:
+  - [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py)
+    rekey hello/reply/commit/done handling and `secure_link_rekey_after_frames`
+- requirements:
+  - [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
+    `REQ-AUT-006`
+- unit evidence:
+  - [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    `test_psk_rekey_rotates_session_id_and_keeps_data_flowing`
+- integration evidence:
+  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic`
 
 #### Nonce and counter lifecycle
 
@@ -819,6 +901,30 @@ Acceptance criteria:
 - duplicate frames are rejected deterministically
 - stale frames from an earlier session are rejected deterministically
 - counter exhaustion results in a safe rekey or fail-closed shutdown rather than undefined behavior
+
+Current status:
+
+- partially fulfilled
+- the delivered runtime enforces strictly monotonic counters, reserved counter rejection, fresh session ids on reconnect/rekey, and fail-closed counter exhaustion
+- explicit reconnect/replay integration coverage beyond the current PSK slice is still pending
+
+Evidence:
+
+- runtime:
+  - [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py)
+    counter validation, session-id rotation, and exhaustion fail-closed behavior
+- requirements:
+  - [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
+    `REQ-AUT-006`
+- unit evidence:
+  - [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py):
+    - `test_data_counter_zero_is_rejected_as_lifecycle_violation`
+    - `test_counter_exhaustion_fails_closed_before_nonce_wrap`
+- integration evidence:
+  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic`
+- remaining gap:
+  - the planned reconnect/replay hardening tests listed below are not all implemented yet
 
 #### Failure handling
 
@@ -855,15 +961,84 @@ Current Phase 1 runtime decision:
 
 - repeated client-side PSK authentication failures now retry under bounded exponential backoff rather than immediate tight looping
 - the current admin/API surface exposes `consecutive_failures`, `retry_backoff_sec`, and `next_retry_unix_ts` for that throttle window
+- the current admin/API surface also exposes stronger operational diagnostics such as `failure_session_id`, `handshake_attempts_total`, `last_event`, `last_event_unix_ts`, `last_authenticated_unix_ts`, `authenticated_sessions_total`, and `rekeys_completed_total`
+
+Current status:
+
+- substantially fulfilled for the delivered PSK slice
+- remaining work is mainly broader transport/runtime hardening rather than absence of basic fail-closed behavior
+
+Evidence:
+
+- runtime:
+  - [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py)
+    malformed-frame rejection, auth-failure handling, retry throttling, and admin/API snapshot fields
+- requirements:
+  - [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
+    `REQ-AUT-007`, `REQ-AUT-008`, and `REQ-AUT-009`
+- unit evidence:
+  - [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py):
+    - malformed/out-of-order fail-closed tests
+    - wrong-PSK retry/backoff tests
+    - operational diagnostics assertions
+  - [test_admin_web_payloads.py](/home/ohnoohweh/quic_br/tests/unit/test_admin_web_payloads.py)
+- integration evidence:
+  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py):
+    - `test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected`
+    - `test_overlay_e2e_tcp_secure_link_psk_happy_path`
+    - `test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic`
+- supporting contract:
+  - [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md)
+    secure-link coverage tables and criteria notes
 
 #### Test additions expected in Phase 1.5
 
+Already generated:
+
 - integration test for rekey under live traffic
+  - evidence:
+    [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic`
+- unit tests for counter overflow handling
+  - evidence:
+    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    `test_counter_exhaustion_fails_closed_before_nonce_wrap`
+- unit tests for reserved/invalid counter lifecycle handling
+  - evidence:
+    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    `test_data_counter_zero_is_rejected_as_lifecycle_violation`
+- unit tests for malformed-frame fail-closed behavior
+  - evidence:
+    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    `test_malformed_frame_after_authentication_fails_closed`
+    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    `test_unexpected_rekey_commit_fails_closed`
+    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    `test_auth_failure_unregisters_server_mux_routes`
+- integration test for persistent wrong-PSK failure throttling and observability
+  - evidence:
+    [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected`
+- unit tests for wrong-PSK retry/backoff behavior
+  - evidence:
+    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    `test_wrong_psk_retries_with_bounded_backoff_and_reports_retry_window`
+    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    `test_reconnect_respects_remaining_retry_backoff_after_auth_failure`
+- unit and integration checks for stronger operational diagnostics
+  - evidence:
+    [test_admin_web_payloads.py](/home/ohnoohweh/quic_br/tests/unit/test_admin_web_payloads.py)
+    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_psk_happy_path`
+    `test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected`
+    `test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic`
+
+Still missing:
+
 - integration test for reconnect without nonce reuse
 - integration test for replay rejection after reconnect and after rekey
-- unit tests for counter overflow handling
-- integration test for malformed-frame fail-closed behavior
-- integration test for persistent wrong-PSK failure throttling and observability
+- integration test for malformed-frame fail-closed behavior as a full subprocess case, not only unit-level verification
 
 ### Phase 2: certificate-based mutual authentication
 
@@ -872,12 +1047,48 @@ Current Phase 1 runtime decision:
 - add mutual-authenticated handshake
 - add traffic encryption
 
+Acceptance criteria:
+
+- both sides authenticate with admin-signed certificates before protected traffic is accepted
+- trust-anchor mismatch, role mismatch, validity failure, deployment mismatch, or revocation all fail closed before the protected data phase
+- the admin/API surface preserves the current secure-link visibility model while adding certificate/trust-validation diagnostics
+
+Current status:
+
+- not fulfilled yet
+
+Evidence:
+
+- planning/design only:
+  - [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md)
+  - [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
+    `PLAN-AUT-004` to `PLAN-AUT-007`
+  - [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md)
+    `Planned certificate-mode secure-link integration test matrix`
+
 ### Phase 3: operational controls
 
 - revocation list
 - certificate expiry handling
 - admin tooling for issuance and rotation
 - admin UI visibility for peer identity metadata
+
+Acceptance criteria:
+
+- operators can revoke or expire credentials and see those effects enforced in runtime behavior
+- operators have supported tooling/workflows for certificate issuance and rotation
+- WebAdmin and admin APIs expose peer identity metadata and trust-validation results clearly enough for troubleshooting and audit
+
+Current status:
+
+- not fulfilled yet
+
+Evidence:
+
+- planning/design only:
+  - [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md)
+  - [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md)
+  - planned requirement IDs in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
 
 ## Minimal operational model
 

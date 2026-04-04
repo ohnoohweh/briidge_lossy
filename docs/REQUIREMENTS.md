@@ -54,7 +54,7 @@ This section covers the delivered PSK-based Phase 1 secure-link slice and the st
 Functional decomposition note:
 
 - `REQ-AUT-001` through `REQ-AUT-003`, `REQ-AUT-005`, `REQ-AUT-006`, and `REQ-AUT-007` are realized jointly by the secure-link runtime slice in [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md) (`ARC-CMP-006`), with lifecycle/config/snapshot wiring contributed by the runner/process orchestration layer (`ARC-CMP-004`).
-- `REQ-AUT-004` and `REQ-AUT-008` are realized jointly by:
+- `REQ-AUT-004`, `REQ-AUT-008`, and `REQ-AUT-009` are realized jointly by:
   - the secure-link runtime slice (`ARC-CMP-006`), which owns the underlying authentication/encryption state and failure categories
   - the runner/process orchestration layer (`ARC-CMP-004`), which gathers and shapes snapshot data
   - the admin web and observability layer (`ARC-CMP-005`), which exposes that state through `/api/status`, `/api/peers`, the live admin feed, and the WebAdmin page
@@ -84,6 +84,7 @@ Current implementation note:
 - `REQ-AUT-006`: The PSK secure-link runtime shall preserve a deterministic session and counter lifecycle: protected data counters start at `1`, remain strictly monotonic per direction, reject stale or reserved counters, and when `secure_link_rekey_after_frames` is configured to a positive value the runtime shall rotate to a fresh secure-link session under live traffic without losing healthy overlay functionality.
 - `REQ-AUT-007`: Malformed, unexpected, or out-of-order secure-link control/data frames shall fail closed: the affected secure-link peer state shall stop forwarding overlay traffic, remain observable as a secure-link failure, and drop any server-side peer-channel routing state that belonged to the failed peer.
 - `REQ-AUT-008`: Repeated client-side PSK authentication failures shall be retried with bounded backoff rather than an immediate tight loop, and the admin/API surface shall expose the current consecutive failure count and next retry window so operators can diagnose persistent secret mismatch or similar auth failures.
+- `REQ-AUT-009`: The admin/API surface shall expose stronger operational diagnostics for the PSK secure-link runtime, including the most recent secure-link event, handshake-attempt count, authenticated-session count, completed-rekey count, last authenticated timestamp, and most recent failed session id so operators can distinguish repeated auth failures from healthy recovery and live-session rotation.
 
 - `PLAN-AUT-004`: The deployment trust anchor should be an admin-controlled root public key configured on peer clients and peer servers.
 - `PLAN-AUT-005`: Peer certificates should be issued by that deployment-local admin root and be constrained by machine-enforced roles.
