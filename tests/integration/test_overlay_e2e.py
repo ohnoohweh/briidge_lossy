@@ -2247,6 +2247,29 @@ def wait_status_secure_link_authenticated_peers(
     )
 
 
+def wait_status_secure_link_consecutive_failures(
+    admin_port: int,
+    *,
+    minimum_count: int,
+    timeout: float = 12.0,
+    label: str = '',
+) -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.5)
+        last_doc = doc
+        secure_link = doc.get('secure_link') or {}
+        if int(secure_link.get('consecutive_failures') or 0) >= int(minimum_count):
+            who = f' {label}' if label else ''
+            log.info(f'[STATUS]{who} port={admin_port} secure_link_consecutive_failures={secure_link!r}')
+            return doc
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'/api/status did not expose secure_link consecutive_failures>={minimum_count} on port {admin_port}; last={last_doc!r}'
+    )
+
+
 def status_state(doc: dict) -> str:
     return str(doc.get('peer_state', '')).strip().upper()
 
@@ -5077,7 +5100,11 @@ def test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected(tmp_path: Path) -
                 case_index=276,
                 secure_slot=1,
                 server_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'server-secret'],
-                client_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'client-secret'],
+                client_extra_args=[
+                    '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'client-secret',
+                    '--secure-link-retry-backoff-initial-ms', '250',
+                    '--secure-link-retry-backoff-max-ms', '500',
+                ],
                 client_restart_if_disconnected=30,
             )
             wait_status_not_connected(client_proc.admin_port or 0, timeout=20.0, label='client')
@@ -5092,6 +5119,15 @@ def test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected(tmp_path: Path) -
                 failure_reason='bad_psk',
                 failure_detail_substr='pre-shared secret mismatch',
             )
+            failed_doc = wait_status_secure_link_consecutive_failures(
+                client_proc.admin_port or 0,
+                minimum_count=2,
+                timeout=12.0,
+                label='client',
+            )
+            secure_link = dict(failed_doc.get('secure_link') or {})
+            assert float(secure_link.get('retry_backoff_sec') or 0.0) >= 0.0
+            assert secure_link.get('next_retry_unix_ts') is not None
             with pytest.raises(Exception):
                 wait_probe(case, timeout=3.0)
             assert_running(server_proc)

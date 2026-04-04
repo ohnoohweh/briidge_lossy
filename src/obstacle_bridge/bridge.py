@@ -1871,6 +1871,7 @@ class _SecureLinkPeerState:
     auth_fail_reason: str = ""
     auth_fail_detail: str = ""
     auth_fail_unix_ts: Optional[float] = None
+    consecutive_failures: int = 0
 
 
 class SecureLinkPskSession(ISession):
@@ -1935,6 +1936,20 @@ class SecureLinkPskSession(ISession):
                 default=0,
                 help='Automatically initiate PSK rekey after this many protected data frames are sent. 0 disables rekeying.'
             )
+        if not _has('--secure-link-retry-backoff-initial-ms'):
+            p.add_argument(
+                '--secure-link-retry-backoff-initial-ms',
+                type=int,
+                default=1000,
+                help='Initial client-side secure-link retry backoff after authentication failure, in milliseconds.'
+            )
+        if not _has('--secure-link-retry-backoff-max-ms'):
+            p.add_argument(
+                '--secure-link-retry-backoff-max-ms',
+                type=int,
+                default=5000,
+                help='Maximum client-side secure-link retry backoff after repeated authentication failures, in milliseconds.'
+            )
 
     def __init__(self, inner: ISession, args: argparse.Namespace, transport_name: str):
         self._inner = inner
@@ -1953,6 +1968,11 @@ class SecureLinkPskSession(ISession):
         self._client_mode = _has_configured_overlay_peer(args, self._transport_name)
         self._psk = str(getattr(args, "secure_link_psk", "") or "").encode("utf-8")
         self._rekey_after_frames = max(0, int(getattr(args, "secure_link_rekey_after_frames", 0) or 0))
+        self._retry_backoff_initial_s = max(0.0, float(int(getattr(args, "secure_link_retry_backoff_initial_ms", 1000) or 0)) / 1000.0)
+        self._retry_backoff_max_s = max(
+            self._retry_backoff_initial_s,
+            float(int(getattr(args, "secure_link_retry_backoff_max_ms", 5000) or 0)) / 1000.0,
+        )
         self._peer_states: Dict[int, _SecureLinkPeerState] = {}
         self._server_chan_to_peer: Dict[int, Tuple[int, int]] = {}
         self._server_peer_chan_to_mux: Dict[Tuple[int, int], int] = {}
@@ -1964,6 +1984,10 @@ class SecureLinkPskSession(ISession):
         self._last_auth_fail_reason: str = ""
         self._last_auth_fail_detail: str = ""
         self._last_auth_fail_unix_ts: Optional[float] = None
+        self._client_retry_task: Optional[asyncio.Task] = None
+        self._client_retry_consecutive_failures: int = 0
+        self._client_retry_not_before_mono: float = 0.0
+        self._client_retry_not_before_unix_ts: Optional[float] = None
 
     @staticmethod
     def _require_crypto() -> None:
@@ -2085,6 +2109,8 @@ class SecureLinkPskSession(ISession):
         state.auth_fail_reason = str(self._auth_fail_reason(code) or "")
         state.auth_fail_detail = str(self._auth_fail_detail(code) or "")
         state.auth_fail_unix_ts = time.time()
+        if self._client_mode:
+            state.consecutive_failures = max(1, int(self._client_retry_consecutive_failures or 0))
         self._last_auth_fail_code = state.auth_fail_code
         self._last_auth_fail_reason = state.auth_fail_reason
         self._last_auth_fail_detail = state.auth_fail_detail
@@ -2098,6 +2124,8 @@ class SecureLinkPskSession(ISession):
             state.auth_fail_reason or "unknown",
             state.auth_fail_detail or "unknown secure-link authentication failure",
         )
+        if self._client_mode and self._started and bool(getattr(self._inner, "is_connected", lambda: False)()):
+            self._schedule_client_retry()
         self._refresh_connected_state()
 
     def _refresh_connected_state(self) -> None:
@@ -2121,6 +2149,81 @@ class SecureLinkPskSession(ISession):
         self._server_peer_chan_to_mux.clear()
         self._server_next_mux_chan = 1
         self._refresh_connected_state()
+
+    def _cancel_client_retry_task(self, *, clear_schedule: bool) -> None:
+        task = self._client_retry_task
+        self._client_retry_task = None
+        current = None
+        try:
+            current = asyncio.current_task()
+        except Exception:
+            current = None
+        if task is not None and task is not current and not task.done():
+            task.cancel()
+        if clear_schedule:
+            self._client_retry_not_before_mono = 0.0
+            self._client_retry_not_before_unix_ts = None
+
+    def _reset_client_retry_backoff(self) -> None:
+        self._cancel_client_retry_task(clear_schedule=True)
+        self._client_retry_consecutive_failures = 0
+
+    async def _delayed_client_retry(self, target_mono: float) -> None:
+        try:
+            while True:
+                remaining = float(target_mono) - time.monotonic()
+                if remaining <= 0.0:
+                    break
+                await asyncio.sleep(min(remaining, 0.25))
+            if not self._started or not self._client_mode:
+                return
+            if not bool(getattr(self._inner, "is_connected", lambda: False)()):
+                return
+            state = self._peer_states.get(0)
+            if state is not None and state.authenticated:
+                return
+            self._client_retry_not_before_mono = 0.0
+            self._client_retry_not_before_unix_ts = None
+            self._begin_client_handshake()
+        except asyncio.CancelledError:
+            return
+        finally:
+            current = asyncio.current_task()
+            if self._client_retry_task is current:
+                self._client_retry_task = None
+
+    def _schedule_client_retry(self) -> None:
+        if not self._client_mode or not self._started or self._retry_backoff_max_s <= 0.0:
+            return
+        self._client_retry_consecutive_failures += 1
+        exponent = max(0, self._client_retry_consecutive_failures - 1)
+        delay_s = min(self._retry_backoff_max_s, self._retry_backoff_initial_s * (2 ** exponent))
+        target_mono = time.monotonic() + delay_s
+        self._client_retry_not_before_mono = target_mono
+        self._client_retry_not_before_unix_ts = time.time() + delay_s
+        self._cancel_client_retry_task(clear_schedule=False)
+        try:
+            self._client_retry_task = asyncio.create_task(self._delayed_client_retry(target_mono))
+        except Exception:
+            self._client_retry_task = None
+
+    def _maybe_begin_client_handshake(self) -> None:
+        if not self._client_mode or not self._started:
+            return
+        if self._peer_states and any(state.authenticated for state in self._peer_states.values()):
+            return
+        if self._client_retry_not_before_mono > time.monotonic():
+            if self._client_retry_task is None or self._client_retry_task.done():
+                try:
+                    self._client_retry_task = asyncio.create_task(
+                        self._delayed_client_retry(self._client_retry_not_before_mono)
+                    )
+                except Exception:
+                    self._client_retry_task = None
+            return
+        self._client_retry_not_before_mono = 0.0
+        self._client_retry_not_before_unix_ts = None
+        self._begin_client_handshake()
 
     @staticmethod
     def _clear_pending_rekey(state: _SecureLinkPeerState) -> None:
@@ -2200,6 +2303,7 @@ class SecureLinkPskSession(ISession):
         await self._inner.start()
 
     async def stop(self) -> None:
+        self._cancel_client_retry_task(clear_schedule=True)
         self._clear_all_states()
         await self._inner.stop()
 
@@ -2264,6 +2368,9 @@ class SecureLinkPskSession(ISession):
                 "failure_reason": failure_reason,
                 "failure_detail": failure_detail,
                 "failure_unix_ts": failure_unix_ts,
+                "consecutive_failures": int(state.consecutive_failures or 0) if state is not None else 0,
+                "retry_backoff_sec": max(0.0, self._client_retry_not_before_mono - time.monotonic()) if self._client_mode and self._client_retry_not_before_mono > 0.0 else 0.0,
+                "next_retry_unix_ts": self._client_retry_not_before_unix_ts if self._client_mode else None,
                 "transport": self._transport_name,
             }
             out.append(r)
@@ -2316,6 +2423,9 @@ class SecureLinkPskSession(ISession):
             "failure_reason": failure_reason,
             "failure_detail": failure_detail,
             "failure_unix_ts": failure_unix_ts,
+            "consecutive_failures": int(self._client_retry_consecutive_failures or 0) if self._client_mode else 0,
+            "retry_backoff_sec": max(0.0, self._client_retry_not_before_mono - time.monotonic()) if self._client_mode and self._client_retry_not_before_mono > 0.0 else 0.0,
+            "next_retry_unix_ts": self._client_retry_not_before_unix_ts if self._client_mode else None,
         }
 
     def _send_auth_fail(self, peer_id: Optional[int], session_id: int, code: int) -> None:
@@ -2326,9 +2436,11 @@ class SecureLinkPskSession(ISession):
             pass
 
     def _begin_client_handshake(self) -> None:
+        self._cancel_client_retry_task(clear_schedule=True)
         state = _SecureLinkPeerState(
             session_id=self._new_session_id(),
             client_nonce=secrets.token_bytes(32),
+            consecutive_failures=int(self._client_retry_consecutive_failures or 0),
         )
         self._peer_states[0] = state
         payload = state.client_nonce + bytes([self._SL_CAP_PSK_V1, 0])
@@ -2336,12 +2448,14 @@ class SecureLinkPskSession(ISession):
 
     def _on_inner_state_change(self, connected: bool) -> None:
         if not connected:
+            self._cancel_client_retry_task(clear_schedule=False)
             self._clear_all_states()
             return
         if self._client_mode and self._started and not self._peer_states:
-            self._begin_client_handshake()
+            self._maybe_begin_client_handshake()
 
     def _on_inner_transport_epoch_change(self, epoch: int) -> None:
+        self._cancel_client_retry_task(clear_schedule=False)
         self._clear_all_states()
         if callable(self._outer_on_transport_epoch_change):
             try:
@@ -2489,6 +2603,7 @@ class SecureLinkPskSession(ISession):
         state.c2s_key = c2s_key
         state.s2c_key = s2c_key
         state.authenticated = True
+        state.consecutive_failures = 0
         state.auth_fail_code = 0
         state.auth_fail_reason = ""
         state.auth_fail_detail = ""
@@ -2497,6 +2612,7 @@ class SecureLinkPskSession(ISession):
         self._last_auth_fail_reason = ""
         self._last_auth_fail_detail = ""
         self._last_auth_fail_unix_ts = None
+        self._reset_client_retry_backoff()
         self._refresh_connected_state()
 
     def _handle_rekey_hello(self, peer_id: Optional[int], session_id: int, body: bytes) -> None:
@@ -2611,6 +2727,7 @@ class SecureLinkPskSession(ISession):
         state.rx_counter = counter
         if not state.authenticated:
             state.authenticated = True
+            state.consecutive_failures = 0
             state.auth_fail_code = 0
             state.auth_fail_reason = ""
             state.auth_fail_detail = ""
@@ -2619,6 +2736,7 @@ class SecureLinkPskSession(ISession):
             self._last_auth_fail_reason = ""
             self._last_auth_fail_detail = ""
             self._last_auth_fail_unix_ts = None
+            self._reset_client_retry_backoff()
             self._refresh_connected_state()
         if not self._client_mode and peer_id is not None:
             plaintext = self._server_rewrite_inbound_app(int(peer_id), plaintext)
@@ -10930,6 +11048,9 @@ class StatsBoard:
                         "failure_reason": None,
                         "failure_detail": None,
                         "failure_unix_ts": None,
+                        "consecutive_failures": 0,
+                        "retry_backoff_sec": 0.0,
+                        "next_retry_unix_ts": None,
                     },
                 )()
             ),
@@ -10994,6 +11115,9 @@ class RunnerMuxAggregate:
             "failure_reason": None,
             "failure_detail": None,
             "failure_unix_ts": None,
+            "consecutive_failures": 0,
+            "retry_backoff_sec": 0.0,
+            "next_retry_unix_ts": None,
             "transport": None,
         }
 

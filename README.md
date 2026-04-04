@@ -456,6 +456,8 @@ What is visible in the included snapshots:
 | `--secure-link-mode` | `off` | Secure-link mode. Phase 1 currently supports `off` or `psk`; `cert` remains planned. |
 | `--secure-link-psk` | `` | Pre-shared secret for `secure_link_mode=psk`. Both peers must use the same non-empty value. |
 | `--secure-link-rekey-after-frames` | `0` | Automatically initiate PSK rekey after this many protected data frames are sent. `0` disables rekeying. |
+| `--secure-link-retry-backoff-initial-ms` | `1000` | Initial client-side retry backoff after a secure-link authentication failure, in milliseconds. |
+| `--secure-link-retry-backoff-max-ms` | `5000` | Maximum client-side retry backoff after repeated secure-link authentication failures, in milliseconds. |
 | `--secure-link-require` | `False` | Fail closed if secure-link cannot be negotiated or authenticated. |
 
 #### Current secure-link quick start
@@ -533,12 +535,14 @@ What to look for in WebAdmin or the admin API:
   - `secure_link.state=failed`
   - `failure_code=1`
   - `failure_reason=bad_psk`
+  - repeated client-side retries show increasing `consecutive_failures`, a bounded `retry_backoff_sec`, and a populated `next_retry_unix_ts`
 
 Operator notes:
 
 - use `--secure-link-require` when you want a hard failure instead of falling back to plaintext behavior
 - use a long random PSK for anything beyond local testing
 - leave `secure_link_rekey_after_frames=0` unless you intentionally want to exercise or validate rekey behavior
+- if you are intentionally testing wrong-PSK or rollout mistakes, `secure_link_retry_backoff_initial_ms` and `secure_link_retry_backoff_max_ms` let you tune how aggressively the client retries after secure-link auth failures
 - the current PSK runtime uses strictly monotonic per-direction protected-data counters starting at `1`; counter `0` is reserved and counter exhaustion fails closed rather than wrapping
 - malformed or unexpected secure-link frames fail closed and remain observable through the admin/API surface; they do not continue forwarding overlay traffic on the affected peer
 - the current PSK mode is a prototype convenience mode, not the final trust model described in [docs/SECURE_LINK_DESIGN.md](docs/SECURE_LINK_DESIGN.md)
@@ -687,10 +691,10 @@ This stays consistent with the current design direction:
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `49/49 = 100.0%`
-- Unit-covered: `27/49 = 55.1%`
-- Any-test-covered: `49/49 = 100.0%`
-- Tracked in manifest: `49/49 = 100.0%`
+- Integration-covered: `50/50 = 100.0%`
+- Unit-covered: `28/50 = 56.0%`
+- Any-test-covered: `50/50 = 100.0%`
+- Tracked in manifest: `50/50 = 100.0%`
 - Requirements without integration coverage: `(none)`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.

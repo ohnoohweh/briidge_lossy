@@ -88,6 +88,8 @@ def _args(**overrides):
         secure_link_psk='lab-secret',
         secure_link_require=False,
         secure_link_rekey_after_frames=0,
+        secure_link_retry_backoff_initial_ms=1000,
+        secure_link_retry_backoff_max_ms=5000,
         tcp_peer=None,
     )
     base.update(overrides)
@@ -107,6 +109,15 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         hdr = ChannelMux.MUX_HDR
         chan_id, proto, counter, mtype, dlen = hdr.unpack(payload[:hdr.size])
         return chan_id, proto, counter, mtype, payload[hdr.size:hdr.size + dlen]
+
+    @staticmethod
+    def _count_frame_type(sent_rows, sl_type: int) -> int:
+        return sum(
+            1
+            for payload, _peer_id in list(sent_rows or [])
+            if SecureLinkPskSession._parse_frame(payload)
+            and SecureLinkPskSession._parse_frame(payload)[0] == sl_type
+        )
 
     async def test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session(self):
         client_inner = FakeInnerSession()
@@ -194,6 +205,90 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.get_secure_link_status_snapshot()["failure_reason"], "bad_psk")
         self.assertIn("pre-shared secret mismatch", client.get_secure_link_status_snapshot()["failure_detail"])
         self.assertIsNotNone(client.get_secure_link_status_snapshot()["failure_unix_ts"])
+
+    async def test_wrong_psk_retries_with_bounded_backoff_and_reports_retry_window(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+
+        client = SecureLinkPskSession(
+            client_inner,
+            _args(
+                tcp_peer='127.0.0.1',
+                secure_link_psk='client-secret',
+                secure_link_retry_backoff_initial_ms=20,
+                secure_link_retry_backoff_max_ms=40,
+            ),
+            'tcp',
+        )
+        server = SecureLinkPskSession(server_inner, _args(secure_link_psk='server-secret'), 'tcp')
+
+        await client.start()
+        await server.start()
+
+        server_inner.emit_state(True)
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        first_snapshot = client.get_secure_link_status_snapshot()
+        self.assertEqual(first_snapshot["state"], "failed")
+        self.assertEqual(first_snapshot["failure_reason"], "bad_psk")
+        self.assertEqual(first_snapshot["consecutive_failures"], 1)
+        self.assertGreater(float(first_snapshot["retry_backoff_sec"] or 0.0), 0.0)
+        self.assertIsNotNone(first_snapshot["next_retry_unix_ts"])
+        self.assertEqual(self._count_frame_type(client_inner.sent, client._SL_TYPE_CLIENT_HELLO), 1)
+
+        await asyncio.sleep(0.03)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        self.assertGreaterEqual(self._count_frame_type(client_inner.sent, client._SL_TYPE_CLIENT_HELLO), 2)
+        second_snapshot = client.get_secure_link_status_snapshot()
+        self.assertGreaterEqual(int(second_snapshot["consecutive_failures"] or 0), 2)
+        self.assertEqual(second_snapshot["failure_reason"], "bad_psk")
+
+    async def test_reconnect_respects_remaining_retry_backoff_after_auth_failure(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+
+        client = SecureLinkPskSession(
+            client_inner,
+            _args(
+                tcp_peer='127.0.0.1',
+                secure_link_psk='client-secret',
+                secure_link_retry_backoff_initial_ms=60,
+                secure_link_retry_backoff_max_ms=60,
+            ),
+            'tcp',
+        )
+        server = SecureLinkPskSession(server_inner, _args(secure_link_psk='server-secret'), 'tcp')
+
+        await client.start()
+        await server.start()
+
+        server_inner.emit_state(True)
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        self.assertEqual(self._count_frame_type(client_inner.sent, client._SL_TYPE_CLIENT_HELLO), 1)
+        client_inner.emit_state(False)
+        await asyncio.sleep(0)
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0.02)
+        self.assertEqual(self._count_frame_type(client_inner.sent, client._SL_TYPE_CLIENT_HELLO), 1)
+
+        await asyncio.sleep(0.06)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        self.assertGreaterEqual(self._count_frame_type(client_inner.sent, client._SL_TYPE_CLIENT_HELLO), 2)
 
     async def test_server_rewrites_mux_channels_per_peer_for_multiple_connections(self):
         server_inner = FakeInnerSession(connected=True)

@@ -851,6 +851,11 @@ Acceptance criteria:
 - admin/API state and logs expose a stable machine reason plus human-readable detail
 - repeated auth failures remain observable without destabilizing the surrounding runner state machine
 
+Current Phase 1 runtime decision:
+
+- repeated client-side PSK authentication failures now retry under bounded exponential backoff rather than immediate tight looping
+- the current admin/API surface exposes `consecutive_failures`, `retry_backoff_sec`, and `next_retry_unix_ts` for that throttle window
+
 #### Test additions expected in Phase 1.5
 
 - integration test for rekey under live traffic
