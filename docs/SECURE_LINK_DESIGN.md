@@ -321,7 +321,7 @@ Config interpretation rules:
 - if `secure_link = false`, the runtime behaves exactly as today
 - if `secure_link = true` and `secure_link_mode = psk`, both sides must have the same `secure_link_psk`
 - if `secure_link_rekey_after_frames > 0`, the current PSK runtime slice initiates client-driven rekey using a fresh secure-link session id and fresh nonces while preserving the overlay connection
-- if `secure_link = true` and `secure_link_mode = cert`, Phase 1 should reject startup or configuration as unsupported
+- the original Phase 1 plan treated `secure_link_mode = cert` as unsupported until the Phase 2 runtime slice was delivered; that limitation no longer applies on the current branch history
 - `secure_link_require = true` is mainly useful for tests to ensure the path does not silently fall back to plaintext
 
 ### Phase 1 first implementation target
@@ -1083,40 +1083,84 @@ Acceptance criteria:
 
 Current status:
 
-- not fulfilled yet
+- fulfilled for the delivered certificate-mode runtime slice
 
 Evidence:
 
-- planning/design only:
-  - [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md)
+- runtime/config:
+  - [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py)
+    `secure_link_mode=cert`, file-path material loading, detached-signature/root verification, certificate handshake path, cert-mode rekey reuse of the shared secure-link data plane, and peer-scoped trust diagnostics
+- deterministic test material:
+  - [tests/fixtures/secure_link_cert/root_a_pub.pem](/home/ohnoohweh/quic_br/tests/fixtures/secure_link_cert/root_a_pub.pem)
+  - [tests/fixtures/secure_link_cert/root_b_pub.pem](/home/ohnoohweh/quic_br/tests/fixtures/secure_link_cert/root_b_pub.pem)
+  - [tests/fixtures/secure_link_cert/client_valid_cert_body.json](/home/ohnoohweh/quic_br/tests/fixtures/secure_link_cert/client_valid_cert_body.json)
+  - [tests/fixtures/secure_link_cert/server_valid_cert_body.json](/home/ohnoohweh/quic_br/tests/fixtures/secure_link_cert/server_valid_cert_body.json)
+- unit evidence:
+  - [test_secure_link_cert.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_cert.py)
+    happy path, trust-anchor mismatch, wrong-role rejection, expired/not-yet-valid/deployment-mismatch rejection, revoked-serial rejection, and cert-mode operator rekey
+  - [test_runner_overlay_transports.py](/home/ohnoohweh/quic_br/tests/unit/test_runner_overlay_transports.py)
+    cert-mode wrapping and required startup material validation
+  - [test_admin_web_payloads.py](/home/ohnoohweh/quic_br/tests/unit/test_admin_web_payloads.py)
+    peer-scoped cert identity/trust payload shaping
+- integration evidence:
+  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_secure_link_cert_happy_path_transports`
+  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_cert_rejection_matrix`
+  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_cert_operator_forced_rekey`
+- requirements/testing references:
   - [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
-    `PLAN-AUT-004` to `PLAN-AUT-007`
+    `REQ-AUT-011` to `REQ-AUT-014`
   - [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md)
-    `Planned certificate-mode secure-link integration test matrix`
+    `Current certificate-mode secure-link coverage`
 
 ### Phase 3: operational controls
 
-- revocation list
-- certificate expiry handling
-- admin tooling for issuance and rotation
-- admin UI visibility for peer identity metadata
+- live reload/apply of revocation material
+- live reload/apply of local root/certificate/private-key material
+- immediate trust enforcement against already-authenticated cert-mode peers
+- admin/API visibility for reload results, disconnect reasons, and peer identity/trust metadata
 
 Acceptance criteria:
 
-- operators can revoke or expire credentials and see those effects enforced in runtime behavior
-- operators have supported tooling/workflows for certificate issuance and rotation
-- WebAdmin and admin APIs expose peer identity metadata and trust-validation results clearly enough for troubleshooting and audit
+- operators can apply updated revoked-serial material without process restart and see newly revoked peers dropped immediately
+- operators can apply updated local root/certificate/private-key material without process restart, and broken replacement bundles fail atomically without partially replacing the active material
+- a successful local-identity apply disconnects already-authenticated cert-mode peers so they must re-authenticate under the new material generation
+- `/api/status`, `/api/peers`, and WebAdmin expose reload/apply results and peer-scoped trust/disconnect diagnostics clearly enough for troubleshooting and audit
 
 Current status:
 
-- not fulfilled yet
+- fulfilled for the delivered Phase 3 operational-control slice
 
 Evidence:
 
-- planning/design only:
-  - [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md)
-  - [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md)
-  - planned requirement IDs in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
+- runtime/config:
+  - [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py)
+    `POST /api/secure-link/reload`, live revocation/local-identity/all apply, aggregate reload summaries, peer-scoped disconnect/trust-enforcement metadata, and atomic cert-bundle validation before activation
+- unit evidence:
+  - [test_secure_link_cert.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_cert.py)
+    revocation reload drop, atomic local-identity reload rejection, and successful local-identity apply with new material generation
+  - [test_runner_overlay_transports.py](/home/ohnoohweh/quic_br/tests/unit/test_runner_overlay_transports.py)
+    peer-targeted secure-link reload dispatch and unknown-peer rejection
+  - [test_admin_web_payloads.py](/home/ohnoohweh/quic_br/tests/unit/test_admin_web_payloads.py)
+    aggregate reload-result shaping on `/api/status` and peer-scoped reload/disconnect fields on `/api/peers`
+- integration evidence:
+  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_cert_revocation_reload_happy_path`
+  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_cert_revocation_reload_noop`
+  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_cert_local_identity_reload_happy_path`
+  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_cert_local_identity_reload_rejected`
+  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_tcp_secure_link_cert_full_reload_applies_atomically`
+- requirements/testing references:
+  - [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
+    `REQ-AUT-015` to `REQ-AUT-019`
+  - [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md)
+    `Current certificate-mode secure-link coverage`
 
 ## Minimal operational model
 

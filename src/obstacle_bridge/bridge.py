@@ -59,9 +59,10 @@ import random
 import hashlib
 import hmac
 import secrets
+from datetime import datetime, timezone
 import urllib.request
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections import deque
 from typing import Dict, Optional, Tuple, List, Set, Deque, Any, Callable, Literal
 
@@ -69,10 +70,15 @@ try:
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
 except Exception:
     hashes = None
     ChaCha20Poly1305 = None
     HKDF = None
+    serialization = None
+    ed25519 = None
+    x25519 = None
 
 # ===== ANSI sequences (dashboard) =====
 ANSI_HIDE_CURSOR = "\x1b[?25l"
@@ -1853,6 +1859,190 @@ class ISession(Protocol):
 
 
 @dataclass
+class _SecureLinkIdentity:
+    cert_body: dict
+    cert_body_bytes: bytes
+    cert_sig: bytes
+    private_key: Any
+    public_key: Any
+    public_key_der: bytes
+    trust_anchor_public_key: Any
+    trust_anchor_der: bytes
+    trust_anchor_id: str
+    issuer_id: str
+    serial: str
+    subject_id: str
+    subject_name: str
+    deployment_id: str
+    roles: List[str]
+
+
+def _secure_link_canonical_cert_body_bytes(body: dict) -> bytes:
+    if not isinstance(body, dict):
+        raise ValueError("certificate body must be a JSON object")
+    if "signature" in body:
+        raise ValueError("certificate body must not include inline signature field")
+    return json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def _secure_link_parse_timestamp(value: str) -> float:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("timestamp is required")
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    dt = datetime.fromisoformat(raw)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _secure_link_load_signature_bytes(path: pathlib.Path) -> bytes:
+    raw = path.read_bytes()
+    stripped = bytes(raw).strip()
+    if not stripped:
+        raise ValueError(f"empty signature file: {path}")
+    with contextlib.suppress(Exception):
+        return base64.b64decode(stripped, validate=True)
+    return bytes(raw)
+
+
+def _secure_link_load_revoked_serials(path: Optional[pathlib.Path]) -> Set[str]:
+    if path is None:
+        return set()
+    text = path.read_text(encoding="utf-8")
+    stripped = text.strip()
+    if not stripped:
+        return set()
+    with contextlib.suppress(Exception):
+        payload = json.loads(stripped)
+        if isinstance(payload, list):
+            return {str(item).strip() for item in payload if str(item).strip()}
+    return {line.strip() for line in text.splitlines() if line.strip()}
+
+
+def _secure_link_public_key_der_b64_to_obj(encoded: str) -> Tuple[Any, bytes]:
+    if serialization is None:
+        raise RuntimeError("secure-link cryptography helpers are unavailable")
+    try:
+        der = base64.b64decode(str(encoded or "").encode("ascii"), validate=True)
+    except Exception as exc:
+        raise ValueError(f"invalid public_key encoding: {exc}") from exc
+    try:
+        pub = serialization.load_der_public_key(der)
+    except Exception as exc:
+        raise ValueError(f"invalid public_key DER: {exc}") from exc
+    return pub, der
+
+
+def _secure_link_load_identity_from_paths(
+    *,
+    root_pub_path: pathlib.Path,
+    cert_body_path: pathlib.Path,
+    cert_sig_path: pathlib.Path,
+    private_key_path: pathlib.Path,
+) -> _SecureLinkIdentity:
+    if serialization is None or ed25519 is None:
+        raise RuntimeError("secure-link certificate mode requires 'cryptography'")
+
+    try:
+        trust_anchor_public_key = serialization.load_pem_public_key(root_pub_path.read_bytes())
+    except Exception as exc:
+        raise ValueError(f"failed to load secure_link_root_pub from {root_pub_path}: {exc}") from exc
+    if not isinstance(trust_anchor_public_key, ed25519.Ed25519PublicKey):
+        raise ValueError("secure_link_root_pub must contain an Ed25519 public key")
+    trust_anchor_der = trust_anchor_public_key.public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    trust_anchor_id = hashlib.sha256(trust_anchor_der).hexdigest()[:16]
+
+    try:
+        cert_body = json.loads(cert_body_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(f"failed to parse secure_link_cert_body from {cert_body_path}: {exc}") from exc
+    cert_body_bytes = _secure_link_canonical_cert_body_bytes(cert_body)
+    cert_sig = _secure_link_load_signature_bytes(cert_sig_path)
+
+    required = (
+        "version", "serial", "issuer_id", "subject_id", "subject_name", "deployment_id",
+        "public_key_algorithm", "public_key", "roles", "issued_at", "not_before",
+        "not_after", "constraints", "signature_algorithm",
+    )
+    missing = [key for key in required if key not in cert_body]
+    if missing:
+        raise ValueError(f"certificate body missing required field(s): {', '.join(missing)}")
+    if int(cert_body.get("version") or 0) != 1:
+        raise ValueError("certificate body version must be 1")
+    if str(cert_body.get("public_key_algorithm") or "") != "Ed25519":
+        raise ValueError("certificate public_key_algorithm must be Ed25519")
+    if str(cert_body.get("signature_algorithm") or "") != "Ed25519":
+        raise ValueError("certificate signature_algorithm must be Ed25519")
+    roles = cert_body.get("roles") or []
+    if not isinstance(roles, list) or not roles:
+        raise ValueError("certificate roles must be a non-empty list")
+
+    public_key, public_key_der = _secure_link_public_key_der_b64_to_obj(str(cert_body.get("public_key") or ""))
+    if not isinstance(public_key, ed25519.Ed25519PublicKey):
+        raise ValueError("certificate public_key must decode to an Ed25519 public key")
+    try:
+        trust_anchor_public_key.verify(cert_sig, cert_body_bytes)
+    except Exception as exc:
+        raise ValueError(f"certificate signature verification failed: {exc}") from exc
+
+    try:
+        private_key = serialization.load_pem_private_key(private_key_path.read_bytes(), password=None)
+    except Exception as exc:
+        raise ValueError(f"failed to load secure_link_private_key from {private_key_path}: {exc}") from exc
+    if not isinstance(private_key, ed25519.Ed25519PrivateKey):
+        raise ValueError("secure_link_private_key must contain an Ed25519 private key")
+    local_public_der = private_key.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    if local_public_der != public_key_der:
+        raise ValueError("secure_link_private_key does not match certified public_key")
+
+    return _SecureLinkIdentity(
+        cert_body=dict(cert_body),
+        cert_body_bytes=cert_body_bytes,
+        cert_sig=cert_sig,
+        private_key=private_key,
+        public_key=public_key,
+        public_key_der=public_key_der,
+        trust_anchor_public_key=trust_anchor_public_key,
+        trust_anchor_der=trust_anchor_der,
+        trust_anchor_id=trust_anchor_id,
+        issuer_id=str(cert_body.get("issuer_id") or ""),
+        serial=str(cert_body.get("serial") or ""),
+        subject_id=str(cert_body.get("subject_id") or ""),
+        subject_name=str(cert_body.get("subject_name") or ""),
+        deployment_id=str(cert_body.get("deployment_id") or ""),
+        roles=[str(role) for role in roles],
+    )
+
+
+def _secure_link_validate_local_identity_operational(
+    identity: _SecureLinkIdentity,
+    *,
+    revoked_serials: Set[str],
+    now_ts: Optional[float] = None,
+) -> None:
+    current_ts = float(time.time() if now_ts is None else now_ts)
+    try:
+        not_before = _secure_link_parse_timestamp(str(identity.cert_body.get("not_before") or ""))
+        not_after = _secure_link_parse_timestamp(str(identity.cert_body.get("not_after") or ""))
+    except Exception as exc:
+        raise ValueError(f"local certificate validity fields are invalid: {exc}") from exc
+    if current_ts < not_before:
+        raise ValueError("local certificate is not valid yet")
+    if current_ts > not_after:
+        raise ValueError("local certificate has expired")
+    if str(identity.serial or "") in set(revoked_serials or set()):
+        raise ValueError("local certificate serial is revoked")
+
+
+@dataclass
 class _SecureLinkPeerState:
     session_id: int
     client_nonce: bytes
@@ -1881,6 +2071,28 @@ class _SecureLinkPeerState:
     last_failure_session_id: Optional[int] = None
     authenticated_sessions_total: int = 0
     rekeys_completed_total: int = 0
+    local_ephemeral_private: Any = None
+    pending_local_ephemeral_private: Any = None
+    peer_subject_id: str = ""
+    peer_subject_name: str = ""
+    peer_roles: List[str] = field(default_factory=list)
+    peer_deployment_id: str = ""
+    peer_serial: str = ""
+    issuer_id: str = ""
+    trust_anchor_id: str = ""
+    peer_public_key: Any = None
+    peer_public_key_der: bytes = b""
+    trust_validation_state: str = ""
+    trust_failure_reason: str = ""
+    trust_failure_detail: str = ""
+    active_material_generation: int = 0
+    last_material_reload_unix_ts: Optional[float] = None
+    last_material_reload_scope: str = ""
+    last_material_reload_result: str = ""
+    last_material_reload_detail: str = ""
+    trust_enforced_unix_ts: Optional[float] = None
+    disconnect_reason: str = ""
+    disconnect_detail: str = ""
 
 
 class SecureLinkPskSession(ISession):
@@ -1894,11 +2106,22 @@ class SecureLinkPskSession(ISession):
     _SL_TYPE_REKEY_COMMIT = 7
     _SL_TYPE_REKEY_DONE = 8
     _SL_CAP_PSK_V1 = 1
+    _SL_CAP_CERT_V1 = 2
     _SL_AUTH_FAIL_BAD_PSK = 1
     _SL_AUTH_FAIL_UNSUPPORTED = 2
     _SL_AUTH_FAIL_REPLAY = 3
     _SL_AUTH_FAIL_DECODE = 4
     _SL_AUTH_FAIL_LIFECYCLE = 5
+    _SL_AUTH_FAIL_UNKNOWN_ROOT = 6
+    _SL_AUTH_FAIL_BAD_SIGNATURE = 7
+    _SL_AUTH_FAIL_BAD_IDENTITY_PROOF = 8
+    _SL_AUTH_FAIL_WRONG_ROLE = 9
+    _SL_AUTH_FAIL_EXPIRED = 10
+    _SL_AUTH_FAIL_NOT_YET_VALID = 11
+    _SL_AUTH_FAIL_DEPLOYMENT_MISMATCH = 12
+    _SL_AUTH_FAIL_REVOKED_SERIAL = 13
+    _SL_AUTH_FAIL_MALFORMED_CERTIFICATE = 14
+    _SL_AUTH_FAIL_UNSUPPORTED_ALGORITHM = 15
     _SL_HDR = struct.Struct(">BBBBQQ")
     _SL_FIRST_DATA_COUNTER = 1
     _SL_MAX_DATA_COUNTER = (1 << 64) - 1
@@ -1923,7 +2146,7 @@ class SecureLinkPskSession(ISession):
                 '--secure-link-mode',
                 choices=('off', 'psk', 'cert'),
                 default='off',
-                help='Secure-link mode. Phase 1 currently supports off or psk; cert remains planned.'
+                help='Secure-link mode. Supported values are off, psk, and cert.'
             )
         if not _has('--secure-link-psk'):
             p.add_argument(
@@ -1966,6 +2189,51 @@ class SecureLinkPskSession(ISession):
                 default=5000,
                 help='Maximum client-side secure-link retry backoff after repeated authentication failures, in milliseconds.'
             )
+        if not _has('--secure-link-root-pub'):
+            p.add_argument(
+                '--secure-link-root-pub',
+                default='',
+                help='Path to the deployment admin root public key PEM for secure_link_mode=cert.'
+            )
+        if not _has('--secure-link-cert-body'):
+            p.add_argument(
+                '--secure-link-cert-body',
+                default='',
+                help='Path to the local secure-link certificate body JSON for secure_link_mode=cert.'
+            )
+        if not _has('--secure-link-cert-sig'):
+            p.add_argument(
+                '--secure-link-cert-sig',
+                default='',
+                help='Path to the detached secure-link certificate signature file for secure_link_mode=cert.'
+            )
+        if not _has('--secure-link-private-key'):
+            p.add_argument(
+                '--secure-link-private-key',
+                default='',
+                help='Path to the local secure-link identity private key PEM for secure_link_mode=cert.'
+            )
+        if not _has('--secure-link-revoked-serials'):
+            p.add_argument(
+                '--secure-link-revoked-serials',
+                default='',
+                help='Optional path to a JSON array or line-based list of revoked certificate serials.'
+            )
+        if not _has('--secure-link-cert-reload-on-restart'):
+            try:
+                p.add_argument(
+                    '--secure-link-cert-reload-on-restart',
+                    action=argparse.BooleanOptionalAction,
+                    default=True,
+                    help='Reload certificate material on process restart. In cert mode, operators can also trigger live reload through the admin API or WebAdmin.'
+                )
+            except Exception:
+                p.add_argument(
+                    '--secure-link-cert-reload-on-restart',
+                    action='store_true',
+                    default=True,
+                    help='Reload certificate material on process restart. In cert mode, operators can also trigger live reload through the admin API or WebAdmin.'
+                )
 
     def __init__(self, inner: ISession, args: argparse.Namespace, transport_name: str):
         self._inner = inner
@@ -1984,6 +2252,7 @@ class SecureLinkPskSession(ISession):
         self._outer_on_app_from_peer_bytes: Optional[Callable[[int], None]] = None
         self._outer_on_transport_epoch_change: Optional[Callable[[int], None]] = None
         self._client_mode = _has_configured_overlay_peer(args, self._transport_name)
+        self._mode = str(getattr(args, "secure_link_mode", "off") or "off").strip().lower()
         self._psk = str(getattr(args, "secure_link_psk", "") or "").encode("utf-8")
         self._rekey_after_frames = max(0, int(getattr(args, "secure_link_rekey_after_frames", 0) or 0))
         self._rekey_after_seconds = max(0.0, float(getattr(args, "secure_link_rekey_after_seconds", 0.0) or 0.0))
@@ -2019,12 +2288,65 @@ class SecureLinkPskSession(ISession):
         self._client_rekey_due_mono: float = 0.0
         self._client_rekey_due_unix_ts: Optional[float] = None
         self._last_rekey_trigger: str = ""
+        self._local_identity: Optional[_SecureLinkIdentity] = None
+        self._revoked_serials: Set[str] = set()
+        self._cert_root_pub_path: Optional[pathlib.Path] = None
+        self._cert_body_path: Optional[pathlib.Path] = None
+        self._cert_sig_path: Optional[pathlib.Path] = None
+        self._cert_private_key_path: Optional[pathlib.Path] = None
+        self._revoked_serials_path: Optional[pathlib.Path] = None
+        self._active_material_generation: int = 0
+        self._last_material_reload_unix_ts: Optional[float] = None
+        self._last_material_reload_scope: str = ""
+        self._last_material_reload_result: str = ""
+        self._last_material_reload_detail: str = ""
+        self._trust_enforced_unix_ts: Optional[float] = None
+        self._secure_link_peers_dropped_total: int = 0
+        if self._mode == "cert":
+            root_pub = pathlib.Path(str(getattr(args, "secure_link_root_pub", "") or ""))
+            cert_body = pathlib.Path(str(getattr(args, "secure_link_cert_body", "") or ""))
+            cert_sig = pathlib.Path(str(getattr(args, "secure_link_cert_sig", "") or ""))
+            private_key = pathlib.Path(str(getattr(args, "secure_link_private_key", "") or ""))
+            required_paths = {
+                "secure_link_root_pub": root_pub,
+                "secure_link_cert_body": cert_body,
+                "secure_link_cert_sig": cert_sig,
+                "secure_link_private_key": private_key,
+            }
+            missing = [name for name, path in required_paths.items() if not str(path)]
+            if missing:
+                raise ValueError(f"secure_link_mode=cert requires {', '.join(missing)}")
+            revoked_path_raw = str(getattr(args, "secure_link_revoked_serials", "") or "").strip()
+            revoked_path = pathlib.Path(revoked_path_raw) if revoked_path_raw else None
+            revoked_serials = _secure_link_load_revoked_serials(revoked_path) if revoked_path is not None else set()
+            local_identity = _secure_link_load_identity_from_paths(
+                root_pub_path=root_pub,
+                cert_body_path=cert_body,
+                cert_sig_path=cert_sig,
+                private_key_path=private_key,
+            )
+            _secure_link_validate_local_identity_operational(local_identity, revoked_serials=revoked_serials)
+            self._local_identity = local_identity
+            self._revoked_serials = revoked_serials
+            self._cert_root_pub_path = root_pub
+            self._cert_body_path = cert_body
+            self._cert_sig_path = cert_sig
+            self._cert_private_key_path = private_key
+            self._revoked_serials_path = revoked_path
+            self._active_material_generation = 1
 
     @staticmethod
     def _require_crypto() -> None:
-        if ChaCha20Poly1305 is None or HKDF is None or hashes is None:
+        if (
+            ChaCha20Poly1305 is None
+            or HKDF is None
+            or hashes is None
+            or serialization is None
+            or ed25519 is None
+            or x25519 is None
+        ):
             raise RuntimeError(
-                "secure_link_mode=psk requires optional dependency 'cryptography'. "
+                "secure-link requires optional dependency 'cryptography'. "
                 "Install the project in an environment where cryptography is available."
             )
 
@@ -2064,6 +2386,273 @@ class SecureLinkPskSession(ISession):
         )
         material = hkdf.derive(self._psk + client_nonce + server_nonce)
         return material[:32], material[32:]
+
+    @staticmethod
+    def _json_payload(obj: dict) -> bytes:
+        return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+    @staticmethod
+    def _parse_json_payload(payload: bytes) -> Optional[dict]:
+        try:
+            parsed = json.loads(bytes(payload or b"").decode("utf-8"))
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _cert_capability(self) -> int:
+        return self._SL_CAP_CERT_V1
+
+    def _is_cert_mode(self) -> bool:
+        return self._mode == "cert"
+
+    def _expected_remote_role(self) -> str:
+        return "server" if self._client_mode else "client"
+
+    def _load_remote_cert(self, cert_body_bytes: bytes, cert_sig: bytes) -> Tuple[Optional[_SecureLinkIdentity], int]:
+        if self._local_identity is None:
+            return None, self._SL_AUTH_FAIL_DECODE
+        try:
+            cert_body = json.loads(cert_body_bytes.decode("utf-8"))
+        except Exception:
+            return None, self._SL_AUTH_FAIL_MALFORMED_CERTIFICATE
+        try:
+            canonical_bytes = _secure_link_canonical_cert_body_bytes(cert_body)
+        except Exception:
+            return None, self._SL_AUTH_FAIL_MALFORMED_CERTIFICATE
+        required = (
+            "version", "serial", "issuer_id", "subject_id", "subject_name", "deployment_id",
+            "public_key_algorithm", "public_key", "roles", "issued_at", "not_before",
+            "not_after", "constraints", "signature_algorithm",
+        )
+        if any(key not in cert_body for key in required):
+            return None, self._SL_AUTH_FAIL_MALFORMED_CERTIFICATE
+        if int(cert_body.get("version") or 0) != 1:
+            return None, self._SL_AUTH_FAIL_MALFORMED_CERTIFICATE
+        if str(cert_body.get("public_key_algorithm") or "") != "Ed25519":
+            return None, self._SL_AUTH_FAIL_UNSUPPORTED_ALGORITHM
+        if str(cert_body.get("signature_algorithm") or "") != "Ed25519":
+            return None, self._SL_AUTH_FAIL_UNSUPPORTED_ALGORITHM
+        try:
+            public_key, public_key_der = _secure_link_public_key_der_b64_to_obj(str(cert_body.get("public_key") or ""))
+        except Exception:
+            return None, self._SL_AUTH_FAIL_MALFORMED_CERTIFICATE
+        if not isinstance(public_key, ed25519.Ed25519PublicKey):
+            return None, self._SL_AUTH_FAIL_UNSUPPORTED_ALGORITHM
+        if str(cert_body.get("issuer_id") or "") != str(self._local_identity.issuer_id or ""):
+            return None, self._SL_AUTH_FAIL_UNKNOWN_ROOT
+        try:
+            self._local_identity.trust_anchor_public_key.verify(cert_sig, canonical_bytes)
+        except Exception:
+            return None, self._SL_AUTH_FAIL_BAD_SIGNATURE
+        roles = cert_body.get("roles") or []
+        if not isinstance(roles, list) or not roles:
+            return None, self._SL_AUTH_FAIL_MALFORMED_CERTIFICATE
+        expected_role = self._expected_remote_role()
+        normalized_roles = {str(role).strip() for role in roles if str(role).strip()}
+        if expected_role not in normalized_roles and "client,server" not in normalized_roles:
+            return None, self._SL_AUTH_FAIL_WRONG_ROLE
+        try:
+            now_ts = time.time()
+            not_before = _secure_link_parse_timestamp(str(cert_body.get("not_before") or ""))
+            not_after = _secure_link_parse_timestamp(str(cert_body.get("not_after") or ""))
+        except Exception:
+            return None, self._SL_AUTH_FAIL_MALFORMED_CERTIFICATE
+        if now_ts < not_before:
+            return None, self._SL_AUTH_FAIL_NOT_YET_VALID
+        if now_ts > not_after:
+            return None, self._SL_AUTH_FAIL_EXPIRED
+        if str(cert_body.get("deployment_id") or "") != str(self._local_identity.deployment_id or ""):
+            return None, self._SL_AUTH_FAIL_DEPLOYMENT_MISMATCH
+        if str(cert_body.get("serial") or "") in self._revoked_serials:
+            return None, self._SL_AUTH_FAIL_REVOKED_SERIAL
+        return _SecureLinkIdentity(
+            cert_body=dict(cert_body),
+            cert_body_bytes=canonical_bytes,
+            cert_sig=bytes(cert_sig or b""),
+            private_key=None,
+            public_key=public_key,
+            public_key_der=public_key_der,
+            trust_anchor_public_key=self._local_identity.trust_anchor_public_key,
+            trust_anchor_der=self._local_identity.trust_anchor_der,
+            trust_anchor_id=self._local_identity.trust_anchor_id,
+            issuer_id=str(cert_body.get("issuer_id") or ""),
+            serial=str(cert_body.get("serial") or ""),
+            subject_id=str(cert_body.get("subject_id") or ""),
+            subject_name=str(cert_body.get("subject_name") or ""),
+            deployment_id=str(cert_body.get("deployment_id") or ""),
+            roles=[str(role) for role in roles],
+        ), 0
+
+    @staticmethod
+    def _cert_client_proof_input(session_id: int, cert_body_bytes: bytes, cert_sig: bytes, eph_pub: bytes) -> bytes:
+        return (
+            b"obstaclebridge-securelink-cert-client-hello-v1|"
+            + int(session_id).to_bytes(8, "big")
+            + cert_body_bytes
+            + cert_sig
+            + eph_pub
+        )
+
+    @staticmethod
+    def _cert_server_proof_input(
+        session_id: int,
+        client_cert_body_bytes: bytes,
+        client_cert_sig: bytes,
+        client_eph_pub: bytes,
+        server_cert_body_bytes: bytes,
+        server_cert_sig: bytes,
+        server_eph_pub: bytes,
+    ) -> bytes:
+        return (
+            b"obstaclebridge-securelink-cert-server-hello-v1|"
+            + int(session_id).to_bytes(8, "big")
+            + client_cert_body_bytes
+            + client_cert_sig
+            + client_eph_pub
+            + server_cert_body_bytes
+            + server_cert_sig
+            + server_eph_pub
+        )
+
+    @staticmethod
+    def _cert_rekey_commit_input(session_id: int, client_eph_pub: bytes, server_eph_pub: bytes) -> bytes:
+        return (
+            b"obstaclebridge-securelink-cert-rekey-commit-v1|"
+            + int(session_id).to_bytes(8, "big")
+            + client_eph_pub
+            + server_eph_pub
+        )
+
+    @staticmethod
+    def _cert_rekey_hello_input(session_id: int, client_eph_pub: bytes) -> bytes:
+        return (
+            b"obstaclebridge-securelink-cert-rekey-hello-v1|"
+            + int(session_id).to_bytes(8, "big")
+            + client_eph_pub
+        )
+
+    @staticmethod
+    def _cert_rekey_reply_input(session_id: int, client_eph_pub: bytes, server_eph_pub: bytes) -> bytes:
+        return (
+            b"obstaclebridge-securelink-cert-rekey-reply-v1|"
+            + int(session_id).to_bytes(8, "big")
+            + client_eph_pub
+            + server_eph_pub
+        )
+
+    def _derive_cert_keys(self, session_id: int, shared_secret: bytes, transcript_hash: bytes) -> Tuple[bytes, bytes]:
+        hkdf = HKDF(
+            algorithm=hashes.SHA256(),
+            length=64,
+            salt=hashlib.sha256(
+                b"obstaclebridge-securelink-cert-v1|"
+                + int(session_id).to_bytes(8, "big")
+            ).digest(),
+            info=b"obstaclebridge-securelink-cert-traffic|" + bytes(transcript_hash or b""),
+        )
+        material = hkdf.derive(bytes(shared_secret or b""))
+        return material[:32], material[32:]
+
+    @staticmethod
+    def _peer_identity_fields(identity: Optional[_SecureLinkIdentity]) -> dict:
+        if identity is None:
+            return {
+                "peer_subject_id": "",
+                "peer_subject_name": "",
+                "peer_roles": [],
+                "peer_deployment_id": "",
+                "peer_serial": "",
+                "issuer_id": "",
+                "trust_anchor_id": "",
+            }
+        return {
+            "peer_subject_id": str(identity.subject_id or ""),
+            "peer_subject_name": str(identity.subject_name or ""),
+            "peer_roles": list(identity.roles or []),
+            "peer_deployment_id": str(identity.deployment_id or ""),
+            "peer_serial": str(identity.serial or ""),
+            "issuer_id": str(identity.issuer_id or ""),
+            "trust_anchor_id": str(identity.trust_anchor_id or ""),
+        }
+
+    def _apply_peer_identity(self, state: _SecureLinkPeerState, identity: Optional[_SecureLinkIdentity]) -> None:
+        fields = self._peer_identity_fields(identity)
+        state.peer_subject_id = fields["peer_subject_id"]
+        state.peer_subject_name = fields["peer_subject_name"]
+        state.peer_roles = list(fields["peer_roles"])
+        state.peer_deployment_id = fields["peer_deployment_id"]
+        state.peer_serial = fields["peer_serial"]
+        state.issuer_id = fields["issuer_id"]
+        state.trust_anchor_id = fields["trust_anchor_id"]
+        state.peer_public_key = identity.public_key if identity is not None else None
+        state.peer_public_key_der = bytes(identity.public_key_der) if identity is not None else b""
+
+    def _build_cert_hello_payload(self, *, session_id: int, eph_public: bytes) -> bytes:
+        if self._local_identity is None:
+            raise RuntimeError("secure-link cert identity not loaded")
+        proof = self._local_identity.private_key.sign(
+            self._cert_client_proof_input(
+                session_id,
+                self._local_identity.cert_body_bytes,
+                self._local_identity.cert_sig,
+                eph_public,
+            )
+        )
+        return self._json_payload({
+            "cap": "cert-v1",
+            "cert_body_b64": base64.b64encode(self._local_identity.cert_body_bytes).decode("ascii"),
+            "cert_sig_b64": base64.b64encode(self._local_identity.cert_sig).decode("ascii"),
+            "ephemeral_pub_b64": base64.b64encode(eph_public).decode("ascii"),
+            "proof_b64": base64.b64encode(proof).decode("ascii"),
+        })
+
+    def _build_cert_server_payload(
+        self,
+        *,
+        session_id: int,
+        client_identity: _SecureLinkIdentity,
+        client_eph_public: bytes,
+        server_eph_public: bytes,
+    ) -> bytes:
+        if self._local_identity is None:
+            raise RuntimeError("secure-link cert identity not loaded")
+        proof = self._local_identity.private_key.sign(
+            self._cert_server_proof_input(
+                session_id,
+                client_identity.cert_body_bytes,
+                client_identity.cert_sig,
+                client_eph_public,
+                self._local_identity.cert_body_bytes,
+                self._local_identity.cert_sig,
+                server_eph_public,
+            )
+        )
+        return self._json_payload({
+            "cap": "cert-v1",
+            "cert_body_b64": base64.b64encode(self._local_identity.cert_body_bytes).decode("ascii"),
+            "cert_sig_b64": base64.b64encode(self._local_identity.cert_sig).decode("ascii"),
+            "ephemeral_pub_b64": base64.b64encode(server_eph_public).decode("ascii"),
+            "proof_b64": base64.b64encode(proof).decode("ascii"),
+        })
+
+    @staticmethod
+    def _parse_cert_handshake_payload(payload: bytes) -> Optional[dict]:
+        parsed = SecureLinkPskSession._parse_json_payload(payload)
+        if not isinstance(parsed, dict) or str(parsed.get("cap") or "") != "cert-v1":
+            return None
+        try:
+            cert_body = base64.b64decode(str(parsed.get("cert_body_b64") or "").encode("ascii"), validate=True)
+            cert_sig = base64.b64decode(str(parsed.get("cert_sig_b64") or "").encode("ascii"), validate=True)
+            eph_pub = base64.b64decode(str(parsed.get("ephemeral_pub_b64") or "").encode("ascii"), validate=True)
+            proof = base64.b64decode(str(parsed.get("proof_b64") or "").encode("ascii"), validate=True)
+        except Exception:
+            return None
+        return {
+            "cert_body": cert_body,
+            "cert_sig": cert_sig,
+            "ephemeral_pub": eph_pub,
+            "proof": proof,
+        }
 
     def _server_proof(self, session_id: int, client_nonce: bytes, server_nonce: bytes) -> bytes:
         return hmac.new(
@@ -2109,6 +2698,16 @@ class SecureLinkPskSession(ISession):
             cls._SL_AUTH_FAIL_REPLAY: "replay",
             cls._SL_AUTH_FAIL_DECODE: "decode",
             cls._SL_AUTH_FAIL_LIFECYCLE: "lifecycle",
+            cls._SL_AUTH_FAIL_UNKNOWN_ROOT: "unknown_root",
+            cls._SL_AUTH_FAIL_BAD_SIGNATURE: "bad_signature",
+            cls._SL_AUTH_FAIL_BAD_IDENTITY_PROOF: "bad_identity_proof",
+            cls._SL_AUTH_FAIL_WRONG_ROLE: "wrong_role",
+            cls._SL_AUTH_FAIL_EXPIRED: "expired",
+            cls._SL_AUTH_FAIL_NOT_YET_VALID: "not_yet_valid",
+            cls._SL_AUTH_FAIL_DEPLOYMENT_MISMATCH: "deployment_mismatch",
+            cls._SL_AUTH_FAIL_REVOKED_SERIAL: "revoked_serial",
+            cls._SL_AUTH_FAIL_MALFORMED_CERTIFICATE: "malformed_certificate",
+            cls._SL_AUTH_FAIL_UNSUPPORTED_ALGORITHM: "unsupported_algorithm",
         }.get(int(code or 0))
 
     @classmethod
@@ -2119,6 +2718,16 @@ class SecureLinkPskSession(ISession):
             cls._SL_AUTH_FAIL_REPLAY: "replayed or out-of-order protected frame rejected",
             cls._SL_AUTH_FAIL_DECODE: "invalid or unexpected secure-link frame",
             cls._SL_AUTH_FAIL_LIFECYCLE: "secure-link session or counter lifecycle invariant violated",
+            cls._SL_AUTH_FAIL_UNKNOWN_ROOT: "peer certificate issuer does not match the configured trust anchor",
+            cls._SL_AUTH_FAIL_BAD_SIGNATURE: "peer certificate signature verification failed against the configured trust anchor",
+            cls._SL_AUTH_FAIL_BAD_IDENTITY_PROOF: "peer failed to prove possession of the certified identity private key",
+            cls._SL_AUTH_FAIL_WRONG_ROLE: "peer certificate roles do not permit this secure-link direction",
+            cls._SL_AUTH_FAIL_EXPIRED: "peer certificate validity interval has expired",
+            cls._SL_AUTH_FAIL_NOT_YET_VALID: "peer certificate is not valid yet",
+            cls._SL_AUTH_FAIL_DEPLOYMENT_MISMATCH: "peer certificate deployment_id does not match the local deployment",
+            cls._SL_AUTH_FAIL_REVOKED_SERIAL: "peer certificate serial is listed as revoked",
+            cls._SL_AUTH_FAIL_MALFORMED_CERTIFICATE: "peer certificate payload is malformed or incomplete",
+            cls._SL_AUTH_FAIL_UNSUPPORTED_ALGORITHM: "peer certificate uses an unsupported algorithm",
         }.get(int(code or 0))
 
     def _mark_auth_fail(self, peer_id: Optional[int], session_id: int, code: int) -> None:
@@ -2144,6 +2753,10 @@ class SecureLinkPskSession(ISession):
         state.last_event = "auth_failed"
         state.last_event_unix_ts = state.auth_fail_unix_ts
         state.rekey_due_unix_ts = None
+        state.active_material_generation = int(self._active_material_generation or 0)
+        state.trust_validation_state = "failed" if self._is_cert_mode() else state.trust_validation_state
+        state.trust_failure_reason = state.auth_fail_reason if self._is_cert_mode() else state.trust_failure_reason
+        state.trust_failure_detail = state.auth_fail_detail if self._is_cert_mode() else state.trust_failure_detail
         if self._client_mode:
             state.consecutive_failures = max(1, int(self._client_retry_consecutive_failures or 0))
             self._cancel_client_rekey_task(clear_schedule=True)
@@ -2216,6 +2829,19 @@ class SecureLinkPskSession(ISession):
         state.last_event_unix_ts = now
         state.last_authenticated_unix_ts = now
         state.rekey_due_unix_ts = None
+        if self._is_cert_mode():
+            state.trust_validation_state = "trusted"
+            state.trust_failure_reason = ""
+            state.trust_failure_detail = ""
+            state.disconnect_reason = ""
+            state.disconnect_detail = ""
+            state.trust_enforced_unix_ts = None
+            state.active_material_generation = int(self._active_material_generation or 0)
+            if self._last_material_reload_unix_ts is not None:
+                state.last_material_reload_unix_ts = self._last_material_reload_unix_ts
+                state.last_material_reload_scope = str(self._last_material_reload_scope or "")
+                state.last_material_reload_result = str(self._last_material_reload_result or "")
+                state.last_material_reload_detail = str(self._last_material_reload_detail or "")
         state.authenticated_sessions_total = int(state.authenticated_sessions_total or 0) + 1
         if rekey_completed:
             state.rekeys_completed_total = int(state.rekeys_completed_total or 0) + 1
@@ -2400,6 +3026,7 @@ class SecureLinkPskSession(ISession):
         state.pending_server_nonce = b""
         state.pending_c2s_key = None
         state.pending_s2c_key = None
+        state.pending_local_ephemeral_private = None
 
     def _promote_pending_rekey(self, state: _SecureLinkPeerState) -> bool:
         if int(state.pending_session_id or 0) <= 0:
@@ -2409,6 +3036,8 @@ class SecureLinkPskSession(ISession):
         state.server_nonce = bytes(state.pending_server_nonce or b"")
         state.c2s_key = bytes(state.pending_c2s_key or b"") or None
         state.s2c_key = bytes(state.pending_s2c_key or b"") or None
+        if state.pending_local_ephemeral_private is not None:
+            state.local_ephemeral_private = state.pending_local_ephemeral_private
         state.authenticated = True
         state.tx_counter = 1
         state.rx_counter = 0
@@ -2424,19 +3053,34 @@ class SecureLinkPskSession(ISession):
             return
         self._cancel_client_rekey_task(clear_schedule=True)
         pending_session_id = self._new_session_id(state.session_id, state.pending_session_id)
-        pending_client_nonce = secrets.token_bytes(32)
-        state.pending_session_id = pending_session_id
-        state.pending_client_nonce = pending_client_nonce
-        state.pending_server_nonce = b""
-        state.pending_c2s_key = None
-        state.pending_s2c_key = None
         state.last_rekey_trigger = str(trigger or "")
         state.rekey_due_unix_ts = None
         self._last_rekey_trigger = state.last_rekey_trigger
         state.last_event = "rekey_started"
         state.last_event_unix_ts = time.time()
         self._record_secure_link_event("rekey_started", state.last_event_unix_ts)
-        payload = pending_client_nonce + bytes([self._SL_CAP_PSK_V1, 0])
+        state.pending_session_id = pending_session_id
+        state.pending_server_nonce = b""
+        state.pending_c2s_key = None
+        state.pending_s2c_key = None
+        if self._is_cert_mode():
+            eph_private = x25519.X25519PrivateKey.generate()
+            eph_public = eph_private.public_key().public_bytes(
+                serialization.Encoding.Raw,
+                serialization.PublicFormat.Raw,
+            )
+            state.pending_local_ephemeral_private = eph_private
+            state.pending_client_nonce = eph_public
+            proof = self._local_identity.private_key.sign(self._cert_rekey_hello_input(pending_session_id, eph_public))
+            payload = self._json_payload({
+                "cap": "cert-v1",
+                "ephemeral_pub_b64": base64.b64encode(eph_public).decode("ascii"),
+                "proof_b64": base64.b64encode(proof).decode("ascii"),
+            })
+        else:
+            pending_client_nonce = secrets.token_bytes(32)
+            state.pending_client_nonce = pending_client_nonce
+            payload = pending_client_nonce + bytes([self._SL_CAP_PSK_V1, 0])
         self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_HELLO, pending_session_id, 0, payload))
 
     def _maybe_trigger_rekey(self, state: Optional[_SecureLinkPeerState]) -> None:
@@ -2448,6 +3092,170 @@ class SecureLinkPskSession(ISession):
         if sent_frames < self._rekey_after_frames:
             return
         self._start_client_rekey(state, trigger="frame_threshold")
+
+    def _apply_material_reload_metadata_to_state(
+        self,
+        state: _SecureLinkPeerState,
+        *,
+        scope: str,
+        result: str,
+        detail: str,
+        when: float,
+    ) -> None:
+        state.active_material_generation = int(self._active_material_generation or 0)
+        state.last_material_reload_unix_ts = when
+        state.last_material_reload_scope = str(scope or "")
+        state.last_material_reload_result = str(result or "")
+        state.last_material_reload_detail = str(detail or "")
+
+    def _load_local_identity_bundle(
+        self,
+        *,
+        revoked_serials: Optional[Set[str]] = None,
+    ) -> _SecureLinkIdentity:
+        if self._cert_root_pub_path is None or self._cert_body_path is None or self._cert_sig_path is None or self._cert_private_key_path is None:
+            raise ValueError("secure-link cert mode paths are not configured")
+        identity = _secure_link_load_identity_from_paths(
+            root_pub_path=self._cert_root_pub_path,
+            cert_body_path=self._cert_body_path,
+            cert_sig_path=self._cert_sig_path,
+            private_key_path=self._cert_private_key_path,
+        )
+        _secure_link_validate_local_identity_operational(identity, revoked_serials=set(revoked_serials or self._revoked_serials))
+        return identity
+
+    def _load_revoked_serials_bundle(self) -> Set[str]:
+        if self._revoked_serials_path is None:
+            return set()
+        return _secure_link_load_revoked_serials(self._revoked_serials_path)
+
+    def _policy_disconnect_peer(
+        self,
+        peer_key: int,
+        *,
+        reason: str,
+        detail: str,
+        auth_fail_code: int,
+        trust_reason: Optional[str] = None,
+        trust_detail: Optional[str] = None,
+    ) -> None:
+        state = self._peer_states.get(int(peer_key))
+        if state is None:
+            return
+        session_id = int(state.session_id or 0)
+        self._mark_auth_fail(None if self._client_mode else peer_key, session_id, auth_fail_code)
+        state = self._peer_states.get(int(peer_key))
+        if state is None:
+            return
+        now = time.time()
+        state.disconnect_reason = str(reason or "")
+        state.disconnect_detail = str(detail or "")
+        state.trust_enforced_unix_ts = now
+        state.last_event = "trust_enforced_disconnect"
+        state.last_event_unix_ts = now
+        state.authenticated = False
+        state.active_material_generation = int(self._active_material_generation or 0)
+        if self._is_cert_mode():
+            state.trust_validation_state = "failed"
+            if trust_reason is not None:
+                state.trust_failure_reason = str(trust_reason or "")
+            if trust_detail is not None:
+                state.trust_failure_detail = str(trust_detail or "")
+        self._trust_enforced_unix_ts = now
+        self._secure_link_peers_dropped_total += 1
+        self._record_secure_link_event("trust_enforced_disconnect", now)
+        if self._client_mode and self._started and bool(getattr(self._inner, "is_connected", lambda: False)()):
+            self._maybe_begin_client_handshake()
+
+    def request_secure_link_reload(self, scope: str = "all", target_peer_id: Optional[str] = None) -> dict:
+        normalized_scope = str(scope or "").strip().lower()
+        if normalized_scope not in {"revocation", "local_identity", "all"}:
+            return {"ok": False, "reason": "invalid_scope", "scope": normalized_scope}
+        if not self._is_cert_mode():
+            return {"ok": False, "reason": "secure_link_cert_mode_required", "scope": normalized_scope}
+
+        previous_identity = self._local_identity
+        previous_revoked = set(self._revoked_serials or set())
+        try:
+            reloaded_revoked = previous_revoked
+            if normalized_scope in {"revocation", "all"}:
+                reloaded_revoked = self._load_revoked_serials_bundle()
+            reloaded_identity = previous_identity
+            if normalized_scope in {"local_identity", "all"}:
+                reloaded_identity = self._load_local_identity_bundle(revoked_serials=reloaded_revoked)
+            if reloaded_identity is None:
+                raise ValueError("secure-link local identity is unavailable")
+        except Exception as exc:
+            now = time.time()
+            detail = str(exc)
+            self._last_material_reload_unix_ts = now
+            self._last_material_reload_scope = normalized_scope
+            self._last_material_reload_result = "failed"
+            self._last_material_reload_detail = detail
+            for state in self._peer_states.values():
+                self._apply_material_reload_metadata_to_state(
+                    state,
+                    scope=normalized_scope,
+                    result="failed",
+                    detail=detail,
+                    when=now,
+                )
+            return {"ok": False, "reason": "reload_failed", "scope": normalized_scope, "detail": detail, "dropped": 0}
+
+        self._local_identity = reloaded_identity
+        self._revoked_serials = set(reloaded_revoked or set())
+        self._active_material_generation = max(1, int(self._active_material_generation or 0) + 1)
+        now = time.time()
+        changed_detail = []
+        if normalized_scope in {"revocation", "all"}:
+            changed_detail.append(f"revoked_serials={len(self._revoked_serials)}")
+        if normalized_scope in {"local_identity", "all"} and self._local_identity is not None:
+            changed_detail.append(f"local_subject_id={self._local_identity.subject_id}")
+        detail = ", ".join(changed_detail) if changed_detail else "material reloaded"
+        self._last_material_reload_unix_ts = now
+        self._last_material_reload_scope = normalized_scope
+        self._last_material_reload_result = "applied"
+        self._last_material_reload_detail = detail
+        dropped = 0
+        for key, state in list(self._peer_states.items()):
+            self._apply_material_reload_metadata_to_state(
+                state,
+                scope=normalized_scope,
+                result="applied",
+                detail=detail,
+                when=now,
+            )
+            if not state.authenticated:
+                continue
+            if str(state.peer_serial or "") in self._revoked_serials:
+                self._policy_disconnect_peer(
+                    key,
+                    reason="revocation_applied",
+                    detail="peer certificate serial is revoked by the reloaded denylist",
+                    auth_fail_code=self._SL_AUTH_FAIL_REVOKED_SERIAL,
+                    trust_reason="revoked_serial",
+                    trust_detail="peer certificate serial is listed as revoked by the active denylist",
+                )
+                dropped += 1
+                continue
+            if normalized_scope in {"local_identity", "all"}:
+                self._policy_disconnect_peer(
+                    key,
+                    reason="local_identity_reloaded",
+                    detail="local secure-link identity material changed and the peer must re-authenticate",
+                    auth_fail_code=self._SL_AUTH_FAIL_LIFECYCLE,
+                    trust_reason=state.trust_failure_reason or "",
+                    trust_detail=state.trust_failure_detail or "",
+                )
+                dropped += 1
+        return {
+            "ok": True,
+            "reason": "reload_applied",
+            "scope": normalized_scope,
+            "dropped": dropped,
+            "active_material_generation": int(self._active_material_generation or 0),
+            "detail": detail,
+        }
 
     def request_secure_link_rekey(self) -> Tuple[bool, str]:
         if not self._client_mode:
@@ -2548,7 +3356,7 @@ class SecureLinkPskSession(ISession):
                 session_id = int(state.session_id or 0) or None
             r["secure_link"] = {
                 "enabled": True,
-                "mode": "psk",
+                "mode": self._mode,
                 "state": secure_state,
                 "authenticated": authenticated,
                 "session_id": session_id,
@@ -2570,6 +3378,24 @@ class SecureLinkPskSession(ISession):
                 "authenticated_sessions_total": int(state.authenticated_sessions_total or 0) if state is not None else 0,
                 "rekeys_completed_total": int(state.rekeys_completed_total or 0) if state is not None else 0,
                 "transport": self._transport_name,
+                "peer_subject_id": str(state.peer_subject_id or "") if state is not None else "",
+                "peer_subject_name": str(state.peer_subject_name or "") if state is not None else "",
+                "peer_roles": list(state.peer_roles or []) if state is not None else [],
+                "peer_deployment_id": str(state.peer_deployment_id or "") if state is not None else "",
+                "peer_serial": str(state.peer_serial or "") if state is not None else "",
+                "issuer_id": str(state.issuer_id or "") if state is not None else "",
+                "trust_anchor_id": str(state.trust_anchor_id or "") if state is not None else (self._local_identity.trust_anchor_id if self._local_identity is not None else ""),
+                "trust_validation_state": str(state.trust_validation_state or "") if state is not None else "",
+                "trust_failure_reason": str(state.trust_failure_reason or "") if state is not None else "",
+                "trust_failure_detail": str(state.trust_failure_detail or "") if state is not None else "",
+                "active_material_generation": int(state.active_material_generation or 0) if state is not None else int(self._active_material_generation or 0),
+                "last_material_reload_unix_ts": state.last_material_reload_unix_ts if state is not None else self._last_material_reload_unix_ts,
+                "last_material_reload_scope": str(state.last_material_reload_scope or "") if state is not None else str(self._last_material_reload_scope or ""),
+                "last_material_reload_result": str(state.last_material_reload_result or "") if state is not None else str(self._last_material_reload_result or ""),
+                "last_material_reload_detail": str(state.last_material_reload_detail or "") if state is not None else str(self._last_material_reload_detail or ""),
+                "trust_enforced_unix_ts": state.trust_enforced_unix_ts if state is not None else self._trust_enforced_unix_ts,
+                "disconnect_reason": str(state.disconnect_reason or "") if state is not None else "",
+                "disconnect_detail": str(state.disconnect_detail or "") if state is not None else "",
             }
             out.append(r)
         return out
@@ -2582,7 +3408,10 @@ class SecureLinkPskSession(ISession):
         failure_unix_ts = None
         any_handshaking = False
         authenticated_peers = 0
+        primary_state: Optional[_SecureLinkPeerState] = None
         for state in self._peer_states.values():
+            if primary_state is None:
+                primary_state = state
             if state.authenticated:
                 authenticated_peers += 1
             elif state.auth_fail_code:
@@ -2611,7 +3440,7 @@ class SecureLinkPskSession(ISession):
             overall_state = "waiting_transport"
         return {
             "enabled": True,
-            "mode": "psk",
+            "mode": self._mode,
             "transport": self._transport_name,
             "state": overall_state,
             "authenticated": authenticated_peers > 0,
@@ -2634,6 +3463,38 @@ class SecureLinkPskSession(ISession):
             "last_authenticated_session_id": self._last_authenticated_session_id,
             "authenticated_sessions_total": int(self._authenticated_sessions_total or 0),
             "rekeys_completed_total": int(self._rekeys_completed_total or 0),
+            "peer_subject_id": str(primary_state.peer_subject_id or "") if primary_state is not None else "",
+            "peer_subject_name": str(primary_state.peer_subject_name or "") if primary_state is not None else "",
+            "peer_roles": list(primary_state.peer_roles or []) if primary_state is not None else [],
+            "peer_deployment_id": str(primary_state.peer_deployment_id or "") if primary_state is not None else "",
+            "peer_serial": str(primary_state.peer_serial or "") if primary_state is not None else "",
+            "issuer_id": str(primary_state.issuer_id or "") if primary_state is not None else "",
+            "trust_anchor_id": str(primary_state.trust_anchor_id or "") if primary_state is not None else (self._local_identity.trust_anchor_id if self._local_identity is not None else ""),
+            "trust_validation_state": str(primary_state.trust_validation_state or "") if primary_state is not None else "",
+            "trust_failure_reason": str(primary_state.trust_failure_reason or "") if primary_state is not None else "",
+            "trust_failure_detail": str(primary_state.trust_failure_detail or "") if primary_state is not None else "",
+            "active_material_generation": int(self._active_material_generation or 0),
+            "last_material_reload_unix_ts": self._last_material_reload_unix_ts,
+            "last_material_reload_scope": self._last_material_reload_scope,
+            "last_material_reload_result": self._last_material_reload_result,
+            "last_material_reload_detail": self._last_material_reload_detail,
+            "trust_enforced_unix_ts": self._trust_enforced_unix_ts,
+            "disconnect_reason": str(primary_state.disconnect_reason or "") if primary_state is not None else "",
+            "disconnect_detail": str(primary_state.disconnect_detail or "") if primary_state is not None else "",
+            "peers_dropped_total": int(self._secure_link_peers_dropped_total or 0),
+        }
+
+    def get_secure_link_operational_summary(self) -> dict:
+        return {
+            "enabled": bool(self._mode != "off"),
+            "mode": self._mode,
+            "transport": self._transport_name,
+            "secure_link_material_generation": int(self._active_material_generation or 0),
+            "secure_link_last_reload_unix_ts": self._last_material_reload_unix_ts,
+            "secure_link_last_reload_scope": str(self._last_material_reload_scope or ""),
+            "secure_link_last_reload_result": str(self._last_material_reload_result or ""),
+            "secure_link_last_reload_detail": str(self._last_material_reload_detail or ""),
+            "secure_link_peers_dropped_total": int(self._secure_link_peers_dropped_total or 0),
         }
 
     def _send_auth_fail(self, peer_id: Optional[int], session_id: int, code: int) -> None:
@@ -2656,7 +3517,17 @@ class SecureLinkPskSession(ISession):
         state.last_event_unix_ts = time.time()
         self._peer_states[0] = state
         self._record_secure_link_event("handshake_started", state.last_event_unix_ts)
-        payload = state.client_nonce + bytes([self._SL_CAP_PSK_V1, 0])
+        if self._is_cert_mode():
+            eph_private = x25519.X25519PrivateKey.generate()
+            eph_public = eph_private.public_key().public_bytes(
+                serialization.Encoding.Raw,
+                serialization.PublicFormat.Raw,
+            )
+            state.local_ephemeral_private = eph_private
+            state.client_nonce = eph_public
+            payload = self._build_cert_hello_payload(session_id=state.session_id, eph_public=eph_public)
+        else:
+            payload = state.client_nonce + bytes([self._SL_CAP_PSK_V1, 0])
         self._inner.send_app(self._build_frame(self._SL_TYPE_CLIENT_HELLO, state.session_id, 0, payload))
 
     def _on_inner_state_change(self, connected: bool) -> None:
@@ -2773,7 +3644,67 @@ class SecureLinkPskSession(ISession):
         return target_peer_id, routed
 
     def _handle_client_hello(self, peer_id: Optional[int], session_id: int, body: bytes) -> None:
-        if self._client_mode or int(session_id or 0) <= 0 or len(body) < 34:
+        if self._client_mode or int(session_id or 0) <= 0:
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        if self._is_cert_mode():
+            parsed = self._parse_cert_handshake_payload(body)
+            if parsed is None:
+                self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_MALFORMED_CERTIFICATE)
+                return
+            remote_identity, fail_code = self._load_remote_cert(parsed["cert_body"], parsed["cert_sig"])
+            if remote_identity is None:
+                self._send_auth_fail(peer_id, session_id, fail_code)
+                return
+            try:
+                remote_identity.public_key.verify(
+                    parsed["proof"],
+                    self._cert_client_proof_input(session_id, remote_identity.cert_body_bytes, remote_identity.cert_sig, parsed["ephemeral_pub"]),
+                )
+            except Exception:
+                self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_BAD_IDENTITY_PROOF)
+                return
+            try:
+                remote_eph_public = x25519.X25519PublicKey.from_public_bytes(parsed["ephemeral_pub"])
+            except Exception:
+                self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_MALFORMED_CERTIFICATE)
+                return
+            server_eph_private = x25519.X25519PrivateKey.generate()
+            server_eph_public = server_eph_private.public_key().public_bytes(
+                serialization.Encoding.Raw,
+                serialization.PublicFormat.Raw,
+            )
+            payload = self._build_cert_server_payload(
+                session_id=session_id,
+                client_identity=remote_identity,
+                client_eph_public=parsed["ephemeral_pub"],
+                server_eph_public=server_eph_public,
+            )
+            transcript_hash = hashlib.sha256(body + payload).digest()
+            c2s_key, s2c_key = self._derive_cert_keys(
+                session_id,
+                server_eph_private.exchange(remote_eph_public),
+                transcript_hash,
+            )
+            key = self._peer_key(peer_id)
+            self._handshake_attempts_total += 1
+            state = _SecureLinkPeerState(
+                session_id=session_id,
+                client_nonce=parsed["ephemeral_pub"],
+                server_nonce=server_eph_public,
+                c2s_key=c2s_key,
+                s2c_key=s2c_key,
+                handshake_attempts_total=int(self._handshake_attempts_total or 0),
+            )
+            state.local_ephemeral_private = server_eph_private
+            self._apply_peer_identity(state, remote_identity)
+            state.last_event = "handshake_started"
+            state.last_event_unix_ts = time.time()
+            self._peer_states[key] = state
+            self._record_secure_link_event("server_hello_sent", state.last_event_unix_ts)
+            self._inner.send_app(self._build_frame(self._SL_TYPE_SERVER_HELLO, session_id, 0, payload), peer_id=peer_id)
+            return
+        if len(body) < 34:
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         client_nonce = body[:32]
@@ -2801,11 +3732,68 @@ class SecureLinkPskSession(ISession):
         self._inner.send_app(self._build_frame(self._SL_TYPE_SERVER_HELLO, session_id, 0, payload), peer_id=peer_id)
 
     def _handle_server_hello(self, session_id: int, body: bytes) -> None:
-        if not self._client_mode or int(session_id or 0) <= 0 or len(body) < 65:
+        if not self._client_mode or int(session_id or 0) <= 0:
             self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         state = self._peer_states.get(0)
         if state is None or int(state.session_id) != int(session_id):
+            self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        if self._is_cert_mode():
+            parsed = self._parse_cert_handshake_payload(body)
+            if parsed is None:
+                self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_MALFORMED_CERTIFICATE)
+                return
+            remote_identity, fail_code = self._load_remote_cert(parsed["cert_body"], parsed["cert_sig"])
+            if remote_identity is None:
+                self._send_auth_fail(None, session_id, fail_code)
+                return
+            try:
+                remote_identity.public_key.verify(
+                    parsed["proof"],
+                    self._cert_server_proof_input(
+                        session_id,
+                        self._local_identity.cert_body_bytes if self._local_identity is not None else b"",
+                        self._local_identity.cert_sig if self._local_identity is not None else b"",
+                        state.client_nonce,
+                        remote_identity.cert_body_bytes,
+                        remote_identity.cert_sig,
+                        parsed["ephemeral_pub"],
+                    ),
+                )
+            except Exception:
+                self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_BAD_IDENTITY_PROOF)
+                return
+            if state.local_ephemeral_private is None:
+                self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
+                return
+            try:
+                remote_eph_public = x25519.X25519PublicKey.from_public_bytes(parsed["ephemeral_pub"])
+            except Exception:
+                self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_MALFORMED_CERTIFICATE)
+                return
+            transcript_hash = hashlib.sha256(
+                self._build_cert_hello_payload(session_id=session_id, eph_public=state.client_nonce) + body
+            ).digest()
+            c2s_key, s2c_key = self._derive_cert_keys(
+                session_id,
+                state.local_ephemeral_private.exchange(remote_eph_public),
+                transcript_hash,
+            )
+            state.server_nonce = parsed["ephemeral_pub"]
+            state.c2s_key = c2s_key
+            state.s2c_key = s2c_key
+            self._apply_peer_identity(state, remote_identity)
+            self._record_authenticated_session(
+                state,
+                session_id=session_id,
+                peer_id=None,
+                event="authenticated",
+                rekey_completed=False,
+            )
+            self._refresh_connected_state()
+            return
+        if len(body) < 65:
             self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         server_nonce = body[:32]
@@ -2832,7 +3820,7 @@ class SecureLinkPskSession(ISession):
         self._refresh_connected_state()
 
     def _handle_rekey_hello(self, peer_id: Optional[int], session_id: int, body: bytes) -> None:
-        if self._client_mode or int(session_id or 0) <= 0 or len(body) < 34:
+        if self._client_mode or int(session_id or 0) <= 0:
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         key = self._peer_key(peer_id)
@@ -2842,6 +3830,60 @@ class SecureLinkPskSession(ISession):
             return
         if int(state.pending_session_id or 0) > 0 and int(state.pending_session_id or 0) != int(session_id):
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
+            return
+        if self._is_cert_mode():
+            parsed = self._parse_json_payload(body)
+            if not isinstance(parsed, dict) or str(parsed.get("cap") or "") != "cert-v1":
+                self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_MALFORMED_CERTIFICATE)
+                return
+            try:
+                client_eph_public = base64.b64decode(str(parsed.get("ephemeral_pub_b64") or "").encode("ascii"), validate=True)
+                proof = base64.b64decode(str(parsed.get("proof_b64") or "").encode("ascii"), validate=True)
+                remote_eph_public = x25519.X25519PublicKey.from_public_bytes(client_eph_public)
+            except Exception:
+                self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_MALFORMED_CERTIFICATE)
+                return
+            remote_identity = state.peer_public_key
+            if not isinstance(remote_identity, ed25519.Ed25519PublicKey):
+                self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
+                return
+            try:
+                remote_identity.verify(proof, self._cert_rekey_hello_input(session_id, client_eph_public))
+            except Exception:
+                self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_BAD_IDENTITY_PROOF)
+                return
+            server_eph_private = x25519.X25519PrivateKey.generate()
+            server_eph_public = server_eph_private.public_key().public_bytes(
+                serialization.Encoding.Raw,
+                serialization.PublicFormat.Raw,
+            )
+            transcript_hash = hashlib.sha256(
+                b"rekey-cert|" + int(session_id).to_bytes(8, "big") + client_eph_public + server_eph_public
+            ).digest()
+            c2s_key, s2c_key = self._derive_cert_keys(
+                session_id,
+                server_eph_private.exchange(remote_eph_public),
+                transcript_hash,
+            )
+            state.pending_session_id = int(session_id)
+            state.pending_client_nonce = client_eph_public
+            state.pending_server_nonce = server_eph_public
+            state.pending_c2s_key = c2s_key
+            state.pending_s2c_key = s2c_key
+            state.pending_local_ephemeral_private = server_eph_private
+            state.last_rekey_trigger = "remote"
+            server_proof = self._local_identity.private_key.sign(
+                self._cert_rekey_reply_input(session_id, client_eph_public, server_eph_public)
+            )
+            payload = self._json_payload({
+                "cap": "cert-v1",
+                "ephemeral_pub_b64": base64.b64encode(server_eph_public).decode("ascii"),
+                "proof_b64": base64.b64encode(server_proof).decode("ascii"),
+            })
+            self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_REPLY, session_id, 0, payload), peer_id=peer_id)
+            return
+        if len(body) < 34:
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         client_nonce = body[:32]
         capability = int(body[32])
@@ -2861,11 +3903,58 @@ class SecureLinkPskSession(ISession):
         self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_REPLY, session_id, 0, payload), peer_id=peer_id)
 
     def _handle_rekey_reply(self, session_id: int, body: bytes) -> None:
-        if not self._client_mode or int(session_id or 0) <= 0 or len(body) < 65:
+        if not self._client_mode or int(session_id or 0) <= 0:
             self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         state = self._peer_states.get(0)
         if state is None or int(state.pending_session_id or 0) != int(session_id):
+            self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        if self._is_cert_mode():
+            parsed = self._parse_json_payload(body)
+            if not isinstance(parsed, dict) or str(parsed.get("cap") or "") != "cert-v1":
+                self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_MALFORMED_CERTIFICATE)
+                return
+            try:
+                server_eph_public = base64.b64decode(str(parsed.get("ephemeral_pub_b64") or "").encode("ascii"), validate=True)
+                proof = base64.b64decode(str(parsed.get("proof_b64") or "").encode("ascii"), validate=True)
+                remote_eph_public = x25519.X25519PublicKey.from_public_bytes(server_eph_public)
+            except Exception:
+                self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_MALFORMED_CERTIFICATE)
+                return
+            if state.pending_local_ephemeral_private is None or self._local_identity is None:
+                self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
+                return
+            # Proof is validated against the already-authenticated peer identity stored on state.
+            remote_identity = state.peer_public_key
+            if not isinstance(remote_identity, ed25519.Ed25519PublicKey):
+                self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
+                return
+            try:
+                remote_identity.verify(
+                    proof,
+                    self._cert_rekey_reply_input(session_id, state.pending_client_nonce, server_eph_public),
+                )
+            except Exception:
+                self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_BAD_IDENTITY_PROOF)
+                return
+            transcript_hash = hashlib.sha256(
+                b"rekey-cert|" + int(session_id).to_bytes(8, "big") + state.pending_client_nonce + server_eph_public
+            ).digest()
+            c2s_key, s2c_key = self._derive_cert_keys(
+                session_id,
+                state.pending_local_ephemeral_private.exchange(remote_eph_public),
+                transcript_hash,
+            )
+            state.pending_server_nonce = server_eph_public
+            state.pending_c2s_key = c2s_key
+            state.pending_s2c_key = s2c_key
+            commit = self._local_identity.private_key.sign(
+                self._cert_rekey_commit_input(session_id, state.pending_client_nonce, server_eph_public)
+            )
+            self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_COMMIT, session_id, 0, commit))
+            return
+        if len(body) < 65:
             self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         server_nonce = body[:32]
@@ -2893,6 +3982,27 @@ class SecureLinkPskSession(ISession):
         state = self._peer_states.get(key)
         if state is None or int(state.pending_session_id or 0) != int(session_id):
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
+            return
+        if self._is_cert_mode():
+            remote_identity = state.peer_public_key
+            if not isinstance(remote_identity, ed25519.Ed25519PublicKey):
+                self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
+                return
+            try:
+                remote_identity.verify(bytes(body or b""), self._cert_rekey_commit_input(session_id, state.pending_client_nonce, state.pending_server_nonce))
+            except Exception:
+                self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_BAD_IDENTITY_PROOF)
+                return
+            self._promote_pending_rekey(state)
+            self._record_authenticated_session(
+                state,
+                session_id=session_id,
+                peer_id=peer_id,
+                event="rekey_completed",
+                rekey_completed=True,
+            )
+            self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_DONE, session_id, 0, b""), peer_id=peer_id)
+            self._refresh_connected_state()
             return
         expected = self._client_rekey_commit_proof(session_id, state.pending_client_nonce, state.pending_server_nonce)
         if not hmac.compare_digest(bytes(body or b""), expected):
@@ -11336,6 +12446,14 @@ class RunnerMuxAggregate:
             "authenticated_sessions_total": 0,
             "rekeys_completed_total": 0,
             "transport": None,
+            "active_material_generation": 0,
+            "last_material_reload_unix_ts": None,
+            "last_material_reload_scope": "",
+            "last_material_reload_result": "",
+            "last_material_reload_detail": "",
+            "trust_enforced_unix_ts": None,
+            "disconnect_reason": "",
+            "disconnect_detail": "",
         }
 
 
@@ -11575,7 +12693,30 @@ class Runner:
             self._restart_requested.set()
 
     def get_status_snapshot(self) -> dict:
-        return self.stats.snapshot_status()
+        payload = dict(self.stats.snapshot_status())
+        summaries: list[dict] = []
+        for session in self._sessions:
+            getter = getattr(session, "get_secure_link_operational_summary", None)
+            if callable(getter):
+                with contextlib.suppress(Exception):
+                    summary = dict(getter() or {})
+                    if summary:
+                        summaries.append(summary)
+        enabled = [s for s in summaries if bool(s.get("enabled"))]
+        payload["secure_link_material_generation"] = max((int(s.get("secure_link_material_generation") or 0) for s in enabled), default=0)
+        latest = None
+        for item in enabled:
+            ts = item.get("secure_link_last_reload_unix_ts")
+            if ts is None:
+                continue
+            if latest is None or float(ts) >= float(latest.get("secure_link_last_reload_unix_ts") or 0.0):
+                latest = item
+        payload["secure_link_last_reload_unix_ts"] = latest.get("secure_link_last_reload_unix_ts") if latest is not None else None
+        payload["secure_link_last_reload_scope"] = str(latest.get("secure_link_last_reload_scope") or "") if latest is not None else ""
+        payload["secure_link_last_reload_result"] = str(latest.get("secure_link_last_reload_result") or "") if latest is not None else ""
+        payload["secure_link_last_reload_detail"] = str(latest.get("secure_link_last_reload_detail") or "") if latest is not None else ""
+        payload["secure_link_peers_dropped_total"] = sum(int(s.get("secure_link_peers_dropped_total") or 0) for s in enabled)
+        return payload
 
     def get_connections_snapshot(self) -> dict:
         if not self._muxes:
@@ -12036,6 +13177,75 @@ class Runner:
             "results": results,
         }
 
+    def request_secure_link_reload(self, scope: str, target_peer_id: Optional[str] = None) -> dict:
+        normalized_scope = str(scope or "").strip().lower()
+        target = str(target_peer_id or "").strip()
+        requested = 0
+        reloaded = 0
+        dropped = 0
+        failed = 0
+        results: list[dict] = []
+        matched_target = False
+        for idx, session in enumerate(self._sessions):
+            label = self._session_labels[idx] if idx < len(self._session_labels) else f"session-{idx}"
+            peer_row_ids = self._session_peer_row_ids(idx, session)
+            if target:
+                if target not in peer_row_ids:
+                    continue
+                matched_target = True
+            requester = getattr(session, "request_secure_link_reload", None)
+            if not callable(requester):
+                failed += 1
+                results.append({
+                    "transport": label,
+                    "peer_ids": peer_row_ids,
+                    "ok": False,
+                    "reason": "secure_link_reload_not_supported",
+                })
+                continue
+            requested += 1
+            try:
+                result = dict(requester(scope=normalized_scope, target_peer_id=target or None) or {})
+            except Exception as e:
+                failed += 1
+                results.append({
+                    "transport": label,
+                    "peer_ids": peer_row_ids,
+                    "ok": False,
+                    "reason": f"error:{e}",
+                })
+                continue
+            if bool(result.get("ok")):
+                reloaded += 1
+            else:
+                failed += 1
+            dropped += int(result.get("dropped") or 0)
+            result.setdefault("transport", label)
+            result.setdefault("peer_ids", peer_row_ids)
+            results.append(result)
+        if target and not matched_target:
+            return {
+                "ok": False,
+                "scope": normalized_scope,
+                "target_peer_id": target,
+                "requested": 0,
+                "reloaded": 0,
+                "dropped": 0,
+                "failed": 0,
+                "results": [],
+                "reason": "unknown_peer_id",
+            }
+        return {
+            "ok": reloaded > 0 and failed == 0,
+            "scope": normalized_scope,
+            "target_peer_id": target or None,
+            "requested": requested,
+            "reloaded": reloaded,
+            "dropped": dropped,
+            "failed": failed,
+            "results": results,
+        }
+
     def _group_config_snapshot(self, config: dict) -> dict:
         sections = getattr(self.args, "_config_sections", {}) or {}
         if not isinstance(sections, dict) or not sections:
@@ -12242,11 +13452,11 @@ class Runner:
         mode = str(getattr(args, "secure_link_mode", "off") or "off").strip().lower()
         if not enabled or mode == "off":
             return session
-        if mode != "psk":
+        if mode not in {"psk", "cert"}:
             raise ValueError(f"secure_link_mode={mode} is not implemented yet")
         if transport_name not in {"myudp", "tcp", "ws", "quic"}:
-            raise ValueError(f"secure_link_mode=psk is not supported for overlay_transport={transport_name}")
-        if not str(getattr(args, "secure_link_psk", "") or ""):
+            raise ValueError(f"secure_link_mode={mode} is not supported for overlay_transport={transport_name}")
+        if mode == "psk" and not str(getattr(args, "secure_link_psk", "") or ""):
             raise ValueError("secure_link_mode=psk requires --secure-link-psk")
         return SecureLinkPskSession(session, args, transport_name)
 
@@ -12475,6 +13685,10 @@ class AdminWebUI:
                 await self._handle_secure_link_rekey(writer, method, body)
                 return
 
+            if path == "/api/secure-link/reload":
+                await self._handle_secure_link_reload(writer, method, body)
+                return
+
             if path == "/api/status":
                 await self._handle_status(writer)
                 return
@@ -12601,6 +13815,30 @@ class AdminWebUI:
             code,
             payload,
             summary=f"peer_id={target_peer_id} requested={payload.get('requested', 0)} skipped={payload.get('skipped', 0)}",
+        )
+        await self._send_json(writer, code, payload)
+
+    async def _handle_secure_link_reload(self, writer, method: str, body: bytes):
+        if method != "POST":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+        try:
+            req = json.loads((body or b"{}").decode("utf-8"))
+        except Exception:
+            await self._send_json(writer, 400, {"ok": False, "error": "invalid JSON body"})
+            return
+        scope = str(req.get("scope", "") or "").strip().lower()
+        if scope not in {"revocation", "local_identity", "all"}:
+            await self._send_json(writer, 400, {"ok": False, "error": "scope must be one of revocation, local_identity, all"})
+            return
+        target_peer_id = str(req.get("peer_id", "") or "").strip()
+        payload = self.runner.request_secure_link_reload(scope=scope, target_peer_id=target_peer_id or None)
+        code = 200 if bool(payload.get("ok")) else 409
+        self._log_api_response(
+            "/api/secure-link/reload",
+            code,
+            payload,
+            summary=f"scope={scope} target_peer_id={target_peer_id or '-'} reloaded={payload.get('reloaded', 0)} dropped={payload.get('dropped', 0)} failed={payload.get('failed', 0)}",
         )
         await self._send_json(writer, code, payload)
 

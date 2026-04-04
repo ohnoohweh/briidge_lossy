@@ -372,6 +372,39 @@ async function requestSecureLinkRekey(peerId) {
   }
 }
 
+async function requestSecureLinkReload(scope) {
+  const normalizedScope = String(scope || '').trim();
+  if (!normalizedScope) {
+    window.alert('Secure-link reload failed: missing scope');
+    return;
+  }
+  const buttons = [
+    document.getElementById('secureLinkReloadRevocationBtn'),
+    document.getElementById('secureLinkReloadIdentityBtn'),
+    document.getElementById('secureLinkReloadAllBtn'),
+  ].filter(Boolean);
+  try {
+    buttons.forEach((button) => {
+      button.disabled = true;
+    });
+    const r = await apiFetch('/api/secure-link/reload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: normalizedScope }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || j.reason || `HTTP ${r.status}`);
+    }
+  } catch (e) {
+    window.alert(`Secure-link reload failed: ${e}`);
+  } finally {
+    buttons.forEach((button) => {
+      button.disabled = false;
+    });
+  }
+}
+
 async function exitProgram() {
   const confirmed = window.confirm('Exit the program now?');
   if (!confirmed) return;
@@ -445,6 +478,10 @@ function renderPeerTable(rows) {
     const isListeningPeer = String(row.state || '').toLowerCase() === 'listening';
     const secureLink = row.secure_link || {};
     const secureLinkEnabled = Boolean(secureLink.enabled);
+    const secureLinkMode = String(secureLink.mode || '').toLowerCase();
+    const isCertMode = secureLinkMode === 'cert';
+    const trustFailureReason = String(secureLink.trust_failure_reason || '').trim();
+    const trustFailureDetail = String(secureLink.trust_failure_detail || '').trim();
     const connectionLine1 = [
       renderMetric('State', String(row.state || 'unknown').toLowerCase(), { pill: true }),
     ];
@@ -485,12 +522,38 @@ function renderPeerTable(rows) {
           renderMetric('Decode Errors', fmtInteger(row.decode_errors ?? 0)),
         ],
       ]);
-    const securityMetrics = secureLinkEnabled ? [
-      renderMetric('secure_link.state', secureLink.state, { pill: true }),
-      renderMetric('secure_link.authenticated', fmtBool(secureLink.authenticated), { pill: true }),
-      renderMetric('rekey_in_progress', fmtBool(secureLink.rekey_in_progress), { pill: true }),
-      renderMetric('session_id', fmtInteger(secureLink.session_id)),
-    ] : [];
+    const securityLines = [];
+    if (secureLinkEnabled) {
+      securityLines.push([
+        renderMetric('secure_link.state', secureLink.state, { pill: true }),
+        renderMetric('secure_link.authenticated', fmtBool(secureLink.authenticated), { pill: true }),
+        renderMetric('rekey_in_progress', fmtBool(secureLink.rekey_in_progress), { pill: true }),
+        renderMetric('session_id', fmtInteger(secureLink.session_id)),
+      ]);
+      if (isCertMode) {
+        securityLines.push([
+          renderMetric('peer_subject_id', secureLink.peer_subject_id),
+          renderMetric('peer_subject_name', secureLink.peer_subject_name),
+          renderMetric('peer_roles', Array.isArray(secureLink.peer_roles) && secureLink.peer_roles.length ? secureLink.peer_roles.join(', ') : 'n/a'),
+        ]);
+        securityLines.push([
+          renderMetric('peer_deployment_id', secureLink.peer_deployment_id),
+          renderMetric('peer_serial', secureLink.peer_serial),
+          renderMetric('issuer_id', secureLink.issuer_id),
+        ]);
+        securityLines.push([
+          renderMetric('trust_validation_state', secureLink.trust_validation_state, { pill: true }),
+          renderMetric('trust_anchor_id', secureLink.trust_anchor_id),
+        ]);
+        if (trustFailureReason || trustFailureDetail) {
+          securityLines.push([
+            renderMetric('trust_failure_reason', trustFailureReason || 'n/a', { pill: true }),
+            renderMetric('trust_failure_detail', trustFailureDetail || 'n/a'),
+          ]);
+        }
+      }
+    }
+    const securityMetrics = secureLinkEnabled ? renderMetricStack(securityLines) : '';
     const allowRekeyAction = String(row.state || '').toLowerCase() !== 'listening';
     const lifecycleMetrics = secureLinkEnabled ? [
       renderMetric('last_event', secureLink.last_event),
@@ -499,6 +562,13 @@ function renderPeerTable(rows) {
       renderMetric('authenticated_sessions_total', fmtInteger(secureLink.authenticated_sessions_total)),
       renderMetric('rekeys_completed_total', fmtInteger(secureLink.rekeys_completed_total)),
       renderMetric('last_rekey_trigger', secureLink.last_rekey_trigger),
+      renderMetric('active_material_generation', fmtInteger(secureLink.active_material_generation)),
+      renderMetric('last_material_reload_unix_ts', fmtUnixTs(secureLink.last_material_reload_unix_ts)),
+      renderMetric('last_material_reload_scope', secureLink.last_material_reload_scope),
+      renderMetric('last_material_reload_result', secureLink.last_material_reload_result),
+      renderMetric('trust_enforced_unix_ts', fmtUnixTs(secureLink.trust_enforced_unix_ts)),
+      renderMetric('disconnect_reason', secureLink.disconnect_reason),
+      renderMetric('disconnect_detail', secureLink.disconnect_detail),
     ] : [];
     const detailRows = [
       `
@@ -523,7 +593,7 @@ function renderPeerTable(rows) {
         <td class="peer-detail-kind">Security</td>
         <td>
           <div class="peer-detail-stack">
-            <div class="peer-detail-grid">${securityMetrics.join('')}</div>
+            ${securityMetrics}
             ${allowRekeyAction ? `
               <div class="peer-detail-actions">
                 <button class="btn btn-secondary secure-link-rekey-btn" type="button" data-peer-id="${escapeHtml(fmtText(row.id))}">Rekey Request</button>
@@ -590,6 +660,12 @@ function applyStatusDoc(j) {
   setProgress('barAppTx', appTx);
   setProgress('barPeerRx', peerRx);
   setProgress('barPeerTx', peerTx);
+  setText('secureLinkMaterialGeneration', fmtInteger(j.secure_link_material_generation));
+  setText('secureLinkLastReloadUnixTs', fmtUnixTs(j.secure_link_last_reload_unix_ts));
+  setText('secureLinkLastReloadScope', fmtText(j.secure_link_last_reload_scope));
+  setText('secureLinkLastReloadResult', fmtText(j.secure_link_last_reload_result));
+  setText('secureLinkLastReloadDetail', fmtText(j.secure_link_last_reload_detail));
+  setText('secureLinkPeersDroppedTotal', fmtInteger(j.secure_link_peers_dropped_total));
 
   const errors = j.decode_errors?.unidentified_frames ?? 0;
   setText('decodeErrors', fmtInteger(errors));
@@ -1299,6 +1375,9 @@ function initMetaToggle() {
 document.getElementById('restartBtn').addEventListener('click', restart);
 document.getElementById('logoutBtn')?.addEventListener('click', logoutAdmin);
 document.getElementById('exitBtn')?.addEventListener('click', exitProgram);
+document.getElementById('secureLinkReloadRevocationBtn')?.addEventListener('click', () => requestSecureLinkReload('revocation'));
+document.getElementById('secureLinkReloadIdentityBtn')?.addEventListener('click', () => requestSecureLinkReload('local_identity'));
+document.getElementById('secureLinkReloadAllBtn')?.addEventListener('click', () => requestSecureLinkReload('all'));
 document.getElementById('configReloadBtn')?.addEventListener('click', loadConfig);
 document.getElementById('configSaveBtn')?.addEventListener('click', saveConfig);
 document.getElementById('logsReloadBtn')?.addEventListener('click', loadLogs);

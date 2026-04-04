@@ -322,21 +322,30 @@ This deeper mapping links concrete integration scenarios to requirement IDs. It 
 | `test_overlay_e2e_ws_proxy_system_default_on_windows_uses_system_proxy` | `REQ-WSP-006` | Verify Windows default system proxy mode through the integration harness | On Windows, the default WS peer-client path uses system proxy discovery and successfully reaches the listener through the proxy | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_system_default_on_windows_uses_system_proxy` |
 | `test_overlay_e2e_ws_proxy_negotiate_auth_on_windows` | `REQ-WSP-009` | Verify Windows Negotiate-authenticated proxy traversal | On Windows, a proxy that challenges with `Proxy-Authenticate: Negotiate` is satisfied and the overlay still reaches `CONNECTED` | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_negotiate_auth_on_windows` |
 
-### Planned certificate-mode secure-link integration test matrix
+### Current certificate-mode secure-link coverage
 
-The remaining `PLAN-AUT-*` items in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md) now cover the still-pending certificate-based trust model rather than the delivered PSK runtime slice, so the following entries are planned tests rather than current suite members.
+The certificate-based secure-link slice is now delivered through Phase 2 trust validation and Phase 3 operational controls, and it is defended by both unit and subprocess integration coverage.
 
-The table captures the intended:
+The delivered certificate-mode criteria now include:
 
-- stimulation: how the system should be exercised
-- criteria: what must be observable from outside the implementation
+- trust-anchor-validated mutual authentication before protected traffic is accepted
+- role, validity-window, deployment-scope, and revoked-serial rejection before the protected data phase
+- peer-scoped identity and trust diagnostics through `/api/peers`
+- operator-forced rekey after a healthy authenticated cert-mode session is established
+- live operator-triggered reload of revocation material, local identity material, or both through `/api/secure-link/reload`
+- aggregate reload/apply result visibility through `/api/status`
+- peer-scoped disconnect/trust-enforcement diagnostics after live reload/apply actions
 
-| Planned requirement ID | Planned stimulation | Planned observable criteria |
-|---|---|---|
-| `PLAN-AUT-004` | Run one pair with the same admin root trust anchor and further pairs with mismatched or unknown roots | Only same-root peers authenticate successfully; mismatched-root or unknown-root peers are rejected before protected traffic starts |
-| `PLAN-AUT-005` | Use correct `client`/`server` role certificates, then swap roles incorrectly, then try a dual-role `client,server` certificate where appropriate | Correct role pairings authenticate; wrong-role certificates are rejected even if otherwise valid; dual-role certificates work only where both roles are acceptable |
-| `PLAN-AUT-006` | Attempt connection with an expired certificate, a not-yet-valid certificate, a wrong-`deployment_id` certificate, a revoked-`serial` certificate, and a fully valid control certificate | Expired, premature, wrong-deployment, and revoked credentials are each rejected before the protected data phase; the valid control case succeeds |
-| `PLAN-AUT-007` | Query `/api/status` and `/api/peers` during successful and failed certificate-based secure-link runs | WebAdmin/API preserves the current secure-link visibility model while adding richer identity and trust-validation details for the certificate-based mode |
+| Test | Active requirement IDs exercised | Objective | Test criteria | How to start |
+|---|---|---|---|---|
+| `test_overlay_e2e_secure_link_cert_happy_path_transports` | `REQ-AUT-011`, `REQ-AUT-012`, `REQ-AUT-013`, `REQ-AUT-014` | Verify cert-mode secure-link authenticates and carries protected overlay traffic across `tcp`, `myudp`, `ws`, and `quic` | Each supported transport reaches `CONNECTED`, the protected probe succeeds, and `/api/peers` reports `secure_link.mode=cert`, `secure_link.state=authenticated`, `trust_validation_state=trusted`, and peer identity fields such as subject id/name, roles, deployment id, serial, issuer, and trust-anchor id | `pytest -q tests/integration/test_overlay_e2e.py -k secure_link_cert_happy_path_transports` |
+| `test_overlay_e2e_tcp_secure_link_cert_rejection_matrix` | `REQ-AUT-011`, `REQ-AUT-012`, `REQ-AUT-013`, `REQ-AUT-014` | Verify cert-mode rejects mismatched trust anchors, wrong roles, invalid validity windows, deployment mismatch, and revoked serials before protected data starts | Client and server stay not connected, the probe does not succeed, and `/api/peers` reports `secure_link.state=failed` together with the expected trust failure category and trust failure detail for each rejection case | `pytest -q tests/integration/test_overlay_e2e.py -k secure_link_cert_rejection_matrix` |
+| `test_overlay_e2e_tcp_secure_link_cert_operator_forced_rekey` | `REQ-AUT-014` | Verify operator-forced rekey works for a selected authenticated cert-mode peer | After the first protected probe, `POST /api/secure-link/rekey` for the active peer row returns `ok=true`, the peer row rotates to a fresh `secure_link.session_id`, and the later protected probe still succeeds with `last_event=rekey_completed` and `last_rekey_trigger=operator` | `pytest -q tests/integration/test_overlay_e2e.py -k secure_link_cert_operator_forced_rekey` |
+| `test_overlay_e2e_tcp_secure_link_cert_revocation_reload_happy_path` | `REQ-AUT-015`, `REQ-AUT-016`, `REQ-AUT-019` | Verify live revocation reload drops a now-revoked authenticated cert-mode peer without process restart | After a healthy authenticated session is established, updating the revoked-serial file and calling `POST /api/secure-link/reload` with `scope=revocation` returns `ok=true`, `/api/status` reports the aggregate reload result, and `/api/peers` shows the affected peer dropped with `trust_failure_reason=revoked_serial`, `disconnect_reason=revocation_applied`, and reload/enforcement timestamps | `pytest -q tests/integration/test_overlay_e2e.py -k cert_revocation_reload_happy_path` |
+| `test_overlay_e2e_tcp_secure_link_cert_revocation_reload_noop` | `REQ-AUT-015`, `REQ-AUT-019` | Verify live revocation reload can succeed without disrupting a healthy peer when no new serial is revoked | Reloading unchanged revocation material returns `ok=true`, `/api/status` reports the successful reload summary, the authenticated peer remains healthy, and no disconnect/trust-enforcement state is introduced spuriously | `pytest -q tests/integration/test_overlay_e2e.py -k cert_revocation_reload_noop` |
+| `test_overlay_e2e_tcp_secure_link_cert_local_identity_reload_happy_path` | `REQ-AUT-017`, `REQ-AUT-018`, `REQ-AUT-019` | Verify live local-identity reload atomically activates new local material and forces existing peers to re-authenticate under the new generation | Replacing the local cert bundle with a valid new generation and calling `POST /api/secure-link/reload` with `scope=local_identity` returns `ok=true`, `/api/status` reports the new material generation, the old authenticated peer is dropped with `disconnect_reason=local_identity_reloaded`, and a fresh authenticated peer row appears under the new generation | `pytest -q tests/integration/test_overlay_e2e.py -k cert_local_identity_reload_happy_path` |
+| `test_overlay_e2e_tcp_secure_link_cert_local_identity_reload_rejected` | `REQ-AUT-017`, `REQ-AUT-019` | Verify an invalid local cert-material reload is rejected atomically and does not partially replace healthy runtime material | Replacing the local bundle with malformed or invalid data and calling `POST /api/secure-link/reload` with `scope=local_identity` returns `ok=false`, `/api/status` reports the failed reload result, and the existing authenticated session remains healthy on the previous material | `pytest -q tests/integration/test_overlay_e2e.py -k cert_local_identity_reload_rejected` |
+| `test_overlay_e2e_tcp_secure_link_cert_full_reload_applies_atomically` | `REQ-AUT-015`, `REQ-AUT-016`, `REQ-AUT-017`, `REQ-AUT-018`, `REQ-AUT-019` | Verify combined reload of revocation and local identity applies atomically and enforces the resulting trust state immediately | Calling `POST /api/secure-link/reload` with `scope=all` after updating both revocation and local cert inputs returns `ok=true`, `/api/status` reports the combined reload result and new material generation, and `/api/peers` shows the expected disconnect/trust-enforcement behavior under the new inputs | `pytest -q tests/integration/test_overlay_e2e.py -k cert_full_reload_applies_atomically` |
 
 ### Current secure-link PSK test criteria notes
 
@@ -348,7 +357,7 @@ The first Phase 1 PSK prototype now exposes its secure-link state through the pe
 
 `/api/status` remains intentionally limited to common runtime summary information such as uptime, aggregate open-channel counts, and aggregate traffic rates.
 
-Future certificate-based work will still benefit from richer fields such as peer identity metadata (`subject_id`, `subject_name`) and trust-validation failure categories.
+Certificate mode now uses those richer fields directly, including peer identity metadata and trust-validation failure categories, and the WebAdmin peer security block renders those cert-specific fields instead of leaving them API-only.
 
 ### Current secure-link PSK coverage
 
@@ -363,7 +372,7 @@ The repository now contains a narrow Phase 1 prototype for:
 - `secure_link_rekey_after_seconds`
 - admin-driven peer-targeted `POST /api/secure-link/rekey` with a JSON body carrying the selected `peer_id`
 
-This runtime slice is now reflected by active `REQ-AUT-*` requirements. Certificate-based trust-anchor and certificate-validation behavior remains in the planned `PLAN-AUT-*` namespace.
+This runtime slice is now reflected by active `REQ-AUT-*` requirements, and the certificate-mode secure-link follow-up has now been promoted into active `REQ-AUT-011` through `REQ-AUT-019`.
 
 | Test | Active requirement IDs exercised | Objective | Test criteria | How to start |
 |---|---|---|---|---|
@@ -385,7 +394,7 @@ This runtime slice is now reflected by active `REQ-AUT-*` requirements. Certific
 
 ## Unit tests
 
-Unit coverage currently collects `80` tests from `tests/unit/`.
+Unit coverage currently collects `91` tests from `tests/unit/`.
 
 ### Unit-side traceability
 
@@ -400,13 +409,14 @@ The component view they support is described in [ARCHITECTURE.md](/home/ohnoohwe
 | `tests/unit/test_channel_mux_listener_mode.py` | `ARC-CMP-003` | `REQ-MUX-003`, `REQ-MUX-004`, `PROC-TST-002` | Listener mode must ignore ambiguous local publishing, parse service specs consistently, and manage remote catalog install/replace/cleanup correctly | `pytest -q tests/unit/test_channel_mux_listener_mode.py` |
 | `tests/unit/test_channel_mux_peer_catalog.py` | `ARC-CMP-003` | `REQ-MUX-003`, `REQ-MUX-004`, `PROC-TST-002` | Peer-scoped remote service state must remain isolated and must be cleaned up per disconnected peer | `pytest -q tests/unit/test_channel_mux_peer_catalog.py` |
 | `tests/unit/test_connection_snapshots.py` | `ARC-CMP-005` | `REQ-LST-006`, `REQ-ADM-006`, `PROC-TST-002` | Snapshot rendering must distinguish passive listeners from active connections, keep passive listener rows zeroed, and expose per-peer session stats on active listener-side peers correctly | `pytest -q tests/unit/test_connection_snapshots.py` |
-| `tests/unit/test_admin_web_payloads.py` | `ARC-CMP-005` | `REQ-AUT-004`, `REQ-AUT-009`, `REQ-AUT-010`, `PROC-TST-002` | Admin payload builders must keep secure-link visibility fields on the peer rows and keep `/api/status` limited to common runtime summary fields so WebAdmin can render peer-scoped security state and operator rekey controls consistently | `pytest -q tests/unit/test_admin_web_payloads.py` |
+| `tests/unit/test_admin_web_payloads.py` | `ARC-CMP-005` | `REQ-AUT-004`, `REQ-AUT-009`, `REQ-AUT-010`, `REQ-AUT-014`, `REQ-AUT-016`, `REQ-AUT-019`, `PROC-TST-002` | Admin payload builders must keep peer-scoped secure-link visibility fields intact, keep `/api/status` limited to aggregate runtime summary, and preserve Phase 2/3 certificate identity, reload-result, and disconnect-enforcement fields so WebAdmin can render peer-scoped security state and operator controls consistently | `pytest -q tests/unit/test_admin_web_payloads.py` |
+| `tests/unit/test_secure_link_cert.py` | `ARC-CMP-006` | `REQ-AUT-011`, `REQ-AUT-012`, `REQ-AUT-013`, `REQ-AUT-014`, `REQ-AUT-015`, `REQ-AUT-016`, `REQ-AUT-017`, `REQ-AUT-018`, `PROC-TST-002` | Certificate-mode secure-link loading, trust validation, role/validity/deployment/revocation rejection, peer identity diagnostics, live revocation reload, atomic local-identity reload, and shared rekey/session behavior must remain internally consistent at the secure-link layer boundary | `pytest -q tests/unit/test_secure_link_cert.py` |
 | `tests/unit/test_secure_link_psk.py` | `ARC-CMP-006` | `REQ-AUT-001`, `REQ-AUT-002`, `REQ-AUT-003`, `REQ-AUT-006`, `REQ-AUT-007`, `REQ-AUT-008`, `REQ-AUT-009`, `REQ-AUT-010`, `PROC-TST-002` | PSK handshake, wrong-secret rejection, bounded retry backoff, stronger operational diagnostics, malformed/out-of-order fail-closed behavior, per-peer routing, frame/time/operator rekey rotation, and nonce/counter lifecycle guards must remain internally consistent at the secure-link layer boundary | `pytest -q tests/unit/test_secure_link_psk.py` |
 | `tests/unit/test_debug_logging_aliases.py` | `ARC-CMP-005` | `PROC-TST-002` | Logging alias configuration must reach the intended websocket-related loggers, and the secure-link logger must stay quiet at `WARNING` by default unless the operator explicitly raises it | `pytest -q tests/unit/test_debug_logging_aliases.py` |
 | `tests/unit/test_peer_resolution.py` | `ARC-CMP-004` | `REQ-OVL-007`, `PROC-TST-002` | Localhost resolution fallback must behave deterministically while non-localhost failures still propagate | `pytest -q tests/unit/test_peer_resolution.py` |
 | `tests/unit/test_runner_config_persistence.py` | `ARC-CMP-004` | `PROC-TST-002` | Runtime config updates must persist back to the configured file correctly | `pytest -q tests/unit/test_runner_config_persistence.py` |
 | `tests/unit/test_runner_events.py` | `ARC-CMP-004` | `PROC-TST-002` | Restart and shutdown events must bind to the active event loop correctly | `pytest -q tests/unit/test_runner_events.py` |
-| `tests/unit/test_runner_overlay_transports.py` | `ARC-CMP-004`, `ARC-CMP-001` | `REQ-OVL-003`, `REQ-OVL-004`, `REQ-OVL-005`, `PROC-TST-002` | Overlay transport parsing and per-transport session/port construction must remain consistent with supported transport rules | `pytest -q tests/unit/test_runner_overlay_transports.py` |
+| `tests/unit/test_runner_overlay_transports.py` | `ARC-CMP-004`, `ARC-CMP-001` | `REQ-OVL-003`, `REQ-OVL-004`, `REQ-OVL-005`, `REQ-AUT-011`, `REQ-AUT-015`, `REQ-AUT-017`, `REQ-AUT-019`, `PROC-TST-002` | Overlay transport parsing, secure-link wrapping, startup validation, and peer-targeted operator control routing must remain consistent with supported transport and cert-mode runtime rules | `pytest -q tests/unit/test_runner_overlay_transports.py` |
 | `tests/unit/test_ws_multi_peer.py` | `ARC-CMP-001`, `ARC-CMP-003` | `REQ-LST-001`, `REQ-MUX-001`, `REQ-MUX-003`, `PROC-TST-002` | WS multi-peer mux rewriting and outbound routing must remain peer-safe and channel-safe | `pytest -q tests/unit/test_ws_multi_peer.py` |
 | `tests/unit/test_ws_payload_mode.py` | `ARC-CMP-001`, `ARC-CMP-005` | `REQ-OVL-004`, `REQ-LIFE-002`, `PROC-TST-002` | WS payload encoding, tx timing, reconnect grace, HTTP preflight, platform-default proxy resolution, compression config, and debug static HTTP behavior must stay internally consistent | `pytest -q tests/unit/test_ws_payload_mode.py` |
 
@@ -417,12 +427,13 @@ The component view they support is described in [ARCHITECTURE.md](/home/ohnoohwe
 | `tests/unit/test_channel_mux_listener_mode.py` | ChannelMux listener semantics | Verify listener mode ignores ambiguous local config, parses service specs correctly, and manages remote catalogs/lifecycle correctly | `pytest -q tests/unit/test_channel_mux_listener_mode.py` |
 | `tests/unit/test_channel_mux_peer_catalog.py` | Per-peer remote service state | Verify peer-specific listener state is scoped and cleaned up per peer | `pytest -q tests/unit/test_channel_mux_peer_catalog.py` |
 | `tests/unit/test_connection_snapshots.py` | Admin snapshot formatting | Verify connection and peer snapshot rendering, including listener rows, active-vs-idle distinctions, zeroed passive-listener stats, and correct per-peer listener-side myudp counters | `pytest -q tests/unit/test_connection_snapshots.py` |
-| `tests/unit/test_admin_web_payloads.py` | Admin payload shaping | Verify `/api/peers` keeps secure-link visibility intact while `/api/status` remains limited to common runtime summary fields for WebAdmin/API consumers | `pytest -q tests/unit/test_admin_web_payloads.py` |
+| `tests/unit/test_admin_web_payloads.py` | Admin payload shaping | Verify `/api/peers` keeps peer-scoped secure-link visibility, identity, reload, and disconnect fields intact while `/api/status` remains limited to aggregate runtime summary fields for WebAdmin/API consumers | `pytest -q tests/unit/test_admin_web_payloads.py` |
 | `tests/unit/test_debug_logging_aliases.py` | Logging alias wiring | Verify websocket logging aliases configure the intended library loggers | `pytest -q tests/unit/test_debug_logging_aliases.py` |
 | `tests/unit/test_peer_resolution.py` | Host resolution behavior | Verify localhost fallback and non-localhost resolution error behavior | `pytest -q tests/unit/test_peer_resolution.py` |
 | `tests/unit/test_runner_config_persistence.py` | Config update persistence | Verify config updates are written back to the configured file correctly | `pytest -q tests/unit/test_runner_config_persistence.py` |
 | `tests/unit/test_runner_events.py` | Runner event binding | Verify restart and shutdown events bind to the running loop correctly | `pytest -q tests/unit/test_runner_events.py` |
-| `tests/unit/test_runner_overlay_transports.py` | Overlay transport parsing/building | Verify transport list parsing and per-transport session/port creation behavior | `pytest -q tests/unit/test_runner_overlay_transports.py` |
+| `tests/unit/test_runner_overlay_transports.py` | Overlay transport parsing/building | Verify transport list parsing, secure-link wrapping, startup material validation, and peer-targeted secure-link operator control routing | `pytest -q tests/unit/test_runner_overlay_transports.py` |
+| `tests/unit/test_secure_link_cert.py` | Secure-link certificate mode | Verify certificate material loading, trust validation, role/validity/deployment/revocation rejection, live reload/apply behavior, and cert-mode rekey behavior | `pytest -q tests/unit/test_secure_link_cert.py` |
 | `tests/unit/test_ws_multi_peer.py` | WebSocket multi-peer mux logic | Verify inbound and outbound mux rewriting and peer-specific send routing | `pytest -q tests/unit/test_ws_multi_peer.py` |
 | `tests/unit/test_ws_payload_mode.py` | WebSocket framing/runtime behavior | Verify payload encoding modes, tx loop behavior, socket config, reconnect grace, HTTP preflight, platform-default proxy handling (`system` on Windows and `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` on Linux/POSIX), compression, and debug static HTTP behavior | `pytest -q tests/unit/test_ws_payload_mode.py` |
 
