@@ -436,11 +436,11 @@ What is visible in the included snapshots:
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `45/46 = 97.8%`
-- Unit-covered: `22/46 = 47.8%`
-- Any-test-covered: `46/46 = 100.0%`
-- Tracked in manifest: `46/46 = 100.0%`
-- Requirement without integration coverage: `REQ-TST-002`
+- Integration-covered: `42/42 = 100.0%`
+- Unit-covered: `20/42 = 47.6%`
+- Any-test-covered: `42/42 = 100.0%`
+- Tracked in manifest: `42/42 = 100.0%`
+- Requirements without integration coverage: `(none)`
 
 The top-level README is intentionally kept as a contributor-facing coverage snapshot. When requirements, implementation, or the test set changes, update this section so the project entrypoint stays aligned with the current contract and evidence.
 
