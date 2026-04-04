@@ -1973,6 +1973,8 @@ class SecureLinkPskSession(ISession):
         self._args = args
         self._transport_name = str(transport_name)
         self._log = logging.getLogger("secure_link")
+        if self._log.level == logging.NOTSET:
+            self._log.setLevel(logging.WARNING)
         self._outer_on_app: Optional[Callable[..., None]] = None
         self._outer_on_state: Optional[Callable[[bool], None]] = None
         self._outer_on_peer_rx: Optional[Callable[[int], None]] = None

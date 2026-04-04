@@ -384,7 +384,7 @@ This runtime slice is now reflected by active `REQ-AUT-*` requirements. Certific
 
 ## Unit tests
 
-Unit coverage currently collects `78` tests from `tests/unit/`.
+Unit coverage currently collects `80` tests from `tests/unit/`.
 
 ### Unit-side traceability
 
@@ -401,7 +401,7 @@ The component view they support is described in [ARCHITECTURE.md](/home/ohnoohwe
 | `tests/unit/test_connection_snapshots.py` | `ARC-CMP-005` | `REQ-LST-006`, `REQ-ADM-006`, `PROC-TST-002` | Snapshot rendering must distinguish passive listeners from active connections, keep passive listener rows zeroed, and expose per-peer session stats on active listener-side peers correctly | `pytest -q tests/unit/test_connection_snapshots.py` |
 | `tests/unit/test_admin_web_payloads.py` | `ARC-CMP-005` | `REQ-AUT-004`, `REQ-AUT-009`, `REQ-AUT-010`, `PROC-TST-002` | Admin status and peer payload builders must preserve secure-link visibility fields so WebAdmin rendering can expose encryption-layer, rekey-trigger, and operational-diagnostics state consistently | `pytest -q tests/unit/test_admin_web_payloads.py` |
 | `tests/unit/test_secure_link_psk.py` | `ARC-CMP-006` | `REQ-AUT-001`, `REQ-AUT-002`, `REQ-AUT-003`, `REQ-AUT-006`, `REQ-AUT-007`, `REQ-AUT-008`, `REQ-AUT-009`, `REQ-AUT-010`, `PROC-TST-002` | PSK handshake, wrong-secret rejection, bounded retry backoff, stronger operational diagnostics, malformed/out-of-order fail-closed behavior, per-peer routing, frame/time/operator rekey rotation, and nonce/counter lifecycle guards must remain internally consistent at the secure-link layer boundary | `pytest -q tests/unit/test_secure_link_psk.py` |
-| `tests/unit/test_debug_logging_aliases.py` | `ARC-CMP-005` | `PROC-TST-002` | Logging alias configuration must reach the intended websocket-related loggers | `pytest -q tests/unit/test_debug_logging_aliases.py` |
+| `tests/unit/test_debug_logging_aliases.py` | `ARC-CMP-005` | `PROC-TST-002` | Logging alias configuration must reach the intended websocket-related loggers, and the secure-link logger must stay quiet at `WARNING` by default unless the operator explicitly raises it | `pytest -q tests/unit/test_debug_logging_aliases.py` |
 | `tests/unit/test_peer_resolution.py` | `ARC-CMP-004` | `REQ-OVL-007`, `PROC-TST-002` | Localhost resolution fallback must behave deterministically while non-localhost failures still propagate | `pytest -q tests/unit/test_peer_resolution.py` |
 | `tests/unit/test_runner_config_persistence.py` | `ARC-CMP-004` | `PROC-TST-002` | Runtime config updates must persist back to the configured file correctly | `pytest -q tests/unit/test_runner_config_persistence.py` |
 | `tests/unit/test_runner_events.py` | `ARC-CMP-004` | `PROC-TST-002` | Restart and shutdown events must bind to the active event loop correctly | `pytest -q tests/unit/test_runner_events.py` |
