@@ -39,6 +39,7 @@ import asyncio
 import base64
 import ctypes
 from ctypes import wintypes
+from contextlib import contextmanager
 import enum
 import importlib.util
 import ipaddress
@@ -5588,6 +5589,26 @@ class WebSocketSession(ISession):
     def _proxy_feature_enabled(self) -> bool:
         return bool(self._peer_tuple) and self._ws_proxy_mode != "off"
 
+    @contextmanager
+    def _suspend_library_proxy_env(self):
+        keys = (
+            "HTTP_PROXY", "http_proxy",
+            "HTTPS_PROXY", "https_proxy",
+            "ALL_PROXY", "all_proxy",
+            "NO_PROXY", "no_proxy",
+        )
+        saved = {key: os.environ.get(key) for key in keys}
+        try:
+            for key in keys:
+                os.environ.pop(key, None)
+            yield
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
     def _env_get_proxy_for_target(self, target_host: str, secure: bool = False) -> Optional[Tuple[str, int]]:
         host = _strip_brackets(str(target_host or "")).strip()
         if not host:
@@ -6674,16 +6695,17 @@ class WebSocketSession(ISession):
             else:
                 self._log.debug(f"[WS-SESSION] ({self._probe_id}) skipping HTTP preflight because proxy tunneling is active")
             t0 = time.perf_counter()
-            ws = await websockets.connect(
-                uri,
-                ssl=ssl_ctx,
-                subprotocols=subprotocols,
-                max_size=self._ws_max_size,
-                compression=self._ws_compression,
-                ping_interval=None,    # we run our own RTT ping
-                ping_timeout=None,
-                **connect_kwargs,
-            )
+            with self._suspend_library_proxy_env():
+                ws = await websockets.connect(
+                    uri,
+                    ssl=ssl_ctx,
+                    subprotocols=subprotocols,
+                    max_size=self._ws_max_size,
+                    compression=self._ws_compression,
+                    ping_interval=None,    # we run our own RTT ping
+                    ping_timeout=None,
+                    **connect_kwargs,
+                )
             dt = (time.perf_counter() - t0) * 1000.0
             local = getattr(ws, "local_address", None)
             remote = getattr(ws, "remote_address", None)
