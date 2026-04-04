@@ -236,6 +236,8 @@ REQ-TST-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_overlay_uses_http_proxy_env
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_overlay_honors_no_proxy_env
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_cli_routing_keeps_explicit_mode_override
+  unit_tests:
+    - tests/unit/test_ws_payload_mode.py::test_register_cli_defaults_ws_proxy_mode_to_env_on_linux
 
 REQ-TST-002:
   unit_tests:

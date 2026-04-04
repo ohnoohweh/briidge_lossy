@@ -156,10 +156,12 @@ After implementing a new feature or fixing a bug:
 - add or adjust integration tests in [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
 - add or adjust unit tests if a local invariant changed
 - update [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md) traceability when a new requirement is covered
+- update [README.md](/home/ohnoohweh/quic_br/README.md) when requirements, implementation, or the test set changes so its links and requirement-coverage snapshot remain current
 
-Repository guards now enforce two parts of this discipline, but they should be treated as the final safety net rather than the primary detector of degradation:
+Repository guards now enforce three parts of this discipline, but they should be treated as the final safety net rather than the primary detector of degradation:
 
 - behavior, test, or architecture changes must update [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
+- requirements, implementation, or test-set changes must update [README.md](/home/ohnoohweh/quic_br/README.md)
 - requirement changes must update [requirements_traceability.yaml](/home/ohnoohweh/quic_br/docs/requirements_traceability.yaml), and the referenced tests must exist
 
 This keeps the project understandable even when development continues in prompt-driven iterations.
