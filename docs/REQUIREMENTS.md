@@ -81,9 +81,4 @@ The motivating user use-cases and the external assumptions around them are docum
 - `REQ-ADM-005`: Authentication state shall remain isolated per HTTP client session.
 - `REQ-ADM-006`: Peer and connection APIs shall reflect connected peers, channel state, and transfer metrics accurately enough for troubleshooting and regression validation.
 
-## Testing requirements
-
-- `REQ-TST-001`: User-visible transport behavior shall be protected by integration tests, the relevant regression suites shall be executed as the primary detector of degradation before documentation or repository guards are relied on for consistency checks, and the top-level `README.md` shall keep links to requirements/process guidance plus the current requirement-coverage snapshot aligned with the implemented project state.
-- `REQ-TST-002`: Important local invariants and component contracts shall be protected by unit tests.
-- `REQ-TST-003`: Known bugs and regressions shall be turned into regression tests whenever practical.
-- `REQ-TST-004`: The integration harness shall support regular parallel execution on a local development machine, and CI shall execute OS-independent integration coverage on Linux while running Windows-specific integration requirements on Windows rather than relying on cross-platform skips as the only evidence.
+Development-process measures such as test-execution discipline, regression-writing policy, and CI split strategy are documented in [DEVELOPMENT_PROCESS.md](/home/ohnoohweh/quic_br/docs/DEVELOPMENT_PROCESS.md). They intentionally do not appear here because they govern how the project is built and validated, not what the delivered project promises to an operator.

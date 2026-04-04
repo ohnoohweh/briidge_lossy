@@ -8,6 +8,28 @@ This project currently evolves in short iterations:
 
 That loop is effective for progress, but by itself it does not guarantee that the project remains understandable over time. The purpose of this document is to define how a change should be turned from a prompt into durable project knowledge.
 
+## Process measures
+
+These measures describe how the project is developed and validated. They are intentionally kept outside [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md) because they are not operator-visible delivery promises.
+
+- `PROC-TST-001`: User-visible transport behavior should be defended primarily by integration tests, and the relevant regression suites should be executed before documentation or repository guards are treated as evidence of correctness.
+  Measure:
+  - run the most relevant targeted tests during iteration
+  - run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` before push or PR when the shared integration harness is materially affected
+  - keep the top-level [README.md](/home/ohnoohweh/quic_br/README.md) coverage snapshot aligned with the current product requirement set
+- `PROC-TST-002`: Important local invariants and component contracts should be defended by unit tests.
+  Measure:
+  - add or update focused tests under `tests/unit/` when internal state handling, parser behavior, or component-local contracts change
+- `PROC-TST-003`: Known bugs and regressions should become regression tests whenever practical.
+  Measure:
+  - reproduce the bug in the smallest suitable unit or integration scenario
+  - keep that scenario in the regular regression flow after the fix lands
+- `PROC-TST-004`: The integration harness should remain executable in regular parallel local and CI workflows, with OS-specific expectations executed on the OS where they are observable.
+  Measure:
+  - keep the worker-safe port allocation tests green
+  - run Linux shared coverage with `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`
+  - run Windows-specific coverage with `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"`
+
 ## Core idea
 
 Each meaningful feature or bugfix should leave evidence in four places:
@@ -64,8 +86,9 @@ Code should not be the only place where behavior is defined.
 
 The test strategy follows a V-model-inspired layering:
 
-- requirements are primarily defended by integration tests
+- product requirements are primarily defended by integration tests
 - architectural invariants and local component rules are primarily defended by unit tests
+- development-process discipline is tracked by the `PROC-TST-*` measures above rather than by product requirement IDs
 
 For each change, ask:
 
