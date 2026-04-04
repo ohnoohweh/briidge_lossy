@@ -225,6 +225,31 @@ Architectural consequence:
 - this capability should be isolated so it does not accidentally appear as a cross-transport or listener-side feature before those variants are explicitly designed
 - platform-specific details should stay below the shared websocket client contract: Windows may use system proxy APIs and `Negotiate`, while Linux/POSIX may use `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`
 
+Functional decomposition:
+
+- project-owned responsibilities:
+  - decide the effective proxy mode for the websocket peer client: platform default, explicit manual proxy, or explicit direct-connect override
+  - discover the proxy endpoint from Windows system settings or Linux/POSIX `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`
+  - keep proxy behavior scoped to websocket peer-client mode so listener mode and non-websocket transports do not silently inherit it
+  - establish the HTTP `CONNECT` tunnel before starting the websocket handshake
+  - handle proxy failure as an observable connection failure without corrupting the overlay state machine
+  - neutralize library-level proxy autodiscovery when application configuration says to connect directly, so one clear proxy policy is enforced by the application
+- library-owned responsibilities:
+  - perform the websocket HTTP upgrade and websocket frame processing once the application has provided either a direct TCP path or a proxied tunnel
+  - preserve normal websocket reconnect and I/O behavior above the socket path selected by the application
+- ownership boundary:
+  - proxy policy is an application contract, not a library default
+  - the `websockets` dependency is used as the websocket protocol engine after proxy selection and tunnel bootstrap are complete
+  - if the library offers independent proxy features, they must not compete with the application-owned proxy decision path
+
+Concrete mapping in the current implementation:
+
+- runner and CLI configuration select the effective proxy mode for each `WebSocketSession`
+- `WebSocketSession._get_ws_proxy_endpoint(...)` resolves the proxy endpoint from manual settings, platform defaults, or environment variables
+- `WebSocketSession._open_ws_proxy_socket_blocking(...)` owns HTTP `CONNECT` setup and proxy authentication preconditions
+- `WebSocketSession._suspend_library_proxy_env()` keeps the dependency from silently re-introducing proxy behavior that bypasses the application contract
+- `websockets.connect(...)` owns the websocket handshake and framed transport after the direct socket or proxy tunnel already exists
+
 ## Test implications
 
 This architecture implies a testing split:

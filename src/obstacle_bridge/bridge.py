@@ -39,6 +39,7 @@ import asyncio
 import base64
 import ctypes
 from ctypes import wintypes
+from contextlib import contextmanager
 import enum
 import importlib.util
 import ipaddress
@@ -5588,6 +5589,26 @@ class WebSocketSession(ISession):
     def _proxy_feature_enabled(self) -> bool:
         return bool(self._peer_tuple) and self._ws_proxy_mode != "off"
 
+    @contextmanager
+    def _suspend_library_proxy_env(self):
+        keys = (
+            "HTTP_PROXY", "http_proxy",
+            "HTTPS_PROXY", "https_proxy",
+            "ALL_PROXY", "all_proxy",
+            "NO_PROXY", "no_proxy",
+        )
+        saved = {key: os.environ.get(key) for key in keys}
+        try:
+            for key in keys:
+                os.environ.pop(key, None)
+            yield
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
     def _env_get_proxy_for_target(self, target_host: str, secure: bool = False) -> Optional[Tuple[str, int]]:
         host = _strip_brackets(str(target_host or "")).strip()
         if not host:
@@ -5606,6 +5627,21 @@ class WebSocketSession(ISession):
         if parsed.hostname:
             return _strip_brackets(parsed.hostname), int(parsed.port or 8080)
         return self._parse_proxy_authority(proxy_url)
+
+    def _test_system_proxy_override(self, secure: bool = False) -> Optional[Tuple[str, int]]:
+        spec = str(os.environ.get("OBSTACLEBRIDGE_TEST_SYSTEM_PROXY", "") or "").strip()
+        if not spec:
+            return None
+        parsed = self._parse_proxy_spec(spec, secure=secure)
+        if parsed is None:
+            raise RuntimeError("invalid OBSTACLEBRIDGE_TEST_SYSTEM_PROXY value")
+        self._log.debug(
+            "[WS-PROXY] (%s) using test system proxy override endpoint=%s:%d",
+            self._probe_id,
+            parsed[0],
+            int(parsed[1]),
+        )
+        return parsed
 
     def _get_ws_proxy_endpoint(self, target_host: str, target_port: int) -> Optional[Tuple[str, int]]:
         self._log.debug(
@@ -5627,9 +5663,6 @@ class WebSocketSession(ISession):
                 return None
             self._log.debug("[WS-PROXY] (%s) env proxy selected endpoint=%s:%d", self._probe_id, endpoint[0], int(endpoint[1]))
             return endpoint
-        if sys.platform != "win32":
-            self._log.debug("[WS-PROXY] (%s) rejecting proxy lookup on unsupported platform=%s", self._probe_id, sys.platform)
-            raise RuntimeError("WebSocket proxy support is currently available on Windows only")
         if self._ws_proxy_mode == "manual":
             if not self._ws_proxy_host or self._ws_proxy_port <= 0:
                 self._log.debug(
@@ -5646,6 +5679,13 @@ class WebSocketSession(ISession):
                 int(self._ws_proxy_port),
             )
             return self._ws_proxy_host, int(self._ws_proxy_port)
+        if self._ws_proxy_mode == "system":
+            test_override = self._test_system_proxy_override(secure=self._use_tls)
+            if test_override is not None:
+                return test_override
+        if sys.platform != "win32":
+            self._log.debug("[WS-PROXY] (%s) rejecting proxy lookup on unsupported platform=%s", self._probe_id, sys.platform)
+            raise RuntimeError("WebSocket proxy support is currently available on Windows only")
         if self._ws_proxy_mode == "system":
             lookup_url = f"http://{self._format_connect_authority(target_host, target_port)}"
             self._log.debug("[WS-PROXY] (%s) system proxy lookup url=%s secure=%s", self._probe_id, lookup_url, self._use_tls)
@@ -6655,16 +6695,17 @@ class WebSocketSession(ISession):
             else:
                 self._log.debug(f"[WS-SESSION] ({self._probe_id}) skipping HTTP preflight because proxy tunneling is active")
             t0 = time.perf_counter()
-            ws = await websockets.connect(
-                uri,
-                ssl=ssl_ctx,
-                subprotocols=subprotocols,
-                max_size=self._ws_max_size,
-                compression=self._ws_compression,
-                ping_interval=None,    # we run our own RTT ping
-                ping_timeout=None,
-                **connect_kwargs,
-            )
+            with self._suspend_library_proxy_env():
+                ws = await websockets.connect(
+                    uri,
+                    ssl=ssl_ctx,
+                    subprotocols=subprotocols,
+                    max_size=self._ws_max_size,
+                    compression=self._ws_compression,
+                    ping_interval=None,    # we run our own RTT ping
+                    ping_timeout=None,
+                    **connect_kwargs,
+                )
             dt = (time.perf_counter() - t0) * 1000.0
             local = getattr(ws, "local_address", None)
             remote = getattr(ws, "remote_address", None)

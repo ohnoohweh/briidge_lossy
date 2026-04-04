@@ -18,6 +18,7 @@ REQ_ID_RE = re.compile(r"`(REQ-[A-Z]+-\d+)`")
 YAML_REQ_RE = re.compile(r"^(REQ-[A-Z]+-\d+):\s*$")
 YAML_TEST_RE = re.compile(r"^\s*-\s+(.+?)\s*$")
 TEST_DEF_RE = re.compile(r"^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.MULTILINE)
+TRACEABILITY_TEST_KEYS = ("tests", "integration_tests", "unit_tests")
 
 
 def _git_changed_files(*diff_args: str) -> list[str]:
@@ -40,43 +41,46 @@ def _load_requirement_ids() -> set[str]:
     return set(REQ_ID_RE.findall(text))
 
 
-def _load_traceability() -> dict[str, list[str]]:
+def _load_traceability() -> dict[str, dict[str, list[str]]]:
     path = ROOT / TRACEABILITY_PATH
     lines = path.read_text(encoding="utf-8").splitlines()
-    out: dict[str, list[str]] = {}
+    out: dict[str, dict[str, list[str]]] = {}
     current_req = None
-    in_tests = False
+    current_key = None
     for line in lines:
         req_match = YAML_REQ_RE.match(line)
         if req_match:
             current_req = req_match.group(1)
-            out.setdefault(current_req, [])
-            in_tests = False
+            out.setdefault(current_req, {key: [] for key in TRACEABILITY_TEST_KEYS})
+            current_key = None
             continue
         if current_req is None:
             continue
         stripped = line.strip()
-        if stripped == "tests:":
-            in_tests = True
+        if stripped in {f"{key}:" for key in TRACEABILITY_TEST_KEYS}:
+            current_key = stripped[:-1]
             continue
         if not stripped:
             continue
         if not line.startswith(" "):
             current_req = None
-            in_tests = False
+            current_key = None
             continue
-        if in_tests:
+        if current_key is not None:
             test_match = YAML_TEST_RE.match(line)
             if test_match:
-                out[current_req].append(test_match.group(1))
+                out[current_req][current_key].append(test_match.group(1))
     return out
 
 
-def _validate_traceability(requirement_ids: set[str], traceability: dict[str, list[str]]) -> list[str]:
+def _validate_traceability(requirement_ids: set[str], traceability: dict[str, dict[str, list[str]]]) -> list[str]:
     errors: list[str] = []
-    for req_id, tests in sorted(traceability.items()):
+    for req_id, groups in sorted(traceability.items()):
         if req_id not in requirement_ids:
             errors.append(f"{TRACEABILITY_PATH}: unknown requirement id {req_id}")
+        tests = []
+        for key in TRACEABILITY_TEST_KEYS:
+            tests.extend(groups.get(key, []))
         if not tests:
             errors.append(f"{TRACEABILITY_PATH}: {req_id} must list at least one test")
         for test_ref in tests:

@@ -2,7 +2,7 @@
 
 This repository currently collects:
 
-- `68` integration tests in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+- `78` integration tests in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
 - `54` unit tests in `tests/unit/`
 
 ## Get started
@@ -152,7 +152,7 @@ The catalog is ordered as:
 
 ## Integration tests
 
-Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py) and collects `68` tests.
+Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py) and collects `78` tests.
 
 The supporting project-level intent documents are:
 
@@ -171,6 +171,7 @@ The supporting project-level intent documents are:
 | `test_overlay_e2e_myudp_delay_loss` | Delayed/lossy myudp behavior | Verify retransmission, large payload handling, and control/data loss behavior through a real loopback MITM proxy | `pytest -q tests/integration/test_overlay_e2e.py -k myudp_delay_loss` |
 | `test_overlay_e2e_server_restart_closes_tcp_preserves_udp` | Restart-specific regression | Verify the special restart behavior for the concurrent WS case | `pytest -q tests/integration/test_overlay_e2e.py -k server_restart_closes_tcp_preserves_udp` |
 | `test_overlay_e2e_admin_api_*` | Admin web auth/API | Verify auth-disabled, auth-required, authenticated, session-isolated API behavior, and live WebSocket telemetry availability for both open and cookie-authenticated sessions | `pytest -q tests/integration/test_overlay_e2e.py -k admin_api` |
+| `test_overlay_e2e_ws_proxy_*` | WebSocket proxy behavior | Verify proxy success, bypass, scope, handshake ordering, failure handling, and explicit override behavior for WS peer clients, with Windows-only cases for system-default and Negotiate auth | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_` |
 | `test_overlay_e2e_ws_overlay_*proxy_env` | WebSocket proxy env behavior | Verify WS peer clients honor `HTTP_PROXY` and `NO_PROXY` in real subprocess runs | `pytest -q tests/integration/test_overlay_e2e.py -k "proxy_env"` |
 | `test_overlay_e2e_cli_routing_*` and allocator checks | Harness self-tests | Verify CLI mode inference and worker-safe port allocation logic | `pytest -q tests/integration/test_overlay_e2e.py -k "cli_routing or alloc_admin_ports or materialize_case_ports or case_port_offset"` |
 
@@ -193,7 +194,15 @@ This first mapping is intentionally coarse. It links current integration entrypo
 | `test_overlay_e2e_admin_live_ws_available_when_auth_disabled` | `REQ-ADM-006` | Live admin WebSocket stream availability and snapshot payload coverage when auth is disabled |
 | `test_overlay_e2e_admin_live_ws_unavailable_without_correct_auth` | `REQ-ADM-003`, `REQ-ADM-006` | Live admin WebSocket stream must reject unauthenticated clients when auth is enabled |
 | `test_overlay_e2e_admin_live_ws_available_after_correct_auth` | `REQ-ADM-004`, `REQ-ADM-006` | Live admin WebSocket stream must accept authenticated clients carrying the admin session cookie |
-| `test_overlay_e2e_ws_overlay_uses_http_proxy_env` and `test_overlay_e2e_ws_overlay_honors_no_proxy_env` | `REQ-WSP-007`, `REQ-TST-001` | WS peer clients must honor `HTTP_PROXY` for CONNECT tunneling and bypass it when `NO_PROXY` matches the target |
+| `test_overlay_e2e_ws_overlay_uses_http_proxy_env` | `REQ-WSP-001`, `REQ-WSP-007`, `REQ-TST-001` | WS peer clients must honor `HTTP_PROXY` and establish proxy-routed overlay traffic successfully |
+| `test_overlay_e2e_ws_proxy_is_scoped_to_peer_client_only` | `REQ-WSP-002` | Proxy behavior must stay scoped to WS peer-client mode and not imply listener-side proxy use |
+| `test_overlay_e2e_http_proxy_env_does_not_apply_to_non_ws_transports` | `REQ-WSP-003` | HTTP proxy configuration must not silently become cross-transport behavior for `myudp`, `tcp`, or `quic` |
+| `test_overlay_e2e_ws_proxy_tunnel_precedes_websocket_handshake` | `REQ-WSP-004` | CONNECT tunnel establishment must precede the websocket handshake on the proxied path |
+| `test_overlay_e2e_ws_proxy_failure_keeps_overlay_state_machine_healthy` | `REQ-WSP-005` | Proxy failure must leave the overlay disconnected but operational and observable through admin state |
+| `test_overlay_e2e_ws_proxy_system_default_on_windows_uses_system_proxy` | `REQ-WSP-006` | On Windows, the default WS peer-client path must honor system proxy discovery when available |
+| `test_overlay_e2e_ws_overlay_honors_no_proxy_env` | `REQ-WSP-007`, `REQ-TST-001` | WS peer clients must bypass proxy routing when `NO_PROXY` matches the target |
+| `test_overlay_e2e_ws_proxy_manual_override_uses_explicit_proxy` and `test_overlay_e2e_ws_proxy_off_override_disables_platform_default_proxy` | `REQ-WSP-008` | Explicit application configuration must be able to force manual proxy use or direct connection |
+| `test_overlay_e2e_ws_proxy_negotiate_auth_on_windows` | `REQ-WSP-009` | On Windows, WS proxy traversal must support Negotiate-authenticated CONNECT flows |
 | `test_overlay_e2e_cli_routing_*` and allocator checks | `REQ-TST-001`, `REQ-TST-003`, `REQ-TST-004` | Harness self-tests that protect the integrity and repeatability of the integration test system itself |
 
 ### Scenario-level traceability
@@ -279,6 +288,14 @@ This deeper mapping links concrete integration scenarios to requirement IDs. It 
 | `test_overlay_e2e_admin_live_ws_available_after_correct_auth` | `REQ-ADM-004`, `REQ-ADM-006` | Verify authenticated live admin WebSocket telemetry | After HTTP challenge/login sets the session cookie, `/api/live` accepts the client and streams `status`, `connections`, `peers`, and `meta` snapshots | `pytest -q tests/integration/test_overlay_e2e.py -k admin_live_ws_available_after_correct_auth` |
 | `test_overlay_e2e_ws_overlay_uses_http_proxy_env` | `REQ-WSP-007` | Verify WS overlay honors `HTTP_PROXY` in a real client subprocess | Client connects through a local HTTP CONNECT proxy, the overlay reaches `CONNECTED`, UDP probes succeed, and the proxy records at least one CONNECT request | `pytest -q tests/integration/test_overlay_e2e.py -k ws_overlay_uses_http_proxy_env` |
 | `test_overlay_e2e_ws_overlay_honors_no_proxy_env` | `REQ-WSP-007` | Verify `NO_PROXY` bypasses `HTTP_PROXY` for loopback WS targets | Client still reaches `CONNECTED` and serves probes while the local HTTP CONNECT proxy records zero CONNECT requests | `pytest -q tests/integration/test_overlay_e2e.py -k ws_overlay_honors_no_proxy_env` |
+| `test_overlay_e2e_ws_proxy_is_scoped_to_peer_client_only` | `REQ-WSP-002` | Verify listener-side WS processes do not initiate proxy CONNECT behavior | WS listener still accepts the client and serves probes while the configured proxy records zero CONNECT requests | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_is_scoped_to_peer_client_only` |
+| `test_overlay_e2e_http_proxy_env_does_not_apply_to_non_ws_transports` | `REQ-WSP-003` | Verify `HTTP_PROXY` does not affect non-WS overlay transports | `myudp`, `tcp`, and `quic` overlay clients still connect directly and the HTTP CONNECT proxy records zero requests | `pytest -q tests/integration/test_overlay_e2e.py -k http_proxy_env_does_not_apply_to_non_ws_transports` |
+| `test_overlay_e2e_ws_proxy_tunnel_precedes_websocket_handshake` | `REQ-WSP-004` | Verify CONNECT tunneling happens before websocket handshake bytes are sent upstream | Proxy records CONNECT first and then sees the tunneled websocket HTTP `GET` request line | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_tunnel_precedes_websocket_handshake` |
+| `test_overlay_e2e_ws_proxy_failure_keeps_overlay_state_machine_healthy` | `REQ-WSP-005` | Verify failed proxy routing leaves the overlay disconnected without crashing the processes | Admin stays reachable, peer state remains not connected, and application probes fail cleanly | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_failure_keeps_overlay_state_machine_healthy` |
+| `test_overlay_e2e_ws_proxy_manual_override_uses_explicit_proxy` | `REQ-WSP-008` | Verify manual proxy override wins over platform-default bypass state | Even with `NO_PROXY` set for loopback, explicit manual proxy configuration forces CONNECT tunneling and traffic still succeeds | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_manual_override_uses_explicit_proxy` |
+| `test_overlay_e2e_ws_proxy_off_override_disables_platform_default_proxy` | `REQ-WSP-008` | Verify explicit direct-connect override disables platform-default proxy routing | Even with `HTTP_PROXY` set, `--ws-proxy-mode off` keeps the WS client on a direct path and the proxy records zero CONNECT requests | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_off_override_disables_platform_default_proxy` |
+| `test_overlay_e2e_ws_proxy_system_default_on_windows_uses_system_proxy` | `REQ-WSP-006` | Verify Windows default system proxy mode through the integration harness | On Windows, the default WS peer-client path uses system proxy discovery and successfully reaches the listener through the proxy | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_system_default_on_windows_uses_system_proxy` |
+| `test_overlay_e2e_ws_proxy_negotiate_auth_on_windows` | `REQ-WSP-009` | Verify Windows Negotiate-authenticated proxy traversal | On Windows, a proxy that challenges with `Proxy-Authenticate: Negotiate` is satisfied and the overlay still reaches `CONNECTED` | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_negotiate_auth_on_windows` |
 | `test_overlay_e2e_cli_routing_*` | `REQ-TST-001`, `REQ-TST-004` | Verify CLI routing logic | Selected cases infer the right harness mode and explicit override is preserved | `pytest -q tests/integration/test_overlay_e2e.py -k cli_routing` |
 | `test_overlay_e2e_materialize_case_ports_shifts_overlay_and_service_ports` | `REQ-TST-004` | Verify port rewriting | Overlay, bounce, probe, and service ports shift consistently | `pytest -q tests/integration/test_overlay_e2e.py -k materialize_case_ports` |
 | `test_overlay_e2e_alloc_admin_ports_isolates_xdist_workers` | `REQ-TST-004` | Verify admin port worker isolation | Admin ports stay in the dedicated admin band and differ across workers | `pytest -q tests/integration/test_overlay_e2e.py -k alloc_admin_ports` |

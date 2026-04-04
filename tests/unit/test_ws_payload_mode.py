@@ -505,7 +505,7 @@ class WebSocketProxyHelpersTests(unittest.TestCase):
         self.assertIn("Host: [2001:db8::1]:443\r\n", request)
         self.assertIn("Proxy-Authorization: Negotiate abc123\r\n", request)
 
-    def test_manual_proxy_mode_is_rejected_off_windows(self):
+    def test_manual_proxy_mode_returns_endpoint_off_windows(self):
         args = _args("binary")
         args.ws_peer = "127.0.0.1"
         args.ws_peer_port = 54321
@@ -516,8 +516,9 @@ class WebSocketProxyHelpersTests(unittest.TestCase):
         session._peer_tuple = ("127.0.0.1", 54321)
 
         with mock.patch.object(sys, "platform", "linux"):
-            with self.assertRaisesRegex(RuntimeError, "Windows only"):
-                session._get_ws_proxy_endpoint("overlay.example", 54321)
+            endpoint = session._get_ws_proxy_endpoint("overlay.example", 54321)
+
+        self.assertEqual(endpoint, ("proxy.example", 8080))
 
     def test_system_proxy_mode_logs_when_no_endpoint_is_found(self):
         args = _args("binary")
