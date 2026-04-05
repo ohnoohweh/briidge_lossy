@@ -34,7 +34,7 @@ The detailed realization concept remains in [SECURE_LINK_DESIGN.md](/home/ohnooh
 - `REQ-OVL-006`: Supported overlay transports shall work on both IPv4 and IPv6 where the specific transport mode is configured for that address family.
 - `REQ-OVL-007`: Localhost-based peer resolution shall behave deterministically for reconnect scenarios on both IPv4 and IPv6.
 
-## WebSocket proxy requirements
+## WebSocket proxy and payload requirements
 
 - Functional decomposition note: the requirements in this section are implemented jointly by project-owned websocket bootstrap logic and dependency-owned websocket protocol handling. The ownership boundary is documented in `docs/ARCHITECTURE.md` under `WebSocket proxy tunneling`.
 
@@ -47,6 +47,14 @@ The detailed realization concept remains in [SECURE_LINK_DESIGN.md](/home/ohnooh
 - `REQ-WSP-007`: On Linux and other POSIX-style environments, the default WebSocket peer-client behavior shall honor the effective `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment settings unless the application configuration explicitly overrides it.
 - `REQ-WSP-008`: Application configuration shall be able to consciously override the platform-default proxy behavior, including forcing direct connection or using an explicitly configured proxy endpoint.
 - `REQ-WSP-009`: A WebSocket peer client running on Windows shall be able to establish its outbound websocket transport through an HTTP proxy that requires `Negotiate` / NTLM-style authentication.
+- `REQ-WSP-010`: The WebSocket overlay transport shall support selectable payload transfer forms through `ws_payload_mode`: raw binary websocket frames (`binary`), plain base64 text websocket frames (`base64`), compact JSON text websocket frames carrying the base64 payload in the `data` field (`json-base64`), and a grouped semi-text form (`semi-text-shape`) using the alphabet `ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-+`. Receivers configured for the text-oriented modes shall continue to accept raw binary websocket frames so mixed peers can fail soft during migration or debugging.
+
+Current payload-form note:
+
+- `binary`: the overlay wire bytes are sent directly as websocket binary frames with no text envelope.
+- `base64`: the same overlay wire bytes are base64-encoded into one websocket text frame.
+- `json-base64`: the overlay wire bytes are base64-encoded and emitted as compact JSON text of the form `{"data":"..."}`.
+- `semi-text-shape`: the overlay wire bytes are split into 6-bit symbols using the alphabet `ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-+`, the final symbol is padded with `0` bits if needed, and the resulting text is grouped into whitespace-separated runs of 1 to 8 symbols to keep a text-shaped appearance while remaining exactly reversible back to the original byte stream.
 
 ## Authentication and encryption requirements
 

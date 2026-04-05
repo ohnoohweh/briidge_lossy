@@ -1097,11 +1097,9 @@ Evidence:
 - runtime/config:
   - [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py)
     `secure_link_mode=cert`, file-path material loading, detached-signature/root verification, certificate handshake path, cert-mode rekey reuse of the shared secure-link data plane, and peer-scoped trust diagnostics
-- deterministic test material:
-  - [tests/fixtures/secure_link_cert/root_a_pub.pem](/home/ohnoohweh/quic_br/tests/fixtures/secure_link_cert/root_a_pub.pem)
-  - [tests/fixtures/secure_link_cert/root_b_pub.pem](/home/ohnoohweh/quic_br/tests/fixtures/secure_link_cert/root_b_pub.pem)
-  - [tests/fixtures/secure_link_cert/client_valid_cert_body.json](/home/ohnoohweh/quic_br/tests/fixtures/secure_link_cert/client_valid_cert_body.json)
-  - [tests/fixtures/secure_link_cert/server_valid_cert_body.json](/home/ohnoohweh/quic_br/tests/fixtures/secure_link_cert/server_valid_cert_body.json)
+- generated test material:
+  - [tests/fixtures/secure_link_cert/__init__.py](/home/ohnoohweh/quic_br/tests/fixtures/secure_link_cert/__init__.py)
+    runtime generation of the trust anchors, signed cert bodies, detached signatures, private keys, and revoked-serial fixtures used by the certificate-mode unit and integration suites
 - unit evidence:
   - [test_secure_link_cert.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_cert.py)
     happy path, trust-anchor mismatch, wrong-role rejection, expired/not-yet-valid/deployment-mismatch rejection, revoked-serial rejection, and cert-mode operator rekey

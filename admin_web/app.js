@@ -514,7 +514,7 @@ function renderPeerTable(rows) {
       connectionLine1.push(renderMetric('Peer', row.peer));
     }
     const connectionLines = [connectionLine1];
-    if (!isListeningPeer) {
+    if (!isListeningPeer && !isConnectingPeer) {
       connectionLines.push([
         renderMetric('UDP Open', fmtInteger(row.open_connections?.udp ?? 0)),
         renderMetric('TCP Open', fmtInteger(row.open_connections?.tcp ?? 0)),
@@ -527,6 +527,7 @@ function renderPeerTable(rows) {
       ]);
     }
     const connectionMetrics = renderMetricStack(connectionLines);
+    const showProtocolRow = !isListeningPeer && !isConnectingPeer;
     const protocolMetrics = showMyUdpProtocolStats
       ? renderMetricStack([
         [
@@ -596,17 +597,17 @@ function renderPeerTable(rows) {
         renderMetric('disconnect_detail', secureLink.disconnect_detail),
       ] : []),
     ] : [];
-    const rowSpan = showSecurityLifecycle ? 4 : (isListeningPeer ? 1 : 2);
+    const rowSpan = showSecurityLifecycle ? 4 : ((isListeningPeer || isConnectingPeer) ? 1 : 2);
     const detailRows = [
       `
-      <tr class="peer-detail-row peer-detail-row-start ${isListeningPeer ? 'peer-detail-row-end' : ''}">
+      <tr class="peer-detail-row peer-detail-row-start ${(isListeningPeer || isConnectingPeer) ? 'peer-detail-row-end' : ''}">
         <td class="mono peer-id-cell" rowspan="${rowSpan}">${escapeHtml(fmtPeerCompositeId(row.transport, row.id))}</td>
         <td class="peer-detail-kind">Connection</td>
         <td>${connectionMetrics}</td>
       </tr>
       `,
     ];
-    if (!isListeningPeer) {
+    if (showProtocolRow) {
       detailRows.push(`
       <tr class="peer-detail-row ${showSecurityLifecycle ? '' : 'peer-detail-row-end'}">
         <td class="peer-detail-kind">Protocol</td>
@@ -623,11 +624,11 @@ function renderPeerTable(rows) {
             ${securityMetrics}
             ${allowRekeyAction ? `
               <div class="peer-detail-actions">
-                <button class="btn btn-secondary secure-link-rekey-btn" type="button" data-peer-id="${escapeHtml(fmtText(row.id))}">Rekey Request</button>
                 <span class="peer-detail-inline">
                   <span class="peer-detail-label">Rekey in progress</span>
                   <span class="peer-detail-value mono ${detailPillClass(secureLink.rekey_in_progress)}">${escapeHtml(fmtBool(secureLink.rekey_in_progress))}</span>
                 </span>
+                <button class="btn btn-secondary secure-link-rekey-btn" type="button" data-peer-id="${escapeHtml(fmtText(row.id))}">Rekey Request</button>
               </div>
             ` : ''}
           </div>
