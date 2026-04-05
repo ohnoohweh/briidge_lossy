@@ -4,3 +4,6 @@ __pycache__
 run.sh
 *.egg-info/
 Cert_SecureLink/
+.vscode/
+.venv/
+.pytest_cache/
