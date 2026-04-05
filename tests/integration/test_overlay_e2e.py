@@ -1479,12 +1479,15 @@ def alloc_admin_port(exclude: Optional[Set[int]] = None, *, case_index: int = 0,
     worker_index = _xdist_worker_index()
     worker_count = _xdist_worker_count()
     base_i = max(int(base), SERVICE_PORT_CEILING)
-    available = 65535 - base_i
+    upper_bound = 65535
+    if base_i < SECURE_LINK_ADMIN_BASE:
+        upper_bound = min(upper_bound, SECURE_LINK_ADMIN_BASE)
+    available = upper_bound - base_i
     if available <= worker_count:
         raise RuntimeError(f'admin port allocation window too small: base={base_i} workers={worker_count}')
     per_worker_budget = max(8, available // worker_count)
     start = base_i + (worker_index * per_worker_budget)
-    stop = min(65535, start + per_worker_budget)
+    stop = min(upper_bound, start + per_worker_budget)
     span = max(1, stop - start)
     first = start + (int(case_index) % span)
     candidates = list(range(first, stop)) + list(range(start, first))
