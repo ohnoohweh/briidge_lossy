@@ -123,6 +123,8 @@ without different cases colliding on the same local ports.
 
 Admin ports are additionally reserved from a dedicated band starting at `ADMIN_PORT_BASE`, above the normal service-port allocation range. This prevents the admin web listener from colliding with overlay or service sockets during highly parallel `xdist` runs.
 
+The harness also partitions the regular admin-port allocator and the Secure Link admin-port allocator into disjoint sub-ranges. Normal integration cases stay below `SECURE_LINK_ADMIN_BASE`, while Secure Link cases allocate at or above that base, so unrelated WS and Secure Link subprocesses cannot race for the same admin port across different `xdist` workers.
+
 ### 3. Delay/loss man-in-the-middle tests
 
 The `myudp` delay/loss coverage is now part of the main integration harness. A loopback UDP proxy sits between peer client and peer server and can:
