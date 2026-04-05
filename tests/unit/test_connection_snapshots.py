@@ -308,6 +308,93 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(peer["inflight"], 7)
         self.assertEqual(peer["myudp"]["confirmed_total"], 11)
 
+    def test_listener_peer_snapshot_unwraps_secure_link_wrapper_for_myudp_stats(self):
+        class _InnerStats:
+            def __init__(self, inflight, confirmed_total):
+                self.max_in_flight = 32
+                self.rtt_est_ms = None
+                self.last_rtt_ok_ns = None
+                self.last_ack_peer = None
+                self.last_sent_ctr = None
+                self.expected = None
+                self.peer_missed_count = None
+                self.missing = []
+                self.stats_hist = {"confirmed_total": confirmed_total, "once": confirmed_total}
+                self._inflight = inflight
+
+            def in_flight(self):
+                return self._inflight
+
+            def waiting_count(self):
+                return 0
+
+        class _UdpSessionLike:
+            def __init__(self):
+                self.inner_session = _InnerStats(inflight=0, confirmed_total=0)
+                self._server_peers = {
+                    1: {
+                        "session": _InnerStats(inflight=5, confirmed_total=9),
+                    }
+                }
+
+            def get_metrics(self):
+                return SessionMetrics(inflight=5)
+
+            def is_connected(self):
+                return True
+
+            def get_overlay_peers_snapshot(self):
+                return [
+                    {
+                        "peer_id": -1,
+                        "connected": False,
+                        "peer": None,
+                        "mux_chans": [],
+                        "rtt_est_ms": None,
+                        "listening": True,
+                    },
+                    {
+                        "peer_id": 1,
+                        "connected": True,
+                        "peer": "198.51.100.1:4433",
+                        "mux_chans": [101],
+                        "secure_link": {
+                            "enabled": True,
+                            "mode": "psk",
+                            "state": "authenticated",
+                            "authenticated": True,
+                        },
+                    },
+                ]
+
+        class _SecureLinkWrapper:
+            def __init__(self):
+                self._real = _UdpSessionLike()
+                self._inner = self._real
+
+            def get_metrics(self):
+                return self._inner.get_metrics()
+
+            def is_connected(self):
+                return True
+
+            def get_overlay_peers_snapshot(self):
+                return self._inner.get_overlay_peers_snapshot()
+
+        args = argparse.Namespace(no_dashboard=True, overlay_transport="myudp")
+        runner = Runner(args)
+        runner._sessions = [_SecureLinkWrapper()]
+        runner._muxes = [_MuxWithListeners()]
+        runner._session_labels = ["myudp"]
+
+        out = runner.get_peer_connections_snapshot()
+        listener = next(p for p in out["peers"] if p["id"] == "0:-1")
+        peer = next(p for p in out["peers"] if p["id"] == "0:1")
+
+        self.assertEqual(listener["myudp"]["confirmed_total"], 0)
+        self.assertEqual(peer["myudp"]["confirmed_total"], 9)
+        self.assertEqual(peer["myudp"]["first_pass"], 9)
+
 
 if __name__ == "__main__":
     unittest.main()

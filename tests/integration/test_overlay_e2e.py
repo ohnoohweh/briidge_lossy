@@ -2161,6 +2161,51 @@ def wait_peer_secure_link_state(
     )
 
 
+def wait_peer_myudp_transmit_stats(
+    admin_port: int,
+    *,
+    minimum_count: int = 1,
+    timeout: float = 12.0,
+    label: str = '',
+    transport: str = 'myudp',
+    minimum_confirmed_total: int = 1,
+) -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    normalized_transport = str(transport or '').strip().lower()
+    minimum_confirmed = max(1, int(minimum_confirmed_total))
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
+        last_doc = doc
+        qualified_rows = 0
+        for row in list(doc.get('peers') or []):
+            if str(row.get('transport', '')).strip().lower() != normalized_transport:
+                continue
+            if str(row.get('state', '')).strip().lower() == 'listening':
+                continue
+            myudp = row.get('myudp') or {}
+            confirmed_total = int(myudp.get('confirmed_total') or 0)
+            attempts_total = (
+                int(myudp.get('first_pass') or 0)
+                + int(myudp.get('repeated_once') or 0)
+                + int(myudp.get('repeated_multiple') or 0)
+            )
+            if confirmed_total >= minimum_confirmed and attempts_total >= minimum_confirmed:
+                qualified_rows += 1
+        if qualified_rows >= int(minimum_count):
+            who = f' {label}' if label else ''
+            log.info(
+                f'[PEERS]{who} port={admin_port} transport={normalized_transport} '
+                f'myudp_transmit_stats_rows={qualified_rows}'
+            )
+            return doc
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'/api/peers did not expose myudp transmit stats for transport={normalized_transport} '
+        f'on port {admin_port}; last={last_doc!r}'
+    )
+
+
 def wait_peer_secure_link_session_change(
     admin_port: int,
     *,
@@ -3758,6 +3803,10 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
             expected = response_payload(payload)
             if udp_results[idx] != expected:
                 raise RuntimeError(f'UDP channel {idx} mismatch: got={udp_results[idx]!r} expected={expected!r}')
+        if secure_slot is not None:
+            wait_peer_myudp_transmit_stats(server_admin, minimum_count=2, timeout=12.0, label='server', transport='myudp')
+            wait_peer_myudp_transmit_stats(client1_admin, minimum_count=1, timeout=12.0, label='client1', transport='myudp')
+            wait_peer_myudp_transmit_stats(client2_admin, minimum_count=1, timeout=12.0, label='client2', transport='myudp')
     finally:
         if client2_proc is not None:
             stop_proc(client2_proc)
