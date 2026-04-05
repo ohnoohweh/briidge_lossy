@@ -503,6 +503,8 @@ function renderPeerTable(rows) {
     const trustFailureReason = String(secureLink.trust_failure_reason || '').trim();
     const trustFailureDetail = String(secureLink.trust_failure_detail || '').trim();
     const showSecurityLifecycle = secureLinkEnabled && !isListeningPeer && !isConnectingPeer;
+    const showMyUdpProtocolStats = isMyUdp;
+    const showMyUdpDetailStats = isMyUdp;
     const connectionLine1 = [
       renderMetric('State', String(row.state || 'unknown').toLowerCase(), { pill: true }),
     ];
@@ -525,7 +527,7 @@ function renderPeerTable(rows) {
       ]);
     }
     const connectionMetrics = renderMetricStack(connectionLines);
-    const protocolMetrics = isMyUdp
+    const protocolMetrics = showMyUdpProtocolStats
       ? renderMetricStack([
         [
           renderMetric('Decode Errors', fmtInteger(row.decode_errors ?? 0)),
@@ -820,7 +822,6 @@ function renderReadonlySecretValue(key) {
   return `
     <div class="config-value-display config-value-display-readonly" data-config-readonly="${key}">
       <span class="config-value-preview config-secret-value" title="hidden">hidden</span>
-      <span class="config-readonly-note">read only</span>
     </div>
   `;
 }

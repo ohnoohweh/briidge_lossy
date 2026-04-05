@@ -3379,6 +3379,7 @@ class SecureLinkPskSession(ISession):
                 "last_event": str(state.last_event or "") if state is not None else "",
                 "last_event_unix_ts": state.last_event_unix_ts if state is not None else None,
                 "last_authenticated_unix_ts": state.last_authenticated_unix_ts if state is not None else None,
+                "connected_since_unix_ts": state.connected_since_unix_ts if state is not None else None,
                 "authenticated_sessions_total": int(state.authenticated_sessions_total or 0) if state is not None else 0,
                 "rekeys_completed_total": int(state.rekeys_completed_total or 0) if state is not None else 0,
                 "transport": self._transport_name,
@@ -12917,7 +12918,7 @@ class Runner:
 
     def _session_retransmit_stats(self, session_obj) -> dict:
         hist: dict = {}
-        buffered_frames = None
+        buffered_frames = 0
         with contextlib.suppress(Exception):
             inner = getattr(session_obj, "inner_session", session_obj)
             hist = dict(getattr(inner, "stats_hist", {}) or {})
