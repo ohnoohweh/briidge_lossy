@@ -208,6 +208,7 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
                             "state": "authenticated",
                             "authenticated": True,
                             "session_id": 77,
+                            "connected_since_unix_ts": 1700000000.0,
                             "failure_reason": None,
                             "transport": "myudp",
                         },
@@ -237,6 +238,7 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(peer["traffic"]["tx_bytes"], 4321)
         self.assertEqual(peer["secure_link"]["state"], "authenticated")
         self.assertTrue(peer["secure_link"]["authenticated"])
+        self.assertEqual(peer["secure_link"]["connected_since_unix_ts"], 1700000000.0)
 
     def test_listener_peer_snapshot_uses_child_myudp_session_stats(self):
         class _InnerStats:

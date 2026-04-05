@@ -2066,6 +2066,7 @@ class _SecureLinkPeerState:
     last_event: str = ""
     last_event_unix_ts: Optional[float] = None
     last_authenticated_unix_ts: Optional[float] = None
+    connected_since_unix_ts: Optional[float] = None
     last_rekey_trigger: str = ""
     rekey_due_unix_ts: Optional[float] = None
     last_failure_session_id: Optional[int] = None
@@ -2828,6 +2829,8 @@ class SecureLinkPskSession(ISession):
         state.last_event = str(event)
         state.last_event_unix_ts = now
         state.last_authenticated_unix_ts = now
+        if state.connected_since_unix_ts is None:
+            state.connected_since_unix_ts = now
         state.rekey_due_unix_ts = None
         if self._is_cert_mode():
             state.trust_validation_state = "trusted"
@@ -3151,6 +3154,7 @@ class SecureLinkPskSession(ISession):
         state.disconnect_reason = str(reason or "")
         state.disconnect_detail = str(detail or "")
         state.trust_enforced_unix_ts = now
+        state.connected_since_unix_ts = None
         state.last_event = "trust_enforced_disconnect"
         state.last_event_unix_ts = now
         state.authenticated = False
@@ -3460,6 +3464,7 @@ class SecureLinkPskSession(ISession):
             "last_event": self._last_secure_link_event,
             "last_event_unix_ts": self._last_secure_link_event_unix_ts,
             "last_authenticated_unix_ts": self._last_authenticated_unix_ts,
+            "connected_since_unix_ts": primary_state.connected_since_unix_ts if primary_state is not None else None,
             "last_authenticated_session_id": self._last_authenticated_session_id,
             "authenticated_sessions_total": int(self._authenticated_sessions_total or 0),
             "rekeys_completed_total": int(self._rekeys_completed_total or 0),
@@ -12443,6 +12448,7 @@ class RunnerMuxAggregate:
             "last_event": "",
             "last_event_unix_ts": None,
             "last_authenticated_unix_ts": None,
+            "connected_since_unix_ts": None,
             "authenticated_sessions_total": 0,
             "rekeys_completed_total": 0,
             "transport": None,
@@ -12870,6 +12876,8 @@ class Runner:
                 }
                 if key in AdminWebUI._secret_config_keys():
                     row["secret"] = True
+                if key in AdminWebUI._readonly_config_keys():
+                    row["readonly"] = True
                 if key in choices:
                     row["choices"] = list(choices.get(key, []))
                 items.append(row)
@@ -13292,6 +13300,8 @@ class Runner:
             if not hasattr(self.args, key):
                 return (False, f"unknown config key: {key}")
             cur = getattr(self.args, key)
+            if key in AdminWebUI._readonly_config_keys():
+                return (False, f"{key} is read-only")
             if key in AdminWebUI._secret_config_keys():
                 if not isinstance(value, str):
                     return (False, f"{key} expects string")
@@ -13892,7 +13902,11 @@ class AdminWebUI:
 
     @staticmethod
     def _secret_config_keys() -> Set[str]:
-        return {"admin_web_password"}
+        return {"admin_web_password", "secure_link_psk"}
+
+    @staticmethod
+    def _readonly_config_keys() -> Set[str]:
+        return {"secure_link_psk"}
 
     def auth_required(self) -> bool:
         if bool(getattr(self.args, "admin_web_auth_disable", False)):
