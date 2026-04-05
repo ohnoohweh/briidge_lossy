@@ -448,6 +448,41 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client_status["last_rekey_trigger"], "time_threshold")
         self.assertGreaterEqual(client_status["rekeys_completed_total"], 1)
 
+    async def test_time_based_rekey_arms_and_rotates_while_idle_after_authentication(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+
+        client = SecureLinkPskSession(
+            client_inner,
+            _args(tcp_peer='127.0.0.1', secure_link_rekey_after_seconds=0.02),
+            'tcp',
+        )
+        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
+
+        await client.start()
+        await server.start()
+
+        server_inner.emit_state(True)
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        initial_peer = client.get_overlay_peers_snapshot()[0]["secure_link"]
+        old_session_id = initial_peer["session_id"]
+        self.assertIsNotNone(initial_peer["rekey_due_unix_ts"])
+
+        await asyncio.sleep(0.08)
+        await asyncio.sleep(0)
+
+        client_status = client.get_secure_link_status_snapshot()
+        new_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
+        self.assertNotEqual(old_session_id, new_session_id)
+        self.assertEqual(client_status["last_event"], "rekey_completed")
+        self.assertEqual(client_status["last_rekey_trigger"], "time_threshold")
+        self.assertGreaterEqual(client_status["rekeys_completed_total"], 1)
+
     async def test_operator_forced_rekey_rotates_session_and_reports_trigger(self):
         client_inner = FakeInnerSession()
         server_inner = FakeInnerSession()
