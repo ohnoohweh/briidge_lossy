@@ -92,6 +92,7 @@ REQ-AUT-004:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_operator_forced_rekey
   unit_tests:
     - tests/unit/test_connection_snapshots.py::test_listener_snapshot_includes_myudp_listener_row
+    - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_unwraps_secure_link_wrapper_for_myudp_stats
     - tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_secure_link_rows
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_prevents_authenticated_session
     - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session

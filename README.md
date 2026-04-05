@@ -738,15 +738,15 @@ This stays consistent with the current runtime boundary:
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `56/56 = 100.0%`
-- Unit-covered: `34/56 = 60.7%`
-- Any-test-covered: `56/56 = 100.0%`
-- Tracked in manifest: `56/56 = 100.0%`
+- Integration-covered: `61/61 = 100.0%`
+- Unit-covered: `39/61 = 63.9%`
+- Any-test-covered: `61/61 = 100.0%`
+- Tracked in manifest: `61/61 = 100.0%`
 - Requirements without integration coverage: `(none)`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
 
-The secure-link topic now has an active `REQ-AUT-*` layer in `docs/REQUIREMENTS.md` for both the delivered PSK-based Phase 1 runtime slice and the delivered certificate-based Phase 2 slice, while the certificate/key-material input profile remains documented in `docs/SYSTEM_BOUNDARY.md`. The current runtime is defended across `myudp`, `tcp`, `ws`, and `quic`, now including broader multi-peer listener validation across those transports, aggregate runtime summary through `/api/status`, peer-scoped secure-link observability through `/api/peers`, frame-, time-, and peer-targeted operator-triggered rekey coverage, reconnect-with-fresh-session coverage, subprocess replay/malformed-frame fail-closed coverage, certificate-based trust-anchor/role/validity/deployment/revocation enforcement, and peer-scoped certificate identity/trust diagnostics. The few subprocess cases that need direct secure-link fault stimulation use the separate test-only `obstacle_bridge.bridge_FI` entrypoint rather than the normal runtime surface.
+The secure-link topic now has an active `REQ-AUT-*` layer in `docs/REQUIREMENTS.md` for both the delivered PSK-based Phase 1 runtime slice and the delivered certificate-based Phase 2 slice, while the certificate/key-material input profile remains documented in `docs/SYSTEM_BOUNDARY.md`. The current runtime is defended across `myudp`, `tcp`, `ws`, and `quic`, now including broader multi-peer listener validation across those transports, aggregate runtime summary through `/api/status`, peer-scoped secure-link observability through `/api/peers`, preservation of transport-specific `myudp` peer counters in `/api/peers` even when secure-link wraps the underlying UDP session, frame-, time-, and peer-targeted operator-triggered rekey coverage, reconnect-with-fresh-session coverage, subprocess replay/malformed-frame fail-closed coverage, certificate-based trust-anchor/role/validity/deployment/revocation enforcement, and peer-scoped certificate identity/trust diagnostics. The few subprocess cases that need direct secure-link fault stimulation use the separate test-only `obstacle_bridge.bridge_FI` entrypoint rather than the normal runtime surface.
 
 The related architecture decomposition is also linked to tests through `.github/architecture_traceability.yaml`.
 

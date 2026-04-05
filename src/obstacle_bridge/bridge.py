@@ -12892,6 +12892,22 @@ class Runner:
             return []
         return list(DEBUG_LOG_RING)[-lim:]
 
+    def _unwrap_snapshot_session(self, session_obj):
+        current = session_obj
+        seen: set[int] = set()
+        while current is not None:
+            current_id = id(current)
+            if current_id in seen:
+                break
+            seen.add(current_id)
+            next_obj = getattr(current, "_real", None)
+            if next_obj is None or next_obj is current:
+                next_obj = getattr(current, "_inner", None)
+            if next_obj is None or next_obj is current:
+                break
+            current = next_obj
+        return current
+
     def _session_metrics_snapshot(self, session_obj, fallback: Optional[SessionMetrics] = None) -> SessionMetrics:
         if session_obj is None:
             return fallback or SessionMetrics()
@@ -12920,7 +12936,8 @@ class Runner:
         hist: dict = {}
         buffered_frames = 0
         with contextlib.suppress(Exception):
-            inner = getattr(session_obj, "inner_session", session_obj)
+            source = self._unwrap_snapshot_session(session_obj)
+            inner = getattr(source, "inner_session", source)
             hist = dict(getattr(inner, "stats_hist", {}) or {})
             waiting_count = getattr(inner, "waiting_count", None)
             if callable(waiting_count):
@@ -12956,6 +12973,7 @@ class Runner:
         for idx, session in enumerate(self._sessions):
             mux = self._muxes[idx] if idx < len(self._muxes) else None
             label = self._session_labels[idx] if idx < len(self._session_labels) else f"session-{idx}"
+            real_session = self._unwrap_snapshot_session(session)
             listen_endpoint = self._overlay_listen_label(label, session)
             m = self._session_metrics_snapshot(session)
             udp_rows: list = []
@@ -12973,7 +12991,7 @@ class Runner:
             if overlay_rows:
                 for p in overlay_rows:
                     if bool(p.get("listening")):
-                        listener_session = getattr(session, "inner_session", None)
+                        listener_session = getattr(real_session, "inner_session", None)
                         listener_metrics = self._session_metrics_snapshot(listener_session)
                         peers.append({
                             "id": f"{idx}:{p.get('peer_id', 0)}",
@@ -12998,7 +13016,7 @@ class Runner:
                         })
                         continue
                     row_session = session
-                    server_peers = getattr(session, "_server_peers", None)
+                    server_peers = getattr(real_session, "_server_peers", None)
                     if isinstance(server_peers, dict):
                         ctx = server_peers.get(int(p.get("peer_id", 0)))
                         if isinstance(ctx, dict) and ctx.get("session") is not None:

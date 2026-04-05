@@ -2,8 +2,8 @@
 
 This repository currently collects:
 
-- `84` integration tests in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
-- `68` unit tests in `tests/unit/`
+- `111` integration tests in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+- `99` unit tests in `tests/unit/`
 
 ## Get started
 
@@ -161,7 +161,7 @@ The catalog is ordered as:
 
 ## Integration tests
 
-Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py) and collects `81` tests.
+Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py) and collects `111` tests.
 
 The supporting project-level intent documents are:
 
@@ -180,7 +180,7 @@ The supporting project-level intent documents are:
 | `test_overlay_e2e_myudp_delay_loss` | Delayed/lossy myudp behavior | Verify retransmission, large payload handling, and control/data loss behavior through a real loopback MITM proxy | `pytest -q tests/integration/test_overlay_e2e.py -k myudp_delay_loss` |
 | `test_overlay_e2e_server_restart_closes_tcp_preserves_udp` | Restart-specific regression | Verify the special restart behavior for the concurrent WS case | `pytest -q tests/integration/test_overlay_e2e.py -k server_restart_closes_tcp_preserves_udp` |
 | `test_overlay_e2e_admin_api_*` | Admin web auth/API | Verify auth-disabled, auth-required, authenticated, session-isolated API behavior, and live WebSocket telemetry availability for both open and cookie-authenticated sessions | `pytest -q tests/integration/test_overlay_e2e.py -k admin_api` |
-| `test_overlay_e2e_*secure_link_psk*` | Secure-link Phase 1 PSK runtime slice | Verify the delivered PSK secure-link slice reaches protected connected state across supported transports, rejects mismatched PSKs, and preserves peer isolation for multi-client listener scenarios | `pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` |
+| `test_overlay_e2e_*secure_link_psk*` | Secure-link Phase 1 PSK runtime slice | Verify the delivered PSK secure-link slice reaches protected connected state across supported transports, rejects mismatched PSKs, preserves peer isolation for multi-client listener scenarios, and keeps `/api/peers` transport-specific secure-link peer stats aligned with live protected traffic | `pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` |
 | `test_overlay_e2e_ws_proxy_*` | WebSocket proxy behavior | Verify proxy success, bypass, scope, handshake ordering, failure handling, and explicit override behavior for WS peer clients, with Windows-only cases for system-default and Negotiate auth | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_` |
 | `test_overlay_e2e_ws_overlay_*proxy_env` | WebSocket proxy env behavior | Verify WS peer clients honor `HTTP_PROXY` and `NO_PROXY` in real subprocess runs | `pytest -q tests/integration/test_overlay_e2e.py -k "proxy_env"` |
 | `test_overlay_e2e_cli_routing_*` and allocator checks | Harness self-tests | Verify CLI mode inference and worker-safe port allocation logic | `pytest -q tests/integration/test_overlay_e2e.py -k "cli_routing or alloc_admin_ports or materialize_case_ports or case_port_offset"` |
@@ -394,7 +394,7 @@ This runtime slice is now reflected by active `REQ-AUT-*` requirements, and the 
 
 ## Unit tests
 
-Unit coverage currently collects `91` tests from `tests/unit/`.
+Unit coverage currently collects `99` tests from `tests/unit/`.
 
 ### Unit-side traceability
 
@@ -408,7 +408,7 @@ The component view they support is described in [ARCHITECTURE.md](/home/ohnoohwe
 |---|---|---|---|---|
 | `tests/unit/test_channel_mux_listener_mode.py` | `ARC-CMP-003` | `REQ-MUX-003`, `REQ-MUX-004`, `PROC-TST-002` | Listener mode must ignore ambiguous local publishing, parse service specs consistently, and manage remote catalog install/replace/cleanup correctly | `pytest -q tests/unit/test_channel_mux_listener_mode.py` |
 | `tests/unit/test_channel_mux_peer_catalog.py` | `ARC-CMP-003` | `REQ-MUX-003`, `REQ-MUX-004`, `PROC-TST-002` | Peer-scoped remote service state must remain isolated and must be cleaned up per disconnected peer | `pytest -q tests/unit/test_channel_mux_peer_catalog.py` |
-| `tests/unit/test_connection_snapshots.py` | `ARC-CMP-005` | `REQ-LST-006`, `REQ-ADM-006`, `PROC-TST-002` | Snapshot rendering must distinguish passive listeners from active connections, keep passive listener rows zeroed, and expose per-peer session stats on active listener-side peers correctly | `pytest -q tests/unit/test_connection_snapshots.py` |
+| `tests/unit/test_connection_snapshots.py` | `ARC-CMP-005` | `REQ-LST-006`, `REQ-ADM-006`, `REQ-AUT-004`, `PROC-TST-002` | Snapshot rendering must distinguish passive listeners from active connections, keep passive listener rows zeroed, expose per-peer session stats on active listener-side peers correctly, and preserve secure-link-wrapped `myudp` peer counters in `/api/peers` | `pytest -q tests/unit/test_connection_snapshots.py` |
 | `tests/unit/test_admin_web_payloads.py` | `ARC-CMP-005` | `REQ-AUT-004`, `REQ-AUT-009`, `REQ-AUT-010`, `REQ-AUT-014`, `REQ-AUT-016`, `REQ-AUT-019`, `PROC-TST-002` | Admin payload builders must keep peer-scoped secure-link visibility fields intact, keep `/api/status` limited to aggregate runtime summary, and preserve Phase 2/3 certificate identity, reload-result, and disconnect-enforcement fields so WebAdmin can render peer-scoped security state and operator controls consistently | `pytest -q tests/unit/test_admin_web_payloads.py` |
 | `tests/unit/test_secure_link_cert.py` | `ARC-CMP-006` | `REQ-AUT-011`, `REQ-AUT-012`, `REQ-AUT-013`, `REQ-AUT-014`, `REQ-AUT-015`, `REQ-AUT-016`, `REQ-AUT-017`, `REQ-AUT-018`, `PROC-TST-002` | Certificate-mode secure-link loading, trust validation, role/validity/deployment/revocation rejection, peer identity diagnostics, live revocation reload, atomic local-identity reload, and shared rekey/session behavior must remain internally consistent at the secure-link layer boundary | `pytest -q tests/unit/test_secure_link_cert.py` |
 | `tests/unit/test_secure_link_psk.py` | `ARC-CMP-006` | `REQ-AUT-001`, `REQ-AUT-002`, `REQ-AUT-003`, `REQ-AUT-006`, `REQ-AUT-007`, `REQ-AUT-008`, `REQ-AUT-009`, `REQ-AUT-010`, `PROC-TST-002` | PSK handshake, wrong-secret rejection, bounded retry backoff, stronger operational diagnostics, malformed/out-of-order fail-closed behavior, per-peer routing, frame/time/operator rekey rotation, and nonce/counter lifecycle guards must remain internally consistent at the secure-link layer boundary | `pytest -q tests/unit/test_secure_link_psk.py` |
@@ -426,7 +426,7 @@ The component view they support is described in [ARCHITECTURE.md](/home/ohnoohwe
 |---|---|---|---|
 | `tests/unit/test_channel_mux_listener_mode.py` | ChannelMux listener semantics | Verify listener mode ignores ambiguous local config, parses service specs correctly, and manages remote catalogs/lifecycle correctly | `pytest -q tests/unit/test_channel_mux_listener_mode.py` |
 | `tests/unit/test_channel_mux_peer_catalog.py` | Per-peer remote service state | Verify peer-specific listener state is scoped and cleaned up per peer | `pytest -q tests/unit/test_channel_mux_peer_catalog.py` |
-| `tests/unit/test_connection_snapshots.py` | Admin snapshot formatting | Verify connection and peer snapshot rendering, including listener rows, active-vs-idle distinctions, connection uptime, and correct per-peer listener-side myudp counters | `pytest -q tests/unit/test_connection_snapshots.py` |
+| `tests/unit/test_connection_snapshots.py` | Admin snapshot formatting | Verify connection and peer snapshot rendering, including listener rows, active-vs-idle distinctions, connection uptime, correct per-peer listener-side myudp counters, and correct counter preservation through secure-link wrappers | `pytest -q tests/unit/test_connection_snapshots.py` |
 | `tests/unit/test_admin_web_payloads.py` | Admin payload shaping | Verify `/api/peers` keeps peer-scoped secure-link visibility, identity, reload, and disconnect fields intact, while `/api/config` hides the PSK secret and marks it read-only and `/api/status` remains limited to aggregate runtime summary fields for WebAdmin/API consumers | `pytest -q tests/unit/test_admin_web_payloads.py` |
 | `tests/unit/test_debug_logging_aliases.py` | Logging alias wiring | Verify websocket logging aliases configure the intended library loggers | `pytest -q tests/unit/test_debug_logging_aliases.py` |
 | `tests/unit/test_peer_resolution.py` | Host resolution behavior | Verify localhost fallback and non-localhost resolution error behavior | `pytest -q tests/unit/test_peer_resolution.py` |
