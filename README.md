@@ -567,7 +567,9 @@ python -m obstacle_bridge --config secure_link_client.json
 
 What to look for in WebAdmin or the admin API:
 
-- WebAdmin shows secure-link details inside each peer block instead of a single legacy headline state
+- WebAdmin shows secure-link details inside each peer block instead of a single legacy headline state, with peer cards laid out full-width across the browser
+- the Configuration tab masks `secure_link_psk` and keeps it read-only in the web UI so the PSK secret is not exposed for editing after startup
+- peer cards show connection uptime, and myudp-specific protocol statistics remain visible only when the peer is actually using the myudp transport
 - when `secure_link.mode=cert`, WebAdmin and `/api/peers` also show peer identity and trust details such as subject id/name, roles, deployment id, serial, issuer, trust-anchor id, and trust-validation status
 - `/api/peers` shows the peer row with `secure_link.authenticated=true`
 - when rekeying is enabled, the peer block and `/api/peers` can briefly show `rekey_in_progress=true` while the session rotates to a fresh `secure_link.session_id`
