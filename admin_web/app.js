@@ -39,6 +39,25 @@ function fmtUnixTs(value) {
   return String(value);
 }
 
+function fmtDateTime(value) {
+  if (value == null || Number.isNaN(value)) return 'n/a';
+  const date = new Date(Number(value) * 1000);
+  if (Number.isNaN(date.getTime())) return 'n/a';
+  return date.toLocaleString([], {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function fmtUptimeFromUnixTs(value) {
+  if (value == null || Number.isNaN(value)) return 'n/a';
+  return fmtUptime(Math.max(0, Math.floor(Date.now() / 1000 - Number(value))));
+}
+
 function fmtBytes(value) {
   if (value == null || Number.isNaN(value)) return 'n/a';
   const bytes = Math.max(0, Number(value));
@@ -476,12 +495,16 @@ function renderPeerTable(rows) {
     const transport = String(row.transport || '').toLowerCase();
     const isMyUdp = transport === 'myudp';
     const isListeningPeer = String(row.state || '').toLowerCase() === 'listening';
+    const isConnectingPeer = String(row.state || '').toLowerCase() === 'connecting';
     const secureLink = row.secure_link || {};
     const secureLinkEnabled = Boolean(secureLink.enabled);
     const secureLinkMode = String(secureLink.mode || '').toLowerCase();
     const isCertMode = secureLinkMode === 'cert';
     const trustFailureReason = String(secureLink.trust_failure_reason || '').trim();
     const trustFailureDetail = String(secureLink.trust_failure_detail || '').trim();
+    const showSecurityLifecycle = secureLinkEnabled && !isListeningPeer && !isConnectingPeer;
+    const showMyUdpProtocolStats = isMyUdp;
+    const showMyUdpDetailStats = isMyUdp;
     const connectionLine1 = [
       renderMetric('State', String(row.state || 'unknown').toLowerCase(), { pill: true }),
     ];
@@ -497,13 +520,14 @@ function renderPeerTable(rows) {
         renderMetric('TCP Open', fmtInteger(row.open_connections?.tcp ?? 0)),
       ]);
       connectionLines.push([
+        renderMetric('Connection Uptime', fmtUptimeFromUnixTs(secureLink.connected_since_unix_ts)),
         renderMetric('RTT Est (ms)', fmtNumber(row.rtt_est_ms)),
         renderMetric('RX Bytes', fmtBytes(row.traffic?.rx_bytes ?? 0)),
         renderMetric('TX Bytes', fmtBytes(row.traffic?.tx_bytes ?? 0)),
       ]);
     }
     const connectionMetrics = renderMetricStack(connectionLines);
-    const protocolMetrics = isMyUdp
+    const protocolMetrics = showMyUdpProtocolStats
       ? renderMetricStack([
         [
           renderMetric('Decode Errors', fmtInteger(row.decode_errors ?? 0)),
@@ -523,11 +547,10 @@ function renderPeerTable(rows) {
         ],
       ]);
     const securityLines = [];
-    if (secureLinkEnabled) {
+    if (showSecurityLifecycle) {
       securityLines.push([
         renderMetric('secure_link.state', secureLink.state, { pill: true }),
         renderMetric('secure_link.authenticated', fmtBool(secureLink.authenticated), { pill: true }),
-        renderMetric('rekey_in_progress', fmtBool(secureLink.rekey_in_progress), { pill: true }),
         renderMetric('session_id', fmtInteger(secureLink.session_id)),
       ]);
       if (isCertMode) {
@@ -553,27 +576,31 @@ function renderPeerTable(rows) {
         }
       }
     }
-    const securityMetrics = secureLinkEnabled ? renderMetricStack(securityLines) : '';
+    const securityMetrics = showSecurityLifecycle ? renderMetricStack(securityLines) : '';
     const allowRekeyAction = String(row.state || '').toLowerCase() !== 'listening';
-    const lifecycleMetrics = secureLinkEnabled ? [
+    const lifecycleMetrics = showSecurityLifecycle ? [
       renderMetric('last_event', secureLink.last_event),
-      renderMetric('last_event_unix_ts', fmtUnixTs(secureLink.last_event_unix_ts)),
-      renderMetric('last_authenticated_unix_ts', fmtUnixTs(secureLink.last_authenticated_unix_ts)),
+      renderMetric('last_event_unix_ts', fmtDateTime(secureLink.last_event_unix_ts)),
+      renderMetric('last_authenticated_unix_ts', fmtDateTime(secureLink.last_authenticated_unix_ts)),
       renderMetric('authenticated_sessions_total', fmtInteger(secureLink.authenticated_sessions_total)),
       renderMetric('rekeys_completed_total', fmtInteger(secureLink.rekeys_completed_total)),
       renderMetric('last_rekey_trigger', secureLink.last_rekey_trigger),
-      renderMetric('active_material_generation', fmtInteger(secureLink.active_material_generation)),
-      renderMetric('last_material_reload_unix_ts', fmtUnixTs(secureLink.last_material_reload_unix_ts)),
-      renderMetric('last_material_reload_scope', secureLink.last_material_reload_scope),
-      renderMetric('last_material_reload_result', secureLink.last_material_reload_result),
-      renderMetric('trust_enforced_unix_ts', fmtUnixTs(secureLink.trust_enforced_unix_ts)),
-      renderMetric('disconnect_reason', secureLink.disconnect_reason),
-      renderMetric('disconnect_detail', secureLink.disconnect_detail),
+      ...(isCertMode ? [
+        renderMetric('active_material_generation', fmtInteger(secureLink.active_material_generation)),
+        renderMetric('last_material_reload_unix_ts', fmtDateTime(secureLink.last_material_reload_unix_ts)),
+        renderMetric('last_material_reload_scope', secureLink.last_material_reload_scope),
+        renderMetric('last_material_reload_result', secureLink.last_material_reload_result),
+        renderMetric('last_material_reload_detail', secureLink.last_material_reload_detail),
+        renderMetric('trust_enforced_unix_ts', fmtDateTime(secureLink.trust_enforced_unix_ts)),
+        renderMetric('disconnect_reason', secureLink.disconnect_reason),
+        renderMetric('disconnect_detail', secureLink.disconnect_detail),
+      ] : []),
     ] : [];
+    const rowSpan = showSecurityLifecycle ? 4 : (isListeningPeer ? 1 : 2);
     const detailRows = [
       `
-      <tr class="peer-detail-row peer-detail-row-start ${isListeningPeer && !secureLinkEnabled ? 'peer-detail-row-end' : ''}">
-        <td class="mono peer-id-cell" rowspan="${isListeningPeer && !secureLinkEnabled ? 1 : secureLinkEnabled ? 4 : 2}">${escapeHtml(fmtPeerCompositeId(row.transport, row.id))}</td>
+      <tr class="peer-detail-row peer-detail-row-start ${isListeningPeer ? 'peer-detail-row-end' : ''}">
+        <td class="mono peer-id-cell" rowspan="${rowSpan}">${escapeHtml(fmtPeerCompositeId(row.transport, row.id))}</td>
         <td class="peer-detail-kind">Connection</td>
         <td>${connectionMetrics}</td>
       </tr>
@@ -581,13 +608,13 @@ function renderPeerTable(rows) {
     ];
     if (!isListeningPeer) {
       detailRows.push(`
-      <tr class="peer-detail-row ${secureLinkEnabled ? '' : 'peer-detail-row-end'}">
+      <tr class="peer-detail-row ${showSecurityLifecycle ? '' : 'peer-detail-row-end'}">
         <td class="peer-detail-kind">Protocol</td>
         <td>${protocolMetrics}</td>
       </tr>
       `);
     }
-    if (secureLinkEnabled) {
+    if (showSecurityLifecycle) {
       detailRows.push(`
       <tr class="peer-detail-row ">
         <td class="peer-detail-kind">Security</td>
@@ -597,6 +624,10 @@ function renderPeerTable(rows) {
             ${allowRekeyAction ? `
               <div class="peer-detail-actions">
                 <button class="btn btn-secondary secure-link-rekey-btn" type="button" data-peer-id="${escapeHtml(fmtText(row.id))}">Rekey Request</button>
+                <span class="peer-detail-inline">
+                  <span class="peer-detail-label">Rekey in progress</span>
+                  <span class="peer-detail-value mono ${detailPillClass(secureLink.rekey_in_progress)}">${escapeHtml(fmtBool(secureLink.rekey_in_progress))}</span>
+                </span>
               </div>
             ` : ''}
           </div>
@@ -661,7 +692,7 @@ function applyStatusDoc(j) {
   setProgress('barPeerRx', peerRx);
   setProgress('barPeerTx', peerTx);
   setText('secureLinkMaterialGeneration', fmtInteger(j.secure_link_material_generation));
-  setText('secureLinkLastReloadUnixTs', fmtUnixTs(j.secure_link_last_reload_unix_ts));
+  setText('secureLinkLastReloadUnixTs', fmtDateTime(j.secure_link_last_reload_unix_ts));
   setText('secureLinkLastReloadScope', fmtText(j.secure_link_last_reload_scope));
   setText('secureLinkLastReloadResult', fmtText(j.secure_link_last_reload_result));
   setText('secureLinkLastReloadDetail', fmtText(j.secure_link_last_reload_detail));
@@ -781,8 +812,18 @@ function isLongConfigValue(rawValue) {
   return String(rawValue || '').length > 72 || String(rawValue || '').includes('\\n');
 }
 
-function renderSecretInput(key) {
-  return `<input type="password" class="config-editor mono" data-config-key="${key}" data-secret="true" placeholder="Leave blank to keep current value" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" />`;
+function renderSecretInput(key, { readonly = false } = {}) {
+  const readonlyAttr = readonly ? ' readonly aria-readonly="true"' : '';
+  const placeholder = readonly ? 'Read-only secret' : 'Leave blank to keep current value';
+  return `<input type="password" class="config-editor mono" data-config-key="${key}" data-secret="true"${readonlyAttr} placeholder="${placeholder}" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" />`;
+}
+
+function renderReadonlySecretValue(key) {
+  return `
+    <div class="config-value-display config-value-display-readonly" data-config-readonly="${key}">
+      <span class="config-value-preview config-secret-value" title="hidden">hidden</span>
+    </div>
+  `;
 }
 
 function renderTextConfigEditor(key, currentValue) {
@@ -798,6 +839,7 @@ function renderTextConfigEditor(key, currentValue) {
 function renderConfigValueCell(item, current) {
   const key = item.key;
   const isSecret = Boolean(item.secret);
+  const isReadonly = Boolean(item.readonly);
   const isLevelSetting = isLoggingLevelSetting(key, current, item.default);
   const isLogFileSetting = isLogFileConfigSetting(key);
   const isDirectEntrySetting = isDirectEntryConfigSetting(key);
@@ -808,10 +850,17 @@ function renderConfigValueCell(item, current) {
     && item.choices.length > 0;
   const previewText = isSecret ? 'hidden' : configValueToPreview(current);
   const previewClass = isSecret ? 'config-value-preview config-secret-value' : 'config-value-preview mono';
+  if (isSecret && isReadonly) {
+    return `
+      <div class="config-value-cell" data-config-cell="${key}">
+        ${renderReadonlySecretValue(key)}
+      </div>
+    `;
+  }
   const editorHtml = isSecret
     ? renderSecretInput(key)
-    : hasChoices
-      ? renderChoiceSelect(key, current, item.choices)
+      : hasChoices
+        ? renderChoiceSelect(key, current, item.choices)
       : (isBooleanSetting
         ? renderBooleanSelect(key, current)
         : (isLevelSetting

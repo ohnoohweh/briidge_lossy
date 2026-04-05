@@ -6,7 +6,45 @@ from obstacle_bridge.bridge import AdminWebUI
 
 class _RunnerStub:
     def __init__(self):
-        self.args = argparse.Namespace(admin_web_name="Lab Node")
+        self.args = argparse.Namespace(
+            admin_web_name="Lab Node",
+            admin_web_password="admin-secret",
+            secure_link_psk="bridge-secret",
+        )
+
+    def get_config_snapshot(self, include_secrets: bool = False):
+        blocked = {"config", "dump_config", "save_config", "save_format", "force", "help"}
+        secret_keys = AdminWebUI._secret_config_keys()
+        data = {}
+        for k, v in vars(self.args).items():
+            if k.startswith("_") or k in blocked:
+                continue
+            if k in secret_keys and not include_secrets:
+                data[k] = ""
+                continue
+            data[k] = v
+        return data
+
+    def get_config_schema_snapshot(self):
+        keys = [k for k in vars(self.args).keys() if not k.startswith("_")]
+        rows = []
+        for key in sorted(keys):
+            row = {"key": key, "description": "(no description)", "default": None}
+            if key in AdminWebUI._secret_config_keys():
+                row["secret"] = True
+            if key in AdminWebUI._readonly_config_keys():
+                row["readonly"] = True
+            rows.append(row)
+        return {"misc": rows}
+
+    def update_config(self, updates):
+        for key, value in updates.items():
+            if key in AdminWebUI._readonly_config_keys():
+                return (False, f"{key} is read-only")
+            if not hasattr(self.args, key):
+                return (False, f"unknown config key: {key}")
+            setattr(self.args, key, value)
+        return (True, "")
 
     def get_status_snapshot(self):
         return {
@@ -47,6 +85,7 @@ class _RunnerStub:
                         "last_event": "authenticated",
                         "last_event_unix_ts": 1700000000.0,
                         "last_authenticated_unix_ts": 1700000000.0,
+                        "connected_since_unix_ts": 1699999900.0,
                         "authenticated_sessions_total": 1,
                         "rekeys_completed_total": 0,
                         "transport": "tcp",
@@ -77,6 +116,7 @@ class _RunnerCertStub(_RunnerStub):
             "last_event": "authenticated",
             "last_event_unix_ts": 1700000000.0,
             "last_authenticated_unix_ts": 1700000000.0,
+            "connected_since_unix_ts": 1699999900.0,
             "authenticated_sessions_total": 1,
             "rekeys_completed_total": 0,
             "transport": "tcp",
@@ -103,6 +143,51 @@ class _RunnerCertStub(_RunnerStub):
 
 
 class AdminWebPayloadTests(unittest.TestCase):
+    def test_config_snapshot_hides_secure_link_psk_and_marks_it_read_only(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+            secure_link_psk="bridge-secret",
+        )
+        ui = AdminWebUI(args, _RunnerStub())
+        config = ui.runner.get_config_snapshot()
+        schema = ui.runner.get_config_schema_snapshot()
+        self.assertEqual(config["secure_link_psk"], "")
+        self.assertEqual(config["admin_web_password"], "")
+        secure_rows = [row for rows in schema.values() for row in rows if row["key"] == "secure_link_psk"]
+        self.assertEqual(len(secure_rows), 1)
+        self.assertTrue(secure_rows[0]["secret"])
+        self.assertTrue(secure_rows[0]["readonly"])
+
+    def test_update_config_rejects_secure_link_psk(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+            secure_link_psk="bridge-secret",
+        )
+        ui = AdminWebUI(args, _RunnerStub())
+        ok, err = ui.runner.update_config({"secure_link_psk": "new-secret"})
+        self.assertFalse(ok)
+        self.assertIn("read-only", err)
+
     def test_build_status_payload_omits_peer_scoped_secure_link_summary(self):
         args = argparse.Namespace(
             admin_web=True,
@@ -153,6 +238,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(peer["secure_link"]["last_event"], "authenticated")
         self.assertEqual(peer["secure_link"]["handshake_attempts_total"], 1)
         self.assertEqual(peer["secure_link"]["authenticated_sessions_total"], 1)
+        self.assertEqual(peer["secure_link"]["connected_since_unix_ts"], 1699999900.0)
 
     def test_build_peers_payload_includes_cert_identity_and_trust_fields(self):
         args = argparse.Namespace(

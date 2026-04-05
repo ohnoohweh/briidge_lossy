@@ -32,7 +32,7 @@ html, body {
 }
 
 body {
-  padding: 24px;
+  padding: 16px;
 }
 
 .hidden {
@@ -40,8 +40,9 @@ body {
 }
 
 .shell {
-  max-width: 1400px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: none;
+  margin: 0;
 }
 
 body.auth-locked {
@@ -196,7 +197,7 @@ h1 {
 
 .layout {
   display: grid;
-  grid-template-columns: 300px 1fr;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
   gap: 22px;
 }
 
@@ -697,7 +698,34 @@ h1 {
 
 .peer-detail-actions {
   display: flex;
+  align-items: center;
+  gap: 12px;
   justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.peer-detail-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.config-value-display-readonly {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px dashed rgba(148, 163, 184, 0.28);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.config-readonly-note {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .peer-detail-line {
