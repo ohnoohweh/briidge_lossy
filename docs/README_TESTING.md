@@ -2,8 +2,8 @@
 
 This repository currently collects:
 
-- `111` integration tests in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
-- `99` unit tests in `tests/unit/`
+- `114` integration tests in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+- `100` unit tests in `tests/unit/`
 
 ## Get started
 
@@ -123,6 +123,8 @@ without different cases colliding on the same local ports.
 
 Admin ports are additionally reserved from a dedicated band starting at `ADMIN_PORT_BASE`, above the normal service-port allocation range. This prevents the admin web listener from colliding with overlay or service sockets during highly parallel `xdist` runs.
 
+The harness also partitions the regular admin-port allocator and the Secure Link admin-port allocator into disjoint sub-ranges. Normal integration cases stay below `SECURE_LINK_ADMIN_BASE`, while Secure Link cases allocate at or above that base, so unrelated WS and Secure Link subprocesses cannot race for the same admin port across different `xdist` workers.
+
 ### 3. Delay/loss man-in-the-middle tests
 
 The `myudp` delay/loss coverage is now part of the main integration harness. A loopback UDP proxy sits between peer client and peer server and can:
@@ -161,7 +163,7 @@ The catalog is ordered as:
 
 ## Integration tests
 
-Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py) and collects `111` tests.
+Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py) and collects `114` tests.
 
 The supporting project-level intent documents are:
 
@@ -382,8 +384,11 @@ This runtime slice is now reflected by active `REQ-AUT-*` requirements, and the 
 | `test_overlay_e2e_tcp_secure_link_psk_listener_two_clients_concurrent_udp_tcp`, `test_overlay_e2e_myudp_secure_link_psk_listener_two_clients_concurrent_udp_tcp`, `test_overlay_e2e_quic_secure_link_psk_listener_two_clients_concurrent_udp_tcp`, and `test_overlay_e2e_ws_secure_link_psk_listener_two_clients` | `REQ-AUT-001`, `REQ-AUT-002`, `REQ-AUT-004`, `REQ-AUT-005` | Verify the PSK secure-link runtime slice preserves multi-peer listener behavior beyond the original TCP-only slice | Listener reports multiple distinct authenticated peers, the transport-appropriate service probes succeed for both clients, and secure-link observability shows authenticated peer state without cross-peer mix-up | `pytest -q tests/integration/test_overlay_e2e.py -k "secure_link_psk_listener_two_clients"` |
 | `test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic` | `REQ-AUT-004`, `REQ-AUT-006`, `REQ-AUT-009` | Verify the PSK runtime can rekey to a fresh secure-link session under live traffic without breaking the overlay | After the first protected probe, `/api/peers` reports a changed `secure_link.session_id` while both sides remain authenticated, the active peer row reports `last_event=rekey_completed`, `rekeys_completed_total>=1`, `authenticated_sessions_total>=2`, and a second probe still succeeds over the same TCP overlay path | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk_rekeys_under_live_traffic` |
 | `test_overlay_e2e_tcp_secure_link_psk_rekeys_after_time_threshold` | `REQ-AUT-004`, `REQ-AUT-009`, `REQ-AUT-010` | Verify the PSK runtime can trigger rekey from a time threshold after protected traffic has been established | After the first protected probe, the client admin/API reports a changed `secure_link.session_id`, `last_event=rekey_completed`, `last_rekey_trigger=time_threshold`, `rekeys_completed_total>=1`, and a later protected probe still succeeds over the same TCP overlay path | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk_rekeys_after_time_threshold` |
+| `test_overlay_e2e_tcp_secure_link_psk_rekeys_after_time_threshold_while_idle` | `REQ-AUT-009`, `REQ-AUT-010` | Verify the PSK runtime arms and completes time-based rekey on an authenticated client session even before any later protected application probe is sent | Immediately after authentication, the client peer row publishes a non-empty `rekey_due_unix_ts`; after the configured threshold elapses, the client admin/API reports a changed `secure_link.session_id`, `last_event=rekey_completed`, `last_rekey_trigger=time_threshold`, `rekeys_completed_total>=1`, and a protected probe sent after the idle rekey still succeeds over the same TCP overlay path | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk_rekeys_after_time_threshold_while_idle` |
 | `test_overlay_e2e_tcp_secure_link_psk_operator_forced_rekey` | `REQ-AUT-004`, `REQ-AUT-009`, `REQ-AUT-010` | Verify an operator can force PSK rekey for a selected peer through the admin API without breaking a healthy overlay session | After the first protected probe, `POST /api/secure-link/rekey` with the active peer row id returns `ok=true`, the client admin/API reports a changed `secure_link.session_id`, `last_event=rekey_completed`, `last_rekey_trigger=operator`, `rekeys_completed_total>=1`, and a later protected probe still succeeds over the same TCP overlay path | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk_operator_forced_rekey` |
 | `test_overlay_e2e_tcp_secure_link_psk_reconnects_with_fresh_session` | `REQ-AUT-006`, `REQ-AUT-009` | Verify reconnect installs a fresh secure-link session instead of reusing the previous session lifecycle | After client restart and successful reconnect, the server-side peer row reports a different `secure_link.session_id` than before disconnect, and a new protected probe still succeeds | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk_reconnects_with_fresh_session` |
+| `test_overlay_e2e_myudp_secure_link_psk_recovery_after_prior_time_threshold_rekey_reports_fresh_authentication` | `REQ-AUT-009`, `REQ-AUT-010` | Verify a fresh myudp recovery after an earlier time-threshold rekey is reported as a new authentication lifecycle rather than as another time-threshold rekey | After a client-side time-threshold rekey has completed, a real myudp outage and recovery yields a new `secure_link.session_id` whose peer row reports `last_event=authenticated`, an empty `last_rekey_trigger`, and `rekeys_completed_total=0`, while protected traffic succeeds again | `pytest -q tests/integration/test_overlay_e2e.py -k myudp_secure_link_psk_recovery_after_prior_time_threshold_rekey_reports_fresh_authentication` |
+| `test_overlay_e2e_myudp_secure_link_psk_client_restart_after_prior_time_threshold_rekey_drops_stale_pre_restart_row` | `REQ-AUT-009`, `REQ-AUT-010` | Verify one-sided myudp client restart after an earlier time-threshold rekey does not leave the stale pre-restart secure-link row visible on the surviving server | After a client-side time-threshold rekey has completed, restarting only the myudp client and sending protected traffic again forces the surviving server `/api/peers` view to expose only the recovered authenticated row for that host instead of also retaining the stale pre-restart row with rekey history | `pytest -q tests/integration/test_overlay_e2e.py -k client_restart_after_prior_time_threshold_rekey_drops_stale_pre_restart_row` |
 | `test_overlay_e2e_tcp_secure_link_psk_replay_after_reconnect_is_rejected` | `REQ-AUT-006`, `REQ-AUT-007` | Verify stale protected frames from the pre-reconnect session are rejected after a fresh session is installed | After reconnect, replaying a previously accepted frame from the old session through the test-only admin-authenticated secure-link failure-injection hook forces `secure_link.state=failed` with `failure_code=4` / `failure_reason=decode`, and the protected probe fails instead of being forwarded | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk_replay_after_reconnect_is_rejected` |
 | `test_overlay_e2e_tcp_secure_link_psk_replay_after_rekey_is_rejected` | `REQ-AUT-006`, `REQ-AUT-007` | Verify stale protected frames from the pre-rekey session are rejected after live rekey installs a fresh session | After rekey, replaying a previously accepted frame from the old session through the test-only admin-authenticated secure-link failure-injection hook forces `secure_link.state=failed` with `failure_code=4` / `failure_reason=decode`, and the protected probe fails instead of being forwarded | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk_replay_after_rekey_is_rejected` |
 | `test_overlay_e2e_tcp_secure_link_psk_malformed_frame_fails_closed_subprocess` | `REQ-AUT-007` | Verify malformed secure-link input fails closed in the real subprocess runtime, not only in unit tests | Injecting malformed raw secure-link bytes through the test-only admin-authenticated secure-link failure-injection hook forces `secure_link.state=failed` with `failure_code=4` / `failure_reason=decode`, and the protected probe fails instead of being forwarded | `pytest -q tests/integration/test_overlay_e2e.py -k tcp_secure_link_psk_malformed_frame_fails_closed_subprocess` |
@@ -394,7 +399,7 @@ This runtime slice is now reflected by active `REQ-AUT-*` requirements, and the 
 
 ## Unit tests
 
-Unit coverage currently collects `99` tests from `tests/unit/`.
+Unit coverage currently collects `100` tests from `tests/unit/`.
 
 ### Unit-side traceability
 

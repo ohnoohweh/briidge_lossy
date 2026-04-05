@@ -1479,12 +1479,15 @@ def alloc_admin_port(exclude: Optional[Set[int]] = None, *, case_index: int = 0,
     worker_index = _xdist_worker_index()
     worker_count = _xdist_worker_count()
     base_i = max(int(base), SERVICE_PORT_CEILING)
-    available = 65535 - base_i
+    upper_bound = 65535
+    if base_i < SECURE_LINK_ADMIN_BASE:
+        upper_bound = min(upper_bound, SECURE_LINK_ADMIN_BASE)
+    available = upper_bound - base_i
     if available <= worker_count:
         raise RuntimeError(f'admin port allocation window too small: base={base_i} workers={worker_count}')
     per_worker_budget = max(8, available // worker_count)
     start = base_i + (worker_index * per_worker_budget)
-    stop = min(65535, start + per_worker_budget)
+    stop = min(upper_bound, start + per_worker_budget)
     span = max(1, stop - start)
     first = start + (int(case_index) % span)
     candidates = list(range(first, stop)) + list(range(start, first))
@@ -5940,6 +5943,77 @@ def test_overlay_e2e_tcp_secure_link_psk_rekeys_after_time_threshold(tmp_path: P
 
 @pytest.mark.integration
 @pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_rekeys_after_time_threshold_while_idle(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        server_args = [
+            '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+        ]
+        client_args = [
+            '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+            '--secure-link-rekey-after-seconds', '10.0',
+        ]
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=386,
+                secure_slot=21,
+                server_extra_args=server_args,
+                client_extra_args=client_args,
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            first_doc = wait_peer_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+                authenticated=True,
+            )
+            client_secure_initial = dict((first_active_secure_link_row(first_doc, transport='tcp').get('secure_link') or {}))
+            first_session_id = int(client_secure_initial.get('session_id') or 0)
+            if first_session_id <= 0:
+                raise RuntimeError(f'Could not determine initial secure-link session id from peers doc: {first_doc!r}')
+            due_unix_ts = client_secure_initial.get('rekey_due_unix_ts')
+            if due_unix_ts is None:
+                raise RuntimeError(
+                    f'Client secure-link row did not publish a time-based rekey deadline after authentication: '
+                    f'{client_secure_initial!r}'
+                )
+            wait_peer_secure_link_session_change(
+                client_proc.admin_port or 0,
+                previous_session_id=first_session_id,
+                timeout=16.0,
+                label='client',
+                transport='tcp',
+            )
+            wait_probe(case, payload=b'\x01idle-time-rekey', timeout=12.0)
+            client_doc = wait_peer_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+                authenticated=True,
+            )
+            client_secure = dict((first_active_secure_link_row(client_doc, transport='tcp').get('secure_link') or {}))
+            assert client_secure.get('last_event') == 'rekey_completed'
+            assert client_secure.get('last_rekey_trigger') == 'time_threshold'
+            assert int(client_secure.get('rekeys_completed_total') or 0) >= 1
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
 def test_overlay_e2e_tcp_secure_link_psk_operator_forced_rekey(tmp_path: Path) -> None:
     with secure_link_test_lock():
         case = CASES['case06_overlay_tcp_ipv4']
@@ -6082,6 +6156,288 @@ def test_overlay_e2e_tcp_secure_link_psk_reconnects_with_fresh_session(tmp_path:
                 raise RuntimeError(f'Could not determine reconnected secure-link session id from peers doc: {server_doc!r}')
             assert new_session_id != old_session_id
             wait_probe(case, payload=b'\x01reconnect-after', timeout=12.0)
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_myudp_secure_link_psk_recovery_after_prior_time_threshold_rekey_reports_fresh_authentication(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case_index = 389
+        base_port = _myudp_delay_loss_base_port(case_index)
+        server_overlay_port = base_port
+        proxy_listen_port = base_port + 1
+        proxy_forward_port = base_port + 2
+        client_probe_port = base_port + 10
+        server_probe_port = base_port + 11
+        server_target_port = base_port + 12
+        client_target_port = base_port + 13
+        server_admin, client_admin = alloc_admin_ports(case_index, base=SECURE_LINK_ADMIN_BASE)
+        missing_cfg = str(tmp_path / 'myudp_secure_link_recovery_elapsed_timer_missing.cfg')
+        py = sys.executable
+
+        bounce_server = BounceBackServer(
+            name='myudp_secure_link_recovery_server_bounce',
+            proto='udp',
+            bind_host='127.0.0.1',
+            port=server_target_port,
+            log_path=tmp_path / 'myudp_secure_link_recovery_server_bounce.log',
+        )
+        bounce_client = BounceBackServer(
+            name='myudp_secure_link_recovery_client_bounce',
+            proto='udp',
+            bind_host='127.0.0.1',
+            port=client_target_port,
+            log_path=tmp_path / 'myudp_secure_link_recovery_client_bounce.log',
+        )
+
+        def build_proxy() -> UdpDelayLossProxy:
+            return UdpDelayLossProxy(
+                name='myudp_secure_link_recovery_elapsed_timer',
+                listen_host='127.0.0.1',
+                listen_port=proxy_listen_port,
+                upstream_host='127.0.0.1',
+                upstream_port=server_overlay_port,
+                forward_bind_host='127.0.0.1',
+                forward_bind_port=proxy_forward_port,
+                delay_ms=300,
+                log_path=tmp_path / 'myudp_secure_link_recovery_proxy.log',
+            )
+
+        server_cmd = [
+            py, str(BRIDGE),
+            '--overlay-transport', 'myudp',
+            '--udp-bind', '127.0.0.1', '--udp-own-port', str(server_overlay_port),
+            '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
+            '--log-file', str(tmp_path / 'myudp_secure_link_recovery_server.txt'),
+            '--config', missing_cfg, '--admin-web-port', '0',
+        ] + admin_args(server_admin) + [
+            '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+        ]
+        client_cmd = [
+            py, str(BRIDGE),
+            '--overlay-transport', 'myudp',
+            '--udp-peer', '127.0.0.1', '--udp-peer-port', str(proxy_listen_port),
+            '--udp-bind', '127.0.0.1', '--udp-own-port', '0',
+            '--own-servers', f'udp,{client_probe_port},127.0.0.1,udp,127.0.0.1,{server_target_port}',
+            '--remote-servers', f'udp,{server_probe_port},127.0.0.1,udp,127.0.0.1,{client_target_port}',
+            '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
+            '--log-file', str(tmp_path / 'myudp_secure_link_recovery_client.txt'),
+            '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
+        ] + admin_args(client_admin) + [
+            '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+            '--secure-link-rekey-after-seconds', '10.0',
+        ]
+
+        server_proc: Optional[Proc] = None
+        client_proc: Optional[Proc] = None
+        proxy: Optional[UdpDelayLossProxy] = None
+        try:
+            bounce_server.start()
+            bounce_client.start()
+            proxy = build_proxy()
+            proxy.start()
+
+            server_proc = start_proc('myudp_secure_link_recovery_server', server_cmd, tmp_path, admin_port=server_admin)
+            client_proc = start_proc('myudp_secure_link_recovery_client', client_cmd, tmp_path, admin_port=client_admin)
+            wait_admin_up(server_admin, timeout=10.0)
+            wait_admin_up(client_admin, timeout=10.0)
+
+            server_proc, client_proc = wait_both_connected(server_proc, client_proc, tmp_path, timeout=30.0)
+            wait_peer_endpoint_visible(server_admin, timeout=12.0, label='server', transport='myudp')
+            wait_peer_endpoint_visible(client_admin, timeout=12.0, label='client', transport='myudp')
+
+            first_doc = wait_peer_secure_link_state(
+                client_admin,
+                expected_state='authenticated',
+                timeout=12.0,
+                label='client',
+                transport='myudp',
+                authenticated=True,
+            )
+            first_secure = dict((first_active_secure_link_row(first_doc, transport='myudp').get('secure_link') or {}))
+            first_session_id = int(first_secure.get('session_id') or 0)
+            if first_session_id <= 0:
+                raise RuntimeError(f'Could not determine initial myudp secure-link session id from peers doc: {first_doc!r}')
+            if first_secure.get('rekey_due_unix_ts') is None:
+                raise RuntimeError(
+                    f'Client myudp secure-link row did not publish a time-based rekey deadline after authentication: '
+                    f'{first_secure!r}'
+                )
+            got = _wait_udp_probe_result('127.0.0.1', client_probe_port, b'\x01myudp-recovery-prime', timeout=12.0)
+            if got != response_payload(b'\x01myudp-recovery-prime'):
+                raise RuntimeError(f'Unexpected pre-outage myudp probe reply: {got!r}')
+
+            rekey_doc = wait_peer_secure_link_session_change(
+                client_admin,
+                previous_session_id=first_session_id,
+                timeout=18.0,
+                label='client',
+                transport='myudp',
+            )
+            rekey_secure = dict((first_active_secure_link_row(rekey_doc, transport='myudp').get('secure_link') or {}))
+            pre_recovery_session_id = int(rekey_secure.get('session_id') or 0)
+            if pre_recovery_session_id <= 0:
+                raise RuntimeError(f'Could not determine post-rekey myudp secure-link session id from peers doc: {rekey_doc!r}')
+            assert pre_recovery_session_id != first_session_id
+            assert rekey_secure.get('last_event') == 'rekey_completed'
+            assert rekey_secure.get('last_rekey_trigger') == 'time_threshold'
+            assert int(rekey_secure.get('rekeys_completed_total') or 0) >= 1
+
+            proxy.stop()
+            proxy = None
+            wait_status_not_connected(client_admin, timeout=30.0, label='client')
+            wait_status_not_connected(server_admin, timeout=30.0, label='server')
+
+            rebuilt_proxy = build_proxy()
+            rebuilt_proxy.start()
+            proxy = rebuilt_proxy
+
+            server_proc, client_proc = wait_both_connected(server_proc, client_proc, tmp_path, timeout=30.0)
+            recovered_doc = wait_peer_secure_link_state(
+                client_admin,
+                expected_state='authenticated',
+                timeout=20.0,
+                label='client',
+                transport='myudp',
+                authenticated=True,
+            )
+            recovered_secure = dict((first_active_secure_link_row(recovered_doc, transport='myudp').get('secure_link') or {}))
+            recovered_session_id = int(recovered_secure.get('session_id') or 0)
+            if recovered_session_id <= 0:
+                raise RuntimeError(f'Could not determine recovered myudp secure-link session id from peers doc: {recovered_doc!r}')
+            assert recovered_session_id != pre_recovery_session_id
+            assert recovered_secure.get('last_event') == 'authenticated'
+            assert not str(recovered_secure.get('last_rekey_trigger') or '')
+            assert int(recovered_secure.get('rekeys_completed_total') or 0) == 0
+
+            got = _wait_udp_probe_result('127.0.0.1', client_probe_port, b'\x01myudp-recovery-after', timeout=12.0)
+            if got != response_payload(b'\x01myudp-recovery-after'):
+                raise RuntimeError(f'Unexpected recovered myudp probe reply: {got!r}')
+        finally:
+            if proxy is not None:
+                proxy.stop()
+            bounce_client.stop()
+            bounce_server.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_myudp_secure_link_psk_client_restart_after_prior_time_threshold_rekey_drops_stale_pre_restart_row(
+    tmp_path: Path,
+) -> None:
+    with secure_link_test_lock():
+        case = CASES['case01_udp_over_own_udp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        server_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
+        client_args = [
+            '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+            '--secure-link-rekey-after-seconds', '3.0',
+        ]
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=390,
+                secure_slot=22,
+                server_extra_args=server_args,
+                client_extra_args=client_args,
+                client_restart_if_disconnected=30,
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            first_doc = wait_peer_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=12.0,
+                label='client',
+                transport='myudp',
+                authenticated=True,
+            )
+            first_secure = dict((first_active_secure_link_row(first_doc, transport='myudp').get('secure_link') or {}))
+            first_session_id = int(first_secure.get('session_id') or 0)
+            if first_session_id <= 0:
+                raise RuntimeError(f'Could not determine initial myudp secure-link session id from peers doc: {first_doc!r}')
+            wait_probe(case, payload=b'\x01myudp-restart-prime', timeout=12.0)
+            rekey_doc = wait_peer_secure_link_session_change(
+                client_proc.admin_port or 0,
+                previous_session_id=first_session_id,
+                timeout=18.0,
+                label='client',
+                transport='myudp',
+            )
+            rekey_secure = dict((first_active_secure_link_row(rekey_doc, transport='myudp').get('secure_link') or {}))
+            pre_restart_session_id = int(rekey_secure.get('session_id') or 0)
+            if pre_restart_session_id <= 0:
+                raise RuntimeError(f'Could not determine pre-restart myudp secure-link session id from peers doc: {rekey_doc!r}')
+            assert pre_restart_session_id != first_session_id
+            assert rekey_secure.get('last_event') == 'rekey_completed'
+            assert rekey_secure.get('last_rekey_trigger') == 'time_threshold'
+            assert int(rekey_secure.get('rekeys_completed_total') or 0) >= 1
+
+            survivor_proc = server_proc
+            restarted_proc = client_proc
+            survivor_admin = survivor_proc.admin_port or 0
+
+            stop_proc(restarted_proc)
+            client_proc = None
+            time.sleep(1.0)
+
+            restarted_proc = start_proc(
+                restarted_proc.name,
+                list(restarted_proc.cmd or []),
+                tmp_path,
+                env_extra=restarted_proc.env_extra,
+                admin_port=restarted_proc.admin_port,
+            )
+            wait_admin_up(restarted_proc.admin_port or 0, timeout=10.0)
+            client_proc = wait_status_connected_proc(restarted_proc, tmp_path, timeout=20.0, label='client')
+
+            wait_probe(case, payload=b'\x01myudp-restart-recover', timeout=20.0)
+
+            recovered_doc = wait_peer_secure_link_session_change(
+                survivor_admin,
+                previous_session_id=pre_restart_session_id,
+                timeout=20.0,
+                label='server',
+                transport='myudp',
+            )
+            active_rows = [
+                row
+                for row in list(recovered_doc.get('peers') or [])
+                if str(row.get('transport', '')).strip().lower() == 'myudp'
+                and str(row.get('state', '')).strip().lower() != 'listening'
+            ]
+            stale_rows = [
+                row
+                for row in active_rows
+                if int(((row.get('secure_link') or {}).get('session_id') or 0)) == pre_restart_session_id
+            ]
+            assert not stale_rows, recovered_doc
+            recovered_rows = [
+                row
+                for row in active_rows
+                if int(((row.get('secure_link') or {}).get('session_id') or 0)) > 0
+            ]
+            if not recovered_rows:
+                raise RuntimeError(f'Could not determine recovered myudp secure-link row from peers doc: {recovered_doc!r}')
+            recovered_secure = dict((recovered_rows[0].get('secure_link') or {}))
+            assert recovered_secure.get('last_event') == 'authenticated'
+            assert not str(recovered_secure.get('last_rekey_trigger') or '')
+            assert int(recovered_secure.get('authenticated_sessions_total') or 0) == 1
+            assert int(recovered_secure.get('rekeys_completed_total') or 0) == 0
+
+            wait_probe(case, payload=b'\x01myudp-restart-after', timeout=12.0)
         finally:
             if bounce is not None:
                 bounce.stop()

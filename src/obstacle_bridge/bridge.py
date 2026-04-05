@@ -2928,7 +2928,11 @@ class SecureLinkPskSession(ISession):
         except asyncio.CancelledError:
             return
         finally:
-            current = asyncio.current_task()
+            current = None
+            try:
+                current = asyncio.current_task()
+            except Exception:
+                current = None
             if self._client_retry_task is current:
                 self._client_retry_task = None
 
@@ -2974,7 +2978,11 @@ class SecureLinkPskSession(ISession):
         except asyncio.CancelledError:
             return
         finally:
-            current = asyncio.current_task()
+            current = None
+            try:
+                current = asyncio.current_task()
+            except Exception:
+                current = None
             if self._client_rekey_task is current:
                 self._client_rekey_task = None
 
@@ -2986,7 +2994,6 @@ class SecureLinkPskSession(ISession):
             or state is None
             or not state.authenticated
             or int(state.pending_session_id or 0) > 0
-            or max(0, int(state.tx_counter or 1) - 1) <= 0
         ):
             return
         target_mono = time.monotonic() + self._rekey_after_seconds
@@ -3323,6 +3330,63 @@ class SecureLinkPskSession(ISession):
     def get_metrics(self) -> SessionMetrics:
         return self._inner.get_metrics()
 
+    @staticmethod
+    def _snapshot_peer_host(row: dict) -> str:
+        peer_label = str(row.get("peer") or "").strip()
+        if not peer_label:
+            return ""
+        if peer_label.startswith("["):
+            closing = peer_label.find("]")
+            return peer_label[1:closing] if closing > 1 else peer_label
+        if ":" not in peer_label:
+            return peer_label
+        return peer_label.rsplit(":", 1)[0]
+
+    def _filter_superseded_myudp_listener_rows(self, rows: list[dict]) -> list[dict]:
+        if self._client_mode or str(self._transport_name or "").strip().lower() != "myudp":
+            return rows
+        candidates_by_host: dict[str, list[tuple[int, int, float, int, int, str]]] = {}
+        for idx, row in enumerate(rows):
+            if bool(row.get("listening")) or str(row.get("state") or "").strip().lower() == "listening":
+                continue
+            secure_link = row.get("secure_link") or {}
+            if not bool(secure_link.get("authenticated")):
+                continue
+            session_id = int(secure_link.get("session_id") or 0)
+            if session_id <= 0:
+                continue
+            host = self._snapshot_peer_host(row)
+            if not host:
+                continue
+            authenticated_ts = float(secure_link.get("last_authenticated_unix_ts") or 0.0)
+            mux_count = len(list(row.get("mux_chans") or []))
+            rekeys_completed = int(secure_link.get("rekeys_completed_total") or 0)
+            last_rekey_trigger = str(secure_link.get("last_rekey_trigger") or "")
+            candidates_by_host.setdefault(host, []).append(
+                (idx, session_id, authenticated_ts, mux_count, rekeys_completed, last_rekey_trigger)
+            )
+        suppress: set[int] = set()
+        for items in candidates_by_host.values():
+            if len(items) < 2:
+                continue
+            newest_idx, newest_session_id, newest_ts, _newest_mux_count, _newest_rekeys_completed, _newest_trigger = max(
+                items,
+                key=lambda item: (item[2], item[1]),
+            )
+            for idx, session_id, authenticated_ts, mux_count, rekeys_completed, last_rekey_trigger in items:
+                if idx == newest_idx or session_id == newest_session_id:
+                    continue
+                if mux_count > 0:
+                    continue
+                if rekeys_completed <= 0 and not last_rekey_trigger:
+                    continue
+                if newest_ts > 0.0 and authenticated_ts > newest_ts:
+                    continue
+                suppress.add(idx)
+        if not suppress:
+            return rows
+        return [row for idx, row in enumerate(rows) if idx not in suppress]
+
     def get_overlay_peers_snapshot(self) -> list[dict]:
         getter = getattr(self._inner, "get_overlay_peers_snapshot", None)
         rows = list(getter() or []) if callable(getter) else []
@@ -3403,7 +3467,7 @@ class SecureLinkPskSession(ISession):
                 "disconnect_detail": str(state.disconnect_detail or "") if state is not None else "",
             }
             out.append(r)
-        return out
+        return self._filter_superseded_myudp_listener_rows(out)
 
     def get_secure_link_status_snapshot(self) -> dict:
         any_failed = False
@@ -3831,7 +3895,12 @@ class SecureLinkPskSession(ISession):
             return
         key = self._peer_key(peer_id)
         state = self._peer_states.get(key)
-        if state is None or not state.authenticated:
+        if (
+            state is None
+            or int(state.session_id or 0) <= 0
+            or not state.c2s_key
+            or not state.s2c_key
+        ):
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         if int(state.pending_session_id or 0) > 0 and int(state.pending_session_id or 0) != int(session_id):
