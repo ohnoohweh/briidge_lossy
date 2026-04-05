@@ -2288,6 +2288,9 @@ class SecureLinkPskSession(ISession):
         self._client_retry_not_before_unix_ts: Optional[float] = None
         self._client_rekey_due_mono: float = 0.0
         self._client_rekey_due_unix_ts: Optional[float] = None
+        self._client_rekey_hold_after_commit: bool = False
+        self._client_rekey_app_queue = deque()
+        self._client_rekey_app_queue_bytes: int = 0
         self._last_rekey_trigger: str = ""
         self._local_identity: Optional[_SecureLinkIdentity] = None
         self._revoked_serials: Set[str] = set()
@@ -2744,6 +2747,7 @@ class SecureLinkPskSession(ISession):
             state.session_id = int(session_id)
         state.authenticated = False
         self._clear_pending_rekey(state)
+        self._clear_client_rekey_app_queue()
         if not self._client_mode and peer_id is not None:
             self._server_unregister_peer_channels(int(peer_id))
         state.auth_fail_code = int(code or 0)
@@ -2799,11 +2803,45 @@ class SecureLinkPskSession(ISession):
 
     def _clear_all_states(self) -> None:
         self._cancel_client_rekey_task(clear_schedule=True)
+        self._clear_client_rekey_app_queue()
         self._peer_states.clear()
         self._server_chan_to_peer.clear()
         self._server_peer_chan_to_mux.clear()
         self._server_next_mux_chan = 1
         self._refresh_connected_state()
+
+    def _clear_client_rekey_app_queue(self) -> None:
+        self._client_rekey_hold_after_commit = False
+        self._client_rekey_app_queue.clear()
+        self._client_rekey_app_queue_bytes = 0
+
+    def _queue_client_rekey_app_payload(self, payload: bytes, peer_id: Optional[int]) -> bool:
+        queued_payload = bytes(payload or b"")
+        if not queued_payload:
+            return False
+        max_frames = 256
+        max_bytes = 1024 * 1024
+        if len(self._client_rekey_app_queue) >= max_frames:
+            return False
+        if (self._client_rekey_app_queue_bytes + len(queued_payload)) > max_bytes:
+            return False
+        self._client_rekey_app_queue.append((queued_payload, peer_id))
+        self._client_rekey_app_queue_bytes += len(queued_payload)
+        return True
+
+    def _flush_client_rekey_app_queue(self) -> None:
+        if not self._client_rekey_app_queue:
+            return
+        queued = list(self._client_rekey_app_queue)
+        self._client_rekey_app_queue.clear()
+        self._client_rekey_app_queue_bytes = 0
+        for idx, (payload, peer_id) in enumerate(queued):
+            if self._send_app_immediate(payload, peer_id=peer_id) > 0:
+                continue
+            remaining = queued[idx:]
+            self._client_rekey_app_queue.extend(remaining)
+            self._client_rekey_app_queue_bytes = sum(len(item[0]) for item in remaining)
+            return
 
     def _record_secure_link_event(self, event: str, when: Optional[float] = None) -> None:
         ts = float(when if when is not None else time.time())
@@ -4048,6 +4086,7 @@ class SecureLinkPskSession(ISession):
         state.pending_s2c_key = s2c_key
         commit = self._client_rekey_commit_proof(session_id, state.pending_client_nonce, server_nonce)
         self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_COMMIT, session_id, 0, commit))
+        self._client_rekey_hold_after_commit = True
 
     def _handle_rekey_commit(self, peer_id: Optional[int], session_id: int, body: bytes) -> None:
         if self._client_mode or int(session_id or 0) <= 0:
@@ -4111,6 +4150,8 @@ class SecureLinkPskSession(ISession):
             rekey_completed=True,
         )
         self._refresh_connected_state()
+        self._client_rekey_hold_after_commit = False
+        self._flush_client_rekey_app_queue()
 
     def _deliver_outer_app(self, payload: bytes, peer_id: Optional[int]) -> None:
         if callable(self._outer_on_app):
@@ -4188,7 +4229,7 @@ class SecureLinkPskSession(ISession):
             return
         self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_UNSUPPORTED)
 
-    def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
+    def _send_app_immediate(self, payload: bytes, peer_id: Optional[int] = None) -> int:
         routed_payload = payload
         if not self._client_mode:
             target = self._resolve_server_send_target(payload, peer_id=peer_id)
@@ -4212,10 +4253,13 @@ class SecureLinkPskSession(ISession):
         wire = aad + ciphertext
         sent = self._inner.send_app(wire, peer_id=peer_id)
         if sent:
-            if self._client_mode:
-                self._schedule_client_rekey_timer(state)
             self._maybe_trigger_rekey(state)
         return len(payload) if sent else 0
+
+    def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
+        if self._client_mode and self._client_rekey_hold_after_commit:
+            return len(payload) if self._queue_client_rekey_app_payload(payload, peer_id) else 0
+        return self._send_app_immediate(payload, peer_id=peer_id)
 
 class UdpSession(ISession):
     """
@@ -8596,7 +8640,7 @@ class WebSocketSession(ISession):
                 self._log.info(f"[WS-SESSION] ({self._probe_id}) failed to resolve --ws-static-dir: {e!r}")
 
         def _http_headers(status: int, length: int, ctype: str = "application/octet-stream"):
-            now = datetime.datetime.utcnow()
+            now = datetime.datetime.now(datetime.timezone.utc)
             return [
                 ("Date", now.strftime("%a, %d %b %Y %H:%M:%S GMT")),
                 ("Server", "ws-mini/1.0"),

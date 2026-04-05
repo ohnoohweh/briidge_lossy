@@ -861,6 +861,7 @@ Current status:
 - fulfilled for the currently delivered client-driven frame-count-triggered rekey path
 - fulfilled for time-based rekey on authenticated client-side sessions after the first protected client-data frame
 - fulfilled for operator-forced rekey through the admin API on authenticated client-side sessions after the first protected client-data frame
+- fulfilled for the previously exposed client/server cutover race where the server could switch on `REKEY_COMMIT` before the client received `REKEY_DONE`; the current runtime now holds only client outbound application payloads in that commit-to-done window and flushes them immediately under the new session once `REKEY_DONE` arrives, so healthy overlay traffic does not depend on an overlap period where both old and new secure-link sessions are accepted simultaneously
 
 Evidence:
 
@@ -884,6 +885,8 @@ Evidence:
     `test_overlay_e2e_tcp_secure_link_psk_rekeys_after_time_threshold`
   - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_psk_operator_forced_rekey`
+  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_myudp_secure_link_psk_rekey_done_delay_keeps_same_udp_channel_healthy`
 
 #### Nonce and counter lifecycle
 
@@ -1020,6 +1023,10 @@ Already generated:
     `test_operator_forced_rekey_rotates_session_and_reports_trigger`
     [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_psk_operator_forced_rekey`
+- integration test for the delayed-`REKEY_DONE` cutover window on a single live myudp UDP channel
+  - evidence:
+    [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    `test_overlay_e2e_myudp_secure_link_psk_rekey_done_delay_keeps_same_udp_channel_healthy`
 - unit tests for counter overflow handling
   - evidence:
     [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)

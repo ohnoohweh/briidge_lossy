@@ -483,6 +483,7 @@ What works today:
 - optional automatic rekey through `secure_link_rekey_after_frames`
 - optional time-based rekey through `secure_link_rekey_after_seconds`
 - operator-forced rekey through peer-targeted `POST /api/secure-link/rekey`
+- `myudp` PSK rekey that still completes under ongoing protected traffic and preserves healthy same-channel UDP flow across the `REKEY_COMMIT` to `REKEY_DONE` cutover window
 - cert-mode trust-anchor, role, validity-window, deployment-scope, and revoked-serial enforcement before protected traffic starts
 - cert-mode peer identity and trust diagnostics through `/api/peers`
 - cert-mode live `POST /api/secure-link/reload` with `scope=revocation`, `scope=local_identity`, or `scope=all`
