@@ -325,7 +325,7 @@ The tables below are generated from the current parser registrations in `bridge.
 | `--ws-subprotocol` | `None` | Optional WebSocket subprotocol (e.g. mux2) |
 | `--ws-tls` | `False` | Use TLS (wss://). Provide cert/key via your deployment. |
 | `--ws-max-size` | `65535` | Maximum binary message size to accept/send (default 65535). |
-| `--ws-payload-mode` | `binary` | WebSocket payload transfer mode: raw binary frames (default), base64 text frames, or JSON text frames with the base64 payload in the data field. |
+| `--ws-payload-mode` | `binary` | WebSocket payload transfer mode: raw binary frames (default), grouped `semi-text-shape` text frames, base64 text frames, or JSON text frames with the base64 payload in the data field. |
 | `--ws-static-dir` | `./web` | Directory to serve as a static web root on the WS port (default ./web). Set to '' to disable. |
 | `--ws-send-timeout` | `3.0` | Seconds to wait for a WebSocket frame send before forcing reconnect (default 3.0). |
 | `--ws-tcp-user-timeout-ms` | `10000` | TCP_USER_TIMEOUT in milliseconds for WebSocket sockets (default 10000, 0 disables). |
@@ -340,6 +340,13 @@ WebSocket proxy tunneling is currently scoped narrowly:
 - Windows only
 - WebSocket peer client only
 - HTTP proxy traversal via `CONNECT`
+
+Current websocket payload forms:
+
+- `binary`: raw overlay wire bytes in websocket binary frames
+- `semi-text-shape`: grouped 6-bit text symbols using `A-Z`, `a-z`, `0-9`, `-`, and `+`, with whitespace between runs of up to 8 symbols
+- `base64`: one base64 text frame per overlay payload
+- `json-base64`: compact JSON text with the base64 payload in the `data` field
 - optional `Negotiate` proxy authentication using the current Windows logon context
 
 ### TCP overlay

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import atexit
 import argparse
 import asyncio
 import base64
@@ -31,12 +32,17 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / 'src'
-SECURE_LINK_CERT_FIXTURES = ROOT / 'tests' / 'fixtures' / 'secure_link_cert'
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 BRIDGE = ROOT / 'ObstacleBridge.py'
 PAYLOAD_IN = b'\x01\x30'
 PAYLOAD_OUT = b'\x02\x30'
+
+from tests.fixtures.secure_link_cert import materialize_secure_link_cert_fixture_set
+
+_SECURE_LINK_CERT_FIXTURE_TMPDIR = tempfile.TemporaryDirectory()
+atexit.register(_SECURE_LINK_CERT_FIXTURE_TMPDIR.cleanup)
+SECURE_LINK_CERT_FIXTURES = materialize_secure_link_cert_fixture_set(Path(_SECURE_LINK_CERT_FIXTURE_TMPDIR.name))
 
 from obstacle_bridge.bridge import (
     CONTROL_MAX_MISSED,
@@ -4547,11 +4553,7 @@ def _cert_secure_args_paths(
 
 
 def _copy_secure_link_cert_fixture_set(target_dir: Path) -> Path:
-    target_dir.mkdir(parents=True, exist_ok=True)
-    for item in SECURE_LINK_CERT_FIXTURES.iterdir():
-        if item.is_file():
-            shutil.copy2(item, target_dir / item.name)
-    return target_dir
+    return materialize_secure_link_cert_fixture_set(target_dir)
 
 
 @pytest.mark.integration

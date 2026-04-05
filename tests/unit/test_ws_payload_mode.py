@@ -179,12 +179,30 @@ class WebSocketPayloadModeTests(unittest.TestCase):
         self.assertEqual(encoded, '{"data":"AnBvbmc="}')
         self.assertEqual(session._decode_ws_message(encoded), wire)
 
+    def test_semi_text_shape_mode_encodes_and_decodes_text_frames(self):
+        session = WebSocketSession(_args("semi-text-shape"))
+        wire = b"\x02pong"
+        encoded = session._ws_payload_codec.encode(wire)
+        self.assertEqual(encoded, "AnBvbmc")
+        self.assertEqual(session._decode_ws_message(encoded), wire)
+
+    def test_semi_text_shape_mode_groups_output_runs(self):
+        session = WebSocketSession(_args("semi-text-shape"))
+        wire = b"abcdefghijkl"
+        encoded = session._ws_payload_codec.encode(wire)
+        self.assertEqual(encoded, "YWJjZGVm Z2hpamts")
+        self.assertEqual(session._decode_ws_message(encoded), wire)
+
     def test_invalid_text_frames_are_rejected(self):
         session = WebSocketSession(_args("json-base64"))
         self.assertIsNone(session._decode_ws_message("not json"))
 
+    def test_invalid_semi_text_shape_frames_are_rejected(self):
+        session = WebSocketSession(_args("semi-text-shape"))
+        self.assertIsNone(session._decode_ws_message("not_valid!"))
+
     def test_binary_frames_are_still_accepted_in_text_modes(self):
-        for mode in ("base64", "json-base64"):
+        for mode in ("base64", "json-base64", "semi-text-shape"):
             session = WebSocketSession(_args(mode))
             wire = b"\x02pong"
             self.assertEqual(session._decode_ws_message(wire), wire)

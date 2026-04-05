@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
+import atexit
 import argparse
 import pathlib
+import tempfile
 import unittest
 from unittest import mock
 
 from obstacle_bridge.bridge import Runner, TcpStreamSession, UdpSession, QuicSession, WebSocketSession, SecureLinkPskSession
+from tests.fixtures.secure_link_cert import materialize_secure_link_cert_fixture_set
 
-FIXTURES = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "secure_link_cert"
+_FIXTURES_TMPDIR = tempfile.TemporaryDirectory()
+atexit.register(_FIXTURES_TMPDIR.cleanup)
+FIXTURES = materialize_secure_link_cert_fixture_set(pathlib.Path(_FIXTURES_TMPDIR.name))
 
 
 def _args(**overrides):

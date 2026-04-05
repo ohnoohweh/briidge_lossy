@@ -32,7 +32,7 @@ html, body {
 }
 
 body {
-  padding: 16px;
+  padding: 16px 0;
 }
 
 .hidden {
@@ -40,9 +40,9 @@ body {
 }
 
 .shell {
-  width: 100%;
+  width: 96%;
   max-width: none;
-  margin: 0;
+  margin: 0 auto;
 }
 
 body.auth-locked {
@@ -700,7 +700,7 @@ h1 {
   display: flex;
   align-items: center;
   gap: 12px;
-  justify-content: flex-end;
+  justify-content: flex-start;
   flex-wrap: wrap;
 }
 

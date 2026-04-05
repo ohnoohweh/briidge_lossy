@@ -7440,9 +7440,52 @@ class WebSocketJsonBase64PayloadCodec(WebSocketPayloadCodec):
         return base64.b64decode(data.encode("ascii"), validate=True)
 
 
+class WebSocketSemiTextShapePayloadCodec(WebSocketPayloadCodec):
+    mode = "semi-text-shape"
+    _ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-+"
+    _DECODE_MAP = {ch: idx for idx, ch in enumerate(_ALPHABET)}
+    _GROUP_SIZE = 8
+
+    def encode(self, wire: bytes):
+        bits = "".join(f"{byte:08b}" for byte in wire)
+        if not bits:
+            return ""
+        symbols = []
+        for start in range(0, len(bits), 6):
+            chunk = bits[start:start + 6]
+            if len(chunk) < 6:
+                chunk = chunk.ljust(6, "0")
+            symbols.append(self._ALPHABET[int(chunk, 2)])
+        return " ".join(
+            "".join(symbols[start:start + self._GROUP_SIZE])
+            for start in range(0, len(symbols), self._GROUP_SIZE)
+        )
+
+    def decode(self, msg) -> Optional[bytes]:
+        if isinstance(msg, (bytes, bytearray)):
+            return bytes(msg)
+        if not isinstance(msg, str):
+            return None
+        normalized = "".join(str(msg).split())
+        if not normalized:
+            return b""
+        bits = []
+        for ch in normalized:
+            value = self._DECODE_MAP.get(ch)
+            if value is None:
+                raise ValueError(f"invalid semi-text-shape symbol: {ch!r}")
+            bits.append(f"{value:06b}")
+        bit_stream = "".join(bits)
+        full_bytes = (len(bit_stream) // 8) * 8
+        trailing = bit_stream[full_bytes:]
+        if trailing and any(bit != "0" for bit in trailing):
+            raise ValueError("invalid semi-text-shape trailing padding")
+        return bytes(int(bit_stream[start:start + 8], 2) for start in range(0, full_bytes, 8))
+
+
 class WebSocketSession(ISession):
     """
-    Overlay over one WebSocket (binary messages by default, optional base64 or JSON+base64 text frames):
+    Overlay over one WebSocket (binary messages by default, optional base64, grouped semi-text, or JSON+base64 text frames):
       wire := KIND(1) + BYTES...
       KIND=0x00 -> APP (to upper layer)
       KIND=0x01 -> PING (payload: Q tx_ns, Q echo_ns)
@@ -7463,6 +7506,7 @@ class WebSocketSession(ISession):
     _PAYLOAD_CODECS = {
         WebSocketBinaryPayloadCodec.mode: WebSocketBinaryPayloadCodec,
         WebSocketBase64PayloadCodec.mode: WebSocketBase64PayloadCodec,
+        WebSocketSemiTextShapePayloadCodec.mode: WebSocketSemiTextShapePayloadCodec,
         WebSocketJsonBase64PayloadCodec.mode: WebSocketJsonBase64PayloadCodec,
     }
 
@@ -7502,7 +7546,7 @@ class WebSocketSession(ISession):
                 '--ws-payload-mode',
                 choices=sorted(WebSocketSession._PAYLOAD_CODECS.keys()),
                 default='binary',
-                help='WebSocket payload transfer mode: raw binary frames (default), base64 text frames, or JSON text frames with the base64 payload in the data field.'
+                help='WebSocket payload transfer mode: raw binary frames (default), grouped semi-text frames, base64 text frames, or JSON text frames with the base64 payload in the data field.'
             )
         if not _has('--ws-static-dir'):
             p.add_argument(
