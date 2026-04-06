@@ -754,10 +754,10 @@ This stays consistent with the current runtime boundary:
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `61/61 = 100.0%`
-- Unit-covered: `39/61 = 63.9%`
-- Any-test-covered: `61/61 = 100.0%`
-- Tracked in manifest: `61/61 = 100.0%`
+- Integration-covered: `66/66 = 100.0%`
+- Unit-covered: `44/66 = 66.7%`
+- Any-test-covered: `66/66 = 100.0%`
+- Tracked in manifest: `66/66 = 100.0%`
 - Requirements without integration coverage: `(none)`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
@@ -766,7 +766,7 @@ The secure-link topic now has an active `REQ-AUT-*` layer in `docs/REQUIREMENTS.
 
 The related architecture decomposition is also linked to tests through `.github/architecture_traceability.yaml`.
 
-The top-level README is intentionally kept as a contributor-facing coverage snapshot. When requirements, implementation, or the test set changes, update this section so the project entrypoint stays aligned with the current contract and evidence.
+The top-level README is intentionally kept as a contributor-facing coverage snapshot. When requirements, implementation, or the test set changes, update this section so the project entrypoint stays aligned with the current contract and evidence, including red-before-green regression additions for bugfixes.
 
 ### CI split note
 

@@ -14,6 +14,7 @@ ARC-CMP-001:
     - tests/unit/test_ws_payload_mode.py::test_http_preflight_requires_success_status
     - tests/unit/test_ws_payload_mode.py::test_listener_peer_uses_advertised_payload_mode_for_rx_and_tx
     - tests/unit/test_ws_multi_peer.py::test_unregister_peer_channels_only_removes_target_peer
+    - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
     - tests/unit/test_ws_multi_peer.py::test_send_app_routes_to_matching_server_peer_queue
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels

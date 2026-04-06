@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import struct
 import unittest
 
 from obstacle_bridge.bridge import WebSocketSession
@@ -22,6 +23,28 @@ def _server_args() -> argparse.Namespace:
         ws_tcp_user_timeout_ms=10000,
         ws_reconnect_grace=3.0,
     )
+
+
+class _QueueDrivenWs:
+    def __init__(self):
+        self.sent = []
+        self.recv_queue = asyncio.Queue()
+        self.remote_address = ("127.0.0.1", 54321)
+        self.local_address = ("127.0.0.1", 8080)
+        self.payload_mode = "binary"
+        self.transport = None
+
+    async def send(self, payload):
+        self.sent.append(payload)
+
+    async def recv(self):
+        return await self.recv_queue.get()
+
+    async def close(self):
+        return None
+
+    async def wait_closed(self):
+        return None
 
 
 class WebSocketMultiPeerMuxRewriteTests(unittest.TestCase):
@@ -90,6 +113,33 @@ class WebSocketMultiPeerSendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(queued_wire, bytes([session._K_APP]) + inbound)
         self.assertTrue(callable(on_sent))
         self.assertTrue(q1.empty())
+
+    async def test_server_peer_rtt_updates_after_ping_pong_round_trip(self):
+        session = WebSocketSession(_server_args())
+        session._loop = asyncio.get_running_loop()
+        peer_ws = _QueueDrivenWs()
+
+        await session._on_accept(peer_ws)
+
+        ctx = session._server_peers[1]
+        self.assertIn("rtt_rt", ctx)
+
+        ping_payload = ctx["rtt"].build_ping_bytes()
+        session._send_ping_frame_for_peer(1, ping_payload)
+        await asyncio.wait_for(ctx["tx_queue"].join(), timeout=1.0)
+
+        self.assertTrue(peer_ws.sent)
+        ping_wire = peer_ws.sent[-1]
+        self.assertEqual(ping_wire[0], session._K_PING)
+        sent_tx_ns, _echo_ns = struct.unpack(">QQ", ping_wire[1:17])
+
+        await peer_ws.recv_queue.put(bytes([session._K_PONG]) + struct.pack(">Q", sent_tx_ns))
+        await asyncio.sleep(0.05)
+
+        self.assertGreater(ctx["rtt"].rtt_est_ms, 0.0)
+        self.assertGreater(session.get_overlay_peers_snapshot()[1]["rtt_est_ms"], 0.0)
+
+        await session._close_server_peer(1)
 
 
 if __name__ == '__main__':
