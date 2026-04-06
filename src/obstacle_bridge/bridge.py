@@ -14025,6 +14025,7 @@ class Runner:
 class AdminWebUI:
     AUTH_CHALLENGE_TTL_SEC = 90
     AUTH_SESSION_TTL_SEC = 8 * 60 * 60
+    CONFIG_CHALLENGE_TTL_SEC = 90
     LIVE_WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
     LIVE_TOPICS = ("status", "connections", "peers", "meta")
 
@@ -14094,6 +14095,7 @@ class AdminWebUI:
         self.started_monotonic = time.monotonic()
         self._auth_challenges: Dict[str, dict] = {}
         self._auth_sessions: Dict[str, float] = {}
+        self._config_challenges: Dict[str, dict] = {}
 
     async def start(self):
         if not getattr(self.args, "admin_web", False):
@@ -14189,6 +14191,10 @@ class AdminWebUI:
 
             if path == "/api/auth/logout":
                 await self._handle_auth_logout(writer, method, headers)
+                return
+
+            if path == "/api/config/challenge":
+                await self._handle_config_challenge(writer, method, headers, body)
                 return
 
             if path.startswith("/api/") and not self._is_authenticated(headers):
@@ -14302,6 +14308,33 @@ class AdminWebUI:
             await self._send_json(writer, 400, {"ok": False, "error": "invalid JSON body"})
             return
         updates = req.get("updates", {})
+        if self.auth_required():
+            challenge_id = str(req.get("challenge_id", "") or "").strip()
+            proof = str(req.get("proof", "") or "").strip().lower()
+            if not challenge_id or not proof:
+                await self._send_json(writer, 428, {"ok": False, "error": "configuration change confirmation required"})
+                return
+            self._prune_auth_state()
+            challenge = self._config_challenges.pop(challenge_id, None)
+            if not challenge:
+                await self._send_json(writer, 403, {"ok": False, "error": "invalid or expired configuration change challenge"})
+                return
+            if not isinstance(updates, dict):
+                await self._send_json(writer, 400, {"ok": False, "error": "updates must be an object"})
+                return
+            updates_digest = self._build_config_update_digest(updates)
+            if updates_digest != str(challenge.get("updates_digest", "") or ""):
+                await self._send_json(writer, 403, {"ok": False, "error": "configuration update payload mismatch"})
+                return
+            expected = self._build_config_change_response(
+                str(challenge.get("seed", "") or ""),
+                str(getattr(self.args, "admin_web_username", "") or ""),
+                str(getattr(self.args, "admin_web_password", "") or ""),
+                updates_digest,
+            )
+            if proof != expected:
+                await self._send_json(writer, 403, {"ok": False, "error": "configuration change confirmation failed"})
+                return
         ok, err = self.runner.update_config(updates)
         if not ok:
             await self._send_json(writer, 400, {"ok": False, "error": err})
@@ -14446,6 +14479,7 @@ class AdminWebUI:
     def reset_auth_state(self) -> None:
         self._auth_challenges.clear()
         self._auth_sessions.clear()
+        self._config_challenges.clear()
 
     def _prune_auth_state(self) -> None:
         now = time.time()
@@ -14455,6 +14489,12 @@ class AdminWebUI:
         expired_sessions = [key for key, expires_at in self._auth_sessions.items() if float(expires_at) <= now]
         for key in expired_sessions:
             self._auth_sessions.pop(key, None)
+        expired_config_challenges = [key for key, item in self._config_challenges.items() if float(item.get("expires_at", 0.0)) <= now]
+        for key in expired_config_challenges:
+            self._config_challenges.pop(key, None)
+        expired_config_challenges = [key for key, item in self._config_challenges.items() if float(item.get("expires_at", 0.0)) <= now]
+        for key in expired_config_challenges:
+            self._config_challenges.pop(key, None)
 
     def _parse_cookie_header(self, headers: dict) -> Dict[str, str]:
         raw = str(headers.get("cookie", "") or "")
@@ -14489,6 +14529,37 @@ class AdminWebUI:
     def _build_auth_response(self, seed: str, username: str, password: str) -> str:
         msg = f"{seed}:{username}:{password}".encode("utf-8")
         return hashlib.sha256(msg).hexdigest()
+
+    @staticmethod
+    def _canonical_config_update_json(updates: dict) -> str:
+        return json.dumps(updates, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+    def _build_config_update_digest(self, updates: dict) -> str:
+        canonical = self._canonical_config_update_json(updates if isinstance(updates, dict) else {})
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def _build_config_change_seed(self, challenge_id: str) -> str:
+        return secrets.token_hex(32) + challenge_id
+
+    def _build_config_change_response(self, seed: str, username: str, password: str, updates_digest: str) -> str:
+        msg = f"{seed}:{username}:{password}:{updates_digest}".encode("utf-8")
+        return hashlib.sha256(msg).hexdigest()
+
+    def _issue_config_challenge(self, updates: dict) -> dict:
+        self._prune_auth_state()
+        challenge_id = secrets.token_hex(16)
+        seed = self._build_config_change_seed(challenge_id)
+        updates_digest = self._build_config_update_digest(updates)
+        self._config_challenges[challenge_id] = {
+            "seed": seed,
+            "updates_digest": updates_digest,
+            "expires_at": time.time() + self.CONFIG_CHALLENGE_TTL_SEC,
+        }
+        return {
+            "challenge_id": challenge_id,
+            "seed": seed,
+            "updates_digest": updates_digest,
+        }
 
     def _issue_session_headers(self) -> List[Tuple[str, str]]:
         token = secrets.token_hex(32)
@@ -14566,6 +14637,38 @@ class AdminWebUI:
         payload = {"ok": True, "authenticated": True}
         self._log_api_response("/api/auth/login", 200, payload, summary="authenticated")
         await self._send_json(writer, 200, payload, headers=self._issue_session_headers())
+
+    async def _handle_config_challenge(self, writer, method: str, headers: dict, body: bytes):
+        if method != "POST":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+        if not self.auth_required():
+            payload = {"ok": True, "auth_required": False}
+            self._log_api_response("/api/config/challenge", 200, payload, summary="auth disabled")
+            await self._send_json(writer, 200, payload)
+            return
+        if not self._is_authenticated(headers):
+            payload = {"ok": False, "authenticated": False, "error": "authentication required"}
+            self._log_api_response("/api/config/challenge", 401, payload, summary="auth required")
+            await self._send_json(writer, 401, payload)
+            return
+        try:
+            req = json.loads((body or b"{}").decode("utf-8"))
+        except Exception:
+            await self._send_json(writer, 400, {"ok": False, "error": "invalid JSON body"})
+            return
+        updates = req.get("updates", {})
+        if not isinstance(updates, dict):
+            await self._send_json(writer, 400, {"ok": False, "error": "updates must be an object"})
+            return
+        payload = {"ok": True, "auth_required": True, **self._issue_config_challenge(updates)}
+        self._log_api_response(
+            "/api/config/challenge",
+            200,
+            {"ok": True, "auth_required": True, "updates_digest": payload["updates_digest"]},
+            summary="issued config change challenge",
+        )
+        await self._send_json(writer, 200, payload)
 
     async def _handle_auth_logout(self, writer, method: str, headers: dict):
         if method != "POST":

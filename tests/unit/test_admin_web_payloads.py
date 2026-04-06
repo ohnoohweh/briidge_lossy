@@ -1,4 +1,7 @@
 import argparse
+import asyncio
+import json
+import time
 import unittest
 
 from obstacle_bridge.bridge import AdminWebUI
@@ -148,6 +151,24 @@ class _RunnerCertStub(_RunnerStub):
         return payload
 
 
+class _WriterStub:
+    def __init__(self):
+        self.buffer = bytearray()
+        self.closed = False
+
+    def write(self, data):
+        self.buffer.extend(data)
+
+    async def drain(self):
+        return None
+
+    def close(self):
+        self.closed = True
+
+    async def wait_closed(self):
+        return None
+
+
 class AdminWebPayloadTests(unittest.TestCase):
     def test_config_snapshot_hides_secure_link_psk_and_marks_it_read_only(self):
         args = argparse.Namespace(
@@ -257,6 +278,84 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["connection_failure_detail"], "unexpected HTTP status 426")
         self.assertEqual(payload["connection_last_event"], "connect_failed")
         self.assertEqual(payload["connection_failure_transport"], "ws")
+
+    def test_config_save_requires_challenge_bound_to_update_block(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=False,
+            admin_web_username="admin",
+            admin_web_password="admin-secret",
+            overlay_transport="tcp",
+            dashboard=False,
+            secure_link_psk="bridge-secret",
+        )
+        runner = _RunnerStub()
+        ui = AdminWebUI(args, runner)
+        headers = {"cookie": f"{ui._session_cookie_name()}=session-token"}
+        ui._auth_sessions["session-token"] = time.time() + 60
+
+        async def run_flow():
+            challenge_writer = _WriterStub()
+            await ui._handle_config_challenge(
+                challenge_writer,
+                "POST",
+                headers,
+                json.dumps({"updates": {"secure_link_psk": "new-secret", "admin_web_name": "New Node"}}).encode("utf-8"),
+            )
+            challenge_doc = json.loads(challenge_writer.buffer.decode("utf-8").split("\r\n\r\n", 1)[1])
+            proof = ui._build_config_change_response(
+                challenge_doc["seed"],
+                args.admin_web_username,
+                args.admin_web_password,
+                challenge_doc["updates_digest"],
+            )
+
+            config_writer = _WriterStub()
+            await ui._handle_config(
+                config_writer,
+                "POST",
+                json.dumps({
+                    "updates": {"secure_link_psk": "new-secret", "admin_web_name": "New Node"},
+                    "challenge_id": challenge_doc["challenge_id"],
+                    "proof": proof,
+                }).encode("utf-8"),
+            )
+            ok_doc = json.loads(config_writer.buffer.decode("utf-8").split("\r\n\r\n", 1)[1])
+            self.assertTrue(ok_doc["ok"])
+            self.assertEqual(runner.args.secure_link_psk, "new-secret")
+            self.assertEqual(runner.args.admin_web_name, "New Node")
+
+            ui._auth_sessions["session-token"] = time.time() + 60
+
+            tamper_challenge_writer = _WriterStub()
+            await ui._handle_config_challenge(
+                tamper_challenge_writer,
+                "POST",
+                headers,
+                json.dumps({"updates": {"secure_link_psk": "tampered-secret"}}).encode("utf-8"),
+            )
+            tamper_challenge_doc = json.loads(tamper_challenge_writer.buffer.decode("utf-8").split("\r\n\r\n", 1)[1])
+
+            tamper_writer = _WriterStub()
+            await ui._handle_config(
+                tamper_writer,
+                "POST",
+                json.dumps({
+                    "updates": {"secure_link_psk": "tampered-secret"},
+                    "challenge_id": tamper_challenge_doc["challenge_id"],
+                    "proof": proof,
+                }).encode("utf-8"),
+            )
+            tamper_doc = json.loads(tamper_writer.buffer.decode("utf-8").split("\r\n\r\n", 1)[1])
+            self.assertFalse(tamper_doc["ok"])
+            self.assertEqual(tamper_doc["error"], "configuration change confirmation failed")
+
+        asyncio.run(run_flow())
 
     def test_build_peers_payload_includes_secure_link_rows(self):
         args = argparse.Namespace(

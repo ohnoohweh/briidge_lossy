@@ -7,6 +7,7 @@ This document records the current WebAdmin design as it is actually implemented 
 It focuses on the delivered admin surface and the concepts that shape it:
 
 - challenge-response login
+- guarded configuration writes bound to the exact update payload
 - session-cookie handling
 - protected API routing
 - live status updates over WebSocket
@@ -88,6 +89,27 @@ Security note:
 - the admin session cookie still travels over the transport path in use
 - HTTPS is still preferred when the deployment path can support it, especially on untrusted networks
 - HTTP login is acceptable only when the operator understands the transport trust boundary
+
+## Guarded configuration writes
+
+The admin configuration editor uses a second challenge-response step when the operator saves changes.
+
+The save flow is intentionally bound to the exact update block rather than only to a class of secret keys:
+
+1. the browser collects the edited configuration values
+2. the browser asks the server for a short-lived config-change challenge for that exact update block
+3. the operator re-enters the current admin password
+4. the browser computes a proof over the server seed, the current password, and a canonical digest of the exact update block
+5. the browser submits the same update block plus the proof
+6. the server accepts the write only if the proof matches the challenge that was issued for that same payload
+
+This design deliberately protects the whole config save path, not just secret-like fields such as `admin_web_password` or `secure_link_psk`.
+
+Design intent:
+
+- prevent a passive or active MITM from rewriting the update payload after the user approved it
+- keep the proof specific to one exact edit block so it cannot be replayed against a different config change
+- preserve the existing secret redaction rules while making config writes themselves harder to tamper with
 
 ## Session and state handling
 

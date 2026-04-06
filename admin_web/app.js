@@ -88,6 +88,7 @@ const authState = {
   required: false,
   authenticated: false,
   appStarted: false,
+  username: '',
 };
 
 const restartState = {
@@ -113,6 +114,47 @@ function setAuthMessage(message, isOk = false) {
   if (!el) return;
   el.textContent = message || '';
   el.classList.toggle('ok', Boolean(message) && isOk);
+}
+
+function setConfigGateMessage(message, isOk = false) {
+  const el = document.getElementById('configGateMessage');
+  if (!el) return;
+  el.textContent = message || '';
+  el.classList.toggle('ok', Boolean(message) && isOk);
+}
+
+const configGateState = {
+  resolver: null,
+};
+
+function openConfigGate(message) {
+  const gate = document.getElementById('configGate');
+  const copy = document.getElementById('configGateCopy');
+  const passwordInput = document.getElementById('configGatePassword');
+  const messageNode = document.getElementById('configGateMessage');
+  if (!gate || !copy || !passwordInput || !messageNode) {
+    return Promise.resolve(null);
+  }
+  copy.textContent = message || 'Enter the current admin password to confirm the configuration changes.';
+  messageNode.textContent = '';
+  passwordInput.value = '';
+  gate.classList.remove('hidden');
+  document.body.classList.add('config-locked');
+  window.setTimeout(() => passwordInput.focus(), 0);
+  return new Promise((resolve) => {
+    configGateState.resolver = resolve;
+  });
+}
+
+function closeConfigGate(result = null) {
+  const gate = document.getElementById('configGate');
+  const passwordInput = document.getElementById('configGatePassword');
+  if (gate) gate.classList.add('hidden');
+  document.body.classList.remove('config-locked');
+  if (passwordInput) passwordInput.value = '';
+  const resolver = configGateState.resolver;
+  configGateState.resolver = null;
+  if (resolver) resolver(result);
 }
 
 function browserLoginHashHint() {
@@ -875,10 +917,38 @@ async function saveConfig() {
   }
 
   try {
-    const r = await apiFetch('/api/config', {
+    const challengeResp = await apiFetch('/api/config/challenge', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ updates }),
+    });
+    const challengeDoc = await challengeResp.json();
+    if (!challengeResp.ok || !challengeDoc.ok) {
+      throw new Error(challengeDoc.error || `HTTP ${challengeResp.status}`);
+    }
+
+    const payload = { updates };
+    if (challengeDoc.auth_required) {
+      const username = String(configState.config?.admin_web_username || authState.username || '').trim();
+      if (!username) {
+        throw new Error('admin username is required to confirm configuration changes');
+      }
+      const password = await openConfigGate(
+        `Enter the current admin password to confirm ${Object.keys(updates).length} configuration change(s).`
+      );
+      if (password == null) {
+        setText('configMessage', 'Configuration save canceled.');
+        return;
+      }
+      const proof = await sha256Hex(`${String(challengeDoc.seed || '')}:${username}:${password}:${String(challengeDoc.updates_digest || '')}`);
+      payload.challenge_id = String(challengeDoc.challenge_id || '');
+      payload.proof = proof;
+    }
+
+    const r = await apiFetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
     const j = await r.json();
     if (!r.ok || !j.ok) {
@@ -1424,6 +1494,7 @@ async function loginAdmin(event) {
     if (!challenge.auth_required) {
       authState.required = false;
       authState.authenticated = true;
+      authState.username = username;
       updateAuthUi();
       await startAdminApp();
       return;
@@ -1445,6 +1516,7 @@ async function loginAdmin(event) {
     document.getElementById('authPassword').value = '';
     authState.required = true;
     authState.authenticated = true;
+    authState.username = username;
     updateAuthUi();
     setAuthMessage('');
     await startAdminApp();
@@ -1470,6 +1542,7 @@ async function logoutAdmin() {
   liveState.connected = false;
   startHttpPollingFallback();
   authState.authenticated = false;
+  authState.username = '';
   updateAuthUi();
   setAuthMessage('Signed out.');
 }
@@ -1535,6 +1608,20 @@ document.getElementById('secureLinkReloadIdentityBtn')?.addEventListener('click'
 document.getElementById('secureLinkReloadAllBtn')?.addEventListener('click', () => requestSecureLinkReload('all'));
 document.getElementById('configReloadBtn')?.addEventListener('click', loadConfig);
 document.getElementById('configSaveBtn')?.addEventListener('click', saveConfig);
+document.getElementById('configGateForm')?.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const passwordInput = document.getElementById('configGatePassword');
+  const password = String(passwordInput?.value || '');
+  if (!password) {
+    setConfigGateMessage('Password is required.');
+    return;
+  }
+  closeConfigGate(password);
+});
+document.getElementById('configGateCancelBtn')?.addEventListener('click', () => {
+  setConfigGateMessage('');
+  closeConfigGate(null);
+});
 document.getElementById('logsReloadBtn')?.addEventListener('click', loadLogs);
 document.getElementById('authForm')?.addEventListener('submit', loginAdmin);
 document.getElementById('peerConnectionsBody')?.addEventListener('click', (event) => {
