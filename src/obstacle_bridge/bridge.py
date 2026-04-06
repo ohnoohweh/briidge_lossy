@@ -2139,6 +2139,7 @@ class _SecureLinkPeerState:
     c2s_key: Optional[bytes] = None
     s2c_key: Optional[bytes] = None
     authenticated: bool = False
+    client_handshake_proof_sent: bool = False
     tx_counter: int = 1
     rx_counter: int = 0
     pending_session_id: int = 0
@@ -2835,6 +2836,14 @@ class SecureLinkPskSession(ISession):
         elif int(session_id or 0) > 0:
             state.session_id = int(session_id)
         state.authenticated = False
+        state.client_handshake_proof_sent = False
+        state.client_nonce = b""
+        state.server_nonce = b""
+        state.c2s_key = None
+        state.s2c_key = None
+        state.tx_counter = 1
+        state.rx_counter = 0
+        state.local_ephemeral_private = None
         self._clear_pending_rekey(state)
         self._clear_client_rekey_app_queue()
         if not self._client_mode and peer_id is not None:
@@ -3176,6 +3185,7 @@ class SecureLinkPskSession(ISession):
         if state.pending_local_ephemeral_private is not None:
             state.local_ephemeral_private = state.pending_local_ephemeral_private
         state.authenticated = True
+        state.client_handshake_proof_sent = False
         state.tx_counter = 1
         state.rx_counter = 0
         state.auth_fail_code = 0
@@ -3225,7 +3235,7 @@ class SecureLinkPskSession(ISession):
             return
         if int(state.pending_session_id or 0) > 0:
             return
-        sent_frames = max(0, int(state.tx_counter or 1) - 1)
+        sent_frames = max(0, int(state.tx_counter or 1) - 1 - int(bool(state.client_handshake_proof_sent)))
         if sent_frames < self._rekey_after_frames:
             return
         self._start_client_rekey(state, trigger="frame_threshold")
@@ -4038,6 +4048,7 @@ class SecureLinkPskSession(ISession):
             rekey_completed=False,
         )
         self._refresh_connected_state()
+        self._send_client_handshake_proof(state)
 
     def _handle_rekey_hello(self, peer_id: Optional[int], session_id: int, body: bytes) -> None:
         if self._client_mode or int(session_id or 0) <= 0:
@@ -4303,6 +4314,8 @@ class SecureLinkPskSession(ISession):
                 rekey_completed=False,
             )
             self._refresh_connected_state()
+        if not plaintext:
+            return
         if not self._client_mode and peer_id is not None:
             plaintext = self._server_rewrite_inbound_app(int(peer_id), plaintext)
         self._deliver_outer_app(plaintext, None if self._client_mode else peer_id)
@@ -4325,6 +4338,14 @@ class SecureLinkPskSession(ISession):
         except Exception:
             pass
         aad = self._hdr_bytes(sl_type, session_id, counter)
+        state = self._peer_states.get(self._peer_key(peer_id))
+        if (
+            state is not None
+            and int(session_id or 0) > 0
+            and int(state.session_id or 0) == int(session_id)
+            and int(state.auth_fail_code or 0) > 0
+        ):
+            return
         if sl_type == self._SL_TYPE_CLIENT_HELLO:
             self._handle_client_hello(peer_id, session_id, body)
             return
@@ -4378,6 +4399,24 @@ class SecureLinkPskSession(ISession):
         if sent:
             self._maybe_trigger_rekey(state)
         return len(payload) if sent else 0
+
+    def _send_client_handshake_proof(self, state: Optional[_SecureLinkPeerState]) -> None:
+        if not self._client_mode or state is None or not state.authenticated or state.client_handshake_proof_sent:
+            return
+        outbound_key = state.c2s_key
+        if not outbound_key:
+            return
+        counter = int(state.tx_counter or 0)
+        if counter < self._SL_FIRST_DATA_COUNTER or counter > self._SL_MAX_DATA_COUNTER:
+            self._send_auth_fail(None, int(state.session_id or 0), self._SL_AUTH_FAIL_LIFECYCLE)
+            return
+        aad = self._hdr_bytes(self._SL_TYPE_DATA, state.session_id, counter)
+        ciphertext = ChaCha20Poly1305(outbound_key).encrypt(self._nonce(counter), b"", aad)
+        wire = aad + ciphertext
+        sent = self._inner.send_app(wire)
+        if sent:
+            state.tx_counter += 1
+            state.client_handshake_proof_sent = True
 
     def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
         if self._client_mode and self._client_rekey_hold_after_commit:
@@ -7516,6 +7555,9 @@ class WebSocketPayloadCodec:
     def decode(self, msg) -> Optional[bytes]:
         raise NotImplementedError
 
+    def max_encoded_size(self, wire_size: int) -> int:
+        return max(0, int(wire_size or 0))
+
 
 class WebSocketBinaryPayloadCodec(WebSocketPayloadCodec):
     mode = "binary"
@@ -7542,9 +7584,16 @@ class WebSocketBase64PayloadCodec(WebSocketPayloadCodec):
             return base64.b64decode(msg.encode("ascii"), validate=True)
         return None
 
+    def max_encoded_size(self, wire_size: int) -> int:
+        size = max(0, int(wire_size or 0))
+        if size <= 0:
+            return 0
+        return 4 * ((size + 2) // 3)
+
 
 class WebSocketJsonBase64PayloadCodec(WebSocketPayloadCodec):
     mode = "json-base64"
+    _JSON_WRAPPER_SIZE = len('{"data":""}')
 
     def encode(self, wire: bytes):
         return json.dumps({"data": base64.b64encode(wire).decode("ascii")}, separators=(",", ":"))
@@ -7561,6 +7610,12 @@ class WebSocketJsonBase64PayloadCodec(WebSocketPayloadCodec):
         if not isinstance(data, str):
             raise ValueError("JSON payload must contain string field 'data'")
         return base64.b64decode(data.encode("ascii"), validate=True)
+
+    def max_encoded_size(self, wire_size: int) -> int:
+        size = max(0, int(wire_size or 0))
+        if size <= 0:
+            return self._JSON_WRAPPER_SIZE
+        return self._JSON_WRAPPER_SIZE + (4 * ((size + 2) // 3))
 
 
 class WebSocketSemiTextShapePayloadCodec(WebSocketPayloadCodec):
@@ -7604,6 +7659,14 @@ class WebSocketSemiTextShapePayloadCodec(WebSocketPayloadCodec):
         if trailing and any(bit != "0" for bit in trailing):
             raise ValueError("invalid semi-text-shape trailing padding")
         return bytes(int(bit_stream[start:start + 8], 2) for start in range(0, full_bytes, 8))
+
+    def max_encoded_size(self, wire_size: int) -> int:
+        size = max(0, int(wire_size or 0))
+        if size <= 0:
+            return 0
+        symbols = (size * 8 + 5) // 6
+        spaces = (symbols - 1) // self._GROUP_SIZE if symbols > 0 else 0
+        return symbols + spaces
 
 
 class _WsConnectionBootstrapError(RuntimeError):
@@ -7766,6 +7829,7 @@ class WebSocketSession(ISession):
         self._ws_max_size: int = int(getattr(self._args, "ws_max_size", 65535))
         self._ws_payload_mode: str = str(getattr(self._args, "ws_payload_mode", "binary") or "binary").lower()
         self._ws_payload_codec: WebSocketPayloadCodec = self._build_ws_payload_codec(self._ws_payload_mode)
+        self._ws_frame_max_size: int = max(0, self._ws_payload_codec.max_encoded_size(self._ws_max_size))
         self._ws_send_timeout_s: float = max(0.0, float(getattr(self._args, "ws_send_timeout", 3.0) or 0.0))
         self._ws_tcp_user_timeout_ms: int = max(0, int(getattr(self._args, "ws_tcp_user_timeout_ms", 10000) or 0))
         self._ws_reconnect_grace_s: float = max(0.0, float(getattr(self._args, "ws_reconnect_grace", 3.0) or 0.0))
@@ -9087,7 +9151,7 @@ class WebSocketSession(ISession):
                     length = struct.unpack("!H", await self._reader.readexactly(2))[0]
                 elif length == 127:
                     length = struct.unpack("!Q", await self._reader.readexactly(8))[0]
-                if length > self_ref._ws_max_size:
+                if length > self_ref._ws_frame_max_size:
                     raise RuntimeError(f"websocket frame too large: {length}")
                 mask_key = await self._reader.readexactly(4) if masked else b""
                 payload = await self._reader.readexactly(length) if length else b""
@@ -9561,7 +9625,7 @@ class WebSocketSession(ISession):
                     uri,
                     ssl=ssl_ctx,
                     subprotocols=subprotocols,
-                    max_size=self._ws_max_size,
+                    max_size=self._ws_frame_max_size,
                     compression=self._ws_compression,
                     ping_interval=None,    # we run our own RTT ping
                     ping_timeout=None,

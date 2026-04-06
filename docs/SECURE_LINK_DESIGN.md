@@ -222,12 +222,14 @@ Meaning:
 
 #### client handshake confirmation
 
-The initiator does not need a third explicit handshake frame in Phase 1.
+The initiator does not need a third explicit handshake control frame in Phase 1.
 
 Instead:
 
-- the first protected `data` frame from the client acts as proof that the initiator derived the same traffic keys
-- if the responder cannot authenticate that first protected frame, the secure-link session is rejected
+- immediately after validating `server_hello`, the client emits one internal zero-length protected `data` frame as proof that it derived the same traffic keys
+- the responder authenticates the session when it successfully decrypts that proof frame rather than waiting for the first real application payload
+- if the responder cannot authenticate that proof frame, the secure-link session is rejected
+- the proof frame is consumed inside the secure-link layer and is not surfaced upward as application payload or `ChannelMux` traffic
 
 This keeps Phase 1 smaller while still validating both directions.
 
