@@ -447,12 +447,12 @@ function detailPillClass(value) {
   return 'role-pill role-unknown';
 }
 
-function renderMetric(label, value, { pill = false } = {}) {
+function renderMetric(label, value, { pill = false, compact = false } = {}) {
   const renderedValue = pill
     ? `<span class="${detailPillClass(value)}">${escapeHtml(fmtText(value))}</span>`
     : `<span class="peer-detail-value mono">${escapeHtml(fmtText(value))}</span>`;
   return `
-    <div class="peer-detail-metric">
+    <div class="peer-detail-metric${compact ? ' peer-detail-metric-compact' : ''}">
       <span class="peer-detail-label">${escapeHtml(label)}</span>
       ${renderedValue}
     </div>
@@ -774,11 +774,8 @@ function renderPeerTable(rows) {
           <div class="peer-detail-stack">
             ${securityMetrics}
             ${allowRekeyAction ? `
-              <div class="peer-detail-actions">
-                <span class="peer-detail-inline">
-                  <span class="peer-detail-label">Rekey in progress</span>
-                  <span class="peer-detail-value mono ${detailPillClass(secureLink.rekey_in_progress)}">${escapeHtml(fmtBool(secureLink.rekey_in_progress))}</span>
-                </span>
+              <div class="peer-detail-rekey-row">
+                ${renderMetric('Rekey in progress', secureLink.rekey_in_progress, { pill: true, compact: true })}
                 <button class="btn btn-secondary secure-link-rekey-btn" type="button" data-peer-id="${escapeHtml(fmtText(row.id))}">Rekey Request</button>
               </div>
             ` : ''}
