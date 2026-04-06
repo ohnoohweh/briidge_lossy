@@ -3,6 +3,22 @@
 # it captures component-level evidence where the architecture decomposition
 # itself matters, especially for joint-function responsibilities.
 
+ARC-CMP-001:
+  unit_tests:
+    - tests/unit/test_ws_multi_peer.py::test_unregister_peer_channels_only_removes_target_peer
+    - tests/unit/test_ws_multi_peer.py::test_send_app_routes_to_matching_server_peer_queue
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_peer
+
+ARC-CMP-003:
+  unit_tests:
+    - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
+    - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_state_is_scoped_by_peer_id
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener
+
 ARC-CMP-004:
   unit_tests:
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_psk

@@ -46,6 +46,7 @@ Important behaviors:
 - listener mode
 - multi-peer listener behavior for transports that support multiple concurrent peer clients
 - transport-specific client bootstrap, such as proxy tunnel establishment, before higher protocol handshakes
+- endpoint-local auxiliary behavior, such as WebSocket pre-upgrade HTTP/static handling, must stay scoped to the originating socket/request and must not mutate unrelated peer sessions
 
 Representative implementation area:
 
@@ -175,6 +176,7 @@ Important behaviors:
 - mixed UDP and TCP services on one peer
 - per-peer isolation in listener mode
 - cleanup on disconnect
+- peer-scoped mutation only: routing, remote catalog changes, and disconnect cleanup must always act on the owning peer rather than on listener-global shortcuts inherited from earlier single-peer designs
 
 This is the main realization layer for listener and mixed-service requirements.
 

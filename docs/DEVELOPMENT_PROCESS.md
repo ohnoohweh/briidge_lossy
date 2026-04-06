@@ -55,6 +55,7 @@ Good requirement style:
 Example:
 
 - "A myudp listener shall support multiple concurrent peer clients and show them as distinct peers in the admin API."
+- "Auxiliary activity on a shared listener endpoint, such as a plain HTTP read on a WebSocket listener, shall stay scoped to the originating request and shall not disturb other peers."
 
 The durable home for these statements is [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md).
 
@@ -135,6 +136,7 @@ For this project, useful completeness dimensions are:
 - transport: `myudp`, `tcp`, `ws`, `quic`
 - topology: single peer, listener, multi-peer
 - traffic: UDP, TCP, mixed
+- peer interaction: one peer active while another peer connects, fails auth, disconnects, or exercises an auxiliary endpoint path such as WS static HTTP
 - lifecycle: startup, reconnect, restart, disconnect
 - admin visibility: status, peers, connections, auth
 - degradation: delay, loss, dropped data/control, concurrency
@@ -189,3 +191,13 @@ Repository guards now enforce three parts of this discipline, but they should be
 - requirement changes must update [requirements_traceability.yaml](/home/ohnoohweh/quic_br/.github/requirements_traceability.yaml), and the referenced tests must exist
 
 This keeps the project understandable even when development continues in prompt-driven iterations.
+
+## Mitigating legacy single-peer assumptions
+
+When behavior suggests one peer is accidentally coupled to another, derive follow-up work from the requirement first and then inspect the code with that failure mode in mind.
+
+- treat `peer_id`, transport-session identity, or request scope as mandatory keys for mutable listener-side state; avoid process-global shortcuts for peer-owned routing, cleanup, or publication decisions
+- review endpoint-adjacent code paths first: listener bootstrap, websocket `process_request` / pre-upgrade HTTP paths, handshake failure handling, disconnect cleanup, and listener-side admin snapshot aggregation
+- require at least one regression that keeps a healthy peer active while another peer or auxiliary request exercises the suspected legacy path
+- prefer mixed-transport and mixed-protocol regressions when the listener shares code paths, because they expose unintended coupling faster than single-transport happy paths
+- when a code path truly needs process-wide effects, document that boundary explicitly so later changes do not mistake a legacy shortcut for intended architecture

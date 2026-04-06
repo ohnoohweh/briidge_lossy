@@ -36,6 +36,10 @@ The recommended workflow is:
 
 This keeps first startup simple and makes larger settings such as `own_servers`, `remote_servers`, auth options, and multi-transport listener combinations much easier to manage than long shell commands.
 
+Listener design note:
+
+- listener-side peer handling is intended to remain peer-independent; one peer's auth failure, disconnect, reconnect, or auxiliary WebSocket HTTP pre-upgrade request should not disturb healthy traffic or published services belonging to another peer
+
 Important config-format note:
 
 - `--config` / `-c` currently expects a JSON file, not an INI file

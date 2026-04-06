@@ -106,6 +106,22 @@ REQ-AUT-005:
   unit_tests:
     - tests/unit/test_secure_link_psk.py::test_server_rewrites_mux_channels_per_peer_for_multiple_connections
 
+REQ-LST-007:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_peer
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener
+  unit_tests:
+    - tests/unit/test_ws_multi_peer.py::test_unregister_peer_channels_only_removes_target_peer
+
+REQ-MUX-005:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener
+  unit_tests:
+    - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
+    - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_state_is_scoped_by_peer_id
+
 REQ-AUT-006:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic
@@ -413,6 +429,7 @@ REQ-ADM-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_available_when_auth_disabled
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_when_auth_disabled
+
 
 REQ-ADM-002:
   integration_tests:
