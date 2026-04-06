@@ -1,7 +1,7 @@
 # ObstacleBridge
 ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for barrier-resilient networking. It can run over multiple overlay transports (`myudp`, `tcp`, `quic`, `ws`), expose local TCP/UDP listener services through a reliable overlay, and host an admin UI for monitoring active channels.
 
-Testing statistics (see docs/README_TESTING.md): `122` integration tests, `112` unit tests. Recent admin-web config tests updated to reflect `secure_link_psk` write-only behavior (commit 637eac8).
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `251` integration tests, `114` unit tests. Recent validation added the Windows WebSocket system-proxy fallback regression and the mixed-listener secure-link WebSocket coverage.
 
 ## Reader guide
 
@@ -43,7 +43,7 @@ Listener design note:
 
 - listener-side peer handling is intended to remain peer-independent; one peer's auth failure, disconnect, reconnect, or auxiliary WebSocket HTTP pre-upgrade request should not disturb healthy traffic or published services belonging to another peer
 - the WS listener now serves its static HTTP root directly at the front listener so ordinary browser keep-alive requests can stay on the same TCP connection before a later WebSocket upgrade attempt
-- that same keep-alive behavior is also defended when a healthy secure-link `myudp` peer is active on the mixed `ws,myudp` listener process; the transport-specific design tradeoffs are captured in [WEBSOCKET_DESIGN.md](/home/ohnoohweh/quic_br/docs/WEBSOCKET_DESIGN.md)
+- that same keep-alive behavior is also defended when a healthy secure-link `myudp` peer is active on the mixed `ws,myudp` listener process; the transport-specific design tradeoffs are captured in [docs/WEBSOCKET_DESIGN.md](docs/WEBSOCKET_DESIGN.md)
 
 Important config-format note:
 
@@ -780,7 +780,7 @@ This stays consistent with the current runtime boundary:
 
 ### Contributor guidance
 - Development process: [docs/DEVELOPMENT_PROCESS.md](docs/DEVELOPMENT_PROCESS.md)
-- User use-cases in the README: [README.md](/home/ohnoohweh/quic_br/README.md)
+- User use-cases in the README: [README.md](README.md)
 - System boundary and assumptions: [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md)
 - Requirements: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
@@ -832,7 +832,7 @@ Debugging in a project like this can be difficult because the behavior emerges f
 - Run the regular pytest suite during normal development to cover unit, integration, and overlay harness regression paths.
 - Use the parallel overlay harness for frequent end-to-end validation when transport and socket behavior matter most.
 - Keep reconnect, listener, and concurrent multi-peer coverage in the regular regression flow instead of treating them as occasional manual checks.
-- The full testing catalog, commands, and scenario-by-scenario criteria are documented in `docs/README_TESTING.md`.
+- The full testing catalog, commands, and scenario-by-scenario criteria are documented in [docs/README_TESTING.md](docs/README_TESTING.md).
 
 ### Repository layout
 - `src/obstacle_bridge/` — main implementation.

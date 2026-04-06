@@ -7314,10 +7314,85 @@ def test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_l
 
 @pytest.mark.integration
 @pytest.mark.slow
+def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_peer_on_mixed_listener(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = materialize_secure_link_case_ports(CASES['case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp'], 10)
+        secure_args = [
+            '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+            '--log-secure-link', 'DEBUG',
+        ]
+        bounce = None
+        server_proc = client_proc = None
+        server_admin = client_admin = None
+        try:
+            bounce = BounceBackServer(
+                name=f'{case.name}_ws_http_probe_bounce',
+                proto=case.bounce_proto,
+                bind_host=case.bounce_bind,
+                port=case.bounce_port,
+                log_path=tmp_path / f'{case.name}_ws_http_probe_bounce.log',
+            )
+            bounce.start()
+            server_admin, client_admin = alloc_admin_ports(288, base=SECURE_LINK_ADMIN_BASE)
+            missing_cfg = str(tmp_path / f'{case.name}_missing.cfg')
+
+            server_cmd = bridge_entrypoint() + materialize_args(case.bridge_server_args, tmp_path, case.name, 'bridge_server')
+            server_cmd += ['--config', missing_cfg, '--admin-web-port', '0']
+            server_cmd += secure_args
+            server_cmd += admin_args(server_admin)
+
+            ws_client_cmd = bridge_entrypoint() + [
+                '--overlay-transport', 'ws',
+                '--ws-peer', '127.0.0.1', '--ws-peer-port', str(_listener_overlay_port(case, 'ws')),
+                '--ws-bind', '0.0.0.0', '--ws-own-port', '0',
+                '--own-servers', f'tcp,{case.probe_port},0.0.0.0,tcp,127.0.0.1,{case.bounce_port}',
+                '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
+                '--log-file', str(tmp_path / f'{case.name}_bridge_client_ws_http_probe.txt'),
+                '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
+            ]
+            ws_client_cmd += secure_args
+            ws_client_cmd += admin_args(client_admin)
+
+            server_proc = start_proc(f'{case.name}_bridge_server', server_cmd, tmp_path, env_extra=case.server_env, admin_port=server_admin)
+            time.sleep(0.5)
+            assert_running(server_proc)
+            wait_admin_up(server_admin, timeout=10.0)
+            wait_tcp_listen('127.0.0.1', _listener_overlay_port(case, 'ws'), timeout=10.0)
+
+            client_proc = start_proc(f'{case.name}_bridge_client_ws_http_probe', ws_client_cmd, tmp_path, env_extra=case.client_env, admin_port=client_admin)
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            wait_probe(case, payload=b'\x01ws-mixed-static-http-before', timeout=12.0)
+            wait_status_connected(server_admin, timeout=20.0, label='server')
+            wait_status_secure_link_state(client_admin, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+            wait_status_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+            wait_peer_secure_link_state(client_admin, expected_state='authenticated', timeout=12.0, label='client', transport='ws', authenticated=True)
+            wait_peer_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', transport='ws', authenticated=True)
+
+            ws_http_url = f'http://127.0.0.1:{_listener_overlay_port(case, "ws")}/'
+            body = assert_static_http_root_serves_repeatedly(ws_http_url, attempts=8, timeout=2.0)
+            assert b'Hello! Welcome!' in body
+
+            wait_probe(case, payload=b'\x01ws-mixed-static-http-after', timeout=12.0)
+            wait_status_secure_link_state(client_admin, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+            wait_status_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
 def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener(tmp_path: Path) -> None:
     with secure_link_test_lock():
         case = materialize_secure_link_case_ports(CASES['case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp'], 10)
-        secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
+        secure_args = [
+            '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+            '--log-secure-link', 'DEBUG',
+        ]
         bounce = BounceBackServer(
             name=f'{case.name}_myudp_http_probe_bounce',
             proto='udp',
