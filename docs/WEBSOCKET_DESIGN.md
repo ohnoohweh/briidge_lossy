@@ -132,6 +132,29 @@ The front-end split should stay limited to concerns that are inherently WebSocke
 
 It should not absorb mux policy, secure-link policy, or admin rendering concerns.
 
+### 7. Text payload modes must budget encoded frame size, not raw payload size
+
+The WebSocket transport supports payload forms that are deliberately not binary-wire-identical:
+
+- `base64`
+- `json-base64`
+- `semi-text-shape`
+
+Those modes expand the transferred frame relative to the raw overlay payload.
+
+That means the runtime must size WebSocket receive limits against the encoded frame, not against the raw overlay budget alone.
+
+The delivered rule is:
+
+- `ws_max_size` remains the raw overlay payload budget
+- the runtime computes an encoded-frame-aware upper bound for the configured payload mode
+- the listener-side parser rejects frames only when the encoded frame exceeds that encoded limit
+- the peer-client `websockets.connect(..., max_size=...)` path must use that encoded limit too
+
+This matters for forwarded-service traffic, especially operator-facing own-server/admin flows over a WS overlay in text payload modes. A response may stay within the raw overlay payload budget while still expanding beyond the WebSocket library receive limit if the client path uses only the raw size.
+
+The live regression that motivated this rule was a forwarded peer-admin response over `semi-text-shape` mode that remained within the configured raw `ws_max_size` but expanded past the WebSocket frame limit and caused a local close with `1009` / `MESSAGE_TOO_BIG`.
+
 ## Regression expectations
 
 Future changes to the WebSocket listener path should preserve these externally visible behaviors:
@@ -141,6 +164,7 @@ Future changes to the WebSocket listener path should preserve these externally v
 - the above remains true when a secure-link-authenticated `myudp` peer is active on the same mixed listener process
 - healthy WebSocket overlay traffic still works after the plain HTTP requests
 - a WS peer client can advertise its configured payload transfer form during upgrade and a listener with a different local default still adopts the correct per-peer codec automatically
+- forwarded own-server/admin traffic over WS text payload modes does not regress into `1009` / `MESSAGE_TOO_BIG` solely because encoded frame size exceeds the raw overlay payload budget
 - accepted WebSocket listener peers report live peer-local RTT in `/api/peers`, while the passive listener row remains zeroed with `rtt=n/a`
 - on the direct non-proxied client path, `GET /` is completed before the later upgrade attempt
 - when that direct-path preflight does not return `200 OK`, the client stays disconnected and does not attempt the later upgrade
@@ -149,7 +173,7 @@ Future changes to the WebSocket listener path should preserve these externally v
 
 The current regression anchor is [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), especially the `test_overlay_e2e_ws_static_http_root_*` family.
 
-For the peer-client bootstrap path, the main regression anchors now live in both [tests/unit/test_ws_payload_mode.py](../tests/unit/test_ws_payload_mode.py) and [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), where payload-mode advertisement/adoption, the HTTP preflight body download, direct-path refusal-on-non-`200`, proxy failure handling, DNS failure classification, and user-visible failed-connection reporting are exercised as supported transport bootstrap behavior.
+For the peer-client bootstrap path, the main regression anchors now live in both [tests/unit/test_ws_payload_mode.py](../tests/unit/test_ws_payload_mode.py) and [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), where payload-mode advertisement/adoption, encoded-frame-aware receive sizing for text payload modes, the HTTP preflight body download, direct-path refusal-on-non-`200`, proxy failure handling, DNS failure classification, and user-visible failed-connection reporting are exercised as supported transport bootstrap behavior.
 
 ## Tradeoffs and future options
 
