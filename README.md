@@ -597,6 +597,8 @@ What to look for in WebAdmin or the admin API:
   - `failure_code=1`
   - `failure_reason=bad_psk`
   - repeated client-side retries show increasing `consecutive_failures`, a bounded `retry_backoff_sec`, a populated `next_retry_unix_ts`, a populated `failure_session_id`, increasing `handshake_attempts_total`, and `last_event=retry_scheduled`
+
+  - Development note: added `secure_link`-scoped DEBUG logging to surface raw secure-link frames and handshake events for WebSocket troubleshooting (PR #178).
 - on healthy authenticated runs, the peer block and `/api/peers` expose `last_event`, `last_event_unix_ts`, `last_authenticated_unix_ts`, `authenticated_sessions_total`, `rekeys_completed_total`, and `last_rekey_trigger`
 - operators can force rekey on an authenticated client-side secure-link session by targeting the selected peer row id:
 

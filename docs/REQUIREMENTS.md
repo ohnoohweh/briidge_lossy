@@ -89,6 +89,8 @@ Current implementation note:
 - the current user-facing runtime configuration surface also includes `secure_link_root_pub`, `secure_link_cert_body`, `secure_link_cert_sig`, `secure_link_private_key`, `secure_link_revoked_serials`, and `secure_link_cert_reload_on_restart` for `secure_link_mode=cert`
 - the Phase 1 PSK mode remains useful for development/testing/lab bring-up, while the certificate-based Phase 2/3 slices provide deployment-rooted mutual authentication, trust validation, and operator-driven live trust-material application
 
+- Implementation note (instrumentation): The runtime now includes additional `secure_link`-scoped DEBUG logging that surfaces incoming secure-link frames and handshake events to aid troubleshooting WebSocket-secure-link handshakes. Operators may enable `secure_link` DEBUG logging temporarily when diagnosing handshake/transport interactions. (see PR #178)
+
 - `REQ-AUT-001`: The project shall provide one transport-independent PSK secure-link capability for overlay authentication and protected data carriage across `myudp`, `tcp`, `ws`, and `quic`.
 - `REQ-AUT-002`: When both peers are configured with the same PSK, the secure-link protected data phase shall authenticate successfully before overlay traffic is accepted and forwarded.
 - `REQ-AUT-003`: When peers are configured with different PSKs, the protected data phase shall not start, overlay traffic shall not be forwarded, and the session shall remain observable as an authentication failure rather than a false connected state.
