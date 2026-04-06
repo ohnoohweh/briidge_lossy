@@ -50,6 +50,7 @@ Important config-format note:
 - `--config` / `-c` currently expects a JSON file, not an INI file
 - the examples below are therefore shown as JSON so they can be copied directly into a file and loaded without surprises on Linux or Windows
 - flat JSON works well for hand-written bootstrap files
+- saved config files keep `admin_web_password` and `secure_link_psk` encrypted on disk and restore them when loaded back into the runtime
 
 ![WebAdmin Config Editor](docs/refered_docs/WebAdmin%20ConfigEditor.png)
 

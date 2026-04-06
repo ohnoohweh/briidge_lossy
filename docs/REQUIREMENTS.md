@@ -159,6 +159,8 @@ Current implementation note:
 
 - `REQ-ADM-008`: When admin authentication is enabled, configuration updates submitted through WebAdmin shall require a fresh challenge-response confirmation bound to the exact update block before the runtime applies the change. The confirmation proof shall be derived from a server-issued seed, the current admin password, and the canonicalized update payload so the proof cannot be reused for a different configuration block. The guarded write flow shall cover both secret and non-secret configuration changes rather than protecting only password-like fields.
 
+- `REQ-ADM-009`: Saved configuration files shall not expose `admin_web_password` or `secure_link_psk` in plaintext. When the runtime loads an encrypted configuration file, it shall restore those values back into memory so the application can continue to start, save, and operate with the configured secrets.
+
 - Implementation note: the admin web challenge-response login shall remain usable over plain HTTP as well as HTTPS. When the page is not in a secure context, the browser-side proof generation shall fall back to an equivalent client-side SHA-256 implementation so the login flow still works without requiring `window.crypto.subtle`.
 
 Development-process measures such as test-execution discipline, regression-writing policy, and CI split strategy are documented in [DEVELOPMENT_PROCESS.md](/home/ohnoohweh/quic_br/docs/DEVELOPMENT_PROCESS.md). They intentionally do not appear here because they govern how the project is built and validated, not what the delivered project promises to an operator.

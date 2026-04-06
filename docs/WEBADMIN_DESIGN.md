@@ -111,6 +111,31 @@ Design intent:
 - keep the proof specific to one exact edit block so it cannot be replayed against a different config change
 - preserve the existing secret redaction rules while making config writes themselves harder to tamper with
 
+### MITM and replay coverage
+
+The current implementation is replay-resistant at the config-write layer, but it is not a substitute for transport security.
+
+What the current mitigation covers:
+
+- the server issues a fresh, short-lived challenge for each config save request
+- the challenge is stored server-side and consumed on first use
+- the proof is bound to the exact canonicalized update payload, so the same proof cannot be reused for a different edit block
+- the write endpoint requires an authenticated session when admin auth is enabled, so the proof alone is not enough
+- stale challenge/proof pairs expire after a short TTL and are rejected
+
+What the current mitigation does not cover:
+
+- a full on-path attacker that can observe, block, and relay traffic still controls the transport path
+- the browser-side password entry is still visible to a hostile endpoint or proxy that can read the page contents
+- the mechanism does not provide confidentiality or server authenticity for the HTTP channel itself
+- a racing attacker who can forward the exact authenticated request before the browser request reaches the server may cause a one-time replay-style success, but cannot reuse the same challenge after it is consumed
+
+Practical interpretation:
+
+- the config-write proof stops payload tampering and cross-request reuse
+- it does not replace HTTPS when the deployment requires transport-level protection
+- the design is best treated as tamper-resistant over HTTP, not as a fully trusted channel
+
 ## Session and state handling
 
 After login, the browser stores the session only as a cookie-managed authenticated state.

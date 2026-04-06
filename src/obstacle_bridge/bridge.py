@@ -81,6 +81,82 @@ except Exception:
     ed25519 = None
     x25519 = None
 
+
+CONFIG_SECRET_FIELDS = {"admin_web_password", "secure_link_psk"}
+CONFIG_SECRET_PREFIX = "enc:v1:"
+CONFIG_SECRET_SALT = b"ObstacleBridge config secret v1"
+CONFIG_SECRET_INFO = b"ObstacleBridge config field encryption"
+CONFIG_SECRET_AAD = b"ObstacleBridge cfg secret"
+
+
+def _config_secret_seed() -> bytes:
+    override = os.environ.get("OBSTACLEBRIDGE_CONFIG_SECRET", "").strip()
+    if override:
+        return override.encode("utf-8")
+    for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+        try:
+            text = pathlib.Path(path).read_text(encoding="utf-8").strip()
+        except Exception:
+            continue
+        if text:
+            return text.encode("utf-8")
+    try:
+        return socket.gethostname().encode("utf-8")
+    except Exception:
+        return b"obstacle-bridge"
+
+
+def _derive_config_secret_key() -> bytes:
+    if hashes is None or HKDF is None:
+        raise RuntimeError("config secret encryption requires cryptography")
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=CONFIG_SECRET_SALT,
+        info=CONFIG_SECRET_INFO,
+    )
+    return hkdf.derive(_config_secret_seed())
+
+
+def _encrypt_config_secret(value: Any) -> Any:
+    if not isinstance(value, str) or value == "":
+        return value
+    if ChaCha20Poly1305 is None:
+        raise RuntimeError("config secret encryption requires cryptography")
+    key = _derive_config_secret_key()
+    nonce = secrets.token_bytes(12)
+    ciphertext = ChaCha20Poly1305(key).encrypt(nonce, value.encode("utf-8"), CONFIG_SECRET_AAD)
+    token = base64.urlsafe_b64encode(nonce + ciphertext).decode("ascii")
+    return CONFIG_SECRET_PREFIX + token
+
+
+def _decrypt_config_secret(value: Any) -> Any:
+    if not isinstance(value, str) or not value.startswith(CONFIG_SECRET_PREFIX):
+        return value
+    if ChaCha20Poly1305 is None:
+        raise RuntimeError("config secret decryption requires cryptography")
+    raw = base64.urlsafe_b64decode(value[len(CONFIG_SECRET_PREFIX):].encode("ascii"))
+    if len(raw) < 13:
+        raise ValueError("invalid encrypted config secret")
+    nonce, ciphertext = raw[:12], raw[12:]
+    key = _derive_config_secret_key()
+    plaintext = ChaCha20Poly1305(key).decrypt(nonce, ciphertext, CONFIG_SECRET_AAD)
+    return plaintext.decode("utf-8")
+
+
+def _transform_config_secrets(obj: Any, transform: Callable[[Any], Any]) -> Any:
+    if isinstance(obj, dict):
+        out = {}
+        for key, value in obj.items():
+            if key in CONFIG_SECRET_FIELDS:
+                out[key] = transform(value)
+            else:
+                out[key] = _transform_config_secrets(value, transform)
+        return out
+    if isinstance(obj, list):
+        return [_transform_config_secrets(item, transform) for item in obj]
+    return obj
+
 # ===== ANSI sequences (dashboard) =====
 ANSI_HIDE_CURSOR = "\x1b[?25l"
 ANSI_SHOW_CURSOR = "\x1b[?25h"
@@ -13804,7 +13880,10 @@ class Runner:
             return (True, "")
         try:
             path = pathlib.Path(str(cfg_path))
-            payload = self._group_config_snapshot(self.get_config_snapshot(include_secrets=True))
+            payload = _transform_config_secrets(
+                self._group_config_snapshot(self.get_config_snapshot(include_secrets=True)),
+                _encrypt_config_secret,
+            )
             parent = path.parent
             if parent and str(parent) not in ("", "."):
                 parent.mkdir(parents=True, exist_ok=True)
@@ -15200,7 +15279,7 @@ class ConfigAwareCLI:
                 sys.stderr.flush()
                 sys.exit(2)
             fmt = args.save_format  # "json" | "json-flat"
-            payload = grouped if fmt == "json" else flat
+            payload = _transform_config_secrets(grouped if fmt == "json" else flat, _encrypt_config_secret)
             with path.open("w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2, ensure_ascii=False)
                 f.write("\n")
@@ -15333,7 +15412,8 @@ class ConfigAwareCLI:
             raise FileNotFoundError(f"Config file not found: {p}")
         with p.open("r", encoding="utf-8") as f:
             data = json.load(f)
-        return self._expand_env(data)
+        expanded = self._expand_env(data)
+        return _transform_config_secrets(expanded, _decrypt_config_secret)
 
     def _scan_actions(self, parser: argparse.ArgumentParser) -> Dict[str, argparse.Action]:
         out: Dict[str, argparse.Action] = {}
