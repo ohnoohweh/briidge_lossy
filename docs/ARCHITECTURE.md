@@ -45,7 +45,7 @@ Important behaviors:
 - single-peer client mode
 - listener mode
 - multi-peer listener behavior for transports that support multiple concurrent peer clients
-- transport-specific client bootstrap, such as proxy tunnel establishment, before higher protocol handshakes
+- transport-specific client bootstrap, such as proxy tunnel establishment and direct-path HTTP root preflight, before higher protocol handshakes
 - endpoint-local auxiliary behavior, such as WebSocket pre-upgrade HTTP/static handling, must stay scoped to the originating socket/request and must not mutate unrelated peer sessions
 
 The current WebSocket-specific listener split, including direct static HTTP handling and same-socket upgrade considerations, is documented in [WEBSOCKET_DESIGN.md](/home/ohnoohweh/quic_br/docs/WEBSOCKET_DESIGN.md).
@@ -117,6 +117,7 @@ Current ownership decisions:
 - retransmission policy and RTT/inflight metrics stay in `ARC-CMP-002` until an implementation phase deliberately reworks that boundary
 - service publication, channel IDs, and remote catalog state stay in `ARC-CMP-003`
 - secure-link config loading and lifecycle wiring belong to `ARC-CMP-004`
+- transport bootstrap or websocket-open failures stay owned by the transport/session layer, but their user-visible failed-state reporting belongs to `ARC-CMP-005`
 - peer identity visibility in admin APIs belongs to `ARC-CMP-005`
 - encryption-layer status visibility in WebAdmin/API is a joint function:
   - `ARC-CMP-006` owns the underlying secure-link state machine and failure categories
@@ -333,6 +334,7 @@ Functional decomposition:
 Concrete mapping in the current implementation:
 
 - runner and CLI configuration select the effective proxy mode for each `WebSocketSession`
+- runner and CLI configuration also select the client-advertised websocket payload form, while each accepted listener-side peer binds its own effective payload codec from the upgrade request metadata
 - `WebSocketSession._get_ws_proxy_endpoint(...)` resolves the proxy endpoint from manual settings, platform defaults, or environment variables
 - `WebSocketSession._open_ws_proxy_socket_blocking(...)` owns HTTP `CONNECT` setup and proxy authentication preconditions
 - `WebSocketSession._suspend_library_proxy_env()` keeps the dependency from silently re-introducing proxy behavior that bypasses the application contract

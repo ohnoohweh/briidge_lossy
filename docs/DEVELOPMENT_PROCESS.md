@@ -71,6 +71,10 @@ Typical component questions:
 
 The durable home for this reasoning is [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md).
 
+When a component has local design tradeoffs, protocol asymmetries, library constraints, or boundary-specific behavior, document those actively in the corresponding component design note such as `..._DESIGN.md` rather than leaving that reasoning only in code review or commit history.
+
+Typical examples are [WEBSOCKET_DESIGN.md](/home/ohnoohweh/quic_br/docs/WEBSOCKET_DESIGN.md) and [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md).
+
 ### 3. Implement
 
 Implementation is the realization step, not the source of truth for intent.

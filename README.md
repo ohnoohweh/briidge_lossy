@@ -347,6 +347,8 @@ WebSocket proxy tunneling is currently scoped narrowly:
 - WebSocket peer client only
 - HTTP proxy traversal via `CONNECT`
 
+Current direct WebSocket peer-client bootstrap also performs a separate `GET /` preflight on a separate TCP connection before the later WebSocket upgrade attempt. That preflight must return `200 OK`, the client downloads the full response body before continuing, and the later WebSocket upgrade is refused when the preflight status is not `200`. The proxy-tunneled path skips this preflight.
+
 Current websocket payload forms:
 
 - `binary`: raw overlay wire bytes in websocket binary frames

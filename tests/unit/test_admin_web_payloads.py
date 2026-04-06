@@ -49,6 +49,12 @@ class _RunnerStub:
     def get_status_snapshot(self):
         return {
             "peer_state": "CONNECTED",
+            "connection_failure_reason": None,
+            "connection_failure_detail": None,
+            "connection_failure_unix_ts": None,
+            "connection_last_event": "",
+            "connection_last_event_unix_ts": None,
+            "connection_failure_transport": None,
             "secure_link_material_generation": 3,
             "secure_link_last_reload_unix_ts": 1700000100.0,
             "secure_link_last_reload_scope": "revocation",
@@ -210,6 +216,44 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["secure_link_last_reload_scope"], "revocation")
         self.assertEqual(payload["secure_link_last_reload_result"], "applied")
         self.assertEqual(payload["secure_link_peers_dropped_total"], 2)
+
+    def test_build_status_payload_preserves_connection_failure_fields(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="ws",
+            dashboard=False,
+        )
+        runner = _RunnerStub()
+        runner.get_status_snapshot = lambda: {
+            "peer_state": "FAILED",
+            "connection_failure_reason": "http_preflight_failed",
+            "connection_failure_detail": "unexpected HTTP status 426",
+            "connection_failure_unix_ts": 1700000200.0,
+            "connection_last_event": "connect_failed",
+            "connection_last_event_unix_ts": 1700000200.0,
+            "connection_failure_transport": "ws",
+            "secure_link_material_generation": 0,
+            "secure_link_last_reload_unix_ts": None,
+            "secure_link_last_reload_scope": "",
+            "secure_link_last_reload_result": "",
+            "secure_link_last_reload_detail": "",
+            "secure_link_peers_dropped_total": 0,
+        }
+        ui = AdminWebUI(args, runner)
+        payload = ui._build_status_payload()
+        self.assertEqual(payload["peer_state"], "FAILED")
+        self.assertEqual(payload["connection_failure_reason"], "http_preflight_failed")
+        self.assertEqual(payload["connection_failure_detail"], "unexpected HTTP status 426")
+        self.assertEqual(payload["connection_last_event"], "connect_failed")
+        self.assertEqual(payload["connection_failure_transport"], "ws")
 
     def test_build_peers_payload_includes_secure_link_rows(self):
         args = argparse.Namespace(

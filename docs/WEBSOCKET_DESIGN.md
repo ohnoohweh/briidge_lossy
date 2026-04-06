@@ -43,6 +43,9 @@ Peer-client responsibilities:
 
 - establish the outbound WebSocket connection
 - honor proxy/bootstrap behavior defined by the WebSocket client path
+- on the direct client path, perform a separate `GET /` HTTP preflight on a separate TCP connection before the later WebSocket upgrade attempt
+- require `200 OK` for that preflight, consume the full HTTP response body before continuing, and refuse the later WebSocket upgrade attempt when the preflight does not return `200`
+- skip that HTTP preflight when the client is using an explicit proxy-tunneled socket path
 - expose a byte/frame path upward to the secure-link and mux layers without leaking transport-specific policy upward
 
 ## Why the listener uses a front-end split
@@ -89,7 +92,9 @@ The delivered implementation favors the externally observable contract over mini
 
 ### 4. The server and client paths do not need symmetric implementations
 
-The current runtime keeps the peer client on the normal `websockets.connect(...)` path while the listener uses the custom front-end split.
+The current runtime keeps the peer client on a mostly normal `websockets.connect(...)` path while the listener uses the custom front-end split.
+
+The main extra client-side bootstrap step today is a direct-path `GET /` preflight before the later upgrade attempt. That preflight is used only on the non-proxied path, and it now forms part of the supported contract: the client downloads the full default-root HTTP body before continuing, and it does not attempt the later WebSocket upgrade when the preflight status is not `200 OK`.
 
 That asymmetry is acceptable because the two sides have different responsibilities:
 
@@ -98,7 +103,24 @@ That asymmetry is acceptable because the two sides have different responsibiliti
 
 Symmetry would only be valuable if it improved maintainability without weakening the delivered listener behavior.
 
-### 5. Keep the WebSocket-specific code narrow
+### 5. The bootstrap path must stay explainable under DEBUG logs
+
+The direct peer-client preflight is intentionally observable when WebSocket logging is raised to `DEBUG`.
+
+The client side should make it obvious:
+
+- when the direct-path HTTP preflight starts
+- which status/body length came back from `GET /`
+- whether the later upgrade was refused because the preflight failed
+- when proxy tunneling skipped the preflight entirely
+
+The listener side should make it obvious:
+
+- when a plain HTTP request was served instead of an upgrade
+- which status/target/body length was returned
+- when a real WebSocket upgrade request was actually attempted
+
+### 6. Keep the WebSocket-specific code narrow
 
 The front-end split should stay limited to concerns that are inherently WebSocket-listener specific:
 
@@ -117,8 +139,14 @@ Future changes to the WebSocket listener path should preserve these externally v
 - two plain HTTP requests on the same TCP connection succeed before any later upgrade attempt
 - the above remains true when a secure-link-authenticated `myudp` peer is active on the same mixed listener process
 - healthy WebSocket overlay traffic still works after the plain HTTP requests
+- a WS peer client can advertise its configured payload transfer form during upgrade and a listener with a different local default still adopts the correct per-peer codec automatically
+- on the direct non-proxied client path, `GET /` is completed before the later upgrade attempt
+- when that direct-path preflight does not return `200 OK`, the client stays disconnected and does not attempt the later upgrade
+- when client bootstrap or websocket-open fails, `/api/status` reports `peer_state=FAILED` with transport-level reason/detail until a later successful connect clears it
 
 The current regression anchor is [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py), especially the `test_overlay_e2e_ws_static_http_root_*` family.
+
+For the peer-client bootstrap path, the main regression anchors now live in both [tests/unit/test_ws_payload_mode.py](/home/ohnoohweh/quic_br/tests/unit/test_ws_payload_mode.py) and [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py), where payload-mode advertisement/adoption, the HTTP preflight body download, direct-path refusal-on-non-`200`, proxy failure handling, DNS failure classification, and user-visible failed-connection reporting are exercised as supported transport bootstrap behavior.
 
 ## Tradeoffs and future options
 
