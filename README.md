@@ -302,6 +302,30 @@ Using config files plus WebAdmin makes these multi-transport setups much easier 
 ## Entry points
 - `python -m obstacle_bridge --help`
 
+### Launcher script
+
+The repository previously included a POSIX shell launcher `scripts/run.sh`. That has been replaced with a cross-platform Python launcher at `scripts/run.py`.
+
+- Default (uses the running Python interpreter and `ObstacleBridge.cfg`):
+
+```bash
+python scripts/run.py
+```
+
+- Windows (show output; useful for debugging):
+
+```powershell
+python .\scripts\run.py --no-redirect
+```
+
+- Supply a custom command instead of the default:
+
+```bash
+python scripts/run.py --command "python -m obstacle_bridge --config ObstacleBridge.cfg"
+```
+
+Options: `--interval` (seconds between restarts when the process exits with code 75), `--no-redirect` (do not redirect stdout/stderr), and `--command` to override the default launcher command.
+
 ## CLI parameter reference
 The tables below are generated from the current parser registrations in `bridge.py`, so the defaults and descriptions match the live code.
 ### General / status
