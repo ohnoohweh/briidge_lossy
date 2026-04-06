@@ -617,6 +617,15 @@ h1 {
   .config-value-cell {
     min-width: 240px;
   }
+
+  .peer-detail-rekey-row {
+    flex-wrap: wrap;
+  }
+
+  .peer-detail-metric-compact {
+    flex-basis: 100%;
+    max-width: none;
+  }
 }
 
 .table-card {
@@ -715,6 +724,13 @@ h1 {
   flex-wrap: wrap;
 }
 
+.peer-detail-rekey-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: nowrap;
+}
+
 .peer-detail-inline {
   display: inline-flex;
   align-items: center;
@@ -752,6 +768,12 @@ h1 {
   border-radius: 12px;
   border: 1px solid rgba(120, 170, 255, 0.12);
   background: rgba(255, 255, 255, 0.03);
+}
+
+.peer-detail-metric-compact {
+  flex: 0 1 33%;
+  min-width: 180px;
+  max-width: 280px;
 }
 
 .peer-detail-label {
