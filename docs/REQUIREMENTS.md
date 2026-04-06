@@ -48,6 +48,7 @@ The detailed realization concept remains in [SECURE_LINK_DESIGN.md](/home/ohnooh
 - `REQ-WSP-008`: Application configuration shall be able to consciously override the platform-default proxy behavior, including forcing direct connection or using an explicitly configured proxy endpoint.
 - `REQ-WSP-009`: A WebSocket peer client running on Windows shall be able to establish its outbound websocket transport through an HTTP proxy that requires `Negotiate` / NTLM-style authentication.
 - `REQ-WSP-010`: The WebSocket overlay transport shall support selectable payload transfer forms through `ws_payload_mode`: raw binary websocket frames (`binary`), plain base64 text websocket frames (`base64`), compact JSON text websocket frames carrying the base64 payload in the `data` field (`json-base64`), and a grouped semi-text form (`semi-text-shape`) using the alphabet `ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-+`. Receivers configured for the text-oriented modes shall continue to accept raw binary websocket frames so mixed peers can fail soft during migration or debugging.
+- `REQ-WSP-011`: On the direct non-proxied WebSocket peer-client path, transport bootstrap shall complete a separate `GET /` HTTP preflight against the target listener before the later websocket upgrade attempt, shall consume the full HTTP response body for that preflight, and shall refuse the websocket upgrade attempt when the preflight status is not `200 OK`.
 
 Current payload-form note:
 

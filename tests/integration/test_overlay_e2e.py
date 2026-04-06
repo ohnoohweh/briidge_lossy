@@ -2576,6 +2576,18 @@ def wait_status_not_connected(admin_port: int, timeout: float = 30.0, label: str
 
     raise RuntimeError(f'Port {admin_port} stayed CONNECTED for {timeout}s; last={last!r}')
 
+
+def wait_log_contains(log_path: Path, needle: str, timeout: float = 10.0) -> str:
+    end = time.time() + timeout
+    last = ''
+    while time.time() < end:
+        text = log_path.read_text(errors='replace') if log_path.exists() else ''
+        if needle in text:
+            return text
+        last = text[-4000:]
+        time.sleep(0.2)
+    raise RuntimeError(f'Log {log_path.name} did not contain {needle!r}\n--- tail ---\n{last}')
+
 def run_case(case: Case, log_dir: Path, case_index: int, settle_s: Optional[float] = None) -> None:
     case = materialize_case_ports(case, case_index)
     procs: List[Proc] = []
@@ -5145,6 +5157,66 @@ def test_overlay_e2e_ws_proxy_failure_keeps_overlay_state_machine_healthy(tmp_pa
         assert status_state(client_status) != 'CONNECTED'
         assert status_state(server_status) != 'CONNECTED'
         expect_probe_failure(case, PAYLOAD_IN, timeout=3.0)
+    finally:
+        bounce.stop()
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_ws_direct_preflight_requires_http_200_before_upgrade(tmp_path: Path) -> None:
+    case_index = 271
+    case = materialize_case_ports(CASES['case08_overlay_ws_ipv4'], case_index)
+    bounce = BounceBackServer(
+        name=f'{case.name}_bounce',
+        proto=case.bounce_proto,
+        bind_host=case.bounce_bind,
+        port=case.bounce_port,
+        log_path=tmp_path / f'{case.name}_bounce.log',
+    )
+    server_proc = client_proc = None
+    try:
+        bounce.start()
+        specs = build_commands(case, tmp_path, case_index, enable_admin=True)
+        server_name, server_cmd, server_env, server_admin = specs[0]
+        client_name, client_cmd, client_env, client_admin = specs[1]
+        server_cmd = _replace_last_arg(server_cmd, '--log', 'DEBUG')
+        client_cmd = _replace_last_arg(client_cmd, '--log', 'DEBUG')
+        server_cmd = _append_args(
+            server_cmd,
+            [
+                '--log-ws-session', 'DEBUG',
+                '--ws-static-dir', str(tmp_path / 'missing_ws_static_root'),
+            ],
+        )
+        client_cmd = _append_args(client_cmd, ['--log-ws-session', 'DEBUG'])
+
+        server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, tmp_path, env_extra=server_env, admin_port=server_admin)
+        client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, tmp_path, env_extra=client_env, admin_port=client_admin)
+
+        wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+        wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
+        client_status = wait_status_not_connected(client_proc.admin_port or 0, timeout=10.0, label='client')
+        server_status = wait_status_not_connected(server_proc.admin_port or 0, timeout=10.0, label='server')
+        assert status_state(client_status) != 'CONNECTED'
+        assert status_state(server_status) != 'CONNECTED'
+        assert_running(server_proc)
+        assert_running(client_proc)
+        expect_probe_failure(case, PAYLOAD_IN, timeout=3.0)
+
+        client_runtime_log = Path(_arg_value(client_cmd, '--log-file', ''))
+        server_runtime_log = Path(_arg_value(server_cmd, '--log-file', ''))
+
+        client_log = wait_log_contains(client_runtime_log, 'HTTP preflight GET / response status=426', timeout=10.0)
+        assert 'refusing websocket upgrade because HTTP preflight returned status=426' in client_log
+        assert 'body_bytes=' in client_log
+
+        server_log = wait_log_contains(server_runtime_log, 'note=upgrade-required-static-disabled', timeout=10.0)
+        assert 'status=426' in server_log
+        assert 'websocket upgrade requested' not in server_log
     finally:
         bounce.stop()
         if client_proc is not None:

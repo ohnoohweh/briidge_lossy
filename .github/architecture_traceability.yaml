@@ -5,10 +5,15 @@
 
 ARC-CMP-001:
   unit_tests:
+    - tests/unit/test_ws_payload_mode.py::test_connect_refuses_upgrade_when_http_preflight_is_not_200
+    - tests/unit/test_ws_payload_mode.py::test_http_preflight_downloads_full_body_before_upgrade
+    - tests/unit/test_ws_payload_mode.py::test_http_preflight_requests_default_page
+    - tests/unit/test_ws_payload_mode.py::test_http_preflight_requires_success_status
     - tests/unit/test_ws_multi_peer.py::test_unregister_peer_channels_only_removes_target_peer
     - tests/unit/test_ws_multi_peer.py::test_send_app_routes_to_matching_server_peer_queue
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_direct_preflight_requires_http_200_before_upgrade
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_link_ws_peer
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_peer
 

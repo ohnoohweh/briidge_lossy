@@ -363,6 +363,7 @@ class WebSocketHttpPreflightTests(unittest.IsolatedAsyncioTestCase):
         reader = _FakeReader(
             [
                 b"HTTP/1.1 200 OK\r\n",
+                b"Content-Length: 13\r\n",
                 b"Content-Type: text/html\r\n",
                 b"\r\n",
             ],
@@ -379,6 +380,24 @@ class WebSocketHttpPreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Host: example.test\r\n", request)
         self.assertTrue(writer.closed)
         self.assertTrue(writer.wait_closed_called)
+
+    async def test_http_preflight_downloads_full_body_before_upgrade(self):
+        session = WebSocketSession(_args("binary"))
+        reader = _FakeReader(
+            [
+                b"HTTP/1.1 200 OK\r\n",
+                b"Content-Length: 16\r\n",
+                b"Content-Type: text/html\r\n",
+                b"\r\n",
+            ],
+            body=b"<html>ok!</html>",
+        )
+        writer = _FakeWriter()
+
+        with mock.patch("obstacle_bridge.bridge.asyncio.open_connection", mock.AsyncMock(return_value=(reader, writer))):
+            await session._load_default_http_page(host="127.0.0.1", port=54321)
+
+        self.assertEqual(reader._body, b"")
 
     async def test_http_preflight_requires_success_status(self):
         session = WebSocketSession(_args("binary"))
@@ -446,6 +465,33 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
         preflight.assert_awaited_once()
         on_accept.assert_awaited_once_with(fake_ws)
         self.assertEqual(connect.await_args.kwargs["compression"], None)
+
+    async def test_connect_refuses_upgrade_when_http_preflight_is_not_200(self):
+        args = _args("binary")
+        args.peer = "127.0.0.1"
+        args.peer_port = 54321
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+        session._peer_tuple = ("127.0.0.1", 54321)
+        session._peer_name_host = "overlay.example"
+        session._peer_name_port = 54321
+
+        connect = mock.AsyncMock()
+        fake_websockets = types.SimpleNamespace(connect=connect)
+
+        with mock.patch.dict(sys.modules, {"websockets": fake_websockets}):
+            with mock.patch.object(
+                session,
+                "_load_default_http_page",
+                mock.AsyncMock(side_effect=RuntimeError("unexpected HTTP status 426")),
+            ) as preflight:
+                with mock.patch.object(session, "_on_accept", mock.AsyncMock()) as on_accept:
+                    await session._connect_to("127.0.0.1", 54321)
+
+        preflight.assert_awaited_once()
+        connect.assert_not_awaited()
+        on_accept.assert_not_awaited()
 
     async def test_connect_uses_proxy_socket_when_proxy_mode_enabled(self):
         args = _args("binary")

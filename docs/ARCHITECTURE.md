@@ -45,7 +45,7 @@ Important behaviors:
 - single-peer client mode
 - listener mode
 - multi-peer listener behavior for transports that support multiple concurrent peer clients
-- transport-specific client bootstrap, such as proxy tunnel establishment, before higher protocol handshakes
+- transport-specific client bootstrap, such as proxy tunnel establishment and direct-path HTTP root preflight, before higher protocol handshakes
 - endpoint-local auxiliary behavior, such as WebSocket pre-upgrade HTTP/static handling, must stay scoped to the originating socket/request and must not mutate unrelated peer sessions
 
 The current WebSocket-specific listener split, including direct static HTTP handling and same-socket upgrade considerations, is documented in [WEBSOCKET_DESIGN.md](/home/ohnoohweh/quic_br/docs/WEBSOCKET_DESIGN.md).

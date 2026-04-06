@@ -93,6 +93,18 @@ def configure_debug_log_ring(max_lines: int) -> None:
     limit = max(1, int(max_lines))
     DEBUG_LOG_RING = deque(DEBUG_LOG_RING, maxlen=limit)
 
+
+def format_stream_endpoints(writer: Any) -> str:
+    try:
+        local = writer.get_extra_info("sockname")
+    except Exception:
+        local = None
+    try:
+        peer = writer.get_extra_info("peername")
+    except Exception:
+        peer = None
+    return f"local={local} peer={peer}"
+
 # ============================== Logging / Debug Config ===============================
 def debug_print(msg: str):
     """Write a timestamped debug line to stderr, never crashing."""
@@ -8940,6 +8952,9 @@ class WebSocketSession(ISession):
         async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
             upgraded = False
             try:
+                self._log.info(
+                    f"[WS-SESSION] ({self._probe_id}) incoming connection {format_stream_endpoints(writer)}"
+                )
                 while True:
                     request = await _read_http_request(reader)
                     if request is None:
@@ -8947,6 +8962,10 @@ class WebSocketSession(ISession):
                     method, req_path, http_version, headers = request
 
                     if _is_ws_upgrade_request(method, headers):
+                        self._log.debug(
+                            f"[WS-SESSION] ({self._probe_id}) websocket upgrade requested "
+                            f"path={req_path} {format_stream_endpoints(writer)}"
+                        )
                         try:
                             ws = await _accept_websocket(reader, writer, req_path, headers)
                         except Exception as exc:
@@ -8973,6 +8992,16 @@ class WebSocketSession(ISession):
                         body = (
                             b"Failed to open a WebSocket connection: missing or invalid Upgrade header.\n\n"
                             b"You cannot access a WebSocket server directly with a browser. You need a WebSocket client.\n"
+                        )
+                        self._log_static_http_decision(
+                            method=method,
+                            req_path=req_path,
+                            status=426,
+                            target=None,
+                            ctype="text/plain; charset=utf-8",
+                            content_length=len(body),
+                            body_length=len(body),
+                            note="upgrade-required-static-disabled",
                         )
                         await _send_http_response(
                             writer,
@@ -9228,6 +9257,9 @@ class WebSocketSession(ISession):
             else:
                 self._log.info(f"[WS-SESSION] ({self._probe_id}) connecting to {uri}")
             if connect_kwargs.get("sock") is None:
+                self._log.debug(
+                    f"[WS-SESSION] ({self._probe_id}) using direct HTTP preflight before websocket upgrade"
+                )
                 await self._load_default_http_page(
                     host=host,
                     port=int(port),
@@ -9497,68 +9529,10 @@ class WebSocketSession(ISession):
         reader = None
         writer = None
         try:
-            open_kwargs = {}
-            if ssl_ctx is not None:
-                open_kwargs["ssl"] = ssl_ctx
-                open_kwargs["server_hostname"] = server_hostname or request_host
-            reader, writer = await asyncio.open_connection(host=host, port=port, **open_kwargs)
-            request = (
-                "GET / HTTP/1.1\r\n"
-                f"Host: {request_host}\r\n"
-                "Connection: close\r\n"
-                "Accept: text/html,application/xhtml+xml\r\n"
-                "User-Agent: ObstacleBridge-ws-preflight/1.0\r\n"
-                "\r\n"
-            ).encode("ascii")
-            writer.write(request)
-            await writer.drain()
-            status_line = await reader.readline()
-            if not status_line:
-                raise RuntimeError("empty HTTP response")
-            parts = status_line.decode("iso-8859-1", "replace").strip().split(" ", 2)
-            status_code = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 0
-            if status_code != 200:
-                raise RuntimeError(f"unexpected HTTP status {status_code}")
-            while True:
-                line = await reader.readline()
-                if not line or line in (b"\r\n", b"\n"):
-                    break
-            body = await reader.read(1)
             self._log.debug(
-                f"[WS-SESSION] ({self._probe_id}) HTTP preflight GET / ok status={status_code} body_present={bool(body)}"
+                f"[WS-SESSION] ({self._probe_id}) HTTP preflight GET / start "
+                f"host={host} port={int(port)} request_host={request_host} tls={bool(ssl_ctx)}"
             )
-        finally:
-            if writer is not None:
-                writer.close()
-                with contextlib.suppress(Exception):
-                    await writer.wait_closed()
-
-    def _decode_ws_message(self, msg) -> Optional[bytes]:
-        if isinstance(msg, str):
-            try:
-                return self._ws_payload_codec.decode(msg)
-            except Exception as e:
-                self._log.debug(f"[WS/RX] ({self._probe_id}) invalid {self._ws_payload_mode} text frame: {e!r}")
-                return None
-        try:
-            return self._ws_payload_codec.decode(msg)
-        except Exception as e:
-            self._log.debug(f"[WS/RX] ({self._probe_id}) invalid {self._ws_payload_mode} frame: {e!r}")
-            return None
-
-    async def _load_default_http_page(
-        self,
-        *,
-        host: str,
-        port: int,
-        ssl_ctx=None,
-        server_hostname: Optional[str] = None,
-        host_header: Optional[str] = None,
-    ) -> None:
-        request_host = host_header or server_hostname or host
-        reader = None
-        writer = None
-        try:
             open_kwargs = {}
             if ssl_ctx is not None:
                 open_kwargs["ssl"] = ssl_ctx
@@ -9579,15 +9553,37 @@ class WebSocketSession(ISession):
                 raise RuntimeError("empty HTTP response")
             parts = status_line.decode("iso-8859-1", "replace").strip().split(" ", 2)
             status_code = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 0
-            if status_code != 200:
-                raise RuntimeError(f"unexpected HTTP status {status_code}")
+            response_headers: Dict[str, str] = {}
             while True:
                 line = await reader.readline()
                 if not line or line in (b"\r\n", b"\n"):
                     break
-            body = await reader.read(1)
+                header_text = line.decode("iso-8859-1", "replace")
+                if ":" not in header_text:
+                    continue
+                key, value = header_text.split(":", 1)
+                response_headers[key.strip().lower()] = value.strip()
+            body = await reader.read()
+            content_length_header = response_headers.get("content-length", "")
+            content_length = int(content_length_header) if content_length_header.isdigit() else None
+            if content_length is not None and len(body) != content_length:
+                raise RuntimeError(
+                    f"incomplete HTTP body {len(body)}/{content_length} for status {status_code}"
+                )
             self._log.debug(
-                f"[WS-SESSION] ({self._probe_id}) HTTP preflight GET / ok status={status_code} body_present={bool(body)}"
+                f"[WS-SESSION] ({self._probe_id}) HTTP preflight GET / response "
+                f"status={status_code} content_length={content_length if content_length is not None else '-'} "
+                f"body_bytes={len(body)}"
+            )
+            if status_code != 200:
+                self._log.debug(
+                    f"[WS-SESSION] ({self._probe_id}) refusing websocket upgrade because "
+                    f"HTTP preflight returned status={status_code}"
+                )
+                raise RuntimeError(f"unexpected HTTP status {status_code}")
+            self._log.debug(
+                f"[WS-SESSION] ({self._probe_id}) HTTP preflight GET / ok "
+                f"status={status_code} downloaded_body_bytes={len(body)}"
             )
         finally:
             if writer is not None:
@@ -10225,7 +10221,7 @@ class ChannelMux:
         self._chan_owner_peer_id: dict[int, int] = {}
 
         # Per-channel stats (readable counters + CRC)
-        self._chan_stats: dict[tuple[int,Proto], _ChanCtr] = {}
+        self._chan_stats: dict[tuple[int, ChannelMux.Proto], _ChanCtr] = {}
 
         # Tasks
         self._sweeper_task: Optional[asyncio.Task] = None
@@ -13813,8 +13809,8 @@ class AdminWebUI:
         self.server = None
 
     async def _handle_client(self, reader, writer):
-        self.log.debug(
-            "Admin web UI handling")
+        self.log.info("Admin web UI incoming connection %s", format_stream_endpoints(writer))
+        self.log.debug("Admin web UI handling")
         try:
             reqline = await reader.readline()
             if not reqline:

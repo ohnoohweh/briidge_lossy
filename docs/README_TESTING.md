@@ -232,6 +232,7 @@ This first mapping is intentionally coarse. It links current integration entrypo
 | `test_overlay_e2e_ws_overlay_honors_no_proxy_env` | `REQ-WSP-007`, `PROC-TST-001` | WS peer clients must bypass proxy routing when `NO_PROXY` matches the target |
 | `test_overlay_e2e_ws_proxy_manual_override_uses_explicit_proxy` and `test_overlay_e2e_ws_proxy_off_override_disables_platform_default_proxy` | `REQ-WSP-008` | Explicit application configuration must be able to force manual proxy use or direct connection |
 | `test_overlay_e2e_ws_proxy_negotiate_auth_on_windows` | `REQ-WSP-009` | On Windows, WS proxy traversal must support Negotiate-authenticated CONNECT flows |
+| `test_overlay_e2e_ws_direct_preflight_requires_http_200_before_upgrade` | `REQ-WSP-011` | Direct WS peer clients must complete the `GET /` preflight and refuse the later upgrade path when that preflight does not return `200 OK` |
 | `test_overlay_e2e_cli_routing_*` and allocator checks | `PROC-TST-001`, `PROC-TST-003`, `PROC-TST-004` | Harness self-tests that protect the integrity and repeatability of the integration test system itself |
 
 ### Scenario-level traceability
@@ -325,6 +326,7 @@ This deeper mapping links concrete integration scenarios to requirement IDs. It 
 | `test_overlay_e2e_ws_proxy_off_override_disables_platform_default_proxy` | `REQ-WSP-008` | Verify explicit direct-connect override disables platform-default proxy routing | Even with `HTTP_PROXY` set, `--ws-proxy-mode off` keeps the WS client on a direct path and the proxy records zero CONNECT requests | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_off_override_disables_platform_default_proxy` |
 | `test_overlay_e2e_ws_proxy_system_default_on_windows_uses_system_proxy` | `REQ-WSP-006` | Verify Windows default system proxy mode through the integration harness | On Windows, the default WS peer-client path uses system proxy discovery and successfully reaches the listener through the proxy | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_system_default_on_windows_uses_system_proxy` |
 | `test_overlay_e2e_ws_proxy_negotiate_auth_on_windows` | `REQ-WSP-009` | Verify Windows Negotiate-authenticated proxy traversal | On Windows, a proxy that challenges with `Proxy-Authenticate: Negotiate` is satisfied and the overlay still reaches `CONNECTED` | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_negotiate_auth_on_windows` |
+| `test_overlay_e2e_ws_direct_preflight_requires_http_200_before_upgrade` | `REQ-WSP-011` | Verify the direct WS client refuses upgrade when the listener cannot serve `GET /` successfully | The client and server stay observable but disconnected, the direct client log records the `GET /` preflight failure, the listener log records the plain HTTP `426` decision, and no WebSocket upgrade request is logged | `pytest -q tests/integration/test_overlay_e2e.py -k ws_direct_preflight_requires_http_200_before_upgrade` |
 
 ### Current certificate-mode secure-link coverage
 
@@ -405,7 +407,7 @@ This runtime slice is now reflected by active `REQ-AUT-*` requirements, and the 
 
 ## Unit tests
 
-Unit coverage currently collects `104` tests from `tests/unit/`.
+Unit coverage currently collects `106` tests from `tests/unit/`.
 
 ### Unit-side traceability
 
@@ -429,7 +431,7 @@ The component view they support is described in [ARCHITECTURE.md](/home/ohnoohwe
 | `tests/unit/test_runner_events.py` | `ARC-CMP-004` | `PROC-TST-002` | Restart and shutdown events must bind to the active event loop correctly | `pytest -q tests/unit/test_runner_events.py` |
 | `tests/unit/test_runner_overlay_transports.py` | `ARC-CMP-004`, `ARC-CMP-001` | `REQ-OVL-003`, `REQ-OVL-004`, `REQ-OVL-005`, `REQ-AUT-011`, `REQ-AUT-015`, `REQ-AUT-017`, `REQ-AUT-019`, `PROC-TST-002` | Overlay transport parsing, secure-link wrapping, startup validation, and peer-targeted operator control routing must remain consistent with supported transport and cert-mode runtime rules | `pytest -q tests/unit/test_runner_overlay_transports.py` |
 | `tests/unit/test_ws_multi_peer.py` | `ARC-CMP-001`, `ARC-CMP-003` | `REQ-LST-001`, `REQ-MUX-001`, `REQ-MUX-003`, `PROC-TST-002` | WS multi-peer mux rewriting and outbound routing must remain peer-safe and channel-safe | `pytest -q tests/unit/test_ws_multi_peer.py` |
-| `tests/unit/test_ws_payload_mode.py` | `ARC-CMP-001`, `ARC-CMP-005` | `REQ-OVL-004`, `REQ-WSP-010`, `REQ-LIFE-002`, `PROC-TST-002` | WS payload encoding, including the grouped `semi-text-shape` transfer form, tx timing, reconnect grace, HTTP preflight, platform-default proxy resolution, compression config, and debug static HTTP behavior must stay internally consistent | `pytest -q tests/unit/test_ws_payload_mode.py` |
+| `tests/unit/test_ws_payload_mode.py` | `ARC-CMP-001`, `ARC-CMP-005` | `REQ-OVL-004`, `REQ-WSP-010`, `REQ-WSP-011`, `REQ-LIFE-002`, `PROC-TST-002` | WS payload encoding, including the grouped `semi-text-shape` transfer form, tx timing, reconnect grace, direct-path HTTP preflight body download and refusal behavior, platform-default proxy resolution, compression config, and debug static HTTP behavior must stay internally consistent | `pytest -q tests/unit/test_ws_payload_mode.py` |
 
 ### Unit test catalog
 
