@@ -7,6 +7,7 @@ Testing statistics (see docs/README_TESTING.md): `122` integration tests, `112` 
 
 - User: start with `Why this project was developed` and `Quick-start examples`
 - Contributor: start with `Contributor guidance`
+  - Contributor note: follow the project's PR style and use the repository PR template when opening changes. See `docs/DEVELOPMENT_PROCESS.md` and `.github/PULL_REQUEST_TEMPLATE.md` for the required PR structure and checklist.
 
 ## For Users
 
