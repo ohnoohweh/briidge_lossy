@@ -14411,7 +14411,11 @@ class AdminWebUI:
 
     @staticmethod
     def _readonly_config_keys() -> Set[str]:
-        return {"secure_link_psk"}
+        # Keep this set minimal: `secure_link_psk` is intentionally secret
+        # but it should be settable (write-only) by the admin UI like
+        # `admin_web_password`. Returning an empty set keeps keys writable
+        # while secret keys are still masked in GET snapshots.
+        return set()
 
     def auth_required(self) -> bool:
         if bool(getattr(self.args, "admin_web_auth_disable", False)):

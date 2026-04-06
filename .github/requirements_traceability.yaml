@@ -455,6 +455,10 @@ REQ-ADM-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_available_when_auth_disabled
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_when_auth_disabled
 
+  unit_tests:
+    - tests/unit/test_admin_web_payloads.py::test_config_snapshot_hides_secure_link_psk_and_marks_it_read_only
+    - tests/unit/test_admin_web_payloads.py::test_update_config_rejects_secure_link_psk
+
 
 REQ-ADM-002:
   integration_tests:
@@ -484,3 +488,8 @@ REQ-ADM-006:
   unit_tests:
     - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_uses_child_myudp_session_stats
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
+
+REQ-ADM-007:
+  unit_tests:
+    - tests/unit/test_admin_web_payloads.py::test_config_snapshot_hides_secure_link_psk_and_marks_it_read_only
+    - tests/unit/test_admin_web_payloads.py::test_update_config_rejects_secure_link_psk

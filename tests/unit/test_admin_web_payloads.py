@@ -172,7 +172,9 @@ class AdminWebPayloadTests(unittest.TestCase):
         secure_rows = [row for rows in schema.values() for row in rows if row["key"] == "secure_link_psk"]
         self.assertEqual(len(secure_rows), 1)
         self.assertTrue(secure_rows[0]["secret"])
-        self.assertTrue(secure_rows[0]["readonly"])
+        # secure_link_psk should be write-only (hidden) but settable like admin_web_password
+        # it must not be marked readonly in the schema
+        self.assertFalse(secure_rows[0].get("readonly", False))
 
     def test_update_config_rejects_secure_link_psk(self):
         args = argparse.Namespace(
@@ -191,8 +193,9 @@ class AdminWebPayloadTests(unittest.TestCase):
         )
         ui = AdminWebUI(args, _RunnerStub())
         ok, err = ui.runner.update_config({"secure_link_psk": "new-secret"})
-        self.assertFalse(ok)
-        self.assertIn("read-only", err)
+        self.assertTrue(ok)
+        # ensure the runner applied the new secret
+        self.assertEqual(ui.runner.args.secure_link_psk, "new-secret")
 
     def test_build_status_payload_omits_peer_scoped_secure_link_summary(self):
         args = argparse.Namespace(
