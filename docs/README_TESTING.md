@@ -5,6 +5,10 @@ This repository currently collects:
 - `122` integration tests in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
 - `112` unit tests in `tests/unit/`
 
+Recent test/content updates:
+
+- 2026-04-06: Admin web config handling tests updated to reflect `secure_link_psk` write-only behavior (see commit 637eac8). The tests in `tests/unit/test_admin_web_payloads.py` now assert that `secure_link_psk` is masked on GET snapshots and is accepted by `update_config` on POST updates.
+
 ## Get started
 
 ### Environment and install constraints
