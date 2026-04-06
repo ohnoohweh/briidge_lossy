@@ -1,6 +1,6 @@
 ## Summary
 
-Document the Windows WebSocket proxy fallback fix, refresh the test catalog and README statistics, and align the WebSocket design note and PR checklist with the validated behavior.
+Replace the POSIX-only `scripts/run.sh` with a cross-platform Python launcher `scripts/run.py`, update `README.md` with usage examples, and remove the legacy `scripts/run.sh`.
 
 ## Problem
 
@@ -8,32 +8,30 @@ Document the Windows WebSocket proxy fallback fix, refresh the test catalog and 
 
 ## Changes
 
-- Updated `src/obstacle_bridge/bridge.py` — Windows `system` proxy lookup now falls back to direct WebSocket connect when no endpoint is returned.
-- Updated `tests/unit/test_ws_payload_mode.py` — unit coverage now asserts the direct-connect fallback instead of expecting a runtime error.
-- Updated `tests/integration/test_overlay_e2e.py` — added the mixed-listener WebSocket secure-link regression and strengthened secure-link debug coverage for the relevant mixed-listener cases.
-- Updated `README.md` — refreshed the test statistics snapshot and linked the reader guide to the WebSocket design note and testing guide.
-- Updated `docs/README_TESTING.md` — recorded the current suite totals and added explicit acceptance criteria for WebSocket bootstrap changes.
-- Updated `docs/WEBSOCKET_DESIGN.md` — documented the Windows no-endpoint direct-connect bootstrap behavior as an intentional transport decision.
+- Added `scripts/run.py` — cross-platform Python launcher that defaults to the running interpreter (`sys.executable`) and restarts the process when exit code `75` is returned.
+- Modified `README.md` — document usage examples for `scripts/run.py` on Linux and Windows, and list flags `--interval`, `--no-redirect`, `--command`.
+- Deleted `scripts/run.sh` — removed legacy POSIX-only launcher.
 
 ## Why This Matters
 
-This closes the gap between the runtime fix, the regression coverage, and the durable project documentation. The reader-facing README now reflects the current suite size, the testing guide states the acceptance bar for WebSocket bootstrap changes, and the design note records why the Windows direct-connect fallback is intentional.
+This makes the launcher usable across Windows, Linux, and macOS without requiring a separate shell or wrapper, simplifies debugging on Windows, and keeps restart semantics consistent with the previous script.
 
 ## Validation
 
 ```bash
-# Full regression rerun
-python -m pytest -q -n 16 tests/integration/test_overlay_e2e.py
+# Run the launcher (uses current interpreter by default)
+python scripts/run.py --no-redirect
 
-# Full unit suite
-python -m pytest -q tests/unit
+# Requirements and readme guards
+python scripts/check_requirements_guard.py --base-ref main
+python scripts/check_readme_testing_guard.py --base-ref main
 ```
 
-Results: the full unit suite passed locally (`114 passed, 8 subtests passed`). A parallel Windows integration rerun still showed instability, while the targeted WebSocket secure-link regression coverage passed and the remaining admin live WebSocket failure is being left to CI signal and follow-up.
+Results: Requirements guard passed. README_TESTING guard passed.
 
 ## Reviewer Notes
 
-- Focus review on: the Windows no-endpoint direct-connect fallback, the mixed-listener secure-link WebSocket regression coverage, and the README/testing-guide wording/placement.
+- Focus review on: correct default command selection (`sys.executable`), restart-on-exit-code-75 behavior, and README wording/placement.
 - Suggested reviewers: (@ohnoohweh)
 
 ---
