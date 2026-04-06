@@ -1,7 +1,7 @@
 # ObstacleBridge
 ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for barrier-resilient networking. It can run over multiple overlay transports (`myudp`, `tcp`, `quic`, `ws`), expose local TCP/UDP listener services through a reliable overlay, and host an admin UI for monitoring active channels.
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `251` integration tests, `114` unit tests. Recent validation added the Windows WebSocket system-proxy fallback regression and the mixed-listener secure-link WebSocket coverage.
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `251` integration tests, `114` unit tests. Recent validation added the Windows WebSocket system-proxy fallback regression and the mixed-listener secure-link WebSocket coverage. The formal requirements set in [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) now also records the Windows direct-connect fallback and the stable post-completion behavior for time-based secure-link rekey.
 
 ## Reader guide
 
