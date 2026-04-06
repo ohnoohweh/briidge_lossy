@@ -157,6 +157,8 @@ Current implementation note:
 
 - `REQ-ADM-007`: Secret configuration keys exposed by the runtime (for example `secure_link_psk` and `admin_web_password`) shall be writable through the admin configuration update API but must never be returned in cleartext by read-only snapshots. The admin UI shall render these keys as password-style inputs (empty on read) and must not display the stored secret value.
 
+- Implementation note: the admin web challenge-response login shall remain usable over plain HTTP as well as HTTPS. When the page is not in a secure context, the browser-side proof generation shall fall back to an equivalent client-side SHA-256 implementation so the login flow still works without requiring `window.crypto.subtle`.
+
 Development-process measures such as test-execution discipline, regression-writing policy, and CI split strategy are documented in [DEVELOPMENT_PROCESS.md](/home/ohnoohweh/quic_br/docs/DEVELOPMENT_PROCESS.md). They intentionally do not appear here because they govern how the project is built and validated, not what the delivered project promises to an operator.
 
 Repository governance update (process change): the project now documents and requires a consistent PR style and a repository PR template to improve review quality and traceability. See [DEVELOPMENT_PROCESS.md](/home/ohnoohweh/quic_br/docs/DEVELOPMENT_PROCESS.md) and `.github/PULL_REQUEST_TEMPLATE.md` for the required PR structure and checklist. This administrative change is intended to improve reviewer efficiency and traceability when implementation, tests, or architecture documents are modified.
