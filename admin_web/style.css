@@ -45,11 +45,13 @@ body {
   margin: 0 auto;
 }
 
-body.auth-locked {
+body.auth-locked,
+body.config-locked {
   overflow: hidden;
 }
 
-body.auth-locked .shell {
+body.auth-locked .shell,
+body.config-locked .shell {
   filter: blur(8px);
   pointer-events: none;
   user-select: none;
@@ -65,7 +67,8 @@ body.restart-locked .shell {
   user-select: none;
 }
 
-.auth-gate {
+.auth-gate,
+.config-gate {
   position: fixed;
   inset: 0;
   z-index: 20;
@@ -77,7 +80,8 @@ body.restart-locked .shell {
   backdrop-filter: blur(10px);
 }
 
-.auth-card {
+.auth-card,
+.config-card {
   width: min(100%, 420px);
   padding: 28px;
 }
@@ -126,6 +130,13 @@ body.restart-locked .shell {
 
 .auth-submit {
   justify-self: start;
+}
+
+.auth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
 }
 
 .restart-gate {

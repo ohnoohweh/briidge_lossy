@@ -88,6 +88,7 @@ const authState = {
   required: false,
   authenticated: false,
   appStarted: false,
+  username: '',
 };
 
 const restartState = {
@@ -113,6 +114,51 @@ function setAuthMessage(message, isOk = false) {
   if (!el) return;
   el.textContent = message || '';
   el.classList.toggle('ok', Boolean(message) && isOk);
+}
+
+function setConfigGateMessage(message, isOk = false) {
+  const el = document.getElementById('configGateMessage');
+  if (!el) return;
+  el.textContent = message || '';
+  el.classList.toggle('ok', Boolean(message) && isOk);
+}
+
+const configGateState = {
+  resolver: null,
+};
+
+function openConfigGate(message) {
+  const gate = document.getElementById('configGate');
+  const copy = document.getElementById('configGateCopy');
+  const passwordInput = document.getElementById('configGatePassword');
+  const messageNode = document.getElementById('configGateMessage');
+  if (!gate || !copy || !passwordInput || !messageNode) {
+    return Promise.resolve(null);
+  }
+  copy.textContent = message || 'Enter the current admin password to confirm the configuration changes.';
+  messageNode.textContent = '';
+  passwordInput.value = '';
+  gate.classList.remove('hidden');
+  document.body.classList.add('config-locked');
+  window.setTimeout(() => passwordInput.focus(), 0);
+  return new Promise((resolve) => {
+    configGateState.resolver = resolve;
+  });
+}
+
+function closeConfigGate(result = null) {
+  const gate = document.getElementById('configGate');
+  const passwordInput = document.getElementById('configGatePassword');
+  if (gate) gate.classList.add('hidden');
+  document.body.classList.remove('config-locked');
+  if (passwordInput) passwordInput.value = '';
+  const resolver = configGateState.resolver;
+  configGateState.resolver = null;
+  if (resolver) resolver(result);
+}
+
+function browserLoginHashHint() {
+  return 'Browser login hashing is unavailable. Use a modern browser with JavaScript enabled.';
 }
 
 function updateAuthUi() {
@@ -177,9 +223,114 @@ async function apiFetch(url, options = {}) {
   return response;
 }
 
+function sha256RoTR(value, bits) {
+  return (value >>> bits) | (value << (32 - bits));
+}
+
+function sha256ToHex(words) {
+  return words.map((word) => (word >>> 0).toString(16).padStart(8, '0')).join('');
+}
+
+function sha256HexFallback(text) {
+  const bytes = new TextEncoder().encode(text);
+  const length = bytes.length;
+  const totalWords = ((((length + 9) + 63) >> 6) << 4);
+  const words = new Uint32Array(totalWords);
+
+  for (let i = 0; i < length; i += 1) {
+    words[i >> 2] |= bytes[i] << (24 - ((i & 3) << 3));
+  }
+  words[length >> 2] |= 0x80 << (24 - ((length & 3) << 3));
+
+  const bitLength = length * 8;
+  words[totalWords - 2] = Math.floor(bitLength / 0x100000000);
+  words[totalWords - 1] = bitLength >>> 0;
+
+  let h0 = 0x6a09e667;
+  let h1 = 0xbb67ae85;
+  let h2 = 0x3c6ef372;
+  let h3 = 0xa54ff53a;
+  let h4 = 0x510e527f;
+  let h5 = 0x9b05688c;
+  let h6 = 0x1f83d9ab;
+  let h7 = 0x5be0cd19;
+
+  const w = new Uint32Array(64);
+  for (let offset = 0; offset < totalWords; offset += 16) {
+    for (let i = 0; i < 16; i += 1) {
+      w[i] = words[offset + i] >>> 0;
+    }
+    for (let i = 16; i < 64; i += 1) {
+      const s0 = sha256RoTR(w[i - 15], 7) ^ sha256RoTR(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+      const s1 = sha256RoTR(w[i - 2], 17) ^ sha256RoTR(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+    }
+
+    let a = h0;
+    let b = h1;
+    let c = h2;
+    let d = h3;
+    let e = h4;
+    let f = h5;
+    let g = h6;
+    let h = h7;
+
+    for (let i = 0; i < 64; i += 1) {
+      const s1 = sha256RoTR(e, 6) ^ sha256RoTR(e, 11) ^ sha256RoTR(e, 25);
+      const ch = (e & f) ^ (~e & g);
+      const temp1 = (h + s1 + ch + SHA256_K[i] + w[i]) >>> 0;
+      const s0 = sha256RoTR(a, 2) ^ sha256RoTR(a, 13) ^ sha256RoTR(a, 22);
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const temp2 = (s0 + maj) >>> 0;
+
+      h = g;
+      g = f;
+      f = e;
+      e = (d + temp1) >>> 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (temp1 + temp2) >>> 0;
+    }
+
+    h0 = (h0 + a) >>> 0;
+    h1 = (h1 + b) >>> 0;
+    h2 = (h2 + c) >>> 0;
+    h3 = (h3 + d) >>> 0;
+    h4 = (h4 + e) >>> 0;
+    h5 = (h5 + f) >>> 0;
+    h6 = (h6 + g) >>> 0;
+    h7 = (h7 + h) >>> 0;
+  }
+
+  return sha256ToHex([h0, h1, h2, h3, h4, h5, h6, h7]);
+}
+
+const SHA256_K = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
+  0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+  0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+  0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+  0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+  0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+  0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+  0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+  0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+];
+
 async function sha256Hex(text) {
-  const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  if (window.isSecureContext && window.crypto?.subtle) {
+    const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  return sha256HexFallback(text);
 }
 
 async function fetchAuthState() {
@@ -766,10 +917,38 @@ async function saveConfig() {
   }
 
   try {
-    const r = await apiFetch('/api/config', {
+    const challengeResp = await apiFetch('/api/config/challenge', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ updates }),
+    });
+    const challengeDoc = await challengeResp.json();
+    if (!challengeResp.ok || !challengeDoc.ok) {
+      throw new Error(challengeDoc.error || `HTTP ${challengeResp.status}`);
+    }
+
+    const payload = { updates };
+    if (challengeDoc.auth_required) {
+      const username = String(configState.config?.admin_web_username || authState.username || '').trim();
+      if (!username) {
+        throw new Error('admin username is required to confirm configuration changes');
+      }
+      const password = await openConfigGate(
+        `Enter the current admin password to confirm ${Object.keys(updates).length} configuration change(s).`
+      );
+      if (password == null) {
+        setText('configMessage', 'Configuration save canceled.');
+        return;
+      }
+      const proof = await sha256Hex(`${String(challengeDoc.seed || '')}:${username}:${password}:${String(challengeDoc.updates_digest || '')}`);
+      payload.challenge_id = String(challengeDoc.challenge_id || '');
+      payload.proof = proof;
+    }
+
+    const r = await apiFetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
     const j = await r.json();
     if (!r.ok || !j.ok) {
@@ -1307,10 +1486,6 @@ async function loginAdmin(event) {
     setAuthMessage('Username and password are required.');
     return;
   }
-  if (!window.crypto?.subtle) {
-    setAuthMessage('Browser crypto support is required for login.');
-    return;
-  }
   setAuthMessage('Authenticating...', true);
   try {
     const challengeResp = await apiFetch('/api/auth/challenge', { cache: 'no-store', authRequest: true });
@@ -1319,6 +1494,7 @@ async function loginAdmin(event) {
     if (!challenge.auth_required) {
       authState.required = false;
       authState.authenticated = true;
+      authState.username = username;
       updateAuthUi();
       await startAdminApp();
       return;
@@ -1340,6 +1516,7 @@ async function loginAdmin(event) {
     document.getElementById('authPassword').value = '';
     authState.required = true;
     authState.authenticated = true;
+    authState.username = username;
     updateAuthUi();
     setAuthMessage('');
     await startAdminApp();
@@ -1365,6 +1542,7 @@ async function logoutAdmin() {
   liveState.connected = false;
   startHttpPollingFallback();
   authState.authenticated = false;
+  authState.username = '';
   updateAuthUi();
   setAuthMessage('Signed out.');
 }
@@ -1430,6 +1608,20 @@ document.getElementById('secureLinkReloadIdentityBtn')?.addEventListener('click'
 document.getElementById('secureLinkReloadAllBtn')?.addEventListener('click', () => requestSecureLinkReload('all'));
 document.getElementById('configReloadBtn')?.addEventListener('click', loadConfig);
 document.getElementById('configSaveBtn')?.addEventListener('click', saveConfig);
+document.getElementById('configGateForm')?.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const passwordInput = document.getElementById('configGatePassword');
+  const password = String(passwordInput?.value || '');
+  if (!password) {
+    setConfigGateMessage('Password is required.');
+    return;
+  }
+  closeConfigGate(password);
+});
+document.getElementById('configGateCancelBtn')?.addEventListener('click', () => {
+  setConfigGateMessage('');
+  closeConfigGate(null);
+});
 document.getElementById('logsReloadBtn')?.addEventListener('click', loadLogs);
 document.getElementById('authForm')?.addEventListener('submit', loginAdmin);
 document.getElementById('peerConnectionsBody')?.addEventListener('click', (event) => {

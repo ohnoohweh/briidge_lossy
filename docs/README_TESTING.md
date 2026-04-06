@@ -8,6 +8,7 @@ This repository currently collects:
 Recent test/content updates:
 
 - 2026-04-06: Admin web config handling tests updated to reflect `secure_link_psk` write-only behavior (see commit 637eac8). The tests in `tests/unit/test_admin_web_payloads.py` now assert that `secure_link_psk` is masked on GET snapshots and is accepted by `update_config` on POST updates.
+- 2026-04-06: Config persistence tests updated so saved config files encrypt `admin_web_password` and `secure_link_psk` on disk while still restoring them into runtime defaults when the JSON config is loaded. See `tests/unit/test_runner_config_persistence.py`.
 
 ## Get started
 

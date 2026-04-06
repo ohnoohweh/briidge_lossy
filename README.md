@@ -50,6 +50,7 @@ Important config-format note:
 - `--config` / `-c` currently expects a JSON file, not an INI file
 - the examples below are therefore shown as JSON so they can be copied directly into a file and loaded without surprises on Linux or Windows
 - flat JSON works well for hand-written bootstrap files
+- saved config files keep `admin_web_password` and `secure_link_psk` encrypted on disk and restore them when loaded back into the runtime
 
 ![WebAdmin Config Editor](docs/refered_docs/WebAdmin%20ConfigEditor.png)
 
@@ -446,7 +447,11 @@ Expected behavior:
 | `--admin-web-password` | `` | Password for admin web access when challenge-based authentication is enabled; redacted from admin config snapshots |
 | `--admin-web-log-max-lines` | `1200` | Maximum number of debug log lines kept in memory for the admin web log view |
 
-When `--admin-web-username` and `--admin-web-password` are configured and auth is not disabled, the admin web page requires a challenge-response login. The browser requests a one-time seed, hashes `seed:username:password` client-side, and sends only the hash proof back to the server. The configured password is not returned by the admin config API.
+When `--admin-web-username` and `--admin-web-password` are configured and auth is not disabled, the admin web page requires a challenge-response login. The browser requests a one-time seed, hashes `seed:username:password` client-side, and sends only the hash proof back to the server. The login flow works over HTTP as well as HTTPS; when the browser is not in a secure context, the admin page uses a JavaScript SHA-256 fallback instead of Web Crypto. The configured password is not returned by the admin config API.
+
+Saving configuration changes uses a second challenge-response confirmation bound to the exact update block, so the current admin password must be re-entered before the server applies guarded config writes.
+
+The admin-web design note in [docs/WEBADMIN_DESIGN.md](docs/WEBADMIN_DESIGN.md) explains the applied auth, session, live-update, and secret-redaction concepts in more detail.
 
 #### Admin web examples
 
