@@ -183,6 +183,60 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client_status["authenticated_sessions_total"], 1)
         self.assertIsNotNone(client_status["last_authenticated_unix_ts"])
 
+    async def test_psk_server_authenticates_before_first_application_payload(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+
+        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
+        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
+
+        server_payloads = []
+        client_payloads = []
+        server.set_on_app_payload(lambda payload, peer_id=None: server_payloads.append(payload))
+        client.set_on_app_payload(lambda payload, peer_id=None: client_payloads.append(payload))
+
+        await client.start()
+        await server.start()
+
+        server_inner.emit_state(True)
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        self.assertTrue(client.is_connected())
+        self.assertTrue(server.is_connected())
+        self.assertEqual(server_payloads, [])
+        self.assertEqual(client_payloads, [])
+
+        client_status = client.get_secure_link_status_snapshot()
+        server_status = server.get_secure_link_status_snapshot()
+        self.assertEqual(client_status["state"], "authenticated")
+        self.assertEqual(server_status["state"], "authenticated")
+        self.assertEqual(client_status["last_event"], "authenticated")
+        self.assertEqual(server_status["last_event"], "authenticated")
+        self.assertEqual(client_status["authenticated_sessions_total"], 1)
+        self.assertEqual(server_status["authenticated_sessions_total"], 1)
+
+        sent_data = [
+            payload
+            for payload, peer_id in client_inner.sent
+            if peer_id is None and client._parse_frame(payload)[0] == client._SL_TYPE_DATA
+        ]
+        self.assertEqual(len(sent_data), 1)
+        sl_type, session_id, counter, ciphertext = client._parse_frame(sent_data[0])
+        self.assertEqual(sl_type, client._SL_TYPE_DATA)
+        self.assertEqual(counter, 1)
+        state = client._peer_states[0]
+        plaintext = ChaCha20Poly1305(state.c2s_key).decrypt(
+            client._nonce(counter),
+            ciphertext,
+            client._hdr_bytes(client._SL_TYPE_DATA, session_id, counter),
+        )
+        self.assertEqual(plaintext, b"")
+
     async def test_wrong_psk_prevents_authenticated_session(self):
         client_inner = FakeInnerSession()
         server_inner = FakeInnerSession()

@@ -2139,6 +2139,7 @@ class _SecureLinkPeerState:
     c2s_key: Optional[bytes] = None
     s2c_key: Optional[bytes] = None
     authenticated: bool = False
+    client_handshake_proof_sent: bool = False
     tx_counter: int = 1
     rx_counter: int = 0
     pending_session_id: int = 0
@@ -2835,6 +2836,14 @@ class SecureLinkPskSession(ISession):
         elif int(session_id or 0) > 0:
             state.session_id = int(session_id)
         state.authenticated = False
+        state.client_handshake_proof_sent = False
+        state.client_nonce = b""
+        state.server_nonce = b""
+        state.c2s_key = None
+        state.s2c_key = None
+        state.tx_counter = 1
+        state.rx_counter = 0
+        state.local_ephemeral_private = None
         self._clear_pending_rekey(state)
         self._clear_client_rekey_app_queue()
         if not self._client_mode and peer_id is not None:
@@ -3176,6 +3185,7 @@ class SecureLinkPskSession(ISession):
         if state.pending_local_ephemeral_private is not None:
             state.local_ephemeral_private = state.pending_local_ephemeral_private
         state.authenticated = True
+        state.client_handshake_proof_sent = False
         state.tx_counter = 1
         state.rx_counter = 0
         state.auth_fail_code = 0
@@ -3225,7 +3235,7 @@ class SecureLinkPskSession(ISession):
             return
         if int(state.pending_session_id or 0) > 0:
             return
-        sent_frames = max(0, int(state.tx_counter or 1) - 1)
+        sent_frames = max(0, int(state.tx_counter or 1) - 1 - int(bool(state.client_handshake_proof_sent)))
         if sent_frames < self._rekey_after_frames:
             return
         self._start_client_rekey(state, trigger="frame_threshold")
@@ -4038,6 +4048,7 @@ class SecureLinkPskSession(ISession):
             rekey_completed=False,
         )
         self._refresh_connected_state()
+        self._send_client_handshake_proof(state)
 
     def _handle_rekey_hello(self, peer_id: Optional[int], session_id: int, body: bytes) -> None:
         if self._client_mode or int(session_id or 0) <= 0:
@@ -4303,6 +4314,8 @@ class SecureLinkPskSession(ISession):
                 rekey_completed=False,
             )
             self._refresh_connected_state()
+        if not plaintext:
+            return
         if not self._client_mode and peer_id is not None:
             plaintext = self._server_rewrite_inbound_app(int(peer_id), plaintext)
         self._deliver_outer_app(plaintext, None if self._client_mode else peer_id)
@@ -4325,6 +4338,14 @@ class SecureLinkPskSession(ISession):
         except Exception:
             pass
         aad = self._hdr_bytes(sl_type, session_id, counter)
+        state = self._peer_states.get(self._peer_key(peer_id))
+        if (
+            state is not None
+            and int(session_id or 0) > 0
+            and int(state.session_id or 0) == int(session_id)
+            and int(state.auth_fail_code or 0) > 0
+        ):
+            return
         if sl_type == self._SL_TYPE_CLIENT_HELLO:
             self._handle_client_hello(peer_id, session_id, body)
             return
@@ -4378,6 +4399,24 @@ class SecureLinkPskSession(ISession):
         if sent:
             self._maybe_trigger_rekey(state)
         return len(payload) if sent else 0
+
+    def _send_client_handshake_proof(self, state: Optional[_SecureLinkPeerState]) -> None:
+        if not self._client_mode or state is None or not state.authenticated or state.client_handshake_proof_sent:
+            return
+        outbound_key = state.c2s_key
+        if not outbound_key:
+            return
+        counter = int(state.tx_counter or 0)
+        if counter < self._SL_FIRST_DATA_COUNTER or counter > self._SL_MAX_DATA_COUNTER:
+            self._send_auth_fail(None, int(state.session_id or 0), self._SL_AUTH_FAIL_LIFECYCLE)
+            return
+        aad = self._hdr_bytes(self._SL_TYPE_DATA, state.session_id, counter)
+        ciphertext = ChaCha20Poly1305(outbound_key).encrypt(self._nonce(counter), b"", aad)
+        wire = aad + ciphertext
+        sent = self._inner.send_app(wire)
+        if sent:
+            state.tx_counter += 1
+            state.client_handshake_proof_sent = True
 
     def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
         if self._client_mode and self._client_rekey_hold_after_commit:
