@@ -1,7 +1,7 @@
 # ObstacleBridge
 ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for barrier-resilient networking. It can run over multiple overlay transports (`myudp`, `tcp`, `quic`, `ws`), expose local TCP/UDP listener services through a reliable overlay, and host an admin UI for monitoring active channels.
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `251` integration tests, `114` unit tests. Recent validation added the Windows WebSocket system-proxy fallback regression and the mixed-listener secure-link WebSocket coverage. The formal requirements set in [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) now also records the Windows direct-connect fallback and the stable post-completion behavior for time-based secure-link rekey.
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `123` integration tests, `118` unit tests. Recent validation now also covers the secure-link server-side authentication transition before the first real application payload and the encoded-frame receive sizing used by WebSocket text payload modes (`base64`, `json-base64`, `semi-text-shape`) so forwarded-service traffic does not regress into `1009` / `MESSAGE_TOO_BIG` failures.
 
 ## Reader guide
 
@@ -44,6 +44,8 @@ Listener design note:
 - listener-side peer handling is intended to remain peer-independent; one peer's auth failure, disconnect, reconnect, or auxiliary WebSocket HTTP pre-upgrade request should not disturb healthy traffic or published services belonging to another peer
 - the WS listener now serves its static HTTP root directly at the front listener so ordinary browser keep-alive requests can stay on the same TCP connection before a later WebSocket upgrade attempt
 - that same keep-alive behavior is also defended when a healthy secure-link `myudp` peer is active on the mixed `ws,myudp` listener process; the transport-specific design tradeoffs are captured in [docs/WEBSOCKET_DESIGN.md](docs/WEBSOCKET_DESIGN.md)
+- for secure-link PSK over WebSocket, the runtime now authenticates the listener/server side immediately after decrypting the client's internal proof frame, so both peers reach `authenticated` without waiting for a first real application payload
+- for WebSocket text payload modes, the runtime now budgets receive limits against the encoded frame size rather than the raw overlay payload budget, which is the key guard against forwarded admin/service traffic exceeding the websocket frame limit after text-mode expansion
 
 Important config-format note:
 

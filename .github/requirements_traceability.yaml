@@ -74,6 +74,7 @@ REQ-AUT-002:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_listener_two_clients
   unit_tests:
     - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session
+    - tests/unit/test_secure_link_psk.py::test_psk_server_authenticates_before_first_application_payload
 
 REQ-AUT-003:
   integration_tests:
@@ -334,6 +335,7 @@ REQ-WSP-010:
     - tests/unit/test_ws_payload_mode.py::test_base64_mode_encodes_and_decodes_text_frames
     - tests/unit/test_ws_payload_mode.py::test_json_base64_mode_encodes_and_decodes_text_frames
     - tests/unit/test_ws_payload_mode.py::test_connect_advertises_payload_mode_in_upgrade_request
+    - tests/unit/test_ws_payload_mode.py::test_connect_uses_encoded_frame_limit_for_text_payload_modes
     - tests/unit/test_ws_payload_mode.py::test_invalid_text_frames_are_rejected
     - tests/unit/test_ws_payload_mode.py::test_invalid_semi_text_shape_frames_are_rejected
     - tests/unit/test_ws_payload_mode.py::test_listener_peer_uses_advertised_payload_mode_for_rx_and_tx
