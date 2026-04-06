@@ -119,6 +119,7 @@ Current ownership decisions:
 - secure-link config loading and lifecycle wiring belong to `ARC-CMP-004`
 - transport bootstrap or websocket-open failures stay owned by the transport/session layer, but their user-visible failed-state reporting belongs to `ARC-CMP-005`
 - peer identity visibility in admin APIs belongs to `ARC-CMP-005`
+- passive listener rows may stay zeroed in admin snapshots, but live per-peer listener metrics such as RTT on accepted peers must come from peer-local runtime state rather than listener-global defaults
 - encryption-layer status visibility in WebAdmin/API is a joint function:
   - `ARC-CMP-006` owns the underlying secure-link state machine and failure categories
   - `ARC-CMP-004` contributes snapshot aggregation and process-level wiring

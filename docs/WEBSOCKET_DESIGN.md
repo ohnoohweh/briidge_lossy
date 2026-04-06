@@ -140,6 +140,7 @@ Future changes to the WebSocket listener path should preserve these externally v
 - the above remains true when a secure-link-authenticated `myudp` peer is active on the same mixed listener process
 - healthy WebSocket overlay traffic still works after the plain HTTP requests
 - a WS peer client can advertise its configured payload transfer form during upgrade and a listener with a different local default still adopts the correct per-peer codec automatically
+- accepted WebSocket listener peers report live peer-local RTT in `/api/peers`, while the passive listener row remains zeroed with `rtt=n/a`
 - on the direct non-proxied client path, `GET /` is completed before the later upgrade attempt
 - when that direct-path preflight does not return `200 OK`, the client stays disconnected and does not attempt the later upgrade
 - when client bootstrap or websocket-open fails, `/api/status` reports `peer_state=FAILED` with transport-level reason/detail until a later successful connect clears it
