@@ -448,6 +448,8 @@ Expected behavior:
 
 When `--admin-web-username` and `--admin-web-password` are configured and auth is not disabled, the admin web page requires a challenge-response login. The browser requests a one-time seed, hashes `seed:username:password` client-side, and sends only the hash proof back to the server. The login flow works over HTTP as well as HTTPS; when the browser is not in a secure context, the admin page uses a JavaScript SHA-256 fallback instead of Web Crypto. The configured password is not returned by the admin config API.
 
+The admin-web design note in [docs/WEBADMIN_DESIGN.md](docs/WEBADMIN_DESIGN.md) explains the applied auth, session, live-update, and secret-redaction concepts in more detail.
+
 #### Admin web examples
 
 The repository includes two exported admin web snapshots:
