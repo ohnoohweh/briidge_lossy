@@ -518,39 +518,41 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_connect_uses_encoded_frame_limit_for_text_payload_modes(self):
-        args = _args("semi-text-shape")
-        args.peer = "127.0.0.1"
-        args.peer_port = 54321
-        session = WebSocketSession(args)
-        session._loop = asyncio.get_running_loop()
-        session._run_flag = True
-        session._peer_tuple = ("127.0.0.1", 54321)
-        session._peer_name_host = "overlay.example"
-        session._peer_name_port = 54321
+        for mode in ("base64", "json-base64", "semi-text-shape"):
+            with self.subTest(mode=mode):
+                args = _args(mode)
+                args.peer = "127.0.0.1"
+                args.peer_port = 54321
+                session = WebSocketSession(args)
+                session._loop = asyncio.get_running_loop()
+                session._run_flag = True
+                session._peer_tuple = ("127.0.0.1", 54321)
+                session._peer_name_host = "overlay.example"
+                session._peer_name_port = 54321
 
-        fake_ws = types.SimpleNamespace(
-            local_address=("127.0.0.1", 40000),
-            remote_address=("127.0.0.1", 54321),
-        )
-        seen = {}
+                fake_ws = types.SimpleNamespace(
+                    local_address=("127.0.0.1", 40000),
+                    remote_address=("127.0.0.1", 54321),
+                )
+                seen = {}
 
-        async def fake_connect(uri, ssl=None, subprotocols=None, max_size=None, compression=None, ping_interval=None, ping_timeout=None, **kwargs):
-            seen["uri"] = uri
-            seen["max_size"] = max_size
-            seen["kwargs"] = kwargs
-            return fake_ws
+                async def fake_connect(uri, ssl=None, subprotocols=None, max_size=None, compression=None, ping_interval=None, ping_timeout=None, **kwargs):
+                    seen["uri"] = uri
+                    seen["max_size"] = max_size
+                    seen["kwargs"] = kwargs
+                    return fake_ws
 
-        fake_websockets = types.SimpleNamespace(connect=fake_connect)
+                fake_websockets = types.SimpleNamespace(connect=fake_connect)
 
-        with mock.patch.dict(sys.modules, {"websockets": fake_websockets}):
-            with mock.patch.object(session, "_load_default_http_page", mock.AsyncMock()) as preflight:
-                with mock.patch.object(session, "_on_accept", mock.AsyncMock()) as on_accept:
-                    await session._connect_to("127.0.0.1", 54321)
+                with mock.patch.dict(sys.modules, {"websockets": fake_websockets}):
+                    with mock.patch.object(session, "_load_default_http_page", mock.AsyncMock()) as preflight:
+                        with mock.patch.object(session, "_on_accept", mock.AsyncMock()) as on_accept:
+                            await session._connect_to("127.0.0.1", 54321)
 
-        preflight.assert_awaited_once()
-        on_accept.assert_awaited_once_with(fake_ws)
-        self.assertEqual(seen["max_size"], session._ws_frame_max_size)
-        self.assertGreater(seen["max_size"], session._ws_max_size)
+                preflight.assert_awaited_once()
+                on_accept.assert_awaited_once_with(fake_ws)
+                self.assertEqual(seen["max_size"], session._ws_frame_max_size)
+                self.assertGreater(seen["max_size"], session._ws_max_size)
 
     async def test_listener_peer_uses_advertised_payload_mode_for_rx_and_tx(self):
         session = WebSocketSession(_args("binary"))
