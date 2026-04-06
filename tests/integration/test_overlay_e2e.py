@@ -4580,6 +4580,7 @@ def _start_ws_case_with_client_env(
     case_index: int,
     client_env_extra: Dict[str, str],
     client_extra_args: Optional[List[str]] = None,
+    server_extra_args: Optional[List[str]] = None,
     server_env_extra: Optional[Dict[str, str]] = None,
 ) -> tuple[BounceBackServer, Proc, Proc]:
     case = materialize_case_ports(case, case_index)
@@ -4598,6 +4599,7 @@ def _start_ws_case_with_client_env(
     server_env.update(server_env_extra or {})
     client_env = dict(client_env)
     client_env.update(client_env_extra)
+    server_cmd = list(server_cmd) + list(server_extra_args or [])
     client_cmd = list(client_cmd) + list(client_extra_args or [])
 
     server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, log_dir, env_extra=server_env, admin_port=server_admin)
@@ -4989,6 +4991,35 @@ def test_overlay_e2e_admin_live_ws_available_after_correct_auth(tmp_path: Path) 
             bounce.stop()
         if client_proc is not None:
             _stop_proc_without_admin(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_ws_listener_adopts_client_payload_mode_from_upgrade_request(tmp_path: Path) -> None:
+    case = CASES['case08_overlay_ws_ipv4']
+    bounce = None
+    server_proc = client_proc = None
+    try:
+        bounce, server_proc, client_proc = _start_ws_case_with_client_env(
+            case,
+            tmp_path,
+            case_index=293,
+            client_env_extra={},
+            server_extra_args=['--ws-payload-mode', 'binary', '--log-ws-session', 'DEBUG'],
+            client_extra_args=['--ws-payload-mode', 'semi-text-shape', '--log-ws-session', 'DEBUG'],
+        )
+        wait_probe(materialize_case_ports(case, 293), timeout=8.0)
+        assert status_state(get_status(client_proc.admin_port or 0)) == 'CONNECTED'
+        assert status_state(get_status(server_proc.admin_port or 0)) == 'CONNECTED'
+        server_log = wait_log_contains(server_proc.log_path, 'payload_mode=semi-text-shape', timeout=10.0)
+        assert 'accept: peer_id=' in server_log
+    finally:
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            stop_proc(client_proc)
         if server_proc is not None:
             stop_proc(server_proc)
 

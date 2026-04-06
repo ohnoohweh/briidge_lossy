@@ -51,12 +51,20 @@ class _FakeReader:
         self._body = self._body[n:]
         return out
 
+    async def readexactly(self, n):
+        if len(self._body) < n:
+            raise asyncio.IncompleteReadError(partial=self._body, expected=n)
+        out = self._body[:n]
+        self._body = self._body[n:]
+        return out
+
 
 class _FakeWriter:
     def __init__(self):
         self.buffer = bytearray()
         self.closed = False
         self.wait_closed_called = False
+        self.transport = _ProbeTransport()
 
     def write(self, data):
         self.buffer.extend(data)
@@ -69,6 +77,9 @@ class _FakeWriter:
 
     async def wait_closed(self):
         self.wait_closed_called = True
+
+    def get_extra_info(self, name):
+        return self.transport.get_extra_info(name)
 
 
 
@@ -418,26 +429,15 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
         fake_server = types.SimpleNamespace(
             sockets=[types.SimpleNamespace(getsockname=lambda: ("127.0.0.1", 54321))]
         )
-        serve = mock.AsyncMock(return_value=fake_server)
-        fake_websockets = types.SimpleNamespace(serve=serve)
-        fake_http11 = types.SimpleNamespace(Response=object)
-        fake_ds = types.SimpleNamespace(Headers=lambda items: items)
+        start_server = mock.AsyncMock(return_value=fake_server)
 
-        with mock.patch.dict(
-            sys.modules,
-            {
-                "websockets": fake_websockets,
-                "websockets.http11": fake_http11,
-                "websockets.datastructures": fake_ds,
-            },
-        ):
+        with mock.patch("obstacle_bridge.bridge.asyncio.start_server", start_server):
             await session._start_server()
 
         self.assertIs(session._server, fake_server)
-        self.assertEqual(serve.await_args.kwargs["compression"], None)
-        if "open_timeout" in serve.await_args.kwargs:
-            self.assertIsNone(serve.await_args.kwargs["open_timeout"])
-        self.assertEqual(serve.await_args.kwargs["write_limit"], 131072)
+        self.assertEqual(start_server.await_args.kwargs["host"], "0.0.0.0")
+        self.assertEqual(start_server.await_args.kwargs["port"], 0)
+        self.assertIsNone(start_server.await_args.kwargs["ssl"])
 
     async def test_connect_disables_websocket_compression(self):
         args = _args("binary")
@@ -465,6 +465,68 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
         preflight.assert_awaited_once()
         on_accept.assert_awaited_once_with(fake_ws)
         self.assertEqual(connect.await_args.kwargs["compression"], None)
+
+    async def test_connect_advertises_payload_mode_in_upgrade_request(self):
+        args = _args("semi-text-shape")
+        args.peer = "127.0.0.1"
+        args.peer_port = 54321
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+        session._peer_tuple = ("127.0.0.1", 54321)
+        session._peer_name_host = "overlay.example"
+        session._peer_name_port = 54321
+
+        fake_ws = types.SimpleNamespace(
+            local_address=("127.0.0.1", 40000),
+            remote_address=("127.0.0.1", 54321),
+        )
+        seen = {}
+
+        async def fake_connect(uri, ssl=None, subprotocols=None, max_size=None, compression=None, ping_interval=None, ping_timeout=None, additional_headers=None, **kwargs):
+            seen["uri"] = uri
+            seen["additional_headers"] = additional_headers
+            seen["kwargs"] = kwargs
+            return fake_ws
+
+        fake_websockets = types.SimpleNamespace(connect=fake_connect)
+
+        with mock.patch.dict(sys.modules, {"websockets": fake_websockets}):
+            with mock.patch.object(session, "_load_default_http_page", mock.AsyncMock()) as preflight:
+                with mock.patch.object(session, "_on_accept", mock.AsyncMock()) as on_accept:
+                    await session._connect_to("127.0.0.1", 54321)
+
+        preflight.assert_awaited_once()
+        on_accept.assert_awaited_once_with(fake_ws)
+        self.assertEqual(
+            seen["additional_headers"],
+            {"X-ObstacleBridge-WS-Payload-Mode": "semi-text-shape"},
+        )
+
+    async def test_listener_peer_uses_advertised_payload_mode_for_rx_and_tx(self):
+        session = WebSocketSession(_args("binary"))
+        session._loop = asyncio.get_running_loop()
+
+        peer_ws = _FakeWs()
+        peer_ws.payload_mode = "base64"
+        peer_ws.local_address = ("127.0.0.1", 8080)
+        peer_ws.remote_address = ("127.0.0.1", 54321)
+
+        await session._on_accept(peer_ws)
+
+        ctx = session._server_peers[1]
+        self.assertEqual(ctx["payload_mode"], "base64")
+        self.assertEqual(session._decode_ws_message("AnBvbmc=", ctx=ctx), b"\x02pong")
+
+        session._schedule_server_send(ctx, b"\x02pong")
+        await asyncio.wait_for(ctx["tx_queue"].join(), timeout=1.0)
+
+        self.assertEqual(peer_ws.sent, ["AnBvbmc="])
+
+        ctx["rx_task"].cancel()
+        await ctx["rx_task"]
+        ctx["tx_task"].cancel()
+        await ctx["tx_task"]
 
     async def test_connect_refuses_upgrade_when_http_preflight_is_not_200(self):
         args = _args("binary")
@@ -752,26 +814,24 @@ class WebSocketStaticHttpDebugTests(unittest.IsolatedAsyncioTestCase):
             fake_server = types.SimpleNamespace(
                 sockets=[types.SimpleNamespace(getsockname=lambda: ("127.0.0.1", 54321))]
             )
-            serve = mock.AsyncMock(return_value=fake_server)
-            fake_websockets = types.SimpleNamespace(serve=serve)
-            fake_http11 = types.SimpleNamespace(Response=_FakeResponse)
-            fake_ds = types.SimpleNamespace(Headers=lambda items: items)
+            start_server = mock.AsyncMock(return_value=fake_server)
 
-            with mock.patch.dict(
-                sys.modules,
-                {
-                    "websockets": fake_websockets,
-                    "websockets.http11": fake_http11,
-                    "websockets.datastructures": fake_ds,
-                },
-            ):
+            with mock.patch("obstacle_bridge.bridge.asyncio.start_server", start_server):
                 await session._start_server()
 
-            process_request = serve.await_args.kwargs["process_request"]
-            request = types.SimpleNamespace(method="GET", path="/icon.png", headers={})
-            response = process_request(_ProbeConnection(), request)
+            handler = start_server.await_args.args[0]
+            reader = _FakeReader(
+                [
+                    b"GET /icon.png HTTP/1.1\r\n",
+                    b"Host: 127.0.0.1\r\n",
+                    b"\r\n",
+                ]
+            )
+            writer = _FakeWriter()
 
-            self.assertIsInstance(response, _FakeResponse)
+            await handler(reader, writer)
+
+            self.assertIn(b"HTTP/1.1 200 OK", writer.buffer)
             self.assertEqual(
                 [kind for kind, *_ in session._loop.calls],
                 ["soon", "later", "later", "later"],

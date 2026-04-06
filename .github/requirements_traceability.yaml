@@ -320,14 +320,18 @@ REQ-WSP-009:
     - tests/unit/test_ws_payload_mode.py::test_system_proxy_mode_logs_when_no_endpoint_is_found
 
 REQ-WSP-010:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_listener_adopts_client_payload_mode_from_upgrade_request
   unit_tests:
     - tests/unit/test_ws_payload_mode.py::test_binary_mode_keeps_bytes_on_send
     - tests/unit/test_ws_payload_mode.py::test_semi_text_shape_mode_encodes_and_decodes_text_frames
     - tests/unit/test_ws_payload_mode.py::test_semi_text_shape_mode_groups_output_runs
     - tests/unit/test_ws_payload_mode.py::test_base64_mode_encodes_and_decodes_text_frames
     - tests/unit/test_ws_payload_mode.py::test_json_base64_mode_encodes_and_decodes_text_frames
+    - tests/unit/test_ws_payload_mode.py::test_connect_advertises_payload_mode_in_upgrade_request
     - tests/unit/test_ws_payload_mode.py::test_invalid_text_frames_are_rejected
     - tests/unit/test_ws_payload_mode.py::test_invalid_semi_text_shape_frames_are_rejected
+    - tests/unit/test_ws_payload_mode.py::test_listener_peer_uses_advertised_payload_mode_for_rx_and_tx
 
 REQ-WSP-011:
   integration_tests:

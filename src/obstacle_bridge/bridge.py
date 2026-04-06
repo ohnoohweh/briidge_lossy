@@ -38,6 +38,7 @@ import argparse
 import asyncio
 import base64
 import ctypes
+import inspect
 from ctypes import wintypes
 from contextlib import contextmanager
 import enum
@@ -7543,6 +7544,7 @@ class WebSocketSession(ISession):
         WebSocketSemiTextShapePayloadCodec.mode: WebSocketSemiTextShapePayloadCodec,
         WebSocketJsonBase64PayloadCodec.mode: WebSocketJsonBase64PayloadCodec,
     }
+    _WS_PAYLOAD_MODE_HEADER = "X-ObstacleBridge-WS-Payload-Mode"
 
     @staticmethod
     def _default_ws_proxy_mode() -> str:
@@ -7668,10 +7670,7 @@ class WebSocketSession(ISession):
         self._use_tls: bool = bool(getattr(self._args, "ws_tls", False))
         self._ws_max_size: int = int(getattr(self._args, "ws_max_size", 65535))
         self._ws_payload_mode: str = str(getattr(self._args, "ws_payload_mode", "binary") or "binary").lower()
-        codec_cls = self._PAYLOAD_CODECS.get(self._ws_payload_mode)
-        if codec_cls is None:
-            raise ValueError(f"Unsupported --ws-payload-mode: {self._ws_payload_mode}")
-        self._ws_payload_codec: WebSocketPayloadCodec = codec_cls()
+        self._ws_payload_codec: WebSocketPayloadCodec = self._build_ws_payload_codec(self._ws_payload_mode)
         self._ws_send_timeout_s: float = max(0.0, float(getattr(self._args, "ws_send_timeout", 3.0) or 0.0))
         self._ws_tcp_user_timeout_ms: int = max(0, int(getattr(self._args, "ws_tcp_user_timeout_ms", 10000) or 0))
         self._ws_reconnect_grace_s: float = max(0.0, float(getattr(self._args, "ws_reconnect_grace", 3.0) or 0.0))
@@ -7750,6 +7749,55 @@ class WebSocketSession(ISession):
     def set_on_app_from_peer_bytes(self, cb): self._on_app_from_peer_bytes = cb
     def set_on_transport_epoch_change(self, cb): self._on_transport_epoch_change = cb
     def set_app_payload_passthrough(self, enabled: bool) -> None: self._app_payload_passthrough = bool(enabled)
+
+    @classmethod
+    def _build_ws_payload_codec(cls, payload_mode: str) -> WebSocketPayloadCodec:
+        codec_cls = cls._PAYLOAD_CODECS.get(str(payload_mode or "").strip().lower())
+        if codec_cls is None:
+            raise ValueError(f"Unsupported --ws-payload-mode: {payload_mode}")
+        return codec_cls()
+
+    def _resolve_inbound_ws_payload_mode(self, requested_mode: Optional[str]) -> str:
+        payload_mode = str(requested_mode or "").strip().lower()
+        if not payload_mode:
+            return self._ws_payload_mode
+        if payload_mode in self._PAYLOAD_CODECS:
+            return payload_mode
+        self._log.warning(
+            "[WS-SESSION] (%s) unsupported advertised payload mode %r; falling back to %s",
+            self._probe_id,
+            requested_mode,
+            self._ws_payload_mode,
+        )
+        return self._ws_payload_mode
+
+    @staticmethod
+    def _websockets_header_kwarg(connect_callable: Any) -> Optional[str]:
+        with contextlib.suppress(Exception):
+            params = inspect.signature(connect_callable).parameters
+            if "additional_headers" in params:
+                return "additional_headers"
+            if "extra_headers" in params:
+                return "extra_headers"
+        return None
+
+    def _build_ws_upgrade_headers(self, connect_callable: Any) -> dict:
+        header_key = self._websockets_header_kwarg(connect_callable)
+        if not header_key:
+            return {}
+        return {
+            header_key: {
+                self._WS_PAYLOAD_MODE_HEADER: self._ws_payload_mode,
+            }
+        }
+
+    def _resolve_ws_codec_context(self, ctx: Optional[dict] = None) -> Tuple[str, WebSocketPayloadCodec]:
+        if isinstance(ctx, dict):
+            payload_mode = str(ctx.get("payload_mode") or "").strip().lower()
+            payload_codec = ctx.get("payload_codec")
+            if payload_mode and isinstance(payload_codec, WebSocketPayloadCodec):
+                return payload_mode, payload_codec
+        return self._ws_payload_mode, self._ws_payload_codec
 
     def get_connection_failure_snapshot(self) -> dict:
         failed = bool(self._peer_tuple and self._connection_failure_reason and not self.is_connected())
@@ -8884,11 +8932,12 @@ class WebSocketSession(ISession):
             return method, req_path, http_version, headers
 
         class _ServerSideWsConnection:
-            def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, req_path: str, subprotocol: Optional[str]) -> None:
+            def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, req_path: str, subprotocol: Optional[str], payload_mode: str) -> None:
                 self._reader = reader
                 self._writer = writer
                 self.path = req_path
                 self.subprotocol = subprotocol
+                self.payload_mode = payload_mode
                 self.transport = writer.transport
                 self.remote_address = writer.get_extra_info("peername")
                 self.local_address = writer.get_extra_info("sockname")
@@ -9017,8 +9066,11 @@ class WebSocketSession(ISession):
             ]
             if chosen_subprotocol:
                 response_headers.append(("Sec-WebSocket-Protocol", chosen_subprotocol))
+            payload_mode = self_ref._resolve_inbound_ws_payload_mode(
+                _headers_get(headers, self_ref._WS_PAYLOAD_MODE_HEADER.lower()),
+            )
             await _send_http_response(writer, status=101, headers=response_headers, body=b"")
-            return _ServerSideWsConnection(reader, writer, req_path, chosen_subprotocol)
+            return _ServerSideWsConnection(reader, writer, req_path, chosen_subprotocol, payload_mode)
 
         async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
             upgraded = False
@@ -9186,10 +9238,13 @@ class WebSocketSession(ISession):
 
     async def _on_accept(self, ws) -> None:
         if not self._peer_tuple:
+            payload_mode = self._resolve_inbound_ws_payload_mode(getattr(ws, "payload_mode", None))
             peer_id = self._alloc_server_peer_id()
             ctx = {
                 "peer_id": peer_id,
                 "ws": ws,
+                "payload_mode": payload_mode,
+                "payload_codec": self._build_ws_payload_codec(payload_mode),
                 "tx_queue": asyncio.Queue(),
                 "tx_task": None,
                 "rx_task": None,
@@ -9200,7 +9255,10 @@ class WebSocketSession(ISession):
             self._configure_ws_socket(ws)
             peer = getattr(ws, "remote_address", None)
             sockname = getattr(ws, "local_address", None)
-            self._log.info(f"[WS-SESSION] ({self._probe_id}) accept: peer_id={peer_id} local={sockname} peer={peer}")
+            self._log.info(
+                f"[WS-SESSION] ({self._probe_id}) accept: peer_id={peer_id} local={sockname} "
+                f"peer={peer} payload_mode={payload_mode}"
+            )
             try:
                 if isinstance(peer, tuple) and len(peer) >= 2:
                     self._peer_host, self._peer_port = peer[0], int(peer[1])
@@ -9392,6 +9450,7 @@ class WebSocketSession(ISession):
                 self._log.debug(f"[WS-SESSION] ({self._probe_id}) skipping HTTP preflight because proxy tunneling is active")
             t0 = time.perf_counter()
             with self._suspend_library_proxy_env():
+                connect_kwargs.update(self._build_ws_upgrade_headers(websockets.connect))
                 ws = await websockets.connect(
                     uri,
                     ssl=ssl_ctx,
@@ -9547,7 +9606,8 @@ class WebSocketSession(ISession):
                     try:
                         if ws is None:
                             continue
-                        send_coro = ws.send(self._ws_payload_codec.encode(wire))
+                        _payload_mode, payload_codec = self._resolve_ws_codec_context(ctx)
+                        send_coro = ws.send(payload_codec.encode(wire))
                         if self._ws_send_timeout_s > 0:
                             await asyncio.wait_for(send_coro, timeout=self._ws_send_timeout_s)
                         else:
@@ -9630,17 +9690,18 @@ class WebSocketSession(ISession):
 
         self._disconnect_task = self._loop.create_task(_delayed_disconnect())  # type: ignore
 
-    def _decode_ws_message(self, msg) -> Optional[bytes]:
+    def _decode_ws_message(self, msg, *, ctx: Optional[dict] = None) -> Optional[bytes]:
+        payload_mode, payload_codec = self._resolve_ws_codec_context(ctx)
         if isinstance(msg, str):
             try:
-                return self._ws_payload_codec.decode(msg)
+                return payload_codec.decode(msg)
             except Exception as e:
-                self._log.debug(f"[WS/RX] ({self._probe_id}) invalid {self._ws_payload_mode} text frame: {e!r}")
+                self._log.debug(f"[WS/RX] ({self._probe_id}) invalid {payload_mode} text frame: {e!r}")
                 return None
         try:
-            return self._ws_payload_codec.decode(msg)
+            return payload_codec.decode(msg)
         except Exception as e:
-            self._log.debug(f"[WS/RX] ({self._probe_id}) invalid {self._ws_payload_mode} frame: {e!r}")
+            self._log.debug(f"[WS/RX] ({self._probe_id}) invalid {payload_mode} frame: {e!r}")
             return None
 
     async def _load_default_http_page(
@@ -9810,7 +9871,7 @@ class WebSocketSession(ISession):
                 if active_ws is None:
                     return
                 msg = await active_ws.recv()  # type: ignore
-                b = self._decode_ws_message(msg)
+                b = self._decode_ws_message(msg, ctx=ctx)
                 if b is None:
                     continue
                 if not b:

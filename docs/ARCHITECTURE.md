@@ -334,6 +334,7 @@ Functional decomposition:
 Concrete mapping in the current implementation:
 
 - runner and CLI configuration select the effective proxy mode for each `WebSocketSession`
+- runner and CLI configuration also select the client-advertised websocket payload form, while each accepted listener-side peer binds its own effective payload codec from the upgrade request metadata
 - `WebSocketSession._get_ws_proxy_endpoint(...)` resolves the proxy endpoint from manual settings, platform defaults, or environment variables
 - `WebSocketSession._open_ws_proxy_socket_blocking(...)` owns HTTP `CONNECT` setup and proxy authentication preconditions
 - `WebSocketSession._suspend_library_proxy_env()` keeps the dependency from silently re-introducing proxy behavior that bypasses the application contract
