@@ -213,3 +213,24 @@ When behavior suggests one peer is accidentally coupled to another, derive follo
 - require at least one regression that keeps a healthy peer active while another peer or auxiliary request exercises the suspected legacy path
 - prefer mixed-transport and mixed-protocol regressions when the listener shares code paths, because they expose unintended coupling faster than single-transport happy paths
 - when a code path truly needs process-wide effects, document that boundary explicitly so later changes do not mistake a legacy shortcut for intended architecture
+
+## Pull Request Style and Templates
+
+To keep PRs consistent and easy to review, follow this PR structure and use the project PR template (see `.github/PULL_REQUEST_TEMPLATE.md`). Reviewers will expect this layout and rely on it when triaging changes:
+
+- **Summary**: Short, high-level description of the change and its intent.
+- **Problem**: Concrete, observable problem statement the change fixes (include a minimal reproduction if relevant).
+- **Changes**: Bulleted list of what changed (files, behavioral changes, tests added/modified).
+- **Why This Matters**: Short paragraph describing the risk/benefit and why the change is needed.
+- **Validation**: Exact commands used to validate the change (tests run, guard checks) and the observed results.
+- **Reviewer Notes**: Focus areas for reviewers (backwards-compatibility, safety, performance, tests to examine).
+
+Checklist for opening PRs:
+
+- Use the repository PR template in `.github/PULL_REQUEST_TEMPLATE.md`.
+- Run the most relevant unit and integration tests and include the commands + short results in the `Validation` section.
+- If implementation or tests change, update `docs/REQUIREMENTS.md`, `README.md`, and `.github/requirements_traceability.yaml` as required by the repository guards.
+- Link to related architecture or design notes in `docs/` when the change affects component responsibilities.
+- Keep the PR body factual and actionable — reviewers should be able to understand what to review and why in under a minute.
+
+Maintainers may update the PR template to reflect evolving review preferences; when in doubt, model new PRs off of recently merged PRs that had small, corrective changes (for example the WebSocket keep-alive demux PR). This keeps reviewer expectations consistent across the project.
