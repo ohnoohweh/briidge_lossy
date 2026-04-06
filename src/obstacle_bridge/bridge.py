@@ -3340,6 +3340,21 @@ class SecureLinkPskSession(ISession):
     def set_on_app_from_peer_bytes(self, cb): self._outer_on_app_from_peer_bytes = cb
     def set_on_transport_epoch_change(self, cb): self._outer_on_transport_epoch_change = cb
 
+    def get_connection_failure_snapshot(self) -> dict:
+        getter = getattr(self._inner, "get_connection_failure_snapshot", None)
+        if callable(getter):
+            with contextlib.suppress(Exception):
+                return dict(getter() or {})
+        return {
+            "failed": False,
+            "reason": None,
+            "detail": None,
+            "unix_ts": None,
+            "last_event": "",
+            "last_event_unix_ts": None,
+            "transport": self._transport_name,
+        }
+
     async def start(self) -> None:
         self._require_crypto()
         setter = getattr(self._inner, "set_app_payload_passthrough", None)
@@ -7495,6 +7510,13 @@ class WebSocketSemiTextShapePayloadCodec(WebSocketPayloadCodec):
         return bytes(int(bit_stream[start:start + 8], 2) for start in range(0, full_bytes, 8))
 
 
+class _WsConnectionBootstrapError(RuntimeError):
+    def __init__(self, reason: str, detail: str):
+        super().__init__(detail)
+        self.reason = str(reason)
+        self.detail = str(detail)
+
+
 class WebSocketSession(ISession):
     """
     Overlay over one WebSocket (binary messages by default, optional base64, grouped semi-text, or JSON+base64 text frames):
@@ -7707,6 +7729,12 @@ class WebSocketSession(ISession):
         self._overlay_connected = False
         self.connection_epoch: int = 0
         self._app_payload_passthrough: bool = False
+        self._ws_connect_timeout_s: float = 5.0
+        self._connection_failure_reason: Optional[str] = None
+        self._connection_failure_detail: Optional[str] = None
+        self._connection_failure_unix_ts: Optional[float] = None
+        self._connection_last_event: str = ""
+        self._connection_last_event_unix_ts: Optional[float] = None
 
         # Static HTTP root
         self._ws_static_dir: Optional[str] = getattr(self._args, "ws_static_dir", "./web") or None
@@ -7722,6 +7750,46 @@ class WebSocketSession(ISession):
     def set_on_app_from_peer_bytes(self, cb): self._on_app_from_peer_bytes = cb
     def set_on_transport_epoch_change(self, cb): self._on_transport_epoch_change = cb
     def set_app_payload_passthrough(self, enabled: bool) -> None: self._app_payload_passthrough = bool(enabled)
+
+    def get_connection_failure_snapshot(self) -> dict:
+        failed = bool(self._peer_tuple and self._connection_failure_reason and not self.is_connected())
+        return {
+            "failed": failed,
+            "reason": self._connection_failure_reason,
+            "detail": self._connection_failure_detail,
+            "unix_ts": self._connection_failure_unix_ts,
+            "last_event": self._connection_last_event,
+            "last_event_unix_ts": self._connection_last_event_unix_ts,
+            "transport": "ws",
+        }
+
+    def _format_connection_failure_detail(self, exc: BaseException) -> str:
+        detail = str(exc).strip()
+        return detail or repr(exc)
+
+    def _record_connection_failure(self, reason: str, detail: str, *, event: str = "connect_failed") -> None:
+        now = time.time()
+        self._connection_failure_reason = str(reason)
+        self._connection_failure_detail = str(detail or "")
+        self._connection_failure_unix_ts = now
+        self._connection_last_event = str(event or "connect_failed")
+        self._connection_last_event_unix_ts = now
+
+    def _clear_connection_failure(self) -> None:
+        self._connection_failure_reason = None
+        self._connection_failure_detail = None
+        self._connection_failure_unix_ts = None
+        self._connection_last_event = ""
+        self._connection_last_event_unix_ts = None
+
+    def _classify_connect_failure(self, exc: BaseException, *, proxy_active: bool) -> tuple[str, str]:
+        if isinstance(exc, _WsConnectionBootstrapError):
+            return exc.reason, exc.detail
+        if isinstance(exc, socket.gaierror):
+            return "dns_resolution_failed", self._format_connection_failure_detail(exc)
+        if proxy_active:
+            return "proxy_negotiation_failed", self._format_connection_failure_detail(exc)
+        return "websocket_open_failed", self._format_connection_failure_detail(exc)
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -8502,7 +8570,10 @@ class WebSocketSession(ISession):
         while attempts < 3:
             attempts += 1
             self._log.debug("[WS-PROXY] (%s) CONNECT attempt=%d proxy=%s:%d", self._probe_id, attempts, proxy_host, int(proxy_port))
-            sock = socket.create_connection((proxy_host, int(proxy_port)), timeout=30.0)
+            sock = socket.create_connection(
+                (proxy_host, int(proxy_port)),
+                timeout=self._ws_connect_timeout_s,
+            )
             try:
                 auth_header = None
                 if auth_mode == "negotiate" and attempts > 1:
@@ -9234,18 +9305,55 @@ class WebSocketSession(ISession):
         proxy_target_port = uri_port
         proxy_endpoint = None
         if self._proxy_feature_enabled():
-            proxy_endpoint = self._get_ws_proxy_endpoint(proxy_target_host, proxy_target_port)
-        if proxy_endpoint is not None:
-            connect_kwargs["sock"] = proxy_sock = await self._open_ws_proxy_socket(proxy_target_host, proxy_target_port)
-            if ssl_ctx is not None:
-                connect_kwargs["server_hostname"] = proxy_target_host
-        elif self._peer_name_host and (self._peer_name_host != host or uri_port != int(port)):
-            connect_kwargs["host"] = host
-            connect_kwargs["port"] = int(port)
-            if ssl_ctx is not None:
-                connect_kwargs["server_hostname"] = self._peer_name_host
-
+            try:
+                proxy_endpoint = self._get_ws_proxy_endpoint(proxy_target_host, proxy_target_port)
+            except Exception as exc:
+                raise _WsConnectionBootstrapError(
+                    "proxy_negotiation_failed",
+                    self._format_connection_failure_detail(exc),
+                ) from exc
         try:
+            if proxy_endpoint is not None:
+                proxy_open_task: Optional[asyncio.Task[socket.socket]] = None
+                try:
+                    proxy_open_task = self._loop.create_task(  # type: ignore[arg-type]
+                        self._open_ws_proxy_socket(proxy_target_host, proxy_target_port)
+                    )
+                    done, _pending = await asyncio.wait({proxy_open_task}, timeout=self._ws_connect_timeout_s)
+                    if proxy_open_task not in done:
+                        proxy_open_task.cancel()
+
+                        def _cleanup_late_proxy_socket(task: asyncio.Task[socket.socket]) -> None:
+                            with contextlib.suppress(Exception):
+                                late_sock = task.result()
+                                late_sock.close()
+
+                        proxy_open_task.add_done_callback(_cleanup_late_proxy_socket)
+                        raise _WsConnectionBootstrapError(
+                            "proxy_negotiation_failed",
+                            f"timed out opening proxy tunnel after {self._ws_connect_timeout_s:.1f}s",
+                        )
+                    connect_kwargs["sock"] = proxy_sock = proxy_open_task.result()
+                except _WsConnectionBootstrapError:
+                    raise
+                except asyncio.TimeoutError as exc:
+                    raise _WsConnectionBootstrapError(
+                        "proxy_negotiation_failed",
+                        f"timed out opening proxy tunnel after {self._ws_connect_timeout_s:.1f}s",
+                    ) from exc
+                except Exception as exc:
+                    raise _WsConnectionBootstrapError(
+                        "proxy_negotiation_failed",
+                        self._format_connection_failure_detail(exc),
+                    ) from exc
+                if ssl_ctx is not None:
+                    connect_kwargs["server_hostname"] = proxy_target_host
+            elif self._peer_name_host and (self._peer_name_host != host or uri_port != int(port)):
+                connect_kwargs["host"] = host
+                connect_kwargs["port"] = int(port)
+                if ssl_ctx is not None:
+                    connect_kwargs["server_hostname"] = self._peer_name_host
+
             had_previous_connection = self.connection_epoch > 0
             if connect_kwargs.get("sock") is not None:
                 self._log.info(
@@ -9260,13 +9368,26 @@ class WebSocketSession(ISession):
                 self._log.debug(
                     f"[WS-SESSION] ({self._probe_id}) using direct HTTP preflight before websocket upgrade"
                 )
-                await self._load_default_http_page(
-                    host=host,
-                    port=int(port),
-                    ssl_ctx=ssl_ctx,
-                    server_hostname=connect_kwargs.get("server_hostname", self._peer_name_host or None),
-                    host_header=uri_host.strip("[]"),
-                )
+                try:
+                    await self._load_default_http_page(
+                        host=host,
+                        port=int(port),
+                        ssl_ctx=ssl_ctx,
+                        server_hostname=connect_kwargs.get("server_hostname", self._peer_name_host or None),
+                        host_header=uri_host.strip("[]"),
+                    )
+                except Exception as exc:
+                    if isinstance(exc, _WsConnectionBootstrapError):
+                        raise
+                    if isinstance(exc, socket.gaierror):
+                        raise _WsConnectionBootstrapError(
+                            "dns_resolution_failed",
+                            self._format_connection_failure_detail(exc),
+                        ) from exc
+                    raise _WsConnectionBootstrapError(
+                        "http_preflight_failed",
+                        self._format_connection_failure_detail(exc),
+                    ) from exc
             else:
                 self._log.debug(f"[WS-SESSION] ({self._probe_id}) skipping HTTP preflight because proxy tunneling is active")
             t0 = time.perf_counter()
@@ -9284,6 +9405,7 @@ class WebSocketSession(ISession):
             dt = (time.perf_counter() - t0) * 1000.0
             local = getattr(ws, "local_address", None)
             remote = getattr(ws, "remote_address", None)
+            self._clear_connection_failure()
             self._log.info(f"[WS-SESSION] ({self._probe_id}) connected in {dt:.1f} ms local={local} peer={remote}")
             await self._on_accept(ws)
             if self._ws is ws:
@@ -9304,6 +9426,11 @@ class WebSocketSession(ISession):
             if proxy_sock is not None:
                 with contextlib.suppress(Exception):
                     proxy_sock.close()
+            failure_reason, failure_detail = self._classify_connect_failure(
+                e,
+                proxy_active=proxy_endpoint is not None,
+            )
+            self._record_connection_failure(failure_reason, failure_detail)
             self._log.warning(f"[WS-SESSION] ({self._probe_id}) connect failed to {uri}: {e!r}")
         finally:
             self._connecting_task = None
@@ -9537,7 +9664,26 @@ class WebSocketSession(ISession):
             if ssl_ctx is not None:
                 open_kwargs["ssl"] = ssl_ctx
                 open_kwargs["server_hostname"] = server_hostname or request_host
-            reader, writer = await asyncio.open_connection(host=host, port=port, **open_kwargs)
+            try:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(host=host, port=port, **open_kwargs),
+                    timeout=self._ws_connect_timeout_s,
+                )
+            except asyncio.TimeoutError as exc:
+                raise _WsConnectionBootstrapError(
+                    "http_channel_open_failed",
+                    f"timed out opening HTTP preflight channel after {self._ws_connect_timeout_s:.1f}s",
+                ) from exc
+            except Exception as exc:
+                if isinstance(exc, socket.gaierror):
+                    raise _WsConnectionBootstrapError(
+                        "dns_resolution_failed",
+                        self._format_connection_failure_detail(exc),
+                    ) from exc
+                raise _WsConnectionBootstrapError(
+                    "http_channel_open_failed",
+                    self._format_connection_failure_detail(exc),
+                ) from exc
             request = (
                 "GET / HTTP/1.1\r\n"
                 f"Host: {request_host}\r\n"
@@ -9548,14 +9694,26 @@ class WebSocketSession(ISession):
             ).encode("ascii")
             writer.write(request)
             await writer.drain()
-            status_line = await reader.readline()
+            try:
+                status_line = await asyncio.wait_for(reader.readline(), timeout=self._ws_connect_timeout_s)
+            except asyncio.TimeoutError as exc:
+                raise _WsConnectionBootstrapError(
+                    "http_preflight_failed",
+                    f"timed out waiting for HTTP preflight response after {self._ws_connect_timeout_s:.1f}s",
+                ) from exc
             if not status_line:
-                raise RuntimeError("empty HTTP response")
+                raise _WsConnectionBootstrapError("http_preflight_failed", "empty HTTP response")
             parts = status_line.decode("iso-8859-1", "replace").strip().split(" ", 2)
             status_code = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 0
             response_headers: Dict[str, str] = {}
             while True:
-                line = await reader.readline()
+                try:
+                    line = await asyncio.wait_for(reader.readline(), timeout=self._ws_connect_timeout_s)
+                except asyncio.TimeoutError as exc:
+                    raise _WsConnectionBootstrapError(
+                        "http_preflight_failed",
+                        f"timed out reading HTTP preflight headers after {self._ws_connect_timeout_s:.1f}s",
+                    ) from exc
                 if not line or line in (b"\r\n", b"\n"):
                     break
                 header_text = line.decode("iso-8859-1", "replace")
@@ -9563,12 +9721,19 @@ class WebSocketSession(ISession):
                     continue
                 key, value = header_text.split(":", 1)
                 response_headers[key.strip().lower()] = value.strip()
-            body = await reader.read()
+            try:
+                body = await asyncio.wait_for(reader.read(), timeout=self._ws_connect_timeout_s)
+            except asyncio.TimeoutError as exc:
+                raise _WsConnectionBootstrapError(
+                    "http_preflight_failed",
+                    f"timed out downloading HTTP preflight body after {self._ws_connect_timeout_s:.1f}s",
+                ) from exc
             content_length_header = response_headers.get("content-length", "")
             content_length = int(content_length_header) if content_length_header.isdigit() else None
             if content_length is not None and len(body) != content_length:
-                raise RuntimeError(
-                    f"incomplete HTTP body {len(body)}/{content_length} for status {status_code}"
+                raise _WsConnectionBootstrapError(
+                    "http_preflight_failed",
+                    f"incomplete HTTP body {len(body)}/{content_length} for status {status_code}",
                 )
             self._log.debug(
                 f"[WS-SESSION] ({self._probe_id}) HTTP preflight GET / response "
@@ -9580,7 +9745,10 @@ class WebSocketSession(ISession):
                     f"[WS-SESSION] ({self._probe_id}) refusing websocket upgrade because "
                     f"HTTP preflight returned status={status_code}"
                 )
-                raise RuntimeError(f"unexpected HTTP status {status_code}")
+                raise _WsConnectionBootstrapError(
+                    "http_preflight_failed",
+                    f"unexpected HTTP status {status_code}",
+                )
             self._log.debug(
                 f"[WS-SESSION] ({self._probe_id}) HTTP preflight GET / ok "
                 f"status={status_code} downloaded_body_bytes={len(body)}"
@@ -12135,6 +12303,7 @@ class ChannelMux:
 # ============================================================================
 STATE_DISCONNECTED = "DISCONNECTED"
 STATE_CONNECTED = "CONNECTED"
+STATE_FAILED = "FAILED"
 
 class StatsBoard:
     """
@@ -12223,6 +12392,15 @@ class StatsBoard:
 
         self.session_is_connected = lambda: False
         self.session_get_metrics  = lambda: SessionMetrics()
+        self.session_get_connection_failure = lambda: {
+            "failed": False,
+            "reason": None,
+            "detail": None,
+            "unix_ts": None,
+            "last_event": "",
+            "last_event_unix_ts": None,
+            "transport": None,
+        }
 
     # ---- wiring from Runner ----------------------------------------------------
     def set_session_ref(self, s: Optional[Session]) -> None:
@@ -12271,6 +12449,19 @@ class StatsBoard:
         self._status_session = session
         self.session_is_connected = session.is_connected
         self.session_get_metrics  = session.get_metrics
+        getter = getattr(session, "get_connection_failure_snapshot", None)
+        if callable(getter):
+            self.session_get_connection_failure = getter
+        else:
+            self.session_get_connection_failure = lambda: {
+                "failed": False,
+                "reason": None,
+                "detail": None,
+                "unix_ts": None,
+                "last_event": "",
+                "last_event_unix_ts": None,
+                "transport": None,
+            }
 
 
     # ---- lifecycle (status task) ----------------------------------------------
@@ -12508,15 +12699,25 @@ class StatsBoard:
 
         hist = dict(getattr(self.session, "stats_hist", {}) or {})
         repeated_multiple = int(hist.get("thrice", 0)) + int(hist.get("gt3", 0))
+        failure = dict(self.session_get_connection_failure() or {})
+        peer_state = self._conn_state
+        if peer_state != STATE_CONNECTED and bool(failure.get("failed")):
+            peer_state = STATE_FAILED
 
         return {
             "updated_unix_ts": now_wall,
-            "peer_state": self._conn_state,
+            "peer_state": peer_state,
             "overlay": {
                 "bind": self._overlay_bind_str,
                 "peer": self._overlay_peer_str,
                 "local_side": self._local_side_str,
             },
+            "connection_failure_reason": failure.get("reason"),
+            "connection_failure_detail": failure.get("detail"),
+            "connection_failure_unix_ts": failure.get("unix_ts"),
+            "connection_last_event": failure.get("last_event") or "",
+            "connection_last_event_unix_ts": failure.get("last_event_unix_ts"),
+            "connection_failure_transport": failure.get("transport"),
             "open_connections": {
                 "udp": int(udp_count),
                 "tcp": int(tcp_count),

@@ -117,6 +117,7 @@ Current ownership decisions:
 - retransmission policy and RTT/inflight metrics stay in `ARC-CMP-002` until an implementation phase deliberately reworks that boundary
 - service publication, channel IDs, and remote catalog state stay in `ARC-CMP-003`
 - secure-link config loading and lifecycle wiring belong to `ARC-CMP-004`
+- transport bootstrap or websocket-open failures stay owned by the transport/session layer, but their user-visible failed-state reporting belongs to `ARC-CMP-005`
 - peer identity visibility in admin APIs belongs to `ARC-CMP-005`
 - encryption-layer status visibility in WebAdmin/API is a joint function:
   - `ARC-CMP-006` owns the underlying secure-link state machine and failure categories

@@ -141,10 +141,11 @@ Future changes to the WebSocket listener path should preserve these externally v
 - healthy WebSocket overlay traffic still works after the plain HTTP requests
 - on the direct non-proxied client path, `GET /` is completed before the later upgrade attempt
 - when that direct-path preflight does not return `200 OK`, the client stays disconnected and does not attempt the later upgrade
+- when client bootstrap or websocket-open fails, `/api/status` reports `peer_state=FAILED` with transport-level reason/detail until a later successful connect clears it
 
 The current regression anchor is [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py), especially the `test_overlay_e2e_ws_static_http_root_*` family.
 
-For the peer-client bootstrap path, the main regression anchors now live in both [tests/unit/test_ws_payload_mode.py](/home/ohnoohweh/quic_br/tests/unit/test_ws_payload_mode.py) and [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py), where the HTTP preflight body download, direct-path refusal-on-non-`200`, and proxy-skip behavior are exercised as supported transport bootstrap behavior.
+For the peer-client bootstrap path, the main regression anchors now live in both [tests/unit/test_ws_payload_mode.py](/home/ohnoohweh/quic_br/tests/unit/test_ws_payload_mode.py) and [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py), where the HTTP preflight body download, direct-path refusal-on-non-`200`, proxy failure handling, DNS failure classification, and user-visible failed-connection reporting are exercised as supported transport bootstrap behavior.
 
 ## Tradeoffs and future options
 

@@ -529,6 +529,68 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("host", connect.await_args.kwargs)
         self.assertNotIn("port", connect.await_args.kwargs)
 
+    async def test_connect_reports_dns_resolution_failures_as_failed(self):
+        args = _args("binary")
+        args.peer = "127.0.0.1"
+        args.peer_port = 54321
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+        session._peer_tuple = ("127.0.0.1", 54321)
+        session._peer_name_host = "overlay.example"
+        session._peer_name_port = 54321
+
+        connect = mock.AsyncMock()
+        fake_websockets = types.SimpleNamespace(connect=connect)
+
+        with mock.patch.dict(sys.modules, {"websockets": fake_websockets}):
+            with mock.patch.object(
+                session,
+                "_load_default_http_page",
+                mock.AsyncMock(side_effect=socket.gaierror(-2, "Name or service not known")),
+            ):
+                await session._connect_to("bad-host.invalid", 54321)
+
+        snapshot = session.get_connection_failure_snapshot()
+        self.assertTrue(snapshot["failed"])
+        self.assertEqual(snapshot["reason"], "dns_resolution_failed")
+        self.assertIn("Name or service not known", snapshot["detail"])
+        self.assertEqual(snapshot["last_event"], "connect_failed")
+        connect.assert_not_awaited()
+
+    async def test_connect_reports_proxy_negotiation_failures_as_failed(self):
+        args = _args("binary")
+        args.ws_peer = "127.0.0.1"
+        args.ws_peer_port = 54321
+        args.ws_proxy_mode = "manual"
+        args.ws_proxy_host = "proxy.example"
+        args.ws_proxy_port = 8080
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+        session._peer_tuple = ("127.0.0.1", 54321)
+        session._peer_name_host = "overlay.example"
+        session._peer_name_port = 54321
+
+        connect = mock.AsyncMock()
+        fake_websockets = types.SimpleNamespace(connect=connect)
+
+        with mock.patch.dict(sys.modules, {"websockets": fake_websockets}):
+            with mock.patch.object(session, "_get_ws_proxy_endpoint", return_value=("proxy.example", 8080)):
+                with mock.patch.object(
+                    session,
+                    "_open_ws_proxy_socket",
+                    mock.AsyncMock(side_effect=RuntimeError("proxy refused CONNECT")),
+                ):
+                    await session._connect_to("127.0.0.1", 54321)
+
+        snapshot = session.get_connection_failure_snapshot()
+        self.assertTrue(snapshot["failed"])
+        self.assertEqual(snapshot["reason"], "proxy_negotiation_failed")
+        self.assertIn("proxy refused CONNECT", snapshot["detail"])
+        self.assertEqual(snapshot["last_event"], "connect_failed")
+        connect.assert_not_awaited()
+
 
 class WebSocketProxyHelpersTests(unittest.TestCase):
     def test_register_cli_defaults_ws_proxy_mode_to_env_on_linux(self):
@@ -641,13 +703,12 @@ class WebSocketProxyHelpersTests(unittest.TestCase):
         session._peer_tuple = ("127.0.0.1", 54321)
 
         with mock.patch("obstacle_bridge.bridge.urllib.request.proxy_bypass", return_value=True):
-            with mock.patch("obstacle_bridge.bridge.urllib.request.getproxies") as getproxies:
+            with mock.patch("obstacle_bridge.bridge.urllib.request.getproxies", return_value={"http": "http://proxy.example:8080"}):
                 endpoint = session._get_ws_proxy_endpoint("overlay.example", 54321)
 
         self.assertIsNone(endpoint)
-        getproxies.assert_not_called()
 
-    def test_open_ws_proxy_socket_logs_connect_success(self):
+    def test_open_ws_proxy_socket_blocking_establishes_connect_tunnel(self):
         args = _args("binary")
         args.ws_peer = "127.0.0.1"
         args.ws_peer_port = 54321
@@ -659,13 +720,12 @@ class WebSocketProxyHelpersTests(unittest.TestCase):
         session._log = mock.Mock()
 
         fake_sock = mock.Mock()
-        with mock.patch.object(session, "_get_ws_proxy_endpoint", return_value=("proxy.example", 8080)):
-            with mock.patch("socket.create_connection", return_value=fake_sock) as create_connection:
-                with mock.patch.object(session, "_read_http_proxy_response", return_value=(200, {})):
-                    sock = session._open_ws_proxy_socket_blocking("overlay.example", 54321)
+        with mock.patch("obstacle_bridge.bridge.socket.create_connection", return_value=fake_sock) as create_connection:
+            with mock.patch.object(session, "_read_http_proxy_response", return_value=(200, {})):
+                sock = session._open_ws_proxy_socket_blocking("overlay.example", 54321)
 
         self.assertIs(sock, fake_sock)
-        create_connection.assert_called_once_with(("proxy.example", 8080), timeout=30.0)
+        create_connection.assert_called_once_with(("proxy.example", 8080), timeout=5.0)
         fake_sock.sendall.assert_called_once()
         fake_sock.setblocking.assert_called_once_with(False)
         debug_messages = [call.args[0] for call in session._log.debug.call_args_list if call.args]

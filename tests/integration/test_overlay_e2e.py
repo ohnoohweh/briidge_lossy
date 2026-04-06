@@ -2577,6 +2577,67 @@ def wait_status_not_connected(admin_port: int, timeout: float = 30.0, label: str
     raise RuntimeError(f'Port {admin_port} stayed CONNECTED for {timeout}s; last={last!r}')
 
 
+def wait_status_failed(
+    admin_port: int,
+    *,
+    timeout: float = 30.0,
+    label: str = '',
+    reason: Optional[str] = None,
+) -> dict:
+    end = time.time() + timeout
+    last = None
+    last_rendered = None
+
+    while time.time() < end:
+        try:
+            last = try_get_status(admin_port)
+            rendered = fmt_state_doc(last)
+            if rendered != last_rendered:
+                who = f' {label}' if label else ''
+                log.info(f'[STATUS]{who} port={admin_port} {rendered}')
+                last_rendered = rendered
+            if last is not None and status_state(last) == 'FAILED':
+                if reason is None or str(last.get('connection_failure_reason') or '') == reason:
+                    who = f' {label}' if label else ''
+                    log.info(f'[STATUS]{who} port={admin_port} FAILED reached')
+                    return last
+        except Exception as e:
+            rendered = f'QUERY_FAILED {e!r}'
+            if rendered != last_rendered:
+                who = f' {label}' if label else ''
+                log.info(f'[STATUS]{who} port={admin_port} {rendered}')
+                last_rendered = rendered
+        time.sleep(0.5)
+
+    raise RuntimeError(f'Port {admin_port} did not reach FAILED; last={last!r}')
+
+
+def wait_any_status_failed(
+    admin_ports: list[int],
+    *,
+    timeout: float = 30.0,
+    reason: Optional[str] = None,
+) -> tuple[int, dict]:
+    end = time.time() + timeout
+    last_by_port: dict[int, Optional[dict]] = {port: None for port in admin_ports}
+
+    while time.time() < end:
+        for port in admin_ports:
+            try:
+                doc = try_get_status(port)
+            except Exception:
+                doc = None
+            last_by_port[port] = doc
+            if doc is None or status_state(doc) != 'FAILED':
+                continue
+            if reason is None or str(doc.get('connection_failure_reason') or '') == reason:
+                log.info(f'[STATUS] port={port} FAILED reached via any-port wait')
+                return port, doc
+        time.sleep(0.5)
+
+    raise RuntimeError(f'Ports {admin_ports!r} did not reach FAILED; last={last_by_port!r}')
+
+
 def wait_log_contains(log_path: Path, needle: str, timeout: float = 10.0) -> str:
     end = time.time() + timeout
     last = ''
@@ -5143,15 +5204,16 @@ def test_overlay_e2e_ws_proxy_failure_keeps_overlay_state_machine_healthy(tmp_pa
         specs = build_commands(case, tmp_path, 270, enable_admin=True)
         server_name, server_cmd, server_env, server_admin = specs[0]
         client_name, client_cmd, client_env, client_admin = specs[1]
+        client_cmd = _replace_last_arg(client_cmd, '--client-restart-if-disconnected', '0')
         client_env = dict(client_env)
         client_env.update(_proxy_env(bad_proxy_port, no_proxy=''))
         server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, tmp_path, env_extra=server_env, admin_port=server_admin)
         client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, tmp_path, env_extra=client_env, admin_port=client_admin)
         wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
         wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
-        time.sleep(2.0)
         assert_running(server_proc)
         assert_running(client_proc)
+        time.sleep(2.0)
         client_status = get_status(client_proc.admin_port or 0)
         server_status = get_status(server_proc.admin_port or 0)
         assert status_state(client_status) != 'CONNECTED'
@@ -5183,6 +5245,7 @@ def test_overlay_e2e_ws_direct_preflight_requires_http_200_before_upgrade(tmp_pa
         specs = build_commands(case, tmp_path, case_index, enable_admin=True)
         server_name, server_cmd, server_env, server_admin = specs[0]
         client_name, client_cmd, client_env, client_admin = specs[1]
+        client_cmd = _replace_last_arg(client_cmd, '--client-restart-if-disconnected', '0')
         server_cmd = _replace_last_arg(server_cmd, '--log', 'DEBUG')
         client_cmd = _replace_last_arg(client_cmd, '--log', 'DEBUG')
         server_cmd = _append_args(
@@ -5193,22 +5256,31 @@ def test_overlay_e2e_ws_direct_preflight_requires_http_200_before_upgrade(tmp_pa
             ],
         )
         client_cmd = _append_args(client_cmd, ['--log-ws-session', 'DEBUG'])
+        server_runtime_log = Path(_arg_value(server_cmd, '--log-file', ''))
+        client_runtime_log = Path(_arg_value(client_cmd, '--log-file', ''))
 
         server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, tmp_path, env_extra=server_env, admin_port=server_admin)
+        wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+        wait_log_contains(server_runtime_log, 'server listening on', timeout=10.0)
         client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, tmp_path, env_extra=client_env, admin_port=client_admin)
 
-        wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
         wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
-        client_status = wait_status_not_connected(client_proc.admin_port or 0, timeout=10.0, label='client')
+        client_status = wait_status_failed(
+            client_proc.admin_port or 0,
+            timeout=15.0,
+            label='client',
+            reason='http_preflight_failed',
+        )
         server_status = wait_status_not_connected(server_proc.admin_port or 0, timeout=10.0, label='server')
-        assert status_state(client_status) != 'CONNECTED'
+        assert status_state(client_status) == 'FAILED'
+        assert client_status.get('connection_failure_reason') == 'http_preflight_failed'
+        assert client_status.get('connection_failure_transport') == 'ws'
+        assert client_status.get('connection_last_event') == 'connect_failed'
+        assert 'HTTP status 426' in str(client_status.get('connection_failure_detail') or '')
         assert status_state(server_status) != 'CONNECTED'
         assert_running(server_proc)
         assert_running(client_proc)
         expect_probe_failure(case, PAYLOAD_IN, timeout=3.0)
-
-        client_runtime_log = Path(_arg_value(client_cmd, '--log-file', ''))
-        server_runtime_log = Path(_arg_value(server_cmd, '--log-file', ''))
 
         client_log = wait_log_contains(client_runtime_log, 'HTTP preflight GET / response status=426', timeout=10.0)
         assert 'refusing websocket upgrade because HTTP preflight returned status=426' in client_log

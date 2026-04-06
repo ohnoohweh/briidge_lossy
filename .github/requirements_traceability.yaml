@@ -338,6 +338,14 @@ REQ-WSP-011:
     - tests/unit/test_ws_payload_mode.py::test_connect_refuses_upgrade_when_http_preflight_is_not_200
     - tests/unit/test_ws_payload_mode.py::test_binary_frames_are_still_accepted_in_text_modes
 
+REQ-WSP-012:
+  integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_direct_preflight_requires_http_200_before_upgrade
+  unit_tests:
+    - tests/unit/test_admin_web_payloads.py::test_build_status_payload_preserves_connection_failure_fields
+    - tests/unit/test_ws_payload_mode.py::test_connect_reports_dns_resolution_failures_as_failed
+    - tests/unit/test_ws_payload_mode.py::test_connect_reports_proxy_negotiation_failures_as_failed
+
 REQ-LIFE-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
