@@ -123,7 +123,7 @@ Current implementation note:
 - `REQ-LST-004`: A QUIC listener shall support two independent peer clients concurrently.
 - `REQ-LST-005`: When a listener has multiple connected peers, the admin peer API shall report distinct peer endpoints for the connected peers.
 - `REQ-LST-006`: Listener-side peer reporting shall distinguish passive listening state from active connected peers.
-- `REQ-LST-007`: Listener behavior shall remain peer-independent: auxiliary listener activity on a shared endpoint, including non-upgrade HTTP handling on a WebSocket listener, per-peer handshake/failure handling, and disconnect cleanup, shall stay scoped to the originating request or peer and shall not degrade healthy traffic forwarding, published-service reachability, or authenticated session state that belongs to another peer.
+- `REQ-LST-007`: Listener behavior shall remain peer-independent: auxiliary listener activity on a shared endpoint, including non-upgrade HTTP handling on a WebSocket listener, repeated plain HTTP requests on the same TCP connection before any later upgrade, per-peer handshake/failure handling, and disconnect cleanup, shall stay scoped to the originating request or peer and shall not degrade healthy traffic forwarding, published-service reachability, or authenticated session state that belongs to another peer, including a healthy peer that is using a different active transport on the same listener process.
 
 ## Mixed traffic and channel requirements
 

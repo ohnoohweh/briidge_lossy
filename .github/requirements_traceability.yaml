@@ -109,6 +109,8 @@ REQ-AUT-005:
 REQ-LST-007:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_link_ws_peer
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_link_myudp_peer_on_mixed_listener
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_peer
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener
   unit_tests:
@@ -117,6 +119,7 @@ REQ-LST-007:
 REQ-MUX-005:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_link_myudp_peer_on_mixed_listener
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services

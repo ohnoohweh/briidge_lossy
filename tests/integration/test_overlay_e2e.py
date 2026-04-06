@@ -1669,6 +1669,64 @@ def fetch_http_bytes(
         return code, response_headers, body
 
 
+def _read_http_response_from_socket(sock: socket.socket, *, timeout: float = 1.5) -> tuple[int, Dict[str, str], bytes]:
+    sock.settimeout(timeout)
+    raw = bytearray()
+    while b'\r\n\r\n' not in raw:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise RuntimeError(f'connection closed before HTTP headers completed: {bytes(raw)!r}')
+        raw.extend(chunk)
+
+    header_block, body = raw.split(b'\r\n\r\n', 1)
+    lines = header_block.decode('iso-8859-1', 'replace').split('\r\n')
+    if not lines:
+        raise RuntimeError('missing HTTP status line')
+    status_parts = lines[0].split()
+    if len(status_parts) < 2:
+        raise RuntimeError(f'invalid HTTP status line: {lines[0]!r}')
+    status_code = int(status_parts[1])
+    headers: Dict[str, str] = {}
+    for line in lines[1:]:
+        if not line or ':' not in line:
+            continue
+        key, value = line.split(':', 1)
+        headers[key.strip().lower()] = value.strip()
+
+    content_length = int(headers.get('content-length', '0') or '0')
+    while len(body) < content_length:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise RuntimeError(
+                f'connection closed before HTTP body completed: expected={content_length} got={len(body)}'
+            )
+        body += chunk
+    return status_code, headers, bytes(body[:content_length])
+
+
+def fetch_http_keepalive_sequence(
+    host: str,
+    port: int,
+    *,
+    path: str = '/',
+    attempts: int = 2,
+    timeout: float = 1.5,
+) -> list[tuple[int, Dict[str, str], bytes]]:
+    responses: list[tuple[int, Dict[str, str], bytes]] = []
+    with socket.create_connection((host, port), timeout=timeout) as sock:
+        for _ in range(max(1, int(attempts))):
+            request = (
+                f'GET {path} HTTP/1.1\r\n'
+                f'Host: {host}:{port}\r\n'
+                'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n'
+                'Connection: keep-alive\r\n'
+                '\r\n'
+            ).encode('ascii')
+            sock.sendall(request)
+            responses.append(_read_http_response_from_socket(sock, timeout=timeout))
+    return responses
+
+
 def assert_static_http_root_serves_repeatedly(url: str, *, attempts: int = 6, timeout: float = 1.5) -> bytes:
     last_body = b''
     for _ in range(max(1, int(attempts))):
@@ -6330,7 +6388,7 @@ def test_overlay_e2e_tcp_secure_link_psk_operator_forced_rekey(tmp_path: Path) -
                 case,
                 tmp_path,
                 case_index=286,
-                secure_slot=11,
+                secure_slot=10,
                 server_extra_args=secure_args,
                 client_extra_args=secure_args,
             )
@@ -7034,6 +7092,53 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_p
 
 @pytest.mark.integration
 @pytest.mark.slow
+def test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_link_ws_peer(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case08_overlay_ws_ipv4']
+        secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
+        bounce = None
+        server_proc = client_proc = None
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=286,
+                secure_slot=10,
+                server_extra_args=secure_args,
+                client_extra_args=secure_args,
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            wait_probe(case, payload=b'\x01ws-static-http-keepalive-before', timeout=12.0)
+            wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+            wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+            wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+
+            responses = fetch_http_keepalive_sequence(
+                '127.0.0.1',
+                _listener_overlay_port(case, 'ws'),
+                attempts=2,
+                timeout=2.0,
+            )
+            assert len(responses) == 2
+            for code, headers, body in responses:
+                assert code == 200
+                assert headers.get('content-type', '').startswith('text/html')
+                assert b'Hello! Welcome!' in body
+
+            wait_probe(case, payload=b'\x01ws-static-http-keepalive-after', timeout=12.0)
+            wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+            wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
 def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener(tmp_path: Path) -> None:
     with secure_link_test_lock():
         case = materialize_secure_link_case_ports(CASES['case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp'], 10)
@@ -7099,6 +7204,91 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myud
 
             myudp_probe_case = replace(myudp_probe_case, expected=response_payload(b'\x01myudp-static-http-after'))
             wait_probe(myudp_probe_case, payload=b'\x01myudp-static-http-after', timeout=12.0)
+            wait_status_secure_link_state(client_admin, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+            wait_status_secure_link_authenticated_peers(server_admin, minimum_count=1, timeout=12.0, label='server')
+        finally:
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+            bounce.stop()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_link_myudp_peer_on_mixed_listener(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = materialize_secure_link_case_ports(CASES['case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp'], 10)
+        secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
+        bounce = BounceBackServer(
+            name=f'{case.name}_myudp_http_keepalive_probe_bounce',
+            proto='udp',
+            bind_host='0.0.0.0',
+            port=case.bounce_port + 20,
+            log_path=tmp_path / f'{case.name}_myudp_http_keepalive_probe_bounce.log',
+        )
+        server_proc = client_proc = None
+        server_admin = client_admin = None
+        try:
+            bounce.start()
+            server_admin, client_admin = alloc_admin_ports(287, base=SECURE_LINK_ADMIN_BASE)
+            missing_cfg = str(tmp_path / f'{case.name}_missing.cfg')
+            server_cmd = bridge_entrypoint() + materialize_args(case.bridge_server_args, tmp_path, case.name, 'bridge_server')
+            server_cmd += ['--config', missing_cfg, '--admin-web-port', '0']
+            server_cmd += secure_args
+            server_cmd += admin_args(server_admin)
+
+            myudp_service_port = case.bounce_port + 30
+            myudp_client_cmd = bridge_entrypoint() + [
+                '--overlay-transport', 'myudp',
+                '--udp-peer', '127.0.0.1', '--udp-peer-port', str(_listener_overlay_port(case, 'myudp')),
+                '--udp-bind', '0.0.0.0', '--udp-own-port', '0',
+                '--own-servers', f'udp,{myudp_service_port},0.0.0.0,udp,127.0.0.1,{case.bounce_port + 20}',
+                '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
+                '--log-file', str(tmp_path / f'{case.name}_bridge_client_myudp_http_keepalive_probe.txt'),
+                '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
+            ]
+            myudp_client_cmd += secure_args
+            myudp_client_cmd += admin_args(client_admin)
+
+            server_proc = start_proc(f'{case.name}_bridge_server', server_cmd, tmp_path, env_extra=case.server_env, admin_port=server_admin)
+            time.sleep(0.5)
+            assert_running(server_proc)
+            wait_admin_up(server_admin, timeout=10.0)
+            wait_tcp_listen('127.0.0.1', _listener_overlay_port(case, 'ws'), timeout=10.0)
+
+            client_proc = start_proc(f'{case.name}_bridge_client_myudp_http_keepalive_probe', myudp_client_cmd, tmp_path, env_extra=case.client_env, admin_port=client_admin)
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            wait_status_secure_link_state(client_admin, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+            wait_peers_count(server_admin, minimum_count=1, timeout=12.0, label='server')
+
+            myudp_probe_case = replace(
+                case,
+                probe_proto='udp',
+                probe_host='127.0.0.1',
+                probe_port=myudp_service_port,
+                probe_bind='0.0.0.0',
+                expected=response_payload(b'\x01myudp-static-http-keepalive-before'),
+            )
+            wait_probe(myudp_probe_case, payload=b'\x01myudp-static-http-keepalive-before', timeout=12.0)
+            wait_status_secure_link_authenticated_peers(server_admin, minimum_count=1, timeout=12.0, label='server')
+            wait_peer_secure_link_state(client_admin, expected_state='authenticated', timeout=12.0, label='client', transport='myudp', authenticated=True)
+            wait_peer_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', transport='myudp', authenticated=True)
+
+            responses = fetch_http_keepalive_sequence(
+                '127.0.0.1',
+                _listener_overlay_port(case, 'ws'),
+                attempts=2,
+                timeout=2.0,
+            )
+            assert len(responses) == 2
+            for code, headers, body in responses:
+                assert code == 200
+                assert headers.get('content-type', '').startswith('text/html')
+                assert b'Hello! Welcome!' in body
+
+            myudp_probe_case = replace(myudp_probe_case, expected=response_payload(b'\x01myudp-static-http-keepalive-after'))
+            wait_probe(myudp_probe_case, payload=b'\x01myudp-static-http-keepalive-after', timeout=12.0)
             wait_status_secure_link_state(client_admin, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
             wait_status_secure_link_authenticated_peers(server_admin, minimum_count=1, timeout=12.0, label='server')
         finally:
