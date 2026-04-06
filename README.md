@@ -7,6 +7,7 @@ Testing statistics (see docs/README_TESTING.md): `122` integration tests, `112` 
 
 - User: start with `Why this project was developed` and `Quick-start examples`
 - Contributor: start with `Contributor guidance`
+  - Contributor note: follow the project's PR style and use the repository PR template when opening changes. See `docs/DEVELOPMENT_PROCESS.md` and `.github/PULL_REQUEST_TEMPLATE.md` for the required PR structure and checklist.
 
 ## For Users
 
@@ -597,6 +598,8 @@ What to look for in WebAdmin or the admin API:
   - `failure_code=1`
   - `failure_reason=bad_psk`
   - repeated client-side retries show increasing `consecutive_failures`, a bounded `retry_backoff_sec`, a populated `next_retry_unix_ts`, a populated `failure_session_id`, increasing `handshake_attempts_total`, and `last_event=retry_scheduled`
+
+  - Development note: added `secure_link`-scoped DEBUG logging to surface raw secure-link frames and handshake events for WebSocket troubleshooting (PR #178).
 - on healthy authenticated runs, the peer block and `/api/peers` expose `last_event`, `last_event_unix_ts`, `last_authenticated_unix_ts`, `authenticated_sessions_total`, `rekeys_completed_total`, and `last_rekey_trigger`
 - operators can force rekey on an authenticated client-side secure-link session by targeting the selected peer row id:
 

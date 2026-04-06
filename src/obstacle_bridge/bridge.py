@@ -3780,6 +3780,10 @@ class SecureLinkPskSession(ISession):
         return target_peer_id, routed
 
     def _handle_client_hello(self, peer_id: Optional[int], session_id: int, body: bytes) -> None:
+        try:
+            self._log.debug("[SECURE-LINK] _handle_client_hello peer_id=%r session_id=%s body_len=%d", peer_id, int(session_id or 0), len(body or b""))
+        except Exception:
+            pass
         if self._client_mode or int(session_id or 0) <= 0:
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
             return
@@ -3868,6 +3872,10 @@ class SecureLinkPskSession(ISession):
         self._inner.send_app(self._build_frame(self._SL_TYPE_SERVER_HELLO, session_id, 0, payload), peer_id=peer_id)
 
     def _handle_server_hello(self, session_id: int, body: bytes) -> None:
+        try:
+            self._log.debug("[SECURE-LINK] _handle_server_hello session_id=%s body_len=%d", int(session_id or 0), len(body or b""))
+        except Exception:
+            pass
         if not self._client_mode or int(session_id or 0) <= 0:
             self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
             return
@@ -4224,11 +4232,22 @@ class SecureLinkPskSession(ISession):
         self._deliver_outer_app(plaintext, None if self._client_mode else peer_id)
 
     def _on_inner_payload(self, payload: bytes, peer_id: Optional[int] = None) -> None:
+        try:
+            self._log.debug("[SECURE-LINK/RX] raw payload len=%d peer_id=%r", len(payload or b""), peer_id)
+        except Exception:
+            pass
         parsed = self._parse_frame(payload)
         if parsed is None:
             self._send_auth_fail(peer_id, 0, self._SL_AUTH_FAIL_DECODE)
             return
         sl_type, session_id, counter, body = parsed
+        try:
+            self._log.debug(
+                "[SECURE-LINK/RX] parsed type=%s session_id=%s counter=%s peer_id=%r body_len=%d",
+                str(sl_type), int(session_id or 0), int(counter or 0), peer_id, len(body or b""),
+            )
+        except Exception:
+            pass
         aad = self._hdr_bytes(sl_type, session_id, counter)
         if sl_type == self._SL_TYPE_CLIENT_HELLO:
             self._handle_client_hello(peer_id, session_id, body)
