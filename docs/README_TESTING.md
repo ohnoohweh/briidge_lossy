@@ -163,7 +163,7 @@ The catalog is ordered as:
 
 ## Integration tests
 
-Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py) and collects `116` tests.
+Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py) and collects `118` tests.
 
 The supporting project-level intent documents are:
 
@@ -184,6 +184,7 @@ The supporting project-level intent documents are:
 | `test_overlay_e2e_admin_api_*` | Admin web auth/API | Verify auth-disabled, auth-required, authenticated, session-isolated API behavior, and live WebSocket telemetry availability for both open and cookie-authenticated sessions | `pytest -q tests/integration/test_overlay_e2e.py -k admin_api` |
 | `test_overlay_e2e_*secure_link_psk*` | Secure-link Phase 1 PSK runtime slice | Verify the delivered PSK secure-link slice reaches protected connected state across supported transports, rejects mismatched PSKs, preserves peer isolation for multi-client listener scenarios, and keeps `/api/peers` transport-specific secure-link peer stats aligned with live protected traffic | `pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` |
 | `test_overlay_e2e_ws_proxy_*` | WebSocket proxy behavior | Verify proxy success, bypass, scope, handshake ordering, failure handling, and explicit override behavior for WS peer clients, with Windows-only cases for system-default and Negotiate auth | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_` |
+| `test_overlay_e2e_ws_static_http_root_repeated_requests_*` | WS listener static HTTP behavior | Verify repeated plain HTTP reads against the WS listener keep returning the static root page in both simpler secure-link `ws` mode and the mixed `ws,myudp` listener case with an authenticated `myudp` peer | `pytest -q tests/integration/test_overlay_e2e.py -k ws_static_http_root_repeated_requests` |
 | `test_overlay_e2e_ws_overlay_*proxy_env` | WebSocket proxy env behavior | Verify WS peer clients honor `HTTP_PROXY` and `NO_PROXY` in real subprocess runs | `pytest -q tests/integration/test_overlay_e2e.py -k "proxy_env"` |
 | `test_overlay_e2e_cli_routing_*` and allocator checks | Harness self-tests | Verify CLI mode inference and worker-safe port allocation logic | `pytest -q tests/integration/test_overlay_e2e.py -k "cli_routing or alloc_admin_ports or materialize_case_ports or case_port_offset"` |
 | `pytest -m "not windows_only"` | Linux shared CI subset | Run all OS-independent integration scenarios on Linux without masking Windows-specific obligations behind skips | `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` |
