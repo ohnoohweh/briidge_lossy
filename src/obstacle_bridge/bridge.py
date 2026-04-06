@@ -8632,36 +8632,17 @@ class WebSocketSession(ISession):
 
     async def _start_server(self) -> None:
         """
-        Start the WebSocket server (websockets >= 12.x) AND a tiny static file server
-        on the same port. We use process_request to serve HTTP before any WS upgrade.
+        Start a combined HTTP/WebSocket listener on the configured WS port.
 
-        - GET/HEAD to any path under --ws-static-dir => static file (200) or 404.
-        - A proper WS Upgrade to self._ws_path continues to the WS handler.
-        - If --ws-static-dir is empty or missing on disk, only WS is served.
+        Plain HTTP requests are served directly from the front listener so the
+        same TCP connection may remain open for additional requests. Upgrade
+        requests on that same socket are then promoted into the overlay WS path.
         """
-        try:
-            import websockets
-            from websockets.http11 import Response
-            from websockets.datastructures import Headers
-        except Exception as e:
-            raise RuntimeError("websockets package is required for WebSocketSession") from e
-
         # Optional TLS
         ssl_ctx = None
         if self._use_tls:
             import ssl
             ssl_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-
-        subprotocols = [self._ws_subprotocol] if self._ws_subprotocol else None
-
-        # --------- simple static file server (process_request hook) ----------
-        # Return (status_code, headers, body_bytes) to short-circuit the WS upgrade.
-        # Return None to let websockets proceed with the WS handshake.
-
-        try:
-            from websockets.http11 import Response  # modern API (>= 14)
-        except Exception:
-            Response = None  # legacy path (12/13) will return (status, headers, body)
 
         from pathlib import Path
         from urllib.parse import unquote
@@ -8669,6 +8650,9 @@ class WebSocketSession(ISession):
         mimetypes.add_type("text/javascript", ".js")   # or "application/javascript"
         mimetypes.add_type("image/svg+xml", ".svg")
         import datetime
+
+        ws_subprotocol = self._ws_subprotocol
+        ws_guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
         # Resolve static root if present
         static_root = None
@@ -8683,13 +8667,20 @@ class WebSocketSession(ISession):
             except Exception as e:
                 self._log.info(f"[WS-SESSION] ({self._probe_id}) failed to resolve --ws-static-dir: {e!r}")
 
-        def _http_headers(status: int, length: int, ctype: str = "application/octet-stream"):
+        def _http_headers(
+            status: int,
+            length: int,
+            ctype: str = "application/octet-stream",
+            *,
+            connection: str = "keep-alive",
+        ):
             now = datetime.datetime.now(datetime.timezone.utc)
             return [
                 ("Date", now.strftime("%a, %d %b %Y %H:%M:%S GMT")),
                 ("Server", "ws-mini/1.0"),
                 ("Content-Type", ctype),
                 ("Content-Length", str(max(0, length))),
+                ("Connection", connection),
                 ("Cache-Control", "public, max-age=60"),
             ]
 
@@ -8706,311 +8697,359 @@ class WebSocketSession(ISession):
                 pass
             return None
 
-
-        def _mk_response(status: int, hdrs_list: list[tuple[str, str]], body: bytes) -> Response:
-            """
-            Build a websockets.http11.Response in a version‑tolerant way:
-            - Prefer the (status_code, reason_phrase, headers, body) signature (11.x+).
-            - Fall back to (status_code, headers, body) if the older form is accepted.
-            """
-            # Minimal reason phrases (good enough for browsers / dev tools)
-            reasons = {
-                200: "OK",
-                403: "Forbidden",
-                404: "Not Found",
-                405: "Method Not Allowed",
-                500: "Internal Server Error",
-            }
-            reason = reasons.get(int(status), "")
-
-            # Ensure headers have the expected type; a list of pairs is also accepted,
-            # but Headers(...) is safest across versions.
-            hdrs = Headers(hdrs_list)
-
-            try:
-                # Newer signature: (status_code, reason_phrase, headers, body)
-                return Response(int(status), reason, hdrs, body)
-            except TypeError:
-                # Older signature used in some releases: (status_code, headers, body)
-                return Response(int(status), hdrs, body)
-
-
-        # --- Modern handler: (connection, request) -> Response|None ---
-        def _process_request_modern(connection, request):
-            if not static_root:
-                return None
-            # Pass through real WS upgrades
-            try:
-                headers = getattr(request, "headers", {}) or {}
-                upgrade = headers.get("Upgrade", headers.get("upgrade", "")) or ""
-                conn = headers.get("Connection", headers.get("connection", "")) or ""
-                if ("upgrade" in conn.lower()) and ("websocket" in upgrade.lower()):
-                    return None
-            except Exception:
-                pass
-
-            method = getattr(request, "method", "GET") or "GET"
-            req_path = getattr(request, "path", "/") or "/"
+        def _static_http_response(method: str, req_path: str) -> tuple[int, list[tuple[str, str]], bytes, Optional[Path], int]:
             if method not in ("GET", "HEAD"):
                 body = b"Method Not Allowed\n"
-                self._log_static_http_decision(
-                    method=method,
-                    req_path=req_path,
-                    status=405,
-                    target=None,
-                    ctype="text/plain",
-                    content_length=len(body),
-                    body_length=len(body),
-                    note="method-not-allowed",
-                )
-                return _mk_response(405, [("Allow", "GET, HEAD")] + _http_headers(405, len(body), "text/plain"), body)
+                return 405, [("Allow", "GET, HEAD")] + _http_headers(405, len(body), "text/plain"), body, None, len(body)
 
             target = _safe_join(static_root, req_path)
             if target is None:
                 body = b"Forbidden\n"
-                self._log_static_http_decision(
-                    method=method,
-                    req_path=req_path,
-                    status=403,
-                    target=None,
-                    ctype="text/plain",
-                    content_length=len(body),
-                    body_length=len(body),
-                    note="safe-join-rejected",
-                )
-                return _mk_response(403, _http_headers(403, len(body), "text/plain"), body)
+                return 403, _http_headers(403, len(body), "text/plain"), body, None, len(body)
 
             if target.is_dir():
                 index = target / "index.html"
                 if not (index.exists() and index.is_file()):
                     body = b"Not Found\n"
+                    return 404, _http_headers(404, len(body), "text/plain"), body, target, len(body)
+                target = index
+
+            if not target.exists() or not target.is_file():
+                body = b"Not Found\n"
+                return 404, _http_headers(404, len(body), "text/plain"), body, target, len(body)
+
+            ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+            try:
+                data = target.read_bytes()
+            except Exception as e:
+                self._log.debug(f"[WS-SESSION] ({self._probe_id}) static read error: {e!r}")
+                body = b"Internal Server Error\n"
+                return 500, _http_headers(500, len(body), "text/plain"), body, target, len(body)
+
+            if method == "HEAD":
+                return 200, _http_headers(200, len(data), ctype), b"", target, 0
+            return 200, _http_headers(200, len(data), ctype), data, target, len(data)
+
+        def _status_reason(status: int) -> str:
+            return {
+                200: "OK",
+                400: "Bad Request",
+                403: "Forbidden",
+                404: "Not Found",
+                405: "Method Not Allowed",
+                426: "Upgrade Required",
+                500: "Internal Server Error",
+            }.get(int(status), "OK")
+
+        async def _send_http_response(
+            writer: asyncio.StreamWriter,
+            *,
+            status: int,
+            headers: list[tuple[str, str]],
+            body: bytes,
+        ) -> None:
+            head = [f"HTTP/1.1 {int(status)} {_status_reason(status)}"]
+            head.extend(f"{key}: {value}" for key, value in headers)
+            writer.write(("\r\n".join(head) + "\r\n\r\n").encode("iso-8859-1") + body)
+            await writer.drain()
+
+        def _headers_get(headers: Dict[str, str], name: str) -> str:
+            return str(headers.get(str(name).lower(), "") or "")
+
+        def _should_keep_alive(http_version: str, headers: Dict[str, str]) -> bool:
+            conn = _headers_get(headers, "connection").lower()
+            if http_version.upper() == "HTTP/1.0":
+                return "keep-alive" in conn
+            return "close" not in conn
+
+        def _is_ws_upgrade_request(method: str, headers: Dict[str, str]) -> bool:
+            if str(method or "").upper() != "GET":
+                return False
+            conn = _headers_get(headers, "connection").lower()
+            upgrade = _headers_get(headers, "upgrade").lower()
+            return "upgrade" in conn and upgrade == "websocket"
+
+        async def _read_http_request(reader: asyncio.StreamReader) -> Optional[tuple[str, str, str, Dict[str, str]]]:
+            try:
+                reqline = await asyncio.wait_for(reader.readline(), timeout=30.0)
+            except asyncio.TimeoutError:
+                return None
+            if not reqline:
+                return None
+            parts = reqline.decode("iso-8859-1", "replace").strip().split()
+            if len(parts) != 3:
+                raise RuntimeError(f"invalid HTTP request line: {reqline!r}")
+            method, req_path, http_version = parts
+            headers: Dict[str, str] = {}
+            content_length = 0
+            while True:
+                line = await reader.readline()
+                if not line or line in (b"\r\n", b"\n"):
+                    break
+                text = line.decode("iso-8859-1", "replace")
+                if ":" not in text:
+                    continue
+                key, value = text.split(":", 1)
+                hk = key.strip().lower()
+                hv = value.strip()
+                headers[hk] = hv
+                if hk == "content-length":
+                    with contextlib.suppress(Exception):
+                        content_length = max(0, int(hv))
+            if content_length > 0:
+                await reader.readexactly(content_length)
+            return method, req_path, http_version, headers
+
+        class _ServerSideWsConnection:
+            def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, req_path: str, subprotocol: Optional[str]) -> None:
+                self._reader = reader
+                self._writer = writer
+                self.path = req_path
+                self.subprotocol = subprotocol
+                self.transport = writer.transport
+                self.remote_address = writer.get_extra_info("peername")
+                self.local_address = writer.get_extra_info("sockname")
+                self._closed_evt = asyncio.Event()
+                self._close_sent = False
+
+            async def recv(self):
+                while True:
+                    opcode, payload = await self._read_frame()
+                    if opcode == 0x8:
+                        if not self._close_sent:
+                            with contextlib.suppress(Exception):
+                                await self._send_frame(0x8, payload[:125])
+                        await self._shutdown()
+                        raise EOFError("websocket close frame received")
+                    if opcode == 0x9:
+                        await self._send_frame(0xA, payload)
+                        continue
+                    if opcode == 0xA:
+                        continue
+                    if opcode == 0x1:
+                        return payload.decode("utf-8", "replace")
+                    if opcode == 0x2:
+                        return payload
+                    raise RuntimeError(f"unsupported websocket opcode: {opcode}")
+
+            async def send(self, message) -> None:
+                if isinstance(message, str):
+                    await self._send_frame(0x1, message.encode("utf-8"))
+                else:
+                    await self._send_frame(0x2, bytes(message))
+
+            async def close(self) -> None:
+                if self._closed_evt.is_set():
+                    return
+                if not self._close_sent:
+                    with contextlib.suppress(Exception):
+                        await self._send_frame(0x8, b"")
+                await self._shutdown()
+
+            async def wait_closed(self) -> None:
+                await self._closed_evt.wait()
+
+            async def _read_frame(self) -> tuple[int, bytes]:
+                hdr = await self._reader.readexactly(2)
+                b1, b2 = hdr[0], hdr[1]
+                fin = bool(b1 & 0x80)
+                opcode = b1 & 0x0F
+                masked = bool(b2 & 0x80)
+                length = b2 & 0x7F
+                if length == 126:
+                    length = struct.unpack("!H", await self._reader.readexactly(2))[0]
+                elif length == 127:
+                    length = struct.unpack("!Q", await self._reader.readexactly(8))[0]
+                if length > self_ref._ws_max_size:
+                    raise RuntimeError(f"websocket frame too large: {length}")
+                mask_key = await self._reader.readexactly(4) if masked else b""
+                payload = await self._reader.readexactly(length) if length else b""
+                if masked and mask_key:
+                    payload = bytes(byte ^ mask_key[idx % 4] for idx, byte in enumerate(payload))
+                if not fin and opcode in (0x0, 0x1, 0x2):
+                    raise RuntimeError("fragmented websocket frames are not supported")
+                return opcode, payload
+
+            async def _send_frame(self, opcode: int, payload: bytes = b"") -> None:
+                if self._closed_evt.is_set():
+                    return
+                if opcode == 0x8:
+                    self._close_sent = True
+                length = len(payload)
+                header = bytearray([0x80 | (opcode & 0x0F)])
+                if length < 126:
+                    header.append(length)
+                elif length < (1 << 16):
+                    header.append(126)
+                    header.extend(struct.pack("!H", length))
+                else:
+                    header.append(127)
+                    header.extend(struct.pack("!Q", length))
+                self._writer.write(bytes(header) + payload)
+                await self._writer.drain()
+
+            async def _shutdown(self) -> None:
+                if self._closed_evt.is_set():
+                    return
+                self._writer.close()
+                with contextlib.suppress(Exception):
+                    await self._writer.wait_closed()
+                self._closed_evt.set()
+
+        self_ref = self
+
+        async def _accept_websocket(
+            reader: asyncio.StreamReader,
+            writer: asyncio.StreamWriter,
+            req_path: str,
+            headers: Dict[str, str],
+        ) -> _ServerSideWsConnection:
+            key = _headers_get(headers, "sec-websocket-key")
+            version = _headers_get(headers, "sec-websocket-version")
+            if not key or version != "13":
+                raise RuntimeError("bad websocket handshake")
+            try:
+                raw_key = base64.b64decode(key.encode("ascii"), validate=True)
+            except Exception as exc:
+                raise RuntimeError("invalid Sec-WebSocket-Key") from exc
+            if len(raw_key) != 16:
+                raise RuntimeError("invalid Sec-WebSocket-Key length")
+
+            chosen_subprotocol = None
+            if ws_subprotocol:
+                requested = []
+                for item in _headers_get(headers, "sec-websocket-protocol").split(","):
+                    token = item.strip()
+                    if token:
+                        requested.append(token)
+                if ws_subprotocol not in requested:
+                    raise RuntimeError("missing required websocket subprotocol")
+                chosen_subprotocol = ws_subprotocol
+
+            accept = base64.b64encode(hashlib.sha1((key + ws_guid).encode("ascii")).digest()).decode("ascii")
+            response_headers = [
+                ("Upgrade", "websocket"),
+                ("Connection", "Upgrade"),
+                ("Sec-WebSocket-Accept", accept),
+            ]
+            if chosen_subprotocol:
+                response_headers.append(("Sec-WebSocket-Protocol", chosen_subprotocol))
+            await _send_http_response(writer, status=101, headers=response_headers, body=b"")
+            return _ServerSideWsConnection(reader, writer, req_path, chosen_subprotocol)
+
+        async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            upgraded = False
+            try:
+                while True:
+                    request = await _read_http_request(reader)
+                    if request is None:
+                        return
+                    method, req_path, http_version, headers = request
+
+                    if _is_ws_upgrade_request(method, headers):
+                        try:
+                            ws = await _accept_websocket(reader, writer, req_path, headers)
+                        except Exception as exc:
+                            body = (f"Failed to open a WebSocket connection: {exc}.\n").encode("utf-8", "replace")
+                            await _send_http_response(
+                                writer,
+                                status=400,
+                                headers=_http_headers(400, len(body), "text/plain; charset=utf-8", connection="close"),
+                                body=body,
+                            )
+                            return
+                        upgraded = True
+                        self._log.debug(f"[WS-SESSION] ({self._probe_id}) HTTP path={req_path}")
+                        await self._on_accept(ws)
+                        try:
+                            await ws.wait_closed()
+                        except Exception:
+                            pass
+                        return
+
+                    keep_alive = _should_keep_alive(http_version, headers)
+
+                    if static_root is None:
+                        body = (
+                            b"Failed to open a WebSocket connection: missing or invalid Upgrade header.\n\n"
+                            b"You cannot access a WebSocket server directly with a browser. You need a WebSocket client.\n"
+                        )
+                        await _send_http_response(
+                            writer,
+                            status=426,
+                            headers=[("Upgrade", "websocket")] + _http_headers(426, len(body), "text/plain; charset=utf-8", connection="close"),
+                            body=body,
+                        )
+                        return
+
+                    status, response_headers, body, target, body_length = _static_http_response(method, req_path)
+                    connection_header = "keep-alive" if keep_alive else "close"
+                    response_headers = [
+                        (key, connection_header if key.lower() == "connection" else value)
+                        for key, value in response_headers
+                    ]
+
+                    ctype = next((value for key, value in response_headers if key.lower() == "content-type"), "application/octet-stream")
+                    note = {
+                        200: "head-response" if method == "HEAD" else "static-hit",
+                        403: "safe-join-rejected",
+                        404: "missing-file",
+                        405: "method-not-allowed",
+                        500: "read-error",
+                    }.get(status, "response")
                     self._log_static_http_decision(
                         method=method,
                         req_path=req_path,
-                        status=404,
+                        status=status,
                         target=target,
-                        ctype="text/plain",
-                        content_length=len(body),
-                        body_length=len(body),
-                        note="directory-without-index",
+                        ctype=ctype,
+                        content_length=int(next((value for key, value in response_headers if key.lower() == "content-length"), "0") or "0"),
+                        body_length=body_length,
+                        note=note,
                     )
-                    return _mk_response(404, _http_headers(404, len(body), "text/plain"), body)
-                target = index
-
-            if not target.exists() or not target.is_file():
-                body = b"Not Found\n"
-                self._log_static_http_decision(
-                    method=method,
-                    req_path=req_path,
-                    status=404,
-                    target=target,
-                    ctype="text/plain",
-                    content_length=len(body),
-                    body_length=len(body),
-                    note="missing-file",
-                )
-                return _mk_response(404, _http_headers(404, len(body), "text/plain"), body)
-
-            ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
-            try:
-                data = target.read_bytes()
-            except Exception as e:
-                self._log.debug(f"[WS-SESSION] ({self._probe_id}) static read error: {e!r}")
-                body = b"Internal Server Error\n"
-                self._log_static_http_decision(
-                    method=method,
-                    req_path=req_path,
-                    status=500,
-                    target=target,
-                    ctype="text/plain",
-                    content_length=len(body),
-                    body_length=len(body),
-                    note=f"read-error={e!r}",
-                )
-                return _mk_response(500, _http_headers(500, len(body), "text/plain"), body)
-
-            if method == "HEAD":
-                self._log_static_http_decision(
-                    method=method,
-                    req_path=req_path,
-                    status=200,
-                    target=target,
-                    ctype=ctype,
-                    content_length=len(data),
-                    body_length=0,
-                    note="head-response",
-                )
-                self._schedule_static_http_debug_probes(
-                    connection,
-                    method=method,
-                    req_path=req_path,
-                    status=200,
-                    target=target,
-                    body_length=0,
-                )
-                return _mk_response(200, _http_headers(200, len(data), ctype), b"")
-            self._log_static_http_decision(
-                method=method,
-                req_path=req_path,
-                status=200,
-                target=target,
-                ctype=ctype,
-                content_length=len(data),
-                body_length=len(data),
-                note="static-hit",
-            )
-            self._schedule_static_http_debug_probes(
-                connection,
-                method=method,
-                req_path=req_path,
-                status=200,
-                target=target,
-                body_length=len(data),
-            )
-            return _mk_response(200, _http_headers(200, len(data), ctype), data)
-
-        # --- Legacy handler: (path, request_headers) -> (status, headers, body)|None ---
-        def _process_request_legacy(path, request_headers):
-            if not static_root:
-                return None
-            # Pass WS upgrade through (legacy servers often still call us)
-            try:
-                upgrade = request_headers.get("Upgrade", request_headers.get("upgrade", "")) or ""
-                conn = request_headers.get("Connection", request_headers.get("connection", "")) or ""
-                if ("upgrade" in conn.lower()) and ("websocket" in upgrade.lower()):
-                    return None
-            except Exception:
-                pass
-
-            # Legacy API doesn't expose method, assume GET
-            method = "GET"
-            target = _safe_join(static_root, path or "/")
-            if target is None:
-                body = b"Forbidden\n"
-                self._log_static_http_decision(
-                    method=method,
-                    req_path=path or "/",
-                    status=403,
-                    target=None,
-                    ctype="text/plain",
-                    content_length=len(body),
-                    body_length=len(body),
-                    note="safe-join-rejected",
-                )
-                return 403, _http_headers(403, len(body), "text/plain"), body
-
-            if target.is_dir():
-                index = target / "index.html"
-                if not (index.exists() and index.is_file()):
-                    body = b"Not Found\n"
-                    self._log_static_http_decision(
+                    await _send_http_response(writer, status=status, headers=response_headers, body=body)
+                    self._schedule_static_http_debug_probes(
+                        writer,
                         method=method,
-                        req_path=path or "/",
-                        status=404,
+                        req_path=req_path,
+                        status=status,
                         target=target,
-                        ctype="text/plain",
-                        content_length=len(body),
-                        body_length=len(body),
-                        note="directory-without-index",
+                        body_length=body_length,
                     )
-                    return 404, _http_headers(404, len(body), "text/plain"), body
-                target = index
-
-            if not target.exists() or not target.is_file():
-                body = b"Not Found\n"
-                self._log_static_http_decision(
-                    method=method,
-                    req_path=path or "/",
-                    status=404,
-                    target=target,
-                    ctype="text/plain",
-                    content_length=len(body),
-                    body_length=len(body),
-                    note="missing-file",
-                )
-                return 404, _http_headers(404, len(body), "text/plain"), body
-
-            ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
-            try:
-                data = target.read_bytes()
+                    if not keep_alive:
+                        return
             except Exception as e:
-                self._log.debug(f"[WS-SESSION] ({self._probe_id}) static read error: {e!r}")
-                body = b"Internal Server Error\n"
-                self._log_static_http_decision(
-                    method=method,
-                    req_path=path or "/",
-                    status=500,
-                    target=target,
-                    ctype="text/plain",
-                    content_length=len(body),
-                    body_length=len(body),
-                    note=f"read-error={e!r}",
-                )
-                return 500, _http_headers(500, len(body), "text/plain"), body
+                self._log.debug(f"[WS-SESSION] ({self._probe_id}) front-listener client error: {e!r}")
+                with contextlib.suppress(Exception):
+                    body = b"Internal Server Error\n"
+                    await _send_http_response(
+                        writer,
+                        status=500,
+                        headers=_http_headers(500, len(body), "text/plain; charset=utf-8", connection="close"),
+                        body=body,
+                    )
+            finally:
+                if not upgraded:
+                    with contextlib.suppress(Exception):
+                        writer.close()
+                        await writer.wait_closed()
 
-            self._log_static_http_decision(
-                method=method,
-                req_path=path or "/",
-                status=200,
-                target=target,
-                ctype=ctype,
-                content_length=len(data),
-                body_length=len(data),
-                note="static-hit",
-            )
-            return 200, _http_headers(200, len(data), ctype), data
-
-        # --- One wrapper that adapts to either signature ---
-        def _process_request(*args, **kwargs):
-            try:
-                if Response is not None and len(args) == 2 and hasattr(args[1], "path"):
-                    return _process_request_modern(*args, **kwargs)  # (connection, request)
-                if len(args) == 2 and isinstance(args[0], str):
-                    return _process_request_legacy(*args, **kwargs)  # (path, headers)
-            except Exception as e:
-                self._log.debug(f"[WS-SESSION] ({self._probe_id}) process_request adapter error: {e!r}")
-            return None
-                
-        # --------------- WS connection handler ---------------
-        async def _handler(ws):
-            
-            path = getattr(ws, "path", getattr(getattr(ws, "request", None), "path", self._ws_path))
-            self._log.debug(f"[WS-SESSION] ({self._probe_id}) HTTP path={path}")
-
-            await self._on_accept(ws)
-            # IMPORTANT: keep handler alive; otherwise server will close with 1000
-            try:
-                await ws.wait_closed()
-            except Exception:
-                pass
-
-        # Start WebSocket server (+ static HTTP via process_request)
-        #
-        # NOTE: `open_timeout` isn't accepted by older websockets releases
-        # (it gets forwarded to loop.create_server(), which raises TypeError
-        # on Python 3.12). Only pass it when the installed websockets.serve
-        # signature explicitly supports it.
-        serve_kwargs = dict(
-            host=self._listen_host,
-            port=self._listen_port,
-            ssl=ssl_ctx,
-            subprotocols=subprotocols,
-            max_size=self._ws_max_size,
-            compression=self._ws_compression,
-            ping_interval=None,  # we run our own RTT ping
-            ping_timeout=None,
-            write_limit=max(131072, self._ws_max_size or 0),  # allow larger HTTP responses to flush before close
-            process_request=_process_request,  # <-- key: serve static before WS
-        )
         try:
-            import inspect
-            if "open_timeout" in inspect.signature(websockets.serve).parameters:
-                # static HTTP requests may stay non-WS during asset transfer
-                serve_kwargs["open_timeout"] = None
-        except Exception:
-            pass
-
-        self._server = await websockets.serve(_handler, **serve_kwargs)
+            family = _listener_family_for_host(self._listen_host)
+            self._server = await asyncio.start_server(
+                _handle_client,
+                host=self._listen_host,
+                port=self._listen_port,
+                ssl=ssl_ctx,
+                family=family,
+            )
+        except TypeError:
+            self._server = await asyncio.start_server(
+                _handle_client,
+                host=self._listen_host,
+                port=self._listen_port,
+                ssl=ssl_ctx,
+            )
 
         sockets = ", ".join(str(s.getsockname()) for s in (self._server.sockets or []))
         self._log.info(

@@ -36,6 +36,12 @@ The recommended workflow is:
 
 This keeps first startup simple and makes larger settings such as `own_servers`, `remote_servers`, auth options, and multi-transport listener combinations much easier to manage than long shell commands.
 
+Listener design note:
+
+- listener-side peer handling is intended to remain peer-independent; one peer's auth failure, disconnect, reconnect, or auxiliary WebSocket HTTP pre-upgrade request should not disturb healthy traffic or published services belonging to another peer
+- the WS listener now serves its static HTTP root directly at the front listener so ordinary browser keep-alive requests can stay on the same TCP connection before a later WebSocket upgrade attempt
+- that same keep-alive behavior is also defended when a healthy secure-link `myudp` peer is active on the mixed `ws,myudp` listener process; the transport-specific design tradeoffs are captured in [WEBSOCKET_DESIGN.md](/home/ohnoohweh/quic_br/docs/WEBSOCKET_DESIGN.md)
+
 Important config-format note:
 
 - `--config` / `-c` currently expects a JSON file, not an INI file
