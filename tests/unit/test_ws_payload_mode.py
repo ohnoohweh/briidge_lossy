@@ -218,6 +218,20 @@ class WebSocketPayloadModeTests(unittest.TestCase):
             wire = b"\x02pong"
             self.assertEqual(session._decode_ws_message(wire), wire)
 
+    def test_text_payload_modes_expand_effective_frame_limit(self):
+        binary_session = WebSocketSession(_args("binary"))
+        self.assertEqual(binary_session._ws_frame_max_size, 65535)
+
+        for mode in ("base64", "json-base64", "semi-text-shape"):
+            session = WebSocketSession(_args(mode))
+            self.assertGreater(session._ws_frame_max_size, session._ws_max_size)
+
+    def test_semi_text_shape_limit_covers_full_raw_wire_budget(self):
+        session = WebSocketSession(_args("semi-text-shape"))
+        wire = bytes([0x01]) + (b"a" * 65534)
+        encoded = session._ws_payload_codec.encode(wire)
+        self.assertLessEqual(len(encoded), session._ws_frame_max_size)
+
     def test_early_flush_preserves_websocket_message_boundaries(self):
         session = WebSocketSession(_args("binary"))
         session._ws = object()

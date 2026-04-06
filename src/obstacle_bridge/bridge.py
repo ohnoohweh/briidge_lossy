@@ -7555,6 +7555,9 @@ class WebSocketPayloadCodec:
     def decode(self, msg) -> Optional[bytes]:
         raise NotImplementedError
 
+    def max_encoded_size(self, wire_size: int) -> int:
+        return max(0, int(wire_size or 0))
+
 
 class WebSocketBinaryPayloadCodec(WebSocketPayloadCodec):
     mode = "binary"
@@ -7581,9 +7584,16 @@ class WebSocketBase64PayloadCodec(WebSocketPayloadCodec):
             return base64.b64decode(msg.encode("ascii"), validate=True)
         return None
 
+    def max_encoded_size(self, wire_size: int) -> int:
+        size = max(0, int(wire_size or 0))
+        if size <= 0:
+            return 0
+        return 4 * ((size + 2) // 3)
+
 
 class WebSocketJsonBase64PayloadCodec(WebSocketPayloadCodec):
     mode = "json-base64"
+    _JSON_WRAPPER_SIZE = len('{"data":""}')
 
     def encode(self, wire: bytes):
         return json.dumps({"data": base64.b64encode(wire).decode("ascii")}, separators=(",", ":"))
@@ -7600,6 +7610,12 @@ class WebSocketJsonBase64PayloadCodec(WebSocketPayloadCodec):
         if not isinstance(data, str):
             raise ValueError("JSON payload must contain string field 'data'")
         return base64.b64decode(data.encode("ascii"), validate=True)
+
+    def max_encoded_size(self, wire_size: int) -> int:
+        size = max(0, int(wire_size or 0))
+        if size <= 0:
+            return self._JSON_WRAPPER_SIZE
+        return self._JSON_WRAPPER_SIZE + (4 * ((size + 2) // 3))
 
 
 class WebSocketSemiTextShapePayloadCodec(WebSocketPayloadCodec):
@@ -7643,6 +7659,14 @@ class WebSocketSemiTextShapePayloadCodec(WebSocketPayloadCodec):
         if trailing and any(bit != "0" for bit in trailing):
             raise ValueError("invalid semi-text-shape trailing padding")
         return bytes(int(bit_stream[start:start + 8], 2) for start in range(0, full_bytes, 8))
+
+    def max_encoded_size(self, wire_size: int) -> int:
+        size = max(0, int(wire_size or 0))
+        if size <= 0:
+            return 0
+        symbols = (size * 8 + 5) // 6
+        spaces = (symbols - 1) // self._GROUP_SIZE if symbols > 0 else 0
+        return symbols + spaces
 
 
 class _WsConnectionBootstrapError(RuntimeError):
@@ -7805,6 +7829,7 @@ class WebSocketSession(ISession):
         self._ws_max_size: int = int(getattr(self._args, "ws_max_size", 65535))
         self._ws_payload_mode: str = str(getattr(self._args, "ws_payload_mode", "binary") or "binary").lower()
         self._ws_payload_codec: WebSocketPayloadCodec = self._build_ws_payload_codec(self._ws_payload_mode)
+        self._ws_frame_max_size: int = max(0, self._ws_payload_codec.max_encoded_size(self._ws_max_size))
         self._ws_send_timeout_s: float = max(0.0, float(getattr(self._args, "ws_send_timeout", 3.0) or 0.0))
         self._ws_tcp_user_timeout_ms: int = max(0, int(getattr(self._args, "ws_tcp_user_timeout_ms", 10000) or 0))
         self._ws_reconnect_grace_s: float = max(0.0, float(getattr(self._args, "ws_reconnect_grace", 3.0) or 0.0))
@@ -9126,7 +9151,7 @@ class WebSocketSession(ISession):
                     length = struct.unpack("!H", await self._reader.readexactly(2))[0]
                 elif length == 127:
                     length = struct.unpack("!Q", await self._reader.readexactly(8))[0]
-                if length > self_ref._ws_max_size:
+                if length > self_ref._ws_frame_max_size:
                     raise RuntimeError(f"websocket frame too large: {length}")
                 mask_key = await self._reader.readexactly(4) if masked else b""
                 payload = await self._reader.readexactly(length) if length else b""
@@ -9600,7 +9625,7 @@ class WebSocketSession(ISession):
                     uri,
                     ssl=ssl_ctx,
                     subprotocols=subprotocols,
-                    max_size=self._ws_max_size,
+                    max_size=self._ws_frame_max_size,
                     compression=self._ws_compression,
                     ping_interval=None,    # we run our own RTT ping
                     ping_timeout=None,
