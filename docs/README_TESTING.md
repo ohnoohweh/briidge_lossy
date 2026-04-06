@@ -2,19 +2,20 @@
 
 This repository currently collects:
 
-- `122` integration tests in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
-- `112` unit tests in `tests/unit/`
+- `251` integration tests in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
+- `114` unit tests in `tests/unit/`
 
 Recent test/content updates:
 
 - 2026-04-06: Admin web config handling tests updated to reflect `secure_link_psk` write-only behavior (see commit 637eac8). The tests in `tests/unit/test_admin_web_payloads.py` now assert that `secure_link_psk` is masked on GET snapshots and is accepted by `update_config` on POST updates.
 - 2026-04-06: Config persistence tests updated so saved config files encrypt `admin_web_password` and `secure_link_psk` on disk while still restoring them into runtime defaults when the JSON config is loaded. See `tests/unit/test_runner_config_persistence.py`.
+- 2026-04-06: WebSocket bootstrap tests updated for Windows system-proxy fallback when no endpoint is discovered. The unit coverage in [tests/unit/test_ws_payload_mode.py](../tests/unit/test_ws_payload_mode.py) now asserts direct-connect fallback, and the mixed-listener secure-link WS regression in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py) covers the same path end to end.
 
 ## Get started
 
 ### Environment and install constraints
 
-- Python `>= 3.9` is required, as declared in [pyproject.toml](/home/ohnoohweh/quic_br/pyproject.toml).
+- Python `>= 3.9` is required, as declared in [pyproject.toml](../pyproject.toml).
 - Runtime dependencies include `aioquic`, `cryptography`, and `websockets`.
 - Test execution additionally uses `pytest` and `pytest-xdist`.
 - The integration suite opens real sockets, starts subprocesses, and is intended to run on a local machine where loopback networking and subprocess creation are available.
@@ -65,6 +66,17 @@ Enforcement layers:
   - Windows-specific coverage: `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"`
 - When `src/obstacle_bridge/bridge.py` did not change, the gate reports success without running the heavy suites.
 - To make merge impossible on failures, configure branch protection in GitHub to require both `Integration Gate (Linux shared)` and `Integration Gate (Windows-specific)`.
+
+### Acceptance criteria for WebSocket bootstrap changes
+
+When a change touches WebSocket proxy discovery, client bootstrap, or same-socket listener behavior, the acceptance bar is:
+
+- `pytest -q tests/unit` passes, including [tests/unit/test_ws_payload_mode.py](../tests/unit/test_ws_payload_mode.py)
+- `pytest -q -n 16 tests/integration/test_overlay_e2e.py` passes
+- the Windows proxy-specific coverage in `test_overlay_e2e_ws_proxy_*` passes when the change touches proxy bootstrap
+- the same-connection static-root coverage in `test_overlay_e2e_ws_static_http_root_*` passes when the change touches the WS listener front-end split
+- if Windows `system` proxy lookup returns no endpoint, the client must fall back to a direct WebSocket connect instead of failing bootstrap early
+- any new transport-specific bootstrap tradeoff must be recorded in [WEBSOCKET_DESIGN.md](WEBSOCKET_DESIGN.md)
 
 ### What to run for regression testing
 
@@ -168,13 +180,13 @@ The catalog is ordered as:
 
 ## Integration tests
 
-Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py) and collects `120` tests.
+Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py) and collects `251` tests.
 
 The supporting project-level intent documents are:
 
-- [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
-- [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md)
-- [DEVELOPMENT_PROCESS.md](/home/ohnoohweh/quic_br/docs/DEVELOPMENT_PROCESS.md)
+- [REQUIREMENTS.md](REQUIREMENTS.md)
+- [ARCHITECTURE.md](ARCHITECTURE.md)
+- [DEVELOPMENT_PROCESS.md](DEVELOPMENT_PROCESS.md)
 
 ### Integration entrypoints
 
@@ -341,7 +353,7 @@ This deeper mapping links concrete integration scenarios to requirement IDs. It 
 
 The certificate-based secure-link slice is now delivered through Phase 2 trust validation and Phase 3 operational controls, and it is defended by both unit and subprocess integration coverage.
 
-Certificate-mode tests now generate their root, certificate, signature, and private-key material at runtime through [tests/fixtures/secure_link_cert/__init__.py](/home/ohnoohweh/quic_br/tests/fixtures/secure_link_cert/__init__.py), so the repository no longer carries checked-in secure-link cert artifacts.
+Certificate-mode tests now generate their root, certificate, signature, and private-key material at runtime through [tests/fixtures/secure_link_cert/__init__.py](../tests/fixtures/secure_link_cert/__init__.py), so the repository no longer carries checked-in secure-link cert artifacts.
 
 The delivered certificate-mode criteria now include:
 
@@ -422,7 +434,7 @@ Unit coverage currently collects `106` tests from `tests/unit/`.
 
 Unit tests usually do not prove full black-box behavior on their own. Their main job is to protect component contracts, local invariants, and architecture-sensitive rules that would be expensive or ambiguous to validate only through end-to-end tests.
 
-The component view they support is described in [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md). The `Architectural component` column below uses the stable component IDs defined there so the traceability stays durable even if section titles are reworded later.
+The component view they support is described in [ARCHITECTURE.md](ARCHITECTURE.md). The `Architectural component` column below uses the stable component IDs defined there so the traceability stays durable even if section titles are reworded later.
 
 ### First traceability mapping for the unit suite
 

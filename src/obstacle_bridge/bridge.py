@@ -2986,7 +2986,7 @@ class SecureLinkPskSession(ISession):
         self._last_auth_fail_unix_ts = None
         self._last_auth_fail_session_id = None
         self._record_secure_link_event(event, now)
-        if self._client_mode:
+        if self._client_mode and str(event or "") != "rekey_completed":
             self._schedule_client_rekey_timer(state)
         self._reset_client_retry_backoff()
         self._log.info(
@@ -8422,7 +8422,7 @@ class WebSocketSession(ISession):
             )
             if endpoint is None:
                 self._log.debug("[WS-PROXY] (%s) system proxy lookup returned no endpoint", self._probe_id)
-                raise RuntimeError("system proxy mode did not return a proxy for the websocket target")
+                return None
             self._log.debug("[WS-PROXY] (%s) system proxy selected endpoint=%s:%d", self._probe_id, endpoint[0], int(endpoint[1]))
             return endpoint
         self._log.debug("[WS-PROXY] (%s) unsupported mode=%s", self._probe_id, self._ws_proxy_mode)

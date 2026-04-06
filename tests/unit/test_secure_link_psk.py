@@ -229,8 +229,8 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
             _args(
                 tcp_peer='127.0.0.1',
                 secure_link_psk='client-secret',
-                secure_link_retry_backoff_initial_ms=20,
-                secure_link_retry_backoff_max_ms=40,
+                secure_link_retry_backoff_initial_ms=100,
+                secure_link_retry_backoff_max_ms=200,
             ),
             'tcp',
         )
@@ -253,7 +253,7 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(first_snapshot["next_retry_unix_ts"])
         self.assertEqual(self._count_frame_type(client_inner.sent, client._SL_TYPE_CLIENT_HELLO), 1)
 
-        await asyncio.sleep(0.03)
+        await asyncio.sleep(0.12)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 

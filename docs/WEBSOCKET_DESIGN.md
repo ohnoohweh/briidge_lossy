@@ -23,9 +23,9 @@ It covers:
 
 It does not redefine:
 
-- secure-link behavior already owned by [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md)
-- mux/channel semantics already owned by [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md)
-- product requirements already owned by [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
+- secure-link behavior already owned by [SECURE_LINK_DESIGN.md](SECURE_LINK_DESIGN.md)
+- mux/channel semantics already owned by [ARCHITECTURE.md](ARCHITECTURE.md)
+- product requirements already owned by [REQUIREMENTS.md](REQUIREMENTS.md)
 
 ## Current boundary
 
@@ -43,6 +43,7 @@ Peer-client responsibilities:
 
 - establish the outbound WebSocket connection
 - honor proxy/bootstrap behavior defined by the WebSocket client path
+- when Windows system proxy discovery returns no endpoint for the target, treat that as a direct-connect path rather than a fatal bootstrap error; the client must still reach the normal HTTP preflight and later upgrade sequence
 - on the direct client path, perform a separate `GET /` HTTP preflight on a separate TCP connection before the later WebSocket upgrade attempt
 - require `200 OK` for that preflight, consume the full HTTP response body before continuing, and refuse the later WebSocket upgrade attempt when the preflight does not return `200`
 - skip that HTTP preflight when the client is using an explicit proxy-tunneled socket path
@@ -144,10 +145,11 @@ Future changes to the WebSocket listener path should preserve these externally v
 - on the direct non-proxied client path, `GET /` is completed before the later upgrade attempt
 - when that direct-path preflight does not return `200 OK`, the client stays disconnected and does not attempt the later upgrade
 - when client bootstrap or websocket-open fails, `/api/status` reports `peer_state=FAILED` with transport-level reason/detail until a later successful connect clears it
+- on Windows system-proxy mode, a missing proxy endpoint is a direct-connect case, not a bootstrap failure; the unit and integration regression coverage should prove the client still reaches the normal HTTP preflight and upgrade path
 
-The current regression anchor is [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py), especially the `test_overlay_e2e_ws_static_http_root_*` family.
+The current regression anchor is [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), especially the `test_overlay_e2e_ws_static_http_root_*` family.
 
-For the peer-client bootstrap path, the main regression anchors now live in both [tests/unit/test_ws_payload_mode.py](/home/ohnoohweh/quic_br/tests/unit/test_ws_payload_mode.py) and [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py), where payload-mode advertisement/adoption, the HTTP preflight body download, direct-path refusal-on-non-`200`, proxy failure handling, DNS failure classification, and user-visible failed-connection reporting are exercised as supported transport bootstrap behavior.
+For the peer-client bootstrap path, the main regression anchors now live in both [tests/unit/test_ws_payload_mode.py](../tests/unit/test_ws_payload_mode.py) and [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), where payload-mode advertisement/adoption, the HTTP preflight body download, direct-path refusal-on-non-`200`, proxy failure handling, DNS failure classification, and user-visible failed-connection reporting are exercised as supported transport bootstrap behavior.
 
 ## Tradeoffs and future options
 

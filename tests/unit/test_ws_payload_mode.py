@@ -708,7 +708,7 @@ class WebSocketProxyHelpersTests(unittest.TestCase):
 
         self.assertEqual(endpoint, ("proxy.example", 8080))
 
-    def test_system_proxy_mode_logs_when_no_endpoint_is_found(self):
+    def test_system_proxy_mode_falls_back_to_direct_when_no_endpoint_is_found(self):
         args = _args("binary")
         args.ws_peer = "127.0.0.1"
         args.ws_peer_port = 54321
@@ -719,8 +719,9 @@ class WebSocketProxyHelpersTests(unittest.TestCase):
 
         with mock.patch.object(sys, "platform", "win32"):
             with mock.patch.object(session, "_win_get_proxy_for_url", return_value=None):
-                with self.assertRaisesRegex(RuntimeError, "did not return a proxy"):
-                    session._get_ws_proxy_endpoint("overlay.example", 54321)
+                endpoint = session._get_ws_proxy_endpoint("overlay.example", 54321)
+
+        self.assertIsNone(endpoint)
 
         debug_messages = [call.args[0] for call in session._log.debug.call_args_list if call.args]
         self.assertTrue(any("endpoint lookup" in msg for msg in debug_messages))
