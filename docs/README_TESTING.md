@@ -2,8 +2,8 @@
 
 This repository currently collects:
 
-- `116` integration tests in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
-- `104` unit tests in `tests/unit/`
+- `122` integration tests in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+- `112` unit tests in `tests/unit/`
 
 ## Get started
 
@@ -434,7 +434,7 @@ The component view they support is described in [ARCHITECTURE.md](/home/ohnoohwe
 | `tests/unit/test_runner_config_persistence.py` | `ARC-CMP-004` | `PROC-TST-002` | Runtime config updates must persist back to the configured file correctly | `pytest -q tests/unit/test_runner_config_persistence.py` |
 | `tests/unit/test_runner_events.py` | `ARC-CMP-004` | `PROC-TST-002` | Restart and shutdown events must bind to the active event loop correctly | `pytest -q tests/unit/test_runner_events.py` |
 | `tests/unit/test_runner_overlay_transports.py` | `ARC-CMP-004`, `ARC-CMP-001` | `REQ-OVL-003`, `REQ-OVL-004`, `REQ-OVL-005`, `REQ-AUT-011`, `REQ-AUT-015`, `REQ-AUT-017`, `REQ-AUT-019`, `PROC-TST-002` | Overlay transport parsing, secure-link wrapping, startup validation, and peer-targeted operator control routing must remain consistent with supported transport and cert-mode runtime rules | `pytest -q tests/unit/test_runner_overlay_transports.py` |
-| `tests/unit/test_ws_multi_peer.py` | `ARC-CMP-001`, `ARC-CMP-003` | `REQ-LST-001`, `REQ-MUX-001`, `REQ-MUX-003`, `PROC-TST-002` | WS multi-peer mux rewriting and outbound routing must remain peer-safe and channel-safe | `pytest -q tests/unit/test_ws_multi_peer.py` |
+| `tests/unit/test_ws_multi_peer.py` | `ARC-CMP-001`, `ARC-CMP-003` | `REQ-LST-001`, `REQ-ADM-006`, `REQ-MUX-001`, `REQ-MUX-003`, `PROC-TST-002`, `PROC-TST-003` | WS multi-peer mux rewriting, peer-scoped outbound routing, and listener-side peer RTT reporting must remain peer-safe and operator-visible for regression diagnosis | `pytest -q tests/unit/test_ws_multi_peer.py` |
 | `tests/unit/test_ws_payload_mode.py` | `ARC-CMP-001`, `ARC-CMP-005` | `REQ-OVL-004`, `REQ-WSP-010`, `REQ-WSP-011`, `REQ-WSP-012`, `REQ-LIFE-002`, `PROC-TST-002` | WS payload encoding, client-advertised payload-mode negotiation, grouped `semi-text-shape` transfer form, tx timing, reconnect grace, direct-path HTTP preflight body download and refusal behavior, user-visible bootstrap/open failure reporting, platform-default proxy resolution, compression config, and debug static HTTP behavior must stay internally consistent | `pytest -q tests/unit/test_ws_payload_mode.py` |
 
 ### Unit test catalog
@@ -451,7 +451,7 @@ The component view they support is described in [ARCHITECTURE.md](/home/ohnoohwe
 | `tests/unit/test_runner_events.py` | Runner event binding | Verify restart and shutdown events bind to the running loop correctly | `pytest -q tests/unit/test_runner_events.py` |
 | `tests/unit/test_runner_overlay_transports.py` | Overlay transport parsing/building | Verify transport list parsing, secure-link wrapping, startup material validation, and peer-targeted secure-link operator control routing | `pytest -q tests/unit/test_runner_overlay_transports.py` |
 | `tests/unit/test_secure_link_cert.py` | Secure-link certificate mode | Verify certificate material loading, trust validation, role/validity/deployment/revocation rejection, live reload/apply behavior, and cert-mode rekey behavior | `pytest -q tests/unit/test_secure_link_cert.py` |
-| `tests/unit/test_ws_multi_peer.py` | WebSocket multi-peer mux logic | Verify inbound and outbound mux rewriting and peer-specific send routing | `pytest -q tests/unit/test_ws_multi_peer.py` |
+| `tests/unit/test_ws_multi_peer.py` | WebSocket multi-peer mux logic | Verify inbound and outbound mux rewriting, peer-specific send routing, and listener-side RTT round-trip updates for accepted WS peers | `pytest -q tests/unit/test_ws_multi_peer.py` |
 | `tests/unit/test_ws_payload_mode.py` | WebSocket framing/runtime behavior | Verify payload encoding modes, including grouped `semi-text-shape`, tx loop behavior, socket config, reconnect grace, HTTP preflight, platform-default proxy handling (`system` on Windows and `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` on Linux/POSIX), compression, and debug static HTTP behavior | `pytest -q tests/unit/test_ws_payload_mode.py` |
 
 ### Run the full unit suite

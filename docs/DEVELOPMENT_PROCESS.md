@@ -23,6 +23,7 @@ These measures describe how the project is developed and validated. They are int
 - `PROC-TST-003`: Known bugs and regressions should become regression tests whenever practical.
   Measure:
   - reproduce the bug in the smallest suitable unit or integration scenario
+  - add or preserve the reproducer before the fix so the unchanged test fails against the buggy behavior and passes after the fix
   - keep that scenario in the regular regression flow after the fix lands
 - `PROC-TST-004`: The integration harness should remain executable in regular parallel local and CI workflows, with OS-specific expectations executed on the OS where they are observable.
   Measure:
@@ -101,6 +102,12 @@ For each change, ask:
 - which internal invariants deserve unit tests?
 - which old bug must become a regression test?
 
+For bug fixes specifically, prefer an explicit red-before-green loop:
+
+- write or isolate the smallest reproducer that fails against the unfixed behavior
+- implement the fix without weakening that test expectation
+- rerun the same unchanged test and keep it as permanent regression evidence
+
 ## Definition of done for one iteration
 
 An iteration should normally be considered complete when:
@@ -110,6 +117,7 @@ An iteration should normally be considered complete when:
 - the code implements the behavior
 - at least one integration test proves the externally visible result
 - unit tests exist for non-trivial internal invariants when appropriate
+- bug-fix regressions have an unchanged reproducer test that was observed red before the fix and green after it
 - the relevant test suites have been executed before relying on repository guards
 - the testing catalog or traceability notes reflect the new behavior
 

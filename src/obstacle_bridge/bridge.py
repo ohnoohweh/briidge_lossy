@@ -9239,6 +9239,8 @@ class WebSocketSession(ISession):
     async def _on_accept(self, ws) -> None:
         if not self._peer_tuple:
             payload_mode = self._resolve_inbound_ws_payload_mode(getattr(ws, "payload_mode", None))
+            rtt = StreamRTT(log=self._log)
+            rtt_rt = StreamRTTRuntime(rtt)
             peer_id = self._alloc_server_peer_id()
             ctx = {
                 "peer_id": peer_id,
@@ -9248,7 +9250,8 @@ class WebSocketSession(ISession):
                 "tx_queue": asyncio.Queue(),
                 "tx_task": None,
                 "rx_task": None,
-                "rtt": StreamRTT(log=self._log),
+                "rtt": rtt,
+                "rtt_rt": rtt_rt,
             }
             self._server_peers[peer_id] = ctx
             self._server_peer_by_ws_id[id(ws)] = peer_id
@@ -9266,6 +9269,10 @@ class WebSocketSession(ISession):
                 pass
             self._reset_counters()
             self._ensure_server_tx_task(ctx)
+            rtt_rt.attach(
+                send_ping_fn=lambda payload, _peer_id=peer_id: self._send_ping_frame_for_peer(_peer_id, payload),
+                on_state_change=lambda _connected, _peer_id=peer_id: self._update_server_overlay_connected(),
+            )
             ctx["rx_task"] = self._loop.create_task(self._rx_pump(ws=ws, peer_id=peer_id))  # type: ignore
             self._ws = ws
             self._rx_task = ctx["rx_task"]
@@ -9314,6 +9321,10 @@ class WebSocketSession(ISession):
             return
         self._server_peer_by_ws_id.pop(id(ctx.get("ws")), None)
         self._server_unregister_peer_channels(peer_id)
+        rtt_rt = ctx.get("rtt_rt")
+        if rtt_rt is not None:
+            with contextlib.suppress(Exception):
+                rtt_rt.detach()
         if callable(self._on_peer_disconnect_cb):
             try:
                 self._on_peer_disconnect_cb(peer_id)
@@ -9854,8 +9865,19 @@ class WebSocketSession(ISession):
         self._schedule_send(body, on_sent=lambda: self._notify_peer_tx(len(body)))
         self._log.debug(f"[WS/TX] ({self._probe_id}) PONG queued")
 
+    def _send_ping_frame_for_peer(self, peer_id: int, ping_payload: bytes) -> None:
+        ctx = self._server_peers.get(peer_id)
+        if not isinstance(ctx, dict) or not ctx.get("ws"):
+            return
+        body = bytes([self._K_PING]) + ping_payload
+        self._log.debug(f"[WS/TX] ({self._probe_id}) peer_id={peer_id} PING queued")
+        self._schedule_server_send(ctx, body, on_sent=lambda: self._notify_peer_tx(len(body)))
+
     def _send_pong_frame_server(self, ctx: dict, echo_tx_ns: int) -> None:
-        body = bytes([self._K_PONG]) + self._rtt.build_pong_bytes(echo_tx_ns)
+        rtt = ctx.get("rtt") if isinstance(ctx, dict) else None
+        if rtt is None:
+            return
+        body = bytes([self._K_PONG]) + rtt.build_pong_bytes(echo_tx_ns)
         self._log.debug(f"[WS/GUARD] ({self._probe_id}) PONG tx peer_id={ctx['peer_id']}: echo_tx_ns={echo_tx_ns}")
         self._schedule_server_send(ctx, body, on_sent=lambda: self._notify_peer_tx(len(body)))
 
@@ -9926,25 +9948,35 @@ class WebSocketSession(ISession):
                         self._log.debug(f"[WS/RX] ({self._probe_id}) malformed PING len={len(payload)}")
 
                 elif kind == self._K_PONG:
-                    if client_mode and len(payload) >= 8:
+                    if len(payload) >= 8:
                         (echo_tx_ns,) = struct.unpack(">Q", payload[:8])
 
                         # Take the sample before state flip for better logging
                         sample_ms = (time.monotonic_ns() - int(echo_tx_ns)) / 1e6
 
-                        self._rtt.on_pong_received(echo_tx_ns)
-
-                        # Guard log: PONG received with the measured RTT sample
-                        self._log.debug(f"[WS/GUARD] ({self._probe_id}) PONG rx: echo_tx_ns={echo_tx_ns} sample_ms={sample_ms:.3f}")
-
-                        # Fast nudge (state transition)
-                        was = self._overlay_connected
-                        now = self._rtt.is_connected()
-                        if now != was:
-                            self._set_overlay_connected(now)
-                    else:
                         if client_mode:
-                            self._log.debug(f"[WS/RX] ({self._probe_id}) malformed PONG len={len(payload)}")
+                            self._rtt.on_pong_received(echo_tx_ns)
+
+                            # Guard log: PONG received with the measured RTT sample
+                            self._log.debug(f"[WS/GUARD] ({self._probe_id}) PONG rx: echo_tx_ns={echo_tx_ns} sample_ms={sample_ms:.3f}")
+
+                            # Fast nudge (state transition)
+                            was = self._overlay_connected
+                            now = self._rtt.is_connected()
+                            if now != was:
+                                self._set_overlay_connected(now)
+                        elif ctx is not None:
+                            ctx_rtt = ctx.get("rtt")
+                            if ctx_rtt is not None:
+                                ctx_rtt.on_pong_received(echo_tx_ns)
+                            self._log.debug(
+                                f"[WS/GUARD] ({self._probe_id}) PONG rx peer_id={ctx['peer_id']}: "
+                                f"echo_tx_ns={echo_tx_ns} sample_ms={sample_ms:.3f}"
+                            )
+                    elif client_mode:
+                        self._log.debug(f"[WS/RX] ({self._probe_id}) malformed PONG len={len(payload)}")
+                    elif ctx is not None:
+                        self._log.debug(f"[WS/RX] ({self._probe_id}) malformed PONG peer_id={ctx['peer_id']} len={len(payload)}")
 
                 else:
                     self._log.debug(f"[WS/RX] ({self._probe_id}) unknown KIND=0x{kind:02x} n={len(b)}")

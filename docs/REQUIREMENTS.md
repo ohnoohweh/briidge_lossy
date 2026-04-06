@@ -124,7 +124,7 @@ Current implementation note:
 - `REQ-LST-003`: A TCP listener shall support two independent peer clients concurrently.
 - `REQ-LST-004`: A QUIC listener shall support two independent peer clients concurrently.
 - `REQ-LST-005`: When a listener has multiple connected peers, the admin peer API shall report distinct peer endpoints for the connected peers.
-- `REQ-LST-006`: Listener-side peer reporting shall distinguish passive listening state from active connected peers.
+- `REQ-LST-006`: Listener-side peer reporting shall distinguish passive listening state from active connected peers, keep the passive listener row zeroed, and expose live per-peer connection metrics such as RTT on the active accepted peer rows.
 - `REQ-LST-007`: Listener behavior shall remain peer-independent: auxiliary listener activity on a shared endpoint, including non-upgrade HTTP handling on a WebSocket listener, repeated plain HTTP requests on the same TCP connection before any later upgrade, per-peer handshake/failure handling, and disconnect cleanup, shall stay scoped to the originating request or peer and shall not degrade healthy traffic forwarding, published-service reachability, or authenticated session state that belongs to another peer, including a healthy peer that is using a different active transport on the same listener process.
 
 ## Mixed traffic and channel requirements
@@ -151,7 +151,7 @@ Current implementation note:
 - `REQ-ADM-003`: When admin authentication is enabled, protected admin APIs shall remain unavailable until correct authentication completes.
 - `REQ-ADM-004`: After correct authentication, the admin API shall become available to that authenticated client.
 - `REQ-ADM-005`: Authentication state shall remain isolated per HTTP client session.
-- `REQ-ADM-006`: Peer and connection APIs shall reflect connected peers, channel state, and transfer metrics accurately enough for troubleshooting and regression validation.
+- `REQ-ADM-006`: Peer and connection APIs shall reflect connected peers, channel state, and transfer metrics accurately enough for troubleshooting and regression validation, including peer-local listener metrics such as RTT on active accepted peer rows.
 
 Development-process measures such as test-execution discipline, regression-writing policy, and CI split strategy are documented in [DEVELOPMENT_PROCESS.md](/home/ohnoohweh/quic_br/docs/DEVELOPMENT_PROCESS.md). They intentionally do not appear here because they govern how the project is built and validated, not what the delivered project promises to an operator.
 

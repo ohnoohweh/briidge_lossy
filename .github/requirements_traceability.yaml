@@ -374,6 +374,7 @@ REQ-LST-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
   unit_tests:
     - tests/unit/test_ws_multi_peer.py::test_inbound_mux_rewrite_allocates_distinct_server_channels_per_peer
+    - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
 
 REQ-LST-002:
   integration_tests:
@@ -397,6 +398,7 @@ REQ-LST-006:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
   unit_tests:
     - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_uses_child_myudp_session_stats
+    - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
 
 REQ-MUX-001:
   integration_tests:
@@ -481,3 +483,4 @@ REQ-ADM-006:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_after_correct_auth
   unit_tests:
     - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_uses_child_myudp_session_stats
+    - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
