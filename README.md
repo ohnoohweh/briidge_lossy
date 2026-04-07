@@ -1,7 +1,7 @@
 # ObstacleBridge
 ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for barrier-resilient networking. It can run over multiple overlay transports (`myudp`, `tcp`, `quic`, `ws`), expose local TCP/UDP listener services through a reliable overlay, and host an admin UI for monitoring active channels.
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `123` integration tests, `121` unit tests. Current branch validation also includes the CI-aligned Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` after the loopback-isolated xdist harness backport and secure-link session-budget stabilization.
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `125` integration tests, `121` unit tests. Current branch validation also includes the CI-aligned Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` after the loopback-isolated xdist harness backport and secure-link session-budget stabilization.
 
 ## Reader guide
 
