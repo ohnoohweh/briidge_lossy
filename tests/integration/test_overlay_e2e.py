@@ -2994,14 +2994,13 @@ def _myudp_delay_loss_base_port(case_index: int) -> int:
     return 36000 + _case_port_offset(case_index, highest_static_port=40000)
 
 
-def _wait_udp_probe_result(host: str, port: int, payload: bytes, *, bind_host: Optional[str] = None, timeout: float = 20.0) -> bytes:
+def _wait_udp_probe_result(host: str, port: int, payload: bytes, *, bind_host: str = '127.0.0.1', timeout: float = 20.0) -> bytes:
     end = time.time() + timeout
     last_exc = None
     expected = response_payload(payload)
-    effective_bind_host = bind_host if bind_host is not None else host
     while time.time() < end:
         try:
-            got = probe_udp(host, port, effective_bind_host, payload, timeout=min(2.5, max(0.5, end - time.time())))
+            got = probe_udp(host, port, bind_host, payload, timeout=min(2.5, max(0.5, end - time.time())))
             if got == expected:
                 return got
             last_exc = RuntimeError(f'unexpected UDP reply: {got!r} != {expected!r}')
@@ -5781,7 +5780,7 @@ def test_overlay_e2e_tcp_secure_link_psk_happy_path(tmp_path: Path) -> None:
             wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
             wait_peer_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', transport='tcp', authenticated=True)
             req = urllib.request.Request(
-                _rewrite_registered_admin_url(f'http://127.0.0.1:{server_proc.admin_port}/api/secure-link/debug'),
+                f'http://127.0.0.1:{server_proc.admin_port}/api/secure-link/debug',
                 data=b'{}',
                 method='POST',
                 headers={'Connection': 'close'},
@@ -6804,7 +6803,7 @@ def test_overlay_e2e_myudp_secure_link_psk_rekey_done_delay_keeps_same_udp_chann
                 raise RuntimeError('Did not observe the rekey cutover gap where server switched before client received REKEY_DONE')
 
             udp_sock.settimeout(5.0)
-            udp_sock.sendto(b'\x01rekey-gap-during', (loopback_v4, client_probe_port))
+            udp_sock.sendto(b'\x01rekey-gap-during', ('127.0.0.1', client_probe_port))
             during_reply, _addr = udp_sock.recvfrom(4096)
             assert during_reply == response_payload(b'\x01rekey-gap-during')
 
@@ -6816,7 +6815,7 @@ def test_overlay_e2e_myudp_secure_link_psk_rekey_done_delay_keeps_same_udp_chann
                 transport='myudp',
             )
             udp_sock.settimeout(2.0)
-            udp_sock.sendto(b'\x01rekey-gap-after', (loopback_v4, client_probe_port))
+            udp_sock.sendto(b'\x01rekey-gap-after', ('127.0.0.1', client_probe_port))
             after_reply, _addr = udp_sock.recvfrom(4096)
             assert after_reply == response_payload(b'\x01rekey-gap-after')
         finally:
@@ -7136,7 +7135,7 @@ def test_overlay_e2e_myudp_secure_link_psk_recovery_after_prior_time_threshold_r
             assert not str(recovered_secure.get('last_rekey_trigger') or '')
             assert int(recovered_secure.get('rekeys_completed_total') or 0) == 0
 
-            got = _wait_udp_probe_result(loopback_v4, client_probe_port, b'\x01myudp-recovery-after', timeout=12.0)
+            got = _wait_udp_probe_result('127.0.0.1', client_probe_port, b'\x01myudp-recovery-after', timeout=12.0)
             if got != response_payload(b'\x01myudp-recovery-after'):
                 raise RuntimeError(f'Unexpected recovered myudp probe reply: {got!r}')
         finally:
@@ -7516,7 +7515,6 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_p
         secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
         bounce = None
         server_proc = client_proc = None
-        ws_listener_host = _connect_host_for_bind(_listener_overlay_bind_host(case, 'ws'), _secure_link_loopback_key(9))
         try:
             case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
                 case,
@@ -7533,7 +7531,7 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_p
             wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
             wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='ws', authenticated=True)
 
-            ws_http_url = f'http://{ws_listener_host}:{_listener_overlay_port(case, "ws")}/'
+            ws_http_url = f'http://127.0.0.1:{_listener_overlay_port(case, "ws")}/'
             body = assert_static_http_root_serves_repeatedly(ws_http_url, attempts=8, timeout=2.0)
             assert b'Hello! Welcome!' in body
 
@@ -7557,7 +7555,6 @@ def test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_l
         secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
         bounce = None
         server_proc = client_proc = None
-        ws_listener_host = _connect_host_for_bind(_listener_overlay_bind_host(case, 'ws'), _secure_link_loopback_key(10))
         try:
             case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
                 case,
@@ -7574,7 +7571,7 @@ def test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_l
             wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
 
             responses = fetch_http_keepalive_sequence(
-                ws_listener_host,
+                '127.0.0.1',
                 _listener_overlay_port(case, 'ws'),
                 attempts=2,
                 timeout=2.0,
@@ -7602,8 +7599,6 @@ def test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_l
 def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_peer_on_mixed_listener(tmp_path: Path) -> None:
     with secure_link_test_lock():
         case = materialize_secure_link_case_ports(CASES['case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp'], 10)
-        loopback_v4, _loopback_v6 = _loopback_hosts_for_case(_secure_link_loopback_key(10))
-        ws_listener_host = _connect_host_for_bind(_listener_overlay_bind_host(case, 'ws'), _secure_link_loopback_key(10))
         secure_args = [
             '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
             '--log-secure-link', 'DEBUG',
@@ -7630,9 +7625,9 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_p
 
             ws_client_cmd = bridge_entrypoint() + [
                 '--overlay-transport', 'ws',
-                '--ws-peer', ws_listener_host, '--ws-peer-port', str(_listener_overlay_port(case, 'ws')),
-                '--ws-bind', loopback_v4, '--ws-own-port', '0',
-                '--own-servers', f'tcp,{case.probe_port},{loopback_v4},tcp,{case.bounce_bind},{case.bounce_port}',
+                '--ws-peer', '127.0.0.1', '--ws-peer-port', str(_listener_overlay_port(case, 'ws')),
+                '--ws-bind', '0.0.0.0', '--ws-own-port', '0',
+                '--own-servers', f'tcp,{case.probe_port},0.0.0.0,tcp,127.0.0.1,{case.bounce_port}',
                 '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
                 '--log-file', str(tmp_path / f'{case.name}_bridge_client_ws_http_probe.txt'),
                 '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
@@ -7644,7 +7639,7 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_p
             time.sleep(0.5)
             assert_running(server_proc)
             wait_admin_up(server_admin, timeout=10.0)
-            wait_tcp_listen(ws_listener_host, _listener_overlay_port(case, 'ws'), timeout=10.0)
+            wait_tcp_listen('127.0.0.1', _listener_overlay_port(case, 'ws'), timeout=10.0)
 
             client_proc = start_proc(f'{case.name}_bridge_client_ws_http_probe', ws_client_cmd, tmp_path, env_extra=case.client_env, admin_port=client_admin)
             client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
@@ -7655,7 +7650,7 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_p
             wait_peer_secure_link_state(client_admin, expected_state='authenticated', timeout=12.0, label='client', transport='ws', authenticated=True)
             wait_peer_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', transport='ws', authenticated=True)
 
-            ws_http_url = f'http://{ws_listener_host}:{_listener_overlay_port(case, "ws")}/'
+            ws_http_url = f'http://127.0.0.1:{_listener_overlay_port(case, "ws")}/'
             body = assert_static_http_root_serves_repeatedly(ws_http_url, attempts=8, timeout=2.0)
             assert b'Hello! Welcome!' in body
 
@@ -7676,8 +7671,6 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_p
 def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener(tmp_path: Path) -> None:
     with secure_link_test_lock():
         case = materialize_secure_link_case_ports(CASES['case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp'], 10)
-        loopback_v4, _loopback_v6 = _loopback_hosts_for_case(_secure_link_loopback_key(10))
-        ws_listener_host = _connect_host_for_bind(_listener_overlay_bind_host(case, 'ws'), _secure_link_loopback_key(10))
         secure_args = [
             '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
             '--log-secure-link', 'DEBUG',
@@ -7703,9 +7696,9 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myud
             myudp_service_port = case.bounce_port + 30
             myudp_client_cmd = bridge_entrypoint() + [
                 '--overlay-transport', 'myudp',
-                '--udp-peer', loopback_v4, '--udp-peer-port', str(_listener_overlay_port(case, 'myudp')),
-                '--udp-bind', loopback_v4, '--udp-own-port', '0',
-                '--own-servers', f'udp,{myudp_service_port},{loopback_v4},udp,{loopback_v4},{case.bounce_port + 20}',
+                '--udp-peer', '127.0.0.1', '--udp-peer-port', str(_listener_overlay_port(case, 'myudp')),
+                '--udp-bind', '0.0.0.0', '--udp-own-port', '0',
+                '--own-servers', f'udp,{myudp_service_port},0.0.0.0,udp,127.0.0.1,{case.bounce_port + 20}',
                 '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
                 '--log-file', str(tmp_path / f'{case.name}_bridge_client_myudp_http_probe.txt'),
                 '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
@@ -7717,7 +7710,7 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myud
             time.sleep(0.5)
             assert_running(server_proc)
             wait_admin_up(server_admin, timeout=10.0)
-            wait_tcp_listen(ws_listener_host, _listener_overlay_port(case, 'ws'), timeout=10.0)
+            wait_tcp_listen('127.0.0.1', _listener_overlay_port(case, 'ws'), timeout=10.0)
 
             client_proc = start_proc(f'{case.name}_bridge_client_myudp_http_probe', myudp_client_cmd, tmp_path, env_extra=case.client_env, admin_port=client_admin)
             client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
@@ -7727,9 +7720,9 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myud
             myudp_probe_case = replace(
                 case,
                 probe_proto='udp',
-                probe_host=loopback_v4,
+                probe_host='127.0.0.1',
                 probe_port=myudp_service_port,
-                probe_bind=loopback_v4,
+                probe_bind='0.0.0.0',
                 expected=response_payload(b'\x01myudp-static-http-before'),
             )
             wait_probe(myudp_probe_case, payload=b'\x01myudp-static-http-before', timeout=12.0)
@@ -7737,7 +7730,7 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myud
             wait_peer_secure_link_state(client_admin, expected_state='authenticated', timeout=12.0, label='client', transport='myudp', authenticated=True)
             wait_peer_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', transport='myudp', authenticated=True)
 
-            ws_http_url = f'http://{ws_listener_host}:{_listener_overlay_port(case, "ws")}/'
+            ws_http_url = f'http://127.0.0.1:{_listener_overlay_port(case, "ws")}/'
             body = assert_static_http_root_serves_repeatedly(ws_http_url, attempts=8, timeout=2.0)
             assert b'Hello! Welcome!' in body
 
@@ -7758,8 +7751,6 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myud
 def test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_link_myudp_peer_on_mixed_listener(tmp_path: Path) -> None:
     with secure_link_test_lock():
         case = materialize_secure_link_case_ports(CASES['case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp'], 10)
-        loopback_v4, _loopback_v6 = _loopback_hosts_for_case(_secure_link_loopback_key(10))
-        ws_listener_host = _connect_host_for_bind(_listener_overlay_bind_host(case, 'ws'), _secure_link_loopback_key(10))
         secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
         bounce = BounceBackServer(
             name=f'{case.name}_myudp_http_keepalive_probe_bounce',
@@ -7782,9 +7773,9 @@ def test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_l
             myudp_service_port = case.bounce_port + 30
             myudp_client_cmd = bridge_entrypoint() + [
                 '--overlay-transport', 'myudp',
-                '--udp-peer', loopback_v4, '--udp-peer-port', str(_listener_overlay_port(case, 'myudp')),
-                '--udp-bind', loopback_v4, '--udp-own-port', '0',
-                '--own-servers', f'udp,{myudp_service_port},{loopback_v4},udp,{loopback_v4},{case.bounce_port + 20}',
+                '--udp-peer', '127.0.0.1', '--udp-peer-port', str(_listener_overlay_port(case, 'myudp')),
+                '--udp-bind', '0.0.0.0', '--udp-own-port', '0',
+                '--own-servers', f'udp,{myudp_service_port},0.0.0.0,udp,127.0.0.1,{case.bounce_port + 20}',
                 '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
                 '--log-file', str(tmp_path / f'{case.name}_bridge_client_myudp_http_keepalive_probe.txt'),
                 '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
@@ -7796,7 +7787,7 @@ def test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_l
             time.sleep(0.5)
             assert_running(server_proc)
             wait_admin_up(server_admin, timeout=10.0)
-            wait_tcp_listen(ws_listener_host, _listener_overlay_port(case, 'ws'), timeout=10.0)
+            wait_tcp_listen('127.0.0.1', _listener_overlay_port(case, 'ws'), timeout=10.0)
 
             client_proc = start_proc(f'{case.name}_bridge_client_myudp_http_keepalive_probe', myudp_client_cmd, tmp_path, env_extra=case.client_env, admin_port=client_admin)
             client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
@@ -7806,9 +7797,9 @@ def test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_l
             myudp_probe_case = replace(
                 case,
                 probe_proto='udp',
-                probe_host=loopback_v4,
+                probe_host='127.0.0.1',
                 probe_port=myudp_service_port,
-                probe_bind=loopback_v4,
+                probe_bind='0.0.0.0',
                 expected=response_payload(b'\x01myudp-static-http-keepalive-before'),
             )
             wait_probe(myudp_probe_case, payload=b'\x01myudp-static-http-keepalive-before', timeout=12.0)
@@ -7817,7 +7808,7 @@ def test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_l
             wait_peer_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', transport='myudp', authenticated=True)
 
             responses = fetch_http_keepalive_sequence(
-                ws_listener_host,
+                '127.0.0.1',
                 _listener_overlay_port(case, 'ws'),
                 attempts=2,
                 timeout=2.0,
