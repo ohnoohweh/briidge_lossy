@@ -208,6 +208,96 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
         finally:
             mux.loop.close()
 
+    def test_send_mux_fragments_oversized_udp_data(self):
+        session = _FakeSession(connected=True, max_app_payload_size=32)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            payload = b"abcdefghijklmnopqrstuvwxyz"
+            mux._send_mux(7, ChannelMux.Proto.UDP, ChannelMux.MType.DATA, payload)
+
+            self.assertGreater(len(session.sent), 1)
+            rebuilt = bytearray()
+            seen_datagram_ids = set()
+            for frame in session.sent:
+                parsed = mux._unpack_mux(frame)
+                self.assertIsNotNone(parsed)
+                chan_id, proto, _counter, mtype, payload_mv = parsed
+                self.assertEqual(chan_id, 7)
+                self.assertEqual(proto, ChannelMux.Proto.UDP)
+                self.assertEqual(mtype, ChannelMux.MType.DATA_FRAG)
+                frag = bytes(payload_mv)
+                datagram_id, total_len, offset = ChannelMux.UDP_FRAG_HDR.unpack(frag[:ChannelMux.UDP_FRAG_HDR.size])
+                seen_datagram_ids.add(datagram_id)
+                chunk = frag[ChannelMux.UDP_FRAG_HDR.size:]
+                self.assertEqual(total_len, len(payload))
+                self.assertLessEqual(len(frame), session.max_app_payload_size)
+                self.assertEqual(offset, len(rebuilt))
+                rebuilt.extend(chunk)
+
+            self.assertEqual(seen_datagram_ids.__len__(), 1)
+            self.assertEqual(bytes(rebuilt), payload)
+        finally:
+            mux.loop.close()
+
+    def test_reassembles_udp_fragments_before_local_delivery(self):
+        session = _FakeSession()
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            payload = b"fragmented-udp-datagram"
+            datagram_id = 41
+            fragment_size = 5
+            with patch.object(mux, '_rx_udp_data') as rx_udp_data:
+                for offset in range(0, len(payload), fragment_size):
+                    frag_payload = ChannelMux.UDP_FRAG_HDR.pack(
+                        datagram_id,
+                        len(payload),
+                        offset,
+                    ) + payload[offset:offset + fragment_size]
+                    frame = mux._pack_mux(
+                        11,
+                        ChannelMux.Proto.UDP,
+                        offset // fragment_size,
+                        ChannelMux.MType.DATA_FRAG,
+                        frag_payload,
+                    )
+                    mux.on_app_payload_from_peer(frame)
+
+                rx_udp_data.assert_called_once_with(11, payload)
+        finally:
+            mux.loop.close()
+
+    def test_drops_udp_fragments_above_service_datagram_cap(self):
+        session = _FakeSession()
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._udp_service_datagram_cap = 8
+            with patch.object(mux, '_rx_udp_data') as rx_udp_data:
+                frag_payload = ChannelMux.UDP_FRAG_HDR.pack(7, 16, 0) + b'abcdefgh'
+                frame = mux._pack_mux(
+                    3,
+                    ChannelMux.Proto.UDP,
+                    0,
+                    ChannelMux.MType.DATA_FRAG,
+                    frag_payload,
+                )
+                mux.on_app_payload_from_peer(frame)
+                rx_udp_data.assert_not_called()
+        finally:
+            mux.loop.close()
+
+    def test_drops_local_udp_datagram_above_service_datagram_cap(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._udp_service_datagram_cap = 4
+            spec = ChannelMux.ServiceSpec(1, 'udp', '127.0.0.1', 20001, 'udp', '127.0.0.1', 20002)
+            svc_key = ('local', 0, 1)
+            with patch.object(mux, '_send_mux') as send_mux:
+                mux._on_local_udp_datagram(spec, svc_key, b'abcdef', ('127.0.0.1', 32000))
+                send_mux.assert_not_called()
+        finally:
+            mux.loop.close()
+
 
 if __name__ == '__main__':
     unittest.main()

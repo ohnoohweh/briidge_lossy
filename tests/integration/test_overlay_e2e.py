@@ -5338,6 +5338,57 @@ def test_overlay_e2e_ws_listener_adopts_client_payload_mode_from_upgrade_request
 
 @pytest.mark.integration
 @pytest.mark.slow
+def test_overlay_e2e_ws_secure_link_psk_udp_fragmentation_survives_text_mode(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case08_overlay_ws_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=294,
+                secure_slot=9,
+                server_extra_args=[
+                    '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+                    '--ws-payload-mode', 'semi-text-shape',
+                    '--ws-max-size', '160',
+                    '--log-channel-mux', 'DEBUG',
+                    '--log-ws-session', 'DEBUG',
+                    '--log-secure-link', 'DEBUG',
+                ],
+                client_extra_args=[
+                    '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+                    '--ws-payload-mode', 'semi-text-shape',
+                    '--ws-max-size', '160',
+                    '--log-channel-mux', 'DEBUG',
+                    '--log-ws-session', 'DEBUG',
+                    '--log-secure-link', 'DEBUG',
+                ],
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+            wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+            wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+
+            payload = b'\x01' + (b'F' * 1400)
+            wait_probe(case, payload=payload, expected=response_payload(payload), timeout=15.0)
+            wait_exact_transferred_bytes(client_proc.admin_port or 0, expected_bytes=len(payload), timeout=12.0, label='client')
+            wait_exact_transferred_bytes(server_proc.admin_port or 0, expected_bytes=len(payload), timeout=12.0, label='server')
+
+            client_log = wait_log_contains(client_proc.log_path, 'fragment UDP datagram', timeout=10.0)
+            assert 'frag_payload_limit=' in client_log
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
 def test_overlay_e2e_ws_overlay_uses_http_proxy_env(tmp_path: Path) -> None:
     case = CASES['case08_overlay_ws_ipv4']
     proxy_port = alloc_admin_port()

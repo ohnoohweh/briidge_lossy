@@ -10476,6 +10476,7 @@ class ChannelMux:
         CLOSE = 2  # TCP only
         REMOTE_SERVICES_SET_V1 = 3  # legacy control plane
         REMOTE_SERVICES_SET_V2 = 4  # control plane: peer installs listener catalog
+        DATA_FRAG = 5  # UDP service datagram fragment
 
     @dataclass(frozen=True)
     class ServiceSpec:
@@ -10665,6 +10666,8 @@ class ChannelMux:
         # UDP client early-buffer (per channel, preserves datagram boundaries)
         self._udp_client_pending: Dict[int, list[bytes]] = {}
         self._udp_client_pending_cap: int = 1024  # max queued datagrams per channel (tweak as needed)
+        self._udp_frag_next_datagram_id: int = 1
+        self._udp_frag_rx: dict[tuple[int, int], dict[str, Any]] = {}
 
         # TCP maps
         # chan -> (svc_id, writer)
@@ -10708,6 +10711,14 @@ class ChannelMux:
             self._resolve_session_max_app_payload(self.session),
         )
         self._SAFE_TCP_READ = max(1, self._session_max_app_payload - ChannelMux.MUX_HDR.size)
+        self._udp_service_datagram_cap, self._udp_service_datagram_diag = self._resolve_udp_service_datagram_cap(self.session)
+        self.log.info(
+            "[MUX] session_max_app_payload=%s safe_tcp_read=%s udp_service_datagram_cap=%s (%s)",
+            self._session_max_app_payload,
+            self._SAFE_TCP_READ,
+            self._udp_service_datagram_cap,
+            self._udp_service_datagram_diag,
+        )
 
         # Dashboard interface
         self._udp_client_svc_id: Dict[int, int] = {}
@@ -10745,6 +10756,9 @@ class ChannelMux:
     # ---------------------------------------------------------------------------
     # MUX v2 header: chan_id(2) | proto(1) | counter(2) | mtype(1) | data_len(2)
     MUX_HDR = struct.Struct(">HBHBH")
+    UDP_FRAG_HDR = struct.Struct(">IHH")
+    UDP_FRAG_REASSEMBLY_TTL_S = 10.0
+    UDP_FRAG_MAX_INFLIGHT = 256
 
     @staticmethod
     def _resolve_session_max_app_payload(session: ISession) -> int:
@@ -10939,6 +10953,7 @@ class ChannelMux:
                     tr.close()
                 except Exception:
                     pass
+            self._drop_udp_fragment_reassembly(chan)
             self._chan_owner_peer_id.pop(chan, None)
             self._forget_udp_open_key(chan)
             self.log.info("[MUX] peer=%s epoch reset -> drop UDP chan=%s", peer_key, chan)
@@ -11069,6 +11084,7 @@ class ChannelMux:
         self._udp_client_svc_id.clear()
         self._udp_open_key_by_chan.clear()
         self._udp_chan_by_open_key.clear()
+        self._udp_frag_rx.clear()
         # Backpressure tasks
         for t in list(self._tcp_backpressure_tasks.values()):
             try: t.cancel()
@@ -11102,6 +11118,14 @@ class ChannelMux:
     def _on_local_udp_datagram(self, spec: ChannelMux.ServiceSpec, svc_key: "ChannelMux.ServiceKey", data: bytes, addr: tuple[str,int]) -> None:
         if not (self._overlay_connected and self._accepting_enabled):
             self.log.debug(f"[NET] package dropping  : ")
+            return
+        if len(data) > self._udp_service_datagram_cap:
+            self.log.warning(
+                "[UDP/SRV] drop oversize local UDP datagram len=%s cap=%s (%s)",
+                len(data),
+                self._udp_service_datagram_cap,
+                self._udp_service_datagram_diag,
+            )
             return
         now = time.time()
         key = (svc_key, addr)
@@ -11173,6 +11197,7 @@ class ChannelMux:
                         except Exception: pass
                     self.log.info("[UDP/CLI] chan=%s idle >= %.0fs -> CLOSE", chan, self.UDP_IDLE_S)
                     self._send_mux(chan, ChannelMux.Proto.UDP, ChannelMux.MType.CLOSE, b"")
+                self._prune_udp_fragment_reassembly()
         except asyncio.CancelledError:
             return
 
@@ -11302,6 +11327,11 @@ class ChannelMux:
     def _send_mux(self, chan_id: int, proto: ChannelMux.Proto, mtype: ChannelMux.MType, data: bytes) -> None:
         if not self.session.is_connected():
             return
+        if proto == ChannelMux.Proto.UDP and mtype == ChannelMux.MType.DATA:
+            payload = bytes(data or b"")
+            if ChannelMux.MUX_HDR.size + len(payload) > self._session_max_app_payload:
+                self._send_udp_mux_fragments(chan_id, payload)
+                return
         # Enforce the effective session payload budget so transport wrappers such as
         # secure-link over WS cannot emit oversized outer frames.
         if data is None:
@@ -11364,6 +11394,83 @@ class ChannelMux:
         nxt = (prev + 1) & 0xFFFF
         self._mux_counters[key] = nxt
         return nxt
+
+    def _next_udp_fragment_datagram_id(self) -> int:
+        datagram_id = int(self._udp_frag_next_datagram_id) & 0xFFFFFFFF
+        if datagram_id <= 0:
+            datagram_id = 1
+        self._udp_frag_next_datagram_id = 1 if datagram_id == 0xFFFFFFFF else datagram_id + 1
+        return datagram_id
+
+    def _udp_fragment_payload_limit(self) -> int:
+        return max(0, self._session_max_app_payload - ChannelMux.MUX_HDR.size - ChannelMux.UDP_FRAG_HDR.size)
+
+    @staticmethod
+    def _describe_session_stack(session: ISession) -> str:
+        parts: list[str] = []
+        seen: set[int] = set()
+        current: Any = session
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            parts.append(type(current).__name__)
+            next_session = getattr(current, "_inner", None)
+            if next_session is None:
+                next_session = getattr(current, "_real", None)
+            if next_session is current:
+                break
+            current = next_session
+        return " -> ".join(parts)
+
+    @staticmethod
+    def _resolve_udp_service_datagram_cap(session: ISession) -> tuple[int, str]:
+        local_udp_payload_cap = 65507
+        fragment_header_cap = 0xFFFF
+        cap = min(local_udp_payload_cap, fragment_header_cap)
+        stack = ChannelMux._describe_session_stack(session)
+        diag = (
+            f"stack={stack}; local_udp_payload_cap={local_udp_payload_cap}; "
+            f"mux_fragment_total_len_cap={fragment_header_cap}"
+        )
+        return cap, diag
+
+    def _send_udp_mux_fragments(self, chan_id: int, payload: bytes) -> None:
+        frag_payload_limit = self._udp_fragment_payload_limit()
+        if frag_payload_limit <= 0:
+            self.log.error(
+                "[MUX] drop oversized UDP datagram: no fragment payload fits within session budget %d",
+                self._session_max_app_payload,
+            )
+            return
+        datagram_id = self._next_udp_fragment_datagram_id()
+        total_len = len(payload)
+        self.log.info(
+            "[MUX] fragment UDP datagram chan=%s len=%s datagram_id=%s frag_payload_limit=%s",
+            chan_id,
+            total_len,
+            datagram_id,
+            frag_payload_limit,
+        )
+        for offset in range(0, total_len, frag_payload_limit):
+            frag_payload = ChannelMux.UDP_FRAG_HDR.pack(
+                datagram_id,
+                total_len & 0xFFFF,
+                offset & 0xFFFF,
+            ) + payload[offset:offset + frag_payload_limit]
+            self._send_mux(chan_id, ChannelMux.Proto.UDP, ChannelMux.MType.DATA_FRAG, frag_payload)
+
+    def _drop_udp_fragment_reassembly(self, chan: int) -> None:
+        for key in [key for key in self._udp_frag_rx if key[0] == chan]:
+            self._udp_frag_rx.pop(key, None)
+
+    def _prune_udp_fragment_reassembly(self) -> None:
+        now = time.time()
+        expired = [
+            key
+            for key, state in self._udp_frag_rx.items()
+            if (now - float(state.get("updated", now))) >= self.UDP_FRAG_REASSEMBLY_TTL_S
+        ]
+        for key in expired:
+            self._udp_frag_rx.pop(key, None)
 
     # ---------- MUX RX demux ----------
     def on_app_payload_from_peer(self, buf: bytes, peer_id: Optional[int] = None) -> bool:
@@ -11428,10 +11535,91 @@ class ChannelMux:
             self._rx_udp_open(chan_id, data, peer_id=peer_id)
         elif mtype == ChannelMux.MType.DATA:
             self._rx_udp_data(chan_id, data)
+        elif mtype == ChannelMux.MType.DATA_FRAG:
+            self._rx_udp_fragment(chan_id, data)
         elif mtype == ChannelMux.MType.CLOSE:
             self._rx_udp_close(chan_id)
         else:
             self.log.warning(f"[APP] Unknwown mtype to dispatch UDP:{mtype}")
+
+    def _rx_udp_fragment(self, chan: int, payload: bytes) -> None:
+        if len(payload) < ChannelMux.UDP_FRAG_HDR.size:
+            self.log.warning("[UDP] chan=%s fragment too short (%d bytes)", chan, len(payload))
+            return
+        datagram_id, total_len, offset = ChannelMux.UDP_FRAG_HDR.unpack(payload[:ChannelMux.UDP_FRAG_HDR.size])
+        chunk = bytes(payload[ChannelMux.UDP_FRAG_HDR.size:])
+        if total_len <= 0:
+            self.log.warning("[UDP] chan=%s fragment invalid total_len=%s", chan, total_len)
+            return
+        if total_len > self._udp_service_datagram_cap:
+            self.log.warning(
+                "[UDP] chan=%s drop fragment datagram_id=%s total_len=%s cap=%s (%s)",
+                chan,
+                datagram_id,
+                total_len,
+                self._udp_service_datagram_cap,
+                self._udp_service_datagram_diag,
+            )
+            self._udp_frag_rx.pop((chan, int(datagram_id)), None)
+            return
+        if offset > total_len or (offset + len(chunk)) > total_len:
+            self.log.warning(
+                "[UDP] chan=%s fragment out of bounds datagram_id=%s total=%s offset=%s chunk=%s",
+                chan,
+                datagram_id,
+                total_len,
+                offset,
+                len(chunk),
+            )
+            return
+        if not chunk:
+            self.log.warning("[UDP] chan=%s empty fragment datagram_id=%s", chan, datagram_id)
+            return
+        if len(self._udp_frag_rx) >= self.UDP_FRAG_MAX_INFLIGHT:
+            self._prune_udp_fragment_reassembly()
+            if len(self._udp_frag_rx) >= self.UDP_FRAG_MAX_INFLIGHT:
+                self.log.warning("[UDP] drop fragment chan=%s datagram_id=%s: reassembly table full", chan, datagram_id)
+                return
+        key = (chan, int(datagram_id))
+        now = time.time()
+        state = self._udp_frag_rx.get(key)
+        if state is None:
+            state = {"total": int(total_len), "parts": {}, "received": 0, "updated": now}
+            self._udp_frag_rx[key] = state
+        elif int(state.get("total", 0)) != int(total_len):
+            self.log.warning(
+                "[UDP] chan=%s fragment total mismatch datagram_id=%s seen=%s new=%s",
+                chan,
+                datagram_id,
+                state.get("total"),
+                total_len,
+            )
+            self._udp_frag_rx.pop(key, None)
+            return
+        parts = state.setdefault("parts", {})
+        if offset not in parts:
+            parts[offset] = chunk
+            state["received"] = int(state.get("received", 0)) + len(chunk)
+        state["updated"] = now
+        if int(state.get("received", 0)) < int(total_len):
+            return
+        assembled = bytearray(int(total_len))
+        cursor = 0
+        for frag_offset, frag_chunk in sorted(parts.items()):
+            frag_offset_i = int(frag_offset)
+            if frag_offset_i != cursor:
+                return
+            next_cursor = frag_offset_i + len(frag_chunk)
+            if next_cursor > int(total_len):
+                self._udp_frag_rx.pop(key, None)
+                self.log.warning("[UDP] chan=%s fragment overflow during reassembly datagram_id=%s", chan, datagram_id)
+                return
+            assembled[frag_offset_i:next_cursor] = frag_chunk
+            cursor = next_cursor
+        if cursor != int(total_len):
+            return
+        self._udp_frag_rx.pop(key, None)
+        self._rx_udp_data(chan, bytes(assembled))
 
 
     def _rx_udp_open(self, chan: int, payload: bytes, peer_id: Optional[int] = None) -> None:
@@ -11543,6 +11731,15 @@ class ChannelMux:
         ctr = self._ctr(ChannelMux.Proto.UDP, chan)
         ctr.msgs_in += 1
         ctr.bytes_in += len(data)        
+        if len(data) > self._udp_service_datagram_cap:
+            self.log.warning(
+                "[UDP] chan=%s drop overlay UDP datagram len=%s cap=%s (%s)",
+                chan,
+                len(data),
+                self._udp_service_datagram_cap,
+                self._udp_service_datagram_diag,
+            )
+            return
         # --- 1) Server-side mapping: remote -> original local sender
         svc = self._udp_by_chan.get(chan)
         if svc is not None:
@@ -11619,6 +11816,7 @@ class ChannelMux:
         self._udp_client_last_ts.pop(chan, None)
         self._chan_stats.pop((chan, ChannelMux.Proto.UDP), None)
         self._chan_owner_peer_id.pop(chan, None)
+        self._drop_udp_fragment_reassembly(chan)
         if tr:
             try: tr.close()
             except Exception: pass
@@ -11642,6 +11840,14 @@ class ChannelMux:
             self.transport = transport  # keep for sockname/peername
 
         def datagram_received(self, data: bytes, addr):
+            if len(data) > self.parent._udp_service_datagram_cap:
+                self.parent.log.warning(
+                    "[UDP/CLI] drop oversize local UDP datagram len=%s cap=%s (%s)",
+                    len(data),
+                    self.parent._udp_service_datagram_cap,
+                    self.parent._udp_service_datagram_diag,
+                )
+                return
             ctr = self.parent._ctr(ChannelMux.Proto.UDP, self.chan)
             ctr.msgs_out += 1
             ctr.bytes_out += len(data)
@@ -12138,6 +12344,19 @@ class ChannelMux:
             self.log.info(f"{basestr} REMOTE_SERVICES_SET_V1 len={len(data)} (legacy/unsupported)")
         if mtype == ChannelMux.MType.DATA:
             self.log.debug(f"{basestr} DATA len={len(data)}:  {data[:5].hex().upper()}")
+        if mtype == ChannelMux.MType.DATA_FRAG:
+            if len(data) >= ChannelMux.UDP_FRAG_HDR.size:
+                datagram_id, total_len, offset = ChannelMux.UDP_FRAG_HDR.unpack(data[:ChannelMux.UDP_FRAG_HDR.size])
+                self.log.debug(
+                    "%s DATA_FRAG datagram_id=%s total=%s offset=%s chunk=%s",
+                    basestr,
+                    datagram_id,
+                    total_len,
+                    offset,
+                    len(data) - ChannelMux.UDP_FRAG_HDR.size,
+                )
+            else:
+                self.log.debug(f"{basestr} DATA_FRAG short len={len(data)}")
         if mtype == ChannelMux.MType.CLOSE:
             self.log.info(f"{basestr} CLOSE")
 

@@ -58,26 +58,187 @@ Important proxy expectation:
 
 - default WebSocket peer-client proxy behavior should follow platform-native settings unless application configuration explicitly overrides that behavior
 
-## 2. Reliability and framing layer
+### Payload-size accounting across the lower layers
 
-Primary responsibility:
+There is no single project-wide "maximum packet size". The runtime applies size limits at each envelope boundary, and the effective application-data budget shrinks as more framing layers are stacked.
 
-- turn raw transport datagrams or frames into reliable overlay behavior
+The current accounting model is:
 
-Main contribution:
+1. `ChannelMux` builds a mux frame with an 8-byte header (`>HBHBH`).
+2. Optional `SecureLink` wrapping adds its own secure-link frame header plus authenticated-encryption overhead before the wrapped session sees the data.
+3. The concrete session (`UdpSession`, `TcpStreamSession`, `QuicSession`, or `WebSocketSession`) applies its own framing and transport-specific size limit.
 
-- DATA and CONTROL framing
-- retransmission
-- missed-frame tracking
-- RTT and inflight tracking
+Current lower-layer budgets in the runtime:
 
-Important behaviors:
+| Layer / component | What the upper layer may pass in | Additional bytes added before the next lower boundary | Current implementation note |
+|---|---|---|---|
+| `ChannelMux` | TCP/UDP service payload chunk | 8-byte mux header | `ChannelMux` drops a mux frame if its packed size exceeds the wrapped session's advertised app-payload limit |
+| `SecureLinkPskSession` / cert mode | plaintext mux frame | 20-byte secure-link header + 16-byte AEAD tag for protected DATA frames | `get_max_app_payload_size()` subtracts this overhead from the wrapped session limit before `ChannelMux` sees it |
+| `UdpSession` | session app payload | lower UDP/reliability/IP overhead below the `send_app()` boundary | Currently advertises `65535` as a software cap |
+| `TcpStreamSession` | session app payload | 4-byte length prefix + 1-byte kind marker on the stream | Currently advertises `65535` as a software cap |
+| `QuicSession` | session app payload | 4-byte length prefix + 1-byte kind marker inside the QUIC stream payload | Advertises configurable `quic_max_size` (default `65535`) |
+| `WebSocketSession` | session app payload | 1-byte kind marker, then payload-codec expansion into the WS frame | Advertises `ws_max_size - 1` to reserve the kind byte |
 
-- cope with delay and loss on `myudp`
-- keep counters and state needed for admin visibility
-- preserve message integrity for large payloads
+From the mux perspective, the effective per-frame application-data budget is therefore:
 
-This layer is especially important for the `myudp` requirements in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md).
+- without secure-link: `session_limit - 8`
+- with secure-link protected DATA: `session_limit - 36 - 8`
+
+where `36 = 20-byte secure-link header + 16-byte AEAD tag`.
+
+This same budget is also used to derive `ChannelMux._SAFE_TCP_READ`, so TCP application streams are read in chunks that fit into one mux DATA frame after headers are added. In other words, TCP stream handling does not try to preserve one large application write as one giant overlay frame; it slices the byte stream into chunks that fit the current session budget.
+
+#### UDP
+
+At the API boundary, `UdpSession` currently reports `65535` as its maximum application payload size. That value is a project-local software budget, not a literal statement that a `65535`-byte UDP payload is always valid on the wire.
+
+Important caveat:
+
+- real UDP datagrams still pay for UDP, IP, and ObstacleBridge reliability/session overhead below the `send_app()` boundary
+- path MTU, IP version, and kernel/socket behavior can therefore make the true wire-safe datagram size smaller than the abstract `65535` session budget
+
+For a concrete MTU example, assume a path MTU of `1550` bytes:
+
+- IPv4 leaves at most `1550 - 20 - 8 = 1522` bytes for the UDP payload
+- IPv6 leaves at most `1550 - 40 - 8 = 1502` bytes for the UDP payload
+
+That is before any ObstacleBridge-specific framing inside the UDP payload. The `myudp` protocol layer then consumes another 19 bytes for `ptype + len + tx_time_ns + echo_time_ns`, so the maximum protocol payload becomes:
+
+- IPv4: `1522 - 19 = 1503` bytes
+- IPv6: `1502 - 19 = 1483` bytes
+
+So the raw received UDP payload is already 28 bytes smaller than MTU for IPv4 and 48 bytes smaller for IPv6, and the maximum overlay protocol payload is 47 bytes smaller than MTU for IPv4 and 67 bytes smaller for IPv6. ChannelMux application data is smaller again once mux and optional secure-link headers are included.
+
+So for UDP the current runtime is internally consistent at the `ChannelMux`/session interface, but that interface is more generous than a strict end-to-end wire budget. This is the main remaining systematic caveat in the size model.
+
+Safety-by-design improvement:
+
+- the mux layer now provides UDP service datagram fragmentation when one local UDP datagram would not fit into one effective session payload budget
+- peer-side mux reassembles those fragments before emitting one local UDP datagram on the destination side
+- the mux layer also enforces an explicit maximum UDP service datagram size and logs the active wrapped transport stack together with that cap at startup
+
+The current mux-level fragment header carries:
+
+- `datagram_id`
+- `total_len`
+- `offset`
+
+so the receiving side can rebuild one original UDP service datagram before passing it to `sendto(...)`.
+
+The implementation details and boundary rationale for this behavior are documented in [CHANNELMUX_DESIGN.md](./CHANNELMUX_DESIGN.md).
+
+#### Who splits and who reassembles?
+
+This is the key behavioral distinction once the effective session budget becomes smaller than the original local payload source.
+
+For local TCP services:
+
+- `ChannelMux` reads from the local TCP socket in chunks of at most `ChannelMux._SAFE_TCP_READ`
+- each chunk becomes one mux `DATA` message
+- on the far side, mux writes each received chunk directly into the destination TCP stream
+
+So TCP service traffic is split by `ChannelMux` and implicitly reassembled by the receiving TCP byte stream. There is no separate mux-level message reassembly step for TCP services because the local application already consumes a stream, not message boundaries.
+
+For local UDP services:
+
+- each received local UDP datagram is forwarded as one mux `DATA` message
+- if that one mux frame would exceed the effective session budget after mux, secure-link, and session framing are considered, `ChannelMux` fragments the UDP service datagram into multiple mux fragment messages
+- the peer-side mux reassembles those fragments before emitting one local UDP datagram
+
+So UDP service traffic no longer has to fit into one effective mux/session payload budget to survive the overlay path. Unlike TCP, however, the receiving side must preserve datagram boundaries, so reassembly happens explicitly at mux level before local delivery.
+
+For the `myudp` transport itself, there is an additional lower-layer fragmentation and reassembly mechanism, but it sits below the session API:
+
+- after `ChannelMux` has already produced one session payload, `UdpSession` can hand that payload into the reliable `myudp` framing layer
+- that lower layer can fragment the session payload into multiple `DataPacket` frames over UDP
+- the peer-side `myudp` session reassembles those fragments back into the original session payload before passing it upward to `ChannelMux`
+
+That means there are now two separate fragmentation layers for different purposes:
+
+- mux-level UDP fragmentation protects UDP service datagrams when the effective session budget is smaller than the original datagram
+- `myudp` transport fragmentation protects one already-accepted session payload while it is being carried over the unreliable UDP transport
+
+The `myudp` transport layer still sits below the session API; it is not the mechanism that preserves UDP service datagrams across tight mux/session budgets.
+
+#### TCP
+
+TCP itself is a stream, not a datagram protocol, so there is no protocol-level single-message ceiling analogous to UDP's length field. In this runtime, `TcpStreamSession` imposes a project-local application-frame budget of `65535` bytes and then adds:
+
+- 4 bytes of stream-frame length
+- 1 byte of frame kind (`APP`, `PING`, `PONG`)
+
+The important point is that large TCP application traffic is handled by chunking at the mux layer, not by assuming one overlay APP frame must carry an arbitrarily large contiguous stream write.
+
+#### QUIC
+
+The current QUIC session uses the same internal `LEN(4) + KIND(1) + BYTES...` stream framing model as `TcpStreamSession`, but exposes a configurable upper-layer cap through `quic_max_size`.
+
+That means:
+
+- the QUIC session budget is explicit and configurable
+- `ChannelMux` and `SecureLink` both account against that configured budget before sending
+- QUIC send-side code also rejects application payloads above `quic_max_size`
+
+So QUIC is conceptually aligned with TCP stream processing, but with an explicit knob rather than a hard-coded `65535` software budget.
+
+#### WebSocket
+
+WebSocket has two distinct size concerns:
+
+1. the raw session payload passed down from `ChannelMux` / `SecureLink`
+2. the final WebSocket frame size after text encoding, when a text payload mode is enabled
+
+The current runtime handles this by separating the two:
+
+- `WebSocketSession.get_max_app_payload_size()` returns `ws_max_size - 1`, reserving one byte for the internal WS kind marker before payload encoding
+- `_ws_frame_max_size` is then computed from the selected payload codec's `max_encoded_size(...)`
+- inbound manual WS frame parsing rejects frames larger than `_ws_frame_max_size`
+
+Current codec growth behavior:
+
+- `binary`: no payload expansion beyond the 1-byte kind marker
+- `base64`: expansion to `4 * ceil(n / 3)` bytes
+- `json-base64`: base64 expansion plus the compact JSON wrapper `{"data":"..."}`
+- `semi-text-shape`: expansion to `ceil((8 * n) / 6)` encoded symbols, plus one grouping space after each full group of 8 symbols, for a total of `symbols + floor((symbols - 1) / 8)` characters
+
+Because `_ws_frame_max_size` is derived from the encoded size rather than the raw payload size, the text-oriented modes are explicitly accounted for. This is the code path that prevents healthy traffic from fitting the raw `ws_max_size` budget but then overflowing only after `base64`, `json-base64`, or `semi-text-shape` expansion.
+
+For `semi-text-shape`, the spacing overhead is not data-dependent. The encoder first converts the entire byte stream into consecutive 6-bit symbols and then inserts a space between fixed groups of 8 emitted symbols. That means the worst case is already captured by the exact formula above; it does not depend on particular bit triples such as `000b` appearing in the payload.
+
+### SecureLink encapsulation and growth
+
+For protected application traffic, SecureLink does not change the mux payload semantics; it wraps the already-packed mux frame.
+
+Protected DATA layout is conceptually:
+
+- secure-link header (`version`, `type`, `flags/reserved`, `session_id`, `counter`)
+- encrypted ciphertext carrying the plaintext mux frame
+- AEAD authentication tag
+
+This is why `SecureLinkPskSession.get_max_app_payload_size()` subtracts `20 + 16` bytes from the wrapped session limit before advertising its own limit upward.
+
+Handshake and rekey control frames can be larger than protected DATA overhead alone:
+
+- PSK mode carries nonces/proofs
+- cert mode additionally carries canonical JSON plus base64-encoded certificate/signature/public-key material
+
+Those control frames are still sent through the same wrapped session budget. The runtime does not currently provide a separate fragmentation layer just for SecureLink control frames, so unusually large control payloads still depend on the underlying session limit being large enough.
+
+### Consistency conclusion
+
+The current size-handling story is mostly consistent at the project-internal boundaries:
+
+- `ChannelMux` enforces the wrapped session's advertised maximum application payload size
+- `ChannelMux` now fragments oversized UDP service datagrams at mux level and reassembles them before local UDP delivery
+- `SecureLink` subtracts its framing and AEAD overhead before advertising its own payload budget upward
+- WebSocket text modes account for encoded-frame growth rather than only raw payload size
+- TCP stream reads are chunked to fit the current mux/session budget instead of assuming one unbounded frame
+
+The main systematic caveat is narrower and more specific:
+
+- the generic `65535` budget exposed by `UdpSession` and `TcpStreamSession` is a software-layer application budget, not a rigorous proof that every lower-layer envelope or real network path can carry that amount unchanged on the wire
+
+So the architecture is internally coherent now, and it avoids the earlier class of overflow bug where wrapped sessions under-reported their budgets. The remaining caution is that the abstract session budget should not be confused with a guaranteed path-safe wire budget, especially for UDP.
 
 ## 2. Secure-link layer
 
@@ -161,7 +322,28 @@ The webpage is therefore an explicit contributor to the overall function, not on
 
 The supporting architecture traceability manifest is maintained in [.github/architecture_traceability.yaml](/home/ohnoohweh/quic_br/.github/architecture_traceability.yaml).
 
-## 3. Channel and service multiplexing layer
+## 3. Reliability and framing layer
+
+Primary responsibility:
+
+- turn raw transport datagrams or frames into reliable overlay behavior
+
+Main contribution:
+
+- DATA and CONTROL framing
+- retransmission
+- missed-frame tracking
+- RTT and inflight tracking
+
+Important behaviors:
+
+- cope with delay and loss on `myudp`
+- keep counters and state needed for admin visibility
+- preserve message integrity for large payloads
+
+This layer is especially important for the `myudp` requirements in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md).
+
+## 4. Channel and service multiplexing layer
 
 Primary responsibility:
 
@@ -184,7 +366,7 @@ Important behaviors:
 
 This is the main realization layer for listener and mixed-service requirements.
 
-## 4. Runner and process orchestration layer
+## 5. Runner and process orchestration layer
 
 Primary responsibility:
 
@@ -204,7 +386,7 @@ Important behaviors:
 - process-safe event binding
 - configuration persistence
 
-## 5. Admin web and observability layer
+## 6. Admin web and observability layer
 
 Primary responsibility:
 
