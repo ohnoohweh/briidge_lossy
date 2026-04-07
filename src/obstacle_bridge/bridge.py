@@ -4593,6 +4593,9 @@ class UdpSession(ISession):
             self._log.debug(f"[UdpSession] get_metrics failed on SessionMetrics(..) %r", e)
             return SessionMetrics()
 
+    def get_max_app_payload_size(self) -> int:
+        return 65535
+
     @staticmethod
     def _format_peer_label(host: Optional[object], port: Optional[object]) -> Optional[str]:
         try:
@@ -5623,6 +5626,9 @@ class TcpStreamSession(ISession):
             )
         except Exception:
             return SessionMetrics()
+
+    def get_max_app_payload_size(self) -> int:
+        return 65535
 
     @staticmethod
     def _format_peer_label(host: Optional[object], port: Optional[object]) -> Optional[str]:
@@ -6721,6 +6727,9 @@ class QuicSession(ISession):
             )
         except Exception:
             return SessionMetrics()
+
+    def get_max_app_payload_size(self) -> int:
+        return max(1, int(self._max_app or 65535))
 
     @staticmethod
     def _format_peer_label(host: Optional[object], port: Optional[object]) -> Optional[str]:

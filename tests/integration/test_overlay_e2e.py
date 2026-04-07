@@ -3890,6 +3890,9 @@ def run_case_mixed_overlay_two_clients_concurrent_udp_tcp(
     settle_s: Optional[float] = None,
 ) -> None:
     base_tcp_port = case.bounce_port
+    loopback_v4, _loopback_v6 = _loopback_hosts_for_case(case_index)
+    ws_peer_host = _connect_host_for_bind(_listener_overlay_bind_host(case, 'ws'), case_index)
+    udp_peer_host = _connect_host_for_bind(_listener_overlay_bind_host(case, 'myudp'), case_index)
     own_udp_bounces = [
         BounceBackServer(name=f'{case.name}_own_udp_1', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 20, log_path=log_dir / f'{case.name}_own_udp_1.log'),
         BounceBackServer(name=f'{case.name}_own_udp_2', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 21, log_path=log_dir / f'{case.name}_own_udp_2.log'),
@@ -3917,15 +3920,15 @@ def run_case_mixed_overlay_two_clients_concurrent_udp_tcp(
 
     ws_client_cmd = [py, str(BRIDGE),
         '--overlay-transport', 'ws',
-        '--ws-peer', '127.0.0.1', '--ws-peer-port', str(ws_peer_port), '--ws-bind', '0.0.0.0', '--ws-own-port', '0',
+        '--ws-peer', ws_peer_host, '--ws-peer-port', str(ws_peer_port), '--ws-bind', loopback_v4, '--ws-own-port', '0',
         '--own-servers',
-        f'udp,{base_tcp_port + 30},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 20}',
-        f'udp,{base_tcp_port + 31},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 21}',
-        f'tcp,{base_tcp_port + 32},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 0}',
-        f'tcp,{base_tcp_port + 33},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 1}',
+        f'udp,{base_tcp_port + 30},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 20}',
+        f'udp,{base_tcp_port + 31},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 21}',
+        f'tcp,{base_tcp_port + 32},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 0}',
+        f'tcp,{base_tcp_port + 33},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 1}',
         '--remote-servers',
-        f'tcp,{base_tcp_port + 40},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 2}',
-        f'tcp,{base_tcp_port + 41},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 3}',
+        f'tcp,{base_tcp_port + 40},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 2}',
+        f'tcp,{base_tcp_port + 41},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 3}',
         '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
         '--log-file', str(log_dir / f'{case.name}_bridge_client_ws.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
@@ -3934,15 +3937,15 @@ def run_case_mixed_overlay_two_clients_concurrent_udp_tcp(
 
     udp_client_cmd = [py, str(BRIDGE),
         '--overlay-transport', 'myudp',
-        '--udp-peer', '127.0.0.1', '--udp-peer-port', str(udp_peer_port), '--udp-bind', '0.0.0.0', '--udp-own-port', '0',
+        '--udp-peer', udp_peer_host, '--udp-peer-port', str(udp_peer_port), '--udp-bind', loopback_v4, '--udp-own-port', '0',
         '--own-servers',
-        f'udp,{base_tcp_port + 34},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 22}',
-        f'udp,{base_tcp_port + 35},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 23}',
-        f'tcp,{base_tcp_port + 36},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 4}',
-        f'tcp,{base_tcp_port + 37},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 5}',
+        f'udp,{base_tcp_port + 34},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 22}',
+        f'udp,{base_tcp_port + 35},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 23}',
+        f'tcp,{base_tcp_port + 36},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 4}',
+        f'tcp,{base_tcp_port + 37},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 5}',
         '--remote-servers',
-        f'tcp,{base_tcp_port + 44},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 6}',
-        f'tcp,{base_tcp_port + 45},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 7}',
+        f'tcp,{base_tcp_port + 44},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 6}',
+        f'tcp,{base_tcp_port + 45},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 7}',
         '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
         '--log-file', str(log_dir / f'{case.name}_bridge_client_myudp.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
@@ -4094,6 +4097,9 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
     client2_extra_args: Optional[List[str]] = None,
 ) -> None:
     base_tcp_port = case.bounce_port
+    loopback_key = _secure_link_loopback_key(secure_slot) if secure_slot is not None else case_index
+    loopback_v4, _loopback_v6 = _loopback_hosts_for_case(loopback_key)
+    udp_peer_host = _connect_host_for_bind(_listener_overlay_bind_host(case, 'myudp'), loopback_key)
     own_udp_bounces = [
         BounceBackServer(name=f'{case.name}_own_udp_1', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 20, log_path=log_dir / f'{case.name}_own_udp_1.log'),
         BounceBackServer(name=f'{case.name}_own_udp_2', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 21, log_path=log_dir / f'{case.name}_own_udp_2.log'),
@@ -4122,15 +4128,15 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
 
     client1_cmd = [py, str(BRIDGE),
         '--overlay-transport', 'myudp',
-        '--udp-peer', '127.0.0.1', '--udp-peer-port', str(udp_peer_port), '--udp-bind', '0.0.0.0', '--udp-own-port', '0',
+        '--udp-peer', udp_peer_host, '--udp-peer-port', str(udp_peer_port), '--udp-bind', loopback_v4, '--udp-own-port', '0',
         '--own-servers',
-        f'udp,{base_tcp_port + 30},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 20}',
-        f'udp,{base_tcp_port + 31},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 21}',
-        f'tcp,{base_tcp_port + 32},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 0}',
-        f'tcp,{base_tcp_port + 33},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 1}',
+        f'udp,{base_tcp_port + 30},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 20}',
+        f'udp,{base_tcp_port + 31},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 21}',
+        f'tcp,{base_tcp_port + 32},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 0}',
+        f'tcp,{base_tcp_port + 33},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 1}',
         '--remote-servers',
-        f'tcp,{base_tcp_port + 40},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 2}',
-        f'tcp,{base_tcp_port + 41},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 3}',
+        f'tcp,{base_tcp_port + 40},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 2}',
+        f'tcp,{base_tcp_port + 41},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 3}',
         '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
         '--log-file', str(log_dir / f'{case.name}_bridge_client_1.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
@@ -4140,15 +4146,15 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
 
     client2_cmd = [py, str(BRIDGE),
         '--overlay-transport', 'myudp',
-        '--udp-peer', '127.0.0.1', '--udp-peer-port', str(udp_peer_port), '--udp-bind', '0.0.0.0', '--udp-own-port', '0',
+        '--udp-peer', udp_peer_host, '--udp-peer-port', str(udp_peer_port), '--udp-bind', loopback_v4, '--udp-own-port', '0',
         '--own-servers',
-        f'udp,{base_tcp_port + 34},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 22}',
-        f'udp,{base_tcp_port + 35},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 23}',
-        f'tcp,{base_tcp_port + 36},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 4}',
-        f'tcp,{base_tcp_port + 37},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 5}',
+        f'udp,{base_tcp_port + 34},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 22}',
+        f'udp,{base_tcp_port + 35},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 23}',
+        f'tcp,{base_tcp_port + 36},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 4}',
+        f'tcp,{base_tcp_port + 37},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 5}',
         '--remote-servers',
-        f'tcp,{base_tcp_port + 44},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 6}',
-        f'tcp,{base_tcp_port + 45},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 7}',
+        f'tcp,{base_tcp_port + 44},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 6}',
+        f'tcp,{base_tcp_port + 45},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 7}',
         '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
         '--log-file', str(log_dir / f'{case.name}_bridge_client_2.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
@@ -4318,6 +4324,9 @@ def run_case_tcp_two_clients_concurrent_udp_tcp(
     client2_extra_args: Optional[List[str]] = None,
 ) -> None:
     base_tcp_port = case.bounce_port
+    loopback_key = _secure_link_loopback_key(secure_slot) if secure_slot is not None else case_index
+    loopback_v4, _loopback_v6 = _loopback_hosts_for_case(loopback_key)
+    tcp_peer_host = _connect_host_for_bind(_listener_overlay_bind_host(case, 'tcp'), loopback_key)
     own_udp_bounces = [
         BounceBackServer(name=f'{case.name}_own_udp_1', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 20, log_path=log_dir / f'{case.name}_own_udp_1.log'),
         BounceBackServer(name=f'{case.name}_own_udp_2', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 21, log_path=log_dir / f'{case.name}_own_udp_2.log'),
@@ -4346,15 +4355,15 @@ def run_case_tcp_two_clients_concurrent_udp_tcp(
 
     client1_cmd = [py, str(BRIDGE),
         '--overlay-transport', 'tcp',
-        '--tcp-peer', '127.0.0.1', '--tcp-peer-port', str(tcp_peer_port), '--tcp-bind', '0.0.0.0', '--tcp-own-port', '0',
+        '--tcp-peer', tcp_peer_host, '--tcp-peer-port', str(tcp_peer_port), '--tcp-bind', loopback_v4, '--tcp-own-port', '0',
         '--own-servers',
-        f'udp,{base_tcp_port + 30},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 20}',
-        f'udp,{base_tcp_port + 31},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 21}',
-        f'tcp,{base_tcp_port + 32},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 0}',
-        f'tcp,{base_tcp_port + 33},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 1}',
+        f'udp,{base_tcp_port + 30},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 20}',
+        f'udp,{base_tcp_port + 31},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 21}',
+        f'tcp,{base_tcp_port + 32},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 0}',
+        f'tcp,{base_tcp_port + 33},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 1}',
         '--remote-servers',
-        f'tcp,{base_tcp_port + 40},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 2}',
-        f'tcp,{base_tcp_port + 41},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 3}',
+        f'tcp,{base_tcp_port + 40},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 2}',
+        f'tcp,{base_tcp_port + 41},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 3}',
         '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
         '--log-file', str(log_dir / f'{case.name}_bridge_client_1.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
@@ -4364,15 +4373,15 @@ def run_case_tcp_two_clients_concurrent_udp_tcp(
 
     client2_cmd = [py, str(BRIDGE),
         '--overlay-transport', 'tcp',
-        '--tcp-peer', '127.0.0.1', '--tcp-peer-port', str(tcp_peer_port), '--tcp-bind', '0.0.0.0', '--tcp-own-port', '0',
+        '--tcp-peer', tcp_peer_host, '--tcp-peer-port', str(tcp_peer_port), '--tcp-bind', loopback_v4, '--tcp-own-port', '0',
         '--own-servers',
-        f'udp,{base_tcp_port + 34},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 22}',
-        f'udp,{base_tcp_port + 35},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 23}',
-        f'tcp,{base_tcp_port + 36},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 4}',
-        f'tcp,{base_tcp_port + 37},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 5}',
+        f'udp,{base_tcp_port + 34},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 22}',
+        f'udp,{base_tcp_port + 35},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 23}',
+        f'tcp,{base_tcp_port + 36},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 4}',
+        f'tcp,{base_tcp_port + 37},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 5}',
         '--remote-servers',
-        f'tcp,{base_tcp_port + 44},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 6}',
-        f'tcp,{base_tcp_port + 45},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 7}',
+        f'tcp,{base_tcp_port + 44},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 6}',
+        f'tcp,{base_tcp_port + 45},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 7}',
         '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
         '--log-file', str(log_dir / f'{case.name}_bridge_client_2.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
@@ -4527,6 +4536,9 @@ def run_case_quic_two_clients_concurrent_udp_tcp(
     client2_extra_args: Optional[List[str]] = None,
 ) -> None:
     base_tcp_port = case.bounce_port
+    loopback_key = _secure_link_loopback_key(secure_slot) if secure_slot is not None else case_index
+    loopback_v4, _loopback_v6 = _loopback_hosts_for_case(loopback_key)
+    quic_peer_host = _connect_host_for_bind(_listener_overlay_bind_host(case, 'quic'), loopback_key)
     own_udp_bounces = [
         BounceBackServer(name=f'{case.name}_own_udp_1', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 20, log_path=log_dir / f'{case.name}_own_udp_1.log'),
         BounceBackServer(name=f'{case.name}_own_udp_2', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 21, log_path=log_dir / f'{case.name}_own_udp_2.log'),
@@ -4555,15 +4567,15 @@ def run_case_quic_two_clients_concurrent_udp_tcp(
 
     client1_cmd = [py, str(BRIDGE),
         '--overlay-transport', 'quic',
-        '--quic-peer', '127.0.0.1', '--quic-peer-port', str(quic_peer_port), '--quic-bind', '0.0.0.0', '--quic-own-port', '0', '--quic-insecure',
+        '--quic-peer', quic_peer_host, '--quic-peer-port', str(quic_peer_port), '--quic-bind', loopback_v4, '--quic-own-port', '0', '--quic-insecure',
         '--own-servers',
-        f'udp,{base_tcp_port + 30},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 20}',
-        f'udp,{base_tcp_port + 31},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 21}',
-        f'tcp,{base_tcp_port + 32},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 0}',
-        f'tcp,{base_tcp_port + 33},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 1}',
+        f'udp,{base_tcp_port + 30},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 20}',
+        f'udp,{base_tcp_port + 31},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 21}',
+        f'tcp,{base_tcp_port + 32},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 0}',
+        f'tcp,{base_tcp_port + 33},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 1}',
         '--remote-servers',
-        f'tcp,{base_tcp_port + 40},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 2}',
-        f'tcp,{base_tcp_port + 41},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 3}',
+        f'tcp,{base_tcp_port + 40},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 2}',
+        f'tcp,{base_tcp_port + 41},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 3}',
         '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
         '--log-file', str(log_dir / f'{case.name}_bridge_client_1.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
@@ -4573,15 +4585,15 @@ def run_case_quic_two_clients_concurrent_udp_tcp(
 
     client2_cmd = [py, str(BRIDGE),
         '--overlay-transport', 'quic',
-        '--quic-peer', '127.0.0.1', '--quic-peer-port', str(quic_peer_port), '--quic-bind', '0.0.0.0', '--quic-own-port', '0', '--quic-insecure',
+        '--quic-peer', quic_peer_host, '--quic-peer-port', str(quic_peer_port), '--quic-bind', loopback_v4, '--quic-own-port', '0', '--quic-insecure',
         '--own-servers',
-        f'udp,{base_tcp_port + 34},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 22}',
-        f'udp,{base_tcp_port + 35},0.0.0.0,udp,127.0.0.1,{base_tcp_port + 23}',
-        f'tcp,{base_tcp_port + 36},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 4}',
-        f'tcp,{base_tcp_port + 37},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 5}',
+        f'udp,{base_tcp_port + 34},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 22}',
+        f'udp,{base_tcp_port + 35},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 23}',
+        f'tcp,{base_tcp_port + 36},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 4}',
+        f'tcp,{base_tcp_port + 37},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 5}',
         '--remote-servers',
-        f'tcp,{base_tcp_port + 44},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 6}',
-        f'tcp,{base_tcp_port + 45},0.0.0.0,tcp,127.0.0.1,{base_tcp_port + 7}',
+        f'tcp,{base_tcp_port + 44},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 6}',
+        f'tcp,{base_tcp_port + 45},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 7}',
         '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
         '--log-file', str(log_dir / f'{case.name}_bridge_client_2.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
@@ -4794,6 +4806,7 @@ def _start_case_with_client_admin_auth(
     *,
     case_index: int,
     client_auth_args: Optional[List[str]] = None,
+    require_probe: bool = True,
 ) -> tuple[BounceBackServer, Proc, Proc]:
     case = materialize_case_ports(case, case_index)
     bounce = BounceBackServer(
@@ -4809,18 +4822,26 @@ def _start_case_with_client_admin_auth(
     client_name, client_cmd, client_env, client_admin = specs[1]
     client_cmd = list(client_cmd) + list(client_auth_args or [])
 
+    client_proc: Optional[Proc] = None
     server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, log_dir, env_extra=server_env, admin_port=server_admin)
-    client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, log_dir, env_extra=client_env, admin_port=client_admin)
     try:
         wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+        overlay_transport = str(_arg_value(case.bridge_server_args, '--overlay-transport', '')).strip().lower()
+        if overlay_transport in ('tcp', 'ws'):
+            listen_host = _connect_host_for_bind(_listener_overlay_bind_host(case, overlay_transport), case_index)
+            wait_tcp_listen(listen_host, _listener_overlay_port(case, overlay_transport), timeout=10.0)
+        client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, log_dir, env_extra=client_env, admin_port=client_admin)
         if client_auth_args:
             wait_admin_auth_up(client_proc.admin_port or 0, timeout=10.0)
         else:
             wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
-        wait_probe(case, timeout=12.0)
+        if require_probe:
+            time.sleep(case.settle_seconds)
+            wait_probe(case, timeout=20.0)
         return bounce, server_proc, client_proc
     except Exception:
-        stop_proc(client_proc)
+        if client_proc is not None:
+            stop_proc(client_proc)
         stop_proc(server_proc)
         bounce.stop()
         raise
@@ -4861,6 +4882,7 @@ def _start_ws_case_with_client_env(
     client_extra_args: Optional[List[str]] = None,
     server_extra_args: Optional[List[str]] = None,
     server_env_extra: Optional[Dict[str, str]] = None,
+    require_probe: bool = True,
 ) -> tuple[BounceBackServer, Proc, Proc]:
     case = materialize_case_ports(case, case_index)
     bounce = BounceBackServer(
@@ -4882,12 +4904,16 @@ def _start_ws_case_with_client_env(
     client_cmd = list(client_cmd) + list(client_extra_args or [])
 
     server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, log_dir, env_extra=server_env, admin_port=server_admin)
+    listen_host = _connect_host_for_bind(_listener_overlay_bind_host(case, 'ws'), case_index)
+    wait_tcp_listen(listen_host, _listener_overlay_port(case, 'ws'), timeout=10.0)
     client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, log_dir, env_extra=client_env, admin_port=client_admin)
     try:
         wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
         wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
         client_proc = wait_status_connected_proc(client_proc, log_dir, timeout=20.0, label='client')
-        wait_probe(case, timeout=12.0)
+        if require_probe:
+            time.sleep(case.settle_seconds)
+            wait_probe(case, timeout=20.0)
         return bounce, server_proc, client_proc
     except Exception:
         if client_proc is not None:
@@ -5248,7 +5274,13 @@ def test_overlay_e2e_admin_live_ws_available_after_correct_auth(tmp_path: Path) 
     bounce = None
     server_proc = client_proc = None
     try:
-        bounce, server_proc, client_proc = _start_case_with_client_admin_auth(case, tmp_path, case_index=262, client_auth_args=auth_args)
+        bounce, server_proc, client_proc = _start_case_with_client_admin_auth(
+            case,
+            tmp_path,
+            case_index=262,
+            client_auth_args=auth_args,
+            require_probe=False,
+        )
         login_code, login_doc, opener = admin_authenticate(client_proc.admin_port or 0, username, password)
         assert login_code == 200
         assert login_doc.get('authenticated') is True
@@ -5326,7 +5358,7 @@ def test_overlay_e2e_ws_overlay_uses_http_proxy_env(tmp_path: Path) -> None:
             client_env_extra=_proxy_env(proxy_port, no_proxy=''),
         )
         wait_http_proxy_connects(proxy, minimum_count=1, timeout=8.0)
-        wait_probe(materialize_case_ports(case, 263), timeout=8.0)
+        wait_probe(materialize_case_ports(case, 263), timeout=12.0)
         assert proxy.connect_count >= 1
     finally:
         proxy.stop()
@@ -5342,6 +5374,7 @@ def test_overlay_e2e_ws_overlay_uses_http_proxy_env(tmp_path: Path) -> None:
 @pytest.mark.slow
 def test_overlay_e2e_ws_overlay_honors_no_proxy_env(tmp_path: Path) -> None:
     case = CASES['case08_overlay_ws_ipv4']
+    no_proxy_host = _loopback_ipv4_host(264)
     proxy_port = alloc_admin_port()
     proxy = HttpConnectProxy(
         name='ws_no_proxy_env',
@@ -5357,7 +5390,7 @@ def test_overlay_e2e_ws_overlay_honors_no_proxy_env(tmp_path: Path) -> None:
             case,
             tmp_path,
             case_index=264,
-            client_env_extra=_proxy_env(proxy_port, no_proxy='127.0.0.1'),
+            client_env_extra=_proxy_env(proxy_port, no_proxy=f'127.0.0.1,{no_proxy_host}'),
         )
         time.sleep(1.0)
         wait_probe(materialize_case_ports(case, 264), timeout=8.0)
@@ -5376,6 +5409,7 @@ def test_overlay_e2e_ws_overlay_honors_no_proxy_env(tmp_path: Path) -> None:
 @pytest.mark.slow
 def test_overlay_e2e_ws_proxy_is_scoped_to_peer_client_only(tmp_path: Path) -> None:
     case = CASES['case08_overlay_ws_ipv4']
+    no_proxy_host = _loopback_ipv4_host(265)
     proxy_port = alloc_admin_port()
     proxy = HttpConnectProxy(
         name='ws_listener_scope_proxy',
@@ -5391,7 +5425,7 @@ def test_overlay_e2e_ws_proxy_is_scoped_to_peer_client_only(tmp_path: Path) -> N
             case,
             tmp_path,
             case_index=265,
-            client_env_extra={'NO_PROXY': '127.0.0.1', 'no_proxy': '127.0.0.1'},
+            client_env_extra={'NO_PROXY': f'127.0.0.1,{no_proxy_host}', 'no_proxy': f'127.0.0.1,{no_proxy_host}'},
             server_env_extra=_proxy_env(proxy_port, no_proxy=''),
         )
         wait_probe(materialize_case_ports(case, 265), timeout=8.0)
@@ -5445,11 +5479,16 @@ def test_overlay_e2e_http_proxy_env_does_not_apply_to_non_ws_transports(case_nam
         client_env = dict(client_env)
         client_env.update(_proxy_env(proxy_port, no_proxy=''))
         server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, tmp_path, env_extra=server_env, admin_port=server_admin)
-        client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, tmp_path, env_extra=client_env, admin_port=client_admin)
         wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+        overlay_transport = str(_arg_value(case.bridge_server_args, '--overlay-transport', '')).strip().lower()
+        if overlay_transport in ('tcp', 'ws'):
+            listen_host = _connect_host_for_bind(_listener_overlay_bind_host(case, overlay_transport), case_index)
+            wait_tcp_listen(listen_host, _listener_overlay_port(case, overlay_transport), timeout=10.0)
+        client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, tmp_path, env_extra=client_env, admin_port=client_admin)
         wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
         client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
-        wait_probe(case, timeout=12.0)
+        time.sleep(case.settle_seconds)
+        wait_probe(case, timeout=20.0)
         time.sleep(1.0)
         assert proxy.connect_count == 0
     finally:
@@ -5668,8 +5707,9 @@ def test_overlay_e2e_ws_proxy_off_override_disables_platform_default_proxy(tmp_p
             case_index=272,
             client_env_extra=_proxy_env(proxy_port, no_proxy=''),
             client_extra_args=['--ws-proxy-mode', 'off'],
+            require_probe=False,
         )
-        wait_probe(materialize_case_ports(case, 272), timeout=8.0)
+        wait_probe(materialize_case_ports(case, 272), timeout=20.0)
         time.sleep(1.0)
         assert proxy.connect_count == 0
     finally:
@@ -5780,7 +5820,7 @@ def test_overlay_e2e_tcp_secure_link_psk_happy_path(tmp_path: Path) -> None:
             wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
             wait_peer_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', transport='tcp', authenticated=True)
             req = urllib.request.Request(
-                f'http://127.0.0.1:{server_proc.admin_port}/api/secure-link/debug',
+                _rewrite_registered_admin_url(f'http://127.0.0.1:{server_proc.admin_port}/api/secure-link/debug'),
                 data=b'{}',
                 method='POST',
                 headers={'Connection': 'close'},
@@ -6803,7 +6843,7 @@ def test_overlay_e2e_myudp_secure_link_psk_rekey_done_delay_keeps_same_udp_chann
                 raise RuntimeError('Did not observe the rekey cutover gap where server switched before client received REKEY_DONE')
 
             udp_sock.settimeout(5.0)
-            udp_sock.sendto(b'\x01rekey-gap-during', ('127.0.0.1', client_probe_port))
+            udp_sock.sendto(b'\x01rekey-gap-during', (loopback_v4, client_probe_port))
             during_reply, _addr = udp_sock.recvfrom(4096)
             assert during_reply == response_payload(b'\x01rekey-gap-during')
 
@@ -6815,7 +6855,7 @@ def test_overlay_e2e_myudp_secure_link_psk_rekey_done_delay_keeps_same_udp_chann
                 transport='myudp',
             )
             udp_sock.settimeout(2.0)
-            udp_sock.sendto(b'\x01rekey-gap-after', ('127.0.0.1', client_probe_port))
+            udp_sock.sendto(b'\x01rekey-gap-after', (loopback_v4, client_probe_port))
             after_reply, _addr = udp_sock.recvfrom(4096)
             assert after_reply == response_payload(b'\x01rekey-gap-after')
         finally:
@@ -7135,7 +7175,7 @@ def test_overlay_e2e_myudp_secure_link_psk_recovery_after_prior_time_threshold_r
             assert not str(recovered_secure.get('last_rekey_trigger') or '')
             assert int(recovered_secure.get('rekeys_completed_total') or 0) == 0
 
-            got = _wait_udp_probe_result('127.0.0.1', client_probe_port, b'\x01myudp-recovery-after', timeout=12.0)
+            got = _wait_udp_probe_result(loopback_v4, client_probe_port, b'\x01myudp-recovery-after', timeout=12.0)
             if got != response_payload(b'\x01myudp-recovery-after'):
                 raise RuntimeError(f'Unexpected recovered myudp probe reply: {got!r}')
         finally:
@@ -7515,6 +7555,7 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_p
         secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
         bounce = None
         server_proc = client_proc = None
+        ws_listener_host = _connect_host_for_bind(_listener_overlay_bind_host(case, 'ws'), _secure_link_loopback_key(9))
         try:
             case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
                 case,
@@ -7531,7 +7572,7 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_p
             wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
             wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='ws', authenticated=True)
 
-            ws_http_url = f'http://127.0.0.1:{_listener_overlay_port(case, "ws")}/'
+            ws_http_url = f'http://{ws_listener_host}:{_listener_overlay_port(case, "ws")}/'
             body = assert_static_http_root_serves_repeatedly(ws_http_url, attempts=8, timeout=2.0)
             assert b'Hello! Welcome!' in body
 
@@ -7555,6 +7596,7 @@ def test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_l
         secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
         bounce = None
         server_proc = client_proc = None
+        ws_listener_host = _connect_host_for_bind(_listener_overlay_bind_host(case, 'ws'), _secure_link_loopback_key(10))
         try:
             case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
                 case,
@@ -7571,7 +7613,7 @@ def test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_l
             wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
 
             responses = fetch_http_keepalive_sequence(
-                '127.0.0.1',
+                ws_listener_host,
                 _listener_overlay_port(case, 'ws'),
                 attempts=2,
                 timeout=2.0,
@@ -7599,6 +7641,8 @@ def test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_l
 def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_peer_on_mixed_listener(tmp_path: Path) -> None:
     with secure_link_test_lock():
         case = materialize_secure_link_case_ports(CASES['case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp'], 10)
+        loopback_v4, _loopback_v6 = _loopback_hosts_for_case(_secure_link_loopback_key(10))
+        ws_listener_host = _connect_host_for_bind(_listener_overlay_bind_host(case, 'ws'), _secure_link_loopback_key(10))
         secure_args = [
             '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
             '--log-secure-link', 'DEBUG',
@@ -7625,9 +7669,9 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_p
 
             ws_client_cmd = bridge_entrypoint() + [
                 '--overlay-transport', 'ws',
-                '--ws-peer', '127.0.0.1', '--ws-peer-port', str(_listener_overlay_port(case, 'ws')),
-                '--ws-bind', '0.0.0.0', '--ws-own-port', '0',
-                '--own-servers', f'tcp,{case.probe_port},0.0.0.0,tcp,127.0.0.1,{case.bounce_port}',
+                '--ws-peer', ws_listener_host, '--ws-peer-port', str(_listener_overlay_port(case, 'ws')),
+                '--ws-bind', loopback_v4, '--ws-own-port', '0',
+                '--own-servers', f'tcp,{case.probe_port},{loopback_v4},tcp,{case.bounce_bind},{case.bounce_port}',
                 '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
                 '--log-file', str(tmp_path / f'{case.name}_bridge_client_ws_http_probe.txt'),
                 '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
@@ -7639,7 +7683,7 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_p
             time.sleep(0.5)
             assert_running(server_proc)
             wait_admin_up(server_admin, timeout=10.0)
-            wait_tcp_listen('127.0.0.1', _listener_overlay_port(case, 'ws'), timeout=10.0)
+            wait_tcp_listen(ws_listener_host, _listener_overlay_port(case, 'ws'), timeout=10.0)
 
             client_proc = start_proc(f'{case.name}_bridge_client_ws_http_probe', ws_client_cmd, tmp_path, env_extra=case.client_env, admin_port=client_admin)
             client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
@@ -7650,7 +7694,7 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_p
             wait_peer_secure_link_state(client_admin, expected_state='authenticated', timeout=12.0, label='client', transport='ws', authenticated=True)
             wait_peer_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', transport='ws', authenticated=True)
 
-            ws_http_url = f'http://127.0.0.1:{_listener_overlay_port(case, "ws")}/'
+            ws_http_url = f'http://{ws_listener_host}:{_listener_overlay_port(case, "ws")}/'
             body = assert_static_http_root_serves_repeatedly(ws_http_url, attempts=8, timeout=2.0)
             assert b'Hello! Welcome!' in body
 
@@ -7671,6 +7715,8 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_p
 def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener(tmp_path: Path) -> None:
     with secure_link_test_lock():
         case = materialize_secure_link_case_ports(CASES['case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp'], 10)
+        loopback_v4, _loopback_v6 = _loopback_hosts_for_case(_secure_link_loopback_key(10))
+        ws_listener_host = _connect_host_for_bind(_listener_overlay_bind_host(case, 'ws'), _secure_link_loopback_key(10))
         secure_args = [
             '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
             '--log-secure-link', 'DEBUG',
@@ -7678,7 +7724,7 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myud
         bounce = BounceBackServer(
             name=f'{case.name}_myudp_http_probe_bounce',
             proto='udp',
-            bind_host='0.0.0.0',
+            bind_host=loopback_v4,
             port=case.bounce_port + 20,
             log_path=tmp_path / f'{case.name}_myudp_http_probe_bounce.log',
         )
@@ -7696,9 +7742,9 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myud
             myudp_service_port = case.bounce_port + 30
             myudp_client_cmd = bridge_entrypoint() + [
                 '--overlay-transport', 'myudp',
-                '--udp-peer', '127.0.0.1', '--udp-peer-port', str(_listener_overlay_port(case, 'myudp')),
-                '--udp-bind', '0.0.0.0', '--udp-own-port', '0',
-                '--own-servers', f'udp,{myudp_service_port},0.0.0.0,udp,127.0.0.1,{case.bounce_port + 20}',
+                '--udp-peer', loopback_v4, '--udp-peer-port', str(_listener_overlay_port(case, 'myudp')),
+                '--udp-bind', loopback_v4, '--udp-own-port', '0',
+                '--own-servers', f'udp,{myudp_service_port},{loopback_v4},udp,{loopback_v4},{case.bounce_port + 20}',
                 '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
                 '--log-file', str(tmp_path / f'{case.name}_bridge_client_myudp_http_probe.txt'),
                 '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
@@ -7710,7 +7756,7 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myud
             time.sleep(0.5)
             assert_running(server_proc)
             wait_admin_up(server_admin, timeout=10.0)
-            wait_tcp_listen('127.0.0.1', _listener_overlay_port(case, 'ws'), timeout=10.0)
+            wait_tcp_listen(ws_listener_host, _listener_overlay_port(case, 'ws'), timeout=10.0)
 
             client_proc = start_proc(f'{case.name}_bridge_client_myudp_http_probe', myudp_client_cmd, tmp_path, env_extra=case.client_env, admin_port=client_admin)
             client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
@@ -7720,9 +7766,9 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myud
             myudp_probe_case = replace(
                 case,
                 probe_proto='udp',
-                probe_host='127.0.0.1',
+                probe_host=loopback_v4,
                 probe_port=myudp_service_port,
-                probe_bind='0.0.0.0',
+                probe_bind=loopback_v4,
                 expected=response_payload(b'\x01myudp-static-http-before'),
             )
             wait_probe(myudp_probe_case, payload=b'\x01myudp-static-http-before', timeout=12.0)
@@ -7730,7 +7776,7 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myud
             wait_peer_secure_link_state(client_admin, expected_state='authenticated', timeout=12.0, label='client', transport='myudp', authenticated=True)
             wait_peer_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', transport='myudp', authenticated=True)
 
-            ws_http_url = f'http://127.0.0.1:{_listener_overlay_port(case, "ws")}/'
+            ws_http_url = f'http://{ws_listener_host}:{_listener_overlay_port(case, "ws")}/'
             body = assert_static_http_root_serves_repeatedly(ws_http_url, attempts=8, timeout=2.0)
             assert b'Hello! Welcome!' in body
 
@@ -7751,11 +7797,13 @@ def test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myud
 def test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_link_myudp_peer_on_mixed_listener(tmp_path: Path) -> None:
     with secure_link_test_lock():
         case = materialize_secure_link_case_ports(CASES['case14_overlay_listener_ws_and_myudp_two_clients_concurrent_udp_tcp'], 10)
+        loopback_v4, _loopback_v6 = _loopback_hosts_for_case(_secure_link_loopback_key(10))
+        ws_listener_host = _connect_host_for_bind(_listener_overlay_bind_host(case, 'ws'), _secure_link_loopback_key(10))
         secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
         bounce = BounceBackServer(
             name=f'{case.name}_myudp_http_keepalive_probe_bounce',
             proto='udp',
-            bind_host='0.0.0.0',
+            bind_host=loopback_v4,
             port=case.bounce_port + 20,
             log_path=tmp_path / f'{case.name}_myudp_http_keepalive_probe_bounce.log',
         )
@@ -7773,9 +7821,9 @@ def test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_l
             myudp_service_port = case.bounce_port + 30
             myudp_client_cmd = bridge_entrypoint() + [
                 '--overlay-transport', 'myudp',
-                '--udp-peer', '127.0.0.1', '--udp-peer-port', str(_listener_overlay_port(case, 'myudp')),
-                '--udp-bind', '0.0.0.0', '--udp-own-port', '0',
-                '--own-servers', f'udp,{myudp_service_port},0.0.0.0,udp,127.0.0.1,{case.bounce_port + 20}',
+                '--udp-peer', loopback_v4, '--udp-peer-port', str(_listener_overlay_port(case, 'myudp')),
+                '--udp-bind', loopback_v4, '--udp-own-port', '0',
+                '--own-servers', f'udp,{myudp_service_port},{loopback_v4},udp,{loopback_v4},{case.bounce_port + 20}',
                 '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
                 '--log-file', str(tmp_path / f'{case.name}_bridge_client_myudp_http_keepalive_probe.txt'),
                 '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
@@ -7787,7 +7835,7 @@ def test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_l
             time.sleep(0.5)
             assert_running(server_proc)
             wait_admin_up(server_admin, timeout=10.0)
-            wait_tcp_listen('127.0.0.1', _listener_overlay_port(case, 'ws'), timeout=10.0)
+            wait_tcp_listen(ws_listener_host, _listener_overlay_port(case, 'ws'), timeout=10.0)
 
             client_proc = start_proc(f'{case.name}_bridge_client_myudp_http_keepalive_probe', myudp_client_cmd, tmp_path, env_extra=case.client_env, admin_port=client_admin)
             client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
@@ -7797,9 +7845,9 @@ def test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_l
             myudp_probe_case = replace(
                 case,
                 probe_proto='udp',
-                probe_host='127.0.0.1',
+                probe_host=loopback_v4,
                 probe_port=myudp_service_port,
-                probe_bind='0.0.0.0',
+                probe_bind=loopback_v4,
                 expected=response_payload(b'\x01myudp-static-http-keepalive-before'),
             )
             wait_probe(myudp_probe_case, payload=b'\x01myudp-static-http-keepalive-before', timeout=12.0)
@@ -7808,7 +7856,7 @@ def test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_l
             wait_peer_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', transport='myudp', authenticated=True)
 
             responses = fetch_http_keepalive_sequence(
-                '127.0.0.1',
+                ws_listener_host,
                 _listener_overlay_port(case, 'ws'),
                 attempts=2,
                 timeout=2.0,
