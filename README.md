@@ -1,7 +1,7 @@
 # ObstacleBridge
 ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for barrier-resilient networking. It can run over multiple overlay transports (`myudp`, `tcp`, `quic`, `ws`), expose local TCP/UDP listener services through a reliable overlay, and host an admin UI for monitoring active channels.
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `123` integration tests, `118` unit tests. Recent validation now also covers the secure-link server-side authentication transition before the first real application payload and the encoded-frame receive sizing used by WebSocket text payload modes (`base64`, `json-base64`, `semi-text-shape`) so forwarded-service traffic does not regress into `1009` / `MESSAGE_TOO_BIG` failures.
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `123` integration tests, `121` unit tests.
 
 ## Reader guide
 
@@ -12,7 +12,7 @@ Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `123`
 ## For Users
 
 ### Whitepaper
-The complete whitepaper requested for this project update is available as a rendered preview at [`docs/WHITEPAPER.html`](https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/WHITEPAPER.html). It covers:
+The complete whitepaper is available as a rendered preview at [`docs/WHITEPAPER.html`](https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/WHITEPAPER.html). It covers:
 - Internet barriers such as NAT, DPI, protocol blocking, traffic shaping, and TLS interception.
 - Transport-level behavior for IP, ICMP, UDP, TCP, QUIC, DNS, HTTP/HTTPS, and WebSockets.
 - The layered overlay architecture used here: RTT/liveness, reliable DATA/CONTROL framing, and ChannelMux OPEN/DATA/CLOSE multiplexing.
@@ -38,14 +38,6 @@ The recommended workflow is:
 4. save the resulting config and use it as the durable runtime definition
 
 This keeps first startup simple and makes larger settings such as `own_servers`, `remote_servers`, auth options, and multi-transport listener combinations much easier to manage than long shell commands.
-
-Listener design note:
-
-- listener-side peer handling is intended to remain peer-independent; one peer's auth failure, disconnect, reconnect, or auxiliary WebSocket HTTP pre-upgrade request should not disturb healthy traffic or published services belonging to another peer
-- the WS listener now serves its static HTTP root directly at the front listener so ordinary browser keep-alive requests can stay on the same TCP connection before a later WebSocket upgrade attempt
-- that same keep-alive behavior is also defended when a healthy secure-link `myudp` peer is active on the mixed `ws,myudp` listener process; the transport-specific design tradeoffs are captured in [docs/WEBSOCKET_DESIGN.md](docs/WEBSOCKET_DESIGN.md)
-- for secure-link PSK over WebSocket, the runtime now authenticates the listener/server side immediately after decrypting the client's internal proof frame, so both peers reach `authenticated` without waiting for a first real application payload
-- for WebSocket text payload modes, the runtime now budgets receive limits against the encoded frame size rather than the raw overlay payload budget, which is the key guard against forwarded admin/service traffic exceeding the websocket frame limit after text-mode expansion
 
 Important config-format note:
 
@@ -308,7 +300,7 @@ Using config files plus WebAdmin makes these multi-transport setups much easier 
 
 ### Launcher script
 
-The repository previously included a POSIX shell launcher `scripts/run.sh`. That has been replaced with a cross-platform Python launcher at `scripts/run.py`.
+Use the cross-platform Python launcher at `scripts/run.py`.
 
 - Default (uses the running Python interpreter and `ObstacleBridge.cfg`):
 
@@ -498,46 +490,63 @@ What is visible in the included snapshots:
 | `--overlay-transport` | `myudp` | Overlay transport between peers: comma-separated list from myudp,tcp,quic,ws. Multiple transports are supported simultaneously for listening instances. |
 | `--client-restart-if-disconnected` | `0.0` | If configured as a peer client (for example --udp-peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables. |
 
-### Secure-link (PSK mode)
+### Secure-link
+
+#### Common parameters
 | Option(s) | Default | Description |
 |---|---:|---|
 | `--secure-link` | `False` | Enable secure-link. Delivered modes are PSK and certificate-based secure-link over `myudp`, `tcp`, `ws`, and `quic`. |
 | `--secure-link-mode` | `off` | Secure-link mode. Supported values are `off`, `psk`, and `cert`. |
+| `--secure-link-retry-backoff-initial-ms` | `1000` | Initial client-side retry backoff after a secure-link authentication failure, in milliseconds. |
+| `--secure-link-retry-backoff-max-ms` | `5000` | Maximum client-side retry backoff after repeated secure-link authentication failures, in milliseconds. |
+| `--secure-link-require` | `False` | Fail closed if secure-link cannot be negotiated or authenticated. |
+
+#### PSK mode parameters
+| Option(s) | Default | Description |
+|---|---:|---|
 | `--secure-link-psk` | `` | Pre-shared secret for `secure_link_mode=psk`. Both peers must use the same non-empty value. |
+| `--secure-link-rekey-after-frames` | `0` | Automatically initiate PSK rekey after this many protected data frames are sent. `0` disables frame-triggered rekeying. |
+| `--secure-link-rekey-after-seconds` | `0.0` | Automatically initiate PSK rekey after this many authenticated seconds, once the current session has already carried protected client data. `0` disables time-triggered rekeying. |
+
+#### Cert mode parameters
+| Option(s) | Default | Description |
+|---|---:|---|
 | `--secure-link-root-pub` | `` | Root public key PEM for `secure_link_mode=cert`. |
 | `--secure-link-cert-body` | `` | Local certificate body JSON for `secure_link_mode=cert`. |
 | `--secure-link-cert-sig` | `` | Detached certificate signature file for `secure_link_mode=cert`. |
 | `--secure-link-private-key` | `` | Local identity private key PEM for `secure_link_mode=cert`. |
 | `--secure-link-revoked-serials` | `` | Optional JSON-array or line-based revoked-serial file for `secure_link_mode=cert`. |
 | `--secure-link-cert-reload-on-restart` | `True` | Reload certificate material on process restart. In `secure_link_mode=cert`, operators can also trigger live reload through the admin API or WebAdmin. |
-| `--secure-link-rekey-after-frames` | `0` | Automatically initiate PSK rekey after this many protected data frames are sent. `0` disables frame-triggered rekeying. |
-| `--secure-link-rekey-after-seconds` | `0.0` | Automatically initiate PSK rekey after this many authenticated seconds, once the current session has already carried protected client data. `0` disables time-triggered rekeying. |
-| `--secure-link-retry-backoff-initial-ms` | `1000` | Initial client-side retry backoff after a secure-link authentication failure, in milliseconds. |
-| `--secure-link-retry-backoff-max-ms` | `5000` | Maximum client-side retry backoff after repeated secure-link authentication failures, in milliseconds. |
-| `--secure-link-require` | `False` | Fail closed if secure-link cannot be negotiated or authenticated. |
 
 #### Current secure-link quick start
 
-The current runtime now includes the delivered Phase 1 PSK mode and the delivered Phase 2 certificate-based mode.
-
-What works today:
+The current runtime includes both delivered secure-link modes:
 
 - `secure_link_mode=psk`
 - `secure_link_mode=cert`
+
+Recommended operator flow:
+
+1. enable WebAdmin on both peers
+2. configure secure-link in the JSON config file or through the Configuration tab
+3. start both peers and open the peer cards in WebAdmin first
+4. use the API only for details that are not yet surfaced in WebAdmin
+
+What works today:
+
 - `overlay_transport=myudp`
 - `overlay_transport=tcp`
 - `overlay_transport=ws`
 - `overlay_transport=quic`
-- aggregate admin/API visibility through `/api/status` and peer-scoped secure-link visibility through `/api/peers`
+- secure-link visibility in WebAdmin, with API fallback through `/api/status` and `/api/peers`
 - optional automatic rekey through `secure_link_rekey_after_frames`
 - optional time-based rekey through `secure_link_rekey_after_seconds`
-- operator-forced rekey through peer-targeted `POST /api/secure-link/rekey`
+- operator-forced rekey from the peer security block in WebAdmin, with `/api/secure-link/rekey` available for automation
 - `myudp` PSK rekey that still completes under ongoing protected traffic and preserves healthy same-channel UDP flow across the `REKEY_COMMIT` to `REKEY_DONE` cutover window
 - cert-mode trust-anchor, role, validity-window, deployment-scope, and revoked-serial enforcement before protected traffic starts
-- cert-mode peer identity and trust diagnostics through `/api/peers`
-- cert-mode live `POST /api/secure-link/reload` with `scope=revocation`, `scope=local_identity`, or `scope=all`
-- aggregate reload/apply summaries through `/api/status`
-- peer-scoped reload/disconnect/trust-enforcement diagnostics through `/api/peers`
+- cert-mode peer identity and trust diagnostics in WebAdmin, with additional detail available through `/api/peers`
+- cert-mode live reload from WebAdmin, with `/api/secure-link/reload` available for automation
+- aggregate reload/apply summaries and some peer-scoped enforcement diagnostics through `/api/status` and `/api/peers`
 
 What is still planned:
 
@@ -564,7 +573,7 @@ Minimal listener example:
 }
 ```
 
-Cert-mode operators can also apply updated trust material without process restart:
+Cert-mode operators can also apply updated trust material without process restart from WebAdmin. The API remains available for automation:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:18080/api/secure-link/reload \
@@ -580,7 +589,7 @@ curl -sS -X POST http://127.0.0.1:18080/api/secure-link/reload \
   -d '{"scope":"all"}'
 ```
 
-When a cert-mode reload succeeds:
+Detailed API signals after a cert-mode reload succeeds:
 
 - `/api/status` reports the aggregate reload result, scope, timestamp, active material generation, and cumulative dropped-peer count
 - `/api/peers` reports peer-scoped reload/enforcement details such as active material generation, trust-enforcement timestamp, and disconnect reason/detail
@@ -615,14 +624,19 @@ python -m obstacle_bridge --config secure_link_server.json
 python -m obstacle_bridge --config secure_link_client.json
 ```
 
-What to look for in WebAdmin or the admin API:
+What to look for in WebAdmin first:
 
 - WebAdmin shows secure-link details inside each peer block instead of a single legacy headline state, with peer cards laid out full-width across the browser
 - the Configuration tab masks `secure_link_psk` and keeps it write-only in the web UI so the PSK secret is not exposed for editing after startup
 - peer cards show connection uptime, and myudp-specific protocol statistics remain visible only when the peer is actually using the myudp transport
-- when `secure_link.mode=cert`, WebAdmin and `/api/peers` also show peer identity and trust details such as subject id/name, roles, deployment id, serial, issuer, trust-anchor id, and trust-validation status
+- when `secure_link.mode=cert`, WebAdmin also shows peer identity and trust details such as subject id/name, roles, deployment id, serial, issuer, trust-anchor id, and trust-validation status
+- when rekeying is enabled, the peer block can briefly show `rekey_in_progress=true` while the session rotates to a fresh `secure_link.session_id`
+- on healthy authenticated runs, the peer block exposes `last_event`, `last_event_unix_ts`, `last_authenticated_unix_ts`, `authenticated_sessions_total`, `rekeys_completed_total`, and `last_rekey_trigger`
+- operators can force rekey on an authenticated client-side secure-link session from the peer security block in WebAdmin
+
+API fallback for details not fully surfaced in WebAdmin yet:
+
 - `/api/peers` shows the peer row with `secure_link.authenticated=true`
-- when rekeying is enabled, the peer block and `/api/peers` can briefly show `rekey_in_progress=true` while the session rotates to a fresh `secure_link.session_id`
 - `/api/status` remains limited to common runtime summary fields such as uptime, aggregate open-channel counts, and aggregate traffic rates
 - if the PSK does not match, the client and server stay disconnected and the failure is reported as:
   - `secure_link.state=failed`
@@ -630,9 +644,11 @@ What to look for in WebAdmin or the admin API:
   - `failure_reason=bad_psk`
   - repeated client-side retries show increasing `consecutive_failures`, a bounded `retry_backoff_sec`, a populated `next_retry_unix_ts`, a populated `failure_session_id`, increasing `handshake_attempts_total`, and `last_event=retry_scheduled`
 
-  - Development note: added `secure_link`-scoped DEBUG logging to surface raw secure-link frames and handshake events for WebSocket troubleshooting (PR #178).
-- on healthy authenticated runs, the peer block and `/api/peers` expose `last_event`, `last_event_unix_ts`, `last_authenticated_unix_ts`, `authenticated_sessions_total`, `rekeys_completed_total`, and `last_rekey_trigger`
-- operators can force rekey on an authenticated client-side secure-link session by targeting the selected peer row id:
+Current WebAdmin gap to close in a future update:
+
+- aggregate cert-reload results and some peer-scoped enforcement diagnostics are still easier to inspect through `/api/status` and `/api/peers` than through WebAdmin
+
+API alternative for operator-forced rekey when scripting or automation is preferred:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:18081/api/secure-link/rekey \
@@ -646,7 +662,7 @@ Operator notes:
 - use a long random PSK for anything beyond local testing
 - leave `secure_link_rekey_after_frames=0` unless you intentionally want to exercise or validate rekey behavior
 - use `secure_link_rekey_after_seconds` when you want automatic rotation on long-lived authenticated client-side sessions without waiting for a frame-count threshold
-- operator-forced rekey currently applies to authenticated client-side secure-link sessions for the targeted peer row; if no protected client data has been sent yet, the admin API rejects the request rather than guessing its way past the handshake boundary
+- operator-forced rekey currently applies to authenticated client-side secure-link sessions for the targeted peer row; if no protected client data has been sent yet, the WebAdmin action and admin API both reject the request rather than guessing its way past the handshake boundary
 - if you are intentionally testing wrong-PSK or rollout mistakes, `secure_link_retry_backoff_initial_ms` and `secure_link_retry_backoff_max_ms` let you tune how aggressively the client retries after secure-link auth failures
 - the current PSK runtime uses strictly monotonic per-direction protected-data counters starting at `1`; counter `0` is reserved and counter exhaustion fails closed rather than wrapping
 - malformed or unexpected secure-link frames fail closed and remain observable through the admin/API surface; they do not continue forwarding overlay traffic on the affected peer
@@ -798,11 +814,9 @@ Current snapshot from `python scripts/report_requirements_coverage.py`:
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
 
-The secure-link topic now has an active `REQ-AUT-*` layer in `docs/REQUIREMENTS.md` for both the delivered PSK-based Phase 1 runtime slice and the delivered certificate-based Phase 2 slice, while the certificate/key-material input profile remains documented in `docs/SYSTEM_BOUNDARY.md`. The current runtime is defended across `myudp`, `tcp`, `ws`, and `quic`, now including broader multi-peer listener validation across those transports, aggregate runtime summary through `/api/status`, peer-scoped secure-link observability through `/api/peers`, passive-listener rows that remain zeroed while active accepted listener peers expose live per-peer metrics such as RTT, preservation of transport-specific `myudp` peer counters in `/api/peers` even when secure-link wraps the underlying UDP session, time-threshold rekey coverage for both post-traffic and authenticated-idle client sessions, myudp recovery and one-sided restart coverage that distinguishes fresh post-recovery authentication from stale pre-restart rekey reporting, frame-, time-, and peer-targeted operator-triggered rekey coverage, reconnect-with-fresh-session coverage, subprocess replay/malformed-frame fail-closed coverage, certificate-based trust-anchor/role/validity/deployment/revocation enforcement, and peer-scoped certificate identity/trust diagnostics. The few subprocess cases that need direct secure-link fault stimulation use the separate test-only `obstacle_bridge.bridge_FI` entrypoint rather than the normal runtime surface.
+The related architecture decomposition is linked to tests through `.github/architecture_traceability.yaml`.
 
-The related architecture decomposition is also linked to tests through `.github/architecture_traceability.yaml`.
-
-The top-level README is intentionally kept as a contributor-facing coverage snapshot. When requirements, implementation, or the test set changes, update this section so the project entrypoint stays aligned with the current contract and evidence, including red-before-green regression additions for bugfixes.
+This top-level section is a compact coverage snapshot. Update the counts and supporting links here when requirements, implementation, or the test set changes. Keep detailed behavior, rationale, and traceability discussion in `docs/REQUIREMENTS.md`, `docs/ARCHITECTURE.md`, `docs/SYSTEM_BOUNDARY.md`, and `docs/README_TESTING.md`.
 
 ### CI split note
 

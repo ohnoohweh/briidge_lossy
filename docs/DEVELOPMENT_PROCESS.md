@@ -16,7 +16,7 @@ These measures describe how the project is developed and validated. They are int
   Measure:
   - run the most relevant targeted tests during iteration
   - run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` before push or PR when the shared integration harness is materially affected
-  - keep the top-level [README.md](/home/ohnoohweh/quic_br/README.md) coverage snapshot aligned with the current product requirement set
+  - keep the top-level [README.md](/home/ohnoohweh/quic_br/README.md) coverage snapshot aligned with the current product requirement set, but keep detailed requirement and design prose in the dedicated docs instead of duplicating it in the snapshot
 - `PROC-TST-002`: Important local invariants and component contracts should be defended by unit tests.
   Measure:
   - add or update focused tests under `tests/unit/` when internal state handling, parser behavior, or component-local contracts change
@@ -194,12 +194,12 @@ After implementing a new feature or fixing a bug:
 - add or adjust integration tests in [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
 - add or adjust unit tests if a local invariant changed
 - update [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md) traceability when a new requirement is covered
-- update [README.md](/home/ohnoohweh/quic_br/README.md) when requirements, implementation, or the test set changes so its links and requirement-coverage snapshot remain current
+- update [README.md](/home/ohnoohweh/quic_br/README.md) when requirements, implementation, or the test set changes so its links and requirement-coverage snapshot remain current; do not treat it as the durable home for detailed requirement narratives
 
 Repository guards now enforce three parts of this discipline, but they should be treated as the final safety net rather than the primary detector of degradation:
 
 - behavior, test, or architecture changes must update [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
-- requirements, implementation, or test-set changes must update [README.md](/home/ohnoohweh/quic_br/README.md)
+- requirements, implementation, or test-set changes must update [README.md](/home/ohnoohweh/quic_br/README.md) so its snapshot counts and links stay current
 - requirement changes must update [requirements_traceability.yaml](/home/ohnoohweh/quic_br/.github/requirements_traceability.yaml), and the referenced tests must exist
 
 This keeps the project understandable even when development continues in prompt-driven iterations.
