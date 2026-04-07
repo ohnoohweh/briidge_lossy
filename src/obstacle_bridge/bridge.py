@@ -1931,6 +1931,7 @@ class ISession(Protocol):
 
     # application payload (Mux -> Session)
     def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int: ...
+    def get_max_app_payload_size(self) -> int: ...
 
     # callback wiring
     def set_on_app_payload(self, cb: Callable[[bytes], None]) -> None: ...
@@ -3482,6 +3483,13 @@ class SecureLinkPskSession(ISession):
     def get_metrics(self) -> SessionMetrics:
         return self._inner.get_metrics()
 
+    def get_max_app_payload_size(self) -> int:
+        getter = getattr(self._inner, "get_max_app_payload_size", None)
+        inner_limit = int(getter() or 65535) if callable(getter) else 65535
+        # Protected DATA frames add the secure-link header and AEAD tag before they
+        # reach the wrapped transport session.
+        return max(0, inner_limit - self._SL_HDR.size - 16)
+
     @staticmethod
     def _snapshot_peer_host(row: dict) -> str:
         peer_label = str(row.get("peer") or "").strip()
@@ -3765,6 +3773,8 @@ class SecureLinkPskSession(ISession):
         self._cancel_client_retry_task(clear_schedule=False)
         self._cancel_client_rekey_task(clear_schedule=False)
         self._clear_all_states()
+        if self._client_mode and self._started and bool(getattr(self._inner, "is_connected", lambda: False)()):
+            self._maybe_begin_client_handshake()
         if callable(self._outer_on_transport_epoch_change):
             try:
                 self._outer_on_transport_epoch_change(epoch)
@@ -8093,6 +8103,10 @@ class WebSocketSession(ISession):
         except Exception:
             return SessionMetrics()
 
+    def get_max_app_payload_size(self) -> int:
+        # send_app() prepends the 1-byte WS kind marker before payload encoding.
+        return max(0, int(self._ws_max_size or 0) - 1)
+
     # ---- Data path (APP) ------------------------------------------------------
     def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
         if not payload:
@@ -10647,7 +10661,11 @@ class ChannelMux:
         self._sweeper_task: Optional[asyncio.Task] = None
         self._ensure_task: Optional[asyncio.Task] = None
 
-        self._SAFE_TCP_READ = 65535 - ChannelMux.MUX_HDR.size # (maximum app message size) - 8 (MUX header)
+        self._session_max_app_payload = max(
+            ChannelMux.MUX_HDR.size,
+            self._resolve_session_max_app_payload(self.session),
+        )
+        self._SAFE_TCP_READ = max(1, self._session_max_app_payload - ChannelMux.MUX_HDR.size)
 
         # Dashboard interface
         self._udp_client_svc_id: Dict[int, int] = {}
@@ -10685,6 +10703,14 @@ class ChannelMux:
     # ---------------------------------------------------------------------------
     # MUX v2 header: chan_id(2) | proto(1) | counter(2) | mtype(1) | data_len(2)
     MUX_HDR = struct.Struct(">HBHBH")
+
+    @staticmethod
+    def _resolve_session_max_app_payload(session: ISession) -> int:
+        getter = getattr(session, "get_max_app_payload_size", None)
+        if callable(getter):
+            with contextlib.suppress(Exception):
+                return max(0, int(getter() or 0))
+        return 65535
     
     def _pack_mux(self, chan_id: int, proto: ChannelMux.Proto, counter: int, mtype: ChannelMux.MType, data: bytes) -> bytes:
         if not (0 <= chan_id <= 0xFFFF):
@@ -11234,12 +11260,17 @@ class ChannelMux:
     def _send_mux(self, chan_id: int, proto: ChannelMux.Proto, mtype: ChannelMux.MType, data: bytes) -> None:
         if not self.session.is_connected():
             return
-        # Enforce max application message size (MUX header + data <= 65535)
+        # Enforce the effective session payload budget so transport wrappers such as
+        # secure-link over WS cannot emit oversized outer frames.
         if data is None:
             data = b""
         wire = self._pack_mux(chan_id, proto, self._next_ctr(chan_id, proto, mtype), mtype, data)
-        if len(wire) > 65535:
-            self.log.error("[MUX] drop oversized app message: %d bytes", len(wire))
+        if len(wire) > self._session_max_app_payload:
+            self.log.error(
+                "[MUX] drop oversized app message: %d bytes > %d",
+                len(wire),
+                self._session_max_app_payload,
+            )
             return
         # Local->peer counter hook
         if self._on_local_rx:

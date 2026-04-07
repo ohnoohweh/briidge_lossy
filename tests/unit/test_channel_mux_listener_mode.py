@@ -8,13 +8,15 @@ from obstacle_bridge.bridge import ChannelMux
 
 
 class _FakeSession:
-    def __init__(self):
+    def __init__(self, *, connected=False, max_app_payload_size=65535):
         self.app_cb = None
         self.peer_disconnect_cb = None
         self.sent = []
+        self.connected = connected
+        self.max_app_payload_size = max_app_payload_size
 
     def is_connected(self):
-        return False
+        return self.connected
 
     def set_on_app_payload(self, cb):
         self.app_cb = cb
@@ -25,6 +27,9 @@ class _FakeSession:
     def send_app(self, payload):
         self.sent.append(payload)
         return len(payload)
+
+    def get_max_app_payload_size(self):
+        return self.max_app_payload_size
 
 
 class ChannelMuxListenerModeTests(unittest.TestCase):
@@ -178,6 +183,30 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         stop_listener.assert_awaited_once_with(('peer', 11, 1), 'udp')
         self.assertNotIn(('peer', 11, 1), self.mux._peer_installed_services)
         self.assertIn(('peer', 22, 1), self.mux._peer_installed_services)
+
+
+class ChannelMuxSessionBudgetTests(unittest.TestCase):
+    def test_safe_tcp_read_uses_session_payload_budget(self):
+        session = _FakeSession(max_app_payload_size=512)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            self.assertEqual(mux._SAFE_TCP_READ, 512 - ChannelMux.MUX_HDR.size)
+        finally:
+            mux.loop.close()
+
+    def test_send_mux_drops_payloads_above_session_budget(self):
+        session = _FakeSession(connected=True, max_app_payload_size=32)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._send_mux(
+                7,
+                ChannelMux.Proto.UDP,
+                ChannelMux.MType.REMOTE_SERVICES_SET_V2,
+                b"x" * (32 - ChannelMux.MUX_HDR.size + 1),
+            )
+            self.assertEqual(session.sent, [])
+        finally:
+            mux.loop.close()
 
 
 if __name__ == '__main__':
