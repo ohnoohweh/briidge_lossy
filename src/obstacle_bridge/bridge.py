@@ -38,6 +38,10 @@ import argparse
 import asyncio
 import base64
 import ctypes
+try:
+    import fcntl
+except Exception:
+    fcntl = None
 import inspect
 from ctypes import wintypes
 from contextlib import contextmanager
@@ -10461,14 +10465,15 @@ class _ChanCtr:
 
 
 class ChannelMux:
-    """Catalog-based multiplexer with multiple TCP/UDP servers and peer-side dynamic dialers."""
-    ProtoName = Literal["tcp", "udp"]
+    """Catalog-based multiplexer with multiple TCP/UDP/TUN services and peer-side dynamic dialers."""
+    ProtoName = Literal["tcp", "udp", "tun"]
     ServiceOrigin = Literal["local", "peer"]
     ServiceKey = Tuple[ServiceOrigin, int, int]  # (origin, peer_id, svc_id)
 
     class Proto(enum.IntEnum):
         UDP = 0
         TCP = 1
+        TUN = 2
 
     class MType(enum.IntEnum):
         DATA = 0
@@ -10488,11 +10493,53 @@ class ChannelMux:
         r_host: str
         r_port: int
 
+    @dataclass
+    class TunDevice:
+        fd: int
+        ifname: str
+        mtu: int
+        service_key: Optional["ChannelMux.ServiceKey"] = None
+        reader_registered: bool = False
+        chan_id: Optional[int] = None
+
     UDP_MIN_ID = 1
     UDP_MAX_ID = 65535
     TCP_MIN_ID = 1
     TCP_MAX_ID = 65535
+    TUN_MIN_ID = 1
+    TUN_MAX_ID = 65535
     UDP_IDLE_S = 20.0
+    TUN_READ_SIZE_MAX = 65535
+    TUN_DEFAULT_MTU = 1500
+    TUNSETIFF = 0x400454CA
+    IFF_TUN = 0x0001
+    IFF_NO_PI = 0x1000
+    SIOCGIFFLAGS = 0x8913
+    SIOCSIFFLAGS = 0x8914
+    SIOCSIFMTU = 0x8922
+    IFF_UP = 0x1
+    IFF_RUNNING = 0x40
+
+    @staticmethod
+    def _proto_name_to_code(name: "ChannelMux.ProtoName") -> int:
+        name_l = str(name).lower()
+        if name_l == "udp":
+            return int(ChannelMux.Proto.UDP)
+        if name_l == "tcp":
+            return int(ChannelMux.Proto.TCP)
+        if name_l == "tun":
+            return int(ChannelMux.Proto.TUN)
+        raise ValueError(f"unsupported protocol name: {name}")
+
+    @staticmethod
+    def _proto_code_to_name(code: int) -> "ChannelMux.ProtoName":
+        if int(code) == int(ChannelMux.Proto.UDP):
+            return "udp"
+        if int(code) == int(ChannelMux.Proto.TCP):
+            return "tcp"
+        if int(code) == int(ChannelMux.Proto.TUN):
+            return "tun"
+        raise ValueError(f"unsupported protocol code: {code}")
 
     # ---------------- CLI ----------------
     @staticmethod
@@ -10507,7 +10554,7 @@ class ChannelMux:
                 help=("Space-separated service specs (client mode only): "
                       "'proto,listen_port,listen_bind,proto,host,port' (quoted). "
                       "Listener instances ignore --own-servers because multiple overlay peers make the target ambiguous. "
-                      "Example: \"tcp,80,0.0.0.0,tcp,127.0.0.1,88 udp,16666,::,udp,127.0.0.1,16666\"")
+                        "Example: \"tcp,80,0.0.0.0,tcp,127.0.0.1,88 udp,16666,::,udp,127.0.0.1,16666 tun,1500,obtun0,tun,obtun1,1500\"")
             )
         if not _has('--remote-servers'):
             p.add_argument(
@@ -10515,7 +10562,7 @@ class ChannelMux:
                 help=("Space-separated service specs (client mode only, applied on connected peer): "
                       "'proto,listen_port,listen_bind,proto,host,port' (quoted). "
                       "Listener instances ignore --remote-servers because multiple overlay peers make the target ambiguous. "
-                      "Example: \"tcp,80,0.0.0.0,tcp,127.0.0.1,88 udp,16666,::,udp,127.0.0.1,16666\"")
+                        "Example: \"tcp,80,0.0.0.0,tcp,127.0.0.1,88 udp,16666,::,udp,127.0.0.1,16666 tun,1500,obtun0,tun,obtun1,1500\"")
             )
         # Keep backpressure knobs (apply to local TCP writers we own)
         if not _has('--mux-tcp-bp-threshold'):
@@ -10602,10 +10649,10 @@ class ChannelMux:
             l_proto, l_port, l_bind, r_proto, r_host, r_port = parts
             l_proto = l_proto.lower()
             r_proto = r_proto.lower()
-            if l_proto not in {"udp", "tcp"}:
-                raise ValueError(f"{arg_name} local protocol must be udp or tcp: {tok}")
-            if r_proto not in {"udp", "tcp"}:
-                raise ValueError(f"{arg_name} remote protocol must be udp or tcp: {tok}")
+            if l_proto not in {"udp", "tcp", "tun"}:
+                raise ValueError(f"{arg_name} local protocol must be udp, tcp or tun: {tok}")
+            if r_proto not in {"udp", "tcp", "tun"}:
+                raise ValueError(f"{arg_name} remote protocol must be udp, tcp or tun: {tok}")
             try:
                 l_port_i = int(l_port)
                 r_port_i = int(r_port)
@@ -10646,12 +10693,14 @@ class ChannelMux:
         self._peer_installed_services: dict[ChannelMux.ServiceKey, ChannelMux.ServiceSpec] = {}
         self._svc_tcp_servers: dict[ChannelMux.ServiceKey, asyncio.base_events.Server] = {}
         self._svc_udp_servers: dict[ChannelMux.ServiceKey, asyncio.DatagramTransport] = {}
+        self._svc_tun_devices: dict[ChannelMux.ServiceKey, ChannelMux.TunDevice] = {}
 
         # Channel id allocators
         self._chan_id_start: int = 1
         self._chan_id_stride: int = 1
         self._next_udp_id: int = self.UDP_MIN_ID
         self._next_tcp_id: int = self.TCP_MIN_ID
+        self._next_tun_id: int = self.TUN_MIN_ID
 
         # UDP server-side maps
         # (svc_id, (host,port)) -> (chan, last_ts)
@@ -10697,6 +10746,11 @@ class ChannelMux:
         self._udp_chan_by_open_key: dict[tuple[int, int, int, int, str, int, int, str, int], int] = {}
         self._tcp_open_key_by_chan: dict[int, tuple[int, int, int, str, int, int, str, int]] = {}
         self._tcp_chan_by_open_key: dict[tuple[int, int, int, str, int, int, str, int], int] = {}
+        self._tun_open_key_by_chan: dict[int, tuple[int, int, int, str, int, int, str, int]] = {}
+        self._tun_chan_by_open_key: dict[tuple[int, int, int, str, int, int, str, int], int] = {}
+        self._tun_by_chan: dict[int, ChannelMux.TunDevice] = {}
+        self._tun_chan_by_service: dict[ChannelMux.ServiceKey, int] = {}
+        self._tun_frag_rx: dict[tuple[int, int], dict[str, Any]] = {}
         self._chan_owner_peer_id: dict[int, int] = {}
 
         # Per-channel stats (readable counters + CRC)
@@ -10804,14 +10858,14 @@ class ChannelMux:
                 self._mux_instance_id & 0xFFFFFFFFFFFFFFFF,
                 self._mux_connection_seq & 0xFFFFFFFF,
                 spec.svc_id,
-                1 if spec.l_proto == "tcp" else 0,
+                self._proto_name_to_code(spec.l_proto),
                 len(lb),
             )
             + lb
             + struct.pack(
                 ">HB",
                 spec.l_port,
-                1 if spec.r_proto == "tcp" else 0,
+                self._proto_name_to_code(spec.r_proto),
             )
             + struct.pack(">B", len(hb))
             + hb
@@ -10863,11 +10917,11 @@ class ChannelMux:
             out += struct.pack(
                 ">HBB",
                 int(s.svc_id),
-                1 if s.l_proto == "tcp" else 0,
+                self._proto_name_to_code(s.l_proto),
                 len(lb),
             )
             out += lb
-            out += struct.pack(">HB", int(s.l_port), 1 if s.r_proto == "tcp" else 0)
+            out += struct.pack(">HB", int(s.l_port), self._proto_name_to_code(s.r_proto))
             out += struct.pack(">B", len(rh))
             out += rh
             out += struct.pack(">H", int(s.r_port))
@@ -10900,8 +10954,8 @@ class ChannelMux:
                 off += r_len
                 (r_port,) = struct.unpack(">H", payload[off:off + 2])
                 off += 2
-                l_proto = "tcp" if int(l_proto_i) == 1 else "udp"
-                r_proto = "tcp" if int(r_proto_i) == 1 else "udp"
+                l_proto = self._proto_code_to_name(int(l_proto_i))
+                r_proto = self._proto_code_to_name(int(r_proto_i))
                 out.append(ChannelMux.ServiceSpec(
                     svc_id=int(svc_id),
                     l_proto=l_proto,
@@ -10939,6 +10993,11 @@ class ChannelMux:
         if key is not None and self._tcp_chan_by_open_key.get(key) == chan:
             self._tcp_chan_by_open_key.pop(key, None)
 
+    def _forget_tun_open_key(self, chan: int) -> None:
+        key = self._tun_open_key_by_chan.pop(chan, None)
+        if key is not None and self._tun_chan_by_open_key.get(key) == chan:
+            self._tun_chan_by_open_key.pop(key, None)
+
     def _reset_peer_open_channels(self, peer_key: int) -> None:
         # UDP channels created from OPEN
         for key, chan in list(self._udp_chan_by_open_key.items()):
@@ -10975,6 +11034,13 @@ class ChannelMux:
             self._chan_owner_peer_id.pop(chan, None)
             self._forget_tcp_open_key(chan)
             self.log.info("[MUX] peer=%s epoch reset -> drop TCP chan=%s", peer_key, chan)
+
+        # TUN channels created from OPEN
+        for key, chan in list(self._tun_chan_by_open_key.items()):
+            if int(key[0]) != int(peer_key):
+                continue
+            self._rx_tun_close(chan)
+            self.log.info("[MUX] peer=%s epoch reset -> drop TUN chan=%s", peer_key, chan)
     # ---------- start/stop ----------
     async def start(self) -> None:
         self.log.info("[MUX] start; overlay_connected=%s accepting=%s", self._overlay_connected, self._accepting_enabled)
@@ -11035,6 +11101,8 @@ class ChannelMux:
                     await self._start_tcp_server_for(svc, svc_key)
                 elif svc.l_proto == "udp" and svc_key not in self._svc_udp_servers:
                     await self._start_udp_server_for(svc, svc_key)
+                elif svc.l_proto == "tun" and svc_key not in self._svc_tun_devices:
+                    await self._start_tun_server_for(svc, svc_key)
             except Exception as e:
                 self.log.warning("[MUX] service %s:%s start failed: %r", svc_key[0], svc.svc_id, e)
 
@@ -11054,6 +11122,14 @@ class ChannelMux:
                 await srv.wait_closed()
             except Exception: pass
             self._svc_tcp_servers.pop(sid, None)
+        # TUN
+        for sid, dev in list(self._svc_tun_devices.items()):
+            try:
+                self.log.info("[MUX] stopping TUN service %s", sid)
+                self._close_tun_device(dev)
+            except Exception:
+                pass
+            self._svc_tun_devices.pop(sid, None)
 
     async def _close_all_channels(self):
         # TCP
@@ -11085,6 +11161,19 @@ class ChannelMux:
         self._udp_open_key_by_chan.clear()
         self._udp_chan_by_open_key.clear()
         self._udp_frag_rx.clear()
+        for chan, dev in list(self._tun_by_chan.items()):
+            if dev.service_key is not None and self._svc_tun_devices.get(dev.service_key) is dev:
+                dev.chan_id = None
+            else:
+                try:
+                    self._close_tun_device(dev)
+                except Exception:
+                    pass
+        self._tun_by_chan.clear()
+        self._tun_chan_by_service.clear()
+        self._tun_open_key_by_chan.clear()
+        self._tun_chan_by_open_key.clear()
+        self._tun_frag_rx.clear()
         # Backpressure tasks
         for t in list(self._tcp_backpressure_tasks.values()):
             try: t.cancel()
@@ -11198,6 +11287,7 @@ class ChannelMux:
                     self.log.info("[UDP/CLI] chan=%s idle >= %.0fs -> CLOSE", chan, self.UDP_IDLE_S)
                     self._send_mux(chan, ChannelMux.Proto.UDP, ChannelMux.MType.CLOSE, b"")
                 self._prune_udp_fragment_reassembly()
+                self._prune_tun_fragment_reassembly()
         except asyncio.CancelledError:
             return
 
@@ -11217,7 +11307,7 @@ class ChannelMux:
                                 await self._start_tcp_server_for(spec, svc_key)
                             except Exception as e:
                                 self.log.info("[MUX] TCP service %s:%s restart failed: %r", svc_key[0], spec.svc_id, e)
-                    else:
+                    elif spec.l_proto == "udp":
                         tr = self._svc_udp_servers.get(svc_key)
                         if tr is None:
                             self.log.info("[MUX] UDP service %s:%s ensure-listen (re)start", svc_key[0], spec.svc_id)
@@ -11225,6 +11315,14 @@ class ChannelMux:
                                 await self._start_udp_server_for(spec, svc_key)
                             except Exception as e:
                                 self.log.info("[MUX] UDP service %s:%s restart failed: %r", svc_key[0], spec.svc_id, e)
+                    else:
+                        dev = self._svc_tun_devices.get(svc_key)
+                        if dev is None:
+                            self.log.info("[MUX] TUN service %s:%s ensure-listen (re)start", svc_key[0], spec.svc_id)
+                            try:
+                                await self._start_tun_server_for(spec, svc_key)
+                            except Exception as e:
+                                self.log.info("[MUX] TUN service %s:%s restart failed: %r", svc_key[0], spec.svc_id, e)
         except asyncio.CancelledError:
             return
 
@@ -11252,6 +11350,11 @@ class ChannelMux:
                     tr.close()
                 except Exception:
                     pass
+            return
+        if proto_name == "tun":
+            dev = self._svc_tun_devices.pop(svc_key, None)
+            if dev is not None:
+                self._close_tun_device(dev)
             return
         srv = self._svc_tcp_servers.pop(svc_key, None)
         if srv:
@@ -11299,6 +11402,8 @@ class ChannelMux:
                         await self._start_tcp_server_for(spec, svc_key)
                     elif spec.l_proto == "udp" and svc_key not in self._svc_udp_servers:
                         await self._start_udp_server_for(spec, svc_key)
+                    elif spec.l_proto == "tun" and svc_key not in self._svc_tun_devices:
+                        await self._start_tun_server_for(spec, svc_key)
                 except Exception as e:
                     self.log.warning("[MUX/CTRL] peer-installed service %s:%s start failed: %r", svc_key[0], spec.svc_id, e)
 
@@ -11331,6 +11436,11 @@ class ChannelMux:
             payload = bytes(data or b"")
             if ChannelMux.MUX_HDR.size + len(payload) > self._session_max_app_payload:
                 self._send_udp_mux_fragments(chan_id, payload)
+                return
+        if proto == ChannelMux.Proto.TUN and mtype == ChannelMux.MType.DATA:
+            payload = bytes(data or b"")
+            if ChannelMux.MUX_HDR.size + len(payload) > self._session_max_app_payload:
+                self._send_tun_mux_fragments(chan_id, payload)
                 return
         # Enforce the effective session payload budget so transport wrappers such as
         # secure-link over WS cannot emit oversized outer frames.
@@ -11472,6 +11582,283 @@ class ChannelMux:
         for key in expired:
             self._udp_frag_rx.pop(key, None)
 
+    def _prune_tun_fragment_reassembly(self) -> None:
+        now = time.time()
+        expired = [
+            key
+            for key, state in self._tun_frag_rx.items()
+            if (now - float(state.get("updated", now))) >= self.UDP_FRAG_REASSEMBLY_TTL_S
+        ]
+        for key in expired:
+            self._tun_frag_rx.pop(key, None)
+
+    @staticmethod
+    def _tun_ifreq_name(name: str) -> bytes:
+        return str(name).encode("utf-8", "ignore")[:15].ljust(16, b"\x00")
+
+    @classmethod
+    def _require_tun_support(cls) -> None:
+        if not sys.platform.startswith("linux"):
+            raise RuntimeError("TUN services are supported only on Linux")
+        if fcntl is None:
+            raise RuntimeError("TUN services require fcntl support")
+
+    def _set_iface_mtu(self, ifname: str, mtu: int) -> None:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            ifr = struct.pack("16sI12x", self._tun_ifreq_name(ifname), int(mtu))
+            fcntl.ioctl(sock.fileno(), self.SIOCSIFMTU, ifr)
+
+    def _set_iface_up(self, ifname: str) -> None:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            req = self._tun_ifreq_name(ifname) + (b"\x00" * 24)
+            res = fcntl.ioctl(sock.fileno(), self.SIOCGIFFLAGS, req)
+            flags = struct.unpack("16xH", res[:18])[0]
+            ifr = struct.pack("16sH14x", self._tun_ifreq_name(ifname), flags | self.IFF_UP | self.IFF_RUNNING)
+            fcntl.ioctl(sock.fileno(), self.SIOCSIFFLAGS, ifr)
+
+    def _open_tun_device(self, ifname: str, mtu: int, svc_key: Optional["ChannelMux.ServiceKey"] = None) -> "ChannelMux.TunDevice":
+        self._require_tun_support()
+        fd = os.open("/dev/net/tun", os.O_RDWR | os.O_NONBLOCK)
+        try:
+            ifr = struct.pack("16sH14x", self._tun_ifreq_name(ifname), self.IFF_TUN | self.IFF_NO_PI)
+            res = fcntl.ioctl(fd, self.TUNSETIFF, ifr)
+            actual = bytes(res[:16]).split(b"\x00", 1)[0].decode("utf-8", "ignore") or ifname
+            os.set_blocking(fd, False)
+            self._set_iface_mtu(actual, mtu)
+            self._set_iface_up(actual)
+            return ChannelMux.TunDevice(fd=fd, ifname=actual, mtu=int(mtu), service_key=svc_key)
+        except Exception:
+            with contextlib.suppress(Exception):
+                os.close(fd)
+            raise
+
+    def _register_tun_reader(self, dev: "ChannelMux.TunDevice") -> None:
+        if dev.reader_registered:
+            return
+        self.loop.add_reader(dev.fd, self._on_tun_fd_readable, dev)
+        dev.reader_registered = True
+
+    def _close_tun_device(self, dev: "ChannelMux.TunDevice") -> None:
+        if dev.reader_registered:
+            with contextlib.suppress(Exception):
+                self.loop.remove_reader(dev.fd)
+            dev.reader_registered = False
+        with contextlib.suppress(Exception):
+            os.close(dev.fd)
+        dev.chan_id = None
+
+    def _find_service_tun_device(self, ifname: str, mtu: int) -> Optional["ChannelMux.TunDevice"]:
+        for dev in self._svc_tun_devices.values():
+            if dev.ifname == ifname and int(dev.mtu) == int(mtu):
+                return dev
+        return None
+
+    async def _start_tun_server_for(self, spec: ChannelMux.ServiceSpec, svc_key: "ChannelMux.ServiceKey"):
+        mtu = max(68, int(spec.l_port or self.TUN_DEFAULT_MTU))
+        dev = self._open_tun_device(spec.l_bind, mtu, svc_key=svc_key)
+        self._svc_tun_devices[svc_key] = dev
+        self._register_tun_reader(dev)
+        self.log.info("[TUN/SRV] service=%s:%s opened if=%s mtu=%s", svc_key[0], spec.svc_id, dev.ifname, dev.mtu)
+
+    def _tun_fragment_payload_limit(self) -> int:
+        return max(0, self._session_max_app_payload - ChannelMux.MUX_HDR.size - ChannelMux.UDP_FRAG_HDR.size)
+
+    def _send_tun_mux_fragments(self, chan_id: int, payload: bytes) -> None:
+        frag_payload_limit = self._tun_fragment_payload_limit()
+        if frag_payload_limit <= 0:
+            self.log.error("[MUX] drop oversized TUN packet: no fragment payload fits within session budget %d", self._session_max_app_payload)
+            return
+        datagram_id = self._next_udp_fragment_datagram_id()
+        total_len = len(payload)
+        self.log.info(
+            "[MUX] fragment TUN packet chan=%s len=%s datagram_id=%s frag_payload_limit=%s",
+            chan_id,
+            total_len,
+            datagram_id,
+            frag_payload_limit,
+        )
+        for offset in range(0, total_len, frag_payload_limit):
+            frag_payload = ChannelMux.UDP_FRAG_HDR.pack(datagram_id, total_len & 0xFFFF, offset & 0xFFFF) + payload[offset:offset + frag_payload_limit]
+            self._send_mux(chan_id, ChannelMux.Proto.TUN, ChannelMux.MType.DATA_FRAG, frag_payload)
+
+    def _bind_tun_channel(self, chan: int, dev: "ChannelMux.TunDevice") -> None:
+        old_chan = dev.chan_id
+        if old_chan is not None and old_chan != chan:
+            self._tun_by_chan.pop(old_chan, None)
+        dev.chan_id = chan
+        self._tun_by_chan[chan] = dev
+        if dev.service_key is not None:
+            self._tun_chan_by_service[dev.service_key] = chan
+
+    def _on_tun_fd_readable(self, dev: "ChannelMux.TunDevice") -> None:
+        while True:
+            try:
+                packet = os.read(dev.fd, max(68, min(self.TUN_READ_SIZE_MAX, int(dev.mtu) + 4)))
+            except BlockingIOError:
+                return
+            except OSError as e:
+                if getattr(e, "errno", None) in (11,):
+                    return
+                self.log.info("[TUN] if=%s read failed: %r", dev.ifname, e)
+                return
+            if not packet:
+                return
+            self._on_local_tun_packet(dev, packet)
+
+    def _on_local_tun_packet(self, dev: "ChannelMux.TunDevice", packet: bytes) -> None:
+        if not (self._overlay_connected and self._accepting_enabled):
+            return
+        if len(packet) > int(dev.mtu):
+            self.log.warning("[TUN] if=%s drop oversize local packet len=%s mtu=%s", dev.ifname, len(packet), dev.mtu)
+            return
+        chan = dev.chan_id
+        if chan is None:
+            svc_key = dev.service_key
+            if svc_key is None:
+                self.log.warning("[TUN] if=%s drop packet: no mux channel bound", dev.ifname)
+                return
+            spec = self._effective_services_by_id().get(svc_key)
+            if spec is None:
+                self.log.warning("[TUN] if=%s drop packet: missing service spec", dev.ifname)
+                return
+            chan = self._alloc_tun_id()
+            self._bind_tun_channel(chan, dev)
+            if str(svc_key[0]) == "peer":
+                self._chan_owner_peer_id[chan] = int(svc_key[1])
+            self._send_mux(chan, ChannelMux.Proto.TUN, ChannelMux.MType.OPEN, self._build_open_v4(spec))
+        self._send_mux(chan, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet)
+
+    def _rx_tun(self, chan: int, mtype: ChannelMux.MType, data: bytes, peer_id: Optional[int] = None) -> None:
+        if mtype == ChannelMux.MType.OPEN:
+            self._rx_tun_open(chan, data, peer_id=peer_id)
+        elif mtype == ChannelMux.MType.DATA:
+            self._rx_tun_data(chan, data)
+        elif mtype == ChannelMux.MType.DATA_FRAG:
+            self._rx_tun_fragment(chan, data)
+        elif mtype == ChannelMux.MType.CLOSE:
+            self._rx_tun_close(chan)
+        else:
+            self.log.warning("[APP] Unknown mtype to dispatch TUN:%s", mtype)
+
+    def _rx_tun_open(self, chan: int, payload: bytes, peer_id: Optional[int] = None) -> None:
+        p = self._parse_open_v4(payload)
+        if not p:
+            self.log.debug("[TUN/CLI] chan=%s OPEN parse failed", chan)
+            return
+        instance_id, connection_seq, svc_id, l_proto, l_bind, l_port, r_proto, host, r_port = p
+        peer_key = int(peer_id or 0)
+        prev_epoch = self._peer_mux_epochs.get(peer_key)
+        if not self._peer_epoch_is_new(peer_id, instance_id, connection_seq):
+            self.log.debug("[TUN/CLI] chan=%s duplicate/replay OPEN instance_id=%s connection_seq=%s", chan, instance_id, connection_seq)
+        else:
+            if prev_epoch is not None:
+                self._reset_peer_open_channels(peer_key)
+            self.loop.create_task(self._drop_peer_installed_services(peer_id=peer_key))
+        if int(l_proto) != int(ChannelMux.Proto.TUN):
+            self.log.warning("[TUN/CLI] chan=%s OPEN declares non-TUN l_proto=%s", chan, l_proto)
+            return
+        if int(r_proto) != int(ChannelMux.Proto.TUN):
+            self.log.warning("[TUN/CLI] chan=%s OPEN requests non-TUN r_proto=%s", chan, r_proto)
+            return
+        open_key = (peer_key, int(svc_id), int(l_proto), str(l_bind), int(l_port), int(r_proto), str(host), int(r_port))
+        self._forget_tun_open_key(chan)
+        self._tun_open_key_by_chan[chan] = open_key
+        self._tun_chan_by_open_key[open_key] = chan
+        dev = self._find_service_tun_device(str(host), int(r_port))
+        if dev is None:
+            try:
+                dev = self._open_tun_device(str(host), max(68, int(r_port or self.TUN_DEFAULT_MTU)))
+                self._register_tun_reader(dev)
+            except Exception as e:
+                self.log.info("[TUN/CLI] chan=%s open failed if=%s mtu=%s: %r", chan, host, r_port, e)
+                self._forget_tun_open_key(chan)
+                return
+        self._bind_tun_channel(chan, dev)
+        self.log.info("[TUN/CLI] chan=%s bound if=%s mtu=%s svc=%s", chan, dev.ifname, dev.mtu, svc_id)
+
+    def _rx_tun_data(self, chan: int, data: bytes) -> None:
+        dev = self._tun_by_chan.get(chan)
+        if dev is None:
+            self.log.warning("[TUN] chan=%s DATA not routed yet (no device)", chan)
+            return
+        ctr = self._ctr(ChannelMux.Proto.TUN, chan)
+        ctr.msgs_in += 1
+        ctr.bytes_in += len(data)
+        if len(data) > int(dev.mtu):
+            self.log.warning("[TUN] chan=%s drop oversize packet len=%s mtu=%s", chan, len(data), dev.mtu)
+            return
+        try:
+            os.write(dev.fd, data)
+            ctr.msgs_out += 1
+            ctr.bytes_out += len(data)
+        except Exception as e:
+            self.log.info("[TUN] chan=%s write failed if=%s: %r", chan, dev.ifname, e)
+
+    def _rx_tun_fragment(self, chan: int, payload: bytes) -> None:
+        dev = self._tun_by_chan.get(chan)
+        if dev is None:
+            self.log.warning("[TUN] chan=%s fragment not routed yet (no device)", chan)
+            return
+        if len(payload) < ChannelMux.UDP_FRAG_HDR.size:
+            self.log.warning("[TUN] chan=%s fragment too short (%d bytes)", chan, len(payload))
+            return
+        datagram_id, total_len, offset = ChannelMux.UDP_FRAG_HDR.unpack(payload[:ChannelMux.UDP_FRAG_HDR.size])
+        chunk = bytes(payload[ChannelMux.UDP_FRAG_HDR.size:])
+        if total_len <= 0 or total_len > int(dev.mtu):
+            self.log.warning("[TUN] chan=%s drop fragment datagram_id=%s total_len=%s mtu=%s", chan, datagram_id, total_len, dev.mtu)
+            self._tun_frag_rx.pop((chan, int(datagram_id)), None)
+            return
+        if offset > total_len or (offset + len(chunk)) > total_len or not chunk:
+            self.log.warning("[TUN] chan=%s invalid fragment datagram_id=%s total=%s offset=%s chunk=%s", chan, datagram_id, total_len, offset, len(chunk))
+            return
+        key = (chan, int(datagram_id))
+        now = time.time()
+        state = self._tun_frag_rx.get(key)
+        if state is None:
+            state = {"total": int(total_len), "parts": {}, "received": 0, "updated": now}
+            self._tun_frag_rx[key] = state
+        elif int(state.get("total", 0)) != int(total_len):
+            self._tun_frag_rx.pop(key, None)
+            return
+        parts = state.setdefault("parts", {})
+        if offset not in parts:
+            parts[offset] = chunk
+            state["received"] = int(state.get("received", 0)) + len(chunk)
+        state["updated"] = now
+        if int(state.get("received", 0)) < int(total_len):
+            return
+        assembled = bytearray(int(total_len))
+        cursor = 0
+        for frag_offset, frag_chunk in sorted(parts.items()):
+            frag_offset_i = int(frag_offset)
+            if frag_offset_i != cursor:
+                return
+            next_cursor = frag_offset_i + len(frag_chunk)
+            if next_cursor > int(total_len):
+                self._tun_frag_rx.pop(key, None)
+                return
+            assembled[frag_offset_i:next_cursor] = frag_chunk
+            cursor = next_cursor
+        if cursor != int(total_len):
+            return
+        self._tun_frag_rx.pop(key, None)
+        self._rx_tun_data(chan, bytes(assembled))
+
+    def _rx_tun_close(self, chan: int) -> None:
+        dev = self._tun_by_chan.pop(chan, None)
+        self._chan_stats.pop((chan, ChannelMux.Proto.TUN), None)
+        self._chan_owner_peer_id.pop(chan, None)
+        self._tun_frag_rx = {key: state for key, state in self._tun_frag_rx.items() if key[0] != chan}
+        self._forget_tun_open_key(chan)
+        if dev is None:
+            return
+        if dev.service_key is not None and self._tun_chan_by_service.get(dev.service_key) == chan:
+            self._tun_chan_by_service.pop(dev.service_key, None)
+            dev.chan_id = None
+        else:
+            self._close_tun_device(dev)
+        self.log.info("[TUN] chan=%s CLOSE => local teardown", chan)
+
     # ---------- MUX RX demux ----------
     def on_app_payload_from_peer(self, buf: bytes, peer_id: Optional[int] = None) -> bool:
         self.log.debug(f"[MUX] APP data receiving on session id=%x", id(self))
@@ -11525,6 +11912,10 @@ class ChannelMux:
 
         if proto == ChannelMux.Proto.TCP:
             self._rx_tcp(chan_id, mtype, payload, peer_id=peer_id)
+            return True
+
+        if proto == ChannelMux.Proto.TUN:
+            self._rx_tun(chan_id, mtype, payload, peer_id=peer_id)
             return True
 
         return False
@@ -12288,6 +12679,25 @@ class ChannelMux:
         )
         return cid
 
+    def _alloc_tun_id(self) -> int:
+        start = self._chan_id_start if self._chan_id_stride == 2 else self.TUN_MIN_ID
+        stride = self._chan_id_stride if self._chan_id_stride > 0 else 1
+        cid = self._next_tun_id
+        if cid > self.TUN_MAX_ID or cid < start:
+            cid = start
+
+        scan_start = cid
+        while cid in self._tun_by_chan:
+            nxt = cid + stride
+            cid = nxt if nxt <= self.TUN_MAX_ID else start
+            if cid == scan_start:
+                raise RuntimeError("no free TUN channel ids available")
+
+        nxt = cid + stride
+        self._next_tun_id = nxt if nxt <= self.TUN_MAX_ID else start
+        self.log.debug("[TUN/SRV] alloc chan=%s next=%s active=%s", cid, self._next_tun_id, len(self._tun_by_chan))
+        return cid
+
     def _ctr(self, proto: ChannelMux.Proto, chan: int) -> _ChanCtr:
         key = (chan, proto)
         c = self._chan_stats.get((chan, proto))
@@ -12318,6 +12728,8 @@ class ChannelMux:
             protostr = "UDP"
         if proto == ChannelMux.Proto.TCP:
             protostr = "TCP"
+        if proto == ChannelMux.Proto.TUN:
+            protostr = "TUN"
 
         basestr=f"{src} {protostr}:{chan_id} {dir} CNT:{counter}"
 

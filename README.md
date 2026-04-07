@@ -101,6 +101,90 @@ After the first startup, open the Admin Web UI and adjust the remaining details 
 - admin authentication and instance naming
 - logging and log retention settings
 
+### TUN interface example
+
+ChannelMux can now expose a Linux TUN interface as a muxed packet service.
+
+Important constraints:
+
+- this currently works on Linux only
+- it uses `/dev/net/tun` and the Python standard library only
+- the process needs permission to create and configure TUN devices
+- ObstacleBridge brings the interface up and applies MTU, but it does not assign IP addresses for you
+
+Service-spec format for TUN uses the existing six-field syntax:
+
+```text
+tun,<local_mtu>,<local_ifname>,tun,<remote_ifname>,<remote_mtu>
+```
+
+Interpretation:
+
+- `local_ifname` is the interface name to create on this side
+- `local_mtu` is the MTU to apply on this side
+- `remote_ifname` is the interface name the peer should create
+- `remote_mtu` is the MTU to apply on the peer side
+
+Example pair:
+
+- client `own_servers`: `tun,1400,obtun0,tun,obtun1,1400`
+- server `remote_servers`: `tun,1400,obtun1,tun,obtun0,1400`
+
+Minimal bootstrap example with TUN carried over a WebSocket overlay:
+
+**Listener / server with remote TUN request**
+
+```json
+{
+  "overlay_transport": "ws",
+  "ws_bind": "0.0.0.0",
+  "ws_own_port": 443,
+  "remote_servers": [
+    "tun,1400,obtun1,tun,obtun0,1400"
+  ],
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18080,
+  "admin_web_name": "TUN Listener",
+  "log": "INFO"
+}
+```
+
+**Peer / client with local TUN service**
+
+```json
+{
+  "overlay_transport": "ws",
+  "ws_peer": "bridge.example.com",
+  "ws_peer_port": 443,
+  "ws_own_port": 0,
+  "own_servers": [
+    "tun,1400,obtun0,tun,obtun1,1400"
+  ],
+  "admin_web": true,
+  "admin_web_bind": "127.0.0.1",
+  "admin_web_port": 18081,
+  "admin_web_name": "TUN Peer",
+  "log": "INFO"
+}
+```
+
+Then start both sides and assign addresses with normal Linux tooling, for example:
+
+```bash
+sudo ip addr add 10.20.0.1/30 dev obtun0
+sudo ip link set obtun0 up
+```
+
+and on the other side:
+
+```bash
+sudo ip addr add 10.20.0.2/30 dev obtun1
+sudo ip link set obtun1 up
+```
+
+After that, packets written to the local TUN interface are carried through ChannelMux as packet-oriented overlay traffic. If a packet is larger than the current wrapped session budget, ChannelMux fragments it at mux level and reassembles it before injecting it into the peer TUN interface.
+
 User-use-case note:
 
 - the examples below are user-oriented deployment patterns, not project requirements

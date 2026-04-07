@@ -83,22 +83,27 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         specs = [
             'udp,16667,0.0.0.0,udp,127.0.0.1,16666',
             'tcp,3129,::,tcp,::1,3128',
+            'tun,1500,obtun0,tun,obtun1,1500',
         ]
 
         parsed = ChannelMux._parse_remote_servers(specs)
 
-        self.assertEqual(len(parsed), 2)
+        self.assertEqual(len(parsed), 3)
         self.assertEqual(parsed[0].svc_id, 1)
         self.assertEqual(parsed[0].l_proto, 'udp')
         self.assertEqual(parsed[1].svc_id, 2)
         self.assertEqual(parsed[1].l_proto, 'tcp')
         self.assertEqual(parsed[1].r_host, '::1')
+        self.assertEqual(parsed[2].svc_id, 3)
+        self.assertEqual(parsed[2].l_proto, 'tun')
+        self.assertEqual(parsed[2].l_bind, 'obtun0')
+        self.assertEqual(parsed[2].r_host, 'obtun1')
 
     def test_parse_remote_servers_rejects_invalid_specs(self):
         with self.assertRaisesRegex(ValueError, '--remote-servers item must have 6 comma-separated fields'):
             ChannelMux._parse_remote_servers(['udp,16667,0.0.0.0,udp,127.0.0.1'])
 
-        with self.assertRaisesRegex(ValueError, '--remote-servers local protocol must be udp or tcp'):
+        with self.assertRaisesRegex(ValueError, '--remote-servers local protocol must be udp, tcp or tun'):
             ChannelMux._parse_remote_servers(['icmp,16667,0.0.0.0,udp,127.0.0.1,16666'])
 
         with self.assertRaisesRegex(ValueError, '--remote-servers ports must be integers in 1..65535'):
@@ -144,18 +149,21 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
     async def test_receiver_starts_udp_and_tcp_listeners_from_remote_catalog(self):
         udp_spec = ChannelMux.ServiceSpec(1, 'udp', '127.0.0.1', 10001, 'udp', '127.0.0.1', 20001)
         tcp_spec = ChannelMux.ServiceSpec(2, 'tcp', '127.0.0.1', 10002, 'tcp', '127.0.0.1', 20002)
-        payload = self.mux._encode_remote_services_set_v2([udp_spec, tcp_spec])
+        tun_spec = ChannelMux.ServiceSpec(3, 'tun', 'obtun0', 1500, 'tun', 'obtun1', 1500)
+        payload = self.mux._encode_remote_services_set_v2([udp_spec, tcp_spec, tun_spec])
         frame = self.mux._pack_mux(0, ChannelMux.Proto.UDP, 0, ChannelMux.MType.REMOTE_SERVICES_SET_V2, payload)
 
-        with patch.object(self.mux, '_start_udp_server_for', new=AsyncMock()) as start_udp, patch.object(self.mux, '_start_tcp_server_for', new=AsyncMock()) as start_tcp:
+        with patch.object(self.mux, '_start_udp_server_for', new=AsyncMock()) as start_udp, patch.object(self.mux, '_start_tcp_server_for', new=AsyncMock()) as start_tcp, patch.object(self.mux, '_start_tun_server_for', new=AsyncMock()) as start_tun:
             ok = self.mux.on_app_payload_from_peer(frame, peer_id=77)
             self.assertTrue(ok)
             await asyncio.sleep(0)
 
         start_udp.assert_awaited_once()
         start_tcp.assert_awaited_once()
+        start_tun.assert_awaited_once()
         self.assertIn(('peer', 77, 1), self.mux._peer_installed_services)
         self.assertIn(('peer', 77, 2), self.mux._peer_installed_services)
+        self.assertIn(('peer', 77, 3), self.mux._peer_installed_services)
 
     async def test_remote_catalog_replacement_adds_and_removes_services(self):
         svc1 = ChannelMux.ServiceSpec(1, 'udp', '127.0.0.1', 10001, 'udp', '127.0.0.1', 20001)
@@ -295,6 +303,75 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
             with patch.object(mux, '_send_mux') as send_mux:
                 mux._on_local_udp_datagram(spec, svc_key, b'abcdef', ('127.0.0.1', 32000))
                 send_mux.assert_not_called()
+        finally:
+            mux.loop.close()
+
+    def test_local_tun_packet_opens_channel_and_sends_data(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._overlay_connected = True
+            mux._accepting_enabled = True
+            spec = ChannelMux.ServiceSpec(5, 'tun', 'obtun0', 1500, 'tun', 'obtun1', 1500)
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+
+            mux._on_local_tun_packet(dev, b'\x45hello')
+
+            self.assertEqual(len(session.sent), 2)
+            first = mux._unpack_mux(session.sent[0])
+            second = mux._unpack_mux(session.sent[1])
+            self.assertIsNotNone(first)
+            self.assertIsNotNone(second)
+            self.assertEqual(first[1], ChannelMux.Proto.TUN)
+            self.assertEqual(first[3], ChannelMux.MType.OPEN)
+            self.assertEqual(second[1], ChannelMux.Proto.TUN)
+            self.assertEqual(second[3], ChannelMux.MType.DATA)
+            self.assertEqual(bytes(second[4]), b'\x45hello')
+            self.assertIsNotNone(dev.chan_id)
+        finally:
+            mux.loop.close()
+
+    def test_send_mux_fragments_oversized_tun_packet(self):
+        session = _FakeSession(connected=True, max_app_payload_size=32)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            payload = b'abcdefghijklmnopqrstuvwxyz'
+            mux._send_mux(9, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, payload)
+
+            self.assertGreater(len(session.sent), 1)
+            rebuilt = bytearray()
+            for frame in session.sent:
+                parsed = mux._unpack_mux(frame)
+                self.assertIsNotNone(parsed)
+                chan_id, proto, _counter, mtype, payload_mv = parsed
+                self.assertEqual(chan_id, 9)
+                self.assertEqual(proto, ChannelMux.Proto.TUN)
+                self.assertEqual(mtype, ChannelMux.MType.DATA_FRAG)
+                frag = bytes(payload_mv)
+                _datagram_id, total_len, offset = ChannelMux.UDP_FRAG_HDR.unpack(frag[:ChannelMux.UDP_FRAG_HDR.size])
+                chunk = frag[ChannelMux.UDP_FRAG_HDR.size:]
+                self.assertEqual(total_len, len(payload))
+                self.assertEqual(offset, len(rebuilt))
+                rebuilt.extend(chunk)
+            self.assertEqual(bytes(rebuilt), payload)
+        finally:
+            mux.loop.close()
+
+    def test_reassembles_tun_fragments_before_device_write(self):
+        session = _FakeSession()
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._tun_by_chan[12] = ChannelMux.TunDevice(fd=44, ifname='obtun0', mtu=64)
+            payload = b'fragmented-tun-packet'
+            with patch('obstacle_bridge.bridge.os.write') as os_write:
+                for offset in range(0, len(payload), 5):
+                    frag_payload = ChannelMux.UDP_FRAG_HDR.pack(31, len(payload), offset) + payload[offset:offset + 5]
+                    frame = mux._pack_mux(12, ChannelMux.Proto.TUN, offset // 5, ChannelMux.MType.DATA_FRAG, frag_payload)
+                    mux.on_app_payload_from_peer(frame)
+                os_write.assert_called_once_with(44, payload)
         finally:
             mux.loop.close()
 

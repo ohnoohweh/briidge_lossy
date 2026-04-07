@@ -7,9 +7,9 @@ This note records the current `ChannelMux` design as implemented in [bridge.py](
 `ChannelMux` is the runtime boundary between:
 
 - plaintext overlay session payloads coming from the transport and optional secure-link layers
-- local TCP and UDP service sockets that are exposed through the overlay
+- local TCP and UDP service sockets, plus Linux TUN packet interfaces, that are exposed through the overlay
 
-Its job is not only routing. It also owns the service-facing semantics that differ between TCP streams and UDP datagrams.
+Its job is not only routing. It also owns the service-facing semantics that differ between TCP streams, UDP datagrams, and packet-oriented TUN interfaces.
 
 ## Scope
 
@@ -20,7 +20,9 @@ This document covers:
 - TCP control-plane setup for listeners, channels, and outbound dials
 - TCP stream chunking at the service boundary
 - UDP datagram forwarding at the service boundary
+- Linux TUN interface setup and packet forwarding at the service boundary
 - mux-level UDP fragmentation and reassembly
+- mux-level TUN packet fragmentation and reassembly
 - explicit UDP service-datagram caps and diagnostics
 
 It does not redefine:
@@ -36,10 +38,14 @@ It does not redefine:
 - channel ids and mux headers
 - `OPEN`, `DATA`, `CLOSE`, and remote-service catalog control messages
 - local TCP/UDP listener lifecycle for configured services
-- mapping between overlay channels and local TCP/UDP sockets
+- local Linux TUN device lifecycle for configured services
+- mapping between overlay channels and local TCP/UDP sockets or TUN devices
 - TCP read chunking sized to the wrapped session budget
 - UDP service datagram fragmentation when one mux `DATA` frame would exceed the effective session budget
 - peer-side UDP service datagram reassembly before local `sendto(...)`
+- TUN packet forwarding using nonblocking `/dev/net/tun` file descriptors
+- TUN packet fragmentation when one mux `DATA` frame would exceed the effective session budget
+- peer-side TUN packet reassembly before local interface injection
 - per-channel counters and related diagnostics
 
 `ChannelMux` does not own:
@@ -63,6 +69,13 @@ The meaning is:
 
 - the local side exposes a listener on `l_bind:l_port` using `l_proto`
 - when traffic arrives on that listener, the peer is asked to reach `r_host:r_port` using `r_proto`
+
+For TUN, the same six fields are reused with packet-interface meaning:
+
+- `l_bind` is the local TUN interface name
+- `l_port` is the local TUN MTU
+- `r_host` is the peer-side TUN interface name
+- `r_port` is the peer-side TUN MTU
 
 For TCP, that means:
 
@@ -125,6 +138,29 @@ This means:
 - the peer creates or reuses the matching UDP client-side transport toward `127.0.0.1:5353`
 - each UDP datagram remains one logical service message unless mux-level fragmentation is required
 
+### Example: one TUN service specification
+
+Example service spec:
+
+```text
+svc_id=30
+l_proto=tun
+l_bind=obtun0
+l_port=1400
+r_proto=tun
+r_host=obtun1
+r_port=1400
+```
+
+This means:
+
+- the local mux creates Linux TUN interface `obtun0`
+- the local interface MTU is set to `1400`
+- packets read from `obtun0` are forwarded through one mux TUN channel
+- the peer creates or reuses Linux TUN interface `obtun1`
+- the peer-side interface MTU is set to `1400`
+- packet boundaries are preserved end to end unless mux-level fragmentation is required
+
 ## Wire model
 
 The primary mux header is:
@@ -166,6 +202,13 @@ For UDP, the important control and data messages are:
 - `DATA`: carry one complete UDP service datagram when it fits inside the session budget
 - `DATA_FRAG`: carry one fragment of a larger UDP service datagram
 - `CLOSE`: tear down idle or obsolete UDP channel state
+
+For TUN, the important control and data messages are:
+
+- `OPEN`: associate one logical TUN channel with an interface name and MTU pair
+- `DATA`: carry one complete TUN packet when it fits inside the session budget
+- `DATA_FRAG`: carry one fragment of a larger TUN packet
+- `CLOSE`: tear down the current channel binding while preserving configured service devices when appropriate
 
 ## TCP protocol
 
@@ -339,6 +382,93 @@ To keep reuse safe, the mux tracks:
 
 This combination prevents a stale `OPEN`, replayed control message, or reconnect boundary from being mistaken for a still-live TCP channel.
 
+## TUN protocol
+
+TUN in `ChannelMux` is packet-oriented, not stream-oriented.
+
+The implementation is currently Linux-only and uses only Python standard-library facilities:
+
+- `os.open` and `os.read` / `os.write`
+- `fcntl.ioctl`
+- event-loop `add_reader(...)`
+- interface configuration through socket ioctls
+
+### TUN OPEN payload
+
+TUN uses the same `OPEN v4` payload shape as TCP and UDP.
+
+For TUN channels:
+
+- `l_proto` and `r_proto` are both `TUN`
+- `l_bind` is interpreted as the source-side interface name
+- `l_port` is interpreted as the source-side MTU
+- `r_host` is interpreted as the destination-side interface name
+- `r_port` is interpreted as the destination-side MTU
+
+So the control plane stays structurally uniform even though the meaning of the bind and host fields is different from socket-based services.
+
+### TUN listener-side flow
+
+When a configured TUN service starts:
+
+1. `ChannelMux` opens `/dev/net/tun`.
+2. It creates the requested interface with `IFF_TUN | IFF_NO_PI`.
+3. It sets the configured MTU.
+4. It brings the interface up.
+5. It registers an event-loop reader for the device file descriptor.
+
+When a packet is read from the interface:
+
+1. `ChannelMux` allocates a TUN channel id if the service has not been bound to one yet.
+2. It sends one `OPEN` message carrying the interface-name and MTU metadata.
+3. It sends the packet as one mux `DATA` message, or as `DATA_FRAG` messages if fragmentation is required.
+
+### TUN dialer-side flow
+
+When the peer receives a TUN `OPEN` message:
+
+1. It parses the `OPEN v4` payload.
+2. It validates that both protocol fields are `TUN`.
+3. It checks the peer epoch using `instance_id` and `connection_seq`.
+4. It binds the channel to an existing configured TUN service device when the requested interface name and MTU match.
+5. Otherwise, it creates a non-service TUN device on demand using the requested peer interface name and MTU.
+6. It registers the file descriptor with the event loop and binds the new channel to that device.
+
+This keeps the control-plane symmetry with TCP and UDP while still allowing packet-interface semantics.
+
+### TUN DATA behavior
+
+`DATA` messages for TUN carry one complete packet.
+
+Current behavior:
+
+- packet boundaries are preserved end to end
+- packets read from the local TUN file descriptor are forwarded as mux `DATA`
+- packets received from the overlay are injected with `os.write(...)` into the bound peer TUN file descriptor
+- packets larger than the device MTU are dropped at the local injection or receive side
+
+So TUN channel semantics are closer to UDP than TCP:
+
+- preserve packet boundaries
+- do not merge adjacent packets into a stream
+- require explicit reassembly when fragmented at mux level
+
+### Example: end-to-end TUN lifecycle
+
+```text
+kernel/IP stack       mux A                     mux B                 kernel/IP stack
+---------------       ---------------------     ------------------    ---------------
+packet -> obtun0 -->  read(fd)
+					  alloc chan=24
+					  OPEN(chan=24, l_bind=obtun0, l_port=1400, r_host=obtun1, r_port=1400) --->
+												parse OPEN
+												create or reuse obtun1
+
+IP packet --------->  DATA(chan=24, packet) --------------------------------------> write(fd)
+```
+
+The logical overlay channel represents the packet path between the two TUN devices, not a socket connection.
+
 ## Recovery-driven protocol changes
 
 Several parts of the current mux protocol exist because connection recovery, reconnect, and replay-safe resynchronization turned out to be first-class requirements rather than edge cases.
@@ -396,7 +526,9 @@ That includes:
 
 - TCP channels created from prior `OPEN` messages
 - UDP channels and their client transports created from prior `OPEN` messages
+- TUN channels and their bound ephemeral TUN devices created from prior `OPEN` messages
 - partial UDP fragment reassembly state
+- partial TUN fragment reassembly state
 - peer-installed listener services from the previous epoch
 
 Only after that reset does the mux apply the new control message.
@@ -506,6 +638,43 @@ The service-facing UDP application still sees one datagram, even though the over
 ```
 
 This avoids reconstructing a UDP service datagram out of fragments that straddle a reconnect boundary.
+
+## TUN service behavior
+
+TUN services are packet-oriented at the local boundary.
+
+Current model:
+
+- one packet read from the local TUN file descriptor is treated as one logical service message
+- if the full mux `DATA` message fits inside the effective session budget, it is sent directly
+- if it would exceed the effective session budget, `ChannelMux` fragments the TUN packet into multiple `DATA_FRAG` mux messages
+- the peer-side mux reassembles those fragments before injecting one packet into the destination TUN interface
+
+This keeps packet boundaries intact for higher-layer IP traffic while still allowing the overlay budget to shrink because of SecureLink or text-encoded WebSocket transports.
+
+### Example: TUN packet carried through DATA_FRAG
+
+```text
+1. a local TUN packet of 1400 bytes arrives on chan=24
+2. mux A determines that one TUN DATA frame would exceed the current wrapped session budget
+3. mux A assigns datagram_id=77
+4. mux A emits several DATA_FRAG(chan=24, datagram_id=77, total_len=1400, offset=...)
+5. mux B stores fragments by (chan=24, datagram_id=77)
+6. once all contiguous bytes are present, mux B rebuilds the original 1400-byte packet
+7. mux B injects one packet into the peer TUN file descriptor
+```
+
+### Example: recovery while TUN fragments are in flight
+
+```text
+1. mux B has partial reassembly state for (chan=24, datagram_id=77)
+2. a newer peer epoch is detected
+3. mux B drops the old TUN channel state and fragment reassembly entry
+4. fragments from the previous epoch are no longer allowed to complete packet delivery
+5. the sender must re-establish traffic in the new epoch
+```
+
+This avoids injecting a reconstructed packet into a TUN interface when the fragments belong to different reconnect epochs.
 
 ## Why mux-level UDP fragmentation exists
 
