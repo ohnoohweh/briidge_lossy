@@ -41,6 +41,10 @@ REQ-OVL-007:
 # NOTE: additionally updated to reflect repository process/PR-style documentation changes (PR #178)
 # NOTE: the README is intentionally maintained as a compact coverage snapshot, while
 # detailed requirement, design, and testing narrative stays in the dedicated docs.
+# NOTE: the PR-185 backport also revalidated the Linux shared xdist slice after
+# loopback-isolated harness rewrites and secure-link session-budget fixes in the
+# delivered runtime, so the existing REQ-WSP-008/010, REQ-ADM-004/006, and
+# REQ-AUT-010 mappings remain defended in the CI-aligned parallel run.
 # The application-vs-library functional decomposition for REQ-WSP-* is documented in
 # docs/ARCHITECTURE.md under "WebSocket proxy tunneling".
 # The broader separation between user use-cases, external assumptions, and

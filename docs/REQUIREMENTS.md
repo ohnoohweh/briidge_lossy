@@ -82,6 +82,8 @@ Current implementation note:
 
 - delivered secure-link modes now include `secure_link_mode=psk` and `secure_link_mode=cert`
 - both delivered modes run on `overlay_transport=myudp`, `tcp`, `ws`, and `quic`
+- the current runtime keeps mux payload budgeting aligned with the wrapped transport session budget for `myudp`, `tcp`, and `quic`, so SecureLink wrapping does not reduce healthy forwarded application traffic to the mux-header size alone
+- when a protected client observes a transport-epoch change during reconnect or restart recovery, it now restarts the secure-link client handshake against that fresh transport epoch instead of continuing on stale client-side handshake state
 - broader multi-peer listener validation now exists on `ws`, `myudp`, `tcp`, and `quic`, with the deepest concurrent channel-routing slice still exercised on the TCP transport
 - the runtime now exposes aggregate runtime summary through `/api/status` and peer-scoped secure-link observability through `/api/peers`
 - in `secure_link_mode=cert`, operators can now trigger live `revocation`, `local_identity`, or `all` reload/apply actions through `POST /api/secure-link/reload` and the WebAdmin controls without restarting the process
