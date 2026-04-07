@@ -822,6 +822,7 @@ This top-level section is a compact coverage snapshot. Update the counts and sup
 
 - Linux runs the OS-independent integration suite with `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`
 - Windows runs the Windows-specific integration subset with `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"`
+- Recent validation for this branch used the Windows-local unit and `windows_only` subset here, and the Linux shared integration subset completed successfully in the CI-aligned environment.
 
 ### Development environment and procedure
 - Feature development is done on Fedora 42.

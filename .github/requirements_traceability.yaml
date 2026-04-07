@@ -39,6 +39,8 @@ REQ-OVL-007:
 # This manifest is CI/support metadata and therefore lives under .github/ rather than docs/.
 # NOTE: updated to reflect a small instrumentation/docs change (PR #178)
 # NOTE: additionally updated to reflect repository process/PR-style documentation changes (PR #178)
+# NOTE: the README is intentionally maintained as a compact coverage snapshot, while
+# detailed requirement, design, and testing narrative stays in the dedicated docs.
 # The application-vs-library functional decomposition for REQ-WSP-* is documented in
 # docs/ARCHITECTURE.md under "WebSocket proxy tunneling".
 # The broader separation between user use-cases, external assumptions, and
