@@ -33,5 +33,6 @@ ObstacleBridge = "obstacle_bridge.bridge:main"
 markers = [
     "integration: end-to-end integration tests",
     "slow: long-running tests",
+    "linux_elevated: Linux-only integration tests that require /dev/net/tun and elevated interface-management permission",
     "windows_only: integration tests that must run on Windows and should be excluded from Linux shared gates",
 ]
