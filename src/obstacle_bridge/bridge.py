@@ -10255,6 +10255,33 @@ def _listener_family_for_host(host: str) -> int:
     return socket.AF_INET6 if ":" in host else socket.AF_INET
 
 
+def _resolve_hostalias(host: str) -> str:
+    alias_path = os.environ.get("HOSTALIASES", "").strip()
+    if not alias_path:
+        return host
+    alias_key = str(host or "").strip()
+    if not alias_key or "." in alias_key or ":" in alias_key:
+        return host
+    try:
+        with open(alias_path, "r", encoding="utf-8") as fh:
+            for raw_line in fh:
+                line = raw_line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                if parts[0] == alias_key:
+                    return parts[1]
+    except OSError:
+        return host
+    return host
+
+
+def _ipv4_to_mapped_ipv6(host: str) -> str:
+    return f"::ffff:{host}"
+
+
 def _resolve_peer_endpoint(
     host: str,
     port: int,
@@ -10267,12 +10294,18 @@ def _resolve_peer_endpoint(
     if not host:
         raise RuntimeError("overlay peer requires a non-empty host name")
 
+    host = _resolve_hostalias(host)
+
     family = _host_ip_family(host)
     if family != socket.AF_UNSPEC:
         if resolve_mode == "ipv4" and family != socket.AF_INET:
             raise RuntimeError(f"overlay peer {host!r} is not an IPv4 address")
         if resolve_mode == "ipv6" and family != socket.AF_INET6:
-            raise RuntimeError(f"overlay peer {host!r} is not an IPv6 address")
+            if family == socket.AF_INET:
+                host = _ipv4_to_mapped_ipv6(host)
+                family = socket.AF_INET6
+            else:
+                raise RuntimeError(f"overlay peer {host!r} is not an IPv6 address")
         bind_family = _bind_family_constraint(bind_host)
         if bind_family is not None and bind_family != family:
             raise RuntimeError(
