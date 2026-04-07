@@ -75,10 +75,17 @@ class FakeInnerSession:
             "rtt_est_ms": None,
         }]
 
+    def get_max_app_payload_size(self):
+        return 65535
+
     def emit_state(self, connected: bool):
         self._connected = connected
         if callable(self._on_state):
             self._on_state(connected)
+
+    def emit_transport_epoch(self, epoch: int):
+        if callable(self._on_transport_epoch_change):
+            self._on_transport_epoch_change(epoch)
 
 
 def _args(**overrides):
@@ -356,6 +363,37 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         self.assertGreaterEqual(self._count_frame_type(client_inner.sent, client._SL_TYPE_CLIENT_HELLO), 2)
+
+    async def test_transport_epoch_change_restarts_client_handshake_without_disconnect_edge(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+
+        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
+        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
+
+        await client.start()
+        await server.start()
+
+        server_inner.emit_state(True)
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        old_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
+        self.assertEqual(self._count_frame_type(client_inner.sent, client._SL_TYPE_CLIENT_HELLO), 1)
+        self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
+
+        client_inner.emit_transport_epoch(2)
+        for _ in range(8):
+            await asyncio.sleep(0)
+
+        self.assertGreaterEqual(self._count_frame_type(client_inner.sent, client._SL_TYPE_CLIENT_HELLO), 2)
+        self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
+        new_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
+        self.assertNotEqual(old_session_id, new_session_id)
 
     async def test_server_rewrites_mux_channels_per_peer_for_multiple_connections(self):
         server_inner = FakeInnerSession(connected=True)

@@ -190,7 +190,7 @@ def main() -> int:
 
     if (changed_contract or requirements_touched) and not readme_touched:
         sys.stderr.write(
-            "README.md must be updated when requirements, implementation, or the test set changes.\n"
+            "README.md must be updated when requirements, implementation, or the test set changes so its coverage snapshot stays current.\n"
             f"Changed contract files: {', '.join(changed_contract) if changed_contract else '(requirements only)'}\n"
             f"Expected updated file: {README_PATH}\n"
         )

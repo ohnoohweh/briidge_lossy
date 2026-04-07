@@ -1931,6 +1931,7 @@ class ISession(Protocol):
 
     # application payload (Mux -> Session)
     def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int: ...
+    def get_max_app_payload_size(self) -> int: ...
 
     # callback wiring
     def set_on_app_payload(self, cb: Callable[[bytes], None]) -> None: ...
@@ -3482,6 +3483,13 @@ class SecureLinkPskSession(ISession):
     def get_metrics(self) -> SessionMetrics:
         return self._inner.get_metrics()
 
+    def get_max_app_payload_size(self) -> int:
+        getter = getattr(self._inner, "get_max_app_payload_size", None)
+        inner_limit = int(getter() or 65535) if callable(getter) else 65535
+        # Protected DATA frames add the secure-link header and AEAD tag before they
+        # reach the wrapped transport session.
+        return max(0, inner_limit - self._SL_HDR.size - 16)
+
     @staticmethod
     def _snapshot_peer_host(row: dict) -> str:
         peer_label = str(row.get("peer") or "").strip()
@@ -3765,6 +3773,8 @@ class SecureLinkPskSession(ISession):
         self._cancel_client_retry_task(clear_schedule=False)
         self._cancel_client_rekey_task(clear_schedule=False)
         self._clear_all_states()
+        if self._client_mode and self._started and bool(getattr(self._inner, "is_connected", lambda: False)()):
+            self._maybe_begin_client_handshake()
         if callable(self._outer_on_transport_epoch_change):
             try:
                 self._outer_on_transport_epoch_change(epoch)
@@ -4582,6 +4592,9 @@ class UdpSession(ISession):
         except Exception as e:
             self._log.debug(f"[UdpSession] get_metrics failed on SessionMetrics(..) %r", e)
             return SessionMetrics()
+
+    def get_max_app_payload_size(self) -> int:
+        return 65535
 
     @staticmethod
     def _format_peer_label(host: Optional[object], port: Optional[object]) -> Optional[str]:
@@ -5613,6 +5626,9 @@ class TcpStreamSession(ISession):
             )
         except Exception:
             return SessionMetrics()
+
+    def get_max_app_payload_size(self) -> int:
+        return 65535
 
     @staticmethod
     def _format_peer_label(host: Optional[object], port: Optional[object]) -> Optional[str]:
@@ -6711,6 +6727,9 @@ class QuicSession(ISession):
             )
         except Exception:
             return SessionMetrics()
+
+    def get_max_app_payload_size(self) -> int:
+        return max(1, int(self._max_app or 65535))
 
     @staticmethod
     def _format_peer_label(host: Optional[object], port: Optional[object]) -> Optional[str]:
@@ -8092,6 +8111,10 @@ class WebSocketSession(ISession):
             )
         except Exception:
             return SessionMetrics()
+
+    def get_max_app_payload_size(self) -> int:
+        # send_app() prepends the 1-byte WS kind marker before payload encoding.
+        return max(0, int(self._ws_max_size or 0) - 1)
 
     # ---- Data path (APP) ------------------------------------------------------
     def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
@@ -10241,6 +10264,33 @@ def _listener_family_for_host(host: str) -> int:
     return socket.AF_INET6 if ":" in host else socket.AF_INET
 
 
+def _resolve_hostalias(host: str) -> str:
+    alias_path = os.environ.get("HOSTALIASES", "").strip()
+    if not alias_path:
+        return host
+    alias_key = str(host or "").strip()
+    if not alias_key or "." in alias_key or ":" in alias_key:
+        return host
+    try:
+        with open(alias_path, "r", encoding="utf-8") as fh:
+            for raw_line in fh:
+                line = raw_line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                if parts[0] == alias_key:
+                    return parts[1]
+    except OSError:
+        return host
+    return host
+
+
+def _ipv4_to_mapped_ipv6(host: str) -> str:
+    return f"::ffff:{host}"
+
+
 def _resolve_peer_endpoint(
     host: str,
     port: int,
@@ -10253,12 +10303,18 @@ def _resolve_peer_endpoint(
     if not host:
         raise RuntimeError("overlay peer requires a non-empty host name")
 
+    host = _resolve_hostalias(host)
+
     family = _host_ip_family(host)
     if family != socket.AF_UNSPEC:
         if resolve_mode == "ipv4" and family != socket.AF_INET:
             raise RuntimeError(f"overlay peer {host!r} is not an IPv4 address")
         if resolve_mode == "ipv6" and family != socket.AF_INET6:
-            raise RuntimeError(f"overlay peer {host!r} is not an IPv6 address")
+            if family == socket.AF_INET:
+                host = _ipv4_to_mapped_ipv6(host)
+                family = socket.AF_INET6
+            else:
+                raise RuntimeError(f"overlay peer {host!r} is not an IPv6 address")
         bind_family = _bind_family_constraint(bind_host)
         if bind_family is not None and bind_family != family:
             raise RuntimeError(
@@ -10647,7 +10703,11 @@ class ChannelMux:
         self._sweeper_task: Optional[asyncio.Task] = None
         self._ensure_task: Optional[asyncio.Task] = None
 
-        self._SAFE_TCP_READ = 65535 - ChannelMux.MUX_HDR.size # (maximum app message size) - 8 (MUX header)
+        self._session_max_app_payload = max(
+            ChannelMux.MUX_HDR.size,
+            self._resolve_session_max_app_payload(self.session),
+        )
+        self._SAFE_TCP_READ = max(1, self._session_max_app_payload - ChannelMux.MUX_HDR.size)
 
         # Dashboard interface
         self._udp_client_svc_id: Dict[int, int] = {}
@@ -10685,6 +10745,14 @@ class ChannelMux:
     # ---------------------------------------------------------------------------
     # MUX v2 header: chan_id(2) | proto(1) | counter(2) | mtype(1) | data_len(2)
     MUX_HDR = struct.Struct(">HBHBH")
+
+    @staticmethod
+    def _resolve_session_max_app_payload(session: ISession) -> int:
+        getter = getattr(session, "get_max_app_payload_size", None)
+        if callable(getter):
+            with contextlib.suppress(Exception):
+                return max(0, int(getter() or 0))
+        return 65535
     
     def _pack_mux(self, chan_id: int, proto: ChannelMux.Proto, counter: int, mtype: ChannelMux.MType, data: bytes) -> bytes:
         if not (0 <= chan_id <= 0xFFFF):
@@ -11234,12 +11302,17 @@ class ChannelMux:
     def _send_mux(self, chan_id: int, proto: ChannelMux.Proto, mtype: ChannelMux.MType, data: bytes) -> None:
         if not self.session.is_connected():
             return
-        # Enforce max application message size (MUX header + data <= 65535)
+        # Enforce the effective session payload budget so transport wrappers such as
+        # secure-link over WS cannot emit oversized outer frames.
         if data is None:
             data = b""
         wire = self._pack_mux(chan_id, proto, self._next_ctr(chan_id, proto, mtype), mtype, data)
-        if len(wire) > 65535:
-            self.log.error("[MUX] drop oversized app message: %d bytes", len(wire))
+        if len(wire) > self._session_max_app_payload:
+            self.log.error(
+                "[MUX] drop oversized app message: %d bytes > %d",
+                len(wire),
+                self._session_max_app_payload,
+            )
             return
         # Local->peer counter hook
         if self._on_local_rx:

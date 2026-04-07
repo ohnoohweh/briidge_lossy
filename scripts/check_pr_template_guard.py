@@ -34,9 +34,10 @@ def main() -> int:
     p.add_argument("--pr", type=str, help="PR number or URL (optional)")
     args = p.parse_args()
 
-    gh_cmd = ["gh", "pr", "view", "--json", "body"]
+    gh_cmd = ["gh", "pr", "view"]
     if args.pr:
-        gh_cmd.insert(2, args.pr)
+        gh_cmd.append(args.pr)
+    gh_cmd.extend(["--json", "body"])
 
     rc, out = run(gh_cmd)
     if rc != 0:
