@@ -11598,10 +11598,30 @@ class ChannelMux:
 
     @classmethod
     def _require_tun_support(cls) -> None:
-        if not sys.platform.startswith("linux"):
-            raise RuntimeError("TUN services are supported only on Linux")
-        if fcntl is None:
-            raise RuntimeError("TUN services require fcntl support")
+        # Linux path: require fcntl and /dev/net/tun
+        if sys.platform.startswith("linux"):
+            if fcntl is None:
+                raise RuntimeError("TUN services require fcntl support")
+            return
+
+        # Windows path: attempt to detect a wintun-compatible python package
+        if sys.platform.startswith("win"):
+            try:
+                import importlib
+                has_wintun = importlib.util.find_spec("wintun") is not None or importlib.util.find_spec("pywintun") is not None
+                if not has_wintun:
+                    raise RuntimeError(
+                        "Windows TUN support requires a WinTun Python package and the Wintun driver installed. "
+                        "Install a compatible package (e.g. 'wintun') and the Wintun kernel driver."
+                    )
+            except Exception:
+                raise RuntimeError(
+                    "Windows TUN support requires a WinTun Python package and the Wintun driver installed. "
+                    "Install a compatible package (e.g. 'wintun') and the Wintun kernel driver."
+                )
+            return
+
+        raise RuntimeError("TUN services are supported only on Linux and Windows")
 
     def _set_iface_mtu(self, ifname: str, mtu: int) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -11618,19 +11638,73 @@ class ChannelMux:
 
     def _open_tun_device(self, ifname: str, mtu: int, svc_key: Optional["ChannelMux.ServiceKey"] = None) -> "ChannelMux.TunDevice":
         self._require_tun_support()
-        fd = os.open("/dev/net/tun", os.O_RDWR | os.O_NONBLOCK)
-        try:
-            ifr = struct.pack("16sH14x", self._tun_ifreq_name(ifname), self.IFF_TUN | self.IFF_NO_PI)
-            res = fcntl.ioctl(fd, self.TUNSETIFF, ifr)
-            actual = bytes(res[:16]).split(b"\x00", 1)[0].decode("utf-8", "ignore") or ifname
-            os.set_blocking(fd, False)
-            self._set_iface_mtu(actual, mtu)
-            self._set_iface_up(actual)
-            return ChannelMux.TunDevice(fd=fd, ifname=actual, mtu=int(mtu), service_key=svc_key)
-        except Exception:
-            with contextlib.suppress(Exception):
-                os.close(fd)
-            raise
+        # Linux implementation (existing behavior)
+        if sys.platform.startswith("linux"):
+            fd = os.open("/dev/net/tun", os.O_RDWR | os.O_NONBLOCK)
+            try:
+                ifr = struct.pack("16sH14x", self._tun_ifreq_name(ifname), self.IFF_TUN | self.IFF_NO_PI)
+                res = fcntl.ioctl(fd, self.TUNSETIFF, ifr)
+                actual = bytes(res[:16]).split(b"\x00", 1)[0].decode("utf-8", "ignore") or ifname
+                os.set_blocking(fd, False)
+                self._set_iface_mtu(actual, mtu)
+                self._set_iface_up(actual)
+                return ChannelMux.TunDevice(fd=fd, ifname=actual, mtu=int(mtu), service_key=svc_key)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    os.close(fd)
+                raise
+
+        # Windows scaffold: try to use a WinTun Python package if available.
+        # Full runtime integration requires a proper WinTun wrapper that exposes
+        # adapter creation and async read/write. Here we detect presence and
+        # surface a clear error if the module isn't fully wired up yet.
+        if sys.platform.startswith("win"):
+            try:
+                import importlib
+                mod = None
+                if importlib.util.find_spec("wintun") is not None:
+                    mod = importlib.import_module("wintun")
+                elif importlib.util.find_spec("pywintun") is not None:
+                    mod = importlib.import_module("pywintun")
+                else:
+                    raise RuntimeError("No WinTun package found")
+
+                # If the imported module provides a simple adapter creation API,
+                # call it here and wrap the result in a TunDevice-like object.
+                # As WinTun Python wrappers vary, this area is intentionally
+                # lightweight: if the module does not expose the expected API,
+                # raise with actionable guidance.
+                create_adapter = getattr(mod, "create_adapter", None) or getattr(mod, "WintunAdapter", None)
+                if create_adapter is None:
+                    raise RuntimeError(
+                        "Found WinTun package but could not locate adapter creation API. "
+                        "Please ensure a compatible WinTun wrapper is installed and extend _open_tun_device accordingly."
+                    )
+
+                # NOTE: The following is a best-effort attempt to construct an adapter.
+                # Concrete projects should replace this with calls matching the chosen
+                # WinTun Python package API (create/open adapter, start IO loops, etc.).
+                try:
+                    adapter = create_adapter(ifname)
+                except Exception as exc:
+                    raise RuntimeError(f"Failed to create WinTun adapter: {exc}") from exc
+
+                # Build a TunDevice-like placeholder. Other code expects attributes
+                # `fd`, `ifname`, `mtu`, `service_key`, `reader_registered`, `chan_id`.
+                dev = ChannelMux.TunDevice(fd=None, ifname=ifname, mtu=int(mtu), service_key=svc_key)
+                # Attach adapter object for later Windows-specific IO handling.
+                setattr(dev, "wintun_adapter", adapter)
+                setattr(dev, "reader_registered", False)
+                return dev
+
+            except Exception as exc:
+                raise RuntimeError(
+                    "Windows TUN device creation failed. Install a WinTun wrapper (e.g. 'wintun') and the Wintun driver, "
+                    "or adapt _open_tun_device to your WinTun package. Original error: " + str(exc)
+                )
+
+        # Should not reach here
+        raise RuntimeError("Unsupported platform for TUN device creation")
 
     def _register_tun_reader(self, dev: "ChannelMux.TunDevice") -> None:
         if dev.reader_registered:
