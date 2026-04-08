@@ -18,6 +18,9 @@ test = [
     "pytest",
     "pytest-xdist",
 ]
+wintun = [
+    "wintun>=0.14.1",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

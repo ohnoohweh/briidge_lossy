@@ -101,18 +101,9 @@ After the first startup, open the Admin Web UI and adjust the remaining details 
 - admin authentication and instance naming
 - logging and log retention settings
 
-### TUN interface example
+### TUN interface example (Linux and Windows)
 
-ChannelMux can now expose a Linux TUN interface as a muxed packet service.
-
-Important constraints:
-
-- this currently works on Linux only
-- it uses `/dev/net/tun` and the Python standard library only
-- the process needs permission to create and configure TUN devices
-- ObstacleBridge brings the interface up and applies MTU, but it does not assign IP addresses for you
-
-Service-spec format for TUN uses the existing six-field syntax:
+ChannelMux can expose a local TUN interface as a muxed packet service. The service-spec format uses the existing six-field syntax:
 
 ```text
 tun,<local_mtu>,<local_ifname>,tun,<remote_ifname>,<remote_mtu>
@@ -130,66 +121,59 @@ Example pair:
 - client `own_servers`: `tun,1400,obtun0,tun,obtun1,1400`
 - server `remote_servers`: `tun,1400,obtun1,tun,obtun0,1400`
 
-Minimal bootstrap example with TUN carried over a WebSocket overlay:
+Linux (native) notes
 
-**Listener / server with remote TUN request**
+- Linux uses `/dev/net/tun` and the standard Python library.
+- The process needs permission to create and configure TUN devices; ObstacleBridge brings the interface up and applies MTU, but it does not assign IP addresses for you.
 
-```json
-{
-  "overlay_transport": "ws",
-  "ws_bind": "0.0.0.0",
-  "ws_own_port": 443,
-  "remote_servers": [
-    "tun,1400,obtun1,tun,obtun0,1400"
-  ],
-  "admin_web": true,
-  "admin_web_bind": "127.0.0.1",
-  "admin_web_port": 18080,
-  "admin_web_name": "TUN Listener",
-  "log": "INFO"
-}
-```
-
-**Peer / client with local TUN service**
-
-```json
-{
-  "overlay_transport": "ws",
-  "ws_peer": "bridge.example.com",
-  "ws_peer_port": 443,
-  "ws_own_port": 0,
-  "own_servers": [
-    "tun,1400,obtun0,tun,obtun1,1400"
-  ],
-  "admin_web": true,
-  "admin_web_bind": "127.0.0.1",
-  "admin_web_port": 18081,
-  "admin_web_name": "TUN Peer",
-  "log": "INFO"
-}
-```
-
-Then start both sides and assign addresses with normal Linux tooling, for example:
+Example Linux IP assignment (run as root):
 
 ```bash
 sudo ip addr add 10.20.0.1/30 dev obtun0
 sudo ip link set obtun0 up
 ```
 
-and on the other side:
+Windows (WinTun) notes — tested path
 
-```bash
-sudo ip addr add 10.20.0.2/30 dev obtun1
-sudo ip link set obtun1 up
+- ObstacleBridge includes scaffolding to use a WinTun adapter on Windows. This requires:
+  - the Wintun driver (tested with Wintun 0.14.1 from https://www.wintun.net/), and
+  - a WinTun Python wrapper module available to the runtime (for example a `wintun` or `pywintun` module).
+- Administrative privileges are required to install the Wintun driver and to create/configure virtual interfaces.
+
+How to provide a WinTun Python wrapper for local testing
+
+1. Download Wintun runtime/driver from https://www.wintun.net/ (tested with 0.14.1) and install the driver per the Wintun instructions.
+2. Provide a Python wrapper module named `wintun` or `pywintun` on `sys.path` so ObstacleBridge can import it. You can do either:
+   - `pip install wintun` (if a compatible package is available), or
+   - place a local wrapper in a folder and set the environment variable `WINTUN_DIR` pointing to that folder, or copy the wrapper into a `wintun` folder next to the workspace (for example `C:\temp\udp2quic_server\wintun`).
+
+Environment variable guidance:
+
+- `WINTUN_DIR`: optional path to a local `wintun` Python wrapper folder. Example:
+
+```powershell
+setx WINTUN_DIR "C:\temp\udp2quic_server\wintun"
 ```
 
-After that, packets written to the local TUN interface are carried through ChannelMux as packet-oriented overlay traffic. If a packet is larger than the current wrapped session budget, ChannelMux fragments it at mux level and reassembles it before injecting it into the peer TUN interface.
+Windows admin commands to assign an IP to the created adapter (PowerShell, run as Administrator):
 
-User-use-case note:
+```powershell
+# replace 'obtun0' with the adapter name created by the WinTun wrapper
+New-NetIPAddress -InterfaceAlias 'obtun0' -IPAddress 10.20.0.2 -PrefixLength 30
+Set-NetAdapter -Name 'obtun0' -AdminStatus Up
+```
 
-- the examples below are user-oriented deployment patterns, not project requirements
-- each one depends on assumptions about the surrounding infrastructure, operating systems, libraries, browsers, and reachable network paths
-- the formal separation between use-case, external assumptions, and project responsibilities is documented in [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md)
+Runtime behavior and caveats
+
+- ObstacleBridge attempts to import `wintun` or `pywintun` from the regular Python import path first. If not found, it will look for a local `wintun` folder pointed at by `WINTUN_DIR` or a workspace-local `wintun` folder (for example `C:\temp\udp2quic_server\wintun`).
+- The project includes a WinTun adapter scaffold in `src/obstacle_bridge/bridge.py`. A compatible wrapper must expose adapter creation and simple read/write methods (common names: `create_adapter`, `WintunAdapter`, `read_packet`, `write_packet`, `close`). The scaffold logs actionable errors when the wrapper API does not match and is intended to be adapted to the concrete wrapper you choose.
+- As with Linux, ObstacleBridge performs mux-level fragmentation and reassembly for TUN packets larger than the current session budget.
+
+Security and privileges
+
+- Installing the Wintun driver and creating virtual adapters typically requires Administrator privileges on Windows. Only install drivers and run admin commands from trusted sources and contexts.
+
+If you need help wiring a specific WinTun Python wrapper into ObstacleBridge, tell me which wrapper you have in `C:\temp\udp2quic_server\wintun` and I will adapt the scaffold in `src/obstacle_bridge/bridge.py` to call its API.
 
 ### 1) NAS behind outbound-only internet, reached through a public server
 This setup fits a NAS or home server that can make outgoing connections but cannot accept incoming internet traffic directly.
