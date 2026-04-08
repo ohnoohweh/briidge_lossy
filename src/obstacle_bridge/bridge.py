@@ -3010,7 +3010,7 @@ class SecureLinkPskSession(ISession):
         self._last_auth_fail_unix_ts = None
         self._last_auth_fail_session_id = None
         self._record_secure_link_event(event, now)
-        if self._client_mode and str(event or "") != "rekey_completed":
+        if self._client_mode:
             self._schedule_client_rekey_timer(state)
         self._reset_client_retry_backoff()
         self._log.info(

@@ -660,7 +660,7 @@ What works today:
 - `myudp` PSK rekey that still completes under ongoing protected traffic and preserves healthy same-channel UDP flow across the `REKEY_COMMIT` to `REKEY_DONE` cutover window
 - cert-mode trust-anchor, role, validity-window, deployment-scope, and revoked-serial enforcement before protected traffic starts
 - cert-mode peer identity and trust diagnostics in WebAdmin, with additional detail available through `/api/peers`
-- cert-mode live reload from WebAdmin, with `/api/secure-link/reload` available for automation
+- cert-mode live reload from the Secure-Link tab in WebAdmin through the `Reload Revocation`, `Reload Local Identity`, and `Reload All` buttons, with `/api/secure-link/reload` available for automation
 - aggregate reload/apply summaries and some peer-scoped enforcement diagnostics through `/api/status` and `/api/peers`
 
 What is still planned:
@@ -688,21 +688,13 @@ Minimal listener example:
 }
 ```
 
-Cert-mode operators can also apply updated trust material without process restart from WebAdmin. The API remains available for automation:
+Cert-mode operators can also apply updated trust material without process restart from the Secure-Link tab in WebAdmin:
 
-```bash
-curl -sS -X POST http://127.0.0.1:18080/api/secure-link/reload \
-  -H 'Content-Type: application/json' \
-  -d '{"scope":"revocation"}'
+- use `Reload Revocation` after updating the revoked-serials file
+- use `Reload Local Identity` after replacing the local certificate/signature/private-key material
+- use `Reload All` when both trust inputs changed and you want one operator action to apply the full set
 
-curl -sS -X POST http://127.0.0.1:18080/api/secure-link/reload \
-  -H 'Content-Type: application/json' \
-  -d '{"scope":"local_identity"}'
-
-curl -sS -X POST http://127.0.0.1:18080/api/secure-link/reload \
-  -H 'Content-Type: application/json' \
-  -d '{"scope":"all"}'
-```
+The same reload scopes remain available through `/api/secure-link/reload` for automation.
 
 Detailed API signals after a cert-mode reload succeeds:
 
