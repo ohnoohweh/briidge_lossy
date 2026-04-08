@@ -2,11 +2,14 @@
 
 This repository currently collects:
 
-- `128` integration tests across [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py), and [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py)
-- `128` unit tests in `tests/unit/`
+- `129` integration tests across [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py), and [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py)
+- `129` unit tests in `tests/unit/`
 
 Recent test/content updates:
 
+- 2026-04-08: The shared integration harness now generates localhost TLS PEM material in a temporary directory outside the repository instead of relying on committed `Cert_localhost/*.pem` files. The QUIC integration cases in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py) now consume runtime-generated localhost server certs, which keeps private key material out of version control while preserving the existing QUIC, localhost-name, and secure-link cert regression coverage.
+- 2026-04-08: The shared integration harness now treats loopback case-port allocation as availability-aware and sticky per case within each xdist worker. This hardening lets the Linux shared run survive host services that already occupy uncommon ports and keeps repeated `materialize_case_ports()` / delay-loss helper calls bound to the same selected port block for the lifetime of a test process.
+- 2026-04-08: Listener-side peer diagnostics now expose `last_incoming_age_seconds` through `/api/peers` and the admin peer table, and `myudp` listener coverage includes a junk-sender stale-peer regression in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py). That integration test sends one invalid UDP datagram from a fresh source port, confirms the listener briefly exposes a `connecting` peer row with decode errors and a recent last-incoming age, and then fails if that never-connected row survives past the transport's 20-second stale window.
 - 2026-04-08: The repository now includes an opt-in `windows_elevated` integration slice in [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py). This local-only slice exercises real Windows TUN end-to-end behavior outside the shared CI lanes: one test proves WinTun-backed TUN channel open and peer bind over a `myudp` overlay, and one test proves the same TUN channel open/bind path after WebSocket plus PSK SecureLink authentication. The slice requires an elevated Windows session plus a usable `wintun.dll` exposed through `WINTUN_DIR`.
 - 2026-04-08: The repository now includes an opt-in `linux_elevated` integration slice in [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py). This local-only slice exercises real Linux TUN end-to-end behavior outside the shared CI lanes: one test proves packet carriage over a `myudp` overlay, and one test proves TUN packet carriage still survives WebSocket `semi-text-shape` plus PSK SecureLink with forced mux fragmentation. The slice is skipped unless explicitly enabled with `--run-linux-elevated` or `OBSTACLEBRIDGE_RUN_LINUX_ELEVATED=1`.
 - 2026-04-08: ChannelMux now includes delivered TUN service coverage across the supported privileged host backends. The regression coverage includes focused unit coverage in [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py) for service-spec parsing, remote catalog propagation, local TUN packet forwarding, and mux-level TUN fragmentation/reassembly, plus the opt-in elevated subprocess coverage in [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py) and [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py). There is still not a non-privileged TUN subprocess slice in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), because that shared harness is designed to run without assuming host-specific TUN availability, interface-creation permission, or elevated OS networking capability on every developer/CI host.
@@ -74,6 +77,7 @@ Enforcement layers:
 - When a change affects TUN behavior, local validation should also include the elevated host-specific lanes documented below for Linux and Windows.
 - When `src/obstacle_bridge/bridge.py` did not change, the gate reports success without running the heavy suites.
 - To make merge impossible on failures, configure branch protection in GitHub to require both `Integration Gate (Linux shared)` and `Integration Gate (Windows-specific)`.
+- The Linux shared lane has been hardened against host-local port collisions by using runtime-generated localhost TLS fixtures and availability-aware loopback port-block selection in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py).
 
 ### Acceptance criteria for WebSocket bootstrap changes
 
@@ -209,7 +213,7 @@ The catalog is ordered as:
 
 ## Integration tests
 
-Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py), and [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py) and collects `128` tests.
+Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py), and [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py) and collects `129` tests.
 
 The supporting project-level intent documents are:
 
@@ -226,6 +230,7 @@ The supporting project-level intent documents are:
 | `test_overlay_e2e_listener_two_clients` | Multi-client listener | Verify that a listener can serve two clients and reports them correctly in admin APIs | `pytest -q tests/integration/test_overlay_e2e.py -k listener_two_clients` |
 | `test_overlay_e2e_concurrent_tcp_channels` | Mixed service concurrency | Verify concurrent TCP channels, additional UDP mappings, and multi-client coexistence on shared listeners | `pytest -q tests/integration/test_overlay_e2e.py -k concurrent_tcp_channels` |
 | `test_overlay_e2e_myudp_delay_loss` | Delayed/lossy myudp behavior | Verify retransmission, large payload handling, and control/data loss behavior through a real loopback MITM proxy | `pytest -q tests/integration/test_overlay_e2e.py -k myudp_delay_loss` |
+| `test_overlay_e2e_myudp_listener_invalid_sender_expires_before_stale_window` | Listener stale-junk-peer regression | Verify a `myudp` listener surfaces diagnostics for an invalid incoming sender and then reaps that never-connected `connecting` row before it survives the 20-second stale window | `pytest -q tests/integration/test_overlay_e2e.py -k myudp_listener_invalid_sender_expires_before_stale_window` |
 | `test_overlay_e2e_server_restart_closes_tcp_preserves_udp` | Restart-specific regression | Verify the special restart behavior for the concurrent WS case | `pytest -q tests/integration/test_overlay_e2e.py -k server_restart_closes_tcp_preserves_udp` |
 | `test_overlay_e2e_admin_api_*` | Admin web auth/API | Verify auth-disabled, auth-required, authenticated, session-isolated API behavior, and live WebSocket telemetry availability for both open and cookie-authenticated sessions | `pytest -q tests/integration/test_overlay_e2e.py -k admin_api` |
 | `test_overlay_e2e_*secure_link_psk*` | Secure-link Phase 1 PSK runtime slice | Verify the delivered PSK secure-link slice reaches protected connected state across supported transports, rejects mismatched PSKs, preserves peer isolation for multi-client listener scenarios, and keeps `/api/peers` transport-specific secure-link peer stats aligned with live protected traffic | `pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` |

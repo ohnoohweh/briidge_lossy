@@ -40,10 +40,15 @@ PAYLOAD_IN = b'\x01\x30'
 PAYLOAD_OUT = b'\x02\x30'
 
 from tests.fixtures.secure_link_cert import materialize_secure_link_cert_fixture_set
+from tests.fixtures.localhost_tls import materialize_localhost_tls_fixture_set
 
 _SECURE_LINK_CERT_FIXTURE_TMPDIR = tempfile.TemporaryDirectory()
 atexit.register(_SECURE_LINK_CERT_FIXTURE_TMPDIR.cleanup)
 SECURE_LINK_CERT_FIXTURES = materialize_secure_link_cert_fixture_set(Path(_SECURE_LINK_CERT_FIXTURE_TMPDIR.name))
+
+_LOCALHOST_TLS_FIXTURE_TMPDIR = tempfile.TemporaryDirectory()
+atexit.register(_LOCALHOST_TLS_FIXTURE_TMPDIR.cleanup)
+LOCALHOST_TLS_FIXTURES = materialize_localhost_tls_fixture_set(Path(_LOCALHOST_TLS_FIXTURE_TMPDIR.name))
 
 from obstacle_bridge.bridge import (
     CONTROL_MAX_MISSED,
@@ -193,14 +198,14 @@ CASES: Dict[str, Case] = {
         name='case10_overlay_quic_ipv4',
         bounce_proto='udp', bounce_bind='0.0.0.0', bounce_port=26666,
         probe_proto='udp', probe_host='127.0.0.1', probe_port=26667, probe_bind='0.0.0.0',
-        bridge_server_args=['--overlay-transport', 'quic', '--quic-bind', '0.0.0.0', '--quic-own-port', '4443', '--quic-cert', 'Cert_localhost/cert.pem', '--quic-key', 'Cert_localhost/key.pem', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server.txt'],
+        bridge_server_args=['--overlay-transport', 'quic', '--quic-bind', '0.0.0.0', '--quic-own-port', '4443', '--quic-cert', str(LOCALHOST_TLS_FIXTURES / 'cert.pem'), '--quic-key', str(LOCALHOST_TLS_FIXTURES / 'key.pem'), '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server.txt'],
         bridge_client_args=['--overlay-transport', 'quic', '--quic-peer', '127.0.0.1', '--quic-peer-port', '4443', '--quic-bind', '0.0.0.0', '--quic-own-port', '0', '--quic-insecure', '--own-servers', 'udp,26667,0.0.0.0,udp,127.0.0.1,26666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_ipv6.txt'],
     ),
     'case11_overlay_quic_ipv6': Case(
         name='case11_overlay_quic_ipv6',
         bounce_proto='udp', bounce_bind='0.0.0.0', bounce_port=26666,
         probe_proto='udp', probe_host='127.0.0.1', probe_port=26667, probe_bind='0.0.0.0',
-        bridge_server_args=['--overlay-transport', 'quic', '--quic-bind', '::', '--quic-own-port', '4443', '--quic-cert', 'Cert_localhost/cert.pem', '--quic-key', 'Cert_localhost/key.pem', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server.txt'],
+        bridge_server_args=['--overlay-transport', 'quic', '--quic-bind', '::', '--quic-own-port', '4443', '--quic-cert', str(LOCALHOST_TLS_FIXTURES / 'cert.pem'), '--quic-key', str(LOCALHOST_TLS_FIXTURES / 'key.pem'), '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_server.txt'],
         bridge_client_args=['--overlay-transport', 'quic', '--quic-peer', '::1', '--quic-peer-port', '4443', '--quic-bind', '::', '--quic-own-port', '0', '--quic-insecure', '--own-servers', 'udp,26667,0.0.0.0,udp,127.0.0.1,26666', '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG', '--log-file', 'br_client_ipv6.txt'],
     ),
     'case12_overlay_ws_ipv4_listener_two_clients': Case(
@@ -278,7 +283,7 @@ CASES: Dict[str, Case] = {
         bridge_server_args=[
             '--overlay-transport', 'quic',
             '--quic-bind', '0.0.0.0', '--quic-own-port', '14543',
-            '--quic-cert', 'Cert_localhost/cert.pem', '--quic-key', 'Cert_localhost/key.pem',
+            '--quic-cert', str(LOCALHOST_TLS_FIXTURES / 'cert.pem'), '--quic-key', str(LOCALHOST_TLS_FIXTURES / 'key.pem'),
             '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
             '--log-file', 'br_server_listener_quic_two_clients.txt',
         ],
@@ -314,6 +319,8 @@ LOOPBACK_IPV6_MAPPED_SECOND_OCTET = 124
 SECURE_LINK_LOOPBACK_KEY_BASE = 10000
 SECURE_LINK_LOOPBACK_KEYS_PER_WORKER = 512
 ADMIN_PORT_LOOPBACKS: Dict[int, Tuple[str, str]] = {}
+ALLOCATED_CASE_PORT_OFFSETS: Dict[int, int] = {}
+ALLOCATED_MYUDP_DELAY_LOSS_BASE_PORTS: Dict[int, int] = {}
 
 
 def _loopback_host_octets(case_key: int, *, second_octet: int) -> Tuple[int, int, int, int]:
@@ -557,6 +564,31 @@ def _case_port_offset(case_index: int, stride: int = 64, highest_static_port: in
     return worker_index * per_worker_budget + case_slot
 
 
+def _case_port_offset_candidates(case_index: int, stride: int = 64, highest_static_port: int = 55000) -> List[int]:
+    worker_index = _xdist_worker_index()
+    worker_count = _xdist_worker_count()
+    max_offset = SERVICE_PORT_CEILING - int(highest_static_port) - 1
+    if max_offset < stride:
+        raise ValueError(
+            f'port allocation window too small: highest_static_port={highest_static_port} stride={stride}'
+        )
+    per_worker_budget = max(1, max_offset // worker_count)
+    if per_worker_budget < stride:
+        raise ValueError(
+            f'too many xdist workers for safe port allocation: '
+            f'workers={worker_count} highest_static_port={highest_static_port} stride={stride}'
+        )
+    case_slots = max(1, per_worker_budget // stride)
+    requested_slot = int(case_index) % case_slots
+    base_offset = worker_index * per_worker_budget
+    candidates: List[int] = []
+    for slot_index in range(requested_slot, case_slots):
+        candidates.append(base_offset + (slot_index * stride))
+    for slot_index in range(0, requested_slot):
+        candidates.append(base_offset + (slot_index * stride))
+    return candidates
+
+
 def _shift_service_specs(raw_specs: List[str], offset: int) -> List[str]:
     shifted: List[str] = []
     for raw in raw_specs:
@@ -607,7 +639,34 @@ def _shift_port_options(args: List[str], offset: int) -> List[str]:
 
 def materialize_case_ports(case: Case, case_index: int) -> Case:
     case = _materialize_case_loopback_hosts(case, case_index)
-    offset = _case_port_offset(case_index)
+    cached_offset = ALLOCATED_CASE_PORT_OFFSETS.get(int(case_index))
+    if cached_offset is not None:
+        if cached_offset == 0:
+            return case
+        return replace(
+            case,
+            bounce_port=_shift_port(case.bounce_port, cached_offset),
+            probe_port=_shift_port(case.probe_port, cached_offset),
+            bridge_server_args=_shift_port_options(case.bridge_server_args, cached_offset),
+            bridge_client_args=_shift_port_options(case.bridge_client_args, cached_offset),
+        )
+    highest = _max_case_static_port(case)
+    selected_offset: Optional[int] = None
+    for candidate_offset in _case_port_offset_candidates(case_index, highest_static_port=highest):
+        candidate = replace(
+            case,
+            bounce_port=_shift_port(case.bounce_port, candidate_offset),
+            probe_port=_shift_port(case.probe_port, candidate_offset),
+            bridge_server_args=_shift_port_options(case.bridge_server_args, candidate_offset),
+            bridge_client_args=_shift_port_options(case.bridge_client_args, candidate_offset),
+        )
+        if all(_can_bind_local_endpoint(proto, host, port) for proto, host, port in _iter_case_local_bind_endpoints(candidate)):
+            selected_offset = candidate_offset
+            break
+    if selected_offset is None:
+        raise RuntimeError(f'no generic integration port slot available: case={case.name} case_index={case_index}')
+    offset = selected_offset
+    ALLOCATED_CASE_PORT_OFFSETS[int(case_index)] = offset
     if offset == 0:
         return case
     return replace(
@@ -663,8 +722,95 @@ def _max_case_static_port(case: Case) -> int:
     )
 
 
+def _bind_proto_socket_kind(proto: str) -> int:
+    rendered = str(proto).strip().lower()
+    if rendered in ('udp', 'myudp', 'quic'):
+        return socket.SOCK_DGRAM
+    return socket.SOCK_STREAM
+
+
+def _can_bind_local_endpoint(proto: str, host: str, port: int) -> bool:
+    if int(port) <= 0:
+        return True
+    family = socket.AF_INET6 if ':' in str(host) else socket.AF_INET
+    sock_type = _bind_proto_socket_kind(proto)
+    try:
+        with contextlib.closing(socket.socket(family, sock_type)) as s:
+            if sock_type == socket.SOCK_STREAM:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((str(host), int(port)))
+        return True
+    except OSError:
+        return False
+
+
+def _iter_case_local_bind_endpoints(case: Case) -> List[Tuple[str, str, int]]:
+    endpoints: List[Tuple[str, str, int]] = [
+        (str(case.bounce_proto), str(case.bounce_bind), int(case.bounce_port)),
+    ]
+
+    def collect(args: List[str]) -> None:
+        bind_map = {
+            '--udp-own-port': ('udp', '--udp-bind'),
+            '--tcp-own-port': ('tcp', '--tcp-bind'),
+            '--ws-own-port': ('ws', '--ws-bind'),
+            '--quic-own-port': ('quic', '--quic-bind'),
+        }
+        bind_hosts = {
+            '--udp-bind': '0.0.0.0',
+            '--tcp-bind': '0.0.0.0',
+            '--ws-bind': '0.0.0.0',
+            '--quic-bind': '0.0.0.0',
+        }
+        service_options = {'--own-servers', '--remote-servers'}
+        i = 0
+        while i < len(args):
+            arg = str(args[i])
+            if arg in bind_hosts and i + 1 < len(args):
+                bind_hosts[arg] = str(args[i + 1])
+                i += 2
+                continue
+            if arg in bind_map and i + 1 < len(args):
+                proto, bind_opt = bind_map[arg]
+                port = int(args[i + 1])
+                if port > 0:
+                    endpoints.append((proto, str(bind_hosts[bind_opt]), port))
+                i += 2
+                continue
+            if arg in service_options:
+                i += 1
+                while i < len(args) and not str(args[i]).startswith('--'):
+                    parts = [p.strip() for p in str(args[i]).split(',')]
+                    if len(parts) >= 6:
+                        with contextlib.suppress(Exception):
+                            local_proto = str(parts[0])
+                            local_port = int(parts[1])
+                            local_bind = str(parts[2])
+                            if local_port > 0:
+                                endpoints.append((local_proto, local_bind, local_port))
+                    i += 1
+                continue
+            i += 1
+
+    collect(case.bridge_server_args)
+    collect(case.bridge_client_args)
+    return endpoints
+
+
+def _secure_link_slot_is_available(case: Case, slot: int) -> bool:
+    candidate = _materialize_case_loopback_hosts(case, _secure_link_loopback_key(slot))
+    offset = SECURE_LINK_PORT_OFFSET_BASE + (int(slot) * SECURE_LINK_PORT_STRIDE)
+    candidate = replace(
+        candidate,
+        bounce_port=_shift_port(candidate.bounce_port, offset),
+        probe_port=_shift_port(candidate.probe_port, offset),
+        bridge_server_args=_shift_port_options(candidate.bridge_server_args, offset),
+        bridge_client_args=_shift_port_options(candidate.bridge_client_args, offset),
+    )
+    return all(_can_bind_local_endpoint(proto, host, port) for proto, host, port in _iter_case_local_bind_endpoints(candidate))
+
+
 def materialize_secure_link_case_ports(case: Case, secure_slot: int) -> Case:
-    case = _materialize_case_loopback_hosts(case, _secure_link_loopback_key(secure_slot))
     highest = _max_case_static_port(case)
     max_slots = _secure_link_port_slots_per_worker(highest)
     slot = int(secure_slot)
@@ -673,7 +819,17 @@ def materialize_secure_link_case_ports(case: Case, secure_slot: int) -> Case:
             f'secure-link slot out of range: slot={slot} max_slots={max_slots} '
             f'highest={highest} base={SECURE_LINK_PORT_OFFSET_BASE}'
         )
-    offset = SECURE_LINK_PORT_OFFSET_BASE + (slot * SECURE_LINK_PORT_STRIDE)
+    selected_slot: Optional[int] = None
+    for candidate_slot in range(slot, max_slots):
+        if _secure_link_slot_is_available(case, candidate_slot):
+            selected_slot = candidate_slot
+            break
+    if selected_slot is None:
+        raise RuntimeError(
+            f'no secure-link slot available: requested_slot={slot} max_slots={max_slots} highest={highest}'
+        )
+    case = _materialize_case_loopback_hosts(case, _secure_link_loopback_key(selected_slot))
+    offset = SECURE_LINK_PORT_OFFSET_BASE + (selected_slot * SECURE_LINK_PORT_STRIDE)
     if highest + offset >= SERVICE_PORT_CEILING:
         raise ValueError(
             f'secure-link test port offset out of range: highest={highest} offset={offset} ceiling={SERVICE_PORT_CEILING}'
@@ -872,6 +1028,7 @@ CASE_INDEX_BASE_LISTENER = 200
 CASE_INDEX_BASE_CONCURRENT = 300
 CASE_INDEX_BASE_RESTART = 400
 CASE_INDEX_BASE_MYUDP_DELAY_LOSS = 500
+CASE_INDEX_BASE_MYUDP_STALE = 580
 
 SERVICE_PORT_CEILING = 61000
 ADMIN_PORT_BASE = 61000
@@ -1840,7 +1997,7 @@ def build_commands(case: Case, log_dir: Path, case_index: int, enable_admin: boo
     # Prevent accidental fixed-port collisions from external config defaults.
     server_cmd += ['--admin-web-port', '0']
     client_cmd += ['--admin-web-port', '0']
-    client_cmd += ['--client-restart-if-disconnected', '5']
+    client_cmd += ['--client-restart-if-disconnected', '10']
     if enable_admin:
         server_cmd += admin_args(server_admin)
         client_cmd += admin_args(client_admin)
@@ -2499,6 +2656,84 @@ def wait_peer_endpoint_visible(admin_port: int, timeout: float = 12.0, label: st
     )
 
 
+def wait_peer_row_visible(
+    admin_port: int,
+    *,
+    transport: str,
+    peer: Optional[str] = None,
+    state: Optional[str] = None,
+    timeout: float = 12.0,
+    label: str = '',
+) -> tuple[dict, dict]:
+    end = time.time() + timeout
+    last_doc = None
+    normalized_transport = str(transport or '').strip().lower()
+    expected_peer = str(peer or '').strip()
+    expected_state = str(state or '').strip().lower()
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
+        last_doc = doc
+        for row in list(doc.get('peers') or []):
+            if str(row.get('transport', '')).strip().lower() != normalized_transport:
+                continue
+            if expected_peer and str(row.get('peer') or '').strip() != expected_peer:
+                continue
+            if expected_state and str(row.get('state', '')).strip().lower() != expected_state:
+                continue
+            who = f' {label}' if label else ''
+            log.info(f'[PEERS]{who} port={admin_port} matched_row={row!r}')
+            return doc, row
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'/api/peers did not expose a matching peer row for transport={normalized_transport} '
+        f'peer={expected_peer or "*"} state={expected_state or "*"} on port {admin_port}; last={last_doc!r}'
+    )
+
+
+def wait_peer_row_absent(
+    admin_port: int,
+    *,
+    transport: str,
+    peer: Optional[str] = None,
+    state: Optional[str] = None,
+    timeout: float = 25.0,
+    label: str = '',
+) -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    last_match = None
+    normalized_transport = str(transport or '').strip().lower()
+    expected_peer = str(peer or '').strip()
+    expected_state = str(state or '').strip().lower()
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
+        last_doc = doc
+        matched = None
+        for row in list(doc.get('peers') or []):
+            if str(row.get('transport', '')).strip().lower() != normalized_transport:
+                continue
+            if expected_peer and str(row.get('peer') or '').strip() != expected_peer:
+                continue
+            if expected_state and str(row.get('state', '')).strip().lower() != expected_state:
+                continue
+            matched = row
+            break
+        if matched is None:
+            who = f' {label}' if label else ''
+            log.info(
+                f'[PEERS]{who} port={admin_port} matched_row_absent transport={normalized_transport} '
+                f'peer={expected_peer or "*"} state={expected_state or "*"}'
+            )
+            return doc
+        last_match = matched
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'/api/peers kept a stale matching peer row for transport={normalized_transport} '
+        f'peer={expected_peer or "*"} state={expected_state or "*"} on port {admin_port}; '
+        f'last_match={last_match!r} last={last_doc!r}'
+    )
+
+
 def wait_distinct_peer_endpoints(
     admin_port: int,
     *,
@@ -2991,7 +3226,25 @@ def run_case(case: Case, log_dir: Path, case_index: int, settle_s: Optional[floa
 
 
 def _myudp_delay_loss_base_port(case_index: int) -> int:
-    return 36000 + _case_port_offset(case_index, highest_static_port=40000)
+    cached = ALLOCATED_MYUDP_DELAY_LOSS_BASE_PORTS.get(int(case_index))
+    if cached is not None:
+        return cached
+    loopback_v4 = _loopback_ipv4_host(case_index)
+    for offset in _case_port_offset_candidates(case_index, highest_static_port=40013):
+        base_port = 36000 + offset
+        ports = [
+            base_port,
+            base_port + 1,
+            base_port + 2,
+            base_port + 10,
+            base_port + 11,
+            base_port + 12,
+            base_port + 13,
+        ]
+        if all(_can_bind_local_endpoint('udp', loopback_v4, port) for port in ports):
+            ALLOCATED_MYUDP_DELAY_LOSS_BASE_PORTS[int(case_index)] = base_port
+            return base_port
+    raise RuntimeError(f'no myudp delay/loss port block available: case_index={case_index}')
 
 
 def _wait_udp_probe_result(host: str, port: int, payload: bytes, *, bind_host: str = '127.0.0.1', timeout: float = 20.0) -> bytes:
@@ -3820,7 +4073,7 @@ def run_case_server_restart_closes_tcp_preserves_udp(case: Case, log_dir: Path, 
             'tcp',
             local_port=case.probe_port,
             state='connected',
-            timeout=8.0,
+            timeout=20.0,
             label='client',
         )
         wait_tcp_socket_closed(tcp_sock, timeout=8.0)
@@ -5063,6 +5316,76 @@ def test_overlay_e2e_myudp_delay_loss(case_name: str, tmp_path: Path) -> None:
         tmp_path,
         CASE_INDEX_BASE_MYUDP_DELAY_LOSS + list(MYUDP_DELAY_LOSS_CASES.keys()).index(case_name),
     )
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_myudp_listener_invalid_sender_expires_before_stale_window(tmp_path: Path) -> None:
+    case_index = CASE_INDEX_BASE_MYUDP_STALE
+    base_port = _myudp_delay_loss_base_port(case_index)
+    overlay_port = base_port
+    admin_port = alloc_admin_port(case_index=case_index)
+    loopback_v4, _loopback_v6 = _loopback_hosts_for_case(case_index)
+    missing_cfg = str(tmp_path / 'myudp_listener_invalid_sender_missing.cfg')
+    server_proc = None
+    try:
+        phase('1. Start myudp listener with admin API enabled')
+        server_cmd = [
+            *bridge_entrypoint(),
+            '--overlay-transport', 'myudp',
+            '--udp-bind', loopback_v4,
+            '--udp-own-port', str(overlay_port),
+            '--log', 'INFO',
+            '--log-channel-mux', 'DEBUG',
+            '--log-udp-session', 'DEBUG',
+            '--log-file', str(tmp_path / 'myudp_listener_invalid_sender_server.txt'),
+            '--admin-web-auth-disable',
+            '--config', missing_cfg,
+            '--admin-web-port', '0',
+            *admin_args(admin_port),
+        ]
+        server_proc = start_proc(
+            'myudp_listener_invalid_sender_server',
+            server_cmd,
+            tmp_path,
+            admin_port=admin_port,
+        )
+        wait_admin_up(admin_port, timeout=10.0)
+        wait_listener_peer_rows_zeroed(admin_port, timeout=10.0, label='listener')
+
+        phase('2. Send one invalid UDP datagram from a fresh source port')
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as attacker:
+            attacker.bind((loopback_v4, 0))
+            attacker.sendto(b'port-scan-junk', (loopback_v4, overlay_port))
+            attacker_peer = f'{loopback_v4}:{attacker.getsockname()[1]}'
+
+        phase('3. Verify /api/peers exposes the connecting junk sender with age and decode data')
+        _doc, row = wait_peer_row_visible(
+            admin_port,
+            transport='myudp',
+            peer=attacker_peer,
+            state='connecting',
+            timeout=8.0,
+            label='listener',
+        )
+        assert int(row.get('decode_errors') or 0) >= 1
+        age = row.get('last_incoming_age_seconds')
+        assert isinstance(age, (int, float))
+        assert 0 <= float(age) < 5.0
+
+        phase('4. Fail if the junk sender survives into the stale window; expect it to be reaped')
+        wait_peer_row_absent(
+            admin_port,
+            transport='myudp',
+            peer=attacker_peer,
+            state='connecting',
+            timeout=25.0,
+            label='listener',
+        )
+        wait_listener_peer_rows_zeroed(admin_port, timeout=5.0, label='listener')
+    finally:
+        if server_proc is not None:
+            stop_proc(server_proc)
 
 
 @pytest.mark.integration
@@ -8054,10 +8377,17 @@ def test_overlay_e2e_cli_routing_keeps_explicit_mode_override() -> None:
 def test_overlay_e2e_materialize_case_ports_shifts_overlay_and_service_ports(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv('PYTEST_XDIST_WORKER', raising=False)
     monkeypatch.delenv('PYTEST_XDIST_WORKER_COUNT', raising=False)
-    offset = _case_port_offset(2)
+    ALLOCATED_CASE_PORT_OFFSETS.clear()
+    baseline_offset = _case_port_offset(2)
     case = materialize_case_ports(CASES['case01_udp_over_own_udp_ipv4'], case_index=2)
+    case_again = materialize_case_ports(CASES['case01_udp_over_own_udp_ipv4'], case_index=2)
     expected_ipv4_host = _loopback_ipv4_host(2)
+    offset = case.bounce_port - 26666
 
+    assert offset >= baseline_offset
+    assert case_again.bounce_port == case.bounce_port
+    assert case_again.probe_port == case.probe_port
+    assert ALLOCATED_CASE_PORT_OFFSETS[2] == offset
     assert case.bounce_port == 26666 + offset
     assert case.probe_port == 26667 + offset
     assert case.probe_host == expected_ipv4_host
