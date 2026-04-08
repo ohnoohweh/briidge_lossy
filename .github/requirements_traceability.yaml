@@ -443,12 +443,16 @@ REQ-MUX-006:
   integration_tests:
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_over_myudp_packet_carry
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_over_ws_secure_link_fragments
+    - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_myudp_channel_open
+    - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_ws_secure_link_channel_open
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_opens_channel_and_sends_data
 
 REQ-MUX-007:
   integration_tests:
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_over_myudp_packet_carry
+    - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_myudp_channel_open
+    - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_ws_secure_link_channel_open
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_receiver_starts_udp_and_tcp_listeners_from_remote_catalog
     - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_state_is_scoped_by_peer_id
@@ -457,6 +461,7 @@ REQ-MUX-008:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_udp_fragmentation_survives_text_mode
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_over_ws_secure_link_fragments
+    - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_ws_secure_link_channel_open
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_send_mux_fragments_oversized_udp_data
     - tests/unit/test_channel_mux_listener_mode.py::test_reassembles_udp_fragments_before_local_delivery

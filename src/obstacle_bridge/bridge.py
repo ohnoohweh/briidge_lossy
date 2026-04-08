@@ -11604,21 +11604,10 @@ class ChannelMux:
                 raise RuntimeError("TUN services require fcntl support")
             return
 
-        # Windows path: attempt to detect a wintun-compatible python package
+        # Windows path: runtime validation happens in _open_tun_device().
+        # That path supports either a Python wrapper or direct ctypes binding
+        # against wintun.dll, so a wrapper package is not required here.
         if sys.platform.startswith("win"):
-            try:
-                import importlib
-                has_wintun = importlib.util.find_spec("wintun") is not None or importlib.util.find_spec("pywintun") is not None
-                if not has_wintun:
-                    raise RuntimeError(
-                        "Windows TUN support requires a WinTun Python package and the Wintun driver installed. "
-                        "Install a compatible package (e.g. 'wintun') and the Wintun kernel driver."
-                    )
-            except Exception:
-                raise RuntimeError(
-                    "Windows TUN support requires a WinTun Python package and the Wintun driver installed. "
-                    "Install a compatible package (e.g. 'wintun') and the Wintun kernel driver."
-                )
             return
 
         raise RuntimeError("TUN services are supported only on Linux and Windows")
@@ -11690,8 +11679,11 @@ class ChannelMux:
                                 wintun_dir = c
                                 break
                     if wintun_dir and os.path.isdir(wintun_dir):
-                        if wintun_dir not in sys.path:
-                            sys.path.insert(0, wintun_dir)
+                        # insert parent of the package directory so `import wintun`
+                        # resolves when `wintun` is a package folder at WINTUN_DIR
+                        parent_dir = os.path.dirname(os.path.abspath(wintun_dir))
+                        if parent_dir not in sys.path:
+                            sys.path.insert(0, parent_dir)
                         try:
                             mod = importlib.import_module("wintun")
                         except Exception:
@@ -11704,30 +11696,62 @@ class ChannelMux:
 
                     # If no Python wrapper was found, try to bind directly to wintun.dll via ctypes.
                     if mod is None:
-                        # locate wintun.dll in candidate locations
+                        # locate wintun.dll in candidate locations, preferring the
+                        # DLL that matches the running Python process architecture.
                         dll_path = None
                         candidates = []
-                        # prefer WINTUN_DIR env if set
+                        # determine process architecture (64 vs 32)
+                        try:
+                            import struct
+
+                            is_64 = struct.calcsize("P") * 8 == 64
+                        except Exception:
+                            is_64 = sys.maxsize > 2 ** 32
+
+                        # helper to add possible dll locations in preferred order
+                        def push(path):
+                            if path:
+                                candidates.append(path)
+
                         env_dir = os.environ.get("WINTUN_DIR")
+                        # If WINTUN_DIR points to a folder, prefer arch-specific subfolders
                         if env_dir:
-                            candidates.append(os.path.join(env_dir, "wintun.dll"))
-                        # Program Files common locations
+                            # direct DLL inside env_dir
+                            push(os.path.join(env_dir, "wintun.dll"))
+                            # arch-specific common subpaths
+                            if is_64:
+                                push(os.path.join(env_dir, "bin", "amd64", "wintun.dll"))
+                                push(os.path.join(env_dir, "bin", "x64", "wintun.dll"))
+                            else:
+                                push(os.path.join(env_dir, "bin", "x86", "wintun.dll"))
+                        # Program Files common locations (prefer arched subfolders)
                         pf = os.environ.get("ProgramFiles")
                         pfx86 = os.environ.get("ProgramFiles(x86)")
                         if pf:
-                            candidates.append(os.path.join(pf, "Wintun", "wintun.dll"))
-                            candidates.append(os.path.join(pf, "wintun", "wintun.dll"))
+                            if is_64:
+                                push(os.path.join(pf, "Wintun", "wintun.dll"))
+                                push(os.path.join(pf, "wintun", "wintun.dll"))
+                                push(os.path.join(pf, "wintun", "bin", "amd64", "wintun.dll"))
+                            else:
+                                push(os.path.join(pf, "wintun", "bin", "x86", "wintun.dll"))
                         if pfx86:
-                            candidates.append(os.path.join(pfx86, "Wintun", "wintun.dll"))
-                            candidates.append(os.path.join(pfx86, "wintun", "wintun.dll"))
+                            # pfx86 typically holds 32-bit installs on 64-bit systems
+                            push(os.path.join(pfx86, "Wintun", "wintun.dll"))
+                            push(os.path.join(pfx86, "wintun", "wintun.dll"))
                         # System locations
                         sysroot = os.environ.get("SystemRoot")
                         if sysroot:
-                            candidates.append(os.path.join(sysroot, "System32", "wintun.dll"))
-                            candidates.append(os.path.join(sysroot, "SysWOW64", "wintun.dll"))
-                        # local folder fallback
-                        candidates.append(os.path.join(os.getcwd(), "wintun.dll"))
-                        candidates.append(os.path.join(wintun_dir or "", "wintun.dll"))
+                            # System32 is 64-bit on 64-bit Windows; SysWOW64 holds 32-bit DLLs
+                            if is_64:
+                                push(os.path.join(sysroot, "System32", "wintun.dll"))
+                                push(os.path.join(sysroot, "SysWOW64", "wintun.dll"))
+                            else:
+                                push(os.path.join(sysroot, "SysWOW64", "wintun.dll"))
+                        # current working directory and workspace-local
+                        push(os.path.join(os.getcwd(), "wintun.dll"))
+                        push(os.path.join(wintun_dir or "", "wintun.dll"))
+
+                        # try candidates in order and pick first that exists
                         for c in candidates:
                             try:
                                 if c and os.path.isfile(c):

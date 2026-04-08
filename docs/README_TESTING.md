@@ -2,13 +2,14 @@
 
 This repository currently collects:
 
-- `125` integration tests across [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py) and [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py)
-- `121` unit tests in `tests/unit/`
+- `128` integration tests across [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py), and [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py)
+- `128` unit tests in `tests/unit/`
 
 Recent test/content updates:
 
+- 2026-04-08: The repository now includes an opt-in `windows_elevated` integration slice in [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py). This local-only slice exercises real Windows TUN end-to-end behavior outside the shared CI lanes: one test proves WinTun-backed TUN channel open and peer bind over a `myudp` overlay, and one test proves the same TUN channel open/bind path after WebSocket plus PSK SecureLink authentication. The slice requires an elevated Windows session plus a usable `wintun.dll` exposed through `WINTUN_DIR`.
 - 2026-04-08: The repository now includes an opt-in `linux_elevated` integration slice in [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py). This local-only slice exercises real Linux TUN end-to-end behavior outside the shared CI lanes: one test proves packet carriage over a `myudp` overlay, and one test proves TUN packet carriage still survives WebSocket `semi-text-shape` plus PSK SecureLink with forced mux fragmentation. The slice is skipped unless explicitly enabled with `--run-linux-elevated` or `OBSTACLEBRIDGE_RUN_LINUX_ELEVATED=1`.
-- 2026-04-08: ChannelMux now includes a Linux-only TUN service slice. The delivered regression coverage includes focused unit coverage in [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py) for service-spec parsing, remote catalog propagation, local TUN packet forwarding, and mux-level TUN fragmentation/reassembly, plus the new opt-in elevated subprocess coverage in [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py). There is still not a non-privileged TUN subprocess slice in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), because that shared harness is designed to run without assuming `/dev/net/tun`, interface-creation permission, or elevated OS networking capability on every developer/CI host.
+- 2026-04-08: ChannelMux now includes delivered TUN service coverage across the supported privileged host backends. The regression coverage includes focused unit coverage in [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py) for service-spec parsing, remote catalog propagation, local TUN packet forwarding, and mux-level TUN fragmentation/reassembly, plus the opt-in elevated subprocess coverage in [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py) and [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py). There is still not a non-privileged TUN subprocess slice in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), because that shared harness is designed to run without assuming host-specific TUN availability, interface-creation permission, or elevated OS networking capability on every developer/CI host.
 - 2026-04-07: The PR-185 backport now documents the loopback-isolated `xdist` hardening that keeps the Linux shared integration slice stable under `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`. The integration harness in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py) now rewrites per-case loopback/admin hosts for direct WS, secure-link, reconnect, and mixed-listener paths, while the delivered runtime fix in [src/obstacle_bridge/bridge.py](../src/obstacle_bridge/bridge.py) restores session-aware payload budgeting for wrapped `myudp`, `tcp`, and `quic` sessions so SecureLink does not collapse forwarded application traffic to the mux-header budget.
 - 2026-04-07: Secure-link regression coverage now documents the delivered reconnect hardening and payload-budget enforcement that keep WS text payload modes from overrunning frame limits after SecureLink wrapping. The focused unit coverage in [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py) and [tests/unit/test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py) defends session-aware ChannelMux sizing and client re-handshake on secure-link transport epoch changes. Validation now includes `pytest -q tests/unit`, `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"` on this Windows workspace, and a successful Linux shared integration run of `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` in the CI-aligned environment.
 - 2026-04-06: Admin web config handling tests updated to reflect `secure_link_psk` write-only behavior (see commit 637eac8). The tests in `tests/unit/test_admin_web_payloads.py` now assert that `secure_link_psk` is masked on GET snapshots and is accepted by `update_config` on POST updates.
@@ -70,6 +71,7 @@ Enforcement layers:
 - When `src/obstacle_bridge/bridge.py` changed, CI now runs two jobs:
   - Linux shared coverage: `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`
   - Windows-specific coverage: `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"`
+- When a change affects TUN behavior, local validation should also include the elevated host-specific lanes documented below for Linux and Windows.
 - When `src/obstacle_bridge/bridge.py` did not change, the gate reports success without running the heavy suites.
 - To make merge impossible on failures, configure branch protection in GitHub to require both `Integration Gate (Linux shared)` and `Integration Gate (Windows-specific)`.
 
@@ -119,18 +121,24 @@ pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"
 pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"
 ```
 
-For the local Linux elevated TUN slice, use:
+For the local elevated TUN slices, use:
 
 ```bash
 ./scripts/run_linux_elevated_tests.sh
 ```
 
-Notes for that command:
+```powershell
+$env:WINTUN_DIR="C:\path\to\wintun\bin\amd64"
+python -m pytest tests/integration/test_windows_elevated.py -m "windows_elevated" -rs -q
+```
 
-- it is intentionally excluded from the shared CI subsets
-- it requires Linux, `/dev/net/tun`, the `ip` command, and permission to create/configure TUN interfaces
-- the script self-elevates with `sudo` when needed and sets the explicit opt-in flag so accidental local `pytest` runs still stay non-privileged
-- the same command is also available as the VS Code task `Linux Elevated Integration Tests`
+Notes for those commands:
+
+- they are intentionally excluded from the shared CI subsets
+- the Linux slice requires Linux, `/dev/net/tun`, the `ip` command, and permission to create/configure TUN interfaces
+- the Linux script self-elevates with `sudo` when needed and sets the explicit opt-in flag so accidental local `pytest` runs still stay non-privileged
+- the same Linux command is also available as the VS Code task `Linux Elevated Integration Tests`
+- the Windows slice requires an elevated Windows session, a usable WinTun installation, and `WINTUN_DIR` pointing at the directory that contains the matching-architecture `wintun.dll`
 
 ## Test patterns
 
@@ -188,7 +196,7 @@ Unit tests cover narrowly scoped logic that is easier and faster to validate wit
 - config parsing
 - per-peer channel catalog logic
 - connection snapshot formatting
-- Linux-only TUN service parsing and mux packet forwarding logic that would otherwise require `/dev/net/tun` and privileged interface setup in the test harness
+- TUN service parsing and mux packet forwarding logic that would otherwise require host-specific privileged interface setup in the test harness
 - websocket payload, proxy-env handling, and reconnect behavior
 - runner event/config helpers
 
@@ -201,7 +209,7 @@ The catalog is ordered as:
 
 ## Integration tests
 
-Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py) and collects `123` tests.
+Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py), and [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py) and collects `128` tests.
 
 The supporting project-level intent documents are:
 
@@ -228,6 +236,7 @@ The supporting project-level intent documents are:
 | `pytest -m "not windows_only"` | Linux shared CI subset | Run all OS-independent integration scenarios on Linux without masking Windows-specific obligations behind skips | `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` |
 | `pytest -m "windows_only"` | Windows-specific CI subset | Run integration scenarios that require Windows system proxy behavior or Windows Negotiate proxy auth | `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"` |
 | `scripts/run_linux_elevated_tests.sh` | Local Linux elevated subset | Run privileged TUN end-to-end coverage that requires `/dev/net/tun` and interface-management permission, including wrapped TUN fragmentation under WS+SecureLink | `./scripts/run_linux_elevated_tests.sh` |
+| `pytest -m "windows_elevated"` | Local Windows elevated subset | Run privileged WinTun-backed TUN end-to-end coverage that requires Administrator rights and a usable `wintun.dll`, including WebSocket plus PSK SecureLink channel-open validation | `python -m pytest tests/integration/test_windows_elevated.py -m "windows_elevated" -rs -q` |
 
 ### Failure-injection policy for integration tests
 
@@ -275,6 +284,7 @@ This first mapping is intentionally coarse. It links current integration entrypo
 | `test_overlay_e2e_ws_direct_preflight_requires_http_200_before_upgrade` | `REQ-WSP-011` | Direct WS peer clients must complete the `GET /` preflight and refuse the later upgrade path when that preflight does not return `200 OK` |
 | `test_overlay_e2e_ws_direct_preflight_requires_http_200_before_upgrade` and `tests/unit/test_ws_payload_mode.py::{test_connect_reports_dns_resolution_failures_as_failed,test_connect_reports_proxy_negotiation_failures_as_failed}` | `REQ-WSP-012` | WS peer-client bootstrap/open failures must become user-visible `FAILED` status with transport-level reason/detail |
 | `test_overlay_e2e_cli_routing_*` and allocator checks | `PROC-TST-001`, `PROC-TST-003`, `PROC-TST-004` | Harness self-tests that protect the integrity and repeatability of the integration test system itself |
+| `test_overlay_e2e_windows_elevated_tun_over_myudp_channel_open`, `test_overlay_e2e_windows_elevated_tun_over_ws_secure_link_channel_open`, and the Linux elevated TUN entrypoints in [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py) | `REQ-MUX-006`, `REQ-MUX-007`, `REQ-MUX-008` | Elevated host-specific TUN coverage that defends end-to-end TUN channel establishment, peer-scoped publication, and wrapped-packet handling on the supported privileged backends |
 
 ### Scenario-level traceability
 

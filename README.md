@@ -1,7 +1,7 @@
 # ObstacleBridge
 ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for barrier-resilient networking. It can run over multiple overlay transports (`myudp`, `tcp`, `quic`, `ws`), expose local TCP/UDP listener services through a reliable overlay, and host an admin UI for monitoring active channels.
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `125` integration tests, `121` unit tests. Current branch validation also includes the CI-aligned Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` after the loopback-isolated xdist harness backport and secure-link session-budget stabilization.
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `128` integration tests, `128` unit tests. Current branch validation also includes the CI-aligned Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`, the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, and the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`.
 
 ## Reader guide
 
@@ -100,80 +100,6 @@ After the first startup, open the Admin Web UI and adjust the remaining details 
 - `own_servers` and `remote_servers`
 - admin authentication and instance naming
 - logging and log retention settings
-
-### TUN interface example (Linux and Windows)
-
-ChannelMux can expose a local TUN interface as a muxed packet service. The service-spec format uses the existing six-field syntax:
-
-```text
-tun,<local_mtu>,<local_ifname>,tun,<remote_ifname>,<remote_mtu>
-```
-
-Interpretation:
-
-- `local_ifname` is the interface name to create on this side
-- `local_mtu` is the MTU to apply on this side
-- `remote_ifname` is the interface name the peer should create
-- `remote_mtu` is the MTU to apply on the peer side
-
-Example pair:
-
-- client `own_servers`: `tun,1400,obtun0,tun,obtun1,1400`
-- server `remote_servers`: `tun,1400,obtun1,tun,obtun0,1400`
-
-Linux (native) notes
-
-- Linux uses `/dev/net/tun` and the standard Python library.
-- The process needs permission to create and configure TUN devices; ObstacleBridge brings the interface up and applies MTU, but it does not assign IP addresses for you.
-
-Example Linux IP assignment (run as root):
-
-```bash
-sudo ip addr add 10.20.0.1/30 dev obtun0
-sudo ip link set obtun0 up
-```
-
-Windows (WinTun) notes — tested path
-
-- ObstacleBridge includes scaffolding to use a WinTun adapter on Windows. This requires:
-  - the Wintun driver (tested with Wintun 0.14.1 from https://www.wintun.net/), and
-  - a WinTun Python wrapper module available to the runtime (for example a `wintun` or `pywintun` module).
-- Administrative privileges are required to install the Wintun driver and to create/configure virtual interfaces.
-
-How to provide a WinTun Python wrapper for local testing
-
-1. Download Wintun runtime/driver from https://www.wintun.net/ (tested with 0.14.1) and install the driver per the Wintun instructions.
-2. Provide a Python wrapper module named `wintun` or `pywintun` on `sys.path` so ObstacleBridge can import it. You can do either:
-  - `pip install wintun` (if a compatible package is available), or
-  - place a local wrapper in a folder and set the environment variable `WINTUN_DIR` pointing to that folder, or copy the wrapper into a `wintun` folder next to the workspace (for example `C:\Program Files\wintun` or `C:\Programs\wintun`).
-
-Environment variable guidance:
-
-- `WINTUN_DIR`: optional path to a local `wintun` Python wrapper folder. Example:
-
-```powershell
-setx WINTUN_DIR "C:\temp\udp2quic_server\wintun"
-```
-
-Windows admin commands to assign an IP to the created adapter (PowerShell, run as Administrator):
-
-```powershell
-# replace 'obtun0' with the adapter name created by the WinTun wrapper
-New-NetIPAddress -InterfaceAlias 'obtun0' -IPAddress 10.20.0.2 -PrefixLength 30
-Set-NetAdapter -Name 'obtun0' -AdminStatus Up
-```
-
-Runtime behavior and caveats
-
-- ObstacleBridge attempts to import `wintun` or `pywintun` from the regular Python import path first. If not found, it will look for a local `wintun` folder pointed at by `WINTUN_DIR` or a workspace-local `wintun` folder (for example `C:\temp\udp2quic_server\wintun`).
-- The project includes a WinTun adapter scaffold in `src/obstacle_bridge/bridge.py`. A compatible wrapper must expose adapter creation and simple read/write methods (common names: `create_adapter`, `WintunAdapter`, `read_packet`, `write_packet`, `close`). The scaffold logs actionable errors when the wrapper API does not match and is intended to be adapted to the concrete wrapper you choose.
-- As with Linux, ObstacleBridge performs mux-level fragmentation and reassembly for TUN packets larger than the current session budget.
-
-Security and privileges
-
-- Installing the Wintun driver and creating virtual adapters typically requires Administrator privileges on Windows. Only install drivers and run admin commands from trusted sources and contexts.
-
-If you need help wiring a specific WinTun Python wrapper into ObstacleBridge, tell me which wrapper you have in `C:\temp\udp2quic_server\wintun` and I will adapt the scaffold in `src/obstacle_bridge/bridge.py` to call its API.
 
 ### 1) NAS behind outbound-only internet, reached through a public server
 This setup fits a NAS or home server that can make outgoing connections but cannot accept incoming internet traffic directly.
@@ -363,6 +289,125 @@ Then use WebAdmin to define:
 - authentication, log policy, and instance naming
 
 Using config files plus WebAdmin makes these multi-transport setups much easier to review and maintain than long shell commands with many inline options.
+
+### TUN interface example (Linux and Windows)
+
+ChannelMux can expose a local TUN interface as a muxed packet service. The service-spec format uses the existing six-field syntax:
+
+```text
+tun,<local_mtu>,<local_ifname>,tun,<remote_ifname>,<remote_mtu>
+```
+
+Interpretation:
+
+- `local_ifname` is the interface name to create on this side
+- `local_mtu` is the MTU to apply on this side
+- `remote_ifname` is the interface name the peer should create
+- `remote_mtu` is the MTU to apply on the peer side
+
+Example pair:
+
+- client `own_servers`: `tun,1400,obtun0,tun,obtun1,1400`
+- server `remote_servers`: `tun,1400,obtun1,tun,obtun0,1400`
+
+Linux (native) notes
+
+- Linux uses `/dev/net/tun` and the standard Python library.
+- The process needs permission to create and configure TUN devices; ObstacleBridge brings the interface up and applies MTU, but it does not assign IP addresses for you.
+
+Example Linux IP assignment (run as root):
+
+```bash
+sudo ip addr add 10.20.0.1/30 dev obtun0
+sudo ip link set obtun0 up
+```
+
+Windows (WinTun) notes — tested path
+
+- ObstacleBridge uses a WinTun adapter on Windows. This requires the Wintun driver (tested with Wintun 0.14.1 from https://www.wintun.net/).
+- Administrative privileges are required to install the Wintun driver and to create or configure virtual interfaces.
+- The default and tested Windows runtime path in this repository is direct ctypes binding to `wintun.dll`.
+
+How to use a downloaded Wintun folder with this project
+
+- Download and extract the Wintun release from https://www.wintun.net/ and install the driver per the Wintun instructions.
+- Point ObstacleBridge to the folder that contains the desired `wintun.dll` by setting the `WINTUN_DIR` environment variable to the folder containing the DLL, or to a parent folder that contains `bin\\amd64` or `bin\\x86` subfolders.
+
+Expected Wintun release layout
+
+- Official Wintun releases include a small layout such as:
+  - `bin\<arch>\wintun.dll` (for example `bin\amd64\wintun.dll` or `bin\x86\wintun.dll`)
+  - `include\wintun.h`
+  - `LICENSE.txt`, `README.md`, and similar release files
+
+- ObstacleBridge autodetects the DLL and prefers the file under `bin\<arch>\wintun.dll` that matches the running Python process architecture (64-bit Python -> `amd64` or `x64`, 32-bit Python -> `x86`). If `WINTUN_DIR` points at the top-level extracted folder, the code looks inside its `bin` subfolders for the matching architecture. To force a particular DLL, set `WINTUN_DIR` to the exact folder that contains `wintun.dll`, for example `...\bin\amd64`.
+
+PowerShell examples (set permanently for the current user):
+
+```powershell
+# If your DLL is in a top-level folder containing the DLL directly:
+setx WINTUN_DIR "C:\\Program Files\\Wintun"
+
+# Or point to the specific architecture subfolder (preferred to force x64 vs x86):
+setx WINTUN_DIR "C:\\path\\to\\wintun\\bin\\amd64"
+```
+
+Notes on selecting the correct DLL
+
+- Match the DLL architecture to the running Python process: use an `amd64` (x64) DLL with 64-bit Python, or `x86` (32-bit) DLL with 32-bit Python. To check Python bitness run:
+
+```powershell
+python -c "import struct; print(struct.calcsize('P')*8)"  # prints 64 or 32
+```
+
+- ObstacleBridge will attempt to autodetect and load `wintun.dll` from:
+  - the folder specified by `WINTUN_DIR` (if set)
+  - common Program Files locations (`C:\\Program Files\\Wintun` or `C:\\Program Files (x86)\\Wintun`)
+  - `System32` or `SysWOW64`
+  - the current working directory
+
+- If autodetection loads the wrong architecture or the wrong DLL, set `WINTUN_DIR` to the specific folder that holds the desired `wintun.dll`, for example `...\\bin\\amd64`, and restart the process.
+
+Running example (PowerShell, run as Administrator when creating adapters):
+
+```powershell
+$env:WINTUN_DIR = 'C:\\path\\to\\wintun\\bin\\amd64'  # or setx as shown above
+python -u scripts\\wintun_example.py --duration 5
+```
+
+What `scripts/wintun_example.py` does
+
+- loads `wintun.dll` through the same direct ctypes path used by the default Windows runtime
+- creates a temporary Wintun adapter
+- starts a packet session on that adapter
+- sends one small test packet into the adapter
+- polls briefly for received packets
+- closes the session and adapter again
+
+What to expect on success
+
+- `Loaded wintun.dll from ...`
+- `Creating adapter: ...`
+- `Adapter handle: ...`
+- `Session started`
+- `Sent test packet`
+- `Session ended`
+- `Adapter closed`
+
+- depending on the Windows network stack behavior on that machine, one or more `Received packet size=...` lines may also appear during the polling window
+
+What failures usually mean
+
+- `Unable to load wintun.dll`: `WINTUN_DIR` points to the wrong folder, the DLL is missing, or the DLL architecture does not match the Python process
+- `WintunCreateAdapter failed`: the process is not elevated, the driver is not installed correctly, or Windows rejected adapter creation
+- `WintunStartSession failed`: adapter creation succeeded, but the packet session could not be started; this usually points to a driver or runtime state problem on the host
+
+Runtime behavior and caveats
+
+- The default runtime path on Windows binds directly to `wintun.dll` using ctypes.
+- The ctypes path requires only `wintun.dll` and the driver; no project-specific files need to be added to the downloaded Wintun folder for runtime use.
+- Creating adapters and manipulating virtual interfaces requires Administrator privileges; run the process elevated when exercising adapter creation.
+
 ## Entry points
 - `python -m obstacle_bridge --help`
 
@@ -888,9 +933,11 @@ This top-level section is a compact coverage snapshot. Update the counts and sup
 
 ### CI split note
 
-- Linux runs the OS-independent integration suite with `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`
-- Windows runs the Windows-specific integration subset with `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"`
-- Recent validation for this branch used the Windows-local unit and `windows_only` subset here, and the Linux shared integration subset completed successfully in the CI-aligned environment.
+- Linux runs the OS-independent shared integration suite with `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`
+- Linux runs the elevated TUN subset separately with `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`
+- Windows runs the Windows-specific non-elevated integration subset with `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"`
+- Windows runs the elevated TUN subset separately with `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`
+- Recent validation for this branch used the Windows-local unit suite, the Windows `windows_only` subset, the Windows elevated TUN subset, and the Linux shared integration subset; the dedicated Linux elevated subset is part of the split CI expectation as well.
 
 ### Development environment and procedure
 - Feature development is done on Fedora 42.
