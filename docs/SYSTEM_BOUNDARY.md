@@ -30,6 +30,26 @@ These assumptions apply broadly across the project and should not be mistaken fo
 - the browser used for the admin UI supports the required HTTP and WebSocket behavior
 - third-party libraries such as `websockets` and `aioquic` provide the protocol mechanisms the project builds on
 
+## Why secure-link and TUN are inside the project boundary
+
+It is reasonable to ask why ObstacleBridge includes secure-link and TUN-oriented capability at all, because complete VPN-style solutions such as WireGuard or OpenVPN can already provide encrypted tunnel transport and virtual network interfaces.
+
+The boundary answer is:
+
+- User use-case:
+  - carry protected application traffic or routed IP traffic across network paths where the operator also needs ObstacleBridge's overlay selection, reconnect behavior, multiplexing, admin visibility, or obstacle-tolerant transports
+- Project responsibility:
+  - integrate protection and virtual-interface carriage directly with the overlay lifecycle, peer model, mux behavior, and admin surface that ObstacleBridge already owns
+- Out of scope:
+  - replacing the full product scope, deployment model, ecosystem, or mature PKI/key-management workflows of dedicated VPN systems such as WireGuard or OpenVPN
+
+More concretely:
+
+- A separate WireGuard or OpenVPN layer can solve many tunnel problems, but it lives outside ObstacleBridge's own overlay and observability model.
+- When the operator wants the protected or TUN-carried traffic to follow ObstacleBridge-specific transports such as `myudp`, WebSocket, QUIC, or mixed listener/peer configurations, the security and TUN handling have to attach to the ObstacleBridge connection itself rather than to an unrelated external tunnel.
+- Integrating these capabilities inside the project also allows peer-scoped policy, mux-aware fragmentation/reassembly, reconnect behavior, remote service publication, and admin/API visibility to remain consistent with the rest of the runtime instead of being split across two independent systems.
+- This does not mean ObstacleBridge is trying to supersede dedicated VPN products. It means the project needs a bounded in-project secure-link and TUN capability for the specific cases where the operator wants VPN-like behavior carried inside the same obstacle-tolerant overlay system.
+
 ## Secure-link responsibility boundary
 
 For the planned authentication and encryption capability, the surrounding system boundary is:
