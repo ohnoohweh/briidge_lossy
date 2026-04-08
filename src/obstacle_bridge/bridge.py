@@ -11709,16 +11709,54 @@ class ChannelMux:
     def _register_tun_reader(self, dev: "ChannelMux.TunDevice") -> None:
         if dev.reader_registered:
             return
-        self.loop.add_reader(dev.fd, self._on_tun_fd_readable, dev)
-        dev.reader_registered = True
+        # Linux: use loop.add_reader on the device fd
+        if getattr(dev, "fd", None) is not None:
+            try:
+                self.loop.add_reader(dev.fd, self._on_tun_fd_readable, dev)
+                dev.reader_registered = True
+                return
+            except Exception:
+                # fall through to try Windows-style adapter
+                pass
+
+        # Windows / WinTun: spawn a background async reader task
+        adapter = getattr(dev, "wintun_adapter", None)
+        if adapter is not None:
+            task = self.loop.create_task(self._wintun_reader_loop(dev))
+            setattr(dev, "wintun_reader_task", task)
+            dev.reader_registered = True
+            return
+        raise RuntimeError("Unable to register TUN reader: no fd or wintun adapter available")
 
     def _close_tun_device(self, dev: "ChannelMux.TunDevice") -> None:
+        # Cancel WinTun reader task if present
         if dev.reader_registered:
             with contextlib.suppress(Exception):
-                self.loop.remove_reader(dev.fd)
+                # remove unix fd reader if exists
+                if getattr(dev, "fd", None) is not None:
+                    self.loop.remove_reader(dev.fd)
+            with contextlib.suppress(Exception):
+                task = getattr(dev, "wintun_reader_task", None)
+                if task is not None:
+                    task.cancel()
             dev.reader_registered = False
+        # Close OS fd if present
         with contextlib.suppress(Exception):
-            os.close(dev.fd)
+            if getattr(dev, "fd", None) is not None:
+                os.close(dev.fd)
+        # Attempt to release WinTun adapter if present
+        with contextlib.suppress(Exception):
+            adapter = getattr(dev, "wintun_adapter", None)
+            if adapter is not None:
+                close_fn = getattr(adapter, "close", None) or getattr(adapter, "shutdown", None) or getattr(adapter, "free", None)
+                if callable(close_fn):
+                    try:
+                        res = close_fn()
+                        if asyncio.iscoroutine(res):
+                            # schedule coroutine close
+                            self.loop.create_task(res)
+                    except Exception:
+                        pass
         dev.chan_id = None
 
     def _find_service_tun_device(self, ifname: str, mtu: int) -> Optional["ChannelMux.TunDevice"]:
@@ -11778,6 +11816,60 @@ class ChannelMux:
             if not packet:
                 return
             self._on_local_tun_packet(dev, packet)
+
+    async def _wintun_reader_loop(self, dev: "ChannelMux.TunDevice") -> None:
+        """
+        Background reader loop for WinTun adapters. Tries common adapter read APIs:
+        - read_packet, read, recv, recv_packet
+        If the adapter method is synchronous, it will be called in the default executor.
+        """
+        adapter = getattr(dev, "wintun_adapter", None)
+        if adapter is None:
+            return
+        # discover read callable
+        read_attr_names = ["read_packet", "read", "recv_packet", "recv", "read_bytes"]
+        read_fn = None
+        for name in read_attr_names:
+            if hasattr(adapter, name):
+                read_fn = getattr(adapter, name)
+                break
+        if read_fn is None:
+            # last resort: try __call__
+            if callable(adapter):
+                read_fn = adapter
+        if read_fn is None:
+            self.log.info("[TUN/WINTUN] adapter for %s has no readable method", dev.ifname)
+            return
+
+        loop = self.loop
+        try:
+            while True:
+                try:
+                    if asyncio.iscoroutinefunction(read_fn):
+                        pkt = await read_fn()
+                    else:
+                        pkt = await loop.run_in_executor(None, read_fn)
+                except asyncio.CancelledError:
+                    return
+                except Exception as e:
+                    self.log.info("[TUN/WINTUN] read failed if=%s: %r", dev.ifname, e)
+                    await asyncio.sleep(0.1)
+                    continue
+                if not pkt:
+                    await asyncio.sleep(0.01)
+                    continue
+                try:
+                    # adapter may return memoryview/bytes-like
+                    packet = bytes(pkt)
+                except Exception:
+                    packet = pkt
+                # forward to existing handler on event loop thread
+                try:
+                    loop.call_soon_threadsafe(self._on_local_tun_packet, dev, packet)
+                except Exception:
+                    pass
+        finally:
+            self.log.info("[TUN/WINTUN] reader loop exiting for %s", dev.ifname)
 
     def _on_local_tun_packet(self, dev: "ChannelMux.TunDevice", packet: bytes) -> None:
         if not (self._overlay_connected and self._accepting_enabled):
@@ -11861,6 +11953,33 @@ class ChannelMux:
         if len(data) > int(dev.mtu):
             self.log.warning("[TUN] chan=%s drop oversize packet len=%s mtu=%s", chan, len(data), dev.mtu)
             return
+        # If this is a WinTun device, attempt adapter send API
+        adapter = getattr(dev, "wintun_adapter", None)
+        if adapter is not None:
+            write_names = ["write", "send", "send_packet", "write_packet"]
+            write_fn = None
+            for n in write_names:
+                if hasattr(adapter, n):
+                    write_fn = getattr(adapter, n)
+                    break
+            try:
+                if write_fn is None:
+                    # try calling adapter directly
+                    if callable(adapter):
+                        res = adapter(data)
+                    else:
+                        raise RuntimeError("No write method on WinTun adapter")
+                else:
+                    res = write_fn(data)
+                # support coroutine write functions
+                if asyncio.iscoroutine(res):
+                    self.loop.create_task(res)
+                ctr.msgs_out += 1
+                ctr.bytes_out += len(data)
+            except Exception as e:
+                self.log.info("[TUN] chan=%s wintun write failed if=%s: %r", chan, dev.ifname, e)
+            return
+        # Fallback: write to fd (Linux)
         try:
             os.write(dev.fd, data)
             ctr.msgs_out += 1
