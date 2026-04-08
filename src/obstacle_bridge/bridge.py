@@ -11672,11 +11672,20 @@ class ChannelMux:
                     # Check env var WINTUN_DIR, then common workspace path.
                     wintun_dir = os.environ.get("WINTUN_DIR")
                     if not wintun_dir:
-                        # try common path used in this workspace
-                        candidate = os.path.join(os.path.abspath(os.path.join(os.getcwd(), os.pardir)), "wintun")
-                        # also try the explicit path where you placed it
-                        explicit = os.path.join(os.path.abspath(os.getcwd()), "..", "..", "wintun")
-                        for c in (os.path.join(os.getcwd(), "wintun"), candidate, explicit, r"C:\temp\udp2quic_server\wintun"):
+                        # Prefer typical Windows installation locations under Program Files
+                        candidates = []
+                        pf = os.environ.get("ProgramFiles")
+                        pfx86 = os.environ.get("ProgramFiles(x86)")
+                        if pf:
+                            candidates.append(os.path.join(pf, "Wintun"))
+                            candidates.append(os.path.join(pf, "wintun"))
+                        if pfx86:
+                            candidates.append(os.path.join(pfx86, "Wintun"))
+                            candidates.append(os.path.join(pfx86, "wintun"))
+                        # Also try a local 'wintun' folder next to the current working directory
+                        candidates.append(os.path.join(os.getcwd(), "wintun"))
+                        candidates.append(os.path.join(os.path.abspath(os.path.join(os.getcwd(), os.pardir)), "wintun"))
+                        for c in candidates:
                             if c and os.path.isdir(c):
                                 wintun_dir = c
                                 break

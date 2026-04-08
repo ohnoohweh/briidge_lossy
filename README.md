@@ -144,8 +144,8 @@ How to provide a WinTun Python wrapper for local testing
 
 1. Download Wintun runtime/driver from https://www.wintun.net/ (tested with 0.14.1) and install the driver per the Wintun instructions.
 2. Provide a Python wrapper module named `wintun` or `pywintun` on `sys.path` so ObstacleBridge can import it. You can do either:
-   - `pip install wintun` (if a compatible package is available), or
-   - place a local wrapper in a folder and set the environment variable `WINTUN_DIR` pointing to that folder, or copy the wrapper into a `wintun` folder next to the workspace (for example `C:\temp\udp2quic_server\wintun`).
+  - `pip install wintun` (if a compatible package is available), or
+  - place a local wrapper in a folder and set the environment variable `WINTUN_DIR` pointing to that folder, or copy the wrapper into a `wintun` folder next to the workspace (for example `C:\Program Files\wintun` or `C:\Programs\wintun`).
 
 Environment variable guidance:
 
