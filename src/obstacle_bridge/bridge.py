@@ -11662,12 +11662,36 @@ class ChannelMux:
             try:
                 import importlib
                 mod = None
+                # Prefer installed packages first
                 if importlib.util.find_spec("wintun") is not None:
                     mod = importlib.import_module("wintun")
                 elif importlib.util.find_spec("pywintun") is not None:
                     mod = importlib.import_module("pywintun")
                 else:
-                    raise RuntimeError("No WinTun package found")
+                    # Fallback: allow a local wintun folder (developer provided).
+                    # Check env var WINTUN_DIR, then common workspace path.
+                    wintun_dir = os.environ.get("WINTUN_DIR")
+                    if not wintun_dir:
+                        # try common path used in this workspace
+                        candidate = os.path.join(os.path.abspath(os.path.join(os.getcwd(), os.pardir)), "wintun")
+                        # also try the explicit path where you placed it
+                        explicit = os.path.join(os.path.abspath(os.getcwd()), "..", "..", "wintun")
+                        for c in (os.path.join(os.getcwd(), "wintun"), candidate, explicit, r"C:\temp\udp2quic_server\wintun"):
+                            if c and os.path.isdir(c):
+                                wintun_dir = c
+                                break
+                    if wintun_dir and os.path.isdir(wintun_dir):
+                        if wintun_dir not in sys.path:
+                            sys.path.insert(0, wintun_dir)
+                        try:
+                            mod = importlib.import_module("wintun")
+                        except Exception:
+                            try:
+                                mod = importlib.import_module("pywintun")
+                            except Exception:
+                                raise RuntimeError(f"No WinTun Python wrapper found in {wintun_dir}")
+                    else:
+                        raise RuntimeError("No WinTun package found")
 
                 # If the imported module provides a simple adapter creation API,
                 # call it here and wrap the result in a TunDevice-like object.
