@@ -11698,9 +11698,155 @@ class ChannelMux:
                             try:
                                 mod = importlib.import_module("pywintun")
                             except Exception:
-                                raise RuntimeError(f"No WinTun Python wrapper found in {wintun_dir}")
+                                mod = None
                     else:
-                        raise RuntimeError("No WinTun package found")
+                        mod = None
+
+                    # If no Python wrapper was found, try to bind directly to wintun.dll via ctypes.
+                    if mod is None:
+                        # locate wintun.dll in candidate locations
+                        dll_path = None
+                        candidates = []
+                        # prefer WINTUN_DIR env if set
+                        env_dir = os.environ.get("WINTUN_DIR")
+                        if env_dir:
+                            candidates.append(os.path.join(env_dir, "wintun.dll"))
+                        # Program Files common locations
+                        pf = os.environ.get("ProgramFiles")
+                        pfx86 = os.environ.get("ProgramFiles(x86)")
+                        if pf:
+                            candidates.append(os.path.join(pf, "Wintun", "wintun.dll"))
+                            candidates.append(os.path.join(pf, "wintun", "wintun.dll"))
+                        if pfx86:
+                            candidates.append(os.path.join(pfx86, "Wintun", "wintun.dll"))
+                            candidates.append(os.path.join(pfx86, "wintun", "wintun.dll"))
+                        # System locations
+                        sysroot = os.environ.get("SystemRoot")
+                        if sysroot:
+                            candidates.append(os.path.join(sysroot, "System32", "wintun.dll"))
+                            candidates.append(os.path.join(sysroot, "SysWOW64", "wintun.dll"))
+                        # local folder fallback
+                        candidates.append(os.path.join(os.getcwd(), "wintun.dll"))
+                        candidates.append(os.path.join(wintun_dir or "", "wintun.dll"))
+                        for c in candidates:
+                            try:
+                                if c and os.path.isfile(c):
+                                    dll_path = c
+                                    break
+                            except Exception:
+                                continue
+                        # Try loading via ctypes; allow system to find it if explicit not found
+                        wintun_lib = None
+                        load_errors = []
+                        try_names = []
+                        if dll_path:
+                            try_names.append(dll_path)
+                        try_names.append("wintun.dll")
+                        for name in try_names:
+                            try:
+                                wintun_lib = ctypes.WinDLL(name)
+                                break
+                            except Exception as e:
+                                load_errors.append((name, e))
+                        if wintun_lib is None:
+                            raise RuntimeError(f"Unable to load wintun.dll; tried: {', '.join([n for n,_ in load_errors])}")
+
+                        # Bind required functions
+                        try:
+                            WintunCreateAdapter = wintun_lib.WintunCreateAdapter
+                            WintunCreateAdapter.restype = ctypes.c_void_p
+                            WintunCreateAdapter.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_byte)]
+                        except Exception:
+                            # Older exports or name differences can be handled here if needed
+                            pass
+
+                        # minimal ctypes-backed wrapper exposing expected adapter methods
+                        class _CtypesWintunAdapter:
+                            def __init__(self, lib, name: str):
+                                self._lib = lib
+                                # wide-char strings expected
+                                self._name = name
+                                # create adapter
+                                try:
+                                    # call WintunCreateAdapter
+                                    self._adapter = lib.WintunCreateAdapter(ctypes.c_wchar_p(name), ctypes.c_wchar_p("ObstacleBridge"), None)
+                                except Exception as e:
+                                    raise RuntimeError(f"WintunCreateAdapter failed: {e}")
+                                if not self._adapter:
+                                    raise RuntimeError("WintunCreateAdapter returned NULL")
+                                # start session
+                                try:
+                                    lib.WintunStartSession.restype = ctypes.c_void_p
+                                    lib.WintunStartSession.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+                                    self._session = lib.WintunStartSession(self._adapter, 0x400000)
+                                except Exception as e:
+                                    # try to close adapter if session start failed
+                                    try:
+                                        lib.WintunCloseAdapter(self._adapter)
+                                    except Exception:
+                                        pass
+                                    raise RuntimeError(f"WintunStartSession failed: {e}")
+
+                            def read_packet(self):
+                                # Prepare PacketSize variable
+                                lib = self._lib
+                                PacketSize = ctypes.c_uint32()
+                                lib.WintunReceivePacket.restype = ctypes.c_void_p
+                                lib.WintunReceivePacket.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+                                ptr = lib.WintunReceivePacket(self._session, ctypes.byref(PacketSize))
+                                if not ptr:
+                                    # emulate ERROR_NO_MORE_ITEMS by returning None
+                                    return None
+                                try:
+                                    data = ctypes.string_at(ptr, PacketSize.value)
+                                finally:
+                                    # release packet
+                                    try:
+                                        lib.WintunReleaseReceivePacket.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+                                        lib.WintunReleaseReceivePacket(self._session, ptr)
+                                    except Exception:
+                                        pass
+                                return data
+
+                            def write(self, data: bytes):
+                                lib = self._lib
+                                size = len(data)
+                                lib.WintunAllocateSendPacket.restype = ctypes.c_void_p
+                                lib.WintunAllocateSendPacket.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+                                ptr = lib.WintunAllocateSendPacket(self._session, ctypes.c_uint32(size))
+                                if not ptr:
+                                    raise RuntimeError("WintunAllocateSendPacket failed or buffer full")
+                                # copy data into ptr
+                                ctypes.memmove(ptr, data, size)
+                                lib.WintunSendPacket.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+                                lib.WintunSendPacket(self._session, ptr)
+
+                            def close(self):
+                                lib = self._lib
+                                try:
+                                    if getattr(self, "_session", None):
+                                        lib.WintunEndSession.argtypes = [ctypes.c_void_p]
+                                        lib.WintunEndSession(self._session)
+                                except Exception:
+                                    pass
+                                try:
+                                    if getattr(self, "_adapter", None):
+                                        lib.WintunCloseAdapter.argtypes = [ctypes.c_void_p]
+                                        lib.WintunCloseAdapter(self._adapter)
+                                except Exception:
+                                    pass
+
+                        # instantiate adapter wrapper
+                        try:
+                            adapter = _CtypesWintunAdapter(wintun_lib, ifname)
+                        except Exception as exc:
+                            raise RuntimeError(f"Failed to initialize ctypes wintun adapter: {exc}")
+
+                        # Build a TunDevice-like placeholder.
+                        dev = ChannelMux.TunDevice(fd=None, ifname=ifname, mtu=int(mtu), service_key=svc_key)
+                        setattr(dev, "wintun_adapter", adapter)
+                        setattr(dev, "reader_registered", False)
+                        return dev
 
                 # If the imported module provides a simple adapter creation API,
                 # call it here and wrap the result in a TunDevice-like object.
