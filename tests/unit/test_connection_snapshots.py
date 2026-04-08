@@ -1,8 +1,10 @@
 import argparse
 import asyncio
+import time
+import types
 import unittest
 
-from obstacle_bridge.bridge import ChannelMux, Runner, SessionMetrics, UdpSession
+from obstacle_bridge.bridge import ChannelMux, Runner, SessionMetrics, TcpStreamSession, QuicSession, UdpSession
 
 
 class _FakeSession:
@@ -452,6 +454,72 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(listener["myudp"]["confirmed_total"], 0)
         self.assertEqual(peer["myudp"]["confirmed_total"], 9)
         self.assertEqual(peer["myudp"]["first_pass"], 9)
+
+
+class TransportPeerSnapshotLastIncomingTests(unittest.TestCase):
+    def test_tcp_client_snapshot_includes_last_incoming_age_seconds(self):
+        session = TcpStreamSession.__new__(TcpStreamSession)
+        session._peer_tuple = ("127.0.0.1", 8081)
+        session._peer_host = "127.0.0.1"
+        session._peer_port = 8081
+        session._rtt = types.SimpleNamespace(rtt_est_ms=1.5, _last_rx_wall_ns=time.monotonic_ns())
+        session.is_connected = lambda: True
+
+        rows = session.get_overlay_peers_snapshot()
+
+        self.assertEqual(len(rows), 1)
+        self.assertIsNotNone(rows[0]["last_incoming_age_seconds"])
+        self.assertGreaterEqual(rows[0]["last_incoming_age_seconds"], 0.0)
+
+    def test_tcp_server_snapshot_includes_last_incoming_age_seconds(self):
+        session = TcpStreamSession.__new__(TcpStreamSession)
+        session._peer_tuple = None
+        session._server_chan_to_peer = {101: (1, 7)}
+        session._server_peers = {
+            1: {
+                "addr": ("198.51.100.10", 5000),
+                "connected": True,
+                "rtt": types.SimpleNamespace(rtt_est_ms=2.5, _last_rx_wall_ns=time.monotonic_ns()),
+            }
+        }
+
+        rows = session.get_overlay_peers_snapshot()
+
+        peer_row = next(row for row in rows if row["peer_id"] == 1)
+        self.assertIsNotNone(peer_row["last_incoming_age_seconds"])
+        self.assertGreaterEqual(peer_row["last_incoming_age_seconds"], 0.0)
+
+    def test_quic_client_snapshot_includes_last_incoming_age_seconds(self):
+        session = QuicSession.__new__(QuicSession)
+        session._peer_tuple = ("127.0.0.1", 443)
+        session._peer_host = "127.0.0.1"
+        session._peer_port = 443
+        session._rtt = types.SimpleNamespace(rtt_est_ms=3.5, _last_rx_wall_ns=time.monotonic_ns())
+        session.is_connected = lambda: True
+
+        rows = session.get_overlay_peers_snapshot()
+
+        self.assertEqual(len(rows), 1)
+        self.assertIsNotNone(rows[0]["last_incoming_age_seconds"])
+        self.assertGreaterEqual(rows[0]["last_incoming_age_seconds"], 0.0)
+
+    def test_quic_server_snapshot_includes_last_incoming_age_seconds(self):
+        session = QuicSession.__new__(QuicSession)
+        session._peer_tuple = None
+        session._server_chan_to_peer = {201: (2, 9)}
+        session._server_peers = {
+            2: {
+                "peer_host": "203.0.113.20",
+                "peer_port": 8443,
+                "rtt": types.SimpleNamespace(rtt_est_ms=4.5, _last_rx_wall_ns=time.monotonic_ns()),
+            }
+        }
+
+        rows = session.get_overlay_peers_snapshot()
+
+        peer_row = next(row for row in rows if row["peer_id"] == 2)
+        self.assertIsNotNone(peer_row["last_incoming_age_seconds"])
+        self.assertGreaterEqual(peer_row["last_incoming_age_seconds"], 0.0)
 
 
 if __name__ == "__main__":

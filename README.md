@@ -910,7 +910,7 @@ This stays consistent with the current runtime boundary:
 - Requirements: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `129` integration tests, `129` unit tests. Current branch validation also includes the CI-aligned Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`, the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, and the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`.
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `133` integration tests, `136` unit tests. Current branch validation also includes the CI-aligned Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`, the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, and the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`.
 
 The shared integration harness now generates localhost TLS test certificates in a temporary directory outside the repository and uses availability-aware loopback port allocation when materializing test cases. This keeps private key material out of version control and makes the Linux shared `xdist` run resilient to host services that already occupy uncommon local ports.
 

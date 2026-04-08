@@ -5759,6 +5759,9 @@ class TcpStreamSession(ISession):
                 "peer": self._format_peer_label(self._peer_host, self._peer_port),
                 "mux_chans": [],
                 "rtt_est_ms": getattr(self._rtt, "rtt_est_ms", None),
+                "last_incoming_age_seconds": _monotonic_age_seconds_from_ns(
+                    int(getattr(self._rtt, "_last_rx_wall_ns", 0) or 0)
+                ),
             }]
 
         rows = [{
@@ -5768,6 +5771,7 @@ class TcpStreamSession(ISession):
             "peer": None,
             "mux_chans": [],
             "rtt_est_ms": None,
+            "last_incoming_age_seconds": None,
             "listening": True,
         }]
         mux_by_peer: Dict[int, list[int]] = {}
@@ -5790,6 +5794,9 @@ class TcpStreamSession(ISession):
                 "peer": self._format_peer_label(host, port),
                 "mux_chans": sorted(mux_by_peer.get(peer_id, [])),
                 "rtt_est_ms": getattr(rtt, "rtt_est_ms", None),
+                "last_incoming_age_seconds": _monotonic_age_seconds_from_ns(
+                    int(getattr(rtt, "_last_rx_wall_ns", 0) or 0)
+                ),
             })
         return rows
 
@@ -6860,6 +6867,9 @@ class QuicSession(ISession):
                 "peer": self._format_peer_label(self._peer_host, self._peer_port),
                 "mux_chans": [],
                 "rtt_est_ms": getattr(self._rtt, "rtt_est_ms", None),
+                "last_incoming_age_seconds": _monotonic_age_seconds_from_ns(
+                    int(getattr(self._rtt, "_last_rx_wall_ns", 0) or 0)
+                ),
             }]
 
         rows = [{
@@ -6869,6 +6879,7 @@ class QuicSession(ISession):
             "peer": None,
             "mux_chans": [],
             "rtt_est_ms": None,
+            "last_incoming_age_seconds": None,
             "listening": True,
         }]
         mux_by_peer: Dict[int, list[int]] = {}
@@ -6892,6 +6903,15 @@ class QuicSession(ISession):
                     ctx["peer_host"], ctx["peer_port"] = host, port
             peer_label = self._format_peer_label(host, port)
             rtt = ctx.get("rtt") if isinstance(ctx, dict) else None
+            last_incoming_age_seconds = None
+            if isinstance(ctx, dict):
+                last_incoming_age_seconds = _monotonic_age_seconds_from_ns(
+                    int(ctx.get("last_incoming_wall_ns") or 0)
+                )
+            if last_incoming_age_seconds is None:
+                last_incoming_age_seconds = _monotonic_age_seconds_from_ns(
+                    int(getattr(rtt, "_last_rx_wall_ns", 0) or 0)
+                )
             rows.append({
                 "peer_id": peer_id,
                 "connected": bool(peer_id in self._server_peers),
@@ -6899,6 +6919,7 @@ class QuicSession(ISession):
                 "peer": peer_label,
                 "mux_chans": sorted(mux_by_peer.get(peer_id, [])),
                 "rtt_est_ms": getattr(rtt, "rtt_est_ms", None),
+                "last_incoming_age_seconds": last_incoming_age_seconds,
             })
         return rows
 
@@ -8355,6 +8376,9 @@ class WebSocketSession(ISession):
                     "peer": peer_label,
                     "mux_chans": [],
                     "rtt_est_ms": getattr(self._rtt, "rtt_est_ms", None),
+                    "last_incoming_age_seconds": _monotonic_age_seconds_from_ns(
+                        int(getattr(self._rtt, "_last_rx_wall_ns", 0) or 0)
+                    ),
                 }
             )
             return rows
@@ -8367,6 +8391,7 @@ class WebSocketSession(ISession):
                 "peer": None,
                 "mux_chans": [],
                 "rtt_est_ms": None,
+                "last_incoming_age_seconds": None,
                 "listening": True,
             }
         )
@@ -8390,6 +8415,15 @@ class WebSocketSession(ISession):
             port = remote[1] if isinstance(remote, tuple) and len(remote) >= 2 else None
             peer_label = self._format_peer_label(host, port)
             rtt = ctx.get("rtt") if isinstance(ctx, dict) else None
+            last_incoming_age_seconds = None
+            if isinstance(ctx, dict):
+                last_incoming_age_seconds = _monotonic_age_seconds_from_ns(
+                    int(ctx.get("last_incoming_wall_ns") or 0)
+                )
+            if last_incoming_age_seconds is None:
+                last_incoming_age_seconds = _monotonic_age_seconds_from_ns(
+                    int(getattr(rtt, "_last_rx_wall_ns", 0) or 0)
+                )
             rows.append(
                 {
                     "peer_id": peer_id,
@@ -8398,6 +8432,7 @@ class WebSocketSession(ISession):
                     "peer": peer_label,
                     "mux_chans": sorted(mux_by_peer.get(peer_id, [])),
                     "rtt_est_ms": getattr(rtt, "rtt_est_ms", None),
+                    "last_incoming_age_seconds": last_incoming_age_seconds,
                 }
             )
 
