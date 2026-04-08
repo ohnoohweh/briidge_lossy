@@ -11598,10 +11598,19 @@ class ChannelMux:
 
     @classmethod
     def _require_tun_support(cls) -> None:
-        if not sys.platform.startswith("linux"):
-            raise RuntimeError("TUN services are supported only on Linux")
-        if fcntl is None:
-            raise RuntimeError("TUN services require fcntl support")
+        # Linux path: require fcntl and /dev/net/tun
+        if sys.platform.startswith("linux"):
+            if fcntl is None:
+                raise RuntimeError("TUN services require fcntl support")
+            return
+
+        # Windows path: runtime validation happens in _open_tun_device().
+        # That path supports either a Python wrapper or direct ctypes binding
+        # against wintun.dll, so a wrapper package is not required here.
+        if sys.platform.startswith("win"):
+            return
+
+        raise RuntimeError("TUN services are supported only on Linux and Windows")
 
     def _set_iface_mtu(self, ifname: str, mtu: int) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -11618,33 +11627,339 @@ class ChannelMux:
 
     def _open_tun_device(self, ifname: str, mtu: int, svc_key: Optional["ChannelMux.ServiceKey"] = None) -> "ChannelMux.TunDevice":
         self._require_tun_support()
-        fd = os.open("/dev/net/tun", os.O_RDWR | os.O_NONBLOCK)
-        try:
-            ifr = struct.pack("16sH14x", self._tun_ifreq_name(ifname), self.IFF_TUN | self.IFF_NO_PI)
-            res = fcntl.ioctl(fd, self.TUNSETIFF, ifr)
-            actual = bytes(res[:16]).split(b"\x00", 1)[0].decode("utf-8", "ignore") or ifname
-            os.set_blocking(fd, False)
-            self._set_iface_mtu(actual, mtu)
-            self._set_iface_up(actual)
-            return ChannelMux.TunDevice(fd=fd, ifname=actual, mtu=int(mtu), service_key=svc_key)
-        except Exception:
-            with contextlib.suppress(Exception):
-                os.close(fd)
-            raise
+        # Linux implementation (existing behavior)
+        if sys.platform.startswith("linux"):
+            fd = os.open("/dev/net/tun", os.O_RDWR | os.O_NONBLOCK)
+            try:
+                ifr = struct.pack("16sH14x", self._tun_ifreq_name(ifname), self.IFF_TUN | self.IFF_NO_PI)
+                res = fcntl.ioctl(fd, self.TUNSETIFF, ifr)
+                actual = bytes(res[:16]).split(b"\x00", 1)[0].decode("utf-8", "ignore") or ifname
+                os.set_blocking(fd, False)
+                self._set_iface_mtu(actual, mtu)
+                self._set_iface_up(actual)
+                return ChannelMux.TunDevice(fd=fd, ifname=actual, mtu=int(mtu), service_key=svc_key)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    os.close(fd)
+                raise
+
+        # Windows scaffold: try to use a WinTun Python package if available.
+        # Full runtime integration requires a proper WinTun wrapper that exposes
+        # adapter creation and async read/write. Here we detect presence and
+        # surface a clear error if the module isn't fully wired up yet.
+        if sys.platform.startswith("win"):
+            try:
+                import importlib
+                mod = None
+                # Prefer installed packages first
+                if importlib.util.find_spec("wintun") is not None:
+                    mod = importlib.import_module("wintun")
+                elif importlib.util.find_spec("pywintun") is not None:
+                    mod = importlib.import_module("pywintun")
+                else:
+                    # Fallback: allow a local wintun folder (developer provided).
+                    # Check env var WINTUN_DIR, then common workspace path.
+                    wintun_dir = os.environ.get("WINTUN_DIR")
+                    if not wintun_dir:
+                        # Prefer typical Windows installation locations under Program Files
+                        candidates = []
+                        pf = os.environ.get("ProgramFiles")
+                        pfx86 = os.environ.get("ProgramFiles(x86)")
+                        if pf:
+                            candidates.append(os.path.join(pf, "Wintun"))
+                            candidates.append(os.path.join(pf, "wintun"))
+                        if pfx86:
+                            candidates.append(os.path.join(pfx86, "Wintun"))
+                            candidates.append(os.path.join(pfx86, "wintun"))
+                        # Also try a local 'wintun' folder next to the current working directory
+                        candidates.append(os.path.join(os.getcwd(), "wintun"))
+                        candidates.append(os.path.join(os.path.abspath(os.path.join(os.getcwd(), os.pardir)), "wintun"))
+                        for c in candidates:
+                            if c and os.path.isdir(c):
+                                wintun_dir = c
+                                break
+                    if wintun_dir and os.path.isdir(wintun_dir):
+                        # insert parent of the package directory so `import wintun`
+                        # resolves when `wintun` is a package folder at WINTUN_DIR
+                        parent_dir = os.path.dirname(os.path.abspath(wintun_dir))
+                        if parent_dir not in sys.path:
+                            sys.path.insert(0, parent_dir)
+                        try:
+                            mod = importlib.import_module("wintun")
+                        except Exception:
+                            try:
+                                mod = importlib.import_module("pywintun")
+                            except Exception:
+                                mod = None
+                    else:
+                        mod = None
+
+                    # If no Python wrapper was found, try to bind directly to wintun.dll via ctypes.
+                    if mod is None:
+                        # locate wintun.dll in candidate locations, preferring the
+                        # DLL that matches the running Python process architecture.
+                        dll_path = None
+                        candidates = []
+                        # determine process architecture (64 vs 32)
+                        try:
+                            import struct
+
+                            is_64 = struct.calcsize("P") * 8 == 64
+                        except Exception:
+                            is_64 = sys.maxsize > 2 ** 32
+
+                        # helper to add possible dll locations in preferred order
+                        def push(path):
+                            if path:
+                                candidates.append(path)
+
+                        env_dir = os.environ.get("WINTUN_DIR")
+                        # If WINTUN_DIR points to a folder, prefer arch-specific subfolders
+                        if env_dir:
+                            # direct DLL inside env_dir
+                            push(os.path.join(env_dir, "wintun.dll"))
+                            # arch-specific common subpaths
+                            if is_64:
+                                push(os.path.join(env_dir, "bin", "amd64", "wintun.dll"))
+                                push(os.path.join(env_dir, "bin", "x64", "wintun.dll"))
+                            else:
+                                push(os.path.join(env_dir, "bin", "x86", "wintun.dll"))
+                        # Program Files common locations (prefer arched subfolders)
+                        pf = os.environ.get("ProgramFiles")
+                        pfx86 = os.environ.get("ProgramFiles(x86)")
+                        if pf:
+                            if is_64:
+                                push(os.path.join(pf, "Wintun", "wintun.dll"))
+                                push(os.path.join(pf, "wintun", "wintun.dll"))
+                                push(os.path.join(pf, "wintun", "bin", "amd64", "wintun.dll"))
+                            else:
+                                push(os.path.join(pf, "wintun", "bin", "x86", "wintun.dll"))
+                        if pfx86:
+                            # pfx86 typically holds 32-bit installs on 64-bit systems
+                            push(os.path.join(pfx86, "Wintun", "wintun.dll"))
+                            push(os.path.join(pfx86, "wintun", "wintun.dll"))
+                        # System locations
+                        sysroot = os.environ.get("SystemRoot")
+                        if sysroot:
+                            # System32 is 64-bit on 64-bit Windows; SysWOW64 holds 32-bit DLLs
+                            if is_64:
+                                push(os.path.join(sysroot, "System32", "wintun.dll"))
+                                push(os.path.join(sysroot, "SysWOW64", "wintun.dll"))
+                            else:
+                                push(os.path.join(sysroot, "SysWOW64", "wintun.dll"))
+                        # current working directory and workspace-local
+                        push(os.path.join(os.getcwd(), "wintun.dll"))
+                        push(os.path.join(wintun_dir or "", "wintun.dll"))
+
+                        # try candidates in order and pick first that exists
+                        for c in candidates:
+                            try:
+                                if c and os.path.isfile(c):
+                                    dll_path = c
+                                    break
+                            except Exception:
+                                continue
+                        # Try loading via ctypes; allow system to find it if explicit not found
+                        wintun_lib = None
+                        load_errors = []
+                        try_names = []
+                        if dll_path:
+                            try_names.append(dll_path)
+                        try_names.append("wintun.dll")
+                        for name in try_names:
+                            try:
+                                wintun_lib = ctypes.WinDLL(name)
+                                break
+                            except Exception as e:
+                                load_errors.append((name, e))
+                        if wintun_lib is None:
+                            raise RuntimeError(f"Unable to load wintun.dll; tried: {', '.join([n for n,_ in load_errors])}")
+
+                        # Bind required functions
+                        try:
+                            WintunCreateAdapter = wintun_lib.WintunCreateAdapter
+                            WintunCreateAdapter.restype = ctypes.c_void_p
+                            WintunCreateAdapter.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_byte)]
+                        except Exception:
+                            # Older exports or name differences can be handled here if needed
+                            pass
+
+                        # minimal ctypes-backed wrapper exposing expected adapter methods
+                        class _CtypesWintunAdapter:
+                            def __init__(self, lib, name: str):
+                                self._lib = lib
+                                # wide-char strings expected
+                                self._name = name
+                                # create adapter
+                                try:
+                                    # call WintunCreateAdapter
+                                    self._adapter = lib.WintunCreateAdapter(ctypes.c_wchar_p(name), ctypes.c_wchar_p("ObstacleBridge"), None)
+                                except Exception as e:
+                                    raise RuntimeError(f"WintunCreateAdapter failed: {e}")
+                                if not self._adapter:
+                                    raise RuntimeError("WintunCreateAdapter returned NULL")
+                                # start session
+                                try:
+                                    lib.WintunStartSession.restype = ctypes.c_void_p
+                                    lib.WintunStartSession.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+                                    self._session = lib.WintunStartSession(self._adapter, 0x400000)
+                                except Exception as e:
+                                    # try to close adapter if session start failed
+                                    try:
+                                        lib.WintunCloseAdapter(self._adapter)
+                                    except Exception:
+                                        pass
+                                    raise RuntimeError(f"WintunStartSession failed: {e}")
+
+                            def read_packet(self):
+                                # Prepare PacketSize variable
+                                lib = self._lib
+                                PacketSize = ctypes.c_uint32()
+                                lib.WintunReceivePacket.restype = ctypes.c_void_p
+                                lib.WintunReceivePacket.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+                                ptr = lib.WintunReceivePacket(self._session, ctypes.byref(PacketSize))
+                                if not ptr:
+                                    # emulate ERROR_NO_MORE_ITEMS by returning None
+                                    return None
+                                try:
+                                    data = ctypes.string_at(ptr, PacketSize.value)
+                                finally:
+                                    # release packet
+                                    try:
+                                        lib.WintunReleaseReceivePacket.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+                                        lib.WintunReleaseReceivePacket(self._session, ptr)
+                                    except Exception:
+                                        pass
+                                return data
+
+                            def write(self, data: bytes):
+                                lib = self._lib
+                                size = len(data)
+                                lib.WintunAllocateSendPacket.restype = ctypes.c_void_p
+                                lib.WintunAllocateSendPacket.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+                                ptr = lib.WintunAllocateSendPacket(self._session, ctypes.c_uint32(size))
+                                if not ptr:
+                                    raise RuntimeError("WintunAllocateSendPacket failed or buffer full")
+                                # copy data into ptr
+                                ctypes.memmove(ptr, data, size)
+                                lib.WintunSendPacket.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+                                lib.WintunSendPacket(self._session, ptr)
+
+                            def close(self):
+                                lib = self._lib
+                                try:
+                                    if getattr(self, "_session", None):
+                                        lib.WintunEndSession.argtypes = [ctypes.c_void_p]
+                                        lib.WintunEndSession(self._session)
+                                except Exception:
+                                    pass
+                                try:
+                                    if getattr(self, "_adapter", None):
+                                        lib.WintunCloseAdapter.argtypes = [ctypes.c_void_p]
+                                        lib.WintunCloseAdapter(self._adapter)
+                                except Exception:
+                                    pass
+
+                        # instantiate adapter wrapper
+                        try:
+                            adapter = _CtypesWintunAdapter(wintun_lib, ifname)
+                        except Exception as exc:
+                            raise RuntimeError(f"Failed to initialize ctypes wintun adapter: {exc}")
+
+                        # Build a TunDevice-like placeholder.
+                        dev = ChannelMux.TunDevice(fd=None, ifname=ifname, mtu=int(mtu), service_key=svc_key)
+                        setattr(dev, "wintun_adapter", adapter)
+                        setattr(dev, "reader_registered", False)
+                        return dev
+
+                # If the imported module provides a simple adapter creation API,
+                # call it here and wrap the result in a TunDevice-like object.
+                # As WinTun Python wrappers vary, this area is intentionally
+                # lightweight: if the module does not expose the expected API,
+                # raise with actionable guidance.
+                create_adapter = getattr(mod, "create_adapter", None) or getattr(mod, "WintunAdapter", None)
+                if create_adapter is None:
+                    raise RuntimeError(
+                        "Found WinTun package but could not locate adapter creation API. "
+                        "Please ensure a compatible WinTun wrapper is installed and extend _open_tun_device accordingly."
+                    )
+
+                # NOTE: The following is a best-effort attempt to construct an adapter.
+                # Concrete projects should replace this with calls matching the chosen
+                # WinTun Python package API (create/open adapter, start IO loops, etc.).
+                try:
+                    adapter = create_adapter(ifname)
+                except Exception as exc:
+                    raise RuntimeError(f"Failed to create WinTun adapter: {exc}") from exc
+
+                # Build a TunDevice-like placeholder. Other code expects attributes
+                # `fd`, `ifname`, `mtu`, `service_key`, `reader_registered`, `chan_id`.
+                dev = ChannelMux.TunDevice(fd=None, ifname=ifname, mtu=int(mtu), service_key=svc_key)
+                # Attach adapter object for later Windows-specific IO handling.
+                setattr(dev, "wintun_adapter", adapter)
+                setattr(dev, "reader_registered", False)
+                return dev
+
+            except Exception as exc:
+                raise RuntimeError(
+                    "Windows TUN device creation failed. Install a WinTun wrapper (e.g. 'wintun') and the Wintun driver, "
+                    "or adapt _open_tun_device to your WinTun package. Original error: " + str(exc)
+                )
+
+        # Should not reach here
+        raise RuntimeError("Unsupported platform for TUN device creation")
 
     def _register_tun_reader(self, dev: "ChannelMux.TunDevice") -> None:
         if dev.reader_registered:
             return
-        self.loop.add_reader(dev.fd, self._on_tun_fd_readable, dev)
-        dev.reader_registered = True
+        # Linux: use loop.add_reader on the device fd
+        if getattr(dev, "fd", None) is not None:
+            try:
+                self.loop.add_reader(dev.fd, self._on_tun_fd_readable, dev)
+                dev.reader_registered = True
+                return
+            except Exception:
+                # fall through to try Windows-style adapter
+                pass
+
+        # Windows / WinTun: spawn a background async reader task
+        adapter = getattr(dev, "wintun_adapter", None)
+        if adapter is not None:
+            task = self.loop.create_task(self._wintun_reader_loop(dev))
+            setattr(dev, "wintun_reader_task", task)
+            dev.reader_registered = True
+            return
+        raise RuntimeError("Unable to register TUN reader: no fd or wintun adapter available")
 
     def _close_tun_device(self, dev: "ChannelMux.TunDevice") -> None:
+        # Cancel WinTun reader task if present
         if dev.reader_registered:
             with contextlib.suppress(Exception):
-                self.loop.remove_reader(dev.fd)
+                # remove unix fd reader if exists
+                if getattr(dev, "fd", None) is not None:
+                    self.loop.remove_reader(dev.fd)
+            with contextlib.suppress(Exception):
+                task = getattr(dev, "wintun_reader_task", None)
+                if task is not None:
+                    task.cancel()
             dev.reader_registered = False
+        # Close OS fd if present
         with contextlib.suppress(Exception):
-            os.close(dev.fd)
+            if getattr(dev, "fd", None) is not None:
+                os.close(dev.fd)
+        # Attempt to release WinTun adapter if present
+        with contextlib.suppress(Exception):
+            adapter = getattr(dev, "wintun_adapter", None)
+            if adapter is not None:
+                close_fn = getattr(adapter, "close", None) or getattr(adapter, "shutdown", None) or getattr(adapter, "free", None)
+                if callable(close_fn):
+                    try:
+                        res = close_fn()
+                        if asyncio.iscoroutine(res):
+                            # schedule coroutine close
+                            self.loop.create_task(res)
+                    except Exception:
+                        pass
         dev.chan_id = None
 
     def _find_service_tun_device(self, ifname: str, mtu: int) -> Optional["ChannelMux.TunDevice"]:
@@ -11704,6 +12019,60 @@ class ChannelMux:
             if not packet:
                 return
             self._on_local_tun_packet(dev, packet)
+
+    async def _wintun_reader_loop(self, dev: "ChannelMux.TunDevice") -> None:
+        """
+        Background reader loop for WinTun adapters. Tries common adapter read APIs:
+        - read_packet, read, recv, recv_packet
+        If the adapter method is synchronous, it will be called in the default executor.
+        """
+        adapter = getattr(dev, "wintun_adapter", None)
+        if adapter is None:
+            return
+        # discover read callable
+        read_attr_names = ["read_packet", "read", "recv_packet", "recv", "read_bytes"]
+        read_fn = None
+        for name in read_attr_names:
+            if hasattr(adapter, name):
+                read_fn = getattr(adapter, name)
+                break
+        if read_fn is None:
+            # last resort: try __call__
+            if callable(adapter):
+                read_fn = adapter
+        if read_fn is None:
+            self.log.info("[TUN/WINTUN] adapter for %s has no readable method", dev.ifname)
+            return
+
+        loop = self.loop
+        try:
+            while True:
+                try:
+                    if asyncio.iscoroutinefunction(read_fn):
+                        pkt = await read_fn()
+                    else:
+                        pkt = await loop.run_in_executor(None, read_fn)
+                except asyncio.CancelledError:
+                    return
+                except Exception as e:
+                    self.log.info("[TUN/WINTUN] read failed if=%s: %r", dev.ifname, e)
+                    await asyncio.sleep(0.1)
+                    continue
+                if not pkt:
+                    await asyncio.sleep(0.01)
+                    continue
+                try:
+                    # adapter may return memoryview/bytes-like
+                    packet = bytes(pkt)
+                except Exception:
+                    packet = pkt
+                # forward to existing handler on event loop thread
+                try:
+                    loop.call_soon_threadsafe(self._on_local_tun_packet, dev, packet)
+                except Exception:
+                    pass
+        finally:
+            self.log.info("[TUN/WINTUN] reader loop exiting for %s", dev.ifname)
 
     def _on_local_tun_packet(self, dev: "ChannelMux.TunDevice", packet: bytes) -> None:
         if not (self._overlay_connected and self._accepting_enabled):
@@ -11787,6 +12156,33 @@ class ChannelMux:
         if len(data) > int(dev.mtu):
             self.log.warning("[TUN] chan=%s drop oversize packet len=%s mtu=%s", chan, len(data), dev.mtu)
             return
+        # If this is a WinTun device, attempt adapter send API
+        adapter = getattr(dev, "wintun_adapter", None)
+        if adapter is not None:
+            write_names = ["write", "send", "send_packet", "write_packet"]
+            write_fn = None
+            for n in write_names:
+                if hasattr(adapter, n):
+                    write_fn = getattr(adapter, n)
+                    break
+            try:
+                if write_fn is None:
+                    # try calling adapter directly
+                    if callable(adapter):
+                        res = adapter(data)
+                    else:
+                        raise RuntimeError("No write method on WinTun adapter")
+                else:
+                    res = write_fn(data)
+                # support coroutine write functions
+                if asyncio.iscoroutine(res):
+                    self.loop.create_task(res)
+                ctr.msgs_out += 1
+                ctr.bytes_out += len(data)
+            except Exception as e:
+                self.log.info("[TUN] chan=%s wintun write failed if=%s: %r", chan, dev.ifname, e)
+            return
+        # Fallback: write to fd (Linux)
         try:
             os.write(dev.fd, data)
             ctr.msgs_out += 1

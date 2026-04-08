@@ -9,7 +9,7 @@ These statements are limited to project-owned behavior. They are not a catalog o
 ObstacleBridge is expected to:
 
 - establish overlay connectivity between peers over supported transports
-- carry UDP and TCP application traffic, plus Linux TUN packet traffic, across that overlay where the required OS capability is available
+- carry UDP and TCP application traffic, plus Linux and Windows TUN packet traffic, across that overlay where the required OS capability is available
 - support listener and peer-client deployment modes
 - expose runtime state and configuration through the admin web interface
 - remain testable under reconnect, restart, concurrency, and lossy-path scenarios
@@ -138,7 +138,7 @@ Current implementation note:
 - `REQ-MUX-003`: Multi-client listener scenarios shall preserve peer isolation so one peer’s channels and services do not conflict with another peer’s.
 - `REQ-MUX-004`: Remote service publication shall remain scoped to the intended peer.
 - `REQ-MUX-005`: Listener-side service, catalog, and cleanup decisions shall be keyed to the owning peer or request scope rather than to process-global singleton state, so legacy single-peer assumptions cannot make unrelated peers inherit disconnects, catalog replacement, or auxiliary-endpoint side effects.
-- `REQ-MUX-006`: On Linux hosts where `/dev/net/tun` is available and the process has permission to create/configure TUN devices, a connected peer shall be able to carry packet traffic between local TUN interfaces over one overlay connection.
+- `REQ-MUX-006`: On hosts where a supported TUN backend is available and the process has permission to create/configure TUN devices, including Linux hosts with `/dev/net/tun` and Windows hosts with a usable WinTun installation, a connected peer shall be able to carry packet traffic between local TUN interfaces over one overlay connection.
 - `REQ-MUX-007`: TUN service publication shall use the same peer-scoped catalog and channel-isolation rules as TCP and UDP services, so one peer's TUN interfaces and packet channels do not conflict with another peer's channels or published services.
 - `REQ-MUX-008`: When a UDP service datagram or TUN packet does not fit into one effective wrapped-session payload budget, the mux layer shall preserve the logical message boundary by fragmenting it across multiple mux messages and reassembling it before local delivery.
 
