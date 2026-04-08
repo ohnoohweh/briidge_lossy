@@ -127,6 +127,30 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
             and SecureLinkPskSession._parse_frame(payload)[0] == sl_type
         )
 
+    async def _wait_for_rekeys_completed(
+        self,
+        session: SecureLinkPskSession,
+        *,
+        min_completed: int,
+        previous_session_id: int | None = None,
+        timeout: float = 0.3,
+    ):
+        deadline = asyncio.get_running_loop().time() + timeout
+        last_peer = session.get_overlay_peers_snapshot()[0]["secure_link"]
+        last_status = session.get_secure_link_status_snapshot()
+        while asyncio.get_running_loop().time() < deadline:
+            last_peer = session.get_overlay_peers_snapshot()[0]["secure_link"]
+            last_status = session.get_secure_link_status_snapshot()
+            session_id = int(last_peer["session_id"] or 0)
+            completed = int(last_peer["rekeys_completed_total"] or 0)
+            if completed >= min_completed and (
+                previous_session_id is None or session_id != int(previous_session_id or 0)
+            ):
+                return last_peer, last_status
+            await asyncio.sleep(0.01)
+            await asyncio.sleep(0)
+        return last_peer, last_status
+
     async def test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session(self):
         client_inner = FakeInnerSession()
         server_inner = FakeInnerSession()
@@ -518,27 +542,31 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
 
         await client.start()
         await server.start()
+        try:
+            server_inner.emit_state(True)
+            client_inner.emit_state(True)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
 
-        server_inner.emit_state(True)
-        client_inner.emit_state(True)
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+            first_mux = self._pack_mux(11, b"prime-time-rekey")
+            self.assertEqual(client.send_app(first_mux), len(first_mux))
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
 
-        first_mux = self._pack_mux(11, b"prime-time-rekey")
-        self.assertEqual(client.send_app(first_mux), len(first_mux))
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+            old_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
+            client_peer, client_status = await self._wait_for_rekeys_completed(
+                client,
+                min_completed=1,
+                previous_session_id=old_session_id,
+            )
 
-        old_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
-        await asyncio.sleep(0.08)
-        await asyncio.sleep(0)
-
-        client_status = client.get_secure_link_status_snapshot()
-        new_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
-        self.assertNotEqual(old_session_id, new_session_id)
-        self.assertEqual(client_status["last_event"], "rekey_completed")
-        self.assertEqual(client_status["last_rekey_trigger"], "time_threshold")
-        self.assertGreaterEqual(client_status["rekeys_completed_total"], 1)
+            new_session_id = client_peer["session_id"]
+            self.assertNotEqual(old_session_id, new_session_id)
+            self.assertEqual(client_status["last_rekey_trigger"], "time_threshold")
+            self.assertGreaterEqual(client_status["rekeys_completed_total"], 1)
+        finally:
+            await client.stop()
+            await server.stop()
 
     async def test_time_based_rekey_arms_and_rotates_while_idle_after_authentication(self):
         client_inner = FakeInnerSession()
@@ -555,25 +583,29 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
 
         await client.start()
         await server.start()
+        try:
+            server_inner.emit_state(True)
+            client_inner.emit_state(True)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
 
-        server_inner.emit_state(True)
-        client_inner.emit_state(True)
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+            initial_peer = client.get_overlay_peers_snapshot()[0]["secure_link"]
+            old_session_id = initial_peer["session_id"]
+            self.assertIsNotNone(initial_peer["rekey_due_unix_ts"])
 
-        initial_peer = client.get_overlay_peers_snapshot()[0]["secure_link"]
-        old_session_id = initial_peer["session_id"]
-        self.assertIsNotNone(initial_peer["rekey_due_unix_ts"])
+            client_peer, client_status = await self._wait_for_rekeys_completed(
+                client,
+                min_completed=1,
+                previous_session_id=old_session_id,
+            )
 
-        await asyncio.sleep(0.08)
-        await asyncio.sleep(0)
-
-        client_status = client.get_secure_link_status_snapshot()
-        new_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
-        self.assertNotEqual(old_session_id, new_session_id)
-        self.assertEqual(client_status["last_event"], "rekey_completed")
-        self.assertEqual(client_status["last_rekey_trigger"], "time_threshold")
-        self.assertGreaterEqual(client_status["rekeys_completed_total"], 1)
+            new_session_id = client_peer["session_id"]
+            self.assertNotEqual(old_session_id, new_session_id)
+            self.assertEqual(client_status["last_rekey_trigger"], "time_threshold")
+            self.assertGreaterEqual(client_status["rekeys_completed_total"], 1)
+        finally:
+            await client.stop()
+            await server.stop()
 
     async def test_time_based_rekey_due_is_not_postponed_by_live_traffic(self):
         client_inner = FakeInnerSession()
@@ -590,33 +622,81 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
 
         await client.start()
         await server.start()
-
-        server_inner.emit_state(True)
-        client_inner.emit_state(True)
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-
-        first_mux = self._pack_mux(11, b"prime-live-time-rekey")
-        self.assertEqual(client.send_app(first_mux), len(first_mux))
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-
-        old_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
-        for counter in range(2, 6):
-            mux = self._pack_mux(11, f"live-time-{counter}".encode("ascii"), counter=counter)
-            self.assertEqual(client.send_app(mux), len(mux))
-            await asyncio.sleep(0.02)
+        try:
+            server_inner.emit_state(True)
+            client_inner.emit_state(True)
+            await asyncio.sleep(0)
             await asyncio.sleep(0)
 
-        await asyncio.sleep(0.02)
-        await asyncio.sleep(0)
+            first_mux = self._pack_mux(11, b"prime-live-time-rekey")
+            self.assertEqual(client.send_app(first_mux), len(first_mux))
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
 
-        client_status = client.get_secure_link_status_snapshot()
-        new_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
-        self.assertNotEqual(old_session_id, new_session_id)
-        self.assertEqual(client_status["last_event"], "rekey_completed")
-        self.assertEqual(client_status["last_rekey_trigger"], "time_threshold")
-        self.assertGreaterEqual(client_status["rekeys_completed_total"], 1)
+            old_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
+            for counter in range(2, 6):
+                mux = self._pack_mux(11, f"live-time-{counter}".encode("ascii"), counter=counter)
+                self.assertEqual(client.send_app(mux), len(mux))
+                await asyncio.sleep(0.02)
+                await asyncio.sleep(0)
+
+            client_peer, client_status = await self._wait_for_rekeys_completed(
+                client,
+                min_completed=1,
+                previous_session_id=old_session_id,
+            )
+
+            new_session_id = client_peer["session_id"]
+            self.assertNotEqual(old_session_id, new_session_id)
+            self.assertEqual(client_status["last_rekey_trigger"], "time_threshold")
+            self.assertGreaterEqual(client_status["rekeys_completed_total"], 1)
+        finally:
+            await client.stop()
+            await server.stop()
+
+    async def test_time_based_rekey_rearms_after_first_rekey_completion(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+
+        client = SecureLinkPskSession(
+            client_inner,
+            _args(tcp_peer='127.0.0.1', secure_link_rekey_after_seconds=0.02),
+            'tcp',
+        )
+        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
+
+        await client.start()
+        await server.start()
+        try:
+            server_inner.emit_state(True)
+            client_inner.emit_state(True)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+            first_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
+
+            deadline = asyncio.get_running_loop().time() + 0.30
+            seen_session_ids = {int(first_session_id or 0)}
+            rekeys_completed_total = 0
+            client_status = client.get_secure_link_status_snapshot()
+            while asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.02)
+                await asyncio.sleep(0)
+                client_peer = client.get_overlay_peers_snapshot()[0]["secure_link"]
+                client_status = client.get_secure_link_status_snapshot()
+                seen_session_ids.add(int(client_peer["session_id"] or 0))
+                rekeys_completed_total = int(client_peer["rekeys_completed_total"] or 0)
+                if rekeys_completed_total >= 2:
+                    break
+
+            self.assertGreaterEqual(rekeys_completed_total, 2)
+            self.assertGreaterEqual(len(seen_session_ids - {0}), 3)
+            self.assertEqual(client_status["last_rekey_trigger"], "time_threshold")
+        finally:
+            await client.stop()
+            await server.stop()
 
     async def test_operator_forced_rekey_rotates_session_and_reports_trigger(self):
         client_inner = FakeInnerSession()

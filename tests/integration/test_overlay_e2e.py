@@ -2104,6 +2104,28 @@ def fetch_http_bytes(
         return code, response_headers, body
 
 
+def fetch_http_text(
+    url: str,
+    *,
+    timeout: float = 1.5,
+    headers: Optional[Dict[str, str]] = None,
+    opener: Optional[urllib.request.OpenerDirector] = None,
+) -> tuple[int, Dict[str, str], str]:
+    url = _rewrite_registered_admin_url(url)
+    req_headers = {
+        'Accept': 'text/html,application/javascript,text/javascript,text/css,*/*;q=0.8',
+        'Connection': 'close',
+    }
+    req_headers.update(headers or {})
+    req = urllib.request.Request(url, headers=req_headers)
+    op = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with op.open(req, timeout=timeout) as resp:
+        code = getattr(resp, 'status', 200)
+        body = resp.read().decode('utf-8', 'replace')
+        response_headers = {str(key).strip().lower(): str(value).strip() for key, value in resp.headers.items()}
+        return code, response_headers, body
+
+
 def _read_http_response_from_socket(sock: socket.socket, *, timeout: float = 1.5) -> tuple[int, Dict[str, str], bytes]:
     sock.settimeout(timeout)
     raw = bytearray()
@@ -2230,6 +2252,31 @@ def wait_admin_auth_up(admin_port: int, timeout: float = 10.0) -> dict:
             log.info(f'[HARNESS] auth state poll failed on {admin_port}: {e!r}')
         time.sleep(0.25)
     raise RuntimeError(f'Admin auth endpoint not ready on port {admin_port}: {last_exc}')
+
+
+def wait_status_connected_auth(
+    admin_port: int,
+    *,
+    opener: urllib.request.OpenerDirector,
+    timeout: float = 20.0,
+    label: str = '',
+) -> dict:
+    end = time.time() + timeout
+    last = None
+    while time.time() < end:
+        code, body = fetch_json_auth(
+            f'http://127.0.0.1:{admin_port}/api/status',
+            timeout=1.5,
+            opener=opener,
+        )
+        if code == 200:
+            last = body
+            if status_state(body) == 'CONNECTED':
+                who = f' {label}' if label else ''
+                log.info(f'[STATUS]{who} port={admin_port} CONNECTED reached via authenticated admin session')
+                return body
+        time.sleep(0.25)
+    raise RuntimeError(f'Authenticated /api/status did not reach CONNECTED on port {admin_port}; last={last!r}')
 
 
 def admin_authenticate(
@@ -2811,6 +2858,60 @@ def wait_peer_secure_link_state(
     )
 
 
+def wait_peer_secure_link_state_auth(
+    admin_port: int,
+    *,
+    opener: urllib.request.OpenerDirector,
+    expected_state: str,
+    timeout: float = 12.0,
+    label: str = '',
+    transport: Optional[str] = None,
+    failure_reason: Optional[str] = None,
+    failure_code: Optional[int] = None,
+    failure_detail_substr: Optional[str] = None,
+    authenticated: Optional[bool] = None,
+) -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    normalized_transport = str(transport or '').strip().lower()
+    expected_state_norm = str(expected_state or '').strip().lower()
+    expected_reason = None if failure_reason is None else str(failure_reason).strip().lower()
+    while time.time() < end:
+        code, doc = fetch_json_auth(
+            f'http://127.0.0.1:{admin_port}/api/peers',
+            timeout=1.5,
+            opener=opener,
+        )
+        if code != 200:
+            time.sleep(0.25)
+            continue
+        last_doc = doc
+        for row in list(doc.get('peers') or []):
+            if normalized_transport and str(row.get('transport', '')).strip().lower() != normalized_transport:
+                continue
+            if str(row.get('state', '')).strip().lower() == 'listening':
+                continue
+            secure_link = row.get('secure_link') or {}
+            if str(secure_link.get('state', '')).strip().lower() != expected_state_norm:
+                continue
+            if expected_reason is not None and str(secure_link.get('failure_reason', '')).strip().lower() != expected_reason:
+                continue
+            if failure_code is not None and int(secure_link.get('failure_code') or 0) != int(failure_code):
+                continue
+            if failure_detail_substr is not None and failure_detail_substr not in str(secure_link.get('failure_detail') or ''):
+                continue
+            if authenticated is not None and bool(secure_link.get('authenticated')) != bool(authenticated):
+                continue
+            who = f' {label}' if label else ''
+            log.info(f'[PEERS]{who} port={admin_port} secure_link_state_auth={secure_link!r}')
+            return doc
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'Authenticated /api/peers did not expose secure_link state={expected_state_norm} '
+        f'on port {admin_port}; last={last_doc!r}'
+    )
+
+
 def wait_peer_myudp_transmit_stats(
     admin_port: int,
     *,
@@ -2884,6 +2985,42 @@ def wait_peer_secure_link_session_change(
         time.sleep(0.25)
     raise RuntimeError(
         f'/api/peers did not expose secure_link session change from {previous_session_id} on port {admin_port}; last={last_doc!r}'
+    )
+
+
+def wait_peer_secure_link_rekeys_completed(
+    admin_port: int,
+    *,
+    minimum_count: int,
+    timeout: float = 12.0,
+    label: str = '',
+    transport: Optional[str] = None,
+    authenticated: Optional[bool] = None,
+) -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    normalized_transport = str(transport or '').strip().lower()
+    minimum_rekeys = max(1, int(minimum_count))
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
+        last_doc = doc
+        for row in list(doc.get('peers') or []):
+            if normalized_transport and str(row.get('transport', '')).strip().lower() != normalized_transport:
+                continue
+            if str(row.get('state', '')).strip().lower() == 'listening':
+                continue
+            secure_link = row.get('secure_link') or {}
+            if authenticated is not None and bool(secure_link.get('authenticated')) != bool(authenticated):
+                continue
+            if int(secure_link.get('rekeys_completed_total') or 0) < minimum_rekeys:
+                continue
+            who = f' {label}' if label else ''
+            log.info(f'[PEERS]{who} port={admin_port} secure_link_rekeys_completed={secure_link!r}')
+            return doc
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'/api/peers did not expose secure_link rekeys_completed_total>={minimum_rekeys} '
+        f'on port {admin_port}; last={last_doc!r}'
     )
 
 
@@ -6219,6 +6356,90 @@ def test_overlay_e2e_tcp_secure_link_psk_happy_path(tmp_path: Path) -> None:
 
 @pytest.mark.integration
 @pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_time_rekey_rearms_after_completion(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=276,
+                secure_slot=1,
+                server_extra_args=['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret'],
+                client_extra_args=[
+                    '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+                    '--secure-link-rekey-after-seconds', '1.0',
+                ],
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+            wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
+            wait_peer_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', transport='tcp', authenticated=True)
+
+            wait_probe(case, payload=b'\x01prime-time-threshold-rekey', timeout=12.0)
+            first_doc = wait_peer_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+                authenticated=True,
+            )
+            first_secure = dict((first_active_secure_link_row(first_doc, transport='tcp').get('secure_link') or {}))
+            first_session_id = int(first_secure.get('session_id') or 0)
+            assert first_session_id > 0
+
+            seen_session_ids = {first_session_id}
+
+            first_rekey_doc = wait_peer_secure_link_rekeys_completed(
+                client_proc.admin_port or 0,
+                minimum_count=1,
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+                authenticated=True,
+            )
+            first_rekey_secure = dict((first_active_secure_link_row(first_rekey_doc, transport='tcp').get('secure_link') or {}))
+            first_rekey_session_id = int(first_rekey_secure.get('session_id') or 0)
+            seen_session_ids.add(first_rekey_session_id)
+            assert first_rekey_session_id > 0
+            assert first_rekey_session_id != first_session_id
+            assert first_rekey_secure.get('last_rekey_trigger') == 'time_threshold'
+            assert int(first_rekey_secure.get('rekeys_completed_total') or 0) >= 1
+
+            wait_probe(case, payload=b'\x01after-first-time-threshold-rekey', timeout=12.0)
+
+            second_rekey_doc = wait_peer_secure_link_rekeys_completed(
+                client_proc.admin_port or 0,
+                minimum_count=2,
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+                authenticated=True,
+            )
+            second_rekey_secure = dict((first_active_secure_link_row(second_rekey_doc, transport='tcp').get('secure_link') or {}))
+            second_rekey_session_id = int(second_rekey_secure.get('session_id') or 0)
+            seen_session_ids.add(second_rekey_session_id)
+            assert second_rekey_session_id > 0
+            assert second_rekey_session_id != first_rekey_session_id
+            assert second_rekey_secure.get('last_rekey_trigger') == 'time_threshold'
+            assert int(second_rekey_secure.get('rekeys_completed_total') or 0) >= 2
+            assert len({sid for sid in seen_session_ids if sid > 0}) >= 3
+
+            wait_probe(case, payload=b'\x01after-second-time-threshold-rekey', timeout=12.0)
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("case_name", "case_index", "secure_slot", "transport"),
     [
@@ -6445,6 +6666,133 @@ def test_overlay_e2e_tcp_secure_link_cert_operator_forced_rekey(tmp_path: Path) 
             assert client_secure.get('last_event') == 'rekey_completed'
             assert client_secure.get('last_rekey_trigger') == 'operator'
             assert int(client_secure.get('rekeys_completed_total') or 0) >= 1
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("scope", "button_id", "button_label", "expect_drop"),
+    [
+        ('revocation', 'secureLinkReloadRevocationBtn', 'Reload Revocation', False),
+        ('local_identity', 'secureLinkReloadIdentityBtn', 'Reload Local Identity', True),
+        ('all', 'secureLinkReloadAllBtn', 'Reload All', True),
+    ],
+)
+def test_overlay_e2e_webadmin_cert_reload_buttons_drive_authenticated_reload_flow(
+    scope: str,
+    button_id: str,
+    button_label: str,
+    expect_drop: bool,
+    tmp_path: Path,
+) -> None:
+    with secure_link_test_lock():
+        runtime_certs = _copy_secure_link_cert_fixture_set(tmp_path / f"runtime-certs-webadmin-{scope}")
+        revoked_path = runtime_certs / "revoked_runtime.json"
+        revoked_path.write_text("[]\n", encoding="utf-8")
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        username = 'admin'
+        password = 'secret-pass'
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=301,
+                secure_slot=32,
+                server_extra_args=_cert_secure_args_paths(
+                    root_pub=str(runtime_certs / 'root_a_pub.pem'),
+                    cert_body=str(runtime_certs / 'server_valid_cert_body.json'),
+                    cert_sig=str(runtime_certs / 'server_valid_cert.sig'),
+                    private_key=str(runtime_certs / 'server_valid_key.pem'),
+                    revoked_serials=str(revoked_path),
+                ),
+                client_extra_args=_cert_secure_args_paths(
+                    root_pub=str(runtime_certs / 'root_a_pub.pem'),
+                    cert_body=str(runtime_certs / 'client_valid_cert_body.json'),
+                    cert_sig=str(runtime_certs / 'client_valid_cert.sig'),
+                    private_key=str(runtime_certs / 'client_valid_key.pem'),
+                    revoked_serials=str(revoked_path),
+                    extra=['--admin-web-username', username, '--admin-web-password', password],
+                ),
+                wait_client_admin=False,
+            )
+            wait_admin_auth_up(client_proc.admin_port or 0, timeout=10.0)
+            login_code, login_doc, opener = admin_authenticate(client_proc.admin_port or 0, username, password)
+            assert login_code == 200
+            assert login_doc.get('authenticated') is True
+            wait_probe(case, payload=f'\x01webadmin-reload-prime-{scope}'.encode('ascii'), timeout=12.0)
+            wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+            wait_status_connected_auth(client_proc.admin_port or 0, timeout=20.0, label='client', opener=opener)
+
+            index_code, index_headers, index_html = fetch_http_text(
+                f'http://127.0.0.1:{client_proc.admin_port}/',
+                timeout=2.0,
+                opener=opener,
+            )
+            assert index_code == 200
+            assert 'text/html' in str(index_headers.get('content-type') or '').lower()
+            assert f'id="{button_id}"' in index_html
+            assert button_label in index_html
+
+            app_code, app_headers, app_js = fetch_http_text(
+                f'http://127.0.0.1:{client_proc.admin_port}/app.js',
+                timeout=2.0,
+                opener=opener,
+            )
+            assert app_code == 200
+            app_content_type = str(app_headers.get('content-type') or '').lower()
+            assert 'javascript' in app_content_type or 'text/plain' in app_content_type
+            assert f"document.getElementById('{button_id}')" in app_js
+            assert f"requestSecureLinkReload('{scope}')" in app_js
+
+            code, body = request_json(
+                f'http://127.0.0.1:{client_proc.admin_port}/api/secure-link/reload',
+                method='POST',
+                payload={"scope": scope},
+                timeout=2.0,
+                opener=opener,
+            )
+            assert code == 200
+            assert body.get('ok') is True
+            assert body.get('scope') == scope
+            if expect_drop:
+                assert int(body.get('dropped') or 0) >= 1
+            else:
+                assert int(body.get('dropped') or 0) == 0
+
+            client_doc = wait_peer_secure_link_state_auth(
+                client_proc.admin_port or 0,
+                opener=opener,
+                expected_state='authenticated',
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+                authenticated=True,
+            )
+            secure = dict((first_active_secure_link_row(client_doc, transport='tcp').get('secure_link') or {}))
+            assert secure.get('mode') == 'cert'
+            assert secure.get('last_material_reload_scope') == scope
+            assert secure.get('last_material_reload_result') == 'applied'
+
+            _status_code, status_doc = fetch_json_auth(
+                f'http://127.0.0.1:{client_proc.admin_port}/api/status',
+                timeout=1.5,
+                opener=opener,
+            )
+            assert status_doc.get('secure_link_last_reload_scope') == scope
+            assert status_doc.get('secure_link_last_reload_result') == 'applied'
+            if expect_drop:
+                assert int(status_doc.get('secure_link_peers_dropped_total') or 0) >= 1
+
+            wait_probe(case, payload=f'\x01webadmin-reload-after-{scope}'.encode('ascii'), timeout=12.0)
         finally:
             if bounce is not None:
                 bounce.stop()
