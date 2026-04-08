@@ -1,13 +1,10 @@
 # ObstacleBridge
 ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for barrier-resilient networking. It can run over multiple overlay transports (`myudp`, `tcp`, `quic`, `ws`), expose local TCP/UDP listener services through a reliable overlay, and host an admin UI for monitoring active channels.
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `128` integration tests, `128` unit tests. Current branch validation also includes the CI-aligned Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`, the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, and the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`.
-
 ## Reader guide
 
 - User: start with `Why this project was developed` and `Quick-start examples`
 - Contributor: start with `Contributor guidance`
-  - Contributor note: follow the project's PR style and use the repository PR template when opening changes. See `docs/DEVELOPMENT_PROCESS.md` and `.github/PULL_REQUEST_TEMPLATE.md` for the required PR structure and checklist.
 
 ## For Users
 
@@ -65,7 +62,7 @@ Create one JSON config file per instance and only keep a few startup arguments o
 ```
 
 ```bash
-python -m obstacle_bridge --config bridge_server.json
+python scripts/run.py --command "python -m obstacle_bridge --config bridge_server.json"
 ```
 
 **Peer / client bootstrap**
@@ -83,14 +80,14 @@ python -m obstacle_bridge --config bridge_server.json
 ```
 
 ```bash
-python -m obstacle_bridge --config bridge_client.json
+python scripts/run.py --command "python -m obstacle_bridge --config bridge_client.json"
 ```
 
 Windows tip:
 
 - save the examples as `bridge_server.json` and `bridge_client.json`
-- then run `python -m obstacle_bridge --config bridge_server.json`
-- and `python -m obstacle_bridge --config bridge_client.json`
+- then run `python scripts/run.py --command "python -m obstacle_bridge --config bridge_server.json"`
+- and `python scripts/run.py --command "python -m obstacle_bridge --config bridge_client.json"`
 - if you prefer to generate a valid JSON template from the tool itself, use `python -m obstacle_bridge --dump-config json`
 
 After the first startup, open the Admin Web UI and adjust the remaining details there:
@@ -290,7 +287,9 @@ Then use WebAdmin to define:
 
 Using config files plus WebAdmin makes these multi-transport setups much easier to review and maintain than long shell commands with many inline options.
 
-### TUN interface example (Linux and Windows)
+### 5) TUN interface example (Linux and Windows)
+
+A TUN device is a virtual Layer 3 network interface. It is useful when you want to tunnel complete IP traffic between two hosts or sites instead of exposing only individual TCP or UDP ports. In practice, that means you can use ObstacleBridge to carry routed subnet traffic in the same general way that tools such as WireGuard or OpenVPN carry virtual network traffic.
 
 ChannelMux can expose a local TUN interface as a muxed packet service. The service-spec format uses the existing six-field syntax:
 
@@ -409,11 +408,14 @@ Runtime behavior and caveats
 - Creating adapters and manipulating virtual interfaces requires Administrator privileges; run the process elevated when exercising adapter creation.
 
 ## Entry points
-- `python -m obstacle_bridge --help`
+- recommended runtime launcher: `python scripts/run.py`
+- direct CLI help: `python -m obstacle_bridge --help`
+
+If your configuration includes any `tun,...` service entries, start ObstacleBridge with elevated operating-system privileges. On Linux that normally means root or equivalent permission to manage `/dev/net/tun`; on Windows that means an Administrator session plus a usable WinTun installation.
 
 ### Launcher script
 
-Use the cross-platform Python launcher at `scripts/run.py`.
+Use the cross-platform Python launcher at `scripts/run.py`. This is the recommended way to start normal runtime instances because it supports the project's restart workflow.
 
 - Default (uses the running Python interpreter and `ObstacleBridge.cfg`):
 
@@ -733,8 +735,8 @@ Minimal peer example:
 Start them with:
 
 ```bash
-python -m obstacle_bridge --config secure_link_server.json
-python -m obstacle_bridge --config secure_link_client.json
+python scripts/run.py --command "python -m obstacle_bridge --config secure_link_server.json"
+python scripts/run.py --command "python -m obstacle_bridge --config secure_link_client.json"
 ```
 
 What to look for in WebAdmin first:
@@ -915,6 +917,8 @@ This stays consistent with the current runtime boundary:
 - System boundary and assumptions: [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md)
 - Requirements: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
+
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `128` integration tests, `128` unit tests. Current branch validation also includes the CI-aligned Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`, the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, and the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`.
 
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
