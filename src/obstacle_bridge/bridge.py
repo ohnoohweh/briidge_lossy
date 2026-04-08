@@ -734,6 +734,16 @@ DATA_MAX_CHUNK = PROTO.max_payload_len() - DATA_PAYLOAD_FIXED
 def now_ns() -> int:
     return time.monotonic_ns()
 
+
+def _monotonic_age_seconds_from_ns(last_rx_wall_ns: Optional[int]) -> Optional[float]:
+    try:
+        if not last_rx_wall_ns:
+            return None
+        age_ns = max(0, now_ns() - int(last_rx_wall_ns))
+        return age_ns / 1e9
+    except Exception:
+        return None
+
 def ring_cmp(a: int, b: int) -> int:
     if a == b:
         return 0
@@ -4466,6 +4476,7 @@ class UdpSession(ISession):
         self._server_peer_chan_to_mux: Dict[Tuple[int, int], int] = {}
         self._server_next_mux_chan: int = 1
         self._app_payload_passthrough: bool = False
+        self._listener_peer_cleanup_task: Optional[asyncio.Task] = None
 
         # Inner reliability/session engine remains the same one from base module.
         self.inner_session = Session(max_in_flight=args.max_inflight, proto=self._proto_state)
@@ -4649,6 +4660,7 @@ class UdpSession(ISession):
                 "peer": None,
                 "mux_chans": [],
                 "rtt_est_ms": None,
+                "last_incoming_age_seconds": None,
                 "listening": True,
             })
             for peer_id in sorted(self._server_peers.keys()):
@@ -4657,12 +4669,22 @@ class UdpSession(ISession):
                 host = addr[0] if isinstance(addr, tuple) and len(addr) >= 2 else None
                 port = addr[1] if isinstance(addr, tuple) and len(addr) >= 2 else None
                 session = ctx.get("session") if isinstance(ctx, dict) else None
+                last_incoming_age_seconds = None
+                if isinstance(ctx, dict):
+                    last_incoming_age_seconds = _monotonic_age_seconds_from_ns(
+                        int(ctx.get("last_incoming_wall_ns") or 0)
+                    )
+                if last_incoming_age_seconds is None and session is not None:
+                    last_incoming_age_seconds = _monotonic_age_seconds_from_ns(
+                        int(getattr(getattr(session, "proto", None), "_last_rx_wall_ns", 0) or 0)
+                    )
                 rows.append({
                     "peer_id": peer_id,
                     "connected": bool(ctx.get("connected")) if isinstance(ctx, dict) else False,
                     "peer": self._format_peer_label(host, port),
                     "mux_chans": sorted(mux_by_peer.get(peer_id, [])),
                     "rtt_est_ms": getattr(session, "rtt_est_ms", None),
+                    "last_incoming_age_seconds": last_incoming_age_seconds,
                 })
             return rows
         peer_label = None
@@ -4679,6 +4701,9 @@ class UdpSession(ISession):
             "peer": peer_label,
             "mux_chans": [],
             "rtt_est_ms": getattr(self.inner_session, "rtt_est_ms", None),
+            "last_incoming_age_seconds": _monotonic_age_seconds_from_ns(
+                int(getattr(getattr(self.inner_session, "proto", None), "_last_rx_wall_ns", 0) or 0)
+            ),
         }]
 
 
@@ -4785,6 +4810,8 @@ class UdpSession(ISession):
         self._transport = transport
         if self._listener_mode:
             self._proto = None
+            if self._listener_peer_cleanup_task is None:
+                self._listener_peer_cleanup_task = self._loop.create_task(self._listener_peer_cleanup_loop())
         else:
             self._proto = protocol
             self.peer_proto = protocol
@@ -4803,6 +4830,11 @@ class UdpSession(ISession):
 
     async def stop(self) -> None:
         try:
+            if self._listener_peer_cleanup_task is not None:
+                self._listener_peer_cleanup_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._listener_peer_cleanup_task
+                self._listener_peer_cleanup_task = None
             for peer_id in list(self._server_peers.keys()):
                 await self._close_server_peer(peer_id)
             if self._transport:
@@ -5018,6 +5050,7 @@ class UdpSession(ISession):
         except Exception:
             return
         key = (host, port)
+        rx_wall_ns = now_ns()
         peer_id = self._server_peer_by_addr.get(key)
         if peer_id is None:
             peer_id = self._alloc_server_peer_id()
@@ -5041,6 +5074,7 @@ class UdpSession(ISession):
                 "session": session,
                 "peer_proto": peer_proto,
                 "connected": False,
+                "last_incoming_wall_ns": rx_wall_ns,
             }
             self._server_peer_by_addr[key] = peer_id
             self.peer_proto = peer_proto
@@ -5049,9 +5083,58 @@ class UdpSession(ISession):
             self._log.info("[UDP/SESSION] listener accepted peer_id=%s peer=%s", peer_id, key)
             self._on_peer_set_for_peer(peer_id, host, port)
         ctx = self._server_peers.get(peer_id)
+        if isinstance(ctx, dict):
+            ctx["last_incoming_wall_ns"] = rx_wall_ns
         peer_proto = ctx.get("peer_proto") if isinstance(ctx, dict) else None
         if peer_proto is not None:
             peer_proto.datagram_received(data, key)
+
+    @staticmethod
+    def _listener_peer_stale_after_ns(ctx: dict) -> int:
+        session = ctx.get("session") if isinstance(ctx, dict) else None
+        proto = getattr(session, "proto", None)
+        try:
+            return max(1, int(getattr(proto, "connected_loss_ns", int(20 * 1e9)) or int(20 * 1e9)))
+        except Exception:
+            return int(20 * 1e9)
+
+    @staticmethod
+    def _listener_peer_last_incoming_wall_ns(ctx: dict) -> int:
+        try:
+            explicit = int(ctx.get("last_incoming_wall_ns") or 0)
+            if explicit > 0:
+                return explicit
+        except Exception:
+            pass
+        session = ctx.get("session") if isinstance(ctx, dict) else None
+        proto = getattr(session, "proto", None)
+        try:
+            return int(getattr(proto, "_last_rx_wall_ns", 0) or 0)
+        except Exception:
+            return 0
+
+    async def _listener_peer_cleanup_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(1.0)
+                stale_peer_ids: list[int] = []
+                now_v = now_ns()
+                for peer_id, ctx in list(self._server_peers.items()):
+                    if not isinstance(ctx, dict):
+                        continue
+                    if bool(ctx.get("connected")):
+                        continue
+                    last_rx_wall_ns = self._listener_peer_last_incoming_wall_ns(ctx)
+                    if last_rx_wall_ns <= 0:
+                        continue
+                    if (now_v - last_rx_wall_ns) < self._listener_peer_stale_after_ns(ctx):
+                        continue
+                    stale_peer_ids.append(int(peer_id))
+                for peer_id in stale_peer_ids:
+                    self._log.info("[UDP/SESSION] dropping stale never-connected listener peer_id=%s", peer_id)
+                    await self._close_server_peer(peer_id)
+        except asyncio.CancelledError:
+            return
 
     def _alloc_server_peer_id(self) -> int:
         peer_id = self._server_next_peer_id
@@ -14713,6 +14796,43 @@ class Runner:
             return f"{host}:{listen_port}"
         return None
 
+    @staticmethod
+    def _session_last_incoming_age_seconds(session: Any) -> Optional[float]:
+        candidates = [
+            session,
+            getattr(session, "proto", None),
+            getattr(session, "_rtt", None),
+            getattr(session, "inner_session", None),
+            getattr(getattr(session, "inner_session", None), "proto", None),
+            getattr(session, "peer_proto", None),
+            getattr(getattr(session, "peer_proto", None), "proto", None),
+        ]
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            with contextlib.suppress(Exception):
+                last_rx_wall_ns = int(getattr(candidate, "_last_rx_wall_ns", 0) or 0)
+                age = _monotonic_age_seconds_from_ns(last_rx_wall_ns)
+                if age is not None:
+                    return age
+        return None
+
+    @staticmethod
+    def _session_decode_errors(session: Any) -> int:
+        candidates = [
+            session,
+            getattr(session, "peer_proto", None),
+            getattr(getattr(session, "peer_proto", None), "proto", None),
+        ]
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            with contextlib.suppress(Exception):
+                value = int(getattr(candidate, "unidentified_frames", 0) or 0)
+                if value > 0:
+                    return value
+        return 0
+
     def get_peer_connections_snapshot(self) -> dict:
         peers: list = []
         for idx, session in enumerate(self._sessions):
@@ -14746,6 +14866,7 @@ class Runner:
                             "listen": listen_endpoint,
                             "peer": p.get("peer"),
                             "rtt_est_ms": p.get("rtt_est_ms", listener_metrics.rtt_est_ms),
+                            "last_incoming_age_seconds": p.get("last_incoming_age_seconds"),
                             "inflight": listener_metrics.inflight,
                             "decode_errors": 0,
                             "open_connections": {
@@ -14761,11 +14882,15 @@ class Runner:
                         })
                         continue
                     row_session = session
+                    row_decode_errors = int(p.get("decode_errors") or 0)
                     server_peers = getattr(real_session, "_server_peers", None)
                     if isinstance(server_peers, dict):
                         ctx = server_peers.get(int(p.get("peer_id", 0)))
                         if isinstance(ctx, dict) and ctx.get("session") is not None:
                             row_session = ctx.get("session")
+                        if isinstance(ctx, dict) and ctx.get("peer_proto") is not None:
+                            with contextlib.suppress(Exception):
+                                row_decode_errors = int(getattr(ctx.get("peer_proto"), "unidentified_frames", 0) or row_decode_errors)
                     row_metrics = self._session_metrics_snapshot(row_session, fallback=m)
                     mux_chans = set(int(c) for c in (p.get("mux_chans") or []))
                     p_rx = 0
@@ -14807,8 +14932,12 @@ class Runner:
                         "listen": listen_endpoint,
                         "peer": p.get("peer"),
                         "rtt_est_ms": p.get("rtt_est_ms", row_metrics.rtt_est_ms),
+                        "last_incoming_age_seconds": p.get(
+                            "last_incoming_age_seconds",
+                            self._session_last_incoming_age_seconds(row_session),
+                        ),
                         "inflight": row_metrics.inflight,
-                        "decode_errors": 0,
+                        "decode_errors": row_decode_errors,
                         "open_connections": {
                             "udp": udp_open,
                             "tcp": tcp_open,
@@ -14853,6 +14982,7 @@ class Runner:
                 "listen": listen_endpoint,
                 "peer": peer_label,
                 "rtt_est_ms": m.rtt_est_ms,
+                "last_incoming_age_seconds": self._session_last_incoming_age_seconds(real_session),
                 "inflight": m.inflight,
                 "decode_errors": decode_errors,
                 "open_connections": {

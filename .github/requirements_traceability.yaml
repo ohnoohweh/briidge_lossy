@@ -45,6 +45,10 @@ REQ-OVL-007:
 # loopback-isolated harness rewrites and secure-link session-budget fixes in the
 # delivered runtime, so the existing REQ-WSP-008/010, REQ-ADM-004/006, and
 # REQ-AUT-010 mappings remain defended in the CI-aligned parallel run.
+# NOTE: PR #189 additionally hardens the shared integration harness with
+# runtime-generated localhost TLS fixtures and availability-aware loopback
+# port-block selection. This is a testability/runtime-note update in
+# REQUIREMENTS.md; the underlying requirement-to-test mappings remain unchanged.
 # The application-vs-library functional decomposition for REQ-WSP-* is documented in
 # docs/ARCHITECTURE.md under "WebSocket proxy tunneling".
 # The broader separation between user use-cases, external assumptions, and

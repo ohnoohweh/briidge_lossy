@@ -2,7 +2,7 @@ import argparse
 import asyncio
 import unittest
 
-from obstacle_bridge.bridge import ChannelMux, Runner, SessionMetrics
+from obstacle_bridge.bridge import ChannelMux, Runner, SessionMetrics, UdpSession
 
 
 class _FakeSession:
@@ -27,6 +27,9 @@ class _FakeDatagramTransport:
         if key == "peername":
             return self._peername
         return None
+
+    def close(self):
+        pass
 
 
 class _FakeSocket:
@@ -239,6 +242,61 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(peer["secure_link"]["state"], "authenticated")
         self.assertTrue(peer["secure_link"]["authenticated"])
         self.assertEqual(peer["secure_link"]["connected_since_unix_ts"], 1700000000.0)
+
+    def test_listener_snapshot_shows_invalid_myudp_sender_as_connecting_peer(self):
+        class _EmptyMux:
+            def snapshot_connections(self):
+                return {
+                    "udp": [],
+                    "tcp": [],
+                    "counts": {"udp": 0, "tcp": 0, "udp_listening": 0, "tcp_listening": 0},
+                }
+
+        args = argparse.Namespace(
+            no_dashboard=True,
+            overlay_transport="myudp",
+            max_inflight=32,
+            udp_bind="0.0.0.0",
+            udp_own_port=4443,
+            udp_peer=None,
+            udp_peer_port=4433,
+            peer_resolve_family="prefer-ipv6",
+        )
+        session = UdpSession(args)
+        session._listener_mode = True
+        session._transport = _FakeDatagramTransport(("0.0.0.0", 4443))
+
+        session._dispatch_listener_datagram(b"port-scan-junk", ("38.180.143.5", 50227))
+
+        overlay_rows = session.get_overlay_peers_snapshot()
+        self.assertEqual(len(overlay_rows), 2)
+        peer_row = next(row for row in overlay_rows if row["peer_id"] != -1)
+        self.assertFalse(peer_row["connected"])
+        self.assertEqual(peer_row["peer"], "38.180.143.5:50227")
+        self.assertIsNotNone(peer_row["last_incoming_age_seconds"])
+        self.assertGreaterEqual(peer_row["last_incoming_age_seconds"], 0)
+
+        ctx = session._server_peers[peer_row["peer_id"]]
+        self.assertFalse(ctx["connected"])
+        self.assertEqual(ctx["peer_proto"].unidentified_frames, 1)
+
+        runner = Runner(args)
+        runner._sessions = [session]
+        runner._muxes = [_EmptyMux()]
+        runner._session_labels = ["myudp"]
+
+        out = runner.get_peer_connections_snapshot()
+        self.assertEqual(len(out["peers"]), 2)
+        peer = next(p for p in out["peers"] if p["id"] != "0:-1")
+        self.assertEqual(peer["id"], f"0:{peer_row['peer_id']}")
+        self.assertFalse(peer["connected"])
+        self.assertEqual(peer["state"], "connecting")
+        self.assertEqual(peer["peer"], "38.180.143.5:50227")
+        self.assertIsNotNone(peer["last_incoming_age_seconds"])
+        self.assertGreaterEqual(peer["last_incoming_age_seconds"], 0)
+        self.assertEqual(peer["decode_errors"], 1)
+        self.assertEqual(peer["open_connections"]["udp"], 0)
+        self.assertEqual(peer["open_connections"]["tcp"], 0)
 
     def test_listener_peer_snapshot_uses_child_myudp_session_stats(self):
         class _InnerStats:

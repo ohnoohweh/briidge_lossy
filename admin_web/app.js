@@ -82,6 +82,11 @@ function fmtUptime(sec) {
   return `${r}s`;
 }
 
+function fmtAgeSeconds(sec) {
+  if (sec == null || Number.isNaN(sec)) return 'n/a';
+  return fmtUptime(sec);
+}
+
 const APP_BASE_TITLE = 'ObstacleBridge';
 
 const authState = {
@@ -665,6 +670,11 @@ function renderPeerTable(rows) {
       connectionLine1.push(renderMetric('Peer', row.peer));
     }
     const connectionLines = [connectionLine1];
+    if (!isListeningPeer && isConnectingPeer) {
+      connectionLines.push([
+        renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds)),
+      ]);
+    }
     if (!isListeningPeer && !isConnectingPeer) {
       connectionLines.push([
         renderMetric('UDP Open', fmtInteger(row.open_connections?.udp ?? 0)),
@@ -672,8 +682,9 @@ function renderPeerTable(rows) {
       ]);
       connectionLines.push([
         renderMetric('Connection Uptime', fmtUptimeFromUnixTs(secureLink.connected_since_unix_ts)),
-        renderMetric('RTT Est (ms)', fmtNumber(row.rtt_est_ms)),
+        renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds)),
         renderMetric('RX Bytes', fmtBytes(row.traffic?.rx_bytes ?? 0)),
+        renderMetric('RTT Est (ms)', fmtNumber(row.rtt_est_ms)),
         renderMetric('TX Bytes', fmtBytes(row.traffic?.tx_bytes ?? 0)),
       ]);
     }

@@ -48,6 +48,26 @@ It currently owns:
 - the live admin WebSocket feed used for status updates
 - rendering of config, peers, connections, logs, restart, and secure-link controls
 
+## Peer diagnostics surface
+
+The peer table and `/api/peers` endpoint are intended to expose operator-usable peer diagnostics, not just a binary connected/disconnected summary.
+
+Current peer-row diagnostics include:
+
+- peer identity and listener-vs-peer row separation
+- peer-scoped connection state such as `listening`, `connecting`, or `connected`
+- peer-local RTT estimates where the transport exposes them
+- peer-scoped decode/unidentified-frame counters where the transport exposes them
+- peer-local `last_incoming_age_seconds`, which reports how long it has been since the runtime last observed an incoming transport message from that peer
+
+Design intent for `last_incoming_age_seconds`:
+
+- make stale or suspicious peer rows diagnosable from the admin UI without requiring direct socket tracing
+- let operators distinguish a healthy quiet peer from a row that only appeared because one incoming packet was observed and nothing valid followed
+- preserve peer scoping, so multi-client listeners can reason about each overlay peer independently rather than only through listener-global status
+
+The WebAdmin page renders this field as `Last Incoming` in the peer details view.
+
 It does not own:
 
 - transport socket lifecycle for overlay peers
@@ -222,6 +242,7 @@ Future changes to WebAdmin should preserve these externally visible behaviors:
 - `/api/live` remains available only to authenticated clients when auth is enabled
 - live updates continue to fall back or reconnect cleanly when the socket drops
 - secure-link and peer state remain peer-scoped in `/api/peers` and the WebAdmin page
+- `/api/peers` continues to expose peer-local age/diagnostic information such as `last_incoming_age_seconds` for non-listening peer rows when the runtime has observed inbound traffic from that peer
 
 The current regression anchors live in [tests/unit/test_admin_web_payloads.py](/home/ohnoohweh/quic_br/tests/unit/test_admin_web_payloads.py) and the admin-web integration cases in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py).
 
