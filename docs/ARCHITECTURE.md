@@ -24,7 +24,7 @@ The following component IDs are intended to stay stable so requirements, tests, 
 | `ARC-CMP-001` | Transport and session layer | Transport-specific peer connectivity, listener/client state, and per-peer transport ownership |
 | `ARC-CMP-002` | Reliability and framing layer | Reliable overlay framing, retransmission, RTT, inflight, and missed-frame tracking |
 | `ARC-CMP-003` | Channel and service multiplexing layer | `own_servers`, `remote_servers`, channel routing, and peer-scoped service isolation |
-| `ARC-CMP-004` | Runner and process orchestration layer | CLI/config composition, lifecycle wiring, restart/shutdown coordination, and process startup |
+| `ARC-CMP-004` | Runner and process orchestration layer | CLI/config composition, lifecycle wiring, restart/shutdown coordination, process startup, and entrypoint supervision |
 | `ARC-CMP-005` | Admin web and observability layer | HTTP API/UI, auth/session control, runtime snapshots, logs, and operator visibility |
 | `ARC-CMP-006` | Secure-link layer | Delivered PSK-based and certificate-based authentication, frame protection, replay defense, rekeying, and secure-link diagnostics between transport sessions and `ChannelMux` |
 
@@ -371,13 +371,14 @@ This is the main realization layer for listener and mixed-service requirements.
 Primary responsibility:
 
 - compose the configured transports, mux, and admin systems into one runnable process
+- supervise process restarts at the runtime entrypoint boundary
 
 Main contribution:
 
-- reads configuration and CLI arguments
-- starts the right transport sessions
-- wires callbacks and lifecycle events
-- coordinates shutdown and restart behavior
+- launcher entrypoint (`python -m obstacle_bridge`) handles restart supervision and runner-only options
+- bridge runtime (`bridge.py`) owns the full transport/mux/admin CLI and in-process runtime behavior
+- forwards non-launcher options from the launcher to `bridge.py` unchanged
+- keeps restart policy outside `bridge.py` so the core runtime stays focused on one process lifecycle
 
 Important behaviors:
 
@@ -385,6 +386,19 @@ Important behaviors:
 - restart handling
 - process-safe event binding
 - configuration persistence
+
+### Entrypoint split (`bridge.py` vs module launcher)
+
+The runtime restart design is intentionally split:
+
+- `src/obstacle_bridge/bridge.py`:
+  - parses the full bridge/runtime CLI surface (`--config`, transport, mux, admin, secure-link, logging)
+  - builds sessions and runs the in-process runtime (`Runner`)
+  - can be called directly as `python -m obstacle_bridge.bridge`
+- `python -m obstacle_bridge` (implemented by `src/obstacle_bridge/__main__.py` + `src/obstacle_bridge/launcher.py`):
+  - provides restart supervision behavior
+  - understands launcher-only options (`--interval`, `--no-redirect`, optional `--command`)
+  - forwards unknown options to `bridge.py`, so bridge CLI flags remain first-class on the default entrypoint
 
 ## 6. Admin web and observability layer
 

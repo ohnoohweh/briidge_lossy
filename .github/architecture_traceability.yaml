@@ -49,6 +49,10 @@ ARC-CMP-004:
     - tests/unit/test_runner_overlay_transports.py::test_request_secure_link_reload_targets_matching_peer_id_only
     - tests/unit/test_runner_overlay_transports.py::test_request_secure_link_reload_rejects_unknown_peer_id
     - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_uses_child_myudp_session_stats
+    - tests/unit/test_launcher_entrypoint.py::test_launcher_forwards_unknown_args_to_bridge
+    - tests/unit/test_launcher_entrypoint.py::test_launcher_restarts_for_code_75
+    - tests/unit/test_launcher_entrypoint.py::test_launcher_waits_interval_for_code_77
+    - tests/unit/test_launcher_entrypoint.py::test_launcher_appends_unknown_args_to_custom_command
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected

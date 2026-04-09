@@ -2,11 +2,12 @@
 
 This repository currently collects:
 
-- `137` integration tests across [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py), [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py), and [tests/integration/test_reconnect_regression.py](../tests/integration/test_reconnect_regression.py)
-- `138` unit tests in `tests/unit/`
+- `140` integration tests across [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py), [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py), and [tests/integration/test_reconnect_regression.py](../tests/integration/test_reconnect_regression.py)
+- `154` unit tests in `tests/unit/`
 
 Recent test/content updates:
 
+- 2026-04-09: Runtime entrypoint supervision now runs through `python -m obstacle_bridge` with launcher passthrough to `bridge.py`. Unit coverage in [tests/unit/test_launcher_entrypoint.py](../tests/unit/test_launcher_entrypoint.py) now defends restart-loop handling (`75` immediate retry and `77` delayed retry) plus forwarding of non-launcher options to `bridge.py`. Traceability now links this coverage to `REQ-LIFE-002` and `REQ-LIFE-005`.
 - 2026-04-09: Service-definition requirement coverage now includes `REQ-MUX-009` for structured JSON `own_servers`/`remote_servers` plus listener lifecycle-hook execution on structured `own_servers` entries. End-to-end coverage adds [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py) cases `test_overlay_e2e_structured_own_servers_lifecycle_hooks_execute` and `test_overlay_e2e_structured_remote_servers_udp_forwarding`, and traceability maps these with focused unit coverage in [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py).
 - 2026-04-09: ChannelMux Phase 2 service lifecycle-hook execution is wired for listener/client events with `argv`-based command spawning, placeholder expansion, timeout/env support, and OS-aware command selection (`linux`/`windows`/`darwin` plus `default`). Coverage in [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py) verifies hook-command argv selection and placeholder rendering behavior. Local validation for this slice used `pytest -q tests/unit/test_channel_mux_listener_mode.py`.
 - 2026-04-09: ChannelMux Phase 1 service-definition coverage focuses on structured `own_servers` / `remote_servers` parsing. Coverage in [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py) verifies structured `tcp`/`udp`/`tun` entries, reserved `lifecycle_hooks` parsing without execution, and structured validation failures. Local validation for this slice used `pytest -q tests/unit/test_channel_mux_listener_mode.py tests/unit/test_runner_events.py`.
@@ -223,7 +224,7 @@ The catalog is ordered as:
 
 ## Integration tests
 
-Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py), and [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py) and collects `137` tests.
+Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py), and [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py) and collects `140` tests.
 
 The supporting project-level intent documents are:
 
@@ -485,7 +486,7 @@ This runtime slice is reflected by active `REQ-AUT-*` requirements, and the cert
 
 ## Unit tests
 
-Unit coverage currently collects `130` tests from `tests/unit/`.
+Unit coverage currently collects `154` tests from `tests/unit/`.
 
 ### Unit-side traceability
 
@@ -508,6 +509,7 @@ The component view they support is described in [ARCHITECTURE.md](ARCHITECTURE.m
 | `tests/unit/test_runner_config_persistence.py` | `ARC-CMP-004` | `PROC-TST-002` | Runtime config updates must persist back to the configured file correctly | `pytest -q tests/unit/test_runner_config_persistence.py` |
 | `tests/unit/test_runner_events.py` | `ARC-CMP-004` | `PROC-TST-002` | Restart and shutdown events must bind to the active event loop correctly | `pytest -q tests/unit/test_runner_events.py` |
 | `tests/unit/test_runner_overlay_transports.py` | `ARC-CMP-004`, `ARC-CMP-001` | `REQ-OVL-003`, `REQ-OVL-004`, `REQ-OVL-005`, `REQ-AUT-011`, `REQ-AUT-015`, `REQ-AUT-017`, `REQ-AUT-019`, `REQ-LIFE-006`, `PROC-TST-002` | Overlay transport parsing, secure-link wrapping, startup validation, and peer-targeted operator control routing (including per-peer reconnect targeting) must remain consistent with supported transport and cert-mode runtime rules | `pytest -q tests/unit/test_runner_overlay_transports.py` |
+| `tests/unit/test_launcher_entrypoint.py` | `ARC-CMP-004` | `REQ-LIFE-002`, `REQ-LIFE-005`, `PROC-TST-002` | The default module entrypoint launcher must preserve restart-loop behavior (`75` immediate retry and `77` delayed retry) and forward non-launcher CLI options to `bridge.py` consistently | `pytest -q tests/unit/test_launcher_entrypoint.py` |
 | `tests/unit/test_ws_multi_peer.py` | `ARC-CMP-001`, `ARC-CMP-003` | `REQ-LST-001`, `REQ-ADM-006`, `REQ-MUX-001`, `REQ-MUX-003`, `PROC-TST-002`, `PROC-TST-003` | WS multi-peer mux rewriting, peer-scoped outbound routing, and listener-side peer RTT plus `last_incoming_age_seconds` reporting must remain peer-safe and operator-visible for regression diagnosis | `pytest -q tests/unit/test_ws_multi_peer.py` |
 | `tests/unit/test_ws_payload_mode.py` | `ARC-CMP-001`, `ARC-CMP-005` | `REQ-OVL-004`, `REQ-WSP-010`, `REQ-WSP-011`, `REQ-WSP-012`, `REQ-LIFE-002`, `PROC-TST-002` | WS payload encoding, client-advertised payload-mode negotiation, grouped `semi-text-shape` transfer form, encoded-frame-aware client receive sizing for text payload modes, tx timing, reconnect grace, direct-path HTTP preflight body download and refusal behavior, user-visible bootstrap/open failure reporting, platform-default proxy resolution, compression config, and debug static HTTP behavior must stay internally consistent | `pytest -q tests/unit/test_ws_payload_mode.py` |
 
@@ -524,6 +526,7 @@ The component view they support is described in [ARCHITECTURE.md](ARCHITECTURE.m
 | `tests/unit/test_runner_config_persistence.py` | Config update persistence | Verify config updates are written back to the configured file correctly | `pytest -q tests/unit/test_runner_config_persistence.py` |
 | `tests/unit/test_runner_events.py` | Runner event binding | Verify restart and shutdown events bind to the running loop correctly | `pytest -q tests/unit/test_runner_events.py` |
 | `tests/unit/test_runner_overlay_transports.py` | Overlay transport parsing/building | Verify transport list parsing, secure-link wrapping, startup material validation, and peer-targeted operator control routing (secure-link reload/rekey and reconnect targeting by peer row id) | `pytest -q tests/unit/test_runner_overlay_transports.py` |
+| `tests/unit/test_launcher_entrypoint.py` | Module-launcher restart supervision | Verify the default `python -m obstacle_bridge` launcher restart loop (`75` immediate retry, `77` delayed retry) and passthrough of non-launcher options to `bridge.py` | `pytest -q tests/unit/test_launcher_entrypoint.py` |
 | `tests/unit/test_secure_link_cert.py` | Secure-link certificate mode | Verify certificate material loading, trust validation, role/validity/deployment/revocation rejection, live reload/apply behavior, and cert-mode rekey behavior | `pytest -q tests/unit/test_secure_link_cert.py` |
 | `tests/unit/test_ws_multi_peer.py` | WebSocket multi-peer mux logic | Verify inbound and outbound mux rewriting, peer-specific send routing, and listener-side RTT plus last-incoming-age updates for accepted WS peers | `pytest -q tests/unit/test_ws_multi_peer.py` |
 | `tests/unit/test_ws_payload_mode.py` | WebSocket framing/runtime behavior | Verify payload encoding modes, including grouped `semi-text-shape`, encoded-frame-aware client sizing for text modes, tx loop behavior, socket config, reconnect grace, HTTP preflight, platform-default proxy handling (`system` on Windows and `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` on Linux/POSIX), compression, and debug static HTTP behavior | `pytest -q tests/unit/test_ws_payload_mode.py` |

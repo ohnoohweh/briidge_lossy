@@ -120,7 +120,7 @@ Create one JSON config file per instance and only keep a few startup arguments o
 ```
 
 ```bash
-python scripts/run.py --command "python -m obstacle_bridge --config bridge_server.json"
+python -m obstacle_bridge --config bridge_server.json
 ```
 
 **Peer / client bootstrap**
@@ -138,14 +138,14 @@ python scripts/run.py --command "python -m obstacle_bridge --config bridge_serve
 ```
 
 ```bash
-python scripts/run.py --command "python -m obstacle_bridge --config bridge_client.json"
+python -m obstacle_bridge --config bridge_client.json
 ```
 
 Windows tip:
 
 - save the examples as `bridge_server.json` and `bridge_client.json`
-- then run `python scripts/run.py --command "python -m obstacle_bridge --config bridge_server.json"`
-- and `python scripts/run.py --command "python -m obstacle_bridge --config bridge_client.json"`
+- then run `python -m obstacle_bridge --config bridge_server.json`
+- and `python -m obstacle_bridge --config bridge_client.json`
 - if you prefer to generate a valid JSON template from the tool itself, use `python -m obstacle_bridge --dump-config json`
 
 After the first startup, open the Admin Web UI and adjust the remaining details there:
@@ -492,34 +492,36 @@ Runtime behavior and caveats
 - Creating adapters and manipulating virtual interfaces requires Administrator privileges; run the process elevated when exercising adapter creation.
 
 ## Entry points
-- recommended runtime launcher: `python scripts/run.py`
-- direct CLI help: `python -m obstacle_bridge --help`
+- runtime launcher: `python -m obstacle_bridge`
+- direct bridge CLI help: `python -m obstacle_bridge.bridge --help`
 
 If your configuration includes any `tun,...` service entries, start ObstacleBridge with elevated operating-system privileges. On Linux that normally means root or equivalent permission to manage `/dev/net/tun`; on Windows that means an Administrator session plus a usable WinTun installation.
 
-### Launcher script
+### Runtime launcher
 
-Use the cross-platform Python launcher at `scripts/run.py`. This is the recommended way to start normal runtime instances because it supports the project's restart workflow.
+Use `python -m obstacle_bridge` for normal runtime instances. It includes restart supervision and forwards bridge options.
+For local source checkouts, install the package in editable mode first (`pip install -e .`) so the module entrypoint resolves.
 
-- Default (uses the running Python interpreter and `ObstacleBridge.cfg`):
+- Default (uses `ObstacleBridge.cfg`):
 
 ```bash
-python scripts/run.py
+python -m obstacle_bridge
 ```
 
 - Windows (show output; useful for debugging):
 
 ```powershell
-python .\scripts\run.py --no-redirect
+python -m obstacle_bridge --no-redirect
 ```
 
-- Supply a custom command instead of the default:
+- Use another config file:
 
 ```bash
-python scripts/run.py --command "python -m obstacle_bridge --config ObstacleBridge.cfg"
+python -m obstacle_bridge --config ObstacleBridge.cfg
 ```
 
-Options: `--interval` (seconds between restarts when the process exits with code 75), `--no-redirect` (do not redirect stdout/stderr), and `--command` to override the default launcher command.
+Launcher options: `--interval` (seconds between restarts when the process exits with code 77), `--no-redirect`, and `--command`.
+Any unknown launcher options are forwarded to `bridge.py`.
 
 ## CLI parameter reference
 The tables below are generated from the current parser registrations in `bridge.py`, so the defaults and descriptions match the live code.
@@ -813,8 +815,8 @@ Minimal peer example:
 Start them with:
 
 ```bash
-python scripts/run.py --command "python -m obstacle_bridge --config secure_link_server.json"
-python scripts/run.py --command "python -m obstacle_bridge --config secure_link_client.json"
+python -m obstacle_bridge --config secure_link_server.json
+python -m obstacle_bridge --config secure_link_client.json
 ```
 
 What to look for in WebAdmin first:
@@ -995,8 +997,9 @@ This stays consistent with the current runtime boundary:
 - System boundary and assumptions: [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md)
 - Requirements: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
+- Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `135` integration tests, `138` unit tests. Current branch validation also includes the CI-aligned Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`, the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, and the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`.
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `140` integration tests, `154` unit tests. Current branch validation also includes the CI-aligned Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`, the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, and the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`.
 
 For changes that touch `src/obstacle_bridge/bridge.py`, the most important regression signal after opening a pull request is the Linux shared integration lane in GitHub CI. Windows-local integration execution is still useful for targeted investigation, but it is not currently the most reliable green/red indicator for broad regression confidence on this branch history.
 
@@ -1005,10 +1008,10 @@ The shared integration harness now generates localhost TLS test certificates in 
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `70/74 = 94.6%`
-- Unit-covered: `51/74 = 68.9%`
-- Any-test-covered: `74/74 = 100.0%`
-- Tracked in manifest: `74/74 = 100.0%`
+- Integration-covered: `71/75 = 94.7%`
+- Unit-covered: `53/75 = 70.7%`
+- Any-test-covered: `75/75 = 100.0%`
+- Tracked in manifest: `75/75 = 100.0%`
 - Requirements without integration coverage: `REQ-ADM-007`, `REQ-ADM-008`, `REQ-ADM-009`, `REQ-LIFE-006`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.

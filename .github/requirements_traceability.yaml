@@ -383,6 +383,7 @@ REQ-LIFE-002:
     - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
   unit_tests:
     - tests/unit/test_ws_payload_mode.py::test_quick_reconnect_cancels_pending_disconnect
+    - tests/unit/test_launcher_entrypoint.py::test_launcher_restarts_for_code_75
 
 REQ-LIFE-003:
   integration_tests:
@@ -396,6 +397,8 @@ REQ-LIFE-005:
   integration_tests:
     - tests/integration/test_reconnect_regression.py::test_reconnect_retry_uses_configured_minimum_delay
     - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
+  unit_tests:
+    - tests/unit/test_launcher_entrypoint.py::test_launcher_waits_interval_for_code_77
 
 REQ-LIFE-006:
   unit_tests:
