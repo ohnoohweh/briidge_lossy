@@ -12031,8 +12031,6 @@ class ChannelMux:
                         candidates = []
                         # determine process architecture (64 vs 32)
                         try:
-                            import struct
-
                             is_64 = struct.calcsize("P") * 8 == 64
                         except Exception:
                             is_64 = sys.maxsize > 2 ** 32

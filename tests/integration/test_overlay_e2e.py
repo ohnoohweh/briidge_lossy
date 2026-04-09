@@ -29,7 +29,7 @@ import urllib.request
 import pytest
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / 'src'
@@ -1562,7 +1562,77 @@ def merge_env(extra: Dict[str, str]) -> Dict[str, str]:
     return env
 
 
+def _legacy_service_spec_to_structured(spec: str) -> Optional[Dict[str, Any]]:
+    parts = [p.strip() for p in str(spec).split(',')]
+    if len(parts) != 6:
+        return None
+    listen_proto = parts[0].lower()
+    target_proto = parts[3].lower()
+    listen_port: int
+    target_port: int
+    try:
+        listen_port = int(parts[1])
+        target_port = int(parts[5])
+    except Exception:
+        return None
+    listen_obj: Dict[str, Any] = {
+        'protocol': listen_proto,
+    }
+    target_obj: Dict[str, Any] = {
+        'protocol': target_proto,
+    }
+    if listen_proto == 'tun':
+        listen_obj['ifname'] = parts[2]
+        listen_obj['mtu'] = listen_port
+    else:
+        listen_obj['bind'] = parts[2]
+        listen_obj['port'] = listen_port
+    if target_proto == 'tun':
+        target_obj['ifname'] = parts[4]
+        target_obj['mtu'] = target_port
+    else:
+        target_obj['host'] = parts[4]
+        target_obj['port'] = target_port
+    return {
+        'listen': listen_obj,
+        'target': target_obj,
+    }
+
+
+def _normalize_service_arg_item(item: str) -> str:
+    raw = str(item).strip()
+    if not raw:
+        return raw
+    with contextlib.suppress(Exception):
+        decoded = json.loads(raw)
+        if isinstance(decoded, dict):
+            return json.dumps(decoded, separators=(',', ':'))
+        if isinstance(decoded, list) and all(isinstance(entry, dict) for entry in decoded):
+            return json.dumps(decoded, separators=(',', ':'))
+    structured = _legacy_service_spec_to_structured(raw)
+    if structured is None:
+        return str(item)
+    return json.dumps(structured, separators=(',', ':'))
+
+
+def _normalize_service_specs_cli_args(args: List[str]) -> List[str]:
+    service_options = {'--own-servers', '--remote-servers'}
+    out: List[str] = []
+    i = 0
+    while i < len(args):
+        arg = str(args[i])
+        out.append(arg)
+        i += 1
+        if arg not in service_options:
+            continue
+        while i < len(args) and not str(args[i]).startswith('--'):
+            out.append(_normalize_service_arg_item(str(args[i])))
+            i += 1
+    return out
+
+
 def start_proc(name: str, cmd: List[str], log_dir: Path, env_extra: Optional[Dict[str, str]] = None, admin_port: Optional[int] = None) -> Proc:
+    normalized_cmd = _normalize_service_specs_cli_args([str(part) for part in cmd])
     log_path = log_dir / f'{name}.log'
     fp = open(log_path, 'wb')
     kwargs = {
@@ -1574,13 +1644,13 @@ def start_proc(name: str, cmd: List[str], log_dir: Path, env_extra: Optional[Dic
     }
     if os.name != 'nt':
         kwargs['start_new_session'] = True
-    p = subprocess.Popen(cmd, **kwargs)
+    p = subprocess.Popen(normalized_cmd, **kwargs)
     return Proc(
         name=name,
         popen=p,
         log_path=log_path,
         admin_port=admin_port,
-        cmd=list(cmd),
+        cmd=list(normalized_cmd),
         env_extra=dict(env_extra or {}),
     )
 
@@ -8745,6 +8815,62 @@ def test_overlay_e2e_materialize_case_ports_shifts_overlay_and_service_ports(mon
     assert _arg_value(case.bridge_client_args, '--udp-peer', '') == expected_ipv4_host
     own_spec = case.bridge_client_args[case.bridge_client_args.index('--own-servers') + 1]
     assert own_spec == f'udp,{26667 + offset},{expected_ipv4_host},udp,{expected_ipv4_host},{26666 + offset}'
+
+
+def test_overlay_e2e_normalize_service_specs_cli_args_migrates_legacy_tuples() -> None:
+    args = [
+        'python',
+        str(BRIDGE),
+        '--own-servers',
+        'udp,26667,127.0.0.1,udp,127.0.0.1,26666',
+        '--remote-servers',
+        'tcp,43129,0.0.0.0,tcp,127.0.0.1,43128',
+        '--log',
+        'INFO',
+    ]
+    normalized = _normalize_service_specs_cli_args(args)
+
+    own_spec = normalized[normalized.index('--own-servers') + 1]
+    remote_spec = normalized[normalized.index('--remote-servers') + 1]
+    assert own_spec.startswith('{"listen":')
+    assert remote_spec.startswith('{"listen":')
+    own_obj = json.loads(own_spec)
+    remote_obj = json.loads(remote_spec)
+    assert own_obj['listen']['protocol'] == 'udp'
+    assert own_obj['listen']['port'] == 26667
+    assert own_obj['target']['host'] == '127.0.0.1'
+    assert remote_obj['listen']['protocol'] == 'tcp'
+    assert remote_obj['target']['port'] == 43128
+
+
+def test_overlay_e2e_normalize_service_specs_cli_args_preserves_structured_json() -> None:
+    structured = '{"listen":{"protocol":"udp","bind":"0.0.0.0","port":16667},"target":{"protocol":"udp","host":"127.0.0.1","port":16666}}'
+    normalized = _normalize_service_specs_cli_args(['python', str(BRIDGE), '--own-servers', structured])
+
+    own_spec = normalized[normalized.index('--own-servers') + 1]
+    own_obj = json.loads(own_spec)
+    assert own_obj['listen']['protocol'] == 'udp'
+    assert own_obj['listen']['port'] == 16667
+    assert own_obj['target']['port'] == 16666
+
+
+def test_overlay_e2e_normalize_service_specs_cli_args_migrates_legacy_tun_tuples() -> None:
+    args = [
+        'python',
+        str(BRIDGE),
+        '--remote-servers',
+        'tun,1400,oblt301s,tun,oblt301c,1400',
+    ]
+    normalized = _normalize_service_specs_cli_args(args)
+
+    remote_spec = normalized[normalized.index('--remote-servers') + 1]
+    remote_obj = json.loads(remote_spec)
+    assert remote_obj['listen']['protocol'] == 'tun'
+    assert remote_obj['listen']['ifname'] == 'oblt301s'
+    assert remote_obj['listen']['mtu'] == 1400
+    assert remote_obj['target']['protocol'] == 'tun'
+    assert remote_obj['target']['ifname'] == 'oblt301c'
+    assert remote_obj['target']['mtu'] == 1400
 
 
 def test_overlay_e2e_alloc_admin_ports_isolates_xdist_workers(monkeypatch: pytest.MonkeyPatch) -> None:
