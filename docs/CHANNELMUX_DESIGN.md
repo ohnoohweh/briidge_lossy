@@ -557,6 +557,21 @@ That means recovery is based on re-advertising the desired listener state, not t
 
 This is one of the important reasons the current design uses a catalog message with epoch metadata rather than only per-channel setup messages.
 
+### Hook-metadata transfer boundary
+
+`REMOTE_SERVICES_SET_V2` currently transfers service endpoint fields only. It does not transfer service-level hook metadata such as `lifecycle_hooks` or `options`.
+
+Implication:
+
+- peer-installed services can be created from the advertised catalog
+- hook execution for those peer-installed services requires an additional protocol extension if hooks are meant to execute on the receiving peer
+
+Frame-budget constraint:
+
+- any future hook-transfer extension must respect the effective session app-payload limit (commonly up to `65535` bytes, and sometimes lower depending on wrapping/session overhead)
+- hook payloads (`argv`, `env`, per-event blocks, multiple services) can grow quickly, so a single-message naive embedding is not safe by default
+- therefore remote hook transfer should use explicit sizing limits and, if needed, chunking/reassembly semantics in a versioned control message
+
 ### Recovery example: peer reconnect with stale channels
 
 ```text
