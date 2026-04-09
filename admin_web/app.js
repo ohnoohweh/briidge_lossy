@@ -518,6 +518,23 @@ async function restart() {
   }
 }
 
+async function reconnectOverlay() {
+  const reconnectBtn = document.getElementById('reconnectBtn');
+  try {
+    if (restartState.active) return;
+    if (reconnectBtn) reconnectBtn.disabled = true;
+    const r = await apiFetch('/api/reconnect', { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || j.reason || `HTTP ${r.status}`);
+    }
+  } catch (e) {
+    window.alert(`Reconnect failed: ${e}`);
+  } finally {
+    if (reconnectBtn && !restartState.active) reconnectBtn.disabled = false;
+  }
+}
+
 async function requestSecureLinkRekey(peerId) {
   const normalizedPeerId = String(peerId || '').trim();
   if (!normalizedPeerId) {
@@ -1609,6 +1626,7 @@ function initMetaToggle() {
 }
 
 document.getElementById('restartBtn').addEventListener('click', restart);
+document.getElementById('reconnectBtn')?.addEventListener('click', reconnectOverlay);
 document.getElementById('logoutBtn')?.addEventListener('click', logoutAdmin);
 document.getElementById('exitBtn')?.addEventListener('click', exitProgram);
 document.getElementById('secureLinkReloadRevocationBtn')?.addEventListener('click', () => requestSecureLinkReload('revocation'));
