@@ -665,6 +665,7 @@ What the admin web shows:
 - UDP and TCP connection tables that show current mappings, local listening ports, remote endpoints, and per-channel byte/message counters.
 - A peer-scoped rekey action inside each peer security block for operator-triggered secure-link rotation on authenticated client-side sessions.
 - A configuration tab that exposes the live runtime options such as overlay transports, listener ports, `--remote-servers`, admin web settings, and log levels.
+- Structured service editors for `own_servers` and `remote_servers`, so services can be added and changed through protocol-aware fields instead of manual config-file editing.
 - A debug log tab with recent in-memory log lines, which is especially useful while investigating channel setup, backpressure, reconnects, and late-data cases.
 
 What is visible in the included snapshots:

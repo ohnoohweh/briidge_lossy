@@ -1137,6 +1137,9 @@ async function saveConfigUpdates(updates, successMessage) {
 }
 
 async function saveConfig() {
+  if (!syncAllServiceCatalogEditors()) {
+    return;
+  }
   const editors = Array.from(document.querySelectorAll('.config-editor[data-config-key]'));
   if (editors.length === 0) return;
 
@@ -1248,6 +1251,140 @@ function isLongConfigValue(rawValue) {
   return String(rawValue || '').length > 72 || String(rawValue || '').includes('\\n');
 }
 
+const SERVICE_CATALOG_KEY_NAMES = new Set(['own_servers', 'remote_servers', '--own-servers', '--remote-servers']);
+const SERVICE_PROTOCOLS = ['udp', 'tcp', 'tun'];
+
+function normalizedConfigLeafKey(key) {
+  const raw = String(key || '').trim().toLowerCase();
+  const segments = raw.split('.');
+  return segments[segments.length - 1] || raw;
+}
+
+function isServiceCatalogConfigSetting(key) {
+  return SERVICE_CATALOG_KEY_NAMES.has(normalizedConfigLeafKey(key));
+}
+
+function sanitizeServiceSpecs(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+    .map((item) => ({
+      name: typeof item.name === 'string' ? item.name : '',
+      listen: item.listen && typeof item.listen === 'object' ? item.listen : {},
+      target: item.target && typeof item.target === 'object' ? item.target : {},
+      lifecycle_hooks: item.lifecycle_hooks && typeof item.lifecycle_hooks === 'object' ? item.lifecycle_hooks : null,
+      options: item.options && typeof item.options === 'object' ? item.options : null,
+    }));
+}
+
+function chooseProtocol(endpoint) {
+  const p = String(endpoint?.protocol || '').trim().toLowerCase();
+  if (SERVICE_PROTOCOLS.includes(p)) return p;
+  return 'udp';
+}
+
+function renderProtocolSelectHtml(selectedValue) {
+  const normalized = chooseProtocol({ protocol: selectedValue });
+  return SERVICE_PROTOCOLS.map((protocol) => {
+    const selected = protocol === normalized ? ' selected' : '';
+    return `<option value="${protocol}"${selected}>${protocol.toUpperCase()}</option>`;
+  }).join('');
+}
+
+function renderServiceEndpointEditor(endpointKind, spec, rowIndex) {
+  const endpoint = endpointKind === 'listen' ? (spec.listen || {}) : (spec.target || {});
+  const protocol = chooseProtocol(endpoint);
+  const labelPrefix = endpointKind === 'listen' ? 'Listen' : 'Target';
+  const addrLabel = endpointKind === 'listen' ? 'Bind' : 'Host';
+  const addressValue = endpointKind === 'listen' ? String(endpoint.bind || '') : String(endpoint.host || '');
+  const portValue = endpoint.port == null ? '' : String(endpoint.port);
+  const ifnameValue = String(endpoint.ifname || '');
+  const mtuValue = endpoint.mtu == null ? '' : String(endpoint.mtu);
+  const netClass = protocol === 'tun' ? 'hidden' : '';
+  const tunClass = protocol === 'tun' ? '' : 'hidden';
+  return `
+    <div class="service-endpoint-grid">
+      <label class="service-field">
+        <span>${labelPrefix} protocol</span>
+        <select class="config-editor mono service-editor-input" data-service-field="${endpointKind}.protocol" data-service-row="${rowIndex}">
+          ${renderProtocolSelectHtml(protocol)}
+        </select>
+      </label>
+      <label class="service-field ${netClass}" data-service-net="${endpointKind}" data-service-row="${rowIndex}">
+        <span>${addrLabel}</span>
+        <input class="config-editor mono service-editor-input" data-service-field="${endpointKind}.address" data-service-row="${rowIndex}" value="${escapeHtml(addressValue)}" autocomplete="off" />
+      </label>
+      <label class="service-field ${netClass}" data-service-net-port="${endpointKind}" data-service-row="${rowIndex}">
+        <span>${labelPrefix} port</span>
+        <input class="config-editor mono service-editor-input" data-service-field="${endpointKind}.port" data-service-row="${rowIndex}" type="number" min="1" max="65535" value="${escapeHtml(portValue)}" autocomplete="off" />
+      </label>
+      <label class="service-field ${tunClass}" data-service-tun="${endpointKind}" data-service-row="${rowIndex}">
+        <span>${labelPrefix} ifname</span>
+        <input class="config-editor mono service-editor-input" data-service-field="${endpointKind}.ifname" data-service-row="${rowIndex}" value="${escapeHtml(ifnameValue)}" autocomplete="off" />
+      </label>
+      <label class="service-field ${tunClass}" data-service-tun-mtu="${endpointKind}" data-service-row="${rowIndex}">
+        <span>${labelPrefix} mtu</span>
+        <input class="config-editor mono service-editor-input" data-service-field="${endpointKind}.mtu" data-service-row="${rowIndex}" type="number" min="1" max="65535" value="${escapeHtml(mtuValue)}" autocomplete="off" />
+      </label>
+    </div>
+  `;
+}
+
+function renderServiceHooksEditors(spec, rowIndex) {
+  const hooksText = spec.lifecycle_hooks ? escapeHtml(JSON.stringify(spec.lifecycle_hooks, null, 2)) : '';
+  const optionsText = spec.options ? escapeHtml(JSON.stringify(spec.options, null, 2)) : '';
+  return `
+    <div class="service-extra-grid">
+      <label class="service-field">
+        <span>Lifecycle hooks (optional JSON object)</span>
+        <textarea class="config-editor config-editor-textarea mono service-editor-input service-extra-textarea" data-service-field="lifecycle_hooks" data-service-row="${rowIndex}" rows="4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">${hooksText}</textarea>
+      </label>
+      <label class="service-field">
+        <span>Options (optional JSON object)</span>
+        <textarea class="config-editor config-editor-textarea mono service-editor-input service-extra-textarea" data-service-field="options" data-service-row="${rowIndex}" rows="4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">${optionsText}</textarea>
+      </label>
+    </div>
+  `;
+}
+
+function renderServiceCatalogItemHtml(spec, rowIndex) {
+  const nameValue = escapeHtml(spec.name || '');
+  return `
+    <article class="service-item card" data-service-item="${rowIndex}">
+      <div class="service-item-header">
+        <strong>Service ${rowIndex + 1}</strong>
+        <button class="btn btn-secondary service-remove-btn" type="button" data-service-remove="${rowIndex}">Remove</button>
+      </div>
+      <label class="service-field">
+        <span>Name (optional)</span>
+        <input class="config-editor mono service-editor-input" data-service-field="name" data-service-row="${rowIndex}" value="${nameValue}" autocomplete="off" />
+      </label>
+      ${renderServiceEndpointEditor('listen', spec, rowIndex)}
+      ${renderServiceEndpointEditor('target', spec, rowIndex)}
+      ${renderServiceHooksEditors(spec, rowIndex)}
+    </article>
+  `;
+}
+
+function renderServiceCatalogEditor(key, currentValue) {
+  const specs = sanitizeServiceSpecs(currentValue);
+  const serialized = escapeHtml(JSON.stringify(specs));
+  const emptyState = specs.length === 0 ? '' : ' hidden';
+  const itemsHtml = specs.map((spec, index) => renderServiceCatalogItemHtml(spec, index)).join('');
+  return `
+    <div class="service-catalog-editor" data-service-catalog-root="${key}">
+      <textarea class="config-editor mono hidden" data-config-key="${key}" data-service-catalog-hidden="true">${serialized}</textarea>
+      <div class="service-catalog-toolbar">
+        <button class="btn btn-secondary" type="button" data-service-add="${key}">Add service</button>
+      </div>
+      <p class="service-catalog-empty${emptyState}" data-service-empty="${key}">No services configured.</p>
+      <div class="service-catalog-items" data-service-items="${key}">
+        ${itemsHtml}
+      </div>
+    </div>
+  `;
+}
+
 function renderSecretInput(key, { readonly = false } = {}) {
   const readonlyAttr = readonly ? ' readonly aria-readonly="true"' : '';
   const placeholder = readonly ? 'Read-only secret' : 'Leave blank to keep current value';
@@ -1276,6 +1413,7 @@ function renderConfigValueCell(item, current) {
   const key = item.key;
   const isSecret = Boolean(item.secret);
   const isReadonly = Boolean(item.readonly);
+  const isServiceCatalogSetting = !isSecret && !isReadonly && isServiceCatalogConfigSetting(key);
   const isLevelSetting = isLoggingLevelSetting(key, current, item.default);
   const isLogFileSetting = isLogFileConfigSetting(key);
   const isDirectEntrySetting = isDirectEntryConfigSetting(key);
@@ -1295,6 +1433,8 @@ function renderConfigValueCell(item, current) {
   }
   const editorHtml = isSecret
     ? renderSecretInput(key)
+      : isServiceCatalogSetting
+        ? renderServiceCatalogEditor(key, current)
       : hasChoices
         ? renderChoiceSelect(key, current, item.choices)
       : (isBooleanSetting
@@ -1457,7 +1597,7 @@ function setConfigRowEditing(key, editing) {
   editorWrap?.classList.toggle('hidden', !editing);
   display?.classList.toggle('hidden', editing);
   if (editing) {
-    const input = row.querySelector('.config-editor');
+    const input = row.querySelector('.config-editor:not([data-service-catalog-hidden="true"])');
     input?.focus();
     if (input?.tagName === 'TEXTAREA') {
       input.selectionStart = input.value.length;
@@ -1466,7 +1606,226 @@ function setConfigRowEditing(key, editing) {
   }
 }
 
+function setServiceEndpointMode(root, rowIndex, endpointKind, protocol) {
+  const normalized = chooseProtocol({ protocol });
+  root.querySelectorAll(`[data-service-net="${endpointKind}"][data-service-row="${rowIndex}"], [data-service-net-port="${endpointKind}"][data-service-row="${rowIndex}"]`)
+    .forEach((el) => el.classList.toggle('hidden', normalized === 'tun'));
+  root.querySelectorAll(`[data-service-tun="${endpointKind}"][data-service-row="${rowIndex}"], [data-service-tun-mtu="${endpointKind}"][data-service-row="${rowIndex}"]`)
+    .forEach((el) => el.classList.toggle('hidden', normalized !== 'tun'));
+}
+
+function parseObjectField(raw, fieldLabel) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${fieldLabel} must be valid JSON object: ${error}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${fieldLabel} must be a JSON object.`);
+  }
+  return parsed;
+}
+
+function parsePortField(raw, fieldLabel) {
+  const text = String(raw || '').trim();
+  if (!text) {
+    throw new Error(`${fieldLabel} is required.`);
+  }
+  const value = Number(text);
+  if (!Number.isInteger(value) || value < 1 || value > 65535) {
+    throw new Error(`${fieldLabel} must be an integer in 1..65535.`);
+  }
+  return value;
+}
+
+function parseOptionalMtu(raw, fieldLabel) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const value = Number(text);
+  if (!Number.isInteger(value) || value < 1 || value > 65535) {
+    throw new Error(`${fieldLabel} must be an integer in 1..65535 when provided.`);
+  }
+  return value;
+}
+
+function parseServiceSpecItem(itemNode, itemIndex) {
+  const rowLabel = `service ${itemIndex + 1}`;
+  const readValue = (field) => itemNode.querySelector(`[data-service-field="${field}"]`)?.value || '';
+  const spec = {};
+  const name = String(readValue('name')).trim();
+  if (name) spec.name = name;
+
+  ['listen', 'target'].forEach((endpointKind) => {
+    const endpointLabel = `${rowLabel} ${endpointKind}`;
+    const protocol = chooseProtocol({ protocol: readValue(`${endpointKind}.protocol`) });
+    const endpoint = { protocol };
+    if (protocol === 'tun') {
+      const ifname = String(readValue(`${endpointKind}.ifname`)).trim();
+      if (!ifname) {
+        throw new Error(`${endpointLabel} ifname is required for tun protocol.`);
+      }
+      endpoint.ifname = ifname;
+      const mtu = parseOptionalMtu(readValue(`${endpointKind}.mtu`), `${endpointLabel} mtu`);
+      if (mtu != null) endpoint.mtu = mtu;
+    } else {
+      const addressField = endpointKind === 'listen' ? `${endpointLabel} bind` : `${endpointLabel} host`;
+      const address = String(readValue(`${endpointKind}.address`)).trim();
+      if (!address) {
+        throw new Error(`${addressField} is required.`);
+      }
+      if (endpointKind === 'listen') endpoint.bind = address;
+      else endpoint.host = address;
+      endpoint.port = parsePortField(readValue(`${endpointKind}.port`), `${endpointLabel} port`);
+    }
+    spec[endpointKind] = endpoint;
+  });
+
+  const lifecycleHooks = parseObjectField(readValue('lifecycle_hooks'), `${rowLabel} lifecycle_hooks`);
+  if (lifecycleHooks) spec.lifecycle_hooks = lifecycleHooks;
+  const options = parseObjectField(readValue('options'), `${rowLabel} options`);
+  if (options) spec.options = options;
+  return spec;
+}
+
+function setServiceCatalogValidationState(key, errorMessage = '') {
+  const row = document.querySelector(`[data-config-row="${CSS.escape(key)}"]`);
+  if (!row) return;
+  row.classList.toggle('config-row-invalid', Boolean(errorMessage));
+  if (errorMessage) {
+    setText('configMessage', errorMessage);
+  }
+}
+
+function syncServiceCatalogEditor(key) {
+  const root = document.querySelector(`[data-service-catalog-root="${CSS.escape(key)}"]`);
+  const sink = document.querySelector(`.config-editor[data-config-key="${CSS.escape(key)}"][data-service-catalog-hidden="true"]`);
+  if (!root || !sink) return true;
+
+  const items = Array.from(root.querySelectorAll('[data-service-item]'));
+  const empty = root.querySelector(`[data-service-empty="${CSS.escape(key)}"]`);
+  if (empty) empty.classList.toggle('hidden', items.length > 0);
+  try {
+    const specs = items.map((itemNode, index) => parseServiceSpecItem(itemNode, index));
+    sink.value = JSON.stringify(specs);
+    setServiceCatalogValidationState(key, '');
+    return true;
+  } catch (error) {
+    sink.value = '"__invalid_service_catalog__"';
+    setServiceCatalogValidationState(key, String(error));
+    return false;
+  }
+}
+
+function renderServiceCatalogItems(root, key, specs) {
+  const listNode = root.querySelector(`[data-service-items="${CSS.escape(key)}"]`);
+  if (!listNode) return;
+  listNode.innerHTML = specs.map((spec, index) => renderServiceCatalogItemHtml(spec, index)).join('');
+}
+
+function readServiceCatalogSpecsFromSink(root, key) {
+  const sink = root.querySelector(`.config-editor[data-config-key="${CSS.escape(key)}"][data-service-catalog-hidden="true"]`);
+  const raw = sink?.value || '[]';
+  try {
+    return sanitizeServiceSpecs(JSON.parse(raw));
+  } catch (_error) {
+    return [];
+  }
+}
+
+function resetServiceCatalogEditorValue(key) {
+  const root = document.querySelector(`[data-service-catalog-root="${CSS.escape(key)}"]`);
+  if (!root) return;
+  const current = configState.config ? configState.config[key] : [];
+  const specs = sanitizeServiceSpecs(current);
+  renderServiceCatalogItems(root, key, specs);
+  initServiceCatalogEditor(root, key);
+  syncServiceCatalogEditor(key);
+}
+
+function initServiceCatalogEditor(root, key) {
+  const bindItemHandlers = () => {
+    Array.from(root.querySelectorAll('[data-service-item]')).forEach((itemNode) => {
+      const rowIndex = Number(itemNode.getAttribute('data-service-item'));
+      ['listen', 'target'].forEach((endpointKind) => {
+        const protocolInput = itemNode.querySelector(`[data-service-field="${endpointKind}.protocol"]`);
+        if (!protocolInput) return;
+        setServiceEndpointMode(root, rowIndex, endpointKind, protocolInput.value);
+        protocolInput.addEventListener('change', () => {
+          setServiceEndpointMode(root, rowIndex, endpointKind, protocolInput.value);
+          syncServiceCatalogEditor(key);
+          refreshConfigPreview(key);
+        });
+      });
+      itemNode.querySelectorAll('.service-editor-input').forEach((input) => {
+        input.addEventListener('input', () => {
+          syncServiceCatalogEditor(key);
+          refreshConfigPreview(key);
+        });
+        input.addEventListener('change', () => {
+          syncServiceCatalogEditor(key);
+          refreshConfigPreview(key);
+        });
+      });
+      const removeBtn = itemNode.querySelector('[data-service-remove]');
+      removeBtn?.addEventListener('click', () => {
+        const specs = readServiceCatalogSpecsFromSink(root, key);
+        specs.splice(rowIndex, 1);
+        renderServiceCatalogItems(root, key, specs);
+        initServiceCatalogEditor(root, key);
+        syncServiceCatalogEditor(key);
+        refreshConfigPreview(key);
+      });
+    });
+  };
+
+  const addBtn = root.querySelector(`[data-service-add="${CSS.escape(key)}"]`);
+  if (addBtn) {
+    addBtn.onclick = () => {
+      const specs = readServiceCatalogSpecsFromSink(root, key);
+      specs.push({
+        listen: { protocol: 'udp', bind: '0.0.0.0', port: 16667 },
+        target: { protocol: 'udp', host: '127.0.0.1', port: 16666 },
+      });
+      renderServiceCatalogItems(root, key, specs);
+      initServiceCatalogEditor(root, key);
+      syncServiceCatalogEditor(key);
+      refreshConfigPreview(key);
+      const firstInput = root.querySelector('[data-service-item]:last-child .service-editor-input');
+      firstInput?.focus();
+    };
+  }
+
+  bindItemHandlers();
+}
+
+function initServiceCatalogEditors() {
+  document.querySelectorAll('[data-service-catalog-root]').forEach((root) => {
+    const key = root.getAttribute('data-service-catalog-root');
+    if (!key) return;
+    initServiceCatalogEditor(root, key);
+    syncServiceCatalogEditor(key);
+  });
+}
+
+function syncAllServiceCatalogEditors() {
+  let ok = true;
+  document.querySelectorAll('[data-service-catalog-root]').forEach((root) => {
+    const key = root.getAttribute('data-service-catalog-root');
+    if (!key) return;
+    if (!syncServiceCatalogEditor(key)) ok = false;
+    refreshConfigPreview(key);
+  });
+  return ok;
+}
+
 function resetConfigEditorValue(key) {
+  if (isServiceCatalogConfigSetting(key)) {
+    resetServiceCatalogEditorValue(key);
+    return;
+  }
   const input = document.querySelector(`.config-editor[data-config-key="${CSS.escape(key)}"]`);
   if (!input) return;
   const isSecret = input.getAttribute('data-secret') === 'true';
@@ -1514,6 +1873,8 @@ function refreshConfigPreview(key) {
 }
 
 function initConfigEditors() {
+  initServiceCatalogEditors();
+
   document.querySelectorAll('[data-config-activate]').forEach((button) => {
     button.addEventListener('click', () => {
       const key = button.getAttribute('data-config-activate');
@@ -1532,6 +1893,9 @@ function initConfigEditors() {
   });
 
   document.querySelectorAll('.config-editor[data-config-key]').forEach((input) => {
+    if (input.getAttribute('data-service-catalog-hidden') === 'true') {
+      return;
+    }
     const key = input.getAttribute('data-config-key');
     if (!key) return;
     const onInput = () => refreshConfigPreview(key);

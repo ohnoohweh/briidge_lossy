@@ -674,6 +674,72 @@ h1 {
   padding: 8px 12px;
 }
 
+.service-catalog-editor {
+  display: grid;
+  gap: 10px;
+}
+
+.service-catalog-toolbar {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.service-catalog-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.service-catalog-items {
+  display: grid;
+  gap: 10px;
+}
+
+.service-item {
+  padding: 12px;
+  border: 1px solid rgba(120, 170, 255, 0.18);
+  background: rgba(255, 255, 255, 0.03);
+  display: grid;
+  gap: 10px;
+}
+
+.service-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.service-remove-btn {
+  padding: 7px 10px;
+}
+
+.service-endpoint-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.service-extra-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.service-field {
+  display: grid;
+  gap: 6px;
+}
+
+.service-field > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.service-extra-textarea {
+  min-height: 90px;
+}
+
 .config-row-editing td {
   vertical-align: top;
 }
