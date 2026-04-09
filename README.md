@@ -36,6 +36,64 @@ The recommended workflow is:
 
 This keeps first startup simple and makes larger settings such as `own_servers`, `remote_servers`, auth options, and multi-transport listener combinations much easier to manage than long shell commands.
 
+Service-definition note:
+
+- use structured JSON service objects for `own_servers` and `remote_servers` with `listen` and `target` blocks
+
+### Service lifecycle hooks (Phase 2)
+
+Service definitions can include optional `lifecycle_hooks` commands.
+
+Hook execution model:
+
+- hooks use `argv` arrays (no implicit shell)
+- each hook can define one shared `argv` list or OS-specific command lists (`linux`, `windows`, `darwin`, optional `default`)
+- optional `timeout_ms` and `env` values are supported
+- placeholders are expanded from service/channel context (`{service_id}`, `{service_name}`, `{protocol}`, `{channel_id}`, `{ifname}`, `{target_host}`, `{target_port}`, `{listen_port}`, `{event}`, `{role}`, `{catalog}`, `{peer_id}`)
+
+TUN route hook example with Linux + Windows command variants:
+
+```json
+{
+  "name": "site-a-tun",
+  "listen": {
+    "protocol": "tun",
+    "ifname": "obtun0",
+    "mtu": 1400
+  },
+  "target": {
+    "protocol": "tun",
+    "ifname": "obtun1",
+    "mtu": 1400
+  },
+  "lifecycle_hooks": {
+    "listener": {
+      "on_created": {
+        "argv": {
+          "linux": ["ip", "link", "set", "dev", "{ifname}", "up"],
+          "windows": ["netsh", "interface", "set", "interface", "name={ifname}", "admin=enabled"]
+        },
+        "timeout_ms": 10000
+      },
+      "on_channel_connected": {
+        "argv": {
+          "linux": ["ip", "route", "replace", "{target_host}/32", "dev", "{ifname}"],
+          "windows": ["netsh", "interface", "ipv4", "add", "route", "prefix={target_host}/32", "interface={ifname}", "nexthop=0.0.0.0", "store=active"]
+        },
+        "timeout_ms": 10000
+      },
+      "on_channel_closed": {
+        "argv": {
+          "linux": ["ip", "route", "del", "{target_host}/32", "dev", "{ifname}"],
+          "windows": ["netsh", "interface", "ipv4", "delete", "route", "prefix={target_host}/32", "interface={ifname}", "store=active"]
+        },
+        "timeout_ms": 10000
+      }
+    }
+  }
+}
+```
+
 Important config-format note:
 
 - `--config` / `-c` currently expects a JSON file, not an INI file
@@ -62,7 +120,7 @@ Create one JSON config file per instance and only keep a few startup arguments o
 ```
 
 ```bash
-python scripts/run.py --command "python -m obstacle_bridge --config bridge_server.json"
+python -m obstacle_bridge --config bridge_server.json
 ```
 
 **Peer / client bootstrap**
@@ -80,14 +138,14 @@ python scripts/run.py --command "python -m obstacle_bridge --config bridge_serve
 ```
 
 ```bash
-python scripts/run.py --command "python -m obstacle_bridge --config bridge_client.json"
+python -m obstacle_bridge --config bridge_client.json
 ```
 
 Windows tip:
 
 - save the examples as `bridge_server.json` and `bridge_client.json`
-- then run `python scripts/run.py --command "python -m obstacle_bridge --config bridge_server.json"`
-- and `python scripts/run.py --command "python -m obstacle_bridge --config bridge_client.json"`
+- then run `python -m obstacle_bridge --config bridge_server.json`
+- and `python -m obstacle_bridge --config bridge_client.json`
 - if you prefer to generate a valid JSON template from the tool itself, use `python -m obstacle_bridge --dump-config json`
 
 After the first startup, open the Admin Web UI and adjust the remaining details there:
@@ -201,7 +259,22 @@ Solution with an ObstacleBridge WebSocket bridge:
 }
 ```
 
-Then use WebAdmin to add an `own_servers` entry that recreates the local WireGuard or UDP OpenVPN endpoint, for example `udp,16666,127.0.0.1,udp,127.0.0.1,16666`.
+Then use WebAdmin to add an `own_servers` entry that recreates the local WireGuard or UDP OpenVPN endpoint, for example:
+
+```json
+{
+  "listen": {
+    "protocol": "udp",
+    "bind": "127.0.0.1",
+    "port": 16666
+  },
+  "target": {
+    "protocol": "udp",
+    "host": "127.0.0.1",
+    "port": 16666
+  }
+}
+```
 
 ### 3) WireGuard bridge for high-loss obstacle conditions
 This fits paths where UDP still passes, but loss and retransmission pressure make conventional transports perform badly.
@@ -291,10 +364,21 @@ Using config files plus WebAdmin makes these multi-transport setups much easier 
 
 A TUN device is a virtual Layer 3 network interface. It is useful when you want to tunnel complete IP traffic between two hosts or sites instead of exposing only individual TCP or UDP ports. In practice, that means you can use ObstacleBridge to carry routed subnet traffic in the same general way that tools such as WireGuard or OpenVPN carry virtual network traffic.
 
-ChannelMux can expose a local TUN interface as a muxed packet service. The service-spec format uses the existing six-field syntax:
+ChannelMux can expose a local TUN interface as a muxed packet service. The preferred config shape is a structured object:
 
-```text
-tun,<local_mtu>,<local_ifname>,tun,<remote_ifname>,<remote_mtu>
+```json
+{
+  "listen": {
+    "protocol": "tun",
+    "ifname": "obtun0",
+    "mtu": 1400
+  },
+  "target": {
+    "protocol": "tun",
+    "ifname": "obtun1",
+    "mtu": 1400
+  }
+}
 ```
 
 Interpretation:
@@ -306,8 +390,8 @@ Interpretation:
 
 Example pair:
 
-- client `own_servers`: `tun,1400,obtun0,tun,obtun1,1400`
-- server `remote_servers`: `tun,1400,obtun1,tun,obtun0,1400`
+- client `own_servers`: `{"listen":{"protocol":"tun","ifname":"obtun0","mtu":1400},"target":{"protocol":"tun","ifname":"obtun1","mtu":1400}}`
+- server `remote_servers`: `{"listen":{"protocol":"tun","ifname":"obtun1","mtu":1400},"target":{"protocol":"tun","ifname":"obtun0","mtu":1400}}`
 
 Linux (native) notes
 
@@ -408,34 +492,36 @@ Runtime behavior and caveats
 - Creating adapters and manipulating virtual interfaces requires Administrator privileges; run the process elevated when exercising adapter creation.
 
 ## Entry points
-- recommended runtime launcher: `python scripts/run.py`
-- direct CLI help: `python -m obstacle_bridge --help`
+- runtime launcher: `python -m obstacle_bridge`
+- direct bridge CLI help: `python -m obstacle_bridge.bridge --help`
 
 If your configuration includes any `tun,...` service entries, start ObstacleBridge with elevated operating-system privileges. On Linux that normally means root or equivalent permission to manage `/dev/net/tun`; on Windows that means an Administrator session plus a usable WinTun installation.
 
-### Launcher script
+### Runtime launcher
 
-Use the cross-platform Python launcher at `scripts/run.py`. This is the recommended way to start normal runtime instances because it supports the project's restart workflow.
+Use `python -m obstacle_bridge` for normal runtime instances. It includes restart supervision and forwards bridge options.
+For local source checkouts, install the package in editable mode first (`pip install -e .`) so the module entrypoint resolves.
 
-- Default (uses the running Python interpreter and `ObstacleBridge.cfg`):
+- Default (uses `ObstacleBridge.cfg`):
 
 ```bash
-python scripts/run.py
+python -m obstacle_bridge
 ```
 
 - Windows (show output; useful for debugging):
 
 ```powershell
-python .\scripts\run.py --no-redirect
+python -m obstacle_bridge --no-redirect
 ```
 
-- Supply a custom command instead of the default:
+- Use another config file:
 
 ```bash
-python scripts/run.py --command "python -m obstacle_bridge --config ObstacleBridge.cfg"
+python -m obstacle_bridge --config ObstacleBridge.cfg
 ```
 
-Options: `--interval` (seconds between restarts when the process exits with code 75), `--no-redirect` (do not redirect stdout/stderr), and `--command` to override the default launcher command.
+Launcher options: `--interval` (seconds between restarts when the process exits with code 77), `--no-redirect`, and `--command`.
+Any unknown launcher options are forwarded to `bridge.py`.
 
 ## CLI parameter reference
 The tables below are generated from the current parser registrations in `bridge.py`, so the defaults and descriptions match the live code.
@@ -521,8 +607,8 @@ Current websocket payload forms:
 ### Channel mux
 | Option(s) | Default | Description |
 |---|---:|---|
-| `--own-servers` | `None` | Space-separated service specs (client mode only): 'proto,listen_port,listen_bind,proto,host,port' (quoted). Listener instances ignore --own-servers because multiple overlay peers make the target ambiguous. Example: "tcp,80,0.0.0.0,tcp,127.0.0.1,88 udp,16666,::,udp,127.0.0.1,16666" |
-| `--remote-servers` | `None` | Space-separated service specs with the same format as `--own-servers`, but applied to the connected overlay peer via mux control signaling (reverse behavior of `--own-servers`). Example: "udp,16666,0.0.0.0,udp,127.0.0.1,16666 tcp,3128,0.0.0.0,tcp,127.0.0.1,3128". |
+| `--own-servers` | `None` | Service catalog for client mode. Define `own_servers` as structured JSON service objects with `listen` and `target` blocks. Listener instances ignore `--own-servers` because multiple overlay peers make the target ambiguous. |
+| `--remote-servers` | `None` | Service catalog applied on the connected overlay peer in client mode. Define `remote_servers` as structured JSON service objects with `listen` and `target` blocks. |
 | `--mux-tcp-bp-threshold` | `1` | Mux TCP: size threshold (bytes) to trigger drain() (default 1). |
 | `--mux-tcp-bp-latency-ms` | `300` | Mux TCP: if > 0, drain writers after this ms when bytes pending. |
 | `--mux-tcp-bp-poll-interval-ms` | `50` | Mux TCP: polling interval for time-based backpressure (ms). |
@@ -581,6 +667,7 @@ What the admin web shows:
 - UDP and TCP connection tables that show current mappings, local listening ports, remote endpoints, and per-channel byte/message counters.
 - A peer-scoped rekey action inside each peer security block for operator-triggered secure-link rotation on authenticated client-side sessions.
 - A configuration tab that exposes the live runtime options such as overlay transports, listener ports, `--remote-servers`, admin web settings, and log levels.
+- Structured service editors for `own_servers` and `remote_servers`, so services can be added and changed through protocol-aware fields instead of manual config-file editing.
 - A debug log tab with recent in-memory log lines, which is especially useful while investigating channel setup, backpressure, reconnects, and late-data cases.
 
 What is visible in the included snapshots:
@@ -728,8 +815,8 @@ Minimal peer example:
 Start them with:
 
 ```bash
-python scripts/run.py --command "python -m obstacle_bridge --config secure_link_server.json"
-python scripts/run.py --command "python -m obstacle_bridge --config secure_link_client.json"
+python -m obstacle_bridge --config secure_link_server.json
+python -m obstacle_bridge --config secure_link_client.json
 ```
 
 What to look for in WebAdmin first:
@@ -910,19 +997,22 @@ This stays consistent with the current runtime boundary:
 - System boundary and assumptions: [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md)
 - Requirements: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
+- Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `135` integration tests, `138` unit tests. Current branch validation also includes the CI-aligned Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`, the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, and the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`.
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `140` integration tests, `161` unit tests. Current branch validation also includes the CI-aligned Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`, the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, and the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`.
+
+For changes that touch `src/obstacle_bridge/bridge.py`, the most important regression signal after opening a pull request is the Linux shared integration lane in GitHub CI. Windows-local integration execution is still useful for targeted investigation, but it is not currently the most reliable green/red indicator for broad regression confidence on this branch history.
 
 The shared integration harness now generates localhost TLS test certificates in a temporary directory outside the repository and uses availability-aware loopback port allocation when materializing test cases. This keeps private key material out of version control and makes the Linux shared `xdist` run resilient to host services that already occupy uncommon local ports.
 
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `70/74 = 94.6%`
-- Unit-covered: `51/74 = 68.9%`
-- Any-test-covered: `74/74 = 100.0%`
-- Tracked in manifest: `74/74 = 100.0%`
-- Requirements without integration coverage: `REQ-ADM-007`, `REQ-ADM-008`, `REQ-ADM-009`, `REQ-LIFE-006`
+- Integration-covered: `71/76 = 93.4%`
+- Unit-covered: `54/76 = 71.1%`
+- Any-test-covered: `76/76 = 100.0%`
+- Tracked in manifest: `76/76 = 100.0%`
+- Requirements without integration coverage: `REQ-ADM-007`, `REQ-ADM-008`, `REQ-ADM-009`, `REQ-LIFE-006`, `REQ-LIFE-007`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
 

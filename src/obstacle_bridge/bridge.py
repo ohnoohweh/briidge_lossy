@@ -64,6 +64,7 @@ import random
 import hashlib
 import hmac
 import secrets
+import subprocess
 from datetime import datetime, timezone
 import urllib.request
 import urllib.parse
@@ -91,6 +92,9 @@ CONFIG_SECRET_PREFIX = "enc:v1:"
 CONFIG_SECRET_SALT = b"ObstacleBridge config secret v1"
 CONFIG_SECRET_INFO = b"ObstacleBridge config field encryption"
 CONFIG_SECRET_AAD = b"ObstacleBridge cfg secret"
+RESTART_EXIT_CODE_IMMEDIATE = 75
+RESTART_EXIT_CODE_DELAYED = 77
+_BUILD_INFO_CACHE: Optional[dict] = None
 
 
 def _config_secret_seed() -> bytes:
@@ -120,6 +124,64 @@ def _derive_config_secret_key() -> bytes:
         info=CONFIG_SECRET_INFO,
     )
     return hkdf.derive(_config_secret_seed())
+
+
+def _detect_build_info() -> dict:
+    global _BUILD_INFO_CACHE
+    if _BUILD_INFO_CACHE is not None:
+        return dict(_BUILD_INFO_CACHE)
+    info = {
+        "commit": "unknown",
+        "repo_root": "",
+        "tainted": False,
+        "tracked_changes": 0,
+        "untracked_changes": 0,
+        "available": False,
+    }
+    try:
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+    except Exception:
+        repo_root = None
+    if repo_root is not None:
+        try:
+            rev = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            if rev.returncode == 0:
+                info["commit"] = str(rev.stdout or "").strip() or "unknown"
+                info["repo_root"] = str(repo_root)
+                info["available"] = True
+            status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            if status.returncode == 0:
+                tracked = 0
+                untracked = 0
+                for line in str(status.stdout or "").splitlines():
+                    item = line.strip()
+                    if not item:
+                        continue
+                    if item.startswith("??"):
+                        untracked += 1
+                    else:
+                        tracked += 1
+                info["tracked_changes"] = tracked
+                info["untracked_changes"] = untracked
+                info["tainted"] = bool(tracked or untracked)
+        except Exception:
+            pass
+    _BUILD_INFO_CACHE = dict(info)
+    return dict(info)
 
 
 def _encrypt_config_secret(value: Any) -> Any:
@@ -4734,10 +4796,12 @@ class UdpSession(ISession):
         self._listener_mode = peer is None
 
         if (
-            not _prefer_unspec_listener_family()
-            and listen_host in ('::', '0.0.0.0')
+            listen_host in ('::', '0.0.0.0')
             and peer_family in (socket.AF_INET, socket.AF_INET6)
         ):
+            # If peer family is known (e.g., literal IPv4 peer), avoid AF_UNSPEC
+            # endpoint auto-selection that can create an IPv6-only socket and
+            # break sendto() to IPv4 peers on some runtimes/platforms.
             family = peer_family
             listen_host = _wildcard_host_for_family(peer_family)
         else:
@@ -10680,6 +10744,8 @@ class ChannelMux:
         REMOTE_SERVICES_SET_V1 = 3  # legacy control plane
         REMOTE_SERVICES_SET_V2 = 4  # control plane: peer installs listener catalog
         DATA_FRAG = 5  # UDP service datagram fragment
+        REMOTE_SERVICES_SET_V2_CHUNK = 6  # chunked control payload for oversized REMOTE_SERVICES_SET_V2
+        OPEN_CHUNK = 7  # chunked control payload for oversized OPEN
 
     @dataclass(frozen=True)
     class ServiceSpec:
@@ -10690,6 +10756,9 @@ class ChannelMux:
         r_proto: "ChannelMux.ProtoName"
         r_host: str
         r_port: int
+        name: Optional[str] = None
+        lifecycle_hooks: Optional[dict] = None
+        options: Optional[dict] = None
 
     @dataclass
     class TunDevice:
@@ -10717,6 +10786,11 @@ class ChannelMux:
     SIOCSIFMTU = 0x8922
     IFF_UP = 0x1
     IFF_RUNNING = 0x40
+    HOOK_DEFAULT_TIMEOUT_MS = 10000
+    CTRL_CHUNK_HDR = struct.Struct(">4sIHH")
+    CTRL_CHUNK_MAGIC = b"CKV1"
+    CTRL_CHUNK_REASSEMBLY_TTL_S = 20.0
+    CTRL_CHUNK_MAX_INFLIGHT = 512
 
     @staticmethod
     def _proto_name_to_code(name: "ChannelMux.ProtoName") -> int:
@@ -10749,18 +10823,20 @@ class ChannelMux:
         if not _has('--own-servers'):
             p.add_argument(
                 '--own-servers', nargs='*', default=None,
-                help=("Space-separated service specs (client mode only): "
-                      "'proto,listen_port,listen_bind,proto,host,port' (quoted). "
+                help=("Service catalog (client mode only). "
+                      "Use structured JSON service objects with listen/target fields. "
                       "Listener instances ignore --own-servers because multiple overlay peers make the target ambiguous. "
-                        "Example: \"tcp,80,0.0.0.0,tcp,127.0.0.1,88 udp,16666,::,udp,127.0.0.1,16666 tun,1500,obtun0,tun,obtun1,1500\"")
+                        "Example JSON item: "
+                        """'{"listen":{"protocol":"tcp","bind":"0.0.0.0","port":80},"target":{"protocol":"tcp","host":"127.0.0.1","port":88}}'""")
             )
         if not _has('--remote-servers'):
             p.add_argument(
                 '--remote-servers', nargs='*', default=None,
-                help=("Space-separated service specs (client mode only, applied on connected peer): "
-                      "'proto,listen_port,listen_bind,proto,host,port' (quoted). "
+                help=("Service catalog applied on the connected peer (client mode only). "
+                      "Use structured JSON service objects with listen/target fields. "
                       "Listener instances ignore --remote-servers because multiple overlay peers make the target ambiguous. "
-                        "Example: \"tcp,80,0.0.0.0,tcp,127.0.0.1,88 udp,16666,::,udp,127.0.0.1,16666 tun,1500,obtun0,tun,obtun1,1500\"")
+                        "Example JSON item: "
+                        """'{"listen":{"protocol":"udp","bind":"::","port":16666},"target":{"protocol":"udp","host":"127.0.0.1","port":16666}}'""")
             )
         # Keep backpressure knobs (apply to local TCP writers we own)
         if not _has('--mux-tcp-bp-threshold'):
@@ -10830,45 +10906,109 @@ class ChannelMux:
     @staticmethod
     def _parse_service_specs(specs: Optional[list[str]], arg_name: str) -> list[ChannelMux.ServiceSpec]:
         """Parse service spec(s) into ServiceSpec list."""
-        import shlex
         if not specs:
             return []
-        filtered_specs = [s for s in specs if isinstance(s, str) and s.strip()]
-        if not filtered_specs:
-            return []
-        flat = " ".join(filtered_specs)
-        tokens = shlex.split(flat)
         out: list[ChannelMux.ServiceSpec] = []
         sid = 1
-        for tok in tokens:
-            parts = [p.strip() for p in tok.split(",")]
-            if len(parts) != 6:
-                raise ValueError(f"{arg_name} item must have 6 comma-separated fields: {tok}")
-            l_proto, l_port, l_bind, r_proto, r_host, r_port = parts
-            l_proto = l_proto.lower()
-            r_proto = r_proto.lower()
-            if l_proto not in {"udp", "tcp", "tun"}:
-                raise ValueError(f"{arg_name} local protocol must be udp, tcp or tun: {tok}")
-            if r_proto not in {"udp", "tcp", "tun"}:
-                raise ValueError(f"{arg_name} remote protocol must be udp, tcp or tun: {tok}")
-            try:
-                l_port_i = int(l_port)
-                r_port_i = int(r_port)
-            except Exception:
-                raise ValueError(f"{arg_name} ports must be integers in 1..65535: {tok}")
-            if not (1 <= l_port_i <= 65535) or not (1 <= r_port_i <= 65535):
-                raise ValueError(f"{arg_name} ports must be integers in 1..65535: {tok}")
-            out.append(ChannelMux.ServiceSpec(
-                svc_id=sid,
-                l_proto=l_proto,
-                l_bind=l_bind,
-                l_port=l_port_i,
-                r_proto=r_proto,
-                r_host=r_host.strip("[]"),
-                r_port=r_port_i,
-            ))
-            sid += 1
+        for item in specs:
+            if item is None:
+                continue
+            parsed_items: list[dict] = []
+            if isinstance(item, dict):
+                parsed_items = [item]
+            elif isinstance(item, str) and item.strip():
+                try:
+                    decoded = json.loads(item)
+                except Exception as exc:
+                    raise ValueError(
+                        f"{arg_name} requires structured JSON service objects; legacy tuple syntax is no longer accepted. "
+                        f"Migrate existing config with scripts/migrate_service_definitions.py. Offending value: {item}"
+                    ) from exc
+                if isinstance(decoded, dict):
+                    parsed_items = [decoded]
+                elif isinstance(decoded, list):
+                    if not all(isinstance(entry, dict) for entry in decoded):
+                        raise ValueError(f"{arg_name} JSON arrays must contain only service objects: {item}")
+                    parsed_items = list(decoded)
+                else:
+                    raise ValueError(f"{arg_name} JSON value must be a service object or array of service objects: {item}")
+            else:
+                continue
+            for parsed_item in parsed_items:
+                out.append(ChannelMux._parse_structured_service_spec(parsed_item, arg_name, sid))
+                sid += 1
         return out
+
+    @staticmethod
+    def _validate_service_proto(name: str, arg_name: str, tok: str, side: str) -> str:
+        lowered = str(name or "").strip().lower()
+        if lowered not in {"udp", "tcp", "tun"}:
+            raise ValueError(f"{arg_name} {side} protocol must be udp, tcp or tun: {tok}")
+        return lowered
+
+    @staticmethod
+    def _validate_service_port(value: Any, arg_name: str, tok: str, field_name: str) -> int:
+        try:
+            port = int(value)
+        except Exception:
+            raise ValueError(f"{arg_name} {field_name} must be an integer in 1..65535: {tok}")
+        if not (1 <= port <= 65535):
+            raise ValueError(f"{arg_name} {field_name} must be an integer in 1..65535: {tok}")
+        return port
+
+    @staticmethod
+    def _parse_structured_service_spec(item: dict, arg_name: str, sid: int) -> "ChannelMux.ServiceSpec":
+        token = json.dumps(item, sort_keys=True, ensure_ascii=False)
+        listen = item.get("listen")
+        target = item.get("target")
+        if not isinstance(listen, dict):
+            raise ValueError(f"{arg_name} structured item requires object field listen: {token}")
+        if not isinstance(target, dict):
+            raise ValueError(f"{arg_name} structured item requires object field target: {token}")
+        l_proto = ChannelMux._validate_service_proto(listen.get("protocol"), arg_name, token, "listen")
+        r_proto = ChannelMux._validate_service_proto(target.get("protocol"), arg_name, token, "target")
+
+        if l_proto == "tun":
+            l_bind = str(listen.get("ifname", "") or "").strip()
+            l_port_i = ChannelMux._validate_service_port(listen.get("mtu"), arg_name, token, "listen mtu")
+            if not l_bind:
+                raise ValueError(f"{arg_name} structured tun listen requires ifname: {token}")
+        else:
+            l_bind = str(listen.get("bind", "") or "").strip()
+            l_port_i = ChannelMux._validate_service_port(listen.get("port"), arg_name, token, "listen port")
+            if not l_bind:
+                raise ValueError(f"{arg_name} structured {l_proto} listen requires bind: {token}")
+
+        if r_proto == "tun":
+            r_host = str(target.get("ifname", "") or "").strip()
+            r_port_i = ChannelMux._validate_service_port(target.get("mtu"), arg_name, token, "target mtu")
+            if not r_host:
+                raise ValueError(f"{arg_name} structured tun target requires ifname: {token}")
+        else:
+            r_host = str(target.get("host", "") or "").strip().strip("[]")
+            r_port_i = ChannelMux._validate_service_port(target.get("port"), arg_name, token, "target port")
+            if not r_host:
+                raise ValueError(f"{arg_name} structured {r_proto} target requires host: {token}")
+
+        lifecycle_hooks = item.get("lifecycle_hooks")
+        if lifecycle_hooks is not None and not isinstance(lifecycle_hooks, dict):
+            raise ValueError(f"{arg_name} structured item lifecycle_hooks must be an object when provided: {token}")
+        options = item.get("options")
+        if options is not None and not isinstance(options, dict):
+            raise ValueError(f"{arg_name} structured item options must be an object when provided: {token}")
+
+        return ChannelMux.ServiceSpec(
+            svc_id=sid,
+            l_proto=l_proto,
+            l_bind=l_bind,
+            l_port=l_port_i,
+            r_proto=r_proto,
+            r_host=r_host,
+            r_port=r_port_i,
+            name=str(item.get("name", "") or "").strip() or None,
+            lifecycle_hooks=lifecycle_hooks if isinstance(lifecycle_hooks, dict) else None,
+            options=options if isinstance(options, dict) else None,
+        )
 
     # -------------- lifecycle --------------
     def __init__(self, session, loop: asyncio.AbstractEventLoop,
@@ -10950,6 +11090,8 @@ class ChannelMux:
         self._tun_chan_by_service: dict[ChannelMux.ServiceKey, int] = {}
         self._tun_frag_rx: dict[tuple[int, int], dict[str, Any]] = {}
         self._chan_owner_peer_id: dict[int, int] = {}
+        self._ctrl_chunk_rx: dict[tuple[int, int, int, int, int], dict[str, Any]] = {}
+        self._ctrl_chunk_next_txid: int = 1
 
         # Per-channel stats (readable counters + CRC)
         self._chan_stats: dict[tuple[int, ChannelMux.Proto], _ChanCtr] = {}
@@ -10988,6 +11130,213 @@ class ChannelMux:
             self.log.debug("[MUX] on_peer_disconnected wired")
         except Exception:
             pass
+    
+    @staticmethod
+    def _hook_platform_key() -> str:
+        platform = str(sys.platform or "").lower()
+        if platform.startswith("win"):
+            return "windows"
+        if platform.startswith("linux"):
+            return "linux"
+        if platform.startswith("darwin"):
+            return "darwin"
+        return platform or "unknown"
+
+    @staticmethod
+    def _render_hook_value(value: Any, context: Dict[str, Any]) -> str:
+        class _SafeMap(dict):
+            def __missing__(self, key):  # type: ignore[override]
+                return ""
+        return str(value).format_map(_SafeMap({k: "" if v is None else str(v) for k, v in context.items()}))
+
+    @staticmethod
+    def _select_hook_argv(command_spec: dict, platform_key: Optional[str] = None) -> list[str]:
+        selected: Optional[Any] = None
+        pk = str(platform_key or ChannelMux._hook_platform_key())
+        argv = command_spec.get("argv")
+        if isinstance(argv, list):
+            selected = argv
+        elif isinstance(argv, dict):
+            selected = argv.get(pk)
+            if selected is None and pk == "windows":
+                selected = argv.get("win32")
+            if selected is None:
+                selected = argv.get("default")
+        if selected is None:
+            argv_by_os = command_spec.get("argv_by_os")
+            if isinstance(argv_by_os, dict):
+                selected = argv_by_os.get(pk)
+                if selected is None and pk == "windows":
+                    selected = argv_by_os.get("win32")
+                if selected is None:
+                    selected = argv_by_os.get("default")
+        if not isinstance(selected, list):
+            raise ValueError("hook command must resolve to argv list")
+        out = [str(v) for v in selected if str(v)]
+        if not out:
+            raise ValueError("hook command argv list must not be empty")
+        return out
+
+    def _hook_command_spec_for(self, spec: "ChannelMux.ServiceSpec", role: str, event: str) -> Optional[dict]:
+        hooks = spec.lifecycle_hooks
+        if not isinstance(hooks, dict):
+            return None
+        role_hooks = hooks.get(str(role))
+        if not isinstance(role_hooks, dict):
+            return None
+        command_spec = role_hooks.get(str(event))
+        if not isinstance(command_spec, dict):
+            return None
+        return command_spec
+
+    def _hook_context(
+        self,
+        spec: "ChannelMux.ServiceSpec",
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        event: str,
+        role: str,
+        channel_id: Optional[int] = None,
+        peer_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        catalog = ""
+        if svc_key is not None:
+            catalog = "own_servers" if str(svc_key[0]) == "local" else "remote_servers"
+        return {
+            "service_id": int(spec.svc_id),
+            "service_name": str(spec.name or f"svc-{spec.svc_id}"),
+            "catalog": catalog,
+            "event": str(event),
+            "protocol": str(spec.l_proto),
+            "channel_id": "" if channel_id is None else int(channel_id),
+            "bind": str(spec.l_bind),
+            "listen_port": int(spec.l_port),
+            "target_host": str(spec.r_host),
+            "target_port": int(spec.r_port),
+            "ifname": str(spec.l_bind) if str(spec.l_proto) == "tun" else "",
+            "peer_id": "" if peer_id is None else int(peer_id),
+            "peer_endpoint": "",
+            "role": str(role),
+        }
+
+    async def _run_service_hook(
+        self,
+        spec: "ChannelMux.ServiceSpec",
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        role: str,
+        event: str,
+        *,
+        channel_id: Optional[int] = None,
+        peer_id: Optional[int] = None,
+    ) -> None:
+        command_spec = self._hook_command_spec_for(spec, role, event)
+        if command_spec is None:
+            return
+        context = self._hook_context(spec, svc_key, event, role, channel_id=channel_id, peer_id=peer_id)
+        try:
+            argv_raw = self._select_hook_argv(command_spec)
+            argv = [self._render_hook_value(v, context) for v in argv_raw]
+            timeout_ms_raw = command_spec.get("timeout_ms", self.HOOK_DEFAULT_TIMEOUT_MS)
+            timeout_ms = int(timeout_ms_raw)
+            if timeout_ms <= 0:
+                timeout_ms = self.HOOK_DEFAULT_TIMEOUT_MS
+            env = None
+            env_extra = command_spec.get("env")
+            if isinstance(env_extra, dict):
+                env = dict(os.environ)
+                for k, v in env_extra.items():
+                    env[str(k)] = self._render_hook_value(v, context)
+            self.log.info(
+                "[HOOK] start role=%s event=%s svc=%s argv=%r timeout_ms=%s",
+                role,
+                event,
+                spec.svc_id,
+                argv,
+                timeout_ms,
+            )
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            try:
+                stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=max(0.1, timeout_ms / 1000.0))
+            except asyncio.TimeoutError:
+                with contextlib.suppress(Exception):
+                    proc.kill()
+                with contextlib.suppress(Exception):
+                    await proc.wait()
+                self.log.warning(
+                    "[HOOK] timeout role=%s event=%s svc=%s timeout_ms=%s argv=%r",
+                    role,
+                    event,
+                    spec.svc_id,
+                    timeout_ms,
+                    argv,
+                )
+                return
+            stdout_tail = (stdout_b or b"").decode("utf-8", "replace")[-400:]
+            stderr_tail = (stderr_b or b"").decode("utf-8", "replace")[-400:]
+            level_fn = self.log.info if int(proc.returncode or 0) == 0 else self.log.warning
+            level_fn(
+                "[HOOK] done role=%s event=%s svc=%s rc=%s stdout_tail=%r stderr_tail=%r",
+                role,
+                event,
+                spec.svc_id,
+                proc.returncode,
+                stdout_tail,
+                stderr_tail,
+            )
+        except Exception as e:
+            self.log.warning(
+                "[HOOK] failed role=%s event=%s svc=%s err=%r",
+                role,
+                event,
+                spec.svc_id,
+                e,
+            )
+
+    def _schedule_service_hook(
+        self,
+        spec: "ChannelMux.ServiceSpec",
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        role: str,
+        event: str,
+        *,
+        channel_id: Optional[int] = None,
+        peer_id: Optional[int] = None,
+    ) -> None:
+        if not self.loop.is_running():
+            self.log.debug(
+                "[HOOK] schedule skipped role=%s event=%s svc=%s: event loop not running",
+                role,
+                event,
+                spec.svc_id,
+            )
+            return
+        coro = self._run_service_hook(
+            spec,
+            svc_key,
+            role,
+            event,
+            channel_id=channel_id,
+            peer_id=peer_id,
+        )
+        try:
+            task = self.loop.create_task(coro)
+        except Exception as e:
+            with contextlib.suppress(Exception):
+                coro.close()
+            self.log.debug(
+                "[HOOK] schedule skipped role=%s event=%s svc=%s err=%r",
+                role,
+                event,
+                spec.svc_id,
+                e,
+            )
+            return
+        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
     # ---------- public counters ----------
     def udp_open_count(self) -> int:
@@ -11042,93 +11391,218 @@ class ChannelMux:
             self.log.warning("[MUX] unpack mux failed : %r", e)
             return None
 
-    # ---------- OPEN v4 payload ----------
-    #  b"O4" + u64 instance_id + u32 connection_seq + u16 svc_id
-    #        + u8 l_proto + u8 l_bind_len + l_bind + u16 l_port
-    #        + u8 r_proto + u8 r_host_len + r_host + u16 r_port
+    @staticmethod
+    def _service_spec_wire_obj(spec: "ChannelMux.ServiceSpec") -> dict[str, Any]:
+        return {
+            "svc_id": int(spec.svc_id),
+            "l_proto": str(spec.l_proto),
+            "l_bind": str(spec.l_bind),
+            "l_port": int(spec.l_port),
+            "r_proto": str(spec.r_proto),
+            "r_host": str(spec.r_host),
+            "r_port": int(spec.r_port),
+            "name": spec.name,
+            "lifecycle_hooks": spec.lifecycle_hooks,
+            "options": spec.options,
+        }
+
+    @staticmethod
+    def _service_spec_from_wire_obj(obj: Any) -> Optional["ChannelMux.ServiceSpec"]:
+        if not isinstance(obj, dict):
+            return None
+        try:
+            l_proto = str(obj.get("l_proto") or "").strip().lower()
+            r_proto = str(obj.get("r_proto") or "").strip().lower()
+            if l_proto not in {"udp", "tcp", "tun"}:
+                return None
+            if r_proto not in {"udp", "tcp", "tun"}:
+                return None
+            lifecycle_hooks = obj.get("lifecycle_hooks")
+            if lifecycle_hooks is not None and not isinstance(lifecycle_hooks, dict):
+                return None
+            options = obj.get("options")
+            if options is not None and not isinstance(options, dict):
+                return None
+            return ChannelMux.ServiceSpec(
+                svc_id=int(obj.get("svc_id")),
+                l_proto=l_proto,
+                l_bind=str(obj.get("l_bind") or ""),
+                l_port=int(obj.get("l_port")),
+                r_proto=r_proto,
+                r_host=str(obj.get("r_host") or ""),
+                r_port=int(obj.get("r_port")),
+                name=str(obj.get("name") or "").strip() or None,
+                lifecycle_hooks=lifecycle_hooks if isinstance(lifecycle_hooks, dict) else None,
+                options=options if isinstance(options, dict) else None,
+            )
+        except Exception:
+            return None
+
+    # ---------- OPEN payload ----------
+    # O4 (legacy): compact fields only.
+    # O5 (extended): same base fields + metadata JSON {name,lifecycle_hooks,options}.
     def _build_open_v4(self, spec: ChannelMux.ServiceSpec) -> bytes:
         lb = spec.l_bind.encode("utf-8", "ignore")
         hb = spec.r_host.encode("utf-8", "ignore")
+        meta_obj = {
+            "name": spec.name,
+            "lifecycle_hooks": spec.lifecycle_hooks,
+            "options": spec.options,
+        }
+        meta = json.dumps(meta_obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        if len(lb) > 0xFFFF or len(hb) > 0xFFFF:
+            raise ValueError("OPEN v5 host/bind too long")
         return (
-            b"O4"
+            b"O5"
             + struct.pack(
-                ">QIHBB",
+                ">QIHBH",
                 self._mux_instance_id & 0xFFFFFFFFFFFFFFFF,
                 self._mux_connection_seq & 0xFFFFFFFF,
-                spec.svc_id,
+                int(spec.svc_id),
                 self._proto_name_to_code(spec.l_proto),
                 len(lb),
             )
             + lb
-            + struct.pack(
-                ">HB",
-                spec.l_port,
-                self._proto_name_to_code(spec.r_proto),
-            )
-            + struct.pack(">B", len(hb))
+            + struct.pack(">HBH", int(spec.l_port), self._proto_name_to_code(spec.r_proto), len(hb))
             + hb
-            + struct.pack(">H", spec.r_port)
+            + struct.pack(">HI", int(spec.r_port), len(meta))
+            + meta
         )
+
+    def _parse_open_with_meta(self, buf: bytes) -> Optional[tuple[int, int, int, int, str, int, int, str, int, Optional[str], Optional[dict], Optional[dict]]]:
+        try:
+            if len(buf) < 2:
+                return None
+            # O5 extended payload
+            if buf[:2] == b"O5":
+                if len(buf) < 2 + 8 + 4 + 2 + 1 + 2 + 2 + 1 + 2 + 2 + 4:
+                    return None
+                instance_id, connection_seq, svc_id, l_proto, l_bind_len = struct.unpack(">QIHBH", buf[2:19])
+                off = 19
+                if len(buf) < off + l_bind_len + 2 + 1 + 2 + 2 + 4:
+                    return None
+                l_bind = buf[off:off + l_bind_len].decode("utf-8", "ignore")
+                off += l_bind_len
+                l_port, r_proto, host_len = struct.unpack(">HBH", buf[off:off + 5])
+                off += 5
+                if len(buf) < off + host_len + 2 + 4:
+                    return None
+                host = buf[off:off + host_len].decode("utf-8", "ignore")
+                off += host_len
+                r_port, meta_len = struct.unpack(">HI", buf[off:off + 6])
+                off += 6
+                if len(buf) < off + meta_len:
+                    return None
+                meta: dict[str, Any] = {}
+                if meta_len > 0:
+                    meta_raw = buf[off:off + meta_len].decode("utf-8", "ignore")
+                    parsed_meta = json.loads(meta_raw)
+                    if isinstance(parsed_meta, dict):
+                        meta = parsed_meta
+                off += meta_len
+                if off != len(buf):
+                    return None
+                lifecycle_hooks = meta.get("lifecycle_hooks")
+                options = meta.get("options")
+                return (
+                    int(instance_id),
+                    int(connection_seq),
+                    int(svc_id),
+                    int(l_proto),
+                    l_bind,
+                    int(l_port),
+                    int(r_proto),
+                    host,
+                    int(r_port),
+                    str(meta.get("name") or "").strip() or None,
+                    lifecycle_hooks if isinstance(lifecycle_hooks, dict) else None,
+                    options if isinstance(options, dict) else None,
+                )
+
+            # O4 legacy payload
+            if len(buf) < 2 + 8 + 4 + 2 + 1 + 1 + 2 + 1 + 1 + 2:
+                return None
+            if buf[0:2] != b"O4":
+                return None
+            instance_id, connection_seq, svc_id, l_proto, l_bind_len = struct.unpack(">QIHBB", buf[2:18])
+            off = 18
+            if len(buf) < off + l_bind_len + 2 + 1 + 1 + 2:
+                return None
+            l_bind = buf[off:off + l_bind_len].decode("utf-8", "ignore")
+            off += l_bind_len
+            l_port, r_proto = struct.unpack(">HB", buf[off:off + 3])
+            off += 3
+            (hlen,) = struct.unpack(">B", buf[off:off + 1])
+            off += 1
+            if len(buf) < off + hlen + 2:
+                return None
+            host = buf[off:off + hlen].decode("utf-8", "ignore")
+            off += hlen
+            (r_port,) = struct.unpack(">H", buf[off:off + 2])
+            off += 2
+            if off != len(buf):
+                return None
+            return (
+                int(instance_id),
+                int(connection_seq),
+                int(svc_id),
+                int(l_proto),
+                l_bind,
+                int(l_port),
+                int(r_proto),
+                host,
+                int(r_port),
+                None,
+                None,
+                None,
+            )
+        except Exception:
+            return None
 
     def _parse_open_v4(self, buf: bytes):
-        if len(buf) < 2 + 8 + 4 + 2 + 1 + 1 + 2 + 1 + 1 + 2:
+        parsed = self._parse_open_with_meta(buf)
+        if parsed is None:
             return None
-        if buf[0:2] != b"O4":
-            return None
-        instance_id, connection_seq, svc_id, l_proto, l_bind_len = struct.unpack(">QIHBB", buf[2:18])
-        off = 18
-        if len(buf) < off + l_bind_len + 2 + 1 + 1 + 2:
-            return None
-        l_bind = buf[off:off + l_bind_len].decode("utf-8", "ignore")
-        off += l_bind_len
-        l_port, r_proto = struct.unpack(">HB", buf[off:off + 3])
-        off += 3
-        (hlen,) = struct.unpack(">B", buf[off:off + 1])
-        off += 1
-        if len(buf) < off + hlen + 2:
-            return None
-        host = buf[off:off + hlen].decode("utf-8", "ignore")
-        off += hlen
-        (r_port,) = struct.unpack(">H", buf[off:off + 2])
-        off += 2
-        if off != len(buf):
-            return None
-        return instance_id, connection_seq, svc_id, l_proto, l_bind, l_port, r_proto, host, r_port
+        return parsed[:9]
 
     # ---------- REMOTE_SERVICES_SET v2 payload ----------
-    # b"RS2" + u64 instance_id + u32 connection_seq + u16 count + repeated:
-    #   u16 svc_id + u8 l_proto + u8 l_bind_len + l_bind + u16 l_port
-    #             + u8 r_proto + u8 r_host_len + r_host + u16 r_port
+    # RS2 legacy: compact fields.
+    # RS3 extended: JSON entries preserving name/lifecycle_hooks/options.
     def _encode_remote_services_set_v2(self, services: list["ChannelMux.ServiceSpec"]) -> bytes:
-        out = bytearray(b"RS2")
+        rows = [self._service_spec_wire_obj(s) for s in services]
+        blob = json.dumps(rows, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        out = bytearray(b"RS3")
         out += struct.pack(
-            ">QIH",
+            ">QII",
             self._mux_instance_id & 0xFFFFFFFFFFFFFFFF,
             self._mux_connection_seq & 0xFFFFFFFF,
-            len(services),
+            len(blob),
         )
-        for s in services:
-            lb = s.l_bind.encode("utf-8", "ignore")
-            rh = s.r_host.encode("utf-8", "ignore")
-            if len(lb) > 255 or len(rh) > 255:
-                raise ValueError("REMOTE_SERVICES_SET_V2 host/bind too long")
-            out += struct.pack(
-                ">HBB",
-                int(s.svc_id),
-                self._proto_name_to_code(s.l_proto),
-                len(lb),
-            )
-            out += lb
-            out += struct.pack(">HB", int(s.l_port), self._proto_name_to_code(s.r_proto))
-            out += struct.pack(">B", len(rh))
-            out += rh
-            out += struct.pack(">H", int(s.r_port))
+        out += blob
         return bytes(out)
 
     def _decode_remote_services_set_v2(self, payload: bytes) -> Optional[tuple[int, int, list["ChannelMux.ServiceSpec"]]]:
-        if len(payload) < 17 or payload[:3] != b"RS2":
-            return None
         try:
+            # RS3 extended
+            if len(payload) >= 19 and payload[:3] == b"RS3":
+                instance_id, connection_seq, blob_len = struct.unpack(">QII", payload[3:19])
+                if int(blob_len) < 0 or len(payload) != 19 + int(blob_len):
+                    return None
+                rows_raw = payload[19:19 + int(blob_len)].decode("utf-8", "ignore")
+                parsed_rows = json.loads(rows_raw)
+                if not isinstance(parsed_rows, list):
+                    return None
+                out_rs3: list[ChannelMux.ServiceSpec] = []
+                for row in parsed_rows:
+                    spec = self._service_spec_from_wire_obj(row)
+                    if spec is None:
+                        return None
+                    out_rs3.append(spec)
+                return int(instance_id), int(connection_seq), out_rs3
+
+            # RS2 legacy
+            if len(payload) < 17 or payload[:3] != b"RS2":
+                return None
             off = 3
             instance_id, connection_seq, count = struct.unpack(">QIH", payload[off:off + 14])
             off += 14
@@ -11165,7 +11639,7 @@ class ChannelMux:
                 ))
             if off != len(payload):
                 return None
-            return instance_id, connection_seq, out
+            return int(instance_id), int(connection_seq), out
         except Exception:
             return None
 
@@ -11372,6 +11846,7 @@ class ChannelMux:
         self._tun_open_key_by_chan.clear()
         self._tun_chan_by_open_key.clear()
         self._tun_frag_rx.clear()
+        self._ctrl_chunk_rx.clear()
         # Backpressure tasks
         for t in list(self._tcp_backpressure_tasks.values()):
             try: t.cancel()
@@ -11401,6 +11876,7 @@ class ChannelMux:
             local_addr=(spec.l_bind, spec.l_port),
             family=family
         )
+        self._schedule_service_hook(spec, svc_key, "listener", "on_created")
 
     def _on_local_udp_datagram(self, spec: ChannelMux.ServiceSpec, svc_key: "ChannelMux.ServiceKey", data: bytes, addr: tuple[str,int]) -> None:
         if not (self._overlay_connected and self._accepting_enabled):
@@ -11430,9 +11906,10 @@ class ChannelMux:
             self._udp_by_chan[chan] = (svc_key, addr)
             if str(svc_key[0]) == "peer":
                 self._chan_owner_peer_id[chan] = int(svc_key[1])
+            self._schedule_service_hook(spec, svc_key, "listener", "on_channel_connected", channel_id=chan)
             self.log.debug("[UDP/SRV] learn %s -> chan=%s svc=%s:%s", addr, chan, svc_key[0], spec.svc_id)
             try:
-                self._send_mux(chan, ChannelMux.Proto.UDP, ChannelMux.MType.OPEN, self._build_open_v4(spec))
+                self._send_open_for_service(chan, ChannelMux.Proto.UDP, spec)
             except Exception:
                 pass
         else:
@@ -11486,6 +11963,7 @@ class ChannelMux:
                     self._send_mux(chan, ChannelMux.Proto.UDP, ChannelMux.MType.CLOSE, b"")
                 self._prune_udp_fragment_reassembly()
                 self._prune_tun_fragment_reassembly()
+                self._prune_control_chunk_reassembly()
         except asyncio.CancelledError:
             return
 
@@ -11530,13 +12008,152 @@ class ChannelMux:
         out.update(self._peer_installed_services)
         return out
 
+    def _next_ctrl_chunk_txid(self) -> int:
+        txid = int(self._ctrl_chunk_next_txid) & 0xFFFFFFFF
+        if txid <= 0:
+            txid = 1
+        self._ctrl_chunk_next_txid = 1 if txid == 0xFFFFFFFF else txid + 1
+        return txid
+
+    def _max_mux_data_len(self) -> int:
+        return max(0, self._session_max_app_payload - ChannelMux.MUX_HDR.size)
+
+    def _send_chunked_control_payload(
+        self,
+        *,
+        chan_id: int,
+        proto: "ChannelMux.Proto",
+        chunk_mtype: "ChannelMux.MType",
+        payload: bytes,
+    ) -> None:
+        max_data_len = self._max_mux_data_len()
+        chunk_payload_cap = max_data_len - ChannelMux.CTRL_CHUNK_HDR.size
+        if chunk_payload_cap <= 0:
+            self.log.error(
+                "[MUX/CTRL] cannot send chunked payload mtype=%s: no room for chunk header (session_max=%s)",
+                int(chunk_mtype),
+                self._session_max_app_payload,
+            )
+            return
+        if not payload:
+            payload = b""
+        total_chunks = max(1, (len(payload) + chunk_payload_cap - 1) // chunk_payload_cap)
+        if total_chunks > 0xFFFF:
+            self.log.error(
+                "[MUX/CTRL] cannot send chunked payload mtype=%s: too many chunks=%s",
+                int(chunk_mtype),
+                total_chunks,
+            )
+            return
+        txid = self._next_ctrl_chunk_txid()
+        self.log.info(
+            "[MUX/CTRL] chunked send mtype=%s txid=%s chan=%s proto=%s bytes=%s chunks=%s cap=%s",
+            int(chunk_mtype),
+            txid,
+            chan_id,
+            int(proto),
+            len(payload),
+            total_chunks,
+            chunk_payload_cap,
+        )
+        for idx in range(total_chunks):
+            part = payload[idx * chunk_payload_cap:(idx + 1) * chunk_payload_cap]
+            frame_data = ChannelMux.CTRL_CHUNK_HDR.pack(
+                ChannelMux.CTRL_CHUNK_MAGIC,
+                txid,
+                idx,
+                total_chunks,
+            ) + part
+            self._send_mux(chan_id, proto, chunk_mtype, frame_data)
+
+    def _consume_control_chunk(
+        self,
+        *,
+        chan_id: int,
+        proto: "ChannelMux.Proto",
+        mtype: "ChannelMux.MType",
+        payload: bytes,
+        peer_id: Optional[int],
+    ) -> Optional[bytes]:
+        if len(payload) < ChannelMux.CTRL_CHUNK_HDR.size:
+            return None
+        magic, txid, chunk_idx, chunk_total = ChannelMux.CTRL_CHUNK_HDR.unpack(payload[:ChannelMux.CTRL_CHUNK_HDR.size])
+        if magic != ChannelMux.CTRL_CHUNK_MAGIC:
+            return None
+        if int(chunk_total) <= 0 or int(chunk_total) > 0xFFFF or int(chunk_idx) >= int(chunk_total):
+            return None
+        chunk = bytes(payload[ChannelMux.CTRL_CHUNK_HDR.size:])
+        key = (int(peer_id or 0), int(chan_id), int(proto), int(mtype), int(txid))
+        state = self._ctrl_chunk_rx.get(key)
+        now = time.time()
+        if state is None:
+            if len(self._ctrl_chunk_rx) >= self.CTRL_CHUNK_MAX_INFLIGHT:
+                self._prune_control_chunk_reassembly()
+                if len(self._ctrl_chunk_rx) >= self.CTRL_CHUNK_MAX_INFLIGHT:
+                    self.log.warning("[MUX/CTRL] drop chunk txid=%s: reassembly table full", txid)
+                    return None
+            state = {"total": int(chunk_total), "parts": {}, "received": 0, "updated": now}
+            self._ctrl_chunk_rx[key] = state
+        elif int(state.get("total", 0)) != int(chunk_total):
+            self._ctrl_chunk_rx.pop(key, None)
+            return None
+        parts = state.setdefault("parts", {})
+        if int(chunk_idx) not in parts:
+            parts[int(chunk_idx)] = chunk
+            state["received"] = int(state.get("received", 0)) + len(chunk)
+        state["updated"] = now
+        if len(parts) < int(chunk_total):
+            return None
+        assembled = bytearray()
+        for idx in range(int(chunk_total)):
+            piece = parts.get(idx)
+            if piece is None:
+                return None
+            assembled.extend(piece)
+        self._ctrl_chunk_rx.pop(key, None)
+        return bytes(assembled)
+
+    def _prune_control_chunk_reassembly(self) -> None:
+        now = time.time()
+        expired = [
+            key
+            for key, state in self._ctrl_chunk_rx.items()
+            if (now - float(state.get("updated", now))) >= self.CTRL_CHUNK_REASSEMBLY_TTL_S
+        ]
+        for key in expired:
+            self._ctrl_chunk_rx.pop(key, None)
+
+    def _send_open_for_service(self, chan_id: int, proto: "ChannelMux.Proto", spec: "ChannelMux.ServiceSpec") -> None:
+        payload = self._build_open_v4(spec)
+        if ChannelMux.MUX_HDR.size + len(payload) <= self._session_max_app_payload:
+            self._send_mux(chan_id, proto, ChannelMux.MType.OPEN, payload)
+            return
+        self._send_chunked_control_payload(
+            chan_id=chan_id,
+            proto=proto,
+            chunk_mtype=ChannelMux.MType.OPEN_CHUNK,
+            payload=payload,
+        )
+
     def _send_remote_services_catalog_if_any(self) -> None:
         if not self._remote_services_requested:
             return
         try:
             payload = self._encode_remote_services_set_v2(self._remote_services_requested)
-            self._send_mux(0, ChannelMux.Proto.UDP, ChannelMux.MType.REMOTE_SERVICES_SET_V2, payload)
-            self.log.info("[MUX/CTRL] sent REMOTE_SERVICES_SET_V2 with %d service(s)", len(self._remote_services_requested))
+            if ChannelMux.MUX_HDR.size + len(payload) <= self._session_max_app_payload:
+                self._send_mux(0, ChannelMux.Proto.UDP, ChannelMux.MType.REMOTE_SERVICES_SET_V2, payload)
+                self.log.info("[MUX/CTRL] sent REMOTE_SERVICES_SET_V2 with %d service(s)", len(self._remote_services_requested))
+            else:
+                self._send_chunked_control_payload(
+                    chan_id=0,
+                    proto=ChannelMux.Proto.UDP,
+                    chunk_mtype=ChannelMux.MType.REMOTE_SERVICES_SET_V2_CHUNK,
+                    payload=payload,
+                )
+                self.log.info(
+                    "[MUX/CTRL] sent chunked REMOTE_SERVICES_SET_V2 with %d service(s)",
+                    len(self._remote_services_requested),
+                )
         except Exception as e:
             self.log.warning("[MUX/CTRL] failed sending REMOTE_SERVICES_SET_V2: %r", e)
 
@@ -11900,8 +12517,6 @@ class ChannelMux:
                         candidates = []
                         # determine process architecture (64 vs 32)
                         try:
-                            import struct
-
                             is_64 = struct.calcsize("P") * 8 == 64
                         except Exception:
                             is_64 = sys.maxsize > 2 ** 32
@@ -12172,6 +12787,7 @@ class ChannelMux:
         self._svc_tun_devices[svc_key] = dev
         self._register_tun_reader(dev)
         self.log.info("[TUN/SRV] service=%s:%s opened if=%s mtu=%s", svc_key[0], spec.svc_id, dev.ifname, dev.mtu)
+        self._schedule_service_hook(spec, svc_key, "listener", "on_created")
 
     def _tun_fragment_payload_limit(self) -> int:
         return max(0, self._session_max_app_payload - ChannelMux.MUX_HDR.size - ChannelMux.UDP_FRAG_HDR.size)
@@ -12292,12 +12908,15 @@ class ChannelMux:
             self._bind_tun_channel(chan, dev)
             if str(svc_key[0]) == "peer":
                 self._chan_owner_peer_id[chan] = int(svc_key[1])
-            self._send_mux(chan, ChannelMux.Proto.TUN, ChannelMux.MType.OPEN, self._build_open_v4(spec))
+            self._schedule_service_hook(spec, svc_key, "listener", "on_channel_connected", channel_id=chan)
+            self._send_open_for_service(chan, ChannelMux.Proto.TUN, spec)
         self._send_mux(chan, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet)
 
     def _rx_tun(self, chan: int, mtype: ChannelMux.MType, data: bytes, peer_id: Optional[int] = None) -> None:
         if mtype == ChannelMux.MType.OPEN:
             self._rx_tun_open(chan, data, peer_id=peer_id)
+        elif mtype == ChannelMux.MType.OPEN_CHUNK:
+            self._rx_open_chunk(chan, ChannelMux.Proto.TUN, data, peer_id=peer_id)
         elif mtype == ChannelMux.MType.DATA:
             self._rx_tun_data(chan, data)
         elif mtype == ChannelMux.MType.DATA_FRAG:
@@ -12308,11 +12927,24 @@ class ChannelMux:
             self.log.warning("[APP] Unknown mtype to dispatch TUN:%s", mtype)
 
     def _rx_tun_open(self, chan: int, payload: bytes, peer_id: Optional[int] = None) -> None:
-        p = self._parse_open_v4(payload)
+        p = self._parse_open_with_meta(payload)
         if not p:
             self.log.debug("[TUN/CLI] chan=%s OPEN parse failed", chan)
             return
-        instance_id, connection_seq, svc_id, l_proto, l_bind, l_port, r_proto, host, r_port = p
+        (
+            instance_id,
+            connection_seq,
+            svc_id,
+            l_proto,
+            l_bind,
+            l_port,
+            r_proto,
+            host,
+            r_port,
+            svc_name,
+            lifecycle_hooks,
+            options,
+        ) = p
         peer_key = int(peer_id or 0)
         prev_epoch = self._peer_mux_epochs.get(peer_key)
         if not self._peer_epoch_is_new(peer_id, instance_id, connection_seq):
@@ -12331,6 +12963,19 @@ class ChannelMux:
         self._forget_tun_open_key(chan)
         self._tun_open_key_by_chan[chan] = open_key
         self._tun_chan_by_open_key[open_key] = chan
+        peer_spec = ChannelMux.ServiceSpec(
+            svc_id=int(svc_id),
+            l_proto="tun",
+            l_bind=str(l_bind),
+            l_port=int(l_port),
+            r_proto="tun",
+            r_host=str(host),
+            r_port=int(r_port),
+            name=svc_name,
+            lifecycle_hooks=lifecycle_hooks,
+            options=options,
+        )
+        self._schedule_service_hook(peer_spec, None, "client", "before_connect", channel_id=chan, peer_id=peer_id)
         dev = self._find_service_tun_device(str(host), int(r_port))
         if dev is None:
             try:
@@ -12341,6 +12986,7 @@ class ChannelMux:
                 self._forget_tun_open_key(chan)
                 return
         self._bind_tun_channel(chan, dev)
+        self._schedule_service_hook(peer_spec, None, "client", "on_connected", channel_id=chan, peer_id=peer_id)
         self.log.info("[TUN/CLI] chan=%s bound if=%s mtu=%s svc=%s", chan, dev.ifname, dev.mtu, svc_id)
 
     def _rx_tun_data(self, chan: int, data: bytes) -> None:
@@ -12449,9 +13095,65 @@ class ChannelMux:
         if dev.service_key is not None and self._tun_chan_by_service.get(dev.service_key) == chan:
             self._tun_chan_by_service.pop(dev.service_key, None)
             dev.chan_id = None
+            spec = self._effective_services_by_id().get(dev.service_key)
+            if spec is not None:
+                self._schedule_service_hook(spec, dev.service_key, "listener", "on_channel_closed", channel_id=chan)
         else:
             self._close_tun_device(dev)
+            spec = ChannelMux.ServiceSpec(svc_id=0, l_proto="tun", l_bind=dev.ifname, l_port=int(dev.mtu), r_proto="tun", r_host=dev.ifname, r_port=int(dev.mtu))
+            self._schedule_service_hook(spec, None, "client", "after_closed", channel_id=chan)
         self.log.info("[TUN] chan=%s CLOSE => local teardown", chan)
+
+    def _rx_open_chunk(
+        self,
+        chan: int,
+        proto: "ChannelMux.Proto",
+        payload: bytes,
+        *,
+        peer_id: Optional[int] = None,
+    ) -> None:
+        assembled = self._consume_control_chunk(
+            chan_id=chan,
+            proto=proto,
+            mtype=ChannelMux.MType.OPEN_CHUNK,
+            payload=payload,
+            peer_id=peer_id,
+        )
+        if assembled is None:
+            return
+        if proto == ChannelMux.Proto.UDP:
+            self._rx_udp_open(chan, assembled, peer_id=peer_id)
+            return
+        if proto == ChannelMux.Proto.TCP:
+            self._rx_tcp_open(chan, assembled, peer_id=peer_id)
+            return
+        if proto == ChannelMux.Proto.TUN:
+            self._rx_tun_open(chan, assembled, peer_id=peer_id)
+            return
+
+    def _on_remote_services_payload(self, payload: bytes, peer_id: Optional[int]) -> bool:
+        decoded = self._decode_remote_services_set_v2(payload)
+        if decoded is None:
+            self.log.warning("[MUX/CTRL] invalid REMOTE_SERVICES_SET_V2 payload (%d bytes)", len(payload))
+            return False
+        instance_id, connection_seq, services = decoded
+        peer_key = int(peer_id or 0)
+        prev_epoch = self._peer_mux_epochs.get(peer_key)
+        if not self._peer_epoch_is_new(peer_id, instance_id, connection_seq):
+            self.log.debug("[MUX/CTRL] duplicate/replay REMOTE_SERVICES_SET_V2 peer_id=%s instance_id=%s connection_seq=%s", peer_key, instance_id, connection_seq)
+        else:
+            if prev_epoch is not None:
+                self._reset_peer_open_channels(peer_key)
+            self.loop.create_task(self._drop_peer_installed_services(peer_id=peer_key))
+        self.loop.create_task(self._apply_peer_installed_services(services, peer_id=peer_id))
+        self.log.info(
+            "[MUX/CTRL] received REMOTE_SERVICES_SET_V2 with %d service(s) from peer_id=%s instance_id=%s connection_seq=%s",
+            len(services),
+            peer_key,
+            instance_id,
+            connection_seq,
+        )
+        return True
 
     # ---------- MUX RX demux ----------
     def on_app_payload_from_peer(self, buf: bytes, peer_id: Optional[int] = None) -> bool:
@@ -12473,28 +13175,19 @@ class ChannelMux:
             except Exception: pass
 
         if mtype == ChannelMux.MType.REMOTE_SERVICES_SET_V2:
-            decoded = self._decode_remote_services_set_v2(payload)
-            if decoded is None:
-                self.log.warning("[MUX/CTRL] invalid REMOTE_SERVICES_SET_V2 payload (%d bytes)", len(payload))
-                return False
-            instance_id, connection_seq, services = decoded
-            peer_key = int(peer_id or 0)
-            prev_epoch = self._peer_mux_epochs.get(peer_key)
-            if not self._peer_epoch_is_new(peer_id, instance_id, connection_seq):
-                self.log.debug("[MUX/CTRL] duplicate/replay REMOTE_SERVICES_SET_V2 peer_id=%s instance_id=%s connection_seq=%s", peer_key, instance_id, connection_seq)
-            else:
-                if prev_epoch is not None:
-                    self._reset_peer_open_channels(peer_key)
-                self.loop.create_task(self._drop_peer_installed_services(peer_id=peer_key))
-            self.loop.create_task(self._apply_peer_installed_services(services, peer_id=peer_id))
-            self.log.info(
-                "[MUX/CTRL] received REMOTE_SERVICES_SET_V2 with %d service(s) from peer_id=%s instance_id=%s connection_seq=%s",
-                len(services),
-                peer_key,
-                instance_id,
-                connection_seq,
+            return self._on_remote_services_payload(payload, peer_id=peer_id)
+
+        if mtype == ChannelMux.MType.REMOTE_SERVICES_SET_V2_CHUNK:
+            assembled = self._consume_control_chunk(
+                chan_id=chan_id,
+                proto=proto,
+                mtype=mtype,
+                payload=payload,
+                peer_id=peer_id,
             )
-            return True
+            if assembled is None:
+                return True
+            return self._on_remote_services_payload(assembled, peer_id=peer_id)
 
         if mtype == ChannelMux.MType.REMOTE_SERVICES_SET_V1:
             self.log.warning("[MUX/CTRL] unsupported REMOTE_SERVICES_SET_V1 payload (%d bytes)", len(payload))
@@ -12518,6 +13211,8 @@ class ChannelMux:
     def _rx_udp(self, chan_id: int, mtype: ChannelMux.MType, data: bytes, peer_id: Optional[int] = None) -> None:
         if mtype == ChannelMux.MType.OPEN:
             self._rx_udp_open(chan_id, data, peer_id=peer_id)
+        elif mtype == ChannelMux.MType.OPEN_CHUNK:
+            self._rx_open_chunk(chan_id, ChannelMux.Proto.UDP, data, peer_id=peer_id)
         elif mtype == ChannelMux.MType.DATA:
             self._rx_udp_data(chan_id, data)
         elif mtype == ChannelMux.MType.DATA_FRAG:
@@ -12608,11 +13303,24 @@ class ChannelMux:
 
 
     def _rx_udp_open(self, chan: int, payload: bytes, peer_id: Optional[int] = None) -> None:
-        p = self._parse_open_v4(payload)
+        p = self._parse_open_with_meta(payload)
         if not p:
             self.log.debug("[UDP/CLI] chan=%s OPEN parse failed", chan)
             return
-        instance_id, connection_seq, svc_id, l_proto, l_bind, l_port, r_proto, host, r_port = p
+        (
+            instance_id,
+            connection_seq,
+            svc_id,
+            l_proto,
+            l_bind,
+            l_port,
+            r_proto,
+            host,
+            r_port,
+            svc_name,
+            lifecycle_hooks,
+            options,
+        ) = p
         peer_key = int(peer_id or 0)
         prev_epoch = self._peer_mux_epochs.get(peer_key)
         if not self._peer_epoch_is_new(peer_id, instance_id, connection_seq):
@@ -12644,8 +13352,21 @@ class ChannelMux:
         self._udp_chan_by_open_key[open_key] = chan
         if chan in self._udp_client_transports:
             return
+        peer_spec = ChannelMux.ServiceSpec(
+            svc_id=int(svc_id),
+            l_proto="udp",
+            l_bind=str(l_bind),
+            l_port=int(l_port),
+            r_proto="udp",
+            r_host=str(host),
+            r_port=int(r_port),
+            name=svc_name,
+            lifecycle_hooks=lifecycle_hooks,
+            options=options,
+        )
         async def _mk():
             try:
+                await self._run_service_hook(peer_spec, None, "client", "before_connect", channel_id=chan, peer_id=peer_id)
                 family = _listener_family_for_host(host)
                 if family == socket.AF_INET6:
                     local_addr = ("::", 0)
@@ -12668,6 +13389,7 @@ class ChannelMux:
             try:
                 self._udp_client_transports[chan] = tr  # type: ignore
                 self._udp_client_last_ts[chan] = time.time()
+                self._schedule_service_hook(peer_spec, None, "client", "on_connected", channel_id=chan, peer_id=peer_id)
 
                 sockname = tr.get_extra_info("sockname")
                 peername = tr.get_extra_info("peername")  # available on connected UDP sockets
@@ -12813,6 +13535,20 @@ class ChannelMux:
         if svc_addr:
             svc_key, addr = svc_addr
             self._udp_by_client.pop((svc_key, addr), None)        
+            spec = self._effective_services_by_id().get(svc_key)
+            if spec is not None:
+                self._schedule_service_hook(spec, svc_key, "listener", "on_channel_closed", channel_id=chan)
+        elif tr is not None:
+            spec = ChannelMux.ServiceSpec(
+                svc_id=int(self._udp_client_svc_id.get(chan) or 0),
+                l_proto="udp",
+                l_bind="",
+                l_port=0,
+                r_proto="udp",
+                r_host="",
+                r_port=0,
+            )
+            self._schedule_service_hook(spec, None, "client", "after_closed", channel_id=chan)
         self.log.info("[UDP] chan=%s CLOSE => local teardown", chan)
 
     class _UDPClientProtocol(asyncio.DatagramProtocol):
@@ -12886,13 +13622,14 @@ class ChannelMux:
                 spec.svc_id,
                 len(self._tcp_by_chan),
             )
+            self._schedule_service_hook(spec, svc_key, "listener", "on_channel_connected", channel_id=chan)
 
             # Install backpressure worker
             self._ensure_backpressure_task(chan, writer)
 
             # Send OPEN v4 (peer dials r_proto/r_host/r_port with full tuple metadata)
             try:
-                self._send_mux(chan, ChannelMux.Proto.TCP, ChannelMux.MType.OPEN, self._build_open_v4(spec))
+                self._send_open_for_service(chan, ChannelMux.Proto.TCP, spec)
             except Exception:
                 pass
 
@@ -12935,6 +13672,7 @@ class ChannelMux:
                     self._tcp_by_chan.pop(chan, None)
                     self._chan_owner_peer_id.pop(chan, None)
                     self._forget_tcp_open_key(chan)
+                    self._schedule_service_hook(spec, svc_key, "listener", "on_channel_closed", channel_id=chan)
                     self.log.info("[TCP/SRV] chan=%s CLOSE teardown complete map_size=%s", chan, len(self._tcp_by_chan))
 
             self.loop.create_task(_pump())
@@ -12947,141 +13685,171 @@ class ChannelMux:
         self._svc_tcp_servers[svc_key] = srv
         sockets = ", ".join(str(s.getsockname()) for s in (srv.sockets or []))
         self.log.info("[TCP/SRV] service=%s:%s listening on %s", svc_key[0], spec.svc_id, sockets)
+        self._schedule_service_hook(spec, svc_key, "listener", "on_created")
 
 
     # ---------- TCP RX path ----------
-    def _rx_tcp(self, chan: int, mtype: ChannelMux.MType, data: bytes, peer_id: Optional[int] = None) -> None:
-        if mtype == ChannelMux.MType.OPEN:
-            # Peer instructs us to dial TCP to (host,port)
-            p = self._parse_open_v4(data)
-            if not p:
-                self.log.debug("[TCP/CLI] chan=%s OPEN parse failed", chan)
-                return
-            instance_id, connection_seq, svc_id, l_proto, l_bind, l_port, r_proto, host, r_port = p
-            peer_key = int(peer_id or 0)
-            prev_epoch = self._peer_mux_epochs.get(peer_key)
-            epoch_is_new = self._peer_epoch_is_new(peer_id, instance_id, connection_seq)
-            self.log.info(
-                "[TCP/CLI] OPEN recv chan=%s peer=%s iid=%s seq=%s svc=%s l=%s:%s r=%s:%s epoch_is_new=%s prev_epoch=%s",
+    def _rx_tcp_open(self, chan: int, data: bytes, peer_id: Optional[int] = None) -> None:
+        p = self._parse_open_with_meta(data)
+        if not p:
+            self.log.debug("[TCP/CLI] chan=%s OPEN parse failed", chan)
+            return
+        (
+            instance_id,
+            connection_seq,
+            svc_id,
+            l_proto,
+            l_bind,
+            l_port,
+            r_proto,
+            host,
+            r_port,
+            svc_name,
+            lifecycle_hooks,
+            options,
+        ) = p
+        peer_key = int(peer_id or 0)
+        prev_epoch = self._peer_mux_epochs.get(peer_key)
+        epoch_is_new = self._peer_epoch_is_new(peer_id, instance_id, connection_seq)
+        self.log.info(
+            "[TCP/CLI] OPEN recv chan=%s peer=%s iid=%s seq=%s svc=%s l=%s:%s r=%s:%s epoch_is_new=%s prev_epoch=%s",
+            chan,
+            peer_key,
+            instance_id,
+            connection_seq,
+            svc_id,
+            l_bind,
+            l_port,
+            host,
+            r_port,
+            epoch_is_new,
+            prev_epoch,
+        )
+        if epoch_is_new:
+            if prev_epoch is not None:
+                self._reset_peer_open_channels(peer_key)
+            self.loop.create_task(self._drop_peer_installed_services(peer_id=peer_key))
+        else:
+            self.log.debug(
+                "[TCP/CLI] duplicate/replay OPEN epoch observed but not treated as channel duplicate chan=%s iid=%s seq=%s",
                 chan,
-                peer_key,
                 instance_id,
                 connection_seq,
-                svc_id,
-                l_bind,
-                l_port,
-                host,
-                r_port,
-                epoch_is_new,
-                prev_epoch,
             )
-            if epoch_is_new:
-                if prev_epoch is not None:
-                    self._reset_peer_open_channels(peer_key)
-                self.loop.create_task(self._drop_peer_installed_services(peer_id=peer_key))
-            else:
-                self.log.debug(
-                    "[TCP/CLI] duplicate/replay OPEN epoch observed but not treated as channel duplicate chan=%s iid=%s seq=%s",
-                    chan,
-                    instance_id,
-                    connection_seq,
-                )
-            if int(l_proto) != int(ChannelMux.Proto.TCP):
-                self.log.warning("[TCP/CLI] chan=%s OPEN declares non-TCP l_proto=%s", chan, l_proto)
-                return
-            if int(r_proto) != int(ChannelMux.Proto.TCP):
-                self.log.warning("[TCP/CLI] chan=%s OPEN requests non-TCP r_proto=%s", chan, r_proto)
-                return
-            open_key = (peer_key, int(svc_id), int(l_proto), str(l_bind), int(l_port), int(r_proto), str(host), int(r_port))
-            self._forget_tcp_open_key(chan)
-            self._tcp_open_key_by_chan[chan] = open_key
-            self._tcp_chan_by_open_key[open_key] = chan
-            self.log.info(
-                "[TCP/CLI] OPEN channel identity bind chan=%s key=%s:%s->%s:%s key_map_size=%s",
-                chan,
-                l_bind,
-                l_port,
-                host,
-                r_port,
-                len(self._tcp_chan_by_open_key),
-            )
-            if chan in self._tcp_by_chan:
-                self.log.info("[TCP/CLI] chan=%s OPEN ignored because chan already connected", chan)
-                return
+        if int(l_proto) != int(ChannelMux.Proto.TCP):
+            self.log.warning("[TCP/CLI] chan=%s OPEN declares non-TCP l_proto=%s", chan, l_proto)
+            return
+        if int(r_proto) != int(ChannelMux.Proto.TCP):
+            self.log.warning("[TCP/CLI] chan=%s OPEN requests non-TCP r_proto=%s", chan, r_proto)
+            return
+        open_key = (peer_key, int(svc_id), int(l_proto), str(l_bind), int(l_port), int(r_proto), str(host), int(r_port))
+        self._forget_tcp_open_key(chan)
+        self._tcp_open_key_by_chan[chan] = open_key
+        self._tcp_chan_by_open_key[open_key] = chan
+        self.log.info(
+            "[TCP/CLI] OPEN channel identity bind chan=%s key=%s:%s->%s:%s key_map_size=%s",
+            chan,
+            l_bind,
+            l_port,
+            host,
+            r_port,
+            len(self._tcp_chan_by_open_key),
+        )
+        if chan in self._tcp_by_chan:
+            self.log.info("[TCP/CLI] chan=%s OPEN ignored because chan already connected", chan)
+            return
+        peer_spec = ChannelMux.ServiceSpec(
+            svc_id=int(svc_id),
+            l_proto="tcp",
+            l_bind=str(l_bind),
+            l_port=int(l_port),
+            r_proto="tcp",
+            r_host=str(host),
+            r_port=int(r_port),
+            name=svc_name,
+            lifecycle_hooks=lifecycle_hooks,
+            options=options,
+        )
 
-            async def _dial():
-                try:
-                    reader = asyncio.StreamReader()
-                    protocol = asyncio.StreamReaderProtocol(reader)
-                    self.log.info("[TCP/CLI] chan=%s connecting -> %s:%s", chan, host, r_port)
-                    transport, _ = await self.loop.create_connection(lambda: protocol, host=host, port=int(r_port))
-                    writer = asyncio.StreamWriter(transport, protocol, reader, self.loop)
-                    self._tcp_by_chan[chan] = (svc_id, writer)
-                    self._tcp_by_writer[writer] = (svc_id, chan)
-                    self._tcp_role_by_chan[chan] = "client"
-                    pending = self._tcp_pending_data.pop(chan, [])
-                    for buf in pending:
-                        try:
-                            writer.write(buf)
-                            ctr = self._ctr(ChannelMux.Proto.TCP, chan)
-                            ctr.msgs_out += 1
-                            ctr.bytes_out += len(buf)
-                            self._maybe_signal_backpressure(chan, writer)
-                            self.log.debug("[TCP/CLI] chan=%s flushed pending %dB", chan, len(buf))
-                        except Exception as e:
-                            self.log.info("[TCP/CLI] chan=%s pending flush error: %r", chan, e)
-                            break
+        async def _dial():
+            try:
+                await self._run_service_hook(peer_spec, None, "client", "before_connect", channel_id=chan, peer_id=peer_id)
+                reader = asyncio.StreamReader()
+                protocol = asyncio.StreamReaderProtocol(reader)
+                self.log.info("[TCP/CLI] chan=%s connecting -> %s:%s", chan, host, r_port)
+                transport, _ = await self.loop.create_connection(lambda: protocol, host=host, port=int(r_port))
+                writer = asyncio.StreamWriter(transport, protocol, reader, self.loop)
+                self._tcp_by_chan[chan] = (svc_id, writer)
+                self._tcp_by_writer[writer] = (svc_id, chan)
+                self._tcp_role_by_chan[chan] = "client"
+                self._schedule_service_hook(peer_spec, None, "client", "on_connected", channel_id=chan, peer_id=peer_id)
+                pending = self._tcp_pending_data.pop(chan, [])
+                for buf in pending:
+                    try:
+                        writer.write(buf)
+                        ctr = self._ctr(ChannelMux.Proto.TCP, chan)
+                        ctr.msgs_out += 1
+                        ctr.bytes_out += len(buf)
+                        self._maybe_signal_backpressure(chan, writer)
+                        self.log.debug("[TCP/CLI] chan=%s flushed pending %dB", chan, len(buf))
+                    except Exception as e:
+                        self.log.info("[TCP/CLI] chan=%s pending flush error: %r", chan, e)
+                        break
 
-                    # Backpressure worker
-                    self._ensure_backpressure_task(chan, writer)
+                # Backpressure worker
+                self._ensure_backpressure_task(chan, writer)
 
-                    # Start RX pump: remote->overlay
-                    async def _rx():
-                        try:
-                            while True:
-                                buf = await reader.read(self._SAFE_TCP_READ)
-                                if not buf:
-                                    break
-
-                                # --- NEW: connection-level log (remote TCP -> overlay) ---
-                                try:
-                                    l_ep, r_ep = self._tcp_endpoints(writer)
-                                    # For a client-dialed socket, src = remote endpoint, dst = our local endpoint
-                                    src = r_ep
-                                    dst = l_ep
-                                    self._log_conn("<-", "TCP", chan, buf, src=src, dst=dst)
-                                except Exception as e:
-                                    self.log.debug(f"[NET] logging failed : %r",e)
-                                    pass
-                                # ---------------------------------------------------------
-                                ctr = self._ctr(ChannelMux.Proto.TCP, chan)
-                                ctr.msgs_in += 1
-                                ctr.bytes_in += len(buf)
-                                self._send_mux(chan, ChannelMux.Proto.TCP, ChannelMux.MType.DATA, buf)
-                                self.log.debug("[TCP/CLI] chan=%s remote->overlay %dB", chan, len(buf))
-                        except Exception as e:
-                            self.log.info("[TCP/CLI] chan=%s rx error: %r", chan, e)
-                        finally:
-                            self.log.info("[TCP/CLI] chan=%s EOF -> CLOSE", chan)
-                            self._send_mux(chan, ChannelMux.Proto.TCP, ChannelMux.MType.CLOSE, b"")
+                # Start RX pump: remote->overlay
+                async def _rx():
+                    try:
+                        while True:
+                            buf = await reader.read(self._SAFE_TCP_READ)
+                            if not buf:
+                                break
                             try:
-                                writer.close()
-                                await getattr(writer, "wait_closed", lambda: asyncio.sleep(0))()
-                            except Exception:
+                                l_ep, r_ep = self._tcp_endpoints(writer)
+                                src = r_ep
+                                dst = l_ep
+                                self._log_conn("<-", "TCP", chan, buf, src=src, dst=dst)
+                            except Exception as e:
+                                self.log.debug(f"[NET] logging failed : %r",e)
                                 pass
-                            self._tcp_by_writer.pop(writer, None)
-                            self._tcp_by_chan.pop(chan, None)
-                            self._forget_tcp_open_key(chan)
-                            self.log.info("[TCP/CLI] chan=%s CLOSE teardown complete map_size=%s", chan, len(self._tcp_by_chan))
+                            ctr = self._ctr(ChannelMux.Proto.TCP, chan)
+                            ctr.msgs_in += 1
+                            ctr.bytes_in += len(buf)
+                            self._send_mux(chan, ChannelMux.Proto.TCP, ChannelMux.MType.DATA, buf)
+                            self.log.debug("[TCP/CLI] chan=%s remote->overlay %dB", chan, len(buf))
+                    except Exception as e:
+                        self.log.info("[TCP/CLI] chan=%s rx error: %r", chan, e)
+                    finally:
+                        self.log.info("[TCP/CLI] chan=%s EOF -> CLOSE", chan)
+                        self._send_mux(chan, ChannelMux.Proto.TCP, ChannelMux.MType.CLOSE, b"")
+                        try:
+                            writer.close()
+                            await getattr(writer, "wait_closed", lambda: asyncio.sleep(0))()
+                        except Exception:
+                            pass
+                        self._tcp_by_writer.pop(writer, None)
+                        self._tcp_by_chan.pop(chan, None)
+                        self._forget_tcp_open_key(chan)
+                        self._schedule_service_hook(peer_spec, None, "client", "after_closed", channel_id=chan, peer_id=peer_id)
+                        self.log.info("[TCP/CLI] chan=%s CLOSE teardown complete map_size=%s", chan, len(self._tcp_by_chan))
 
-                    self.loop.create_task(_rx())
-                    # (No early buffer on ChannelMux TCP paths)
-                except Exception as e:
-                    self.log.info("[TCP/CLI] chan=%s connect failed: %r", chan, e)
-                    self._tcp_pending_data.pop(chan, None)
-                    self._forget_tcp_open_key(chan)
+                self.loop.create_task(_rx())
+            except Exception as e:
+                self.log.info("[TCP/CLI] chan=%s connect failed: %r", chan, e)
+                self._tcp_pending_data.pop(chan, None)
+                self._forget_tcp_open_key(chan)
 
-            self.loop.create_task(_dial())
+        self.loop.create_task(_dial())
+
+    def _rx_tcp(self, chan: int, mtype: ChannelMux.MType, data: bytes, peer_id: Optional[int] = None) -> None:
+        if mtype == ChannelMux.MType.OPEN:
+            self._rx_tcp_open(chan, data, peer_id=peer_id)
+            return
+
+        if mtype == ChannelMux.MType.OPEN_CHUNK:
+            self._rx_open_chunk(chan, ChannelMux.Proto.TCP, data, peer_id=peer_id)
             return
 
         # DATA to local TCP writer (overlay -> local)
@@ -13134,16 +13902,19 @@ class ChannelMux:
         # CLOSE
         if mtype == ChannelMux.MType.CLOSE:
             tup = self._tcp_by_chan.pop(chan, None)
+            role = self._tcp_role_by_chan.pop(chan, None)
             if tup:
                 _, writer = tup
                 self._tcp_pending_data.pop(chan, None)
                 self._tcp_by_writer.pop(writer, None)
-                self._tcp_role_by_chan.pop(chan, None)
                 self._chan_owner_peer_id.pop(chan, None)
                 try:
                     writer.close()
                 except Exception:
                     pass
+                if role == "client":
+                    spec = ChannelMux.ServiceSpec(svc_id=0, l_proto="tcp", l_bind="", l_port=0, r_proto="tcp", r_host="", r_port=0)
+                    self._schedule_service_hook(spec, None, "client", "after_closed", channel_id=chan)
             self._forget_tcp_open_key(chan)
             self.log.info("[TCP] chan=%s CLOSE => local teardown map_size=%s", chan, len(self._tcp_by_chan))
 
@@ -13346,8 +14117,12 @@ class ChannelMux:
                     seq,
                     len(services),
                 )
+        if mtype == ChannelMux.MType.REMOTE_SERVICES_SET_V2_CHUNK:
+            self.log.debug(f"{basestr} REMOTE_SERVICES_SET_V2_CHUNK len={len(data)}")
         if mtype == ChannelMux.MType.REMOTE_SERVICES_SET_V1:
             self.log.info(f"{basestr} REMOTE_SERVICES_SET_V1 len={len(data)} (legacy/unsupported)")
+        if mtype == ChannelMux.MType.OPEN_CHUNK:
+            self.log.debug(f"{basestr} OPEN_CHUNK len={len(data)}")
         if mtype == ChannelMux.MType.DATA:
             self.log.debug(f"{basestr} DATA len={len(data)}:  {data[:5].hex().upper()}")
         if mtype == ChannelMux.MType.DATA_FRAG:
@@ -13368,6 +14143,34 @@ class ChannelMux:
 
     def _dbg_parse_open_v4(self, payload: bytes) -> str:
         try:
+            if len(payload) >= 2 and payload[:2] == b"O5":
+                parsed = self._parse_open_with_meta(payload)
+                if not parsed:
+                    return ""
+                (
+                    instance_id,
+                    connection_seq,
+                    svc_id,
+                    l_proto,
+                    l_bind,
+                    l_port,
+                    r_proto,
+                    host,
+                    r_port,
+                    svc_name,
+                    lifecycle_hooks,
+                    options,
+                ) = parsed
+                proto_map = {0: "UDP", 1: "TCP", 2: "TUN"}
+                l_proto_s = proto_map.get(int(l_proto), str(int(l_proto)))
+                r_proto_s = proto_map.get(int(r_proto), str(int(r_proto)))
+                return (
+                    f"OPENv5 iid={instance_id} seq={connection_seq} svc={svc_id} "
+                    f"name={svc_name or '-'} l={l_proto_s} {l_bind}:{l_port} "
+                    f"r={r_proto_s} {host}:{r_port} "
+                    f"hooks={'yes' if isinstance(lifecycle_hooks, dict) else 'no'} "
+                    f"options={'yes' if isinstance(options, dict) else 'no'}"
+                )
             if len(payload) < 22 or payload[:2] != b"O4":
                 return ""
             instance_id, connection_seq, svc_id, l_proto, l_len = struct.unpack(">QIHBB", payload[2:18])
@@ -14427,6 +15230,7 @@ class Runner:
         self.admin_web = None
         self._restart_requested: Optional[asyncio.Event] = None
         self._restart_requested_flag = False
+        self._restart_exit_code: int = RESTART_EXIT_CODE_IMMEDIATE
         self._shutdown_exit_code: Optional[int] = None
         self._last_connected_monotonic: Optional[float] = None
         self._last_disconnected_monotonic: Optional[float] = None
@@ -14546,8 +15350,8 @@ class Runner:
                 self.log.debug("[RUNNER] stop timed out during restart")
 
         if self._restart_requested is not None and self._restart_requested.is_set():
-            self.log.warning("[RUNNER] exiting rc=75")
-            raise SystemExit(75)
+            self.log.warning("[RUNNER] exiting rc=%d", int(self._restart_exit_code))
+            raise SystemExit(int(self._restart_exit_code))
 
         if self._shutdown_exit_code is not None:
             self.log.warning("[RUNNER] exiting rc=%d", self._shutdown_exit_code)
@@ -14636,9 +15440,15 @@ class Runner:
         except RuntimeError:
             pass
 
+    def _restart_requires_delay(self) -> bool:
+        raw = str(getattr(self.args, "overlay_transport", "") or "")
+        parts = [item.strip().lower() for item in raw.split(",") if item.strip()]
+        return "myudp" in parts
+
     def request_restart(self) -> None:
         self.log.debug("[SERVER] Runner restart requested")
         self._restart_requested_flag = True
+        self._restart_exit_code = RESTART_EXIT_CODE_DELAYED if self._restart_requires_delay() else RESTART_EXIT_CODE_IMMEDIATE
         if self._restart_requested is not None:
             self._restart_requested.set()
 
@@ -15344,6 +16154,9 @@ class Runner:
             tmp.replace(path)
         except Exception as e:
             return (False, f"failed to persist config to {cfg_path}: {e}")
+        # Persisted runtime config is now present and no longer a first-start state.
+        setattr(self.args, "_first_start_detected", False)
+        setattr(self.args, "_config_file_state", "loaded")
         return (True, "")
 
     def update_config(self, updates: dict) -> tuple[bool, str]:
@@ -15564,6 +16377,12 @@ class AdminWebUI:
     CONFIG_CHALLENGE_TTL_SEC = 90
     LIVE_WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
     LIVE_TOPICS = ("status", "connections", "peers", "meta")
+    ONBOARDING_TOKEN_PREFIX = "ob1."
+
+    @staticmethod
+    def _transport_attr_prefix(transport: str) -> str:
+        t = str(transport or "").strip().lower()
+        return "udp" if t in {"udp", "myudp"} else t
 
     @staticmethod
     def register_cli(p):
@@ -15599,6 +16418,30 @@ class AdminWebUI:
             "--admin-web-name",
             default="",
             help="Optional instance name shown in the admin web title and headline",
+        )
+        g.add_argument(
+            "--admin-web-landing-page-disable",
+            action="store_true",
+            default=False,
+            help="Disable the Admin Web landing/quick-start panel for advanced users.",
+        )
+        g.add_argument(
+            "--admin-web-security-advisor-disable",
+            action="store_true",
+            default=False,
+            help="Disable the Admin Web startup security advisor panel for advanced users.",
+        )
+        g.add_argument(
+            "--admin-web-security-advisor-startup-disable",
+            action="store_true",
+            default=False,
+            help="Do not auto-open the security advisor on first page load.",
+        )
+        g.add_argument(
+            "--admin-web-first-tab",
+            choices=["home", "status", "secure-link", "configuration", "logs", "misc"],
+            default="home",
+            help="Initial Admin Web tab. Use status for an advanced/operator-focused default.",
         )
         g.add_argument(
             "--admin-web-token",
@@ -15777,6 +16620,22 @@ class AdminWebUI:
                 await self._handle_connections(writer)
                 return
 
+            if path == "/api/onboarding/connection-profiles":
+                await self._handle_onboarding_connection_profiles(writer, method)
+                return
+
+            if path == "/api/onboarding/invite/generate":
+                await self._handle_onboarding_invite_generate(writer, method, body)
+                return
+
+            if path == "/api/onboarding/invite/preview":
+                await self._handle_onboarding_invite_preview(writer, method, body)
+                return
+
+            if path == "/api/onboarding/blueprints":
+                await self._handle_onboarding_blueprints(writer, method)
+                return
+
             if path == "/api/config":
                 await self._handle_config(writer, method, body)
                 return
@@ -15811,6 +16670,375 @@ class AdminWebUI:
         self._log_api_response("/api/connections", 200, payload)
         await self._send_json(writer, 200, payload)
 
+    @staticmethod
+    def _sanitize_onboarding_services(value: Any) -> list[dict]:
+        if not isinstance(value, list):
+            return []
+        out: list[dict] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            listen = item.get("listen")
+            target = item.get("target")
+            if not isinstance(listen, dict) or not isinstance(target, dict):
+                continue
+            l_proto = str(listen.get("protocol", "") or "").strip().lower()
+            t_proto = str(target.get("protocol", "") or "").strip().lower()
+            if l_proto not in {"udp", "tcp", "tun"} or t_proto not in {"udp", "tcp", "tun"}:
+                continue
+            spec: dict = {"listen": {"protocol": l_proto}, "target": {"protocol": t_proto}}
+            name = str(item.get("name", "") or "").strip()
+            if name:
+                spec["name"] = name
+            if l_proto == "tun":
+                ifname = str(listen.get("ifname", "") or "").strip()
+                if ifname:
+                    spec["listen"]["ifname"] = ifname
+                mtu = listen.get("mtu")
+                if mtu is not None:
+                    with contextlib.suppress(Exception):
+                        mtu_i = int(mtu)
+                        if 1 <= mtu_i <= 65535:
+                            spec["listen"]["mtu"] = mtu_i
+            else:
+                bind = str(listen.get("bind", "") or "").strip()
+                with contextlib.suppress(Exception):
+                    port_i = int(listen.get("port"))
+                    if bind and 1 <= port_i <= 65535:
+                        spec["listen"]["bind"] = bind
+                        spec["listen"]["port"] = port_i
+            if t_proto == "tun":
+                ifname = str(target.get("ifname", "") or "").strip()
+                if ifname:
+                    spec["target"]["ifname"] = ifname
+                mtu = target.get("mtu")
+                if mtu is not None:
+                    with contextlib.suppress(Exception):
+                        mtu_i = int(mtu)
+                        if 1 <= mtu_i <= 65535:
+                            spec["target"]["mtu"] = mtu_i
+            else:
+                host = str(target.get("host", "") or "").strip()
+                with contextlib.suppress(Exception):
+                    port_i = int(target.get("port"))
+                    if host and 1 <= port_i <= 65535:
+                        spec["target"]["host"] = host
+                        spec["target"]["port"] = port_i
+            hooks = item.get("lifecycle_hooks")
+            if isinstance(hooks, dict):
+                spec["lifecycle_hooks"] = hooks
+            opts = item.get("options")
+            if isinstance(opts, dict):
+                spec["options"] = opts
+            out.append(spec)
+        return out
+
+    @staticmethod
+    def _decode_host_port(value: Any) -> Tuple[str, Optional[int]]:
+        if isinstance(value, dict):
+            host = str(value.get("host", "") or "").strip()
+            with contextlib.suppress(Exception):
+                port_i = int(value.get("port"))
+                if host and 1 <= port_i <= 65535:
+                    return host, port_i
+            return host, None
+        if isinstance(value, (list, tuple)) and len(value) >= 2:
+            host = str(value[0] or "").strip()
+            with contextlib.suppress(Exception):
+                port_i = int(value[1])
+                if host and 1 <= port_i <= 65535:
+                    return host, port_i
+            return host, None
+        text = str(value or "").strip()
+        if not text:
+            return "", None
+        if text.startswith("[") and "]:" in text:
+            host, _, port_text = text[1:].partition("]:")
+            with contextlib.suppress(Exception):
+                port_i = int(port_text)
+                if 1 <= port_i <= 65535:
+                    return host, port_i
+            return host, None
+        if ":" in text:
+            host, _, port_text = text.rpartition(":")
+            with contextlib.suppress(Exception):
+                port_i = int(port_text)
+                if host and 1 <= port_i <= 65535:
+                    return host, port_i
+        return text, None
+
+    def _normalized_overlay_transports(self) -> list[str]:
+        raw = getattr(self.args, "overlay_transport", None)
+        values: list[str]
+        if isinstance(raw, str):
+            values = [item.strip().lower() for item in raw.split(",")]
+        elif isinstance(raw, (list, tuple, set)):
+            values = [str(item or "").strip().lower() for item in raw]
+        else:
+            values = []
+        out: list[str] = []
+        for item in values:
+            if item in {"udp", "myudp", "tcp", "quic", "ws"} and item not in out:
+                out.append(item)
+        if not out:
+            out = ["myudp"]
+        out = ["myudp" if item == "udp" else item for item in out]
+        return out
+
+    def _build_onboarding_connection_profiles(self) -> list[dict]:
+        profiles: list[dict] = []
+        secure_mode = str(getattr(self.args, "secure_link_mode", "off") or "off").strip().lower()
+        overlay_transports = self._normalized_overlay_transports()
+        for transport in overlay_transports:
+            attr_prefix = self._transport_attr_prefix(transport)
+            bind = str(getattr(self.args, f"{attr_prefix}_bind", "") or "").strip()
+            own_port = getattr(self.args, f"{attr_prefix}_own_port", None)
+            peer = str(getattr(self.args, f"{attr_prefix}_peer", "") or "").strip()
+            peer_port = getattr(self.args, f"{attr_prefix}_peer_port", None)
+            with contextlib.suppress(Exception):
+                own_port = int(own_port)
+            with contextlib.suppress(Exception):
+                peer_port = int(peer_port)
+            role = "client" if peer else "server"
+            endpoint_host = peer if role == "client" else bind
+            endpoint_port = peer_port if role == "client" else own_port
+            profile = {
+                "id": f"cfg:{transport}:{len(profiles)}",
+                "source": "config",
+                "transport": transport,
+                "role": role,
+                "endpoint_host": str(endpoint_host or ""),
+                "endpoint_port": endpoint_port if isinstance(endpoint_port, int) else None,
+                "listen_bind": bind,
+                "listen_port": own_port if isinstance(own_port, int) else None,
+                "peer_host": peer,
+                "peer_port": peer_port if isinstance(peer_port, int) else None,
+                "secure_link_mode": secure_mode,
+                "label": (
+                    f"{transport.upper()} peer {peer}:{peer_port}"
+                    if role == "client"
+                    else f"{transport.upper()} listen {bind}:{own_port}"
+                ),
+            }
+            if transport == "ws":
+                profile["ws_path"] = str(getattr(self.args, "ws_path", "/") or "/")
+                profile["ws_tls"] = bool(getattr(self.args, "ws_tls", False))
+            profiles.append(profile)
+        try:
+            peers_payload = self.runner.get_peer_connections_snapshot() or {}
+            for row in list(peers_payload.get("peers") or []):
+                transport = str(row.get("transport", "") or "").strip().lower()
+                if transport not in {"udp", "tcp", "quic", "ws", "myudp"}:
+                    continue
+                role = "server" if str(row.get("state", "")).strip().lower() == "listening" else "client"
+                endpoint_raw = row.get("listen") if role == "server" else row.get("peer")
+                host, port = self._decode_host_port(endpoint_raw)
+                profiles.append(
+                    {
+                        "id": f"live:{transport}:{row.get('id')}",
+                        "source": "live",
+                        "transport": "myudp" if transport == "udp" else transport,
+                        "role": role,
+                        "endpoint_host": host,
+                        "endpoint_port": port,
+                        "listen_bind": "",
+                        "listen_port": None,
+                        "peer_host": "",
+                        "peer_port": None,
+                        "secure_link_mode": secure_mode,
+                        "label": f"{transport.upper()} {role} {host}:{port}" if host and port else f"{transport.upper()} {role}",
+                    }
+                )
+        except Exception:
+            self.log.exception("failed to derive live onboarding connection profiles")
+        return profiles
+
+    def _build_onboarding_blueprints(self) -> list[dict]:
+        grouped: Dict[str, list[dict]] = {}
+        snapshot = self.runner.get_connections_snapshot() or {}
+        for proto in ("udp", "tcp"):
+            for row in list(snapshot.get(proto) or []):
+                state = str(row.get("state", "") or "").strip().lower()
+                if state == "listening":
+                    continue
+                peer_id = str(row.get("peer_id", "") or "").strip()
+                if not peer_id:
+                    continue
+                local_port = row.get("local_port")
+                with contextlib.suppress(Exception):
+                    local_port = int(local_port)
+                if not isinstance(local_port, int) or not (1 <= local_port <= 65535):
+                    continue
+                host, port = self._decode_host_port(row.get("remote_destination"))
+                if not host or not isinstance(port, int):
+                    continue
+                spec = {
+                    "name": f"bp-{peer_id}-{proto}-{local_port}",
+                    "listen": {"protocol": proto, "bind": "0.0.0.0", "port": local_port},
+                    "target": {"protocol": proto, "host": host, "port": port},
+                }
+                grouped.setdefault(peer_id, [])
+                token = json.dumps(spec, sort_keys=True, ensure_ascii=False)
+                if token not in {json.dumps(item, sort_keys=True, ensure_ascii=False) for item in grouped[peer_id]}:
+                    grouped[peer_id].append(spec)
+        out = [{"peer_id": peer_id, "own_servers": specs} for peer_id, specs in sorted(grouped.items()) if specs]
+        return out
+
+    @classmethod
+    def _encode_onboarding_token(cls, payload: dict) -> str:
+        raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        body = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+        return cls.ONBOARDING_TOKEN_PREFIX + body
+
+    @classmethod
+    def _decode_onboarding_token(cls, token: str) -> dict:
+        text = str(token or "").strip()
+        if text.startswith(cls.ONBOARDING_TOKEN_PREFIX):
+            text = text[len(cls.ONBOARDING_TOKEN_PREFIX):]
+        if not text:
+            raise ValueError("invite token is empty")
+        padding = "=" * ((4 - (len(text) % 4)) % 4)
+        try:
+            raw = base64.urlsafe_b64decode((text + padding).encode("ascii"))
+        except Exception as exc:
+            raise ValueError(f"invite token is not valid base64url: {exc}") from exc
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except Exception as exc:
+            raise ValueError(f"invite token has invalid JSON payload: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("invite token payload must be a JSON object")
+        return payload
+
+    @staticmethod
+    def _onboarding_updates_from_invite(payload: dict) -> dict:
+        updates: dict = {}
+        conn = payload.get("connection")
+        if not isinstance(conn, dict):
+            return updates
+        transport = str(conn.get("transport", "") or "").strip().lower()
+        if transport == "udp":
+            transport = "myudp"
+        host = str(conn.get("endpoint_host", "") or "").strip()
+        port = conn.get("endpoint_port")
+        if transport in {"myudp", "tcp", "quic", "ws"} and host:
+            updates["overlay_transport"] = transport
+            attr_prefix = AdminWebUI._transport_attr_prefix(transport)
+            updates[f"{attr_prefix}_peer"] = host
+            with contextlib.suppress(Exception):
+                port_i = int(port)
+                if 1 <= port_i <= 65535:
+                    updates[f"{attr_prefix}_peer_port"] = port_i
+        secure_mode = str(payload.get("secure_link_mode", "") or "").strip().lower()
+        if secure_mode in {"off", "none", "psk", "cert"}:
+            updates["secure_link_mode"] = "off" if secure_mode in {"off", "none"} else secure_mode
+            updates["secure_link"] = secure_mode not in {"off", "none"}
+        psk_value = payload.get("secure_link_psk")
+        if isinstance(psk_value, str) and psk_value.strip():
+            with contextlib.suppress(Exception):
+                updates["secure_link_psk"] = str(_decrypt_config_secret(psk_value) or "")
+        own = AdminWebUI._sanitize_onboarding_services(payload.get("own_servers"))
+        remote = AdminWebUI._sanitize_onboarding_services(payload.get("remote_servers"))
+        if own:
+            updates["own_servers"] = own
+        if remote:
+            updates["remote_servers"] = remote
+        return updates
+
+    async def _handle_onboarding_connection_profiles(self, writer, method: str):
+        if method != "GET":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+        profiles = self._build_onboarding_connection_profiles()
+        payload = {"ok": True, "count": len(profiles), "profiles": profiles}
+        self._log_api_response("/api/onboarding/connection-profiles", 200, payload, summary=f"count={len(profiles)}")
+        await self._send_json(writer, 200, payload)
+
+    async def _handle_onboarding_invite_generate(self, writer, method: str, body: bytes):
+        if method != "POST":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+        try:
+            req = json.loads((body or b"{}").decode("utf-8"))
+        except Exception:
+            await self._send_json(writer, 400, {"ok": False, "error": "invalid JSON body"})
+            return
+        profiles = self._build_onboarding_connection_profiles()
+        connection_id = str(req.get("connection_id", "") or "").strip()
+        selected = None
+        if len(profiles) > 1 and not connection_id:
+            await self._send_json(
+                writer,
+                409,
+                {"ok": False, "error": "multiple connection profiles available; select connection_id", "profiles": profiles},
+            )
+            return
+        if connection_id:
+            for item in profiles:
+                if str(item.get("id", "") or "") == connection_id:
+                    selected = item
+                    break
+            if selected is None:
+                await self._send_json(writer, 400, {"ok": False, "error": f"unknown connection_id: {connection_id}"})
+                return
+        elif profiles:
+            selected = profiles[0]
+        secure_mode = str(getattr(self.args, "secure_link_mode", "off") or "off").strip().lower()
+        own_services = self._sanitize_onboarding_services(req.get("own_servers", getattr(self.args, "own_servers", [])))
+        remote_services = self._sanitize_onboarding_services(req.get("remote_servers", getattr(self.args, "remote_servers", [])))
+        payload_doc = {
+            "version": 1,
+            "generated_unix_ts": int(time.time()),
+            "generated_by": str(getattr(self.args, "admin_web_name", "") or ""),
+            "connection": selected or {},
+            "secure_link_mode": secure_mode if secure_mode in {"off", "none", "psk", "cert"} else "off",
+            "secure_link_psk": _encrypt_config_secret(str(getattr(self.args, "secure_link_psk", "") or "")),
+            "secure_link_required": bool(getattr(self.args, "secure_link_require", False)),
+            "admin_auth_recommended": True,
+            "own_servers": own_services,
+            "remote_servers": remote_services,
+        }
+        token = self._encode_onboarding_token(payload_doc)
+        payload = {"ok": True, "invite_token": token, "preview": payload_doc}
+        self._log_api_response("/api/onboarding/invite/generate", 200, {"ok": True}, summary=f"connection_id={connection_id or '-'}")
+        await self._send_json(writer, 200, payload)
+
+    async def _handle_onboarding_invite_preview(self, writer, method: str, body: bytes):
+        if method != "POST":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+        try:
+            req = json.loads((body or b"{}").decode("utf-8"))
+        except Exception:
+            await self._send_json(writer, 400, {"ok": False, "error": "invalid JSON body"})
+            return
+        token = str(req.get("invite_token", "") or "").strip()
+        if not token:
+            await self._send_json(writer, 400, {"ok": False, "error": "invite_token is required"})
+            return
+        try:
+            payload_doc = self._decode_onboarding_token(token)
+        except Exception as exc:
+            await self._send_json(writer, 400, {"ok": False, "error": str(exc)})
+            return
+        updates = self._onboarding_updates_from_invite(payload_doc)
+        preview_doc = dict(payload_doc)
+        if isinstance(preview_doc.get("secure_link_psk"), str) and preview_doc.get("secure_link_psk"):
+            preview_doc["secure_link_psk"] = "***hidden***"
+            preview_doc["secure_link_psk_present"] = True
+        payload = {"ok": True, "preview": preview_doc, "suggested_updates": updates}
+        self._log_api_response("/api/onboarding/invite/preview", 200, {"ok": True}, summary=f"updates={len(updates)}")
+        await self._send_json(writer, 200, payload)
+
+    async def _handle_onboarding_blueprints(self, writer, method: str):
+        if method != "GET":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+        blueprints = self._build_onboarding_blueprints()
+        payload = {"ok": True, "count": len(blueprints), "blueprints": blueprints}
+        self._log_api_response("/api/onboarding/blueprints", 200, payload, summary=f"count={len(blueprints)}")
+        await self._send_json(writer, 200, payload)
+
     def _build_meta_payload(self) -> dict:
         return {
             "app": "udp-bidirectional-mux",
@@ -15820,6 +17048,7 @@ class AdminWebUI:
             "overlay_transport": getattr(self.runner.args, "overlay_transport", None),
             "dashboard_enabled": getattr(self.runner.args, "dashboard", None),
             "milestone": "C",
+            "build": _detect_build_info(),
         }
 
     async def _handle_meta(self, writer):
@@ -15848,6 +17077,7 @@ class AdminWebUI:
             await self._send_json(writer, 400, {"ok": False, "error": "invalid JSON body"})
             return
         updates = req.get("updates", {})
+        restart_after_save = bool(req.get("restart_after_save", False))
         if self.auth_required():
             challenge_id = str(req.get("challenge_id", "") or "").strip()
             proof = str(req.get("proof", "") or "").strip().lower()
@@ -15881,9 +17111,23 @@ class AdminWebUI:
             return
         if any(key in AdminWebUI._secret_config_keys() or key in {"admin_web_auth_disable", "admin_web_username"} for key in updates.keys()):
             self.reset_auth_state()
-        payload = {"ok": True, "config": self.runner.get_config_snapshot()}
-        self._log_api_response("/api/config", 200, payload, summary=f"updated keys={list(updates.keys())}")
+        delay_restart = bool(self.runner._restart_requires_delay()) if restart_after_save else False
+        payload = {
+            "ok": True,
+            "config": self.runner.get_config_snapshot(),
+            "restart_requested": bool(restart_after_save),
+            "restart_mode": "delayed" if delay_restart else ("immediate" if restart_after_save else ""),
+            "restart_delay_sec": 40 if delay_restart else 0,
+        }
+        self._log_api_response(
+            "/api/config",
+            200,
+            payload,
+            summary=f"updated keys={list(updates.keys())} restart_after_save={restart_after_save}",
+        )
         await self._send_json(writer, 200, payload)
+        if restart_after_save:
+            self.runner.request_restart()
 
     async def _handle_logs(self, writer, raw_path: str):
         limit = 400
@@ -15972,7 +17216,13 @@ class AdminWebUI:
                 await self._send(writer, 403, b"Forbidden", "text/plain; charset=utf-8")
                 return
 
-        payload = {"ok": True, "restarting": True}
+        delay_restart = bool(self.runner._restart_requires_delay())
+        payload = {
+            "ok": True,
+            "restarting": True,
+            "restart_mode": "delayed" if delay_restart else "immediate",
+            "restart_delay_sec": 40 if delay_restart else 0,
+        }
         self._log_api_response("/api/restart", 200, payload)
         await self._send_json(writer, 200, payload)
         self.runner.request_restart()
@@ -16090,6 +17340,110 @@ class AdminWebUI:
         ])
         suffix = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:12]
         return f"admin_web_session_{suffix}"
+
+    @staticmethod
+    def _is_loopback_host(value: str) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return False
+        lowered = text.lower().strip("[]")
+        if lowered in {"localhost", "ip6-localhost"}:
+            return True
+        try:
+            return bool(ipaddress.ip_address(lowered).is_loopback)
+        except Exception:
+            return False
+
+    def _build_security_advisor_payload(self) -> dict:
+        enabled = not bool(getattr(self.args, "admin_web_security_advisor_disable", False))
+        bind = str(getattr(self.args, "admin_web_bind", "") or "").strip()
+        admin_local_only = self._is_loopback_host(bind)
+        secure_mode = str(getattr(self.args, "secure_link_mode", "off") or "off").strip().lower()
+        secure_psk = str(getattr(self.args, "secure_link_psk", "") or "")
+        auth_disabled = bool(getattr(self.args, "admin_web_auth_disable", False))
+        findings: List[dict] = []
+        if enabled:
+            if bool(getattr(self.args, "admin_web", False)):
+                if auth_disabled:
+                    admin_message = (
+                        "Admin Web password protection is recommended even on localhost-only setups. Enable admin authentication in the configuration unless you intentionally want friction-free local access."
+                        if admin_local_only
+                        else "Admin Web is reachable beyond localhost and admin authentication is disabled in the configuration. This should be treated as a warning. Enable admin authentication or bind Admin Web to localhost."
+                    )
+                    findings.append({
+                        "id": "admin_auth_disabled",
+                        "severity": "warning" if not admin_local_only else "recommended",
+                        "title": "Protect Admin Web",
+                        "message": admin_message,
+                        "action_label": "Open Configuration",
+                        "action_target": "configuration",
+                    })
+            if secure_mode in {"", "off", "none"}:
+                findings.append({
+                    "id": "secure_link_disabled",
+                    "severity": "warning" if not admin_local_only else "recommended",
+                    "title": "Enable SecureLink",
+                    "message": (
+                        "SecureLink is currently disabled. That can be acceptable for localhost-only or lab-style setups, but enabling SecureLink is still recommended."
+                        if admin_local_only
+                        else "This node is not localhost-only and SecureLink is currently disabled. Running without SecureLink should be treated as a warning. Start with PSK for quick protection or move to certificates for deployment-grade trust."
+                    ),
+                    "action_label": "Open Secure-Link",
+                    "action_target": "secure-link",
+                })
+            elif secure_mode == "psk":
+                if len(secure_psk.strip()) < 12:
+                    findings.append({
+                        "id": "secure_link_psk_weak",
+                        "severity": "recommended",
+                        "title": "Strengthen PSK",
+                        "message": "SecureLink PSK is enabled, but the configured secret looks short. Use a stronger shared secret for better protection.",
+                        "action_label": "Open Configuration",
+                        "action_target": "configuration",
+                    })
+                findings.append({
+                    "id": "secure_link_cert_followup",
+                    "severity": "informational",
+                    "title": "Plan Certificate Trust",
+                    "message": "PSK is a good quick-start protection mode. For longer-lived deployments, certificate-based SecureLink provides a stronger operational trust model.",
+                    "action_label": "Open Secure-Link",
+                    "action_target": "secure-link",
+                })
+        highest = "informational"
+        for level in ("critical", "warning", "recommended", "informational"):
+            if any(str(item.get("severity", "")).lower() == level for item in findings):
+                highest = level
+                break
+        summary = "Security advisor disabled."
+        if enabled:
+            if not findings:
+                summary = "Current settings look reasonably hardened for this first implementation slice."
+            else:
+                if highest == "critical":
+                    summary = "Security advisor found settings that should be addressed before wider exposure."
+                elif highest == "warning":
+                    summary = "Security advisor found warning-level hardening issues for this node."
+                elif highest == "recommended":
+                    summary = "Security advisor found recommended hardening steps for this node."
+                else:
+                    summary = "Security advisor found optional follow-up improvements."
+        return {
+            "enabled": enabled,
+            "summary": summary,
+            "highest_severity": highest,
+            "findings": findings,
+        }
+
+    def _build_admin_ui_payload(self) -> dict:
+        return {
+            "home_tab_enabled": True,
+            "landing_page_enabled": False,
+            "security_advisor_enabled": not bool(getattr(self.args, "admin_web_security_advisor_disable", False)),
+            "security_advisor_startup_enabled": not bool(getattr(self.args, "admin_web_security_advisor_startup_disable", False)),
+            "first_tab": str(getattr(self.args, "admin_web_first_tab", "home") or "home"),
+            "first_start_detected": bool(getattr(self.args, "_first_start_detected", False)),
+            "config_file_state": str(getattr(self.args, "_config_file_state", "unknown") or "unknown"),
+        }
 
     def _is_authenticated(self, headers: dict) -> bool:
         if not self.auth_required():
@@ -16297,6 +17651,9 @@ class AdminWebUI:
         payload["uptime_sec"] = int(time.monotonic() - self.started_monotonic)
         payload["app"] = "udp-bidirectional-mux"
         payload["milestone"] = "B"
+        payload["admin_ui"] = self._build_admin_ui_payload()
+        payload["security_advisor"] = self._build_security_advisor_payload()
+        payload["build"] = _detect_build_info()
         return payload
 
     async def _handle_status(self, writer):
@@ -16542,6 +17899,8 @@ class ConfigAwareCLI:
         self._bootstrap: Optional[argparse.ArgumentParser] = None
         self._parser: Optional[argparse.ArgumentParser] = None
         self._raw_config: Optional[Dict[str, Any]] = None
+        self._config_file_state: str = "unknown"  # unknown|missing|empty|loaded|invalid
+        self._first_start_detected: bool = False
 
         # Snapshots captured right AFTER registrars add their options,
         # and BEFORE we apply any JSON config.
@@ -16566,6 +17925,8 @@ class ConfigAwareCLI:
         # Phase 2: apply JSON config as defaults (if provided)
         if boot_args.config:
             config_path = pathlib.Path(boot_args.config)
+            self._config_file_state = "unknown"
+            self._first_start_detected = False
             if explicit_config_flag or config_path.exists():
                 try:
                     cfg = self._load_json_config(boot_args.config)
@@ -16576,9 +17937,21 @@ class ConfigAwareCLI:
                         f"Config file not found, continuing with defaults: {config_path}\n"
                     )
                     sys.stderr.flush()
+                    self._config_file_state = "missing"
+                except ValueError:
+                    self._config_file_state = "invalid"
+                    raise
                 else:
                     self._raw_config = cfg
                     self._apply_config_defaults_from_json(parser, cfg)
+                    self._config_file_state = "empty" if not cfg else "loaded"
+            else:
+                # Default startup path where config was not explicitly passed and does not exist.
+                self._config_file_state = "missing"
+
+            default_cfg_name = "ObstacleBridge.cfg"
+            cfg_name = pathlib.Path(str(boot_args.config)).name
+            self._first_start_detected = cfg_name == default_cfg_name and self._config_file_state in {"missing", "empty"}
 
         # Phase 3: final parse; CLI overrides config/defaults
         args = parser.parse_args(remaining)
@@ -16589,6 +17962,8 @@ class ConfigAwareCLI:
         args.save_config = boot_args.save_config       # file path or None
         args.save_format = boot_args.save_format       # "json" | "json-flat"
         args.force = boot_args.force                   # bool
+        args._config_file_state = self._config_file_state
+        args._first_start_detected = self._first_start_detected
 
         # If dumping or saving was requested, perform it and exit right here.
         self._maybe_dump_or_save_and_exit(args)
@@ -16906,8 +18281,13 @@ class ConfigAwareCLI:
         p = pathlib.Path(path)
         if not p.exists():
             raise FileNotFoundError(f"Config file not found: {p}")
-        with p.open("r", encoding="utf-8") as f:
-            data = json.load(f)
+        raw = p.read_text(encoding="utf-8")
+        if not raw.strip():
+            return {}
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON config in {p}: {e}") from e
         expanded = self._expand_env(data)
         return _transform_config_secrets(expanded, _decrypt_config_secret)
 

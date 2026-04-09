@@ -33,6 +33,194 @@ class _FakeSession:
 
 
 class ChannelMuxListenerModeTests(unittest.TestCase):
+    def test_select_hook_argv_uses_list_directly(self):
+        selected = ChannelMux._select_hook_argv({"argv": ["cmd", "arg1"]}, platform_key="linux")
+        self.assertEqual(selected, ["cmd", "arg1"])
+
+    def test_select_hook_argv_uses_platform_specific_mapping(self):
+        cmd = {
+            "argv": {
+                "linux": ["ip", "route", "add", "{target_host}/32", "dev", "{ifname}"],
+                "windows": ["route", "ADD", "{target_host}", "MASK", "255.255.255.255", "{ifname}"],
+                "default": ["echo", "fallback"],
+            }
+        }
+        self.assertEqual(
+            ChannelMux._select_hook_argv(cmd, platform_key="linux"),
+            ["ip", "route", "add", "{target_host}/32", "dev", "{ifname}"],
+        )
+        self.assertEqual(
+            ChannelMux._select_hook_argv(cmd, platform_key="windows"),
+            ["route", "ADD", "{target_host}", "MASK", "255.255.255.255", "{ifname}"],
+        )
+        self.assertEqual(
+            ChannelMux._select_hook_argv(cmd, platform_key="freebsd"),
+            ["echo", "fallback"],
+        )
+
+    def test_select_hook_argv_rejects_invalid_shape(self):
+        with self.assertRaisesRegex(ValueError, "argv list"):
+            ChannelMux._select_hook_argv({"argv": "bad"}, platform_key="linux")
+
+    def test_render_hook_value_replaces_known_placeholders(self):
+        rendered = ChannelMux._render_hook_value(
+            "route add {target_host} dev {ifname} svc={service_id}",
+            {"target_host": "198.18.30.2", "ifname": "obtun0", "service_id": 3},
+        )
+        self.assertEqual(rendered, "route add 198.18.30.2 dev obtun0 svc=3")
+
+    def test_open_payload_roundtrip_preserves_hook_metadata(self):
+        mux = ChannelMux(_FakeSession(), asyncio.new_event_loop())
+        try:
+            spec = ChannelMux.ServiceSpec(
+                svc_id=7,
+                l_proto='tcp',
+                l_bind='0.0.0.0',
+                l_port=18080,
+                r_proto='tcp',
+                r_host='127.0.0.1',
+                r_port=8080,
+                name='web-service',
+                lifecycle_hooks={'client': {'on_connected': {'argv': ['echo', 'ok']}}},
+                options={'note': 'metadata'},
+            )
+            payload = mux._build_open_v4(spec)
+            parsed = mux._parse_open_with_meta(payload)
+            self.assertIsNotNone(parsed)
+            assert parsed is not None
+            self.assertEqual(parsed[2], 7)
+            self.assertEqual(parsed[9], 'web-service')
+            self.assertEqual(parsed[10], {'client': {'on_connected': {'argv': ['echo', 'ok']}}})
+            self.assertEqual(parsed[11], {'note': 'metadata'})
+        finally:
+            mux.loop.close()
+
+    def test_remote_services_roundtrip_preserves_hook_metadata(self):
+        mux = ChannelMux(_FakeSession(), asyncio.new_event_loop())
+        try:
+            spec = ChannelMux.ServiceSpec(
+                svc_id=3,
+                l_proto='udp',
+                l_bind='0.0.0.0',
+                l_port=16667,
+                r_proto='udp',
+                r_host='127.0.0.1',
+                r_port=16666,
+                name='udp-publish',
+                lifecycle_hooks={'listener': {'on_created': {'argv': ['echo', 'created']}}},
+                options={'tag': 'alpha'},
+            )
+            payload = mux._encode_remote_services_set_v2([spec])
+            decoded = mux._decode_remote_services_set_v2(payload)
+            self.assertIsNotNone(decoded)
+            assert decoded is not None
+            _iid, _seq, services = decoded
+            self.assertEqual(len(services), 1)
+            self.assertEqual(services[0].name, 'udp-publish')
+            self.assertEqual(services[0].lifecycle_hooks, {'listener': {'on_created': {'argv': ['echo', 'created']}}})
+            self.assertEqual(services[0].options, {'tag': 'alpha'})
+        finally:
+            mux.loop.close()
+
+    def test_chunked_remote_services_transfer_reassembles_metadata(self):
+        session = _FakeSession(connected=True, max_app_payload_size=96)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            spec = ChannelMux.ServiceSpec(
+                svc_id=5,
+                l_proto='udp',
+                l_bind='0.0.0.0',
+                l_port=26667,
+                r_proto='udp',
+                r_host='127.0.0.1',
+                r_port=26666,
+                name='chunked-remote',
+                lifecycle_hooks={'listener': {'on_channel_connected': {'argv': ['echo', 'x' * 220]}}},
+                options={'meta': 'y' * 220},
+            )
+            mux._remote_services_requested = [spec]
+            mux._send_remote_services_catalog_if_any()
+            self.assertGreater(len(session.sent), 1)
+            chunk_frames = []
+            for wire in session.sent:
+                parsed = mux._unpack_mux(wire)
+                self.assertIsNotNone(parsed)
+                assert parsed is not None
+                _chan, proto, _ctr, mtype, payload_mv = parsed
+                self.assertEqual(proto, ChannelMux.Proto.UDP)
+                if mtype == ChannelMux.MType.REMOTE_SERVICES_SET_V2_CHUNK:
+                    chunk_frames.append(bytes(payload_mv))
+            self.assertGreaterEqual(len(chunk_frames), 2)
+
+            assembled = None
+            for chunk in chunk_frames:
+                assembled = mux._consume_control_chunk(
+                    chan_id=0,
+                    proto=ChannelMux.Proto.UDP,
+                    mtype=ChannelMux.MType.REMOTE_SERVICES_SET_V2_CHUNK,
+                    payload=chunk,
+                    peer_id=99,
+                ) or assembled
+            self.assertIsNotNone(assembled)
+            decoded = mux._decode_remote_services_set_v2(assembled or b"")
+            self.assertIsNotNone(decoded)
+            assert decoded is not None
+            _iid, _seq, services = decoded
+            self.assertEqual(services[0].name, 'chunked-remote')
+            self.assertIsInstance(services[0].lifecycle_hooks, dict)
+            self.assertIsInstance(services[0].options, dict)
+        finally:
+            mux.loop.close()
+
+    def test_chunked_open_transfer_reassembles_metadata(self):
+        session = _FakeSession(connected=True, max_app_payload_size=96)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            spec = ChannelMux.ServiceSpec(
+                svc_id=11,
+                l_proto='tcp',
+                l_bind='0.0.0.0',
+                l_port=31000,
+                r_proto='tcp',
+                r_host='127.0.0.1',
+                r_port=32000,
+                name='chunked-open',
+                lifecycle_hooks={'client': {'before_connect': {'argv': ['echo', 'z' * 220]}}},
+                options={'description': 'q' * 220},
+            )
+            mux._send_open_for_service(17, ChannelMux.Proto.TCP, spec)
+            self.assertGreater(len(session.sent), 1)
+            chunk_frames = []
+            for wire in session.sent:
+                parsed = mux._unpack_mux(wire)
+                self.assertIsNotNone(parsed)
+                assert parsed is not None
+                chan, proto, _ctr, mtype, payload_mv = parsed
+                self.assertEqual(chan, 17)
+                self.assertEqual(proto, ChannelMux.Proto.TCP)
+                if mtype == ChannelMux.MType.OPEN_CHUNK:
+                    chunk_frames.append(bytes(payload_mv))
+            self.assertGreaterEqual(len(chunk_frames), 2)
+
+            assembled = None
+            for chunk in chunk_frames:
+                assembled = mux._consume_control_chunk(
+                    chan_id=17,
+                    proto=ChannelMux.Proto.TCP,
+                    mtype=ChannelMux.MType.OPEN_CHUNK,
+                    payload=chunk,
+                    peer_id=7,
+                ) or assembled
+            self.assertIsNotNone(assembled)
+            parsed_open = mux._parse_open_with_meta(assembled or b"")
+            self.assertIsNotNone(parsed_open)
+            assert parsed_open is not None
+            self.assertEqual(parsed_open[9], 'chunked-open')
+            self.assertIsInstance(parsed_open[10], dict)
+            self.assertIsInstance(parsed_open[11], dict)
+        finally:
+            mux.loop.close()
+
     def test_listener_mode_ignores_own_servers_and_remote_servers(self):
         args = argparse.Namespace(
             peer=None,
@@ -41,8 +229,14 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
             ws_peer=None,
             quic_peer=None,
             overlay_transport='myudp',
-            own_servers=['udp,16667,0.0.0.0,udp,127.0.0.1,16666'],
-            remote_servers=['tcp,3129,0.0.0.0,tcp,127.0.0.1,3128'],
+            own_servers=[{
+                'listen': {'protocol': 'udp', 'bind': '0.0.0.0', 'port': 16667},
+                'target': {'protocol': 'udp', 'host': '127.0.0.1', 'port': 16666},
+            }],
+            remote_servers=[{
+                'listen': {'protocol': 'tcp', 'bind': '0.0.0.0', 'port': 3129},
+                'target': {'protocol': 'tcp', 'host': '127.0.0.1', 'port': 3128},
+            }],
             mux_tcp_bp_threshold=1,
             mux_tcp_bp_latency_ms=300,
             mux_tcp_bp_poll_interval_ms=50,
@@ -60,7 +254,10 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
             peer='127.0.0.1',
             udp_peer='127.0.0.1',
             overlay_transport='myudp',
-            own_servers=['udp,16667,0.0.0.0,udp,127.0.0.1,16666'],
+            own_servers=[{
+                'listen': {'protocol': 'udp', 'bind': '0.0.0.0', 'port': 16667},
+                'target': {'protocol': 'udp', 'host': '127.0.0.1', 'port': 16666},
+            }],
             remote_servers=None,
             mux_tcp_bp_threshold=1,
             mux_tcp_bp_latency_ms=300,
@@ -79,11 +276,11 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         finally:
             mux.loop.close()
 
-    def test_parse_remote_servers_accepts_valid_specs(self):
+    def test_parse_remote_servers_accepts_json_string_specs(self):
         specs = [
-            'udp,16667,0.0.0.0,udp,127.0.0.1,16666',
-            'tcp,3129,::,tcp,::1,3128',
-            'tun,1500,obtun0,tun,obtun1,1500',
+            '{"listen":{"protocol":"udp","bind":"0.0.0.0","port":16667},"target":{"protocol":"udp","host":"127.0.0.1","port":16666}}',
+            '{"listen":{"protocol":"tcp","bind":"::","port":3129},"target":{"protocol":"tcp","host":"::1","port":3128}}',
+            '{"listen":{"protocol":"tun","ifname":"obtun0","mtu":1500},"target":{"protocol":"tun","ifname":"obtun1","mtu":1500}}',
         ]
 
         parsed = ChannelMux._parse_remote_servers(specs)
@@ -99,15 +296,77 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         self.assertEqual(parsed[2].l_bind, 'obtun0')
         self.assertEqual(parsed[2].r_host, 'obtun1')
 
+    def test_parse_remote_servers_accepts_structured_specs(self):
+        specs = [
+            {
+                'name': 'public-http',
+                'listen': {'protocol': 'tcp', 'bind': '0.0.0.0', 'port': 80},
+                'target': {'protocol': 'tcp', 'host': '127.0.0.1', 'port': 8080},
+                'lifecycle_hooks': {
+                    'listener': {
+                        'on_created': {'argv': ['hook.cmd', 'created']},
+                    }
+                },
+                'options': {'note': 'reserved'},
+            },
+            {
+                'listen': {'protocol': 'tun', 'ifname': 'obtun0', 'mtu': 1400},
+                'target': {'protocol': 'tun', 'ifname': 'obtun1', 'mtu': 1400},
+            },
+        ]
+
+        parsed = ChannelMux._parse_remote_servers(specs)
+
+        self.assertEqual(len(parsed), 2)
+        self.assertEqual(parsed[0].name, 'public-http')
+        self.assertEqual(parsed[0].l_proto, 'tcp')
+        self.assertEqual(parsed[0].l_bind, '0.0.0.0')
+        self.assertEqual(parsed[0].l_port, 80)
+        self.assertEqual(parsed[0].r_host, '127.0.0.1')
+        self.assertEqual(parsed[0].r_port, 8080)
+        self.assertEqual(parsed[0].lifecycle_hooks['listener']['on_created']['argv'], ['hook.cmd', 'created'])
+        self.assertEqual(parsed[0].options['note'], 'reserved')
+        self.assertEqual(parsed[1].l_proto, 'tun')
+        self.assertEqual(parsed[1].l_bind, 'obtun0')
+        self.assertEqual(parsed[1].l_port, 1400)
+        self.assertEqual(parsed[1].r_host, 'obtun1')
+        self.assertEqual(parsed[1].r_port, 1400)
+
     def test_parse_remote_servers_rejects_invalid_specs(self):
-        with self.assertRaisesRegex(ValueError, '--remote-servers item must have 6 comma-separated fields'):
-            ChannelMux._parse_remote_servers(['udp,16667,0.0.0.0,udp,127.0.0.1'])
+        with self.assertRaisesRegex(ValueError, '--remote-servers listen protocol must be udp, tcp or tun'):
+            ChannelMux._parse_remote_servers([
+                '{"listen":{"protocol":"icmp","bind":"0.0.0.0","port":16667},"target":{"protocol":"udp","host":"127.0.0.1","port":16666}}'
+            ])
 
-        with self.assertRaisesRegex(ValueError, '--remote-servers local protocol must be udp, tcp or tun'):
-            ChannelMux._parse_remote_servers(['icmp,16667,0.0.0.0,udp,127.0.0.1,16666'])
+        with self.assertRaisesRegex(ValueError, '--remote-servers listen port must be an integer in 1..65535'):
+            ChannelMux._parse_remote_servers([
+                '{"listen":{"protocol":"udp","bind":"0.0.0.0","port":0},"target":{"protocol":"udp","host":"127.0.0.1","port":16666}}'
+            ])
 
-        with self.assertRaisesRegex(ValueError, '--remote-servers ports must be integers in 1..65535'):
-            ChannelMux._parse_remote_servers(['udp,0,0.0.0.0,udp,127.0.0.1,16666'])
+        with self.assertRaisesRegex(ValueError, '--remote-servers target port must be an integer in 1..65535'):
+            ChannelMux._parse_remote_servers([
+                '{"listen":{"protocol":"udp","bind":"0.0.0.0","port":16667},"target":{"protocol":"udp","host":"127.0.0.1","port":"bad"}}'
+            ])
+
+        with self.assertRaisesRegex(ValueError, 'JSON value must be a service object or array of service objects'):
+            ChannelMux._parse_remote_servers(['123'])
+
+    def test_parse_remote_servers_rejects_invalid_structured_specs(self):
+        with self.assertRaisesRegex(ValueError, 'requires object field listen'):
+            ChannelMux._parse_remote_servers([{'target': {'protocol': 'tcp', 'host': '127.0.0.1', 'port': 80}}])
+
+        with self.assertRaisesRegex(ValueError, 'structured tcp listen requires bind'):
+            ChannelMux._parse_remote_servers([{
+                'listen': {'protocol': 'tcp', 'port': 80},
+                'target': {'protocol': 'tcp', 'host': '127.0.0.1', 'port': 8080},
+            }])
+
+        with self.assertRaisesRegex(ValueError, 'lifecycle_hooks must be an object'):
+            ChannelMux._parse_remote_servers([{
+                'listen': {'protocol': 'udp', 'bind': '0.0.0.0', 'port': 16667},
+                'target': {'protocol': 'udp', 'host': '127.0.0.1', 'port': 16666},
+                'lifecycle_hooks': ['bad'],
+            }])
 
     def test_parse_service_specs_treats_empty_config_entries_as_no_services(self):
         self.assertEqual(ChannelMux._parse_own_servers([None]), [])

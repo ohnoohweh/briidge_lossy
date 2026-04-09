@@ -169,6 +169,10 @@ class _WriterStub:
         return None
 
 
+def _http_json_body(writer: _WriterStub) -> dict:
+    return json.loads(writer.buffer.decode("utf-8").split("\r\n\r\n", 1)[1])
+
+
 class AdminWebPayloadTests(unittest.TestCase):
     def test_config_snapshot_hides_secure_link_psk_and_marks_it_read_only(self):
         args = argparse.Namespace(
@@ -240,6 +244,9 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["secure_link_last_reload_scope"], "revocation")
         self.assertEqual(payload["secure_link_last_reload_result"], "applied")
         self.assertEqual(payload["secure_link_peers_dropped_total"], 2)
+        self.assertIn("admin_ui", payload)
+        self.assertEqual(payload["admin_ui"]["first_start_detected"], False)
+        self.assertEqual(payload["admin_ui"]["config_file_state"], "unknown")
 
     def test_build_status_payload_preserves_connection_failure_fields(self):
         args = argparse.Namespace(
@@ -414,3 +421,146 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(secure["active_material_generation"], 3)
         self.assertEqual(secure["last_material_reload_scope"], "revocation")
         self.assertEqual(secure["last_material_reload_result"], "applied")
+
+    def test_onboarding_connection_profiles_expose_configured_transports(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            overlay_transport=["udp", "ws"],
+            secure_link_mode="psk",
+            udp_bind="0.0.0.0",
+            udp_own_port=16666,
+            udp_peer="",
+            udp_peer_port=16666,
+            ws_bind="0.0.0.0",
+            ws_own_port=8080,
+            ws_peer="peer.example.net",
+            ws_peer_port=8443,
+            ws_path="/bridge",
+            ws_tls=True,
+        )
+        ui = AdminWebUI(args, _RunnerStub())
+        profiles = ui._build_onboarding_connection_profiles()
+        self.assertGreaterEqual(len(profiles), 2)
+        labels = [str(item.get("label", "")) for item in profiles]
+        self.assertTrue(any("UDP listen" in label for label in labels))
+        ws_profiles = [item for item in profiles if item.get("transport") == "ws" and item.get("source") == "config"]
+        self.assertEqual(len(ws_profiles), 1)
+        self.assertEqual(ws_profiles[0]["role"], "client")
+        self.assertEqual(ws_profiles[0]["endpoint_host"], "peer.example.net")
+        self.assertEqual(ws_profiles[0]["endpoint_port"], 8443)
+
+    def test_onboarding_invite_roundtrip_and_suggested_updates(self):
+        payload = {
+            "version": 1,
+            "connection": {
+                "transport": "tcp",
+                "endpoint_host": "bridge.example.net",
+                "endpoint_port": 4433,
+            },
+            "secure_link_mode": "psk",
+            "own_servers": [
+                {
+                    "name": "api",
+                    "listen": {"protocol": "tcp", "bind": "0.0.0.0", "port": 8080},
+                    "target": {"protocol": "tcp", "host": "127.0.0.1", "port": 8080},
+                }
+            ],
+        }
+        token = AdminWebUI._encode_onboarding_token(payload)
+        self.assertTrue(token.startswith(AdminWebUI.ONBOARDING_TOKEN_PREFIX))
+        parsed = AdminWebUI._decode_onboarding_token(token)
+        self.assertEqual(parsed["connection"]["transport"], "tcp")
+        updates = AdminWebUI._onboarding_updates_from_invite(parsed)
+        self.assertEqual(updates["overlay_transport"], "tcp")
+        self.assertEqual(updates["tcp_peer"], "bridge.example.net")
+        self.assertEqual(updates["tcp_peer_port"], 4433)
+        self.assertEqual(updates["secure_link_mode"], "psk")
+        self.assertIn("own_servers", updates)
+
+    def test_onboarding_blueprints_group_active_peer_connections(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            overlay_transport="udp",
+            secure_link_mode="off",
+        )
+
+        class _RunnerWithConnections(_RunnerStub):
+            def get_connections_snapshot(self):
+                return {
+                    "udp": [
+                        {
+                            "peer_id": "2:7",
+                            "state": "connected",
+                            "local_port": 15000,
+                            "remote_destination": {"host": "10.0.0.8", "port": 16000},
+                        }
+                    ],
+                    "tcp": [
+                        {
+                            "peer_id": "2:7",
+                            "state": "connected",
+                            "local_port": 25000,
+                            "remote_destination": {"host": "10.0.0.8", "port": 26000},
+                        }
+                    ],
+                    "counts": {"udp": 1, "tcp": 1, "udp_listening": 0, "tcp_listening": 0},
+                }
+
+        ui = AdminWebUI(args, _RunnerWithConnections())
+        blueprints = ui._build_onboarding_blueprints()
+        self.assertEqual(len(blueprints), 1)
+        self.assertEqual(blueprints[0]["peer_id"], "2:7")
+        self.assertEqual(len(blueprints[0]["own_servers"]), 2)
+
+    def test_onboarding_invite_preview_hides_psk_and_updates_keep_plaintext(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            overlay_transport="tcp",
+            secure_link_mode="psk",
+            secure_link_psk="lab-secret-12345",
+            secure_link_require=False,
+            admin_web_username="admin",
+        )
+        ui = AdminWebUI(args, _RunnerStub())
+
+        async def run_flow():
+            profile_id = str((ui._build_onboarding_connection_profiles() or [{}])[0].get("id", ""))
+            generate_writer = _WriterStub()
+            await ui._handle_onboarding_invite_generate(
+                generate_writer,
+                "POST",
+                json.dumps({"connection_id": profile_id}).encode("utf-8"),
+            )
+            generated = _http_json_body(generate_writer)
+            self.assertTrue(generated["ok"])
+            invite_token = str(generated.get("invite_token", "") or "")
+            self.assertTrue(invite_token)
+
+            preview_writer = _WriterStub()
+            await ui._handle_onboarding_invite_preview(
+                preview_writer,
+                "POST",
+                json.dumps({"invite_token": invite_token}).encode("utf-8"),
+            )
+            preview = _http_json_body(preview_writer)
+            self.assertTrue(preview["ok"])
+            self.assertEqual(preview["preview"].get("secure_link_psk"), "***hidden***")
+            self.assertTrue(preview["preview"].get("secure_link_psk_present"))
+            self.assertEqual(preview["suggested_updates"].get("secure_link_psk"), "lab-secret-12345")
+
+        asyncio.run(run_flow())

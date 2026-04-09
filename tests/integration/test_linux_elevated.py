@@ -79,6 +79,25 @@ def _wait_interface(ifname: str, timeout: float = 12.0) -> None:
     raise RuntimeError(f"interface {ifname} did not appear")
 
 
+def _wait_interface_with_bridge_logs(
+    ifname: str,
+    *,
+    server_proc: overlay_e2e.Proc,
+    client_proc: overlay_e2e.Proc,
+    timeout: float = 12.0,
+) -> None:
+    try:
+        _wait_interface(ifname, timeout=timeout)
+        return
+    except Exception as exc:
+        server_tail = server_proc.log_path.read_text(errors="replace")[-3000:] if server_proc.log_path.exists() else ""
+        client_tail = client_proc.log_path.read_text(errors="replace")[-3000:] if client_proc.log_path.exists() else ""
+        raise RuntimeError(
+            f"{exc}\n--- {server_proc.log_path.name} tail ---\n{server_tail}\n"
+            f"--- {client_proc.log_path.name} tail ---\n{client_tail}"
+        ) from exc
+
+
 def _run_ip(*args: str) -> None:
     subprocess.run(["ip", *args], check=True, capture_output=True, text=True)
 
@@ -140,12 +159,28 @@ def _start_tun_bridge_pair(
         if secure_slot is not None
         else overlay_e2e.materialize_case_ports(base_case, case_index)
     )
-    client_spec = f"tun,{mtu},{client_ifname},tun,{server_ifname},{mtu}"
-    server_spec = f"tun,{mtu},{server_ifname},tun,{client_ifname},{mtu}"
+    client_spec = json.dumps(
+        {
+            "listen": {"protocol": "tun", "ifname": client_ifname, "mtu": int(mtu)},
+            "target": {"protocol": "tun", "ifname": server_ifname, "mtu": int(mtu)},
+        },
+        separators=(",", ":"),
+    )
+    server_spec = json.dumps(
+        {
+            "listen": {"protocol": "tun", "ifname": server_ifname, "mtu": int(mtu)},
+            "target": {"protocol": "tun", "ifname": client_ifname, "mtu": int(mtu)},
+        },
+        separators=(",", ":"),
+    )
+    server_args = _strip_option_and_values(materialized.bridge_server_args, "--own-servers")
+    server_args = _strip_option_and_values(server_args, "--remote-servers")
+    client_args = _with_service_specs(materialized.bridge_client_args, "--own-servers", [client_spec])
+    client_args = _with_service_specs(client_args, "--remote-servers", [server_spec])
     tuned_case = replace(
         materialized,
-        bridge_server_args=_with_service_specs(materialized.bridge_server_args, "--remote-servers", [server_spec]),
-        bridge_client_args=_with_service_specs(materialized.bridge_client_args, "--own-servers", [client_spec]),
+        bridge_server_args=server_args,
+        bridge_client_args=client_args,
     )
     server_spec_cmd, client_spec_cmd = overlay_e2e.build_commands(tuned_case, tmp_path, case_index, enable_admin=True)
 
@@ -214,8 +249,8 @@ def test_overlay_e2e_linux_elevated_tun_over_myudp_packet_carry(tmp_path: Path) 
         mtu=1400,
     )
     try:
-        _wait_interface(client_ifname)
-        _wait_interface(server_ifname)
+        _wait_interface_with_bridge_logs(client_ifname, server_proc=pair.server_proc, client_proc=pair.client_proc)
+        _wait_interface_with_bridge_logs(server_ifname, server_proc=pair.server_proc, client_proc=pair.client_proc)
         _configure_tun_route(client_ifname, "198.18.30.1", "198.18.30.2")
         _configure_tun_route(server_ifname, "198.18.30.2", "198.18.30.1")
 
@@ -272,8 +307,8 @@ def test_overlay_e2e_linux_elevated_tun_over_ws_secure_link_fragments(tmp_path: 
             label="server",
             authenticated=True,
         )
-        _wait_interface(client_ifname)
-        _wait_interface(server_ifname)
+        _wait_interface_with_bridge_logs(client_ifname, server_proc=pair.server_proc, client_proc=pair.client_proc)
+        _wait_interface_with_bridge_logs(server_ifname, server_proc=pair.server_proc, client_proc=pair.client_proc)
         _configure_tun_route(client_ifname, "198.18.31.1", "198.18.31.2")
         _configure_tun_route(server_ifname, "198.18.31.2", "198.18.31.1")
         payload = b"tun-frag-302-" + (b"F" * 1300)

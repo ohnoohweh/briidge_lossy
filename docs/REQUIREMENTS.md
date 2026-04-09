@@ -123,6 +123,7 @@ Current implementation note:
 - `REQ-LIFE-004`: Restart-specific regressions for concurrent channel cases shall remain covered so existing functionality does not silently erode.
 - `REQ-LIFE-005`: Repeated failed reconnect attempts shall be throttled by a configurable minimum retry delay so client overlays do not hammer connection setup continuously while a peer remains unavailable.
 - `REQ-LIFE-006`: Operator-triggered reconnect requests exposed by the admin API and WebAdmin shall be scoped to the selected established peer connection rather than being process-global across unrelated peer sessions.
+- `REQ-LIFE-007`: Startup through the default runtime entrypoint shall tolerate a missing or empty default config file by continuing with built-in defaults, while malformed JSON config input shall fail fast with a clear error.
 
 ## Listener and multi-peer requirements
 
@@ -144,6 +145,7 @@ Current implementation note:
 - `REQ-MUX-006`: On hosts where a supported TUN backend is available and the process has permission to create/configure TUN devices, including Linux hosts with `/dev/net/tun` and Windows hosts with a usable WinTun installation, a connected peer shall be able to carry packet traffic between local TUN interfaces over one overlay connection.
 - `REQ-MUX-007`: TUN service publication shall use the same peer-scoped catalog and channel-isolation rules as TCP and UDP services, so one peer's TUN interfaces and packet channels do not conflict with another peer's channels or published services.
 - `REQ-MUX-008`: When a UDP service datagram or TUN packet does not fit into one effective wrapped-session payload budget, the mux layer shall preserve the logical message boundary by fragmenting it across multiple mux messages and reassembling it before local delivery.
+- `REQ-MUX-009`: The service-definition runtime surface shall accept structured JSON entries for both `own_servers` and `remote_servers`, and a structured `own_servers` entry may include lifecycle hook commands that execute on listener-side service events (`on_created`, `on_channel_connected`, `on_channel_closed`) with placeholder-driven argument/environment rendering.
 
 ## Loss and delay requirements
 
@@ -168,6 +170,7 @@ Current implementation note:
 - `REQ-ADM-008`: When admin authentication is enabled, configuration updates submitted through WebAdmin shall require a fresh challenge-response confirmation bound to the exact update block before the runtime applies the change. The confirmation proof shall be derived from a server-issued seed, the current admin password, and the canonicalized update payload so the proof cannot be reused for a different configuration block. The guarded write flow shall cover both secret and non-secret configuration changes rather than protecting only password-like fields.
 
 - `REQ-ADM-009`: Saved configuration files shall not expose `admin_web_password` or `secure_link_psk` in plaintext. When the runtime loads an encrypted configuration file, it shall restore those values back into memory so the application can continue to start, save, and operate with the configured secrets.
+- `REQ-ADM-010`: The admin web onboarding surface shall expose APIs to derive connection profiles from current runtime/config state, generate invite tokens, and preview invite tokens before apply. Invite preview output shall not expose the secure-link PSK in plaintext while the apply/update payload keeps the effective secure-link setting values usable for runtime configuration updates.
 
 - Implementation note: the admin web challenge-response login shall remain usable over plain HTTP as well as HTTPS. When the page is not in a secure context, the browser-side proof generation shall fall back to an equivalent client-side SHA-256 implementation so the login flow still works without requiring `window.crypto.subtle`.
 

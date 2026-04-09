@@ -204,6 +204,26 @@ Repository guards now enforce three parts of this discipline, but they should be
 
 This keeps the project understandable even when development continues in prompt-driven iterations.
 
+### Shift-left local hooks (before push)
+
+To catch documentation/traceability drift before pushing, enable the local git hooks once per clone:
+
+```bash
+./scripts/install_local_hooks.sh
+```
+
+This wires `core.hooksPath=.githooks` and runs the following checks on every commit:
+
+- `python scripts/check_readme_testing_guard.py --staged`
+- `python scripts/check_requirements_guard.py --staged`
+
+The checks enforce that test/architecture/requirements changes come with matching updates in:
+
+- [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md)
+- [.github/requirements_traceability.yaml](/home/ohnoohweh/quic_br/.github/requirements_traceability.yaml)
+- [.github/architecture_traceability.yaml](/home/ohnoohweh/quic_br/.github/architecture_traceability.yaml)
+- [README.md](/home/ohnoohweh/quic_br/README.md) coverage snapshot
+
 ## Mitigating legacy single-peer assumptions
 
 When behavior suggests one peer is accidentally coupled to another, derive follow-up work from the requirement first and then inspect the code with that failure mode in mind.

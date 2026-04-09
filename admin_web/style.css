@@ -86,6 +86,13 @@ body.restart-locked .shell {
   padding: 28px;
 }
 
+.advisor-gate-card {
+  width: min(100%, 720px);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
 .auth-copy {
   margin-top: 8px;
   color: var(--muted);
@@ -200,10 +207,241 @@ h1 {
   font-weight: 700;
 }
 
+.build-badge {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.03em;
+}
+
+.build-badge.build-tainted {
+  border-color: rgba(251, 146, 60, 0.42);
+  background: rgba(251, 146, 60, 0.10);
+  color: #fed7aa;
+}
+
 .topbar-right {
   display: flex;
   align-items: center;
   gap: 16px;
+}
+
+.quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.home-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  color: var(--muted);
+}
+
+.home-toggle input {
+  width: 16px;
+  height: 16px;
+}
+
+.onboarding-pane {
+  margin-top: 14px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.onboarding-pane h3,
+.onboarding-pane h4 {
+  margin-bottom: 10px;
+}
+
+#onboardingConnectPane {
+  min-height: 360px;
+}
+
+.onboarding-step {
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-evenly;
+  gap: 14px;
+}
+
+.onboarding-step p {
+  margin: 0;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.onboarding-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.onboarding-blueprint-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-top: 10px;
+}
+
+.onboarding-preview {
+  margin-top: 10px;
+  padding: 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(11, 17, 28, 0.8);
+  min-height: 150px;
+  max-height: 220px;
+  overflow-y: auto;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+#onboardingInviteOutput {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#onboardingInviteInput {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.onboarding-auth-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.onboarding-auth-two-col {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.onboarding-auth-grid .home-toggle {
+  margin-top: 0;
+  align-self: end;
+}
+
+.wizard-modal-header {
+  align-items: center;
+}
+
+.wizard-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  justify-content: flex-end;
+}
+
+.wizard-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.advisor-findings {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.advisor-item {
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.advisor-item.severity-critical {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.10);
+}
+
+.advisor-item.severity-warning {
+  border-color: rgba(251, 146, 60, 0.42);
+  background: rgba(251, 146, 60, 0.10);
+}
+
+.advisor-item.severity-recommended {
+  border-color: rgba(245, 158, 11, 0.40);
+  background: rgba(245, 158, 11, 0.09);
+}
+
+.advisor-item.severity-informational {
+  border-color: rgba(79, 209, 197, 0.30);
+  background: rgba(79, 209, 197, 0.07);
+}
+
+.advisor-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.advisor-item h3 {
+  font-size: 16px;
+}
+
+.advisor-item p {
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+.advisor-severity {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.advisor-severity.severity-critical {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fecaca;
+}
+
+.advisor-severity.severity-warning {
+  background: rgba(251, 146, 60, 0.18);
+  color: #fed7aa;
+}
+
+.advisor-severity.severity-recommended {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fde68a;
+}
+
+.advisor-severity.severity-informational {
+  background: rgba(79, 209, 197, 0.16);
+  color: #99f6e4;
+}
+
+.advisor-item .btn {
+  margin-top: 12px;
 }
 
 .layout {
@@ -548,6 +786,72 @@ h1 {
   padding: 8px 12px;
 }
 
+.service-catalog-editor {
+  display: grid;
+  gap: 10px;
+}
+
+.service-catalog-toolbar {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.service-catalog-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.service-catalog-items {
+  display: grid;
+  gap: 10px;
+}
+
+.service-item {
+  padding: 12px;
+  border: 1px solid rgba(120, 170, 255, 0.18);
+  background: rgba(255, 255, 255, 0.03);
+  display: grid;
+  gap: 10px;
+}
+
+.service-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.service-remove-btn {
+  padding: 7px 10px;
+}
+
+.service-endpoint-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.service-extra-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.service-field {
+  display: grid;
+  gap: 6px;
+}
+
+.service-field > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.service-extra-textarea {
+  min-height: 90px;
+}
+
 .config-row-editing td {
   vertical-align: top;
 }
@@ -624,6 +928,29 @@ h1 {
 
   .peer-state-control {
     flex-wrap: wrap;
+  }
+
+  .onboarding-grid,
+  .onboarding-auth-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .onboarding-auth-two-col {
+    grid-template-columns: 1fr;
+  }
+
+  .onboarding-blueprint-row {
+    grid-template-columns: 1fr;
+  }
+
+  .wizard-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .wizard-footer {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .peer-detail-metric-compact {

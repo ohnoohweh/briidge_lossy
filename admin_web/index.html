@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <title>ObstacleBridge</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="style.css?v=20260405a">
+  <link rel="stylesheet" href="style.css?v=20260409a">
 </head>
 <body>
   <div id="restartGate" class="restart-gate hidden">
@@ -52,11 +52,24 @@
       </form>
     </section>
   </div>
+  <div id="securityAdvisorGate" class="auth-gate hidden">
+    <section class="auth-card card advisor-gate-card">
+      <div class="eyebrow">Security Advisor</div>
+      <h2>Recommendations</h2>
+      <p id="securityAdvisorGateSummary" class="auth-copy">Current security posture and recommended next steps.</p>
+      <div id="securityAdvisorGateFindings" class="advisor-findings"></div>
+      <div class="auth-actions" style="margin-top:16px;">
+        <button id="securityAdvisorGateDisableStartupBtn" class="btn btn-secondary" type="button">Do Not Show On Startup Again</button>
+        <button id="securityAdvisorGateCloseBtn" class="btn btn-secondary" type="button">Continue</button>
+      </div>
+    </section>
+  </div>
   <div class="shell">
     <header class="topbar">
       <div>
         <div class="eyebrow">Network Appliance</div>
         <h1 id="appHeadline">ObstacleBridge</h1>
+        <div id="buildBadge" class="build-badge">build unknown</div>
       </div>
       <div class="topbar-right">
         <button id="logoutBtn" class="btn btn-secondary hidden" type="button">Logout</button>
@@ -67,6 +80,7 @@
     <div class="layout">
       <aside class="sidebar card">
         <nav class="nav-tabs" aria-label="Main navigation">
+          <button class="nav-tab" data-tab="home" type="button">Home</button>
           <button class="nav-tab active" data-tab="status" type="button">Status</button>
           <button class="nav-tab" data-tab="secure-link" type="button">Secure-Link</button>
           <button class="nav-tab" data-tab="configuration" type="button">Configuration</button>
@@ -83,6 +97,38 @@
       </aside>
 
       <main class="mainview">
+        <section id="tab-home" class="tab-panel">
+          <section class="section-block card">
+            <div class="section-header">
+              <div>
+                <h2>Home</h2>
+                <p id="homeSummary">Setup and troubleshooting helpers will grow here. For now, you can reopen the Security Advisor whenever you need it.</p>
+              </div>
+            </div>
+            <div class="quick-actions">
+              <button id="openSecurityAdvisorBtn" class="btn btn-secondary" type="button">Open Security Advisor</button>
+            </div>
+            <label class="home-toggle">
+              <input id="homeOpenStatusOnStartup" type="checkbox" />
+              <span>Open Status on startup</span>
+            </label>
+          </section>
+          <section class="section-block card">
+            <div class="section-header">
+              <div>
+                <h2>Onboarding</h2>
+                <p id="onboardingSummary">Start guided setup or invite generation from dedicated popup tools.</p>
+              </div>
+            </div>
+            <div class="quick-actions">
+              <button id="openSetupAssistantBtn" class="btn btn-secondary" type="button">Open Setup Assistant</button>
+              <button id="openTokenGeneratorBtn" class="btn btn-secondary" type="button">Open Token Generator</button>
+              <button id="onboardingModeAdvancedBtn" class="btn btn-secondary" type="button">Open Advanced Configuration</button>
+            </div>
+            <p id="onboardingMessage" class="config-message"></p>
+          </section>
+        </section>
+
         <section id="tab-status" class="tab-panel active">
           <section class="summary-grid">
             <article class="metric-card card">
@@ -311,6 +357,129 @@
     </div>
   </div>
 
-  <script src="app.js?v=20260405a"></script>
+  <div id="setupAssistantGate" class="config-gate hidden">
+    <section class="card config-card advisor-gate-card">
+      <div class="section-header compact wizard-modal-header">
+        <div>
+          <div class="eyebrow">Guided Setup</div>
+          <h2>Setup Assistant</h2>
+        </div>
+        <button id="setupAssistantCloseBtnTop" class="btn btn-secondary" type="button">Close</button>
+      </div>
+      <p id="setupAssistantMessage" class="config-message"></p>
+      <div id="onboardingConnectPane" class="onboarding-pane">
+        <div id="setupAssistantStep1" class="onboarding-step">
+          <h3>Welcome to ObstacleBridge</h3>
+          <p>I will help you to quickly getting me configured.</p>
+        </div>
+        <div id="setupAssistantStep2" class="onboarding-step hidden">
+          <h3>WebAdmin Access</h3>
+          <p>Do you want to have WebAdmin page accessible</p>
+          <label class="service-field">
+            <span>Selection</span>
+            <select id="onboardingAdminExposure" class="config-editor mono">
+              <option value="local">Only locally</option>
+              <option value="global">Globally</option>
+            </select>
+          </label>
+          <p>Please define password for accessing WebAdmin page</p>
+          <div class="onboarding-auth-grid onboarding-auth-two-col">
+            <label class="service-field">
+              <span>User name</span>
+              <input id="onboardingAdminUser" class="config-editor mono" type="text" autocomplete="off" />
+            </label>
+            <label class="service-field">
+              <span>Password</span>
+              <input id="onboardingAdminPass" class="config-editor mono" type="password" autocomplete="off" />
+            </label>
+          </div>
+        </div>
+        <div id="setupAssistantStep3" class="onboarding-step hidden">
+          <h3>Recommendation</h3>
+          <div id="setupAssistantRecommendation" class="onboarding-preview"></div>
+        </div>
+        <div id="setupAssistantStep4" class="onboarding-step hidden">
+          <h3>Invite Token</h3>
+          <label class="service-field">
+            <span>Invite token</span>
+            <textarea id="onboardingInviteInput" class="config-editor config-editor-textarea mono" rows="4" placeholder="Paste invite token from peer server"></textarea>
+          </label>
+        </div>
+        <div id="setupAssistantStep5" class="onboarding-step hidden">
+          <h3>Review Configuration</h3>
+          <div id="onboardingReviewConfig" class="onboarding-preview mono"></div>
+        </div>
+      </div>
+      <div class="wizard-footer">
+        <button id="setupAssistantBackBtn" class="btn btn-secondary" type="button">Back</button>
+        <button id="setupAssistantNextBtn" class="btn btn-secondary" type="button">Next</button>
+      </div>
+    </section>
+  </div>
+
+  <div id="tokenGeneratorGate" class="config-gate hidden">
+    <section class="card config-card advisor-gate-card">
+      <div class="section-header compact wizard-modal-header">
+        <div>
+          <div class="eyebrow">Peer Server</div>
+          <h2>Invite Token Generator</h2>
+        </div>
+        <button id="tokenGeneratorCloseBtnTop" class="btn btn-secondary" type="button">Close</button>
+      </div>
+      <p id="tokenGeneratorMessage" class="config-message"></p>
+      <div id="onboardingServerPane" class="onboarding-pane">
+        <div id="tokenGeneratorStep1" class="onboarding-step">
+          <h3>Welcome</h3>
+          <p>I will guide you to generate a new invite token step by step.</p>
+        </div>
+        <div id="tokenGeneratorStep2" class="onboarding-step hidden">
+          <h3>Connection Profile</h3>
+          <label class="service-field">
+            <span>Select connection profile</span>
+            <select id="onboardingConnectionSelect" class="config-editor mono"></select>
+          </label>
+        </div>
+        <div id="tokenGeneratorStep3" class="onboarding-step hidden">
+          <h3>Own Service Definition</h3>
+          <div class="quick-actions">
+            <button id="onboardingLoadServicesBtn" class="btn btn-secondary" type="button">Load Services From Config</button>
+            <button id="onboardingAddOwnServiceBtn" class="btn btn-secondary" type="button">Add Own Service</button>
+          </div>
+          <div class="onboarding-blueprint-row">
+            <label class="service-field">
+              <span>Reuse connected peer blueprint for own_servers</span>
+              <select id="onboardingBlueprintSelect" class="config-editor mono"></select>
+            </label>
+            <button id="onboardingApplyBlueprintBtn" class="btn btn-secondary" type="button">Apply Blueprint</button>
+          </div>
+          <div id="onboardingOwnServicesList" class="service-catalog-items"></div>
+        </div>
+        <div id="tokenGeneratorStep4" class="onboarding-step hidden">
+          <h3>Remote Service Definition</h3>
+          <div class="quick-actions">
+            <button id="onboardingAddRemoteServiceBtn" class="btn btn-secondary" type="button">Add Remote Service</button>
+          </div>
+          <div id="onboardingRemoteServicesList" class="service-catalog-items"></div>
+        </div>
+        <div id="tokenGeneratorStep5" class="onboarding-step hidden">
+          <h3>Generate Invite Token</h3>
+          <div id="tokenGeneratorReview" class="onboarding-preview"></div>
+          <label class="service-field">
+            <span>Generated invite token</span>
+            <textarea id="onboardingInviteOutput" class="config-editor config-editor-textarea mono" rows="4" wrap="soft" readonly></textarea>
+          </label>
+          <div class="quick-actions">
+            <button id="onboardingCopyInviteBtn" class="btn btn-secondary" type="button">Copy Invite</button>
+          </div>
+        </div>
+      </div>
+      <div class="wizard-footer">
+        <button id="tokenGeneratorBackBtn" class="btn btn-secondary" type="button">Back</button>
+        <button id="tokenGeneratorNextBtn" class="btn btn-secondary" type="button">Next</button>
+      </div>
+    </section>
+  </div>
+
+  <script src="app.js?v=20260409a"></script>
 </body>
 </html>

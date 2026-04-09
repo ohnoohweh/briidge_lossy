@@ -29,7 +29,7 @@ import urllib.request
 import pytest
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / 'src'
@@ -859,6 +859,23 @@ def _replace_own_servers_local_port(args: List[str], local_port: int) -> List[st
     return out
 
 
+def _replace_option_values(args: List[str], option: str, values: List[str]) -> List[str]:
+    out: List[str] = []
+    i = 0
+    while i < len(args):
+        arg = str(args[i])
+        if arg == option:
+            i += 1
+            while i < len(args) and not str(args[i]).startswith('--'):
+                i += 1
+            continue
+        out.append(arg)
+        i += 1
+    if values:
+        out.extend([str(option), *[str(v) for v in values]])
+    return out
+
+
 def _with_localhost_peer(case: Case, name: str, bind_host: str, resolve_family: str) -> Case:
     transport = 'myudp'
     if '--overlay-transport' in case.bridge_client_args:
@@ -1562,7 +1579,77 @@ def merge_env(extra: Dict[str, str]) -> Dict[str, str]:
     return env
 
 
+def _legacy_service_spec_to_structured(spec: str) -> Optional[Dict[str, Any]]:
+    parts = [p.strip() for p in str(spec).split(',')]
+    if len(parts) != 6:
+        return None
+    listen_proto = parts[0].lower()
+    target_proto = parts[3].lower()
+    listen_port: int
+    target_port: int
+    try:
+        listen_port = int(parts[1])
+        target_port = int(parts[5])
+    except Exception:
+        return None
+    listen_obj: Dict[str, Any] = {
+        'protocol': listen_proto,
+    }
+    target_obj: Dict[str, Any] = {
+        'protocol': target_proto,
+    }
+    if listen_proto == 'tun':
+        listen_obj['ifname'] = parts[2]
+        listen_obj['mtu'] = listen_port
+    else:
+        listen_obj['bind'] = parts[2]
+        listen_obj['port'] = listen_port
+    if target_proto == 'tun':
+        target_obj['ifname'] = parts[4]
+        target_obj['mtu'] = target_port
+    else:
+        target_obj['host'] = parts[4]
+        target_obj['port'] = target_port
+    return {
+        'listen': listen_obj,
+        'target': target_obj,
+    }
+
+
+def _normalize_service_arg_item(item: str) -> str:
+    raw = str(item).strip()
+    if not raw:
+        return raw
+    with contextlib.suppress(Exception):
+        decoded = json.loads(raw)
+        if isinstance(decoded, dict):
+            return json.dumps(decoded, separators=(',', ':'))
+        if isinstance(decoded, list) and all(isinstance(entry, dict) for entry in decoded):
+            return json.dumps(decoded, separators=(',', ':'))
+    structured = _legacy_service_spec_to_structured(raw)
+    if structured is None:
+        return str(item)
+    return json.dumps(structured, separators=(',', ':'))
+
+
+def _normalize_service_specs_cli_args(args: List[str]) -> List[str]:
+    service_options = {'--own-servers', '--remote-servers'}
+    out: List[str] = []
+    i = 0
+    while i < len(args):
+        arg = str(args[i])
+        out.append(arg)
+        i += 1
+        if arg not in service_options:
+            continue
+        while i < len(args) and not str(args[i]).startswith('--'):
+            out.append(_normalize_service_arg_item(str(args[i])))
+            i += 1
+    return out
+
+
 def start_proc(name: str, cmd: List[str], log_dir: Path, env_extra: Optional[Dict[str, str]] = None, admin_port: Optional[int] = None) -> Proc:
+    normalized_cmd = _normalize_service_specs_cli_args([str(part) for part in cmd])
     log_path = log_dir / f'{name}.log'
     fp = open(log_path, 'wb')
     kwargs = {
@@ -1574,13 +1661,13 @@ def start_proc(name: str, cmd: List[str], log_dir: Path, env_extra: Optional[Dic
     }
     if os.name != 'nt':
         kwargs['start_new_session'] = True
-    p = subprocess.Popen(cmd, **kwargs)
+    p = subprocess.Popen(normalized_cmd, **kwargs)
     return Proc(
         name=name,
         popen=p,
         log_path=log_path,
         admin_port=admin_port,
-        cmd=list(cmd),
+        cmd=list(normalized_cmd),
         env_extra=dict(env_extra or {}),
     )
 
@@ -1839,6 +1926,27 @@ def wait_probe(
             last_exc = e
             time.sleep(0.25)
     raise RuntimeError(f'Probe failed for {case.name}: {last_exc}')
+
+
+def _wait_jsonl_events(path: Path, predicate: Callable[[List[Dict[str, str]]], bool], *, timeout: float = 12.0) -> List[Dict[str, str]]:
+    end = time.time() + timeout
+    last_rows: List[Dict[str, str]] = []
+    while time.time() < end:
+        if path.exists():
+            rows: List[Dict[str, str]] = []
+            for raw in path.read_text(encoding='utf-8', errors='replace').splitlines():
+                line = str(raw).strip()
+                if not line:
+                    continue
+                with contextlib.suppress(Exception):
+                    parsed = json.loads(line)
+                    if isinstance(parsed, dict):
+                        rows.append({str(k): '' if v is None else str(v) for k, v in parsed.items()})
+            last_rows = rows
+            if predicate(rows):
+                return rows
+        time.sleep(0.1)
+    raise RuntimeError(f'event predicate not satisfied for {path.name}; rows={last_rows!r}')
 
 
 def expect_probe_failure(case: Case, payload: bytes, timeout: float = 5.0) -> None:
@@ -5432,6 +5540,148 @@ def test_overlay_e2e_reconnect(case_name: str, tmp_path: Path) -> None:
 
 @pytest.mark.integration
 @pytest.mark.slow
+def test_overlay_e2e_structured_own_servers_lifecycle_hooks_execute(tmp_path: Path) -> None:
+    case_index = 206
+    case = materialize_case_ports(CASES['case01_udp_over_own_udp_ipv4'], case_index)
+    hook_log = tmp_path / 'own_server_hook_events.jsonl'
+    hook_writer = (
+        "import json,os,pathlib;"
+        "p=pathlib.Path(os.environ['OB_HOOK_OUT']);"
+        "p.parent.mkdir(parents=True, exist_ok=True);"
+        "evt=dict("
+        "event=os.environ.get('OB_EVENT',''),"
+        "role=os.environ.get('OB_ROLE',''),"
+        "catalog=os.environ.get('OB_CATALOG',''),"
+        "protocol=os.environ.get('OB_PROTOCOL',''),"
+        "service_name=os.environ.get('OB_SERVICE_NAME',''),"
+        "service_id=os.environ.get('OB_SERVICE_ID',''),"
+        "channel_id=os.environ.get('OB_CHANNEL_ID','')"
+        ");"
+        "fp=p.open('a', encoding='utf-8');"
+        "fp.write(json.dumps(evt,separators=(',',':'))+'\\n');"
+        "fp.close()"
+    )
+    hook_cmd = {
+        'argv': [sys.executable, '-c', hook_writer],
+        'timeout_ms': 2000,
+        'env': {
+            'OB_HOOK_OUT': str(hook_log),
+            'OB_EVENT': '{event}',
+            'OB_ROLE': '{role}',
+            'OB_CATALOG': '{catalog}',
+            'OB_PROTOCOL': '{protocol}',
+            'OB_SERVICE_NAME': '{service_name}',
+            'OB_SERVICE_ID': '{service_id}',
+            'OB_CHANNEL_ID': '{channel_id}',
+        },
+    }
+    structured_own = json.dumps(
+        {
+            'name': 'hooked-own-udp',
+            'listen': {'protocol': 'udp', 'bind': str(case.probe_bind or '0.0.0.0'), 'port': int(case.probe_port)},
+            'target': {'protocol': 'udp', 'host': str(case.bounce_bind), 'port': int(case.bounce_port)},
+            'lifecycle_hooks': {
+                'listener': {
+                    'on_created': hook_cmd,
+                    'on_channel_connected': hook_cmd,
+                }
+            },
+        },
+        separators=(',', ':'),
+    )
+
+    bounce = BounceBackServer(
+        name=f'{case.name}_bounce',
+        proto=case.bounce_proto,
+        bind_host=case.bounce_bind,
+        port=case.bounce_port,
+        log_path=tmp_path / f'{case.name}_bounce.log',
+    )
+    bounce.start()
+    specs = build_commands(case, tmp_path, case_index, enable_admin=True)
+    server_name, server_cmd, server_env, server_admin = specs[0]
+    client_name, client_cmd, client_env, client_admin = specs[1]
+    client_cmd = _replace_option_values(client_cmd, '--own-servers', [structured_own])
+
+    server_proc = client_proc = None
+    try:
+        server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, tmp_path, env_extra=server_env, admin_port=server_admin)
+        client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, tmp_path, env_extra=client_env, admin_port=client_admin)
+        wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+        wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
+        client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+        wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+        wait_probe(case, payload=b'\x01hook-own', timeout=12.0)
+
+        rows = _wait_jsonl_events(
+            hook_log,
+            lambda entries: (
+                {'on_created', 'on_channel_connected'}.issubset({str(e.get('event') or '') for e in entries})
+            ),
+            timeout=12.0,
+        )
+        created_rows = [row for row in rows if row.get('event') == 'on_created']
+        connected_rows = [row for row in rows if row.get('event') == 'on_channel_connected']
+        assert created_rows and connected_rows
+        assert all(row.get('role') == 'listener' for row in created_rows + connected_rows)
+        assert all(row.get('catalog') == 'own_servers' for row in created_rows + connected_rows)
+        assert all(row.get('protocol') == 'udp' for row in created_rows + connected_rows)
+        assert all(row.get('service_name') == 'hooked-own-udp' for row in created_rows + connected_rows)
+    finally:
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+        bounce.stop()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_structured_remote_servers_udp_forwarding(tmp_path: Path) -> None:
+    case_index = 207
+    case = materialize_case_ports(CASES['case01_udp_over_own_udp_ipv4'], case_index)
+    structured_remote = json.dumps(
+        {
+            'name': 'remote-udp-json',
+            'listen': {'protocol': 'udp', 'bind': str(case.probe_bind or '0.0.0.0'), 'port': int(case.probe_port)},
+            'target': {'protocol': 'udp', 'host': str(case.bounce_bind), 'port': int(case.bounce_port)},
+        },
+        separators=(',', ':'),
+    )
+
+    bounce = BounceBackServer(
+        name=f'{case.name}_bounce',
+        proto=case.bounce_proto,
+        bind_host=case.bounce_bind,
+        port=case.bounce_port,
+        log_path=tmp_path / f'{case.name}_bounce.log',
+    )
+    bounce.start()
+    specs = build_commands(case, tmp_path, case_index, enable_admin=True)
+    server_name, server_cmd, server_env, server_admin = specs[0]
+    client_name, client_cmd, client_env, client_admin = specs[1]
+    client_cmd = _replace_option_values(client_cmd, '--own-servers', [])
+    client_cmd = _replace_option_values(client_cmd, '--remote-servers', [structured_remote])
+
+    server_proc = client_proc = None
+    try:
+        server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, tmp_path, env_extra=server_env, admin_port=server_admin)
+        client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, tmp_path, env_extra=client_env, admin_port=client_admin)
+        wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+        wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
+        client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+        wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+        wait_probe(case, payload=b'\x01remote-json', timeout=12.0)
+    finally:
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+        bounce.stop()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
 @pytest.mark.parametrize("case_name", LISTENER_CASES)
 def test_overlay_e2e_listener_two_clients(case_name: str, tmp_path: Path) -> None:
     run_case_two_peer_clients_listener(CASES[case_name], tmp_path, CASE_INDEX_BASE_LISTENER + ALL_CASES.index(case_name))
@@ -8745,6 +8995,62 @@ def test_overlay_e2e_materialize_case_ports_shifts_overlay_and_service_ports(mon
     assert _arg_value(case.bridge_client_args, '--udp-peer', '') == expected_ipv4_host
     own_spec = case.bridge_client_args[case.bridge_client_args.index('--own-servers') + 1]
     assert own_spec == f'udp,{26667 + offset},{expected_ipv4_host},udp,{expected_ipv4_host},{26666 + offset}'
+
+
+def test_overlay_e2e_normalize_service_specs_cli_args_migrates_legacy_tuples() -> None:
+    args = [
+        'python',
+        str(BRIDGE),
+        '--own-servers',
+        'udp,26667,127.0.0.1,udp,127.0.0.1,26666',
+        '--remote-servers',
+        'tcp,43129,0.0.0.0,tcp,127.0.0.1,43128',
+        '--log',
+        'INFO',
+    ]
+    normalized = _normalize_service_specs_cli_args(args)
+
+    own_spec = normalized[normalized.index('--own-servers') + 1]
+    remote_spec = normalized[normalized.index('--remote-servers') + 1]
+    assert own_spec.startswith('{"listen":')
+    assert remote_spec.startswith('{"listen":')
+    own_obj = json.loads(own_spec)
+    remote_obj = json.loads(remote_spec)
+    assert own_obj['listen']['protocol'] == 'udp'
+    assert own_obj['listen']['port'] == 26667
+    assert own_obj['target']['host'] == '127.0.0.1'
+    assert remote_obj['listen']['protocol'] == 'tcp'
+    assert remote_obj['target']['port'] == 43128
+
+
+def test_overlay_e2e_normalize_service_specs_cli_args_preserves_structured_json() -> None:
+    structured = '{"listen":{"protocol":"udp","bind":"0.0.0.0","port":16667},"target":{"protocol":"udp","host":"127.0.0.1","port":16666}}'
+    normalized = _normalize_service_specs_cli_args(['python', str(BRIDGE), '--own-servers', structured])
+
+    own_spec = normalized[normalized.index('--own-servers') + 1]
+    own_obj = json.loads(own_spec)
+    assert own_obj['listen']['protocol'] == 'udp'
+    assert own_obj['listen']['port'] == 16667
+    assert own_obj['target']['port'] == 16666
+
+
+def test_overlay_e2e_normalize_service_specs_cli_args_migrates_legacy_tun_tuples() -> None:
+    args = [
+        'python',
+        str(BRIDGE),
+        '--remote-servers',
+        'tun,1400,oblt301s,tun,oblt301c,1400',
+    ]
+    normalized = _normalize_service_specs_cli_args(args)
+
+    remote_spec = normalized[normalized.index('--remote-servers') + 1]
+    remote_obj = json.loads(remote_spec)
+    assert remote_obj['listen']['protocol'] == 'tun'
+    assert remote_obj['listen']['ifname'] == 'oblt301s'
+    assert remote_obj['listen']['mtu'] == 1400
+    assert remote_obj['target']['protocol'] == 'tun'
+    assert remote_obj['target']['ifname'] == 'oblt301c'
+    assert remote_obj['target']['mtu'] == 1400
 
 
 def test_overlay_e2e_alloc_admin_ports_isolates_xdist_workers(monkeypatch: pytest.MonkeyPatch) -> None:
