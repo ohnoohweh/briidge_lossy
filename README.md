@@ -38,9 +38,61 @@ This keeps first startup simple and makes larger settings such as `own_servers`,
 
 Service-definition note:
 
-- the preferred config shape for `own_servers` and `remote_servers` is now a structured JSON object form with `listen` and `target` blocks
-- the old comma-separated tuple form is no longer accepted by the runtime
-- if you have older tuple-based JSON config files, migrate them first with [scripts/migrate_service_definitions.py](scripts/migrate_service_definitions.py) and keep the structured JSON form as the durable definition going forward
+- use structured JSON service objects for `own_servers` and `remote_servers` with `listen` and `target` blocks
+
+### Service lifecycle hooks (Phase 2)
+
+Service definitions can include optional `lifecycle_hooks` commands.
+
+Hook execution model:
+
+- hooks use `argv` arrays (no implicit shell)
+- each hook can define one shared `argv` list or OS-specific command lists (`linux`, `windows`, `darwin`, optional `default`)
+- optional `timeout_ms` and `env` values are supported
+- placeholders are expanded from service/channel context (`{service_id}`, `{service_name}`, `{protocol}`, `{channel_id}`, `{ifname}`, `{target_host}`, `{target_port}`, `{listen_port}`, `{event}`, `{role}`, `{catalog}`, `{peer_id}`)
+
+TUN route hook example with Linux + Windows command variants:
+
+```json
+{
+  "name": "site-a-tun",
+  "listen": {
+    "protocol": "tun",
+    "ifname": "obtun0",
+    "mtu": 1400
+  },
+  "target": {
+    "protocol": "tun",
+    "ifname": "obtun1",
+    "mtu": 1400
+  },
+  "lifecycle_hooks": {
+    "listener": {
+      "on_created": {
+        "argv": {
+          "linux": ["ip", "link", "set", "dev", "{ifname}", "up"],
+          "windows": ["netsh", "interface", "set", "interface", "name={ifname}", "admin=enabled"]
+        },
+        "timeout_ms": 10000
+      },
+      "on_channel_connected": {
+        "argv": {
+          "linux": ["ip", "route", "replace", "{target_host}/32", "dev", "{ifname}"],
+          "windows": ["netsh", "interface", "ipv4", "add", "route", "prefix={target_host}/32", "interface={ifname}", "nexthop=0.0.0.0", "store=active"]
+        },
+        "timeout_ms": 10000
+      },
+      "on_channel_closed": {
+        "argv": {
+          "linux": ["ip", "route", "del", "{target_host}/32", "dev", "{ifname}"],
+          "windows": ["netsh", "interface", "ipv4", "delete", "route", "prefix={target_host}/32", "interface={ifname}", "store=active"]
+        },
+        "timeout_ms": 10000
+      }
+    }
+  }
+}
+```
 
 Important config-format note:
 

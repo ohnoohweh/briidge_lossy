@@ -2,13 +2,15 @@
 
 This repository currently collects:
 
-- `135` integration tests across [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py), [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py), and [tests/integration/test_reconnect_regression.py](../tests/integration/test_reconnect_regression.py)
+- `137` integration tests across [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py), [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py), and [tests/integration/test_reconnect_regression.py](../tests/integration/test_reconnect_regression.py)
 - `138` unit tests in `tests/unit/`
 
 Recent test/content updates:
 
-- 2026-04-09: ChannelMux Phase 1 service-definition work now includes focused unit coverage for structured `own_servers` / `remote_servers` parsing plus the one-way migration tool at [scripts/migrate_service_definitions.py](../scripts/migrate_service_definitions.py). The updated coverage in [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py) now verifies structured `tcp`/`udp`/`tun` entries, reserved `lifecycle_hooks` parsing without execution, and structured validation failures, while [tests/unit/test_service_definition_migration.py](../tests/unit/test_service_definition_migration.py) verifies tuple-based JSON catalogs can be migrated into the new structured object form. Local validation for this slice used `pytest -q tests/unit/test_channel_mux_listener_mode.py tests/unit/test_service_definition_migration.py tests/unit/test_runner_events.py`.
-- 2026-04-09: Reconnect operator control is now explicitly scoped per established peer connection as `REQ-LIFE-006` in [REQUIREMENTS.md](REQUIREMENTS.md). Unit coverage in [tests/unit/test_runner_overlay_transports.py](../tests/unit/test_runner_overlay_transports.py) now verifies targeted reconnect requests act only on the selected peer row and reject unknown peer IDs.
+- 2026-04-09: Service-definition requirement coverage now includes `REQ-MUX-009` for structured JSON `own_servers`/`remote_servers` plus listener lifecycle-hook execution on structured `own_servers` entries. End-to-end coverage adds [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py) cases `test_overlay_e2e_structured_own_servers_lifecycle_hooks_execute` and `test_overlay_e2e_structured_remote_servers_udp_forwarding`, and traceability maps these with focused unit coverage in [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py).
+- 2026-04-09: ChannelMux Phase 2 service lifecycle-hook execution is wired for listener/client events with `argv`-based command spawning, placeholder expansion, timeout/env support, and OS-aware command selection (`linux`/`windows`/`darwin` plus `default`). Coverage in [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py) verifies hook-command argv selection and placeholder rendering behavior. Local validation for this slice used `pytest -q tests/unit/test_channel_mux_listener_mode.py`.
+- 2026-04-09: ChannelMux Phase 1 service-definition coverage focuses on structured `own_servers` / `remote_servers` parsing. Coverage in [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py) verifies structured `tcp`/`udp`/`tun` entries, reserved `lifecycle_hooks` parsing without execution, and structured validation failures. Local validation for this slice used `pytest -q tests/unit/test_channel_mux_listener_mode.py tests/unit/test_runner_events.py`.
+- 2026-04-09: Reconnect operator control is explicitly scoped per established peer connection as `REQ-LIFE-006` in [REQUIREMENTS.md](REQUIREMENTS.md). Unit coverage in [tests/unit/test_runner_overlay_transports.py](../tests/unit/test_runner_overlay_transports.py) verifies targeted reconnect requests act only on the selected peer row and reject unknown peer IDs.
 - 2026-04-09: Reconnect/restart requirements now include explicit retry-throttling behavior as `REQ-LIFE-005` in [REQUIREMENTS.md](REQUIREMENTS.md). Integration coverage in [tests/integration/test_reconnect_regression.py](../tests/integration/test_reconnect_regression.py) now verifies both repeated reconnect-loop re-entry after prior task completion and enforcement of the configured minimum retry delay between failed attempts.
 - 2026-04-09: Added reconnect-loop regression coverage in [tests/integration/test_reconnect_regression.py](../tests/integration/test_reconnect_regression.py) to defend repeated reconnect behavior after multiple disconnect cycles. The new integration test intentionally models the legacy reconnect-loop guard (`_reconnect_task is not None`) to prove the unfixed behavior fails on the second disconnect, and then validates the delivered runtime fix where finished reconnect tasks are cleared so a new reconnect loop starts again.
 - 2026-04-08: Peer-snapshot observability coverage now defends `last_incoming_age_seconds` across the delivered non-`myudp` overlay transports as well. Focused unit coverage in [tests/unit/test_connection_snapshots.py](../tests/unit/test_connection_snapshots.py) now verifies TCP and QUIC client/listener peer rows expose a non-null last-incoming age after inbound traffic has been observed, and [tests/unit/test_ws_multi_peer.py](../tests/unit/test_ws_multi_peer.py) now verifies the same WebSocket peer-age field on both client and accepted-listener peer rows.
@@ -184,7 +186,7 @@ The harness also partitions the regular admin-port allocator and the Secure Link
 
 ### 3. Delay/loss man-in-the-middle tests
 
-The `myudp` delay/loss coverage is now part of the main integration harness. A loopback UDP proxy sits between peer client and peer server and can:
+The `myudp` delay/loss coverage is part of the main integration harness. A loopback UDP proxy sits between peer client and peer server and can:
 
 - add propagation delay
 - drop selected DATA frames
@@ -221,7 +223,7 @@ The catalog is ordered as:
 
 ## Integration tests
 
-Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py), and [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py) and collects `133` tests.
+Integration coverage currently lives in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py), and [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py) and collects `137` tests.
 
 The supporting project-level intent documents are:
 
@@ -241,6 +243,7 @@ The supporting project-level intent documents are:
 | `test_overlay_e2e_myudp_delay_loss` | Delayed/lossy myudp behavior | Verify retransmission, large payload handling, and control/data loss behavior through a real loopback MITM proxy | `pytest -q tests/integration/test_overlay_e2e.py -k myudp_delay_loss` |
 | `test_overlay_e2e_myudp_listener_invalid_sender_expires_before_stale_window` | Listener stale-junk-peer regression | Verify a `myudp` listener surfaces diagnostics for an invalid incoming sender and then reaps that never-connected `connecting` row before it survives the 20-second stale window | `pytest -q tests/integration/test_overlay_e2e.py -k myudp_listener_invalid_sender_expires_before_stale_window` |
 | `test_overlay_e2e_server_restart_closes_tcp_preserves_udp` | Restart-specific regression | Verify the special restart behavior for the concurrent WS case | `pytest -q tests/integration/test_overlay_e2e.py -k server_restart_closes_tcp_preserves_udp` |
+| `test_overlay_e2e_structured_own_servers_lifecycle_hooks_execute` and `test_overlay_e2e_structured_remote_servers_udp_forwarding` | Structured service-definition and hook execution | Verify structured JSON `own_servers`/`remote_servers` execution paths end to end, including listener lifecycle-hook invocation for structured `own_servers` | `pytest -q tests/integration/test_overlay_e2e.py -k "structured_own_servers_lifecycle_hooks_execute or structured_remote_servers_udp_forwarding"` |
 | `test_overlay_e2e_admin_api_*` | Admin web auth/API | Verify auth-disabled, auth-required, authenticated, session-isolated API behavior, and live WebSocket telemetry availability for both open and cookie-authenticated sessions | `pytest -q tests/integration/test_overlay_e2e.py -k admin_api` |
 | `test_overlay_e2e_webadmin_cert_reload_buttons_drive_authenticated_reload_flow` | WebAdmin secure-link operator path | Verify the served Secure-Link tab exposes the documented cert reload controls and that an authenticated operator can drive the reload flow through that browser path | `pytest -q tests/integration/test_overlay_e2e.py -k webadmin_cert_reload_buttons` |
 | `test_overlay_e2e_*secure_link_psk*` | Secure-link Phase 1 PSK runtime slice | Verify the delivered PSK secure-link slice reaches protected connected state across supported transports, rejects mismatched PSKs, preserves peer isolation for multi-client listener scenarios, and keeps `/api/peers` transport-specific secure-link peer stats aligned with live protected traffic | `pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` |
@@ -278,6 +281,7 @@ This first mapping is intentionally coarse. It links current integration entrypo
 | `test_overlay_e2e_concurrent_tcp_channels` | `REQ-LST-001`, `REQ-LST-002`, `REQ-LST-003`, `REQ-LST-004`, `REQ-LST-005`, `REQ-LST-006`, `REQ-LST-007`, `REQ-MUX-001`, `REQ-MUX-002`, `REQ-MUX-003`, `REQ-MUX-004`, `REQ-MUX-005`, `REQ-ADM-006` | Covers mixed-service concurrency, multi-client listener behavior, distinct peer visibility, and the baseline peer-independence model for WS/myudp/TCP/QUIC listeners |
 | `test_overlay_e2e_myudp_delay_loss` | `REQ-MYU-001`, `REQ-MYU-002`, `REQ-MYU-003`, `REQ-MYU-004`, `REQ-MYU-005`, `REQ-MYU-006` | Covers delayed path, dropped DATA/CONTROL frames, large payloads, and bidirectional loss behavior |
 | `test_overlay_e2e_server_restart_closes_tcp_preserves_udp` | `REQ-LIFE-004`, `REQ-MUX-001`, `REQ-MUX-002` | Special restart regression for the concurrent WS case |
+| `test_overlay_e2e_structured_own_servers_lifecycle_hooks_execute` and `test_overlay_e2e_structured_remote_servers_udp_forwarding`, plus [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py) hook/structured parsing checks | `REQ-MUX-009` | Verifies structured JSON service-definition coverage for both `own_servers` and `remote_servers`, plus listener lifecycle-hook execution for structured `own_servers` entries with placeholder-rendered hook context |
 | `test_overlay_e2e_admin_api_available_when_auth_disabled` | `REQ-ADM-002` | Auth-disabled API accessibility |
 | `test_overlay_e2e_admin_api_unavailable_without_correct_auth` | `REQ-ADM-003` | Auth-required API lockout behavior |
 | `test_overlay_e2e_admin_api_available_after_correct_auth` | `REQ-ADM-004` | Successful challenge/login unlock behavior |
@@ -402,7 +406,7 @@ This deeper mapping links concrete integration scenarios to requirement IDs. It 
 
 ### Current certificate-mode secure-link coverage
 
-The certificate-based secure-link slice is now delivered through Phase 2 trust validation and Phase 3 operational controls, and it is defended by both unit and subprocess integration coverage.
+The certificate-based secure-link slice spans Phase 2 trust validation and Phase 3 operational controls, and it is defended by both unit and subprocess integration coverage.
 
 Certificate-mode tests now generate their root, certificate, signature, and private-key material at runtime through [tests/fixtures/secure_link_cert/__init__.py](../tests/fixtures/secure_link_cert/__init__.py), so the repository no longer carries checked-in secure-link cert artifacts.
 
@@ -453,7 +457,7 @@ The repository now contains a narrow Phase 1 prototype for:
 - `secure_link_rekey_after_seconds`
 - admin-driven peer-targeted `POST /api/secure-link/rekey` with a JSON body carrying the selected `peer_id`
 
-This runtime slice is now reflected by active `REQ-AUT-*` requirements, and the certificate-mode secure-link follow-up has now been promoted into active `REQ-AUT-011` through `REQ-AUT-019`.
+This runtime slice is reflected by active `REQ-AUT-*` requirements, and the certificate-mode secure-link follow-up maps to active `REQ-AUT-011` through `REQ-AUT-019`.
 
 | Test | Active requirement IDs exercised | Objective | Test criteria | How to start |
 |---|---|---|---|---|

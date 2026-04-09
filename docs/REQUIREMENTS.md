@@ -144,6 +144,7 @@ Current implementation note:
 - `REQ-MUX-006`: On hosts where a supported TUN backend is available and the process has permission to create/configure TUN devices, including Linux hosts with `/dev/net/tun` and Windows hosts with a usable WinTun installation, a connected peer shall be able to carry packet traffic between local TUN interfaces over one overlay connection.
 - `REQ-MUX-007`: TUN service publication shall use the same peer-scoped catalog and channel-isolation rules as TCP and UDP services, so one peer's TUN interfaces and packet channels do not conflict with another peer's channels or published services.
 - `REQ-MUX-008`: When a UDP service datagram or TUN packet does not fit into one effective wrapped-session payload budget, the mux layer shall preserve the logical message boundary by fragmenting it across multiple mux messages and reassembling it before local delivery.
+- `REQ-MUX-009`: The service-definition runtime surface shall accept structured JSON entries for both `own_servers` and `remote_servers`, and a structured `own_servers` entry may include lifecycle hook commands that execute on listener-side service events (`on_created`, `on_channel_connected`, `on_channel_closed`) with placeholder-driven argument/environment rendering.
 
 ## Loss and delay requirements
 

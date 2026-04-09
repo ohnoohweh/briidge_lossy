@@ -33,6 +33,42 @@ class _FakeSession:
 
 
 class ChannelMuxListenerModeTests(unittest.TestCase):
+    def test_select_hook_argv_uses_list_directly(self):
+        selected = ChannelMux._select_hook_argv({"argv": ["cmd", "arg1"]}, platform_key="linux")
+        self.assertEqual(selected, ["cmd", "arg1"])
+
+    def test_select_hook_argv_uses_platform_specific_mapping(self):
+        cmd = {
+            "argv": {
+                "linux": ["ip", "route", "add", "{target_host}/32", "dev", "{ifname}"],
+                "windows": ["route", "ADD", "{target_host}", "MASK", "255.255.255.255", "{ifname}"],
+                "default": ["echo", "fallback"],
+            }
+        }
+        self.assertEqual(
+            ChannelMux._select_hook_argv(cmd, platform_key="linux"),
+            ["ip", "route", "add", "{target_host}/32", "dev", "{ifname}"],
+        )
+        self.assertEqual(
+            ChannelMux._select_hook_argv(cmd, platform_key="windows"),
+            ["route", "ADD", "{target_host}", "MASK", "255.255.255.255", "{ifname}"],
+        )
+        self.assertEqual(
+            ChannelMux._select_hook_argv(cmd, platform_key="freebsd"),
+            ["echo", "fallback"],
+        )
+
+    def test_select_hook_argv_rejects_invalid_shape(self):
+        with self.assertRaisesRegex(ValueError, "argv list"):
+            ChannelMux._select_hook_argv({"argv": "bad"}, platform_key="linux")
+
+    def test_render_hook_value_replaces_known_placeholders(self):
+        rendered = ChannelMux._render_hook_value(
+            "route add {target_host} dev {ifname} svc={service_id}",
+            {"target_host": "198.18.30.2", "ifname": "obtun0", "service_id": 3},
+        )
+        self.assertEqual(rendered, "route add 198.18.30.2 dev obtun0 svc=3")
+
     def test_listener_mode_ignores_own_servers_and_remote_servers(self):
         args = argparse.Namespace(
             peer=None,

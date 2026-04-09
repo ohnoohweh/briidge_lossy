@@ -477,6 +477,37 @@ The assistant should produce:
 - expose hook results through logs and admin diagnostics
 - add black-box regression coverage for listener, client, TCP, UDP, and TUN paths
 
+### Phase 2 peer-transfer scope and frame-budget constraint
+
+Hook execution adds a protocol-scope question for peer-installed services:
+
+- `own_servers` hooks execute from local config on the local process
+- `remote_servers` services are installed on the connected peer through `REMOTE_SERVICES_SET_V2`
+- if remote service hooks are intended to execute on that peer, hook definitions must be transferred to the peer in a wire-compatible form
+
+Current runtime behavior:
+
+- `REMOTE_SERVICES_SET_V2` currently transfers only service endpoint fields
+- `lifecycle_hooks` and `options` are not serialized in that payload
+- as a result, peer-installed services can be created, but remote hook definitions are not available on the receiving side unless a dedicated transfer extension is added
+
+Frame-size implication:
+
+- yes, the per-app-frame payload budget counts here
+- mux/control payloads are bounded by the effective session app payload size (commonly `65535` bytes, and sometimes lower depending on wrapping/session limits)
+- hook definitions can be large (`argv`, `env`, event blocks, multiple services), so a naive single-message embedding can exceed that budget
+
+Design requirement for remote hook transfer:
+
+- remote hook transfer should be treated as a separate versioned protocol slice
+- payload growth must be bounded and validated against effective session limits
+- if one-message transfer cannot be guaranteed under limit, the protocol needs explicit chunking/reassembly and clear failure semantics
+
+Practical direction:
+
+- keep `own_servers` hook execution independent so local hook execution remains useful without protocol expansion
+- add remote hook transfer only with explicit wire/version design and targeted integration tests for near-limit and oversized catalog behavior
+
 ### Phase 3: UI/editor improvement
 
 - add the quick-start assistant and task-oriented setup flows

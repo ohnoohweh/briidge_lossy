@@ -10782,6 +10782,7 @@ class ChannelMux:
     SIOCSIFMTU = 0x8922
     IFF_UP = 0x1
     IFF_RUNNING = 0x40
+    HOOK_DEFAULT_TIMEOUT_MS = 10000
 
     @staticmethod
     def _proto_name_to_code(name: "ChannelMux.ProtoName") -> int:
@@ -11119,6 +11120,213 @@ class ChannelMux:
             self.log.debug("[MUX] on_peer_disconnected wired")
         except Exception:
             pass
+    
+    @staticmethod
+    def _hook_platform_key() -> str:
+        platform = str(sys.platform or "").lower()
+        if platform.startswith("win"):
+            return "windows"
+        if platform.startswith("linux"):
+            return "linux"
+        if platform.startswith("darwin"):
+            return "darwin"
+        return platform or "unknown"
+
+    @staticmethod
+    def _render_hook_value(value: Any, context: Dict[str, Any]) -> str:
+        class _SafeMap(dict):
+            def __missing__(self, key):  # type: ignore[override]
+                return ""
+        return str(value).format_map(_SafeMap({k: "" if v is None else str(v) for k, v in context.items()}))
+
+    @staticmethod
+    def _select_hook_argv(command_spec: dict, platform_key: Optional[str] = None) -> list[str]:
+        selected: Optional[Any] = None
+        pk = str(platform_key or ChannelMux._hook_platform_key())
+        argv = command_spec.get("argv")
+        if isinstance(argv, list):
+            selected = argv
+        elif isinstance(argv, dict):
+            selected = argv.get(pk)
+            if selected is None and pk == "windows":
+                selected = argv.get("win32")
+            if selected is None:
+                selected = argv.get("default")
+        if selected is None:
+            argv_by_os = command_spec.get("argv_by_os")
+            if isinstance(argv_by_os, dict):
+                selected = argv_by_os.get(pk)
+                if selected is None and pk == "windows":
+                    selected = argv_by_os.get("win32")
+                if selected is None:
+                    selected = argv_by_os.get("default")
+        if not isinstance(selected, list):
+            raise ValueError("hook command must resolve to argv list")
+        out = [str(v) for v in selected if str(v)]
+        if not out:
+            raise ValueError("hook command argv list must not be empty")
+        return out
+
+    def _hook_command_spec_for(self, spec: "ChannelMux.ServiceSpec", role: str, event: str) -> Optional[dict]:
+        hooks = spec.lifecycle_hooks
+        if not isinstance(hooks, dict):
+            return None
+        role_hooks = hooks.get(str(role))
+        if not isinstance(role_hooks, dict):
+            return None
+        command_spec = role_hooks.get(str(event))
+        if not isinstance(command_spec, dict):
+            return None
+        return command_spec
+
+    def _hook_context(
+        self,
+        spec: "ChannelMux.ServiceSpec",
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        event: str,
+        role: str,
+        channel_id: Optional[int] = None,
+        peer_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        catalog = ""
+        if svc_key is not None:
+            catalog = "own_servers" if str(svc_key[0]) == "local" else "remote_servers"
+        return {
+            "service_id": int(spec.svc_id),
+            "service_name": str(spec.name or f"svc-{spec.svc_id}"),
+            "catalog": catalog,
+            "event": str(event),
+            "protocol": str(spec.l_proto),
+            "channel_id": "" if channel_id is None else int(channel_id),
+            "bind": str(spec.l_bind),
+            "listen_port": int(spec.l_port),
+            "target_host": str(spec.r_host),
+            "target_port": int(spec.r_port),
+            "ifname": str(spec.l_bind) if str(spec.l_proto) == "tun" else "",
+            "peer_id": "" if peer_id is None else int(peer_id),
+            "peer_endpoint": "",
+            "role": str(role),
+        }
+
+    async def _run_service_hook(
+        self,
+        spec: "ChannelMux.ServiceSpec",
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        role: str,
+        event: str,
+        *,
+        channel_id: Optional[int] = None,
+        peer_id: Optional[int] = None,
+    ) -> None:
+        command_spec = self._hook_command_spec_for(spec, role, event)
+        if command_spec is None:
+            return
+        context = self._hook_context(spec, svc_key, event, role, channel_id=channel_id, peer_id=peer_id)
+        try:
+            argv_raw = self._select_hook_argv(command_spec)
+            argv = [self._render_hook_value(v, context) for v in argv_raw]
+            timeout_ms_raw = command_spec.get("timeout_ms", self.HOOK_DEFAULT_TIMEOUT_MS)
+            timeout_ms = int(timeout_ms_raw)
+            if timeout_ms <= 0:
+                timeout_ms = self.HOOK_DEFAULT_TIMEOUT_MS
+            env = None
+            env_extra = command_spec.get("env")
+            if isinstance(env_extra, dict):
+                env = dict(os.environ)
+                for k, v in env_extra.items():
+                    env[str(k)] = self._render_hook_value(v, context)
+            self.log.info(
+                "[HOOK] start role=%s event=%s svc=%s argv=%r timeout_ms=%s",
+                role,
+                event,
+                spec.svc_id,
+                argv,
+                timeout_ms,
+            )
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            try:
+                stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=max(0.1, timeout_ms / 1000.0))
+            except asyncio.TimeoutError:
+                with contextlib.suppress(Exception):
+                    proc.kill()
+                with contextlib.suppress(Exception):
+                    await proc.wait()
+                self.log.warning(
+                    "[HOOK] timeout role=%s event=%s svc=%s timeout_ms=%s argv=%r",
+                    role,
+                    event,
+                    spec.svc_id,
+                    timeout_ms,
+                    argv,
+                )
+                return
+            stdout_tail = (stdout_b or b"").decode("utf-8", "replace")[-400:]
+            stderr_tail = (stderr_b or b"").decode("utf-8", "replace")[-400:]
+            level_fn = self.log.info if int(proc.returncode or 0) == 0 else self.log.warning
+            level_fn(
+                "[HOOK] done role=%s event=%s svc=%s rc=%s stdout_tail=%r stderr_tail=%r",
+                role,
+                event,
+                spec.svc_id,
+                proc.returncode,
+                stdout_tail,
+                stderr_tail,
+            )
+        except Exception as e:
+            self.log.warning(
+                "[HOOK] failed role=%s event=%s svc=%s err=%r",
+                role,
+                event,
+                spec.svc_id,
+                e,
+            )
+
+    def _schedule_service_hook(
+        self,
+        spec: "ChannelMux.ServiceSpec",
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        role: str,
+        event: str,
+        *,
+        channel_id: Optional[int] = None,
+        peer_id: Optional[int] = None,
+    ) -> None:
+        if not self.loop.is_running():
+            self.log.debug(
+                "[HOOK] schedule skipped role=%s event=%s svc=%s: event loop not running",
+                role,
+                event,
+                spec.svc_id,
+            )
+            return
+        coro = self._run_service_hook(
+            spec,
+            svc_key,
+            role,
+            event,
+            channel_id=channel_id,
+            peer_id=peer_id,
+        )
+        try:
+            task = self.loop.create_task(coro)
+        except Exception as e:
+            with contextlib.suppress(Exception):
+                coro.close()
+            self.log.debug(
+                "[HOOK] schedule skipped role=%s event=%s svc=%s err=%r",
+                role,
+                event,
+                spec.svc_id,
+                e,
+            )
+            return
+        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
     # ---------- public counters ----------
     def udp_open_count(self) -> int:
@@ -11532,6 +11740,7 @@ class ChannelMux:
             local_addr=(spec.l_bind, spec.l_port),
             family=family
         )
+        self._schedule_service_hook(spec, svc_key, "listener", "on_created")
 
     def _on_local_udp_datagram(self, spec: ChannelMux.ServiceSpec, svc_key: "ChannelMux.ServiceKey", data: bytes, addr: tuple[str,int]) -> None:
         if not (self._overlay_connected and self._accepting_enabled):
@@ -11561,6 +11770,7 @@ class ChannelMux:
             self._udp_by_chan[chan] = (svc_key, addr)
             if str(svc_key[0]) == "peer":
                 self._chan_owner_peer_id[chan] = int(svc_key[1])
+            self._schedule_service_hook(spec, svc_key, "listener", "on_channel_connected", channel_id=chan)
             self.log.debug("[UDP/SRV] learn %s -> chan=%s svc=%s:%s", addr, chan, svc_key[0], spec.svc_id)
             try:
                 self._send_mux(chan, ChannelMux.Proto.UDP, ChannelMux.MType.OPEN, self._build_open_v4(spec))
@@ -12301,6 +12511,7 @@ class ChannelMux:
         self._svc_tun_devices[svc_key] = dev
         self._register_tun_reader(dev)
         self.log.info("[TUN/SRV] service=%s:%s opened if=%s mtu=%s", svc_key[0], spec.svc_id, dev.ifname, dev.mtu)
+        self._schedule_service_hook(spec, svc_key, "listener", "on_created")
 
     def _tun_fragment_payload_limit(self) -> int:
         return max(0, self._session_max_app_payload - ChannelMux.MUX_HDR.size - ChannelMux.UDP_FRAG_HDR.size)
@@ -12421,6 +12632,7 @@ class ChannelMux:
             self._bind_tun_channel(chan, dev)
             if str(svc_key[0]) == "peer":
                 self._chan_owner_peer_id[chan] = int(svc_key[1])
+            self._schedule_service_hook(spec, svc_key, "listener", "on_channel_connected", channel_id=chan)
             self._send_mux(chan, ChannelMux.Proto.TUN, ChannelMux.MType.OPEN, self._build_open_v4(spec))
         self._send_mux(chan, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet)
 
@@ -12460,6 +12672,16 @@ class ChannelMux:
         self._forget_tun_open_key(chan)
         self._tun_open_key_by_chan[chan] = open_key
         self._tun_chan_by_open_key[open_key] = chan
+        peer_spec = ChannelMux.ServiceSpec(
+            svc_id=int(svc_id),
+            l_proto="tun",
+            l_bind=str(l_bind),
+            l_port=int(l_port),
+            r_proto="tun",
+            r_host=str(host),
+            r_port=int(r_port),
+        )
+        self._schedule_service_hook(peer_spec, None, "client", "before_connect", channel_id=chan, peer_id=peer_id)
         dev = self._find_service_tun_device(str(host), int(r_port))
         if dev is None:
             try:
@@ -12470,6 +12692,7 @@ class ChannelMux:
                 self._forget_tun_open_key(chan)
                 return
         self._bind_tun_channel(chan, dev)
+        self._schedule_service_hook(peer_spec, None, "client", "on_connected", channel_id=chan, peer_id=peer_id)
         self.log.info("[TUN/CLI] chan=%s bound if=%s mtu=%s svc=%s", chan, dev.ifname, dev.mtu, svc_id)
 
     def _rx_tun_data(self, chan: int, data: bytes) -> None:
@@ -12578,8 +12801,13 @@ class ChannelMux:
         if dev.service_key is not None and self._tun_chan_by_service.get(dev.service_key) == chan:
             self._tun_chan_by_service.pop(dev.service_key, None)
             dev.chan_id = None
+            spec = self._effective_services_by_id().get(dev.service_key)
+            if spec is not None:
+                self._schedule_service_hook(spec, dev.service_key, "listener", "on_channel_closed", channel_id=chan)
         else:
             self._close_tun_device(dev)
+            spec = ChannelMux.ServiceSpec(svc_id=0, l_proto="tun", l_bind=dev.ifname, l_port=int(dev.mtu), r_proto="tun", r_host=dev.ifname, r_port=int(dev.mtu))
+            self._schedule_service_hook(spec, None, "client", "after_closed", channel_id=chan)
         self.log.info("[TUN] chan=%s CLOSE => local teardown", chan)
 
     # ---------- MUX RX demux ----------
@@ -12773,8 +13001,18 @@ class ChannelMux:
         self._udp_chan_by_open_key[open_key] = chan
         if chan in self._udp_client_transports:
             return
+        peer_spec = ChannelMux.ServiceSpec(
+            svc_id=int(svc_id),
+            l_proto="udp",
+            l_bind=str(l_bind),
+            l_port=int(l_port),
+            r_proto="udp",
+            r_host=str(host),
+            r_port=int(r_port),
+        )
         async def _mk():
             try:
+                await self._run_service_hook(peer_spec, None, "client", "before_connect", channel_id=chan, peer_id=peer_id)
                 family = _listener_family_for_host(host)
                 if family == socket.AF_INET6:
                     local_addr = ("::", 0)
@@ -12797,6 +13035,7 @@ class ChannelMux:
             try:
                 self._udp_client_transports[chan] = tr  # type: ignore
                 self._udp_client_last_ts[chan] = time.time()
+                self._schedule_service_hook(peer_spec, None, "client", "on_connected", channel_id=chan, peer_id=peer_id)
 
                 sockname = tr.get_extra_info("sockname")
                 peername = tr.get_extra_info("peername")  # available on connected UDP sockets
@@ -12942,6 +13181,20 @@ class ChannelMux:
         if svc_addr:
             svc_key, addr = svc_addr
             self._udp_by_client.pop((svc_key, addr), None)        
+            spec = self._effective_services_by_id().get(svc_key)
+            if spec is not None:
+                self._schedule_service_hook(spec, svc_key, "listener", "on_channel_closed", channel_id=chan)
+        elif tr is not None:
+            spec = ChannelMux.ServiceSpec(
+                svc_id=int(self._udp_client_svc_id.get(chan) or 0),
+                l_proto="udp",
+                l_bind="",
+                l_port=0,
+                r_proto="udp",
+                r_host="",
+                r_port=0,
+            )
+            self._schedule_service_hook(spec, None, "client", "after_closed", channel_id=chan)
         self.log.info("[UDP] chan=%s CLOSE => local teardown", chan)
 
     class _UDPClientProtocol(asyncio.DatagramProtocol):
@@ -13015,6 +13268,7 @@ class ChannelMux:
                 spec.svc_id,
                 len(self._tcp_by_chan),
             )
+            self._schedule_service_hook(spec, svc_key, "listener", "on_channel_connected", channel_id=chan)
 
             # Install backpressure worker
             self._ensure_backpressure_task(chan, writer)
@@ -13064,6 +13318,7 @@ class ChannelMux:
                     self._tcp_by_chan.pop(chan, None)
                     self._chan_owner_peer_id.pop(chan, None)
                     self._forget_tcp_open_key(chan)
+                    self._schedule_service_hook(spec, svc_key, "listener", "on_channel_closed", channel_id=chan)
                     self.log.info("[TCP/SRV] chan=%s CLOSE teardown complete map_size=%s", chan, len(self._tcp_by_chan))
 
             self.loop.create_task(_pump())
@@ -13076,6 +13331,7 @@ class ChannelMux:
         self._svc_tcp_servers[svc_key] = srv
         sockets = ", ".join(str(s.getsockname()) for s in (srv.sockets or []))
         self.log.info("[TCP/SRV] service=%s:%s listening on %s", svc_key[0], spec.svc_id, sockets)
+        self._schedule_service_hook(spec, svc_key, "listener", "on_created")
 
 
     # ---------- TCP RX path ----------
@@ -13137,9 +13393,19 @@ class ChannelMux:
             if chan in self._tcp_by_chan:
                 self.log.info("[TCP/CLI] chan=%s OPEN ignored because chan already connected", chan)
                 return
+            peer_spec = ChannelMux.ServiceSpec(
+                svc_id=int(svc_id),
+                l_proto="tcp",
+                l_bind=str(l_bind),
+                l_port=int(l_port),
+                r_proto="tcp",
+                r_host=str(host),
+                r_port=int(r_port),
+            )
 
             async def _dial():
                 try:
+                    await self._run_service_hook(peer_spec, None, "client", "before_connect", channel_id=chan, peer_id=peer_id)
                     reader = asyncio.StreamReader()
                     protocol = asyncio.StreamReaderProtocol(reader)
                     self.log.info("[TCP/CLI] chan=%s connecting -> %s:%s", chan, host, r_port)
@@ -13148,6 +13414,7 @@ class ChannelMux:
                     self._tcp_by_chan[chan] = (svc_id, writer)
                     self._tcp_by_writer[writer] = (svc_id, chan)
                     self._tcp_role_by_chan[chan] = "client"
+                    self._schedule_service_hook(peer_spec, None, "client", "on_connected", channel_id=chan, peer_id=peer_id)
                     pending = self._tcp_pending_data.pop(chan, [])
                     for buf in pending:
                         try:
@@ -13201,6 +13468,7 @@ class ChannelMux:
                             self._tcp_by_writer.pop(writer, None)
                             self._tcp_by_chan.pop(chan, None)
                             self._forget_tcp_open_key(chan)
+                            self._schedule_service_hook(peer_spec, None, "client", "after_closed", channel_id=chan, peer_id=peer_id)
                             self.log.info("[TCP/CLI] chan=%s CLOSE teardown complete map_size=%s", chan, len(self._tcp_by_chan))
 
                     self.loop.create_task(_rx())
@@ -13263,16 +13531,19 @@ class ChannelMux:
         # CLOSE
         if mtype == ChannelMux.MType.CLOSE:
             tup = self._tcp_by_chan.pop(chan, None)
+            role = self._tcp_role_by_chan.pop(chan, None)
             if tup:
                 _, writer = tup
                 self._tcp_pending_data.pop(chan, None)
                 self._tcp_by_writer.pop(writer, None)
-                self._tcp_role_by_chan.pop(chan, None)
                 self._chan_owner_peer_id.pop(chan, None)
                 try:
                     writer.close()
                 except Exception:
                     pass
+                if role == "client":
+                    spec = ChannelMux.ServiceSpec(svc_id=0, l_proto="tcp", l_bind="", l_port=0, r_proto="tcp", r_host="", r_port=0)
+                    self._schedule_service_hook(spec, None, "client", "after_closed", channel_id=chan)
             self._forget_tcp_open_key(chan)
             self.log.info("[TCP] chan=%s CLOSE => local teardown map_size=%s", chan, len(self._tcp_by_chan))
 

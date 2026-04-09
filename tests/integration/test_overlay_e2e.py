@@ -859,6 +859,23 @@ def _replace_own_servers_local_port(args: List[str], local_port: int) -> List[st
     return out
 
 
+def _replace_option_values(args: List[str], option: str, values: List[str]) -> List[str]:
+    out: List[str] = []
+    i = 0
+    while i < len(args):
+        arg = str(args[i])
+        if arg == option:
+            i += 1
+            while i < len(args) and not str(args[i]).startswith('--'):
+                i += 1
+            continue
+        out.append(arg)
+        i += 1
+    if values:
+        out.extend([str(option), *[str(v) for v in values]])
+    return out
+
+
 def _with_localhost_peer(case: Case, name: str, bind_host: str, resolve_family: str) -> Case:
     transport = 'myudp'
     if '--overlay-transport' in case.bridge_client_args:
@@ -1909,6 +1926,27 @@ def wait_probe(
             last_exc = e
             time.sleep(0.25)
     raise RuntimeError(f'Probe failed for {case.name}: {last_exc}')
+
+
+def _wait_jsonl_events(path: Path, predicate: Callable[[List[Dict[str, str]]], bool], *, timeout: float = 12.0) -> List[Dict[str, str]]:
+    end = time.time() + timeout
+    last_rows: List[Dict[str, str]] = []
+    while time.time() < end:
+        if path.exists():
+            rows: List[Dict[str, str]] = []
+            for raw in path.read_text(encoding='utf-8', errors='replace').splitlines():
+                line = str(raw).strip()
+                if not line:
+                    continue
+                with contextlib.suppress(Exception):
+                    parsed = json.loads(line)
+                    if isinstance(parsed, dict):
+                        rows.append({str(k): '' if v is None else str(v) for k, v in parsed.items()})
+            last_rows = rows
+            if predicate(rows):
+                return rows
+        time.sleep(0.1)
+    raise RuntimeError(f'event predicate not satisfied for {path.name}; rows={last_rows!r}')
 
 
 def expect_probe_failure(case: Case, payload: bytes, timeout: float = 5.0) -> None:
@@ -5498,6 +5536,148 @@ def test_overlay_e2e_basic(case_name: str, tmp_path: Path) -> None:
 @pytest.mark.parametrize("case_name", RECONNECT_CASES)
 def test_overlay_e2e_reconnect(case_name: str, tmp_path: Path) -> None:
     run_case_reconnect(CASES[case_name], tmp_path, CASE_INDEX_BASE_RECONNECT + ALL_CASES.index(case_name))
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_structured_own_servers_lifecycle_hooks_execute(tmp_path: Path) -> None:
+    case_index = 206
+    case = materialize_case_ports(CASES['case01_udp_over_own_udp_ipv4'], case_index)
+    hook_log = tmp_path / 'own_server_hook_events.jsonl'
+    hook_writer = (
+        "import json,os,pathlib;"
+        "p=pathlib.Path(os.environ['OB_HOOK_OUT']);"
+        "p.parent.mkdir(parents=True, exist_ok=True);"
+        "evt=dict("
+        "event=os.environ.get('OB_EVENT',''),"
+        "role=os.environ.get('OB_ROLE',''),"
+        "catalog=os.environ.get('OB_CATALOG',''),"
+        "protocol=os.environ.get('OB_PROTOCOL',''),"
+        "service_name=os.environ.get('OB_SERVICE_NAME',''),"
+        "service_id=os.environ.get('OB_SERVICE_ID',''),"
+        "channel_id=os.environ.get('OB_CHANNEL_ID','')"
+        ");"
+        "fp=p.open('a', encoding='utf-8');"
+        "fp.write(json.dumps(evt,separators=(',',':'))+'\\n');"
+        "fp.close()"
+    )
+    hook_cmd = {
+        'argv': [sys.executable, '-c', hook_writer],
+        'timeout_ms': 2000,
+        'env': {
+            'OB_HOOK_OUT': str(hook_log),
+            'OB_EVENT': '{event}',
+            'OB_ROLE': '{role}',
+            'OB_CATALOG': '{catalog}',
+            'OB_PROTOCOL': '{protocol}',
+            'OB_SERVICE_NAME': '{service_name}',
+            'OB_SERVICE_ID': '{service_id}',
+            'OB_CHANNEL_ID': '{channel_id}',
+        },
+    }
+    structured_own = json.dumps(
+        {
+            'name': 'hooked-own-udp',
+            'listen': {'protocol': 'udp', 'bind': str(case.probe_bind or '0.0.0.0'), 'port': int(case.probe_port)},
+            'target': {'protocol': 'udp', 'host': str(case.bounce_bind), 'port': int(case.bounce_port)},
+            'lifecycle_hooks': {
+                'listener': {
+                    'on_created': hook_cmd,
+                    'on_channel_connected': hook_cmd,
+                }
+            },
+        },
+        separators=(',', ':'),
+    )
+
+    bounce = BounceBackServer(
+        name=f'{case.name}_bounce',
+        proto=case.bounce_proto,
+        bind_host=case.bounce_bind,
+        port=case.bounce_port,
+        log_path=tmp_path / f'{case.name}_bounce.log',
+    )
+    bounce.start()
+    specs = build_commands(case, tmp_path, case_index, enable_admin=True)
+    server_name, server_cmd, server_env, server_admin = specs[0]
+    client_name, client_cmd, client_env, client_admin = specs[1]
+    client_cmd = _replace_option_values(client_cmd, '--own-servers', [structured_own])
+
+    server_proc = client_proc = None
+    try:
+        server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, tmp_path, env_extra=server_env, admin_port=server_admin)
+        client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, tmp_path, env_extra=client_env, admin_port=client_admin)
+        wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+        wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
+        client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+        wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+        wait_probe(case, payload=b'\x01hook-own', timeout=12.0)
+
+        rows = _wait_jsonl_events(
+            hook_log,
+            lambda entries: (
+                {'on_created', 'on_channel_connected'}.issubset({str(e.get('event') or '') for e in entries})
+            ),
+            timeout=12.0,
+        )
+        created_rows = [row for row in rows if row.get('event') == 'on_created']
+        connected_rows = [row for row in rows if row.get('event') == 'on_channel_connected']
+        assert created_rows and connected_rows
+        assert all(row.get('role') == 'listener' for row in created_rows + connected_rows)
+        assert all(row.get('catalog') == 'own_servers' for row in created_rows + connected_rows)
+        assert all(row.get('protocol') == 'udp' for row in created_rows + connected_rows)
+        assert all(row.get('service_name') == 'hooked-own-udp' for row in created_rows + connected_rows)
+    finally:
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+        bounce.stop()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_structured_remote_servers_udp_forwarding(tmp_path: Path) -> None:
+    case_index = 207
+    case = materialize_case_ports(CASES['case01_udp_over_own_udp_ipv4'], case_index)
+    structured_remote = json.dumps(
+        {
+            'name': 'remote-udp-json',
+            'listen': {'protocol': 'udp', 'bind': str(case.probe_bind or '0.0.0.0'), 'port': int(case.probe_port)},
+            'target': {'protocol': 'udp', 'host': str(case.bounce_bind), 'port': int(case.bounce_port)},
+        },
+        separators=(',', ':'),
+    )
+
+    bounce = BounceBackServer(
+        name=f'{case.name}_bounce',
+        proto=case.bounce_proto,
+        bind_host=case.bounce_bind,
+        port=case.bounce_port,
+        log_path=tmp_path / f'{case.name}_bounce.log',
+    )
+    bounce.start()
+    specs = build_commands(case, tmp_path, case_index, enable_admin=True)
+    server_name, server_cmd, server_env, server_admin = specs[0]
+    client_name, client_cmd, client_env, client_admin = specs[1]
+    client_cmd = _replace_option_values(client_cmd, '--own-servers', [])
+    client_cmd = _replace_option_values(client_cmd, '--remote-servers', [structured_remote])
+
+    server_proc = client_proc = None
+    try:
+        server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, tmp_path, env_extra=server_env, admin_port=server_admin)
+        client_proc = start_proc(f'{case.name}_{client_name}', client_cmd, tmp_path, env_extra=client_env, admin_port=client_admin)
+        wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+        wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
+        client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+        wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+        wait_probe(case, payload=b'\x01remote-json', timeout=12.0)
+    finally:
+        if client_proc is not None:
+            stop_proc(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+        bounce.stop()
 
 
 @pytest.mark.integration
