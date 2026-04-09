@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <title>ObstacleBridge</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="style.css?v=20260405a">
+  <link rel="stylesheet" href="style.css?v=20260409a">
 </head>
 <body>
   <div id="restartGate" class="restart-gate hidden">
@@ -57,6 +57,7 @@
       <div>
         <div class="eyebrow">Network Appliance</div>
         <h1 id="appHeadline">ObstacleBridge</h1>
+        <div id="buildBadge" class="build-badge">build unknown</div>
       </div>
       <div class="topbar-right">
         <button id="logoutBtn" class="btn btn-secondary hidden" type="button">Logout</button>
@@ -84,6 +85,30 @@
 
       <main class="mainview">
         <section id="tab-status" class="tab-panel active">
+          <section id="landingPanel" class="section-block card">
+            <div class="section-header">
+              <div>
+                <h2>Home</h2>
+                <p id="landingSummary">Quick-start actions and guidance for this node.</p>
+              </div>
+            </div>
+            <div class="quick-actions" id="landingQuickActions">
+              <button class="btn btn-secondary" type="button" data-open-tab="configuration">Open Configuration</button>
+              <button class="btn btn-secondary" type="button" data-open-tab="secure-link">Open Secure-Link</button>
+              <button class="btn btn-secondary" type="button" data-open-tab="logs">Open Debug Logs</button>
+            </div>
+          </section>
+
+          <section id="securityAdvisorPanel" class="section-block card">
+            <div class="section-header">
+              <div>
+                <h2>Security Advisor</h2>
+                <p id="securityAdvisorSummary">Current security posture and recommended next steps.</p>
+              </div>
+            </div>
+            <div id="securityAdvisorFindings" class="advisor-findings"></div>
+          </section>
+
           <section class="summary-grid">
             <article class="metric-card card">
               <div class="metric-label">UDP Open</div>
@@ -311,6 +336,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=20260405a"></script>
+  <script src="app.js?v=20260409a"></script>
 </body>
 </html>

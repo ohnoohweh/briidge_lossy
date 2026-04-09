@@ -200,10 +200,119 @@ h1 {
   font-weight: 700;
 }
 
+.build-badge {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.03em;
+}
+
+.build-badge.build-tainted {
+  border-color: rgba(251, 146, 60, 0.42);
+  background: rgba(251, 146, 60, 0.10);
+  color: #fed7aa;
+}
+
 .topbar-right {
   display: flex;
   align-items: center;
   gap: 16px;
+}
+
+.quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.advisor-findings {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.advisor-item {
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.advisor-item.severity-critical {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.10);
+}
+
+.advisor-item.severity-warning {
+  border-color: rgba(251, 146, 60, 0.42);
+  background: rgba(251, 146, 60, 0.10);
+}
+
+.advisor-item.severity-recommended {
+  border-color: rgba(245, 158, 11, 0.40);
+  background: rgba(245, 158, 11, 0.09);
+}
+
+.advisor-item.severity-informational {
+  border-color: rgba(79, 209, 197, 0.30);
+  background: rgba(79, 209, 197, 0.07);
+}
+
+.advisor-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.advisor-item h3 {
+  font-size: 16px;
+}
+
+.advisor-item p {
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+.advisor-severity {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.advisor-severity.severity-critical {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fecaca;
+}
+
+.advisor-severity.severity-warning {
+  background: rgba(251, 146, 60, 0.18);
+  color: #fed7aa;
+}
+
+.advisor-severity.severity-recommended {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fde68a;
+}
+
+.advisor-severity.severity-informational {
+  background: rgba(79, 209, 197, 0.16);
+  color: #99f6e4;
+}
+
+.advisor-item .btn {
+  margin-top: 12px;
 }
 
 .layout {

@@ -518,6 +518,17 @@ async function restart() {
   }
 }
 
+function fmtBuildBadge(build) {
+  if (!build || !build.available) return 'build unknown';
+  const commit = String(build.commit || 'unknown');
+  const tracked = Number(build.tracked_changes || 0);
+  const untracked = Number(build.untracked_changes || 0);
+  if (build.tainted) {
+    return `commit ${commit} tainted (${tracked} tracked, ${untracked} untracked)`;
+  }
+  return `commit ${commit} clean`;
+}
+
 async function reconnectOverlay() {
   const reconnectBtn = document.getElementById('reconnectBtn');
   try {
@@ -671,6 +682,80 @@ function startPolling(task, intervalMs) {
 function isTabActive(tabName) {
   const panel = document.getElementById(`tab-${tabName}`);
   return Boolean(panel && panel.classList.contains('active'));
+}
+
+function setActiveTab(tabName) {
+  const tabs = document.querySelectorAll('.nav-tab');
+  const panels = document.querySelectorAll('.tab-panel');
+  tabs.forEach((tab) => tab.classList.toggle('active', tab.dataset.tab === tabName));
+  panels.forEach((panel) => panel.classList.toggle('active', panel.id === `tab-${tabName}`));
+  updateLiveSubscriptions();
+}
+
+function advisorSeverityClass(value) {
+  const normalized = String(value || 'informational').toLowerCase();
+  if (normalized === 'critical') return 'severity-critical';
+  if (normalized === 'warning') return 'severity-warning';
+  if (normalized === 'recommended') return 'severity-recommended';
+  return 'severity-informational';
+}
+
+function renderLandingPanel(statusDoc) {
+  const panel = document.getElementById('landingPanel');
+  const summary = document.getElementById('landingSummary');
+  const enabled = Boolean(statusDoc?.admin_ui?.landing_page_enabled);
+  if (!panel || !summary) return;
+  panel.classList.toggle('hidden', !enabled);
+  if (!enabled) return;
+  const advisor = statusDoc?.security_advisor || {};
+  const highest = String(advisor.highest_severity || '').toLowerCase();
+  if (highest === 'critical') {
+    summary.textContent = 'Quick-start is available, but the security advisor found settings worth fixing before wider exposure.';
+    return;
+  }
+  if (highest === 'warning') {
+    summary.textContent = 'Quick-start is available, but the security advisor found warning-level issues that should be reviewed.';
+    return;
+  }
+  if (highest === 'recommended') {
+    summary.textContent = 'Quick-start actions are ready. The security advisor also suggests a few hardening steps for this node.';
+    return;
+  }
+  summary.textContent = 'Use these quick actions to configure, secure, and review this node without digging through every setting first.';
+}
+
+function renderSecurityAdvisor(statusDoc) {
+  const panel = document.getElementById('securityAdvisorPanel');
+  const summary = document.getElementById('securityAdvisorSummary');
+  const findingsRoot = document.getElementById('securityAdvisorFindings');
+  const advisor = statusDoc?.security_advisor || {};
+  const enabled = Boolean(advisor.enabled);
+  if (!panel || !summary || !findingsRoot) return;
+  panel.classList.toggle('hidden', !enabled);
+  if (!enabled) return;
+  summary.textContent = String(advisor.summary || 'Current security posture and recommended next steps.');
+  const findings = Array.isArray(advisor.findings) ? advisor.findings : [];
+  if (findings.length === 0) {
+    findingsRoot.innerHTML = '<div class="advisor-item severity-informational"><div class="advisor-item-top"><h3>No immediate findings</h3><span class="advisor-severity severity-informational">ok</span></div><p>No startup security recommendations are active in this first implementation slice.</p></div>';
+    return;
+  }
+  findingsRoot.innerHTML = findings.map((item) => {
+    const severity = advisorSeverityClass(item.severity);
+    const title = escapeHtml(fmtText(item.title));
+    const message = escapeHtml(fmtText(item.message));
+    const actionLabel = String(item.action_label || '').trim();
+    const actionTarget = String(item.action_target || '').trim();
+    return `
+      <article class="advisor-item ${severity}">
+        <div class="advisor-item-top">
+          <h3>${title}</h3>
+          <span class="advisor-severity ${severity}">${escapeHtml(fmtText(item.severity))}</span>
+        </div>
+        <p>${message}</p>
+        ${actionLabel && actionTarget ? `<button class="btn btn-secondary" type="button" data-open-tab="${escapeHtml(actionTarget)}">${escapeHtml(actionLabel)}</button>` : ''}
+      </article>
+    `;
+  }).join('');
 }
 
 async function loadStatus() {
@@ -885,12 +970,24 @@ async function loadPeers() {
 function applyMetaDoc(j) {
   applyAdminInstanceName(j.admin_web_name);
   setText('uptimeSec', fmtUptime(j.uptime_sec));
+  const badge = document.getElementById('buildBadge');
+  if (badge) {
+    badge.textContent = fmtBuildBadge(j.build || {});
+    badge.classList.toggle('build-tainted', Boolean(j.build?.tainted));
+  }
   const meta = document.getElementById('meta');
   if (meta) meta.textContent = JSON.stringify(j, null, 2);
 }
 
 function applyStatusDoc(j) {
   applyAdminInstanceName(j.admin_web_name);
+  const badge = document.getElementById('buildBadge');
+  if (badge) {
+    badge.textContent = fmtBuildBadge(j.build || {});
+    badge.classList.toggle('build-tainted', Boolean(j.build?.tainted));
+  }
+  renderLandingPanel(j);
+  renderSecurityAdvisor(j);
   setText('uptimeSec', fmtUptime(j.uptime_sec));
   setText('udpOpen', fmtInteger(j.open_connections?.udp));
   setText('tcpOpen', fmtInteger(j.open_connections?.tcp));
@@ -1699,6 +1796,27 @@ document.getElementById('peerConnectionsBody')?.addEventListener('click', (event
   }
   if (!target.classList.contains('secure-link-rekey-btn')) return;
   requestSecureLinkRekey(target.getAttribute('data-peer-id') || '');
+});
+document.body?.addEventListener('click', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const tabName = target.getAttribute('data-open-tab');
+  if (!tabName) return;
+  setActiveTab(tabName);
+  if (!isApiEnabled()) return;
+  if (tabName === 'configuration') {
+    loadConfig();
+    return;
+  }
+  if (tabName === 'status' && !liveState.connected) {
+    loadStatus();
+    loadConnections();
+    loadPeers();
+    return;
+  }
+  if (tabName === 'misc' && !liveState.connected) {
+    loadMeta();
+  }
 });
 initTabs();
 initMetaToggle();

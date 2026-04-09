@@ -64,6 +64,7 @@ import random
 import hashlib
 import hmac
 import secrets
+import subprocess
 from datetime import datetime, timezone
 import urllib.request
 import urllib.parse
@@ -91,6 +92,7 @@ CONFIG_SECRET_PREFIX = "enc:v1:"
 CONFIG_SECRET_SALT = b"ObstacleBridge config secret v1"
 CONFIG_SECRET_INFO = b"ObstacleBridge config field encryption"
 CONFIG_SECRET_AAD = b"ObstacleBridge cfg secret"
+_BUILD_INFO_CACHE: Optional[dict] = None
 
 
 def _config_secret_seed() -> bytes:
@@ -120,6 +122,64 @@ def _derive_config_secret_key() -> bytes:
         info=CONFIG_SECRET_INFO,
     )
     return hkdf.derive(_config_secret_seed())
+
+
+def _detect_build_info() -> dict:
+    global _BUILD_INFO_CACHE
+    if _BUILD_INFO_CACHE is not None:
+        return dict(_BUILD_INFO_CACHE)
+    info = {
+        "commit": "unknown",
+        "repo_root": "",
+        "tainted": False,
+        "tracked_changes": 0,
+        "untracked_changes": 0,
+        "available": False,
+    }
+    try:
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+    except Exception:
+        repo_root = None
+    if repo_root is not None:
+        try:
+            rev = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            if rev.returncode == 0:
+                info["commit"] = str(rev.stdout or "").strip() or "unknown"
+                info["repo_root"] = str(repo_root)
+                info["available"] = True
+            status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            if status.returncode == 0:
+                tracked = 0
+                untracked = 0
+                for line in str(status.stdout or "").splitlines():
+                    item = line.strip()
+                    if not item:
+                        continue
+                    if item.startswith("??"):
+                        untracked += 1
+                    else:
+                        tracked += 1
+                info["tracked_changes"] = tracked
+                info["untracked_changes"] = untracked
+                info["tainted"] = bool(tracked or untracked)
+        except Exception:
+            pass
+    _BUILD_INFO_CACHE = dict(info)
+    return dict(info)
 
 
 def _encrypt_config_secret(value: Any) -> Any:
@@ -15601,6 +15661,18 @@ class AdminWebUI:
             help="Optional instance name shown in the admin web title and headline",
         )
         g.add_argument(
+            "--admin-web-landing-page-disable",
+            action="store_true",
+            default=False,
+            help="Disable the Admin Web landing/quick-start panel for advanced users.",
+        )
+        g.add_argument(
+            "--admin-web-security-advisor-disable",
+            action="store_true",
+            default=False,
+            help="Disable the Admin Web startup security advisor panel for advanced users.",
+        )
+        g.add_argument(
             "--admin-web-token",
             default="",
             help="Optional bearer token for admin restart endpoint",
@@ -15820,6 +15892,7 @@ class AdminWebUI:
             "overlay_transport": getattr(self.runner.args, "overlay_transport", None),
             "dashboard_enabled": getattr(self.runner.args, "dashboard", None),
             "milestone": "C",
+            "build": _detect_build_info(),
         }
 
     async def _handle_meta(self, writer):
@@ -16091,6 +16164,105 @@ class AdminWebUI:
         suffix = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:12]
         return f"admin_web_session_{suffix}"
 
+    @staticmethod
+    def _is_loopback_host(value: str) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return False
+        lowered = text.lower().strip("[]")
+        if lowered in {"localhost", "ip6-localhost"}:
+            return True
+        try:
+            return bool(ipaddress.ip_address(lowered).is_loopback)
+        except Exception:
+            return False
+
+    def _build_security_advisor_payload(self) -> dict:
+        enabled = not bool(getattr(self.args, "admin_web_security_advisor_disable", False))
+        bind = str(getattr(self.args, "admin_web_bind", "") or "").strip()
+        admin_local_only = self._is_loopback_host(bind)
+        secure_mode = str(getattr(self.args, "secure_link_mode", "off") or "off").strip().lower()
+        secure_psk = str(getattr(self.args, "secure_link_psk", "") or "")
+        auth_disabled = bool(getattr(self.args, "admin_web_auth_disable", False))
+        admin_password = str(getattr(self.args, "admin_web_password", "") or "")
+        findings: List[dict] = []
+        if enabled:
+            if bool(getattr(self.args, "admin_web", False)):
+                if auth_disabled or not admin_password:
+                    findings.append({
+                        "id": "admin_password_missing",
+                        "severity": "warning" if not admin_local_only else "recommended",
+                        "title": "Protect Admin Web",
+                        "message": (
+                            "Admin Web password protection is recommended even on localhost-only setups. Set an admin password unless you intentionally want friction-free local access."
+                            if admin_local_only
+                            else "Admin Web is reachable beyond localhost without password protection. This should be treated as a warning. Set an admin password or bind Admin Web to localhost."
+                        ),
+                        "action_label": "Open Configuration",
+                        "action_target": "configuration",
+                    })
+            if secure_mode in {"", "off", "none"}:
+                findings.append({
+                    "id": "secure_link_disabled",
+                    "severity": "warning" if not admin_local_only else "recommended",
+                    "title": "Enable SecureLink",
+                    "message": (
+                        "SecureLink is currently disabled. That can be acceptable for localhost-only or lab-style setups, but enabling SecureLink is still recommended."
+                        if admin_local_only
+                        else "This node is not localhost-only and SecureLink is currently disabled. Running without SecureLink should be treated as a warning. Start with PSK for quick protection or move to certificates for deployment-grade trust."
+                    ),
+                    "action_label": "Open Secure-Link",
+                    "action_target": "secure-link",
+                })
+            elif secure_mode == "psk":
+                if len(secure_psk.strip()) < 12:
+                    findings.append({
+                        "id": "secure_link_psk_weak",
+                        "severity": "recommended",
+                        "title": "Strengthen PSK",
+                        "message": "SecureLink PSK is enabled, but the configured secret looks short. Use a stronger shared secret for better protection.",
+                        "action_label": "Open Configuration",
+                        "action_target": "configuration",
+                    })
+                findings.append({
+                    "id": "secure_link_cert_followup",
+                    "severity": "informational",
+                    "title": "Plan Certificate Trust",
+                    "message": "PSK is a good quick-start protection mode. For longer-lived deployments, certificate-based SecureLink provides a stronger operational trust model.",
+                    "action_label": "Open Secure-Link",
+                    "action_target": "secure-link",
+                })
+        highest = "informational"
+        for level in ("critical", "warning", "recommended", "informational"):
+            if any(str(item.get("severity", "")).lower() == level for item in findings):
+                highest = level
+                break
+        summary = "Security advisor disabled."
+        if enabled:
+            if not findings:
+                summary = "Current settings look reasonably hardened for this first implementation slice."
+            else:
+                if highest == "critical":
+                    summary = "Security advisor found settings that should be addressed before wider exposure."
+                elif highest == "warning":
+                    summary = "Security advisor found warning-level hardening issues for this node."
+                elif highest == "recommended":
+                    summary = "Security advisor found recommended hardening steps for this node."
+                else:
+                    summary = "Security advisor found optional follow-up improvements."
+        return {
+            "enabled": enabled,
+            "summary": summary,
+            "highest_severity": highest,
+            "findings": findings,
+        }
+
+    def _build_admin_ui_payload(self) -> dict:
+        return {
+            "landing_page_enabled": not bool(getattr(self.args, "admin_web_landing_page_disable", False)),
+            "security_advisor_enabled": not bool(getattr(self.args, "admin_web_security_advisor_disable", False)),
+        }
+
     def _is_authenticated(self, headers: dict) -> bool:
         if not self.auth_required():
             return True
@@ -16297,6 +16469,9 @@ class AdminWebUI:
         payload["uptime_sec"] = int(time.monotonic() - self.started_monotonic)
         payload["app"] = "udp-bidirectional-mux"
         payload["milestone"] = "B"
+        payload["admin_ui"] = self._build_admin_ui_payload()
+        payload["security_advisor"] = self._build_security_advisor_payload()
+        payload["build"] = _detect_build_info()
         return payload
 
     async def _handle_status(self, writer):
