@@ -52,6 +52,18 @@
       </form>
     </section>
   </div>
+  <div id="securityAdvisorGate" class="auth-gate hidden">
+    <section class="auth-card card advisor-gate-card">
+      <div class="eyebrow">Security Advisor</div>
+      <h2>Recommendations</h2>
+      <p id="securityAdvisorGateSummary" class="auth-copy">Current security posture and recommended next steps.</p>
+      <div id="securityAdvisorGateFindings" class="advisor-findings"></div>
+      <div class="auth-actions" style="margin-top:16px;">
+        <button id="securityAdvisorGateDisableStartupBtn" class="btn btn-secondary" type="button">Do Not Show On Startup Again</button>
+        <button id="securityAdvisorGateCloseBtn" class="btn btn-secondary" type="button">Continue</button>
+      </div>
+    </section>
+  </div>
   <div class="shell">
     <header class="topbar">
       <div>
@@ -68,6 +80,7 @@
     <div class="layout">
       <aside class="sidebar card">
         <nav class="nav-tabs" aria-label="Main navigation">
+          <button class="nav-tab" data-tab="home" type="button">Home</button>
           <button class="nav-tab active" data-tab="status" type="button">Status</button>
           <button class="nav-tab" data-tab="secure-link" type="button">Secure-Link</button>
           <button class="nav-tab" data-tab="configuration" type="button">Configuration</button>
@@ -84,31 +97,25 @@
       </aside>
 
       <main class="mainview">
-        <section id="tab-status" class="tab-panel active">
-          <section id="landingPanel" class="section-block card">
+        <section id="tab-home" class="tab-panel">
+          <section class="section-block card">
             <div class="section-header">
               <div>
                 <h2>Home</h2>
-                <p id="landingSummary">Quick-start actions and guidance for this node.</p>
+                <p id="homeSummary">Setup and troubleshooting helpers will grow here. For now, you can reopen the Security Advisor whenever you need it.</p>
               </div>
             </div>
-            <div class="quick-actions" id="landingQuickActions">
-              <button class="btn btn-secondary" type="button" data-open-tab="configuration">Open Configuration</button>
-              <button class="btn btn-secondary" type="button" data-open-tab="secure-link">Open Secure-Link</button>
-              <button class="btn btn-secondary" type="button" data-open-tab="logs">Open Debug Logs</button>
+            <div class="quick-actions">
+              <button id="openSecurityAdvisorBtn" class="btn btn-secondary" type="button">Open Security Advisor</button>
             </div>
+            <label class="home-toggle">
+              <input id="homeOpenStatusOnStartup" type="checkbox" />
+              <span>Open Status on startup</span>
+            </label>
           </section>
+        </section>
 
-          <section id="securityAdvisorPanel" class="section-block card">
-            <div class="section-header">
-              <div>
-                <h2>Security Advisor</h2>
-                <p id="securityAdvisorSummary">Current security posture and recommended next steps.</p>
-              </div>
-            </div>
-            <div id="securityAdvisorFindings" class="advisor-findings"></div>
-          </section>
-
+        <section id="tab-status" class="tab-panel active">
           <section class="summary-grid">
             <article class="metric-card card">
               <div class="metric-label">UDP Open</div>

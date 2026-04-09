@@ -2,7 +2,12 @@
 """
 Replacement for `scripts/run.sh`.
 
-Runs a command in a loop and restarts it only when it exits with code 75.
+Runs a command in a loop and restarts it when it exits with one of the
+project restart codes:
+
+- 75: restart immediately
+- 77: restart after the configured interval
+
 If the command exits with any other code, this script exits with that code.
 
 Usage examples:
@@ -21,7 +26,7 @@ import time
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Run a command and restart only on exit code 75")
+    p = argparse.ArgumentParser(description="Run a command and restart on project restart exit codes")
     p.add_argument(
         "--command",
         "-c",
@@ -33,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
         "-i",
         type=int,
         default=30,
-        help="Seconds to wait before restarting when exit code == 75",
+        help="Seconds to wait before restarting when exit code == 77",
     )
     p.add_argument(
         "--no-redirect",
@@ -61,9 +66,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Command not found: {exc}", file=sys.stderr)
                 return 127
             rc = int(result.returncode)
-            if rc != 75:
-                return rc
-            time.sleep(args.interval)
+            if rc == 75:
+                continue
+            if rc == 77:
+                time.sleep(args.interval)
+                continue
+            return rc
     finally:
         if devnull is not None:
             devnull.close()

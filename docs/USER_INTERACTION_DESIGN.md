@@ -48,6 +48,124 @@ The operator should not need to memorize tuple formats, certificate field lists,
 - avoid asking for the same connection inputs multiple times
 - let one configured node generate reusable setup material for another node
 
+## Design direction and justification
+
+The interaction design is intentionally moving away from a configuration-first product toward a guided operator-first product.
+
+That direction is justified by the nature of the tool:
+
+- ObstacleBridge combines transport choice, exposure decisions, service mapping, and security posture in one runtime
+- many important choices are cross-cutting rather than isolated to one field
+- users often know what they want to achieve before they know which protocol or settings are appropriate
+- small configuration mistakes can lead to confusing failure modes that are hard to diagnose from syntax alone
+
+The design direction therefore prioritizes:
+
+- guided decisions over raw parameter entry
+- validation and recommendations over silent acceptance of risky settings
+- reusable setup artifacts over repeated manual input
+- visibility of security and troubleshooting posture over hidden internal state
+
+### Why guided interaction matters
+
+Guided interaction is preferred because the tool asks users to make decisions that are operational, not merely syntactic.
+
+Examples:
+
+- choosing `myudp` vs `ws` is not just a protocol dropdown, it is a judgment about the surrounding network
+- deciding whether a listener is localhost-only or publicly reachable affects the expected security posture
+- choosing between PSK and certificates is a tradeoff between quick deployment and longer-term trust management
+
+A raw config editor can expose those knobs, but it does not help the user choose well.
+
+### Why recommendations and warnings matter
+
+The product should recommend better defaults and warn on risky exposure because:
+
+- many deployments start as experiments and later become semi-permanent
+- localhost-only assumptions often drift into broader exposure over time
+- operators benefit from incremental hardening guidance rather than only binary pass/fail validation
+
+This is why the security advisor distinguishes:
+
+- acceptable-but-not-ideal local/lab posture
+- warning-level real-world exposure without expected protection
+
+### Why reuse matters
+
+Configuration reuse and template connections are important because duplicated input creates avoidable errors.
+
+If a server already knows:
+
+- which transport peers should use
+- which hostname or IP they should target
+- what security mode is expected
+
+then asking the peer-side operator to re-enter those values manually adds friction without adding value.
+
+### Why troubleshooting context belongs in the interaction design
+
+Troubleshooting is part of user interaction, not only an engineering afterthought.
+
+When something fails, the operator needs fast answers to basic questions such as:
+
+- what exact build is running
+- whether the runtime is clean or tainted
+- what transport and security mode are active
+- whether the path appears unstable
+
+Exposing this context directly in the UI reduces support friction and helps users reason about the system without dropping immediately into logs or source code.
+
+### Why some surfaces stay optional
+
+Not every operator wants the same amount of guidance.
+
+That is why parts of the interaction model should remain optional or configurable:
+
+- startup security advisor popup
+- first landing tab
+- future Home/setup assistant surfaces
+
+This keeps the product approachable for new users without burdening advanced users who already know their workflow.
+
+## Early implementation direction
+
+The current implementation work has started with a deliberately small slice of this broader interaction vision.
+
+What has been added so far:
+
+- a Security Advisor surface in WebAdmin
+- startup-popup behavior for the Security Advisor when findings exist
+- direct actions from the Security Advisor into the relevant tab
+- a user-facing option to stop showing the Security Advisor automatically on startup, with immediate config persistence
+- a Home tab that can reopen the Security Advisor
+- a Home-tab shortcut to choose whether startup should open `Home` or `Status`
+- build identity visibility, including commit ID and clean/tainted state, as part of troubleshooting context
+
+Why this is a good first slice:
+
+- it puts helpful guidance in front of the user without forcing a full wizard implementation first
+- it starts reducing configuration hunting by placing a few important controls where the user feels the need for them
+- it establishes the pattern that WebAdmin should guide, explain, and assist rather than only expose raw runtime state
+- it already connects security posture, troubleshooting posture, and operator convenience in one place
+
+How this contributes to the long-term vision:
+
+- the Security Advisor is an early form of guided interaction
+- the startup popup proves that guidance can appear at the right moment instead of being hidden in a tab
+- the Home shortcuts show how frequently used decisions can move closer to the user’s workflow
+- build identity visibility supports the troubleshooting-assistant direction by making software state visible directly in the UI
+
+This implementation is intentionally not the end state.
+
+It is a foundation step toward:
+
+- setup assistants
+- troubleshooting assistants
+- protocol and environment advisors
+- reusable server-to-peer setup artifacts
+- more task-oriented WebAdmin workflows
+
 ## Primary user entrypoint
 
 Admin Web should become the main operating console for normal users.

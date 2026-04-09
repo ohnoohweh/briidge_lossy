@@ -92,6 +92,8 @@ CONFIG_SECRET_PREFIX = "enc:v1:"
 CONFIG_SECRET_SALT = b"ObstacleBridge config secret v1"
 CONFIG_SECRET_INFO = b"ObstacleBridge config field encryption"
 CONFIG_SECRET_AAD = b"ObstacleBridge cfg secret"
+RESTART_EXIT_CODE_IMMEDIATE = 75
+RESTART_EXIT_CODE_DELAYED = 77
 _BUILD_INFO_CACHE: Optional[dict] = None
 
 
@@ -14487,6 +14489,7 @@ class Runner:
         self.admin_web = None
         self._restart_requested: Optional[asyncio.Event] = None
         self._restart_requested_flag = False
+        self._restart_exit_code: int = RESTART_EXIT_CODE_IMMEDIATE
         self._shutdown_exit_code: Optional[int] = None
         self._last_connected_monotonic: Optional[float] = None
         self._last_disconnected_monotonic: Optional[float] = None
@@ -14606,8 +14609,8 @@ class Runner:
                 self.log.debug("[RUNNER] stop timed out during restart")
 
         if self._restart_requested is not None and self._restart_requested.is_set():
-            self.log.warning("[RUNNER] exiting rc=75")
-            raise SystemExit(75)
+            self.log.warning("[RUNNER] exiting rc=%d", int(self._restart_exit_code))
+            raise SystemExit(int(self._restart_exit_code))
 
         if self._shutdown_exit_code is not None:
             self.log.warning("[RUNNER] exiting rc=%d", self._shutdown_exit_code)
@@ -14696,9 +14699,15 @@ class Runner:
         except RuntimeError:
             pass
 
+    def _restart_requires_delay(self) -> bool:
+        raw = str(getattr(self.args, "overlay_transport", "") or "")
+        parts = [item.strip().lower() for item in raw.split(",") if item.strip()]
+        return "myudp" in parts
+
     def request_restart(self) -> None:
         self.log.debug("[SERVER] Runner restart requested")
         self._restart_requested_flag = True
+        self._restart_exit_code = RESTART_EXIT_CODE_DELAYED if self._restart_requires_delay() else RESTART_EXIT_CODE_IMMEDIATE
         if self._restart_requested is not None:
             self._restart_requested.set()
 
@@ -15673,6 +15682,18 @@ class AdminWebUI:
             help="Disable the Admin Web startup security advisor panel for advanced users.",
         )
         g.add_argument(
+            "--admin-web-security-advisor-startup-disable",
+            action="store_true",
+            default=False,
+            help="Do not auto-open the security advisor on first page load.",
+        )
+        g.add_argument(
+            "--admin-web-first-tab",
+            choices=["home", "status", "secure-link", "configuration", "logs", "misc"],
+            default="home",
+            help="Initial Admin Web tab. Use status for an advanced/operator-focused default.",
+        )
+        g.add_argument(
             "--admin-web-token",
             default="",
             help="Optional bearer token for admin restart endpoint",
@@ -16045,7 +16066,13 @@ class AdminWebUI:
                 await self._send(writer, 403, b"Forbidden", "text/plain; charset=utf-8")
                 return
 
-        payload = {"ok": True, "restarting": True}
+        delay_restart = bool(self.runner._restart_requires_delay())
+        payload = {
+            "ok": True,
+            "restarting": True,
+            "restart_mode": "delayed" if delay_restart else "immediate",
+            "restart_delay_sec": 40 if delay_restart else 0,
+        }
         self._log_api_response("/api/restart", 200, payload)
         await self._send_json(writer, 200, payload)
         self.runner.request_restart()
@@ -16184,20 +16211,20 @@ class AdminWebUI:
         secure_mode = str(getattr(self.args, "secure_link_mode", "off") or "off").strip().lower()
         secure_psk = str(getattr(self.args, "secure_link_psk", "") or "")
         auth_disabled = bool(getattr(self.args, "admin_web_auth_disable", False))
-        admin_password = str(getattr(self.args, "admin_web_password", "") or "")
         findings: List[dict] = []
         if enabled:
             if bool(getattr(self.args, "admin_web", False)):
-                if auth_disabled or not admin_password:
+                if auth_disabled:
+                    admin_message = (
+                        "Admin Web password protection is recommended even on localhost-only setups. Enable admin authentication in the configuration unless you intentionally want friction-free local access."
+                        if admin_local_only
+                        else "Admin Web is reachable beyond localhost and admin authentication is disabled in the configuration. This should be treated as a warning. Enable admin authentication or bind Admin Web to localhost."
+                    )
                     findings.append({
-                        "id": "admin_password_missing",
+                        "id": "admin_auth_disabled",
                         "severity": "warning" if not admin_local_only else "recommended",
                         "title": "Protect Admin Web",
-                        "message": (
-                            "Admin Web password protection is recommended even on localhost-only setups. Set an admin password unless you intentionally want friction-free local access."
-                            if admin_local_only
-                            else "Admin Web is reachable beyond localhost without password protection. This should be treated as a warning. Set an admin password or bind Admin Web to localhost."
-                        ),
+                        "message": admin_message,
                         "action_label": "Open Configuration",
                         "action_target": "configuration",
                     })
@@ -16259,8 +16286,11 @@ class AdminWebUI:
 
     def _build_admin_ui_payload(self) -> dict:
         return {
-            "landing_page_enabled": not bool(getattr(self.args, "admin_web_landing_page_disable", False)),
+            "home_tab_enabled": True,
+            "landing_page_enabled": False,
             "security_advisor_enabled": not bool(getattr(self.args, "admin_web_security_advisor_disable", False)),
+            "security_advisor_startup_enabled": not bool(getattr(self.args, "admin_web_security_advisor_startup_disable", False)),
+            "first_tab": str(getattr(self.args, "admin_web_first_tab", "home") or "home"),
         }
 
     def _is_authenticated(self, headers: dict) -> bool:

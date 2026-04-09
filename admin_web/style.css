@@ -86,6 +86,10 @@ body.restart-locked .shell {
   padding: 28px;
 }
 
+.advisor-gate-card {
+  width: min(100%, 720px);
+}
+
 .auth-copy {
   margin-top: 8px;
   color: var(--muted);
@@ -230,6 +234,19 @@ h1 {
   flex-wrap: wrap;
   gap: 12px;
   margin-top: 16px;
+}
+
+.home-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  color: var(--muted);
+}
+
+.home-toggle input {
+  width: 16px;
+  height: 16px;
 }
 
 .advisor-findings {

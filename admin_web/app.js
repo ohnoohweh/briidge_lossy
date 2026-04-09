@@ -110,6 +110,12 @@ const liveState = {
   pollingStops: [],
 };
 
+const uiState = {
+  statusDoc: null,
+  securityAdvisorShownOnce: false,
+  initialTabApplied: false,
+};
+
 function isApiEnabled() {
   return !authState.required || authState.authenticated;
 }
@@ -512,7 +518,10 @@ async function restart() {
     if (!r.ok || !j.ok) {
       throw new Error(j.error || `HTTP ${r.status}`);
     }
-    startRestartCountdown(40);
+    const delaySec = Math.max(0, Number(j.restart_delay_sec || 0));
+    if (delaySec > 0) {
+      startRestartCountdown(delaySec);
+    }
   } catch (e) {
     window.alert(`Restart failed: ${e}`);
   }
@@ -700,39 +709,11 @@ function advisorSeverityClass(value) {
   return 'severity-informational';
 }
 
-function renderLandingPanel(statusDoc) {
-  const panel = document.getElementById('landingPanel');
-  const summary = document.getElementById('landingSummary');
-  const enabled = Boolean(statusDoc?.admin_ui?.landing_page_enabled);
-  if (!panel || !summary) return;
-  panel.classList.toggle('hidden', !enabled);
-  if (!enabled) return;
+function renderSecurityAdvisorMarkup(statusDoc, findingsElementId, summaryElementId) {
+  const summary = document.getElementById(summaryElementId);
+  const findingsRoot = document.getElementById(findingsElementId);
   const advisor = statusDoc?.security_advisor || {};
-  const highest = String(advisor.highest_severity || '').toLowerCase();
-  if (highest === 'critical') {
-    summary.textContent = 'Quick-start is available, but the security advisor found settings worth fixing before wider exposure.';
-    return;
-  }
-  if (highest === 'warning') {
-    summary.textContent = 'Quick-start is available, but the security advisor found warning-level issues that should be reviewed.';
-    return;
-  }
-  if (highest === 'recommended') {
-    summary.textContent = 'Quick-start actions are ready. The security advisor also suggests a few hardening steps for this node.';
-    return;
-  }
-  summary.textContent = 'Use these quick actions to configure, secure, and review this node without digging through every setting first.';
-}
-
-function renderSecurityAdvisor(statusDoc) {
-  const panel = document.getElementById('securityAdvisorPanel');
-  const summary = document.getElementById('securityAdvisorSummary');
-  const findingsRoot = document.getElementById('securityAdvisorFindings');
-  const advisor = statusDoc?.security_advisor || {};
-  const enabled = Boolean(advisor.enabled);
-  if (!panel || !summary || !findingsRoot) return;
-  panel.classList.toggle('hidden', !enabled);
-  if (!enabled) return;
+  if (!summary || !findingsRoot) return;
   summary.textContent = String(advisor.summary || 'Current security posture and recommended next steps.');
   const findings = Array.isArray(advisor.findings) ? advisor.findings : [];
   if (findings.length === 0) {
@@ -756,6 +737,60 @@ function renderSecurityAdvisor(statusDoc) {
       </article>
     `;
   }).join('');
+}
+
+function openSecurityAdvisorGate() {
+  const gate = document.getElementById('securityAdvisorGate');
+  if (!gate) return;
+  gate.classList.remove('hidden');
+  document.body.classList.add('config-locked');
+}
+
+function closeSecurityAdvisorGate() {
+  const gate = document.getElementById('securityAdvisorGate');
+  if (!gate) return;
+  gate.classList.add('hidden');
+  document.body.classList.remove('config-locked');
+}
+
+function maybeOpenSecurityAdvisor(statusDoc) {
+  if (uiState.securityAdvisorShownOnce) return;
+  const advisor = statusDoc?.security_advisor || {};
+  const adminUi = statusDoc?.admin_ui || {};
+  const findings = Array.isArray(advisor.findings) ? advisor.findings : [];
+  if (!advisor.enabled || !adminUi.security_advisor_startup_enabled || findings.length === 0) return;
+  uiState.securityAdvisorShownOnce = true;
+  renderSecurityAdvisorMarkup(statusDoc, 'securityAdvisorGateFindings', 'securityAdvisorGateSummary');
+  openSecurityAdvisorGate();
+}
+
+function renderHomeTab(statusDoc) {
+  const summary = document.getElementById('homeSummary');
+  const button = document.getElementById('openSecurityAdvisorBtn');
+  const openStatusCheckbox = document.getElementById('homeOpenStatusOnStartup');
+  const adminUi = statusDoc?.admin_ui || {};
+  const homeEnabled = Boolean(adminUi.home_tab_enabled);
+  const homePanel = document.getElementById('tab-home');
+  const homeNav = document.querySelector('.nav-tab[data-tab="home"]');
+  if (homePanel) homePanel.classList.toggle('hidden', !homeEnabled);
+  if (homeNav) homeNav.classList.toggle('hidden', !homeEnabled);
+  if (openStatusCheckbox) {
+    openStatusCheckbox.checked = String(adminUi.first_tab || 'home').toLowerCase() === 'status';
+  }
+  if (!summary || !button) return;
+  const advisor = statusDoc?.security_advisor || {};
+  const findings = Array.isArray(advisor.findings) ? advisor.findings : [];
+  if (!advisor.enabled) {
+    summary.textContent = 'Security Advisor is disabled. Setup and troubleshooting helpers can live here as they grow.';
+    button.disabled = true;
+    return;
+  }
+  if (findings.length === 0) {
+    summary.textContent = 'No immediate Security Advisor findings are active right now. You can reopen the advisor to confirm the current posture any time.';
+  } else {
+    summary.textContent = String(advisor.summary || 'You can reopen the Security Advisor any time from this Home tab.');
+  }
+  button.disabled = false;
 }
 
 async function loadStatus() {
@@ -980,14 +1015,20 @@ function applyMetaDoc(j) {
 }
 
 function applyStatusDoc(j) {
+  uiState.statusDoc = j || {};
+  if (!uiState.initialTabApplied) {
+    uiState.initialTabApplied = true;
+    const preferredTab = String(j?.admin_ui?.first_tab || 'home').toLowerCase();
+    setActiveTab(preferredTab);
+  }
   applyAdminInstanceName(j.admin_web_name);
   const badge = document.getElementById('buildBadge');
   if (badge) {
     badge.textContent = fmtBuildBadge(j.build || {});
     badge.classList.toggle('build-tainted', Boolean(j.build?.tainted));
   }
-  renderLandingPanel(j);
-  renderSecurityAdvisor(j);
+  renderHomeTab(j);
+  maybeOpenSecurityAdvisor(j);
   setText('uptimeSec', fmtUptime(j.uptime_sec));
   setText('udpOpen', fmtInteger(j.open_connections?.udp));
   setText('tcpOpen', fmtInteger(j.open_connections?.tcp));
@@ -1047,38 +1088,7 @@ async function loadConfig() {
   }
 }
 
-async function saveConfig() {
-  const editors = Array.from(document.querySelectorAll('.config-editor[data-config-key]'));
-  if (editors.length === 0) return;
-
-  const updates = {};
-  for (const input of editors) {
-    const key = input.getAttribute('data-config-key');
-    const isSecret = input.getAttribute('data-secret') === 'true';
-    if (isSecret) {
-      const nextValue = input.value || '';
-      if (nextValue) {
-        updates[key] = nextValue;
-      }
-      continue;
-    }
-    const raw = (input.value || '').trim();
-    try {
-      const parsed = JSON.parse(raw);
-      const current = configState.config ? configState.config[key] : undefined;
-      if (JSON.stringify(parsed) !== JSON.stringify(current)) {
-        updates[key] = parsed;
-      }
-    } catch (e) {
-      setText('configMessage', `Invalid JSON for ${key}: ${e}`);
-      return;
-    }
-  }
-  if (Object.keys(updates).length === 0) {
-    setText('configMessage', 'No configuration changes to save.');
-    return;
-  }
-
+async function saveConfigUpdates(updates, successMessage) {
   try {
     const challengeResp = await apiFetch('/api/config/challenge', {
       method: 'POST',
@@ -1117,10 +1127,93 @@ async function saveConfig() {
     if (!r.ok || !j.ok) {
       throw new Error(j.error || `HTTP ${r.status}`);
     }
-    setText('configMessage', `Saved ${Object.keys(updates).length} configuration value(s).`);
+    setText('configMessage', successMessage || `Saved ${Object.keys(updates).length} configuration value(s).`);
     await loadConfig();
+    return true;
   } catch (e) {
     setText('configMessage', `Save failed: ${e}`);
+    return false;
+  }
+}
+
+async function saveConfig() {
+  const editors = Array.from(document.querySelectorAll('.config-editor[data-config-key]'));
+  if (editors.length === 0) return;
+
+  const updates = {};
+  for (const input of editors) {
+    const key = input.getAttribute('data-config-key');
+    const isSecret = input.getAttribute('data-secret') === 'true';
+    if (isSecret) {
+      const nextValue = input.value || '';
+      if (nextValue) {
+        updates[key] = nextValue;
+      }
+      continue;
+    }
+    const raw = (input.value || '').trim();
+    try {
+      const parsed = JSON.parse(raw);
+      const current = configState.config ? configState.config[key] : undefined;
+      if (JSON.stringify(parsed) !== JSON.stringify(current)) {
+        updates[key] = parsed;
+      }
+    } catch (e) {
+      setText('configMessage', `Invalid JSON for ${key}: ${e}`);
+      return;
+    }
+  }
+  if (Object.keys(updates).length === 0) {
+    setText('configMessage', 'No configuration changes to save.');
+    return;
+  }
+  await saveConfigUpdates(updates, `Saved ${Object.keys(updates).length} configuration value(s).`);
+}
+
+async function disableSecurityAdvisorStartup() {
+  const button = document.getElementById('securityAdvisorGateDisableStartupBtn');
+  if (button) button.disabled = true;
+  try {
+    if (!configState.config || Object.keys(configState.config).length === 0) {
+      await loadConfig();
+    }
+    const ok = await saveConfigUpdates(
+      { admin_web_security_advisor_startup_disable: true },
+      'Security Advisor startup popup disabled and configuration saved.'
+    );
+    if (ok) {
+      if (uiState.statusDoc?.admin_ui) {
+        uiState.statusDoc.admin_ui.security_advisor_startup_enabled = false;
+      }
+      closeSecurityAdvisorGate();
+    }
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function toggleOpenStatusOnStartup(event) {
+  const checkbox = event?.target;
+  if (!(checkbox instanceof HTMLInputElement)) return;
+  checkbox.disabled = true;
+  const nextFirstTab = checkbox.checked ? 'status' : 'home';
+  try {
+    if (!configState.config || Object.keys(configState.config).length === 0) {
+      await loadConfig();
+    }
+    const ok = await saveConfigUpdates(
+      { admin_web_first_tab: nextFirstTab },
+      `Startup page updated to ${nextFirstTab}.`
+    );
+    if (ok) {
+      if (uiState.statusDoc?.admin_ui) {
+        uiState.statusDoc.admin_ui.first_tab = nextFirstTab;
+      }
+    } else {
+      checkbox.checked = !checkbox.checked;
+    }
+  } finally {
+    checkbox.disabled = false;
   }
 }
 
@@ -1786,6 +1879,14 @@ document.getElementById('configGateCancelBtn')?.addEventListener('click', () => 
   closeConfigGate(null);
 });
 document.getElementById('logsReloadBtn')?.addEventListener('click', loadLogs);
+document.getElementById('openSecurityAdvisorBtn')?.addEventListener('click', () => {
+  if (!uiState.statusDoc) return;
+  renderSecurityAdvisorMarkup(uiState.statusDoc, 'securityAdvisorGateFindings', 'securityAdvisorGateSummary');
+  openSecurityAdvisorGate();
+});
+document.getElementById('homeOpenStatusOnStartup')?.addEventListener('change', toggleOpenStatusOnStartup);
+document.getElementById('securityAdvisorGateDisableStartupBtn')?.addEventListener('click', disableSecurityAdvisorStartup);
+document.getElementById('securityAdvisorGateCloseBtn')?.addEventListener('click', closeSecurityAdvisorGate);
 document.getElementById('authForm')?.addEventListener('submit', loginAdmin);
 document.getElementById('peerConnectionsBody')?.addEventListener('click', (event) => {
   const target = event.target;
@@ -1802,6 +1903,9 @@ document.body?.addEventListener('click', (event) => {
   if (!(target instanceof HTMLElement)) return;
   const tabName = target.getAttribute('data-open-tab');
   if (!tabName) return;
+  if (!document.getElementById('securityAdvisorGate')?.classList.contains('hidden')) {
+    closeSecurityAdvisorGate();
+  }
   setActiveTab(tabName);
   if (!isApiEnabled()) return;
   if (tabName === 'configuration') {
