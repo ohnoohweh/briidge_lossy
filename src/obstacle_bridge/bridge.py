@@ -14642,12 +14642,19 @@ class Runner:
         if self._restart_requested is not None:
             self._restart_requested.set()
 
-    def request_overlay_reconnect(self) -> dict:
+    def request_overlay_reconnect(self, target_peer_id: Optional[str] = None) -> dict:
+        target = str(target_peer_id or "").strip()
         requested = 0
         sessions = 0
         transports: list[str] = []
+        matched_target = False
         for idx, session in enumerate(self._sessions):
             sessions += 1
+            peer_row_ids = self._session_peer_row_ids(idx, session)
+            if target:
+                if target not in peer_row_ids:
+                    continue
+                matched_target = True
             method = getattr(session, "request_reconnect", None)
             if not callable(method):
                 continue
@@ -14658,8 +14665,18 @@ class Runner:
                 requested += 1
                 label = self._session_labels[idx] if idx < len(self._session_labels) else f"session-{idx}"
                 transports.append(str(label))
+        if target and not matched_target:
+            return {
+                "ok": False,
+                "target_peer_id": target,
+                "requested": 0,
+                "sessions": sessions,
+                "transports": [],
+                "reason": "unknown_peer_id",
+            }
         return {
             "ok": requested > 0,
+            "target_peer_id": target or None,
             "requested": requested,
             "sessions": sessions,
             "transports": transports,
@@ -15737,7 +15754,7 @@ class AdminWebUI:
                 return
 
             if path == "/api/reconnect":
-                await self._handle_reconnect(writer, method, headers)
+                await self._handle_reconnect(writer, method, headers, body)
                 return
 
             if path == "/api/shutdown":
@@ -15960,7 +15977,7 @@ class AdminWebUI:
         await self._send_json(writer, 200, payload)
         self.runner.request_restart()
 
-    async def _handle_reconnect(self, writer, method, headers):
+    async def _handle_reconnect(self, writer, method, headers, body: bytes):
         if method != "POST":
             await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
             return
@@ -15973,13 +15990,25 @@ class AdminWebUI:
                 await self._send(writer, 403, b"Forbidden", "text/plain; charset=utf-8")
                 return
 
-        payload = self.runner.request_overlay_reconnect()
-        code = 200 if bool(payload.get("ok")) else 409
+        req = {}
+        if body:
+            try:
+                req = json.loads((body or b"{}").decode("utf-8"))
+            except Exception:
+                await self._send_json(writer, 400, {"ok": False, "error": "invalid JSON body"})
+                return
+        target_peer_id = str(req.get("peer_id", "") or "").strip() or None
+        payload = self.runner.request_overlay_reconnect(target_peer_id=target_peer_id)
+        code = 200 if bool(payload.get("ok")) else (404 if payload.get("reason") == "unknown_peer_id" else 409)
         self._log_api_response(
             "/api/reconnect",
             code,
             payload,
-            summary=f"requested={payload.get('requested', 0)} sessions={payload.get('sessions', 0)} transports={','.join(payload.get('transports', []))}",
+            summary=(
+                f"target_peer_id={target_peer_id or '-'} "
+                f"requested={payload.get('requested', 0)} sessions={payload.get('sessions', 0)} "
+                f"transports={','.join(payload.get('transports', []))}"
+            ),
         )
         await self._send_json(writer, code, payload)
 
