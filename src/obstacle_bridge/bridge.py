@@ -10752,6 +10752,9 @@ class ChannelMux:
         r_proto: "ChannelMux.ProtoName"
         r_host: str
         r_port: int
+        name: Optional[str] = None
+        lifecycle_hooks: Optional[dict] = None
+        options: Optional[dict] = None
 
     @dataclass
     class TunDevice:
@@ -10811,7 +10814,9 @@ class ChannelMux:
         if not _has('--own-servers'):
             p.add_argument(
                 '--own-servers', nargs='*', default=None,
-                help=("Space-separated service specs (client mode only): "
+                help=("Service catalog (client mode only). "
+                      "Prefer structured JSON config entries with listen/target objects. "
+                      "Legacy tuple CLI items still use "
                       "'proto,listen_port,listen_bind,proto,host,port' (quoted). "
                       "Listener instances ignore --own-servers because multiple overlay peers make the target ambiguous. "
                         "Example: \"tcp,80,0.0.0.0,tcp,127.0.0.1,88 udp,16666,::,udp,127.0.0.1,16666 tun,1500,obtun0,tun,obtun1,1500\"")
@@ -10819,7 +10824,9 @@ class ChannelMux:
         if not _has('--remote-servers'):
             p.add_argument(
                 '--remote-servers', nargs='*', default=None,
-                help=("Space-separated service specs (client mode only, applied on connected peer): "
+                help=("Service catalog applied on the connected peer (client mode only). "
+                      "Prefer structured JSON config entries with listen/target objects. "
+                      "Legacy tuple CLI items still use "
                       "'proto,listen_port,listen_bind,proto,host,port' (quoted). "
                       "Listener instances ignore --remote-servers because multiple overlay peers make the target ambiguous. "
                         "Example: \"tcp,80,0.0.0.0,tcp,127.0.0.1,88 udp,16666,::,udp,127.0.0.1,16666 tun,1500,obtun0,tun,obtun1,1500\"")
@@ -10895,42 +10902,115 @@ class ChannelMux:
         import shlex
         if not specs:
             return []
-        filtered_specs = [s for s in specs if isinstance(s, str) and s.strip()]
-        if not filtered_specs:
-            return []
-        flat = " ".join(filtered_specs)
-        tokens = shlex.split(flat)
         out: list[ChannelMux.ServiceSpec] = []
         sid = 1
-        for tok in tokens:
-            parts = [p.strip() for p in tok.split(",")]
-            if len(parts) != 6:
-                raise ValueError(f"{arg_name} item must have 6 comma-separated fields: {tok}")
-            l_proto, l_port, l_bind, r_proto, r_host, r_port = parts
-            l_proto = l_proto.lower()
-            r_proto = r_proto.lower()
-            if l_proto not in {"udp", "tcp", "tun"}:
-                raise ValueError(f"{arg_name} local protocol must be udp, tcp or tun: {tok}")
-            if r_proto not in {"udp", "tcp", "tun"}:
-                raise ValueError(f"{arg_name} remote protocol must be udp, tcp or tun: {tok}")
-            try:
-                l_port_i = int(l_port)
-                r_port_i = int(r_port)
-            except Exception:
-                raise ValueError(f"{arg_name} ports must be integers in 1..65535: {tok}")
-            if not (1 <= l_port_i <= 65535) or not (1 <= r_port_i <= 65535):
-                raise ValueError(f"{arg_name} ports must be integers in 1..65535: {tok}")
-            out.append(ChannelMux.ServiceSpec(
-                svc_id=sid,
-                l_proto=l_proto,
-                l_bind=l_bind,
-                l_port=l_port_i,
-                r_proto=r_proto,
-                r_host=r_host.strip("[]"),
-                r_port=r_port_i,
-            ))
-            sid += 1
+        for item in specs:
+            if item is None:
+                continue
+            if isinstance(item, dict):
+                out.append(ChannelMux._parse_structured_service_spec(item, arg_name, sid))
+                sid += 1
+                continue
+            if not isinstance(item, str) or not item.strip():
+                continue
+            tokens = shlex.split(item)
+            if not tokens:
+                tokens = [item]
+            for tok in tokens:
+                out.append(ChannelMux._parse_legacy_service_spec(tok, arg_name, sid))
+                sid += 1
         return out
+
+    @staticmethod
+    def _validate_service_proto(name: str, arg_name: str, tok: str, side: str) -> str:
+        lowered = str(name or "").strip().lower()
+        if lowered not in {"udp", "tcp", "tun"}:
+            raise ValueError(f"{arg_name} {side} protocol must be udp, tcp or tun: {tok}")
+        return lowered
+
+    @staticmethod
+    def _validate_service_port(value: Any, arg_name: str, tok: str, field_name: str) -> int:
+        try:
+            port = int(value)
+        except Exception:
+            raise ValueError(f"{arg_name} {field_name} must be an integer in 1..65535: {tok}")
+        if not (1 <= port <= 65535):
+            raise ValueError(f"{arg_name} {field_name} must be an integer in 1..65535: {tok}")
+        return port
+
+    @staticmethod
+    def _parse_legacy_service_spec(tok: str, arg_name: str, sid: int) -> "ChannelMux.ServiceSpec":
+        parts = [p.strip() for p in tok.split(",")]
+        if len(parts) != 6:
+            raise ValueError(f"{arg_name} item must have 6 comma-separated fields: {tok}")
+        l_proto, l_port, l_bind, r_proto, r_host, r_port = parts
+        l_proto = ChannelMux._validate_service_proto(l_proto, arg_name, tok, "local")
+        r_proto = ChannelMux._validate_service_proto(r_proto, arg_name, tok, "remote")
+        l_port_i = ChannelMux._validate_service_port(l_port, arg_name, tok, "local port")
+        r_port_i = ChannelMux._validate_service_port(r_port, arg_name, tok, "remote port")
+        return ChannelMux.ServiceSpec(
+            svc_id=sid,
+            l_proto=l_proto,
+            l_bind=l_bind,
+            l_port=l_port_i,
+            r_proto=r_proto,
+            r_host=r_host.strip("[]"),
+            r_port=r_port_i,
+        )
+
+    @staticmethod
+    def _parse_structured_service_spec(item: dict, arg_name: str, sid: int) -> "ChannelMux.ServiceSpec":
+        token = json.dumps(item, sort_keys=True, ensure_ascii=False)
+        listen = item.get("listen")
+        target = item.get("target")
+        if not isinstance(listen, dict):
+            raise ValueError(f"{arg_name} structured item requires object field listen: {token}")
+        if not isinstance(target, dict):
+            raise ValueError(f"{arg_name} structured item requires object field target: {token}")
+        l_proto = ChannelMux._validate_service_proto(listen.get("protocol"), arg_name, token, "listen")
+        r_proto = ChannelMux._validate_service_proto(target.get("protocol"), arg_name, token, "target")
+
+        if l_proto == "tun":
+            l_bind = str(listen.get("ifname", "") or "").strip()
+            l_port_i = ChannelMux._validate_service_port(listen.get("mtu"), arg_name, token, "listen mtu")
+            if not l_bind:
+                raise ValueError(f"{arg_name} structured tun listen requires ifname: {token}")
+        else:
+            l_bind = str(listen.get("bind", "") or "").strip()
+            l_port_i = ChannelMux._validate_service_port(listen.get("port"), arg_name, token, "listen port")
+            if not l_bind:
+                raise ValueError(f"{arg_name} structured {l_proto} listen requires bind: {token}")
+
+        if r_proto == "tun":
+            r_host = str(target.get("ifname", "") or "").strip()
+            r_port_i = ChannelMux._validate_service_port(target.get("mtu"), arg_name, token, "target mtu")
+            if not r_host:
+                raise ValueError(f"{arg_name} structured tun target requires ifname: {token}")
+        else:
+            r_host = str(target.get("host", "") or "").strip().strip("[]")
+            r_port_i = ChannelMux._validate_service_port(target.get("port"), arg_name, token, "target port")
+            if not r_host:
+                raise ValueError(f"{arg_name} structured {r_proto} target requires host: {token}")
+
+        lifecycle_hooks = item.get("lifecycle_hooks")
+        if lifecycle_hooks is not None and not isinstance(lifecycle_hooks, dict):
+            raise ValueError(f"{arg_name} structured item lifecycle_hooks must be an object when provided: {token}")
+        options = item.get("options")
+        if options is not None and not isinstance(options, dict):
+            raise ValueError(f"{arg_name} structured item options must be an object when provided: {token}")
+
+        return ChannelMux.ServiceSpec(
+            svc_id=sid,
+            l_proto=l_proto,
+            l_bind=l_bind,
+            l_port=l_port_i,
+            r_proto=r_proto,
+            r_host=r_host,
+            r_port=r_port_i,
+            name=str(item.get("name", "") or "").strip() or None,
+            lifecycle_hooks=lifecycle_hooks if isinstance(lifecycle_hooks, dict) else None,
+            options=options if isinstance(options, dict) else None,
+        )
 
     # -------------- lifecycle --------------
     def __init__(self, session, loop: asyncio.AbstractEventLoop,

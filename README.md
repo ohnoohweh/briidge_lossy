@@ -36,6 +36,12 @@ The recommended workflow is:
 
 This keeps first startup simple and makes larger settings such as `own_servers`, `remote_servers`, auth options, and multi-transport listener combinations much easier to manage than long shell commands.
 
+Service-definition note:
+
+- the preferred config shape for `own_servers` and `remote_servers` is now a structured JSON object form with `listen` and `target` blocks
+- the old comma-separated tuple form still exists as a narrow compatibility input inside the current runtime, but the intended migration path is the repository tool [scripts/migrate_service_definitions.py](scripts/migrate_service_definitions.py)
+- if you have older tuple-based JSON config files, migrate them first and keep the structured JSON form as the durable definition going forward
+
 Important config-format note:
 
 - `--config` / `-c` currently expects a JSON file, not an INI file
@@ -912,6 +918,8 @@ This stays consistent with the current runtime boundary:
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 
 Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `135` integration tests, `138` unit tests. Current branch validation also includes the CI-aligned Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`, the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, and the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`.
+
+For changes that touch `src/obstacle_bridge/bridge.py`, the most important regression signal after opening a pull request is the Linux shared integration lane in GitHub CI. Windows-local integration execution is still useful for targeted investigation, but it is not currently the most reliable green/red indicator for broad regression confidence on this branch history.
 
 The shared integration harness now generates localhost TLS test certificates in a temporary directory outside the repository and uses availability-aware loopback port allocation when materializing test cases. This keeps private key material out of version control and makes the Linux shared `xdist` run resilient to host services that already occupy uncommon local ports.
 

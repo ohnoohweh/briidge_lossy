@@ -99,6 +99,42 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         self.assertEqual(parsed[2].l_bind, 'obtun0')
         self.assertEqual(parsed[2].r_host, 'obtun1')
 
+    def test_parse_remote_servers_accepts_structured_specs(self):
+        specs = [
+            {
+                'name': 'public-http',
+                'listen': {'protocol': 'tcp', 'bind': '0.0.0.0', 'port': 80},
+                'target': {'protocol': 'tcp', 'host': '127.0.0.1', 'port': 8080},
+                'lifecycle_hooks': {
+                    'listener': {
+                        'on_created': {'argv': ['hook.cmd', 'created']},
+                    }
+                },
+                'options': {'note': 'reserved'},
+            },
+            {
+                'listen': {'protocol': 'tun', 'ifname': 'obtun0', 'mtu': 1400},
+                'target': {'protocol': 'tun', 'ifname': 'obtun1', 'mtu': 1400},
+            },
+        ]
+
+        parsed = ChannelMux._parse_remote_servers(specs)
+
+        self.assertEqual(len(parsed), 2)
+        self.assertEqual(parsed[0].name, 'public-http')
+        self.assertEqual(parsed[0].l_proto, 'tcp')
+        self.assertEqual(parsed[0].l_bind, '0.0.0.0')
+        self.assertEqual(parsed[0].l_port, 80)
+        self.assertEqual(parsed[0].r_host, '127.0.0.1')
+        self.assertEqual(parsed[0].r_port, 8080)
+        self.assertEqual(parsed[0].lifecycle_hooks['listener']['on_created']['argv'], ['hook.cmd', 'created'])
+        self.assertEqual(parsed[0].options['note'], 'reserved')
+        self.assertEqual(parsed[1].l_proto, 'tun')
+        self.assertEqual(parsed[1].l_bind, 'obtun0')
+        self.assertEqual(parsed[1].l_port, 1400)
+        self.assertEqual(parsed[1].r_host, 'obtun1')
+        self.assertEqual(parsed[1].r_port, 1400)
+
     def test_parse_remote_servers_rejects_invalid_specs(self):
         with self.assertRaisesRegex(ValueError, '--remote-servers item must have 6 comma-separated fields'):
             ChannelMux._parse_remote_servers(['udp,16667,0.0.0.0,udp,127.0.0.1'])
@@ -106,8 +142,25 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '--remote-servers local protocol must be udp, tcp or tun'):
             ChannelMux._parse_remote_servers(['icmp,16667,0.0.0.0,udp,127.0.0.1,16666'])
 
-        with self.assertRaisesRegex(ValueError, '--remote-servers ports must be integers in 1..65535'):
+        with self.assertRaisesRegex(ValueError, '--remote-servers local port must be an integer in 1..65535'):
             ChannelMux._parse_remote_servers(['udp,0,0.0.0.0,udp,127.0.0.1,16666'])
+
+    def test_parse_remote_servers_rejects_invalid_structured_specs(self):
+        with self.assertRaisesRegex(ValueError, 'requires object field listen'):
+            ChannelMux._parse_remote_servers([{'target': {'protocol': 'tcp', 'host': '127.0.0.1', 'port': 80}}])
+
+        with self.assertRaisesRegex(ValueError, 'structured tcp listen requires bind'):
+            ChannelMux._parse_remote_servers([{
+                'listen': {'protocol': 'tcp', 'port': 80},
+                'target': {'protocol': 'tcp', 'host': '127.0.0.1', 'port': 8080},
+            }])
+
+        with self.assertRaisesRegex(ValueError, 'lifecycle_hooks must be an object'):
+            ChannelMux._parse_remote_servers([{
+                'listen': {'protocol': 'udp', 'bind': '0.0.0.0', 'port': 16667},
+                'target': {'protocol': 'udp', 'host': '127.0.0.1', 'port': 16666},
+                'lifecycle_hooks': ['bad'],
+            }])
 
     def test_parse_service_specs_treats_empty_config_entries_as_no_services(self):
         self.assertEqual(ChannelMux._parse_own_servers([None]), [])
