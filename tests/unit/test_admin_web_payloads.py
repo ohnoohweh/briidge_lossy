@@ -240,6 +240,9 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["secure_link_last_reload_scope"], "revocation")
         self.assertEqual(payload["secure_link_last_reload_result"], "applied")
         self.assertEqual(payload["secure_link_peers_dropped_total"], 2)
+        self.assertIn("admin_ui", payload)
+        self.assertEqual(payload["admin_ui"]["first_start_detected"], False)
+        self.assertEqual(payload["admin_ui"]["config_file_state"], "unknown")
 
     def test_build_status_payload_preserves_connection_failure_fields(self):
         args = argparse.Namespace(

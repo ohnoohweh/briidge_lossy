@@ -999,7 +999,7 @@ This stays consistent with the current runtime boundary:
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 - Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `140` integration tests, `154` unit tests. Current branch validation also includes the CI-aligned Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`, the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, and the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`.
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `140` integration tests, `157` unit tests. Current branch validation also includes the CI-aligned Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`, the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, and the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`.
 
 For changes that touch `src/obstacle_bridge/bridge.py`, the most important regression signal after opening a pull request is the Linux shared integration lane in GitHub CI. Windows-local integration execution is still useful for targeted investigation, but it is not currently the most reliable green/red indicator for broad regression confidence on this branch history.
 
@@ -1008,11 +1008,11 @@ The shared integration harness now generates localhost TLS test certificates in 
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `71/75 = 94.7%`
-- Unit-covered: `53/75 = 70.7%`
-- Any-test-covered: `75/75 = 100.0%`
-- Tracked in manifest: `75/75 = 100.0%`
-- Requirements without integration coverage: `REQ-ADM-007`, `REQ-ADM-008`, `REQ-ADM-009`, `REQ-LIFE-006`
+- Integration-covered: `71/76 = 93.4%`
+- Unit-covered: `54/76 = 71.1%`
+- Any-test-covered: `76/76 = 100.0%`
+- Tracked in manifest: `76/76 = 100.0%`
+- Requirements without integration coverage: `REQ-ADM-007`, `REQ-ADM-008`, `REQ-ADM-009`, `REQ-LIFE-006`, `REQ-LIFE-007`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
 

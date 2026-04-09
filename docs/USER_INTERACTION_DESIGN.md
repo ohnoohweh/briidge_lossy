@@ -25,12 +25,12 @@ ObstacleBridge should feel like a guided networking tool, not a syntax puzzle.
 
 The primary interaction model should be:
 
-1. start the process with a minimal bootstrap config
-2. open Admin Web
-3. choose a goal
-4. answer a short series of focused questions
-5. review the generated configuration
-6. apply and save
+1. install and start with `python -m obstacle_bridge`
+2. let the runtime detect first start from the default config state
+3. open Admin Web onboarding
+4. choose a simple goal
+5. answer only essential prompts
+6. connect and then expose advanced settings progressively
 
 The operator should not need to memorize tuple formats, certificate field lists, or every transport option just to publish one service or secure one deployment.
 
@@ -172,12 +172,15 @@ Admin Web should become the main operating console for normal users.
 
 Recommended first-run experience:
 
-1. the process starts with a very small config
-2. Admin Web opens to a landing page instead of a raw config editor
-3. the landing page asks:
-   - What do you want to do today?
-4. the user chooses a guided flow
-5. the product builds the underlying structured configuration from those answers
+1. user starts the runtime with `python -m obstacle_bridge` and no manual config discussion
+2. runtime uses default config path (`ObstacleBridge.cfg`) and treats first run as "new start" when no usable config content exists
+3. Admin Web opens to a beginner landing page, not raw config fields
+4. primary onboarding asks for a connection invite string (human-shared text, typically base64-like)
+5. onboarding asks for admin username/password with a visible checkbox to disable auth intentionally
+6. bottom actions offer:
+   - Set up this node as a peer server
+   - Skip guided setup (I will configure manually)
+7. only after the quick path succeeds should advanced controls become prominent
 
 Recommended top-level entry actions:
 
@@ -194,6 +197,26 @@ Recommended top-level entry actions:
 - Generate peer setup package
 - Import peer setup package
 - Open advanced configuration
+
+## Beginner-first onboarding contract
+
+The beginning of the user journey should optimize for "first successful connection" rather than "first complete configuration".
+
+First-run onboarding should therefore prioritize:
+
+- one startup command (`python -m obstacle_bridge`)
+- one invite-input field
+- one credential step (username/password, with explicit opt-out checkbox)
+- one-click role choice (peer server vs guided client connect)
+
+The onboarding should defer advanced topics such as:
+
+- multi-file config layout
+- structured service-definition editing
+- lifecycle hooks and OS-specific hook commands
+- transport fine-tuning and protocol edge options
+
+Those topics remain important, but should be presented only after baseline connectivity is established.
 
 ## Interaction layers
 
@@ -230,6 +253,7 @@ Characteristics:
 
 - raw config visibility
 - advanced transport settings
+- lifecycle hooks and command templating
 - direct field access
 - intended as an exception path, not the default
 

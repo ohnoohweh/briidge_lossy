@@ -17030,6 +17030,8 @@ class AdminWebUI:
             "security_advisor_enabled": not bool(getattr(self.args, "admin_web_security_advisor_disable", False)),
             "security_advisor_startup_enabled": not bool(getattr(self.args, "admin_web_security_advisor_startup_disable", False)),
             "first_tab": str(getattr(self.args, "admin_web_first_tab", "home") or "home"),
+            "first_start_detected": bool(getattr(self.args, "_first_start_detected", False)),
+            "config_file_state": str(getattr(self.args, "_config_file_state", "unknown") or "unknown"),
         }
 
     def _is_authenticated(self, headers: dict) -> bool:
@@ -17486,6 +17488,8 @@ class ConfigAwareCLI:
         self._bootstrap: Optional[argparse.ArgumentParser] = None
         self._parser: Optional[argparse.ArgumentParser] = None
         self._raw_config: Optional[Dict[str, Any]] = None
+        self._config_file_state: str = "unknown"  # unknown|missing|empty|loaded|invalid
+        self._first_start_detected: bool = False
 
         # Snapshots captured right AFTER registrars add their options,
         # and BEFORE we apply any JSON config.
@@ -17510,6 +17514,8 @@ class ConfigAwareCLI:
         # Phase 2: apply JSON config as defaults (if provided)
         if boot_args.config:
             config_path = pathlib.Path(boot_args.config)
+            self._config_file_state = "unknown"
+            self._first_start_detected = False
             if explicit_config_flag or config_path.exists():
                 try:
                     cfg = self._load_json_config(boot_args.config)
@@ -17520,9 +17526,21 @@ class ConfigAwareCLI:
                         f"Config file not found, continuing with defaults: {config_path}\n"
                     )
                     sys.stderr.flush()
+                    self._config_file_state = "missing"
+                except ValueError:
+                    self._config_file_state = "invalid"
+                    raise
                 else:
                     self._raw_config = cfg
                     self._apply_config_defaults_from_json(parser, cfg)
+                    self._config_file_state = "empty" if not cfg else "loaded"
+            else:
+                # Default startup path where config was not explicitly passed and does not exist.
+                self._config_file_state = "missing"
+
+            default_cfg_name = "ObstacleBridge.cfg"
+            cfg_name = pathlib.Path(str(boot_args.config)).name
+            self._first_start_detected = cfg_name == default_cfg_name and self._config_file_state in {"missing", "empty"}
 
         # Phase 3: final parse; CLI overrides config/defaults
         args = parser.parse_args(remaining)
@@ -17533,6 +17551,8 @@ class ConfigAwareCLI:
         args.save_config = boot_args.save_config       # file path or None
         args.save_format = boot_args.save_format       # "json" | "json-flat"
         args.force = boot_args.force                   # bool
+        args._config_file_state = self._config_file_state
+        args._first_start_detected = self._first_start_detected
 
         # If dumping or saving was requested, perform it and exit right here.
         self._maybe_dump_or_save_and_exit(args)
@@ -17850,8 +17870,13 @@ class ConfigAwareCLI:
         p = pathlib.Path(path)
         if not p.exists():
             raise FileNotFoundError(f"Config file not found: {p}")
-        with p.open("r", encoding="utf-8") as f:
-            data = json.load(f)
+        raw = p.read_text(encoding="utf-8")
+        if not raw.strip():
+            return {}
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON config in {p}: {e}") from e
         expanded = self._expand_env(data)
         return _transform_config_secrets(expanded, _decrypt_config_secret)
 

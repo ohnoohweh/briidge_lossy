@@ -123,6 +123,7 @@ Current implementation note:
 - `REQ-LIFE-004`: Restart-specific regressions for concurrent channel cases shall remain covered so existing functionality does not silently erode.
 - `REQ-LIFE-005`: Repeated failed reconnect attempts shall be throttled by a configurable minimum retry delay so client overlays do not hammer connection setup continuously while a peer remains unavailable.
 - `REQ-LIFE-006`: Operator-triggered reconnect requests exposed by the admin API and WebAdmin shall be scoped to the selected established peer connection rather than being process-global across unrelated peer sessions.
+- `REQ-LIFE-007`: Startup through the default runtime entrypoint shall tolerate a missing or empty default config file by continuing with built-in defaults, while malformed JSON config input shall fail fast with a clear error.
 
 ## Listener and multi-peer requirements
 
