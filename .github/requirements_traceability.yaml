@@ -539,12 +539,14 @@ REQ-ADM-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_available_when_auth_disabled
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_when_auth_disabled
+  unit_tests:
+    - tests/unit/test_admin_web_payloads.py::test_onboarding_connection_profiles_expose_configured_transports
+    - tests/unit/test_admin_web_payloads.py::test_onboarding_blueprints_group_active_peer_connections
 
 
 REQ-ADM-009:
   unit_tests:
     - tests/unit/test_runner_config_persistence.py::test_runtime_config_encrypts_secret_fields_and_loads_them_back
-  unit_tests:
     - tests/unit/test_admin_web_payloads.py::test_config_snapshot_hides_secure_link_psk_and_marks_it_read_only
     - tests/unit/test_admin_web_payloads.py::test_update_config_rejects_secure_link_psk
 
@@ -592,3 +594,10 @@ REQ-ADM-007:
 REQ-ADM-008:
   unit_tests:
     - tests/unit/test_admin_web_payloads.py::test_config_save_requires_challenge_bound_to_update_block
+
+REQ-ADM-010:
+  unit_tests:
+    - tests/unit/test_admin_web_payloads.py::test_onboarding_connection_profiles_expose_configured_transports
+    - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_roundtrip_and_suggested_updates
+    - tests/unit/test_admin_web_payloads.py::test_onboarding_blueprints_group_active_peer_connections
+    - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_preview_hides_psk_and_updates_keep_plaintext
