@@ -392,6 +392,11 @@ REQ-LIFE-004:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_server_restart_closes_tcp_preserves_udp
 
+REQ-LIFE-005:
+  integration_tests:
+    - tests/integration/test_reconnect_regression.py::test_reconnect_retry_uses_configured_minimum_delay
+    - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
+
 REQ-LST-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_two_clients

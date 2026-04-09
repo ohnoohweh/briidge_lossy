@@ -100,6 +100,37 @@ class WebSocketReconnectRegressionTests(unittest.IsolatedAsyncioTestCase):
             with contextlib.suppress(asyncio.CancelledError):
                 await session._reconnect_task
 
+    async def test_reconnect_retry_uses_configured_minimum_delay(self):
+        args = _client_args()
+        args.overlay_reconnect_retry_delay_ms = 80
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+
+        attempt_ts: list[float] = []
+
+        async def _fake_connect_to(host: str, port: int) -> None:
+            attempt_ts.append(asyncio.get_running_loop().time())
+            # Keep failing so reconnect loop keeps scheduling retries.
+            session._ws = None
+
+        session._connect_to = _fake_connect_to  # type: ignore[method-assign]
+
+        session._ws = None
+        session._start_reconnect_loop()
+        await asyncio.sleep(0.27)
+
+        self.assertGreaterEqual(len(attempt_ts), 3, "expected repeated reconnect attempts")
+        gaps = [b - a for a, b in zip(attempt_ts, attempt_ts[1:])]
+        # Keep tolerance for scheduler jitter while still proving delay throttling.
+        self.assertTrue(all(gap >= 0.06 for gap in gaps), f"retry gaps too small: {gaps!r}")
+
+        session._run_flag = False
+        if session._reconnect_task is not None:
+            session._reconnect_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await session._reconnect_task
+
 
 if __name__ == "__main__":
     unittest.main()
