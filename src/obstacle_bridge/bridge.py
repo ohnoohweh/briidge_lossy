@@ -10815,21 +10815,19 @@ class ChannelMux:
             p.add_argument(
                 '--own-servers', nargs='*', default=None,
                 help=("Service catalog (client mode only). "
-                      "Prefer structured JSON config entries with listen/target objects. "
-                      "Legacy tuple CLI items still use "
-                      "'proto,listen_port,listen_bind,proto,host,port' (quoted). "
+                      "Use structured JSON service objects with listen/target fields. "
                       "Listener instances ignore --own-servers because multiple overlay peers make the target ambiguous. "
-                        "Example: \"tcp,80,0.0.0.0,tcp,127.0.0.1,88 udp,16666,::,udp,127.0.0.1,16666 tun,1500,obtun0,tun,obtun1,1500\"")
+                        "Example JSON item: "
+                        """'{"listen":{"protocol":"tcp","bind":"0.0.0.0","port":80},"target":{"protocol":"tcp","host":"127.0.0.1","port":88}}'""")
             )
         if not _has('--remote-servers'):
             p.add_argument(
                 '--remote-servers', nargs='*', default=None,
                 help=("Service catalog applied on the connected peer (client mode only). "
-                      "Prefer structured JSON config entries with listen/target objects. "
-                      "Legacy tuple CLI items still use "
-                      "'proto,listen_port,listen_bind,proto,host,port' (quoted). "
+                      "Use structured JSON service objects with listen/target fields. "
                       "Listener instances ignore --remote-servers because multiple overlay peers make the target ambiguous. "
-                        "Example: \"tcp,80,0.0.0.0,tcp,127.0.0.1,88 udp,16666,::,udp,127.0.0.1,16666 tun,1500,obtun0,tun,obtun1,1500\"")
+                        "Example JSON item: "
+                        """'{"listen":{"protocol":"udp","bind":"::","port":16666},"target":{"protocol":"udp","host":"127.0.0.1","port":16666}}'""")
             )
         # Keep backpressure knobs (apply to local TCP writers we own)
         if not _has('--mux-tcp-bp-threshold'):
@@ -10899,7 +10897,6 @@ class ChannelMux:
     @staticmethod
     def _parse_service_specs(specs: Optional[list[str]], arg_name: str) -> list[ChannelMux.ServiceSpec]:
         """Parse service spec(s) into ServiceSpec list."""
-        import shlex
         if not specs:
             return []
         out: list[ChannelMux.ServiceSpec] = []
@@ -10907,17 +10904,29 @@ class ChannelMux:
         for item in specs:
             if item is None:
                 continue
+            parsed_items: list[dict] = []
             if isinstance(item, dict):
-                out.append(ChannelMux._parse_structured_service_spec(item, arg_name, sid))
-                sid += 1
+                parsed_items = [item]
+            elif isinstance(item, str) and item.strip():
+                try:
+                    decoded = json.loads(item)
+                except Exception as exc:
+                    raise ValueError(
+                        f"{arg_name} requires structured JSON service objects; legacy tuple syntax is no longer accepted. "
+                        f"Migrate existing config with scripts/migrate_service_definitions.py. Offending value: {item}"
+                    ) from exc
+                if isinstance(decoded, dict):
+                    parsed_items = [decoded]
+                elif isinstance(decoded, list):
+                    if not all(isinstance(entry, dict) for entry in decoded):
+                        raise ValueError(f"{arg_name} JSON arrays must contain only service objects: {item}")
+                    parsed_items = list(decoded)
+                else:
+                    raise ValueError(f"{arg_name} JSON value must be a service object or array of service objects: {item}")
+            else:
                 continue
-            if not isinstance(item, str) or not item.strip():
-                continue
-            tokens = shlex.split(item)
-            if not tokens:
-                tokens = [item]
-            for tok in tokens:
-                out.append(ChannelMux._parse_legacy_service_spec(tok, arg_name, sid))
+            for parsed_item in parsed_items:
+                out.append(ChannelMux._parse_structured_service_spec(parsed_item, arg_name, sid))
                 sid += 1
         return out
 
@@ -10937,26 +10946,6 @@ class ChannelMux:
         if not (1 <= port <= 65535):
             raise ValueError(f"{arg_name} {field_name} must be an integer in 1..65535: {tok}")
         return port
-
-    @staticmethod
-    def _parse_legacy_service_spec(tok: str, arg_name: str, sid: int) -> "ChannelMux.ServiceSpec":
-        parts = [p.strip() for p in tok.split(",")]
-        if len(parts) != 6:
-            raise ValueError(f"{arg_name} item must have 6 comma-separated fields: {tok}")
-        l_proto, l_port, l_bind, r_proto, r_host, r_port = parts
-        l_proto = ChannelMux._validate_service_proto(l_proto, arg_name, tok, "local")
-        r_proto = ChannelMux._validate_service_proto(r_proto, arg_name, tok, "remote")
-        l_port_i = ChannelMux._validate_service_port(l_port, arg_name, tok, "local port")
-        r_port_i = ChannelMux._validate_service_port(r_port, arg_name, tok, "remote port")
-        return ChannelMux.ServiceSpec(
-            svc_id=sid,
-            l_proto=l_proto,
-            l_bind=l_bind,
-            l_port=l_port_i,
-            r_proto=r_proto,
-            r_host=r_host.strip("[]"),
-            r_port=r_port_i,
-        )
 
     @staticmethod
     def _parse_structured_service_spec(item: dict, arg_name: str, sid: int) -> "ChannelMux.ServiceSpec":

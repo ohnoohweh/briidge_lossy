@@ -39,8 +39,8 @@ This keeps first startup simple and makes larger settings such as `own_servers`,
 Service-definition note:
 
 - the preferred config shape for `own_servers` and `remote_servers` is now a structured JSON object form with `listen` and `target` blocks
-- the old comma-separated tuple form still exists as a narrow compatibility input inside the current runtime, but the intended migration path is the repository tool [scripts/migrate_service_definitions.py](scripts/migrate_service_definitions.py)
-- if you have older tuple-based JSON config files, migrate them first and keep the structured JSON form as the durable definition going forward
+- the old comma-separated tuple form is no longer accepted by the runtime
+- if you have older tuple-based JSON config files, migrate them first with [scripts/migrate_service_definitions.py](scripts/migrate_service_definitions.py) and keep the structured JSON form as the durable definition going forward
 
 Important config-format note:
 
@@ -207,7 +207,22 @@ Solution with an ObstacleBridge WebSocket bridge:
 }
 ```
 
-Then use WebAdmin to add an `own_servers` entry that recreates the local WireGuard or UDP OpenVPN endpoint, for example `udp,16666,127.0.0.1,udp,127.0.0.1,16666`.
+Then use WebAdmin to add an `own_servers` entry that recreates the local WireGuard or UDP OpenVPN endpoint, for example:
+
+```json
+{
+  "listen": {
+    "protocol": "udp",
+    "bind": "127.0.0.1",
+    "port": 16666
+  },
+  "target": {
+    "protocol": "udp",
+    "host": "127.0.0.1",
+    "port": 16666
+  }
+}
+```
 
 ### 3) WireGuard bridge for high-loss obstacle conditions
 This fits paths where UDP still passes, but loss and retransmission pressure make conventional transports perform badly.
@@ -297,10 +312,21 @@ Using config files plus WebAdmin makes these multi-transport setups much easier 
 
 A TUN device is a virtual Layer 3 network interface. It is useful when you want to tunnel complete IP traffic between two hosts or sites instead of exposing only individual TCP or UDP ports. In practice, that means you can use ObstacleBridge to carry routed subnet traffic in the same general way that tools such as WireGuard or OpenVPN carry virtual network traffic.
 
-ChannelMux can expose a local TUN interface as a muxed packet service. The service-spec format uses the existing six-field syntax:
+ChannelMux can expose a local TUN interface as a muxed packet service. The preferred config shape is a structured object:
 
-```text
-tun,<local_mtu>,<local_ifname>,tun,<remote_ifname>,<remote_mtu>
+```json
+{
+  "listen": {
+    "protocol": "tun",
+    "ifname": "obtun0",
+    "mtu": 1400
+  },
+  "target": {
+    "protocol": "tun",
+    "ifname": "obtun1",
+    "mtu": 1400
+  }
+}
 ```
 
 Interpretation:
@@ -312,8 +338,8 @@ Interpretation:
 
 Example pair:
 
-- client `own_servers`: `tun,1400,obtun0,tun,obtun1,1400`
-- server `remote_servers`: `tun,1400,obtun1,tun,obtun0,1400`
+- client `own_servers`: `{"listen":{"protocol":"tun","ifname":"obtun0","mtu":1400},"target":{"protocol":"tun","ifname":"obtun1","mtu":1400}}`
+- server `remote_servers`: `{"listen":{"protocol":"tun","ifname":"obtun1","mtu":1400},"target":{"protocol":"tun","ifname":"obtun0","mtu":1400}}`
 
 Linux (native) notes
 
@@ -527,8 +553,8 @@ Current websocket payload forms:
 ### Channel mux
 | Option(s) | Default | Description |
 |---|---:|---|
-| `--own-servers` | `None` | Space-separated service specs (client mode only): 'proto,listen_port,listen_bind,proto,host,port' (quoted). Listener instances ignore --own-servers because multiple overlay peers make the target ambiguous. Example: "tcp,80,0.0.0.0,tcp,127.0.0.1,88 udp,16666,::,udp,127.0.0.1,16666" |
-| `--remote-servers` | `None` | Space-separated service specs with the same format as `--own-servers`, but applied to the connected overlay peer via mux control signaling (reverse behavior of `--own-servers`). Example: "udp,16666,0.0.0.0,udp,127.0.0.1,16666 tcp,3128,0.0.0.0,tcp,127.0.0.1,3128". |
+| `--own-servers` | `None` | Service catalog for client mode. Define `own_servers` as structured JSON service objects with `listen` and `target` blocks. Listener instances ignore `--own-servers` because multiple overlay peers make the target ambiguous. |
+| `--remote-servers` | `None` | Service catalog applied on the connected overlay peer in client mode. Define `remote_servers` as structured JSON service objects with `listen` and `target` blocks. |
 | `--mux-tcp-bp-threshold` | `1` | Mux TCP: size threshold (bytes) to trigger drain() (default 1). |
 | `--mux-tcp-bp-latency-ms` | `300` | Mux TCP: if > 0, drain writers after this ms when bytes pending. |
 | `--mux-tcp-bp-poll-interval-ms` | `50` | Mux TCP: polling interval for time-based backpressure (ms). |

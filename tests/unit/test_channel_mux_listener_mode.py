@@ -41,8 +41,14 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
             ws_peer=None,
             quic_peer=None,
             overlay_transport='myudp',
-            own_servers=['udp,16667,0.0.0.0,udp,127.0.0.1,16666'],
-            remote_servers=['tcp,3129,0.0.0.0,tcp,127.0.0.1,3128'],
+            own_servers=[{
+                'listen': {'protocol': 'udp', 'bind': '0.0.0.0', 'port': 16667},
+                'target': {'protocol': 'udp', 'host': '127.0.0.1', 'port': 16666},
+            }],
+            remote_servers=[{
+                'listen': {'protocol': 'tcp', 'bind': '0.0.0.0', 'port': 3129},
+                'target': {'protocol': 'tcp', 'host': '127.0.0.1', 'port': 3128},
+            }],
             mux_tcp_bp_threshold=1,
             mux_tcp_bp_latency_ms=300,
             mux_tcp_bp_poll_interval_ms=50,
@@ -60,7 +66,10 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
             peer='127.0.0.1',
             udp_peer='127.0.0.1',
             overlay_transport='myudp',
-            own_servers=['udp,16667,0.0.0.0,udp,127.0.0.1,16666'],
+            own_servers=[{
+                'listen': {'protocol': 'udp', 'bind': '0.0.0.0', 'port': 16667},
+                'target': {'protocol': 'udp', 'host': '127.0.0.1', 'port': 16666},
+            }],
             remote_servers=None,
             mux_tcp_bp_threshold=1,
             mux_tcp_bp_latency_ms=300,
@@ -79,11 +88,11 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         finally:
             mux.loop.close()
 
-    def test_parse_remote_servers_accepts_valid_specs(self):
+    def test_parse_remote_servers_accepts_json_string_specs(self):
         specs = [
-            'udp,16667,0.0.0.0,udp,127.0.0.1,16666',
-            'tcp,3129,::,tcp,::1,3128',
-            'tun,1500,obtun0,tun,obtun1,1500',
+            '{"listen":{"protocol":"udp","bind":"0.0.0.0","port":16667},"target":{"protocol":"udp","host":"127.0.0.1","port":16666}}',
+            '{"listen":{"protocol":"tcp","bind":"::","port":3129},"target":{"protocol":"tcp","host":"::1","port":3128}}',
+            '{"listen":{"protocol":"tun","ifname":"obtun0","mtu":1500},"target":{"protocol":"tun","ifname":"obtun1","mtu":1500}}',
         ]
 
         parsed = ChannelMux._parse_remote_servers(specs)
@@ -136,14 +145,23 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         self.assertEqual(parsed[1].r_port, 1400)
 
     def test_parse_remote_servers_rejects_invalid_specs(self):
-        with self.assertRaisesRegex(ValueError, '--remote-servers item must have 6 comma-separated fields'):
-            ChannelMux._parse_remote_servers(['udp,16667,0.0.0.0,udp,127.0.0.1'])
+        with self.assertRaisesRegex(ValueError, '--remote-servers listen protocol must be udp, tcp or tun'):
+            ChannelMux._parse_remote_servers([
+                '{"listen":{"protocol":"icmp","bind":"0.0.0.0","port":16667},"target":{"protocol":"udp","host":"127.0.0.1","port":16666}}'
+            ])
 
-        with self.assertRaisesRegex(ValueError, '--remote-servers local protocol must be udp, tcp or tun'):
-            ChannelMux._parse_remote_servers(['icmp,16667,0.0.0.0,udp,127.0.0.1,16666'])
+        with self.assertRaisesRegex(ValueError, '--remote-servers listen port must be an integer in 1..65535'):
+            ChannelMux._parse_remote_servers([
+                '{"listen":{"protocol":"udp","bind":"0.0.0.0","port":0},"target":{"protocol":"udp","host":"127.0.0.1","port":16666}}'
+            ])
 
-        with self.assertRaisesRegex(ValueError, '--remote-servers local port must be an integer in 1..65535'):
-            ChannelMux._parse_remote_servers(['udp,0,0.0.0.0,udp,127.0.0.1,16666'])
+        with self.assertRaisesRegex(ValueError, '--remote-servers target port must be an integer in 1..65535'):
+            ChannelMux._parse_remote_servers([
+                '{"listen":{"protocol":"udp","bind":"0.0.0.0","port":16667},"target":{"protocol":"udp","host":"127.0.0.1","port":"bad"}}'
+            ])
+
+        with self.assertRaisesRegex(ValueError, 'JSON value must be a service object or array of service objects'):
+            ChannelMux._parse_remote_servers(['123'])
 
     def test_parse_remote_servers_rejects_invalid_structured_specs(self):
         with self.assertRaisesRegex(ValueError, 'requires object field listen'):
