@@ -3,7 +3,7 @@ ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for ba
 
 ## Reader guide
 
-- User: start with `Why this project was developed` and `Quick-start examples`
+- User: start with `Why this project was developed` and `Quick start (Setup Wizard)`
 - Contributor: start with `Contributor guidance`
 
 ## For Users
@@ -26,135 +26,49 @@ The complete whitepaper is available as a rendered preview at [`docs/WHITEPAPER.
 - `chisel` is implemented in Go, and using/building it on Synology NAS environments can be difficult in practice.
 - ObstacleBridge adds the `myudp` transport to better handle network obstacles and traffic degradation conditions seen in large-scale Asian network environments.
 
-### Quick-start examples
-The recommended workflow is:
+### Quick start (Setup Wizard)
+For new users, the simplest path is:
 
-1. start each instance with a small JSON config file
-2. enable the Admin Web UI from the beginning
-3. tune transports, peers, published services, auth, and logging in the Config tab
-4. save the resulting config and use it as the durable runtime definition
+1. start ObstacleBridge with defaults:
 
-This keeps first startup simple and makes larger settings such as `own_servers`, `remote_servers`, auth options, and multi-transport listener combinations much easier to manage than long shell commands.
-
-Service-definition note:
-
-- use structured JSON service objects for `own_servers` and `remote_servers` with `listen` and `target` blocks
-
-### Service lifecycle hooks (Phase 2)
-
-Service definitions can include optional `lifecycle_hooks` commands.
-
-Hook execution model:
-
-- hooks use `argv` arrays (no implicit shell)
-- each hook can define one shared `argv` list or OS-specific command lists (`linux`, `windows`, `darwin`, optional `default`)
-- optional `timeout_ms` and `env` values are supported
-- placeholders are expanded from service/channel context (`{service_id}`, `{service_name}`, `{protocol}`, `{channel_id}`, `{ifname}`, `{target_host}`, `{target_port}`, `{listen_port}`, `{event}`, `{role}`, `{catalog}`, `{peer_id}`)
-
-TUN route hook example with Linux + Windows command variants:
-
-```json
-{
-  "name": "site-a-tun",
-  "listen": {
-    "protocol": "tun",
-    "ifname": "obtun0",
-    "mtu": 1400
-  },
-  "target": {
-    "protocol": "tun",
-    "ifname": "obtun1",
-    "mtu": 1400
-  },
-  "lifecycle_hooks": {
-    "listener": {
-      "on_created": {
-        "argv": {
-          "linux": ["ip", "link", "set", "dev", "{ifname}", "up"],
-          "windows": ["netsh", "interface", "set", "interface", "name={ifname}", "admin=enabled"]
-        },
-        "timeout_ms": 10000
-      },
-      "on_channel_connected": {
-        "argv": {
-          "linux": ["ip", "route", "replace", "{target_host}/32", "dev", "{ifname}"],
-          "windows": ["netsh", "interface", "ipv4", "add", "route", "prefix={target_host}/32", "interface={ifname}", "nexthop=0.0.0.0", "store=active"]
-        },
-        "timeout_ms": 10000
-      },
-      "on_channel_closed": {
-        "argv": {
-          "linux": ["ip", "route", "del", "{target_host}/32", "dev", "{ifname}"],
-          "windows": ["netsh", "interface", "ipv4", "delete", "route", "prefix={target_host}/32", "interface={ifname}", "store=active"]
-        },
-        "timeout_ms": 10000
-      }
-    }
-  }
-}
+```bash
+python -m obstacle_bridge
 ```
 
-Important config-format note:
+2. open Admin Web at `http://127.0.0.1:18080/`
+3. run the Setup Wizard from the Home tab
+4. choose Admin Web exposure (`local` or `global`) and optional credentials
+5. paste an invite token from your peer/server admin
+6. review, finish, and let the runtime restart
 
-- `--config` / `-c` currently expects a JSON file, not an INI file
-- the examples below are therefore shown as JSON so they can be copied directly into a file and loaded without surprises on Linux or Windows
-- flat JSON works well for hand-written bootstrap files
-- saved config files keep `admin_web_password` and `secure_link_psk` encrypted on disk and restore them when loaded back into the runtime
+On first start, missing or empty default config is treated as a valid bootstrap state. The wizard can populate the runtime config from invite-token data and save a durable JSON config automatically.
 
-![WebAdmin Config Editor](docs/refered_docs/WebAdmin%20ConfigEditor.png)
+### Invite-token onboarding flow
+The wizard is designed for typical peer onboarding:
 
-### Minimal bootstrap pattern
-Create one JSON config file per instance and only keep a few startup arguments on the command line.
+- Step 1: Welcome
+- Step 2: Admin Web access scope and optional username/password
+- Step 3: Invite token paste/preview
+- Step 4: Review
+- Step 5: Apply + restart
 
-**Listener / server bootstrap**
-```json
-{
-  "overlay_transport": "myudp",
-  "udp_bind": "::",
-  "udp_own_port": 4443,
-  "admin_web": true,
-  "admin_web_bind": "127.0.0.1",
-  "admin_web_port": 18080,
-  "log": "INFO"
-}
-```
+The token-based flow carries transport and service-definition onboarding data (`own_servers`, `remote_servers`, secure-link mode/PSK envelope, and peer endpoint settings). Admin credentials are entered locally in the wizard and are not sourced from the invite token.
+
+### Manual/advanced startup (optional)
+If you prefer file-based bootstrap from the command line, use JSON config files:
 
 ```bash
 python -m obstacle_bridge --config bridge_server.json
-```
-
-**Peer / client bootstrap**
-```json
-{
-  "overlay_transport": "myudp",
-  "udp_peer": "bridge.example.com",
-  "udp_peer_port": 4443,
-  "udp_own_port": 0,
-  "admin_web": true,
-  "admin_web_bind": "127.0.0.1",
-  "admin_web_port": 18081,
-  "log": "INFO"
-}
-```
-
-```bash
 python -m obstacle_bridge --config bridge_client.json
 ```
 
-Windows tip:
+Notes:
 
-- save the examples as `bridge_server.json` and `bridge_client.json`
-- then run `python -m obstacle_bridge --config bridge_server.json`
-- and `python -m obstacle_bridge --config bridge_client.json`
-- if you prefer to generate a valid JSON template from the tool itself, use `python -m obstacle_bridge --dump-config json`
+- `--config` expects JSON (not INI)
+- `python -m obstacle_bridge --dump-config json` prints a JSON template
+- saved config files store `admin_web_password` and `secure_link_psk` encrypted on disk
 
-After the first startup, open the Admin Web UI and adjust the remaining details there:
-
-- overlay transport mix such as `myudp`, `ws`, `tcp`, or `quic`
-- peer target and listener bind/port values
-- `own_servers` and `remote_servers`
-- admin authentication and instance naming
-- logging and log retention settings
+![WebAdmin Config Editor](docs/refered_docs/WebAdmin%20ConfigEditor.png)
 
 ### 1) NAS behind outbound-only internet, reached through a public server
 This setup fits a NAS or home server that can make outgoing connections but cannot accept incoming internet traffic directly.
@@ -692,6 +606,61 @@ What is visible in the included snapshots:
 | `--overlay-transport` | `myudp` | Overlay transport between peers: comma-separated list from myudp,tcp,quic,ws. Multiple transports are supported simultaneously for listening instances. |
 | `--overlay-reconnect-retry-delay-ms` | `30000` | Delay in milliseconds between failed reconnect attempts for `tcp`/`quic`/`ws` client overlays. |
 | `--client-restart-if-disconnected` | `0.0` | If configured as a peer client (for example --udp-peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables. |
+
+### Advanced service lifecycle hooks
+This is an expert feature and is intentionally documented here (CLI/advanced area), not in the quick-start onboarding path.
+
+Service definitions can include optional `lifecycle_hooks` commands.
+
+Hook execution model:
+
+- hooks use `argv` arrays (no implicit shell)
+- each hook can define one shared `argv` list or OS-specific command lists (`linux`, `windows`, `darwin`, optional `default`)
+- optional `timeout_ms` and `env` values are supported
+- placeholders are expanded from service/channel context (`{service_id}`, `{service_name}`, `{protocol}`, `{channel_id}`, `{ifname}`, `{target_host}`, `{target_port}`, `{listen_port}`, `{event}`, `{role}`, `{catalog}`, `{peer_id}`)
+
+TUN route hook example with Linux + Windows command variants:
+
+```json
+{
+  "name": "site-a-tun",
+  "listen": {
+    "protocol": "tun",
+    "ifname": "obtun0",
+    "mtu": 1400
+  },
+  "target": {
+    "protocol": "tun",
+    "ifname": "obtun1",
+    "mtu": 1400
+  },
+  "lifecycle_hooks": {
+    "listener": {
+      "on_created": {
+        "argv": {
+          "linux": ["ip", "link", "set", "dev", "{ifname}", "up"],
+          "windows": ["netsh", "interface", "set", "interface", "name={ifname}", "admin=enabled"]
+        },
+        "timeout_ms": 10000
+      },
+      "on_channel_connected": {
+        "argv": {
+          "linux": ["ip", "route", "replace", "{target_host}/32", "dev", "{ifname}"],
+          "windows": ["netsh", "interface", "ipv4", "add", "route", "prefix={target_host}/32", "interface={ifname}", "nexthop=0.0.0.0", "store=active"]
+        },
+        "timeout_ms": 10000
+      },
+      "on_channel_closed": {
+        "argv": {
+          "linux": ["ip", "route", "del", "{target_host}/32", "dev", "{ifname}"],
+          "windows": ["netsh", "interface", "ipv4", "delete", "route", "prefix={target_host}/32", "interface={ifname}", "store=active"]
+        },
+        "timeout_ms": 10000
+      }
+    }
+  }
+}
+```
 
 ### Secure-link
 
