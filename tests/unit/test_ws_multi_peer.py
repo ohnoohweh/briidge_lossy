@@ -141,6 +141,39 @@ class WebSocketMultiPeerSendTests(unittest.IsolatedAsyncioTestCase):
 
         await session._close_server_peer(1)
 
+    async def test_server_peer_snapshot_includes_last_incoming_age_seconds(self):
+        session = WebSocketSession(_server_args())
+        session._loop = asyncio.get_running_loop()
+        peer_ws = _QueueDrivenWs()
+
+        await session._on_accept(peer_ws)
+
+        ctx = session._server_peers[1]
+        ping_payload = ctx["rtt"].build_ping_bytes()
+        await peer_ws.recv_queue.put(bytes([session._K_PING]) + ping_payload)
+        await asyncio.sleep(0.05)
+
+        peer_row = next(row for row in session.get_overlay_peers_snapshot() if row["peer_id"] == 1)
+        self.assertIsNotNone(peer_row["last_incoming_age_seconds"])
+        self.assertGreaterEqual(peer_row["last_incoming_age_seconds"], 0.0)
+
+        await session._close_server_peer(1)
+
+
+class WebSocketPeerSnapshotTests(unittest.TestCase):
+    def test_client_peer_snapshot_includes_last_incoming_age_seconds(self):
+        args = _server_args()
+        args.ws_peer = "127.0.0.1"
+        args.ws_peer_port = 8080
+        session = WebSocketSession(args)
+        session._rtt._last_rx_wall_ns = 1
+
+        rows = session.get_overlay_peers_snapshot()
+
+        self.assertEqual(len(rows), 1)
+        self.assertIsNotNone(rows[0]["last_incoming_age_seconds"])
+        self.assertGreaterEqual(rows[0]["last_incoming_age_seconds"], 0.0)
+
 
 if __name__ == '__main__':
     unittest.main()
