@@ -622,6 +622,10 @@ h1 {
     flex-wrap: wrap;
   }
 
+  .peer-state-control {
+    flex-wrap: wrap;
+  }
+
   .peer-detail-metric-compact {
     flex-basis: 100%;
     max-width: none;
@@ -729,6 +733,20 @@ h1 {
   align-items: center;
   gap: 12px;
   flex-wrap: nowrap;
+}
+
+.peer-state-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.peer-state-metric {
+  display: grid;
+  gap: 6px;
+  width: 100%;
 }
 
 .peer-detail-inline {

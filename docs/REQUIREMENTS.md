@@ -121,6 +121,8 @@ Current implementation note:
 - `REQ-LIFE-002`: When the disconnected side returns, the overlay shall reconnect automatically when the configured topology supports reconnection.
 - `REQ-LIFE-003`: After reconnection, traffic forwarding shall resume and probes shall again succeed.
 - `REQ-LIFE-004`: Restart-specific regressions for concurrent channel cases shall remain covered so existing functionality does not silently erode.
+- `REQ-LIFE-005`: Repeated failed reconnect attempts shall be throttled by a configurable minimum retry delay so client overlays do not hammer connection setup continuously while a peer remains unavailable.
+- `REQ-LIFE-006`: Operator-triggered reconnect requests exposed by the admin API and WebAdmin shall be scoped to the selected established peer connection rather than being process-global across unrelated peer sessions.
 
 ## Listener and multi-peer requirements
 

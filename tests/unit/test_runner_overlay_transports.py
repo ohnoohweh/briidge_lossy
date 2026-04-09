@@ -43,6 +43,52 @@ def _args(**overrides):
 
 
 class RunnerOverlayTransportTests(unittest.TestCase):
+    def test_request_overlay_reconnect_targets_matching_peer_id_only(self):
+        class _Session:
+            def __init__(self, peer_ids):
+                self._peer_ids = peer_ids
+                self.requests = 0
+
+            def get_overlay_peers_snapshot(self):
+                return [{"peer_id": peer_id} for peer_id in self._peer_ids]
+
+            def request_reconnect(self):
+                self.requests += 1
+                return True
+
+        runner = Runner.__new__(Runner)
+        runner._sessions = [_Session([1]), _Session([2])]
+        runner._session_labels = ["tcp", "ws"]
+
+        payload = Runner.request_overlay_reconnect(runner, target_peer_id="1:2")
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["target_peer_id"], "1:2")
+        self.assertEqual(payload["requested"], 1)
+        self.assertEqual(runner._sessions[0].requests, 0)
+        self.assertEqual(runner._sessions[1].requests, 1)
+        self.assertEqual(payload["transports"], ["ws"])
+
+    def test_request_overlay_reconnect_rejects_unknown_peer_id(self):
+        class _Session:
+            def get_overlay_peers_snapshot(self):
+                return [{"peer_id": 1}]
+
+            def request_reconnect(self):
+                raise AssertionError("should not be called for unknown peer")
+
+        runner = Runner.__new__(Runner)
+        runner._sessions = [_Session()]
+        runner._session_labels = ["tcp"]
+
+        payload = Runner.request_overlay_reconnect(runner, target_peer_id="0:99")
+
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["target_peer_id"], "0:99")
+        self.assertEqual(payload["requested"], 0)
+        self.assertEqual(payload["transports"], [])
+        self.assertEqual(payload["reason"], "unknown_peer_id")
+
     def test_request_secure_link_rekey_targets_matching_peer_id_only(self):
         class _Session:
             def __init__(self, peer_ids):

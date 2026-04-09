@@ -518,6 +518,55 @@ async function restart() {
   }
 }
 
+async function reconnectOverlay() {
+  const reconnectBtn = document.getElementById('reconnectBtn');
+  try {
+    if (restartState.active) return;
+    if (reconnectBtn) reconnectBtn.disabled = true;
+    const r = await apiFetch('/api/reconnect', { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || j.reason || `HTTP ${r.status}`);
+    }
+  } catch (e) {
+    window.alert(`Reconnect failed: ${e}`);
+  } finally {
+    if (reconnectBtn && !restartState.active) reconnectBtn.disabled = false;
+  }
+}
+
+async function reconnectPeer(peerId, triggerButton = null) {
+  const normalizedPeerId = String(peerId || '').trim();
+  if (!normalizedPeerId) {
+    window.alert('Reconnect failed: missing peer id');
+    return;
+  }
+  const buttons = Array.from(document.querySelectorAll('.peer-reconnect-btn'));
+  try {
+    buttons.forEach((button) => {
+      button.disabled = true;
+    });
+    const r = await apiFetch('/api/reconnect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ peer_id: normalizedPeerId }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || j.reason || `HTTP ${r.status}`);
+    }
+  } catch (e) {
+    window.alert(`Reconnect failed: ${e}`);
+  } finally {
+    buttons.forEach((button) => {
+      button.disabled = false;
+    });
+    if (triggerButton instanceof HTMLElement) {
+      triggerButton.blur();
+    }
+  }
+}
+
 async function requestSecureLinkRekey(peerId) {
   const normalizedPeerId = String(peerId || '').trim();
   if (!normalizedPeerId) {
@@ -661,8 +710,17 @@ function renderPeerTable(rows) {
     const showSecurityLifecycle = secureLinkEnabled && !isListeningPeer && !isConnectingPeer;
     const showMyUdpProtocolStats = isMyUdp;
     const showMyUdpDetailStats = isMyUdp;
+    const stateText = String(row.state || 'unknown').toLowerCase();
     const connectionLine1 = [
-      renderMetric('State', String(row.state || 'unknown').toLowerCase(), { pill: true }),
+      `
+      <div class="peer-state-control">
+        <div class="peer-detail-metric">
+          <span class="peer-detail-label">State</span>
+          <span class="${detailPillClass(stateText)}">${escapeHtml(fmtText(stateText))}</span>
+        </div>
+        ${!isListeningPeer ? `<button class="btn btn-secondary peer-reconnect-btn" type="button" data-peer-id="${escapeHtml(fmtText(row.id))}">Reconnect</button>` : ''}
+      </div>
+      `,
     ];
     if (isListeningPeer) {
       connectionLine1.push(renderMetric('Listen', row.listen));
@@ -1635,6 +1693,10 @@ document.getElementById('authForm')?.addEventListener('submit', loginAdmin);
 document.getElementById('peerConnectionsBody')?.addEventListener('click', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
+  if (target.classList.contains('peer-reconnect-btn')) {
+    reconnectPeer(target.getAttribute('data-peer-id') || '', target);
+    return;
+  }
   if (!target.classList.contains('secure-link-rekey-btn')) return;
   requestSecureLinkRekey(target.getAttribute('data-peer-id') || '');
 });

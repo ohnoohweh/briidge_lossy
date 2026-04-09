@@ -32,6 +32,7 @@ REQ-OVL-006:
 REQ-OVL-007:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
+    - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
   unit_tests:
     - tests/unit/test_peer_resolution.py::test_resolve_localhost_ipv4_uses_loopback_fallback_on_gaierror
     - tests/unit/test_peer_resolution.py::test_resolve_localhost_ipv6_uses_loopback_fallback_on_gaierror
@@ -379,6 +380,7 @@ REQ-LIFE-001:
 REQ-LIFE-002:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
+    - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
   unit_tests:
     - tests/unit/test_ws_payload_mode.py::test_quick_reconnect_cancels_pending_disconnect
 
@@ -389,6 +391,16 @@ REQ-LIFE-003:
 REQ-LIFE-004:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_server_restart_closes_tcp_preserves_udp
+
+REQ-LIFE-005:
+  integration_tests:
+    - tests/integration/test_reconnect_regression.py::test_reconnect_retry_uses_configured_minimum_delay
+    - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
+
+REQ-LIFE-006:
+  unit_tests:
+    - tests/unit/test_runner_overlay_transports.py::test_request_overlay_reconnect_targets_matching_peer_id_only
+    - tests/unit/test_runner_overlay_transports.py::test_request_overlay_reconnect_rejects_unknown_peer_id
 
 REQ-LST-001:
   integration_tests:

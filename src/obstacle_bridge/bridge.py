@@ -3494,6 +3494,13 @@ class SecureLinkPskSession(ISession):
     def is_connected(self) -> bool:
         return self._compute_connected()
 
+    def request_reconnect(self) -> bool:
+        trigger = getattr(self._inner, "request_reconnect", None)
+        if callable(trigger):
+            with contextlib.suppress(Exception):
+                return bool(trigger())
+        return False
+
     def get_metrics(self) -> SessionMetrics:
         return self._inner.get_metrics()
 
@@ -5592,6 +5599,10 @@ class TcpStreamSession(ISession):
         # reconnect
         self._connecting_task: Optional[asyncio.Task] = None
         self._reconnect_task: Optional[asyncio.Task] = None
+        self._reconnect_retry_delay_s: float = max(
+            0.0,
+            float(int(getattr(self._args, "overlay_reconnect_retry_delay_ms", 30000) or 0)) / 1000.0,
+        )
 
         # cosmetics
         self._probe_id = f"{id(self)&0xFFFF:04x}"
@@ -6021,24 +6032,42 @@ class TcpStreamSession(ISession):
         self._connecting_task = self._loop.create_task(_connect())
 
     def _start_reconnect_loop(self) -> None:
-        if not self._peer_tuple or self._reconnect_task is not None or not self._run_flag:
+        if not self._peer_tuple or not self._run_flag:
             return
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            return
+        self._reconnect_task = None
         host, port = self._peer_tuple
         async def _reconnect():
-            delay = 0.5
-            while self._run_flag:
-                # If TCP writer exists, exit (RTT runtime will flip overlay state)
-                if self._writer is not None:
-                    return
-                await self._connect_to(host, port)
-                if self._writer is not None:
-                    return
-                try:
-                    await asyncio.sleep(delay)
-                except asyncio.CancelledError:
-                    return
-                delay = min(delay * 2.0, 10.0)
+            delay = self._reconnect_retry_delay_s
+            try:
+                while self._run_flag:
+                    # If TCP writer exists, exit (RTT runtime will flip overlay state)
+                    if self._writer is not None:
+                        return
+                    await self._connect_to(host, port)
+                    if self._writer is not None:
+                        return
+                    try:
+                        await asyncio.sleep(delay)
+                    except asyncio.CancelledError:
+                        return
+            finally:
+                if self._reconnect_task is asyncio.current_task():
+                    self._reconnect_task = None
         self._reconnect_task = self._loop.create_task(_reconnect())
+
+    def request_reconnect(self) -> bool:
+        if not self._peer_tuple or not self._run_flag:
+            return False
+        if self._writer is not None:
+            with contextlib.suppress(Exception):
+                self._writer.close()
+        self._writer = None
+        self._reader = None
+        self._set_overlay_connected(False)
+        self._start_reconnect_loop()
+        return True
 
     def _enable_os_keepalive(self, writer: asyncio.StreamWriter) -> None:
         try:
@@ -6676,6 +6705,10 @@ class QuicSession(ISession):
         self._rx_task: Optional[asyncio.Task] = None
         self._connecting_task: Optional[asyncio.Task] = None
         self._reconnect_task: Optional[asyncio.Task] = None
+        self._reconnect_retry_delay_s: float = max(
+            0.0,
+            float(int(getattr(self._args, "overlay_reconnect_retry_delay_ms", 30000) or 0)) / 1000.0,
+        )
         self._run_flag: bool = False
         self._server_connected_evt = asyncio.Event()
         self._server_peers: Dict[int, dict] = {}
@@ -7139,24 +7172,44 @@ class QuicSession(ISession):
         self._connecting_task = self._loop.create_task(_connect())  # type: ignore
 
     def _start_reconnect_loop(self) -> None:
-        if not self._peer_tuple or self._reconnect_task is not None or not self._run_flag:
+        if not self._peer_tuple or not self._run_flag:
             return
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            return
+        self._reconnect_task = None
         host, port = self._peer_tuple
         async def _reconnect():
-            delay = 0.5
-            while self._run_flag:
-                # If TCP writer exists, exit (RTT runtime will flip overlay state)
-                if self._quic is not None:
-                    return
-                await self._connect_to(host, port)
-                if self._quic is not None:
-                    return
-                try:
-                    await asyncio.sleep(delay)
-                except asyncio.CancelledError:
-                    return
-                delay = min(delay * 2.0, 10.0)
+            delay = self._reconnect_retry_delay_s
+            try:
+                while self._run_flag:
+                    # If TCP writer exists, exit (RTT runtime will flip overlay state)
+                    if self._quic is not None:
+                        return
+                    await self._connect_to(host, port)
+                    if self._quic is not None:
+                        return
+                    try:
+                        await asyncio.sleep(delay)
+                    except asyncio.CancelledError:
+                        return
+            finally:
+                if self._reconnect_task is asyncio.current_task():
+                    self._reconnect_task = None
         self._reconnect_task = self._loop.create_task(_reconnect())  # type: ignore
+
+    def request_reconnect(self) -> bool:
+        if not self._peer_tuple or not self._run_flag:
+            return False
+        proto = self._proto
+        self._proto = None
+        self._quic = None
+        self._stream_id = None
+        if proto is not None:
+            with contextlib.suppress(Exception):
+                proto.close()
+        self._set_overlay_connected(False)
+        self._start_reconnect_loop()
+        return True
 
     async def _connect_to(self, host: str, port: int) -> None:
         """
@@ -7981,6 +8034,10 @@ class WebSocketSession(ISession):
         self._tx_task: Optional[asyncio.Task] = None
         self._connecting_task: Optional[asyncio.Task] = None
         self._reconnect_task: Optional[asyncio.Task] = None
+        self._reconnect_retry_delay_s: float = max(
+            0.0,
+            float(int(getattr(self._args, "overlay_reconnect_retry_delay_ms", 30000) or 0)) / 1000.0,
+        )
         self._disconnect_task: Optional[asyncio.Task] = None
         self._tx_queue: "asyncio.Queue[tuple[bytes, Optional[Callable[[], None]]]]" = asyncio.Queue()
         self._server_connected_evt = asyncio.Event()
@@ -9521,24 +9578,47 @@ class WebSocketSession(ISession):
         self._connecting_task = self._loop.create_task(_connect())  # type: ignore
 
     def _start_reconnect_loop(self) -> None:
-        if not self._peer_tuple or self._reconnect_task is not None or not self._run_flag:
+        if not self._peer_tuple or not self._run_flag:
             return
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            return
+        self._reconnect_task = None
         host, port = self._peer_tuple
         async def _reconnect():
-            delay = 0.5
-            while self._run_flag:
-                # If TCP writer exists, exit (RTT runtime will flip overlay state)
-                if self._ws is not None:
-                    return
-                await self._connect_to(host, port)
-                if self._ws is not None:
-                    return
-                try:
-                    await asyncio.sleep(delay)
-                except asyncio.CancelledError:
-                    return
-                delay = min(delay * 2.0, 10.0)
+            delay = self._reconnect_retry_delay_s
+            try:
+                while self._run_flag:
+                    # If TCP writer exists, exit (RTT runtime will flip overlay state)
+                    if self._ws is not None:
+                        return
+                    await self._connect_to(host, port)
+                    if self._ws is not None:
+                        return
+                    try:
+                        await asyncio.sleep(delay)
+                    except asyncio.CancelledError:
+                        return
+            finally:
+                if self._reconnect_task is asyncio.current_task():
+                    self._reconnect_task = None
         self._reconnect_task = self._loop.create_task(_reconnect())  # type: ignore
+
+    def request_reconnect(self) -> bool:
+        if not self._peer_tuple or not self._run_flag:
+            return False
+        ws = self._ws
+        self._ws = None
+        if self._disconnect_task:
+            self._disconnect_task.cancel()
+            self._disconnect_task = None
+        if ws is not None:
+            try:
+                self._loop.create_task(ws.close())  # type: ignore[arg-type]
+            except Exception:
+                pass
+        self._schedule_overlay_disconnect()
+        self._start_reconnect_loop()
+        return True
 
     async def _on_accept(self, ws) -> None:
         if not self._peer_tuple:
@@ -14562,6 +14642,47 @@ class Runner:
         if self._restart_requested is not None:
             self._restart_requested.set()
 
+    def request_overlay_reconnect(self, target_peer_id: Optional[str] = None) -> dict:
+        target = str(target_peer_id or "").strip()
+        requested = 0
+        sessions = 0
+        transports: list[str] = []
+        matched_target = False
+        for idx, session in enumerate(self._sessions):
+            sessions += 1
+            peer_row_ids = self._session_peer_row_ids(idx, session)
+            if target:
+                if target not in peer_row_ids:
+                    continue
+                matched_target = True
+            method = getattr(session, "request_reconnect", None)
+            if not callable(method):
+                continue
+            ok = False
+            with contextlib.suppress(Exception):
+                ok = bool(method())
+            if ok:
+                requested += 1
+                label = self._session_labels[idx] if idx < len(self._session_labels) else f"session-{idx}"
+                transports.append(str(label))
+        if target and not matched_target:
+            return {
+                "ok": False,
+                "target_peer_id": target,
+                "requested": 0,
+                "sessions": sessions,
+                "transports": [],
+                "reason": "unknown_peer_id",
+            }
+        return {
+            "ok": requested > 0,
+            "target_peer_id": target or None,
+            "requested": requested,
+            "sessions": sessions,
+            "transports": transports,
+            "reason": "" if requested > 0 else "no reconnect-capable client overlay session is currently running",
+        }
+
     def get_status_snapshot(self) -> dict:
         payload = dict(self.stats.snapshot_status())
         summaries: list[dict] = []
@@ -15363,7 +15484,14 @@ class Runner:
                 type=float,
                 default=0.0,
                 help='If configured as a peer client (for example --udp-peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables.'
-            )            
+            )
+        if not _has('--overlay-reconnect-retry-delay-ms'):
+            p.add_argument(
+                '--overlay-reconnect-retry-delay-ms',
+                type=int,
+                default=30000,
+                help='Delay in milliseconds between failed reconnect attempts for tcp/quic/ws client overlays (default 30000).'
+            )
     @staticmethod
     def _parse_overlay_transports(args: argparse.Namespace) -> List[str]:
         raw = str(getattr(args, "overlay_transport", "myudp") or "myudp")
@@ -15625,6 +15753,10 @@ class AdminWebUI:
                 await self._handle_restart(writer, method, headers)
                 return
 
+            if path == "/api/reconnect":
+                await self._handle_reconnect(writer, method, headers, body)
+                return
+
             if path == "/api/shutdown":
                 await self._handle_shutdown(writer, method, headers)
                 return
@@ -15844,6 +15976,41 @@ class AdminWebUI:
         self._log_api_response("/api/restart", 200, payload)
         await self._send_json(writer, 200, payload)
         self.runner.request_restart()
+
+    async def _handle_reconnect(self, writer, method, headers, body: bytes):
+        if method != "POST":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+
+        token = getattr(self.args, "admin_web_token", "") or ""
+        if token:
+            auth = headers.get("authorization", "")
+            expected = f"Bearer {token}"
+            if auth != expected:
+                await self._send(writer, 403, b"Forbidden", "text/plain; charset=utf-8")
+                return
+
+        req = {}
+        if body:
+            try:
+                req = json.loads((body or b"{}").decode("utf-8"))
+            except Exception:
+                await self._send_json(writer, 400, {"ok": False, "error": "invalid JSON body"})
+                return
+        target_peer_id = str(req.get("peer_id", "") or "").strip() or None
+        payload = self.runner.request_overlay_reconnect(target_peer_id=target_peer_id)
+        code = 200 if bool(payload.get("ok")) else (404 if payload.get("reason") == "unknown_peer_id" else 409)
+        self._log_api_response(
+            "/api/reconnect",
+            code,
+            payload,
+            summary=(
+                f"target_peer_id={target_peer_id or '-'} "
+                f"requested={payload.get('requested', 0)} sessions={payload.get('sessions', 0)} "
+                f"transports={','.join(payload.get('transports', []))}"
+            ),
+        )
+        await self._send_json(writer, code, payload)
 
     async def _handle_shutdown(self, writer, method, headers):
         if method != "POST":
