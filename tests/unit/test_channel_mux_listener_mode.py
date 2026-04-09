@@ -69,6 +69,158 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         )
         self.assertEqual(rendered, "route add 198.18.30.2 dev obtun0 svc=3")
 
+    def test_open_payload_roundtrip_preserves_hook_metadata(self):
+        mux = ChannelMux(_FakeSession(), asyncio.new_event_loop())
+        try:
+            spec = ChannelMux.ServiceSpec(
+                svc_id=7,
+                l_proto='tcp',
+                l_bind='0.0.0.0',
+                l_port=18080,
+                r_proto='tcp',
+                r_host='127.0.0.1',
+                r_port=8080,
+                name='web-service',
+                lifecycle_hooks={'client': {'on_connected': {'argv': ['echo', 'ok']}}},
+                options={'note': 'metadata'},
+            )
+            payload = mux._build_open_v4(spec)
+            parsed = mux._parse_open_with_meta(payload)
+            self.assertIsNotNone(parsed)
+            assert parsed is not None
+            self.assertEqual(parsed[2], 7)
+            self.assertEqual(parsed[9], 'web-service')
+            self.assertEqual(parsed[10], {'client': {'on_connected': {'argv': ['echo', 'ok']}}})
+            self.assertEqual(parsed[11], {'note': 'metadata'})
+        finally:
+            mux.loop.close()
+
+    def test_remote_services_roundtrip_preserves_hook_metadata(self):
+        mux = ChannelMux(_FakeSession(), asyncio.new_event_loop())
+        try:
+            spec = ChannelMux.ServiceSpec(
+                svc_id=3,
+                l_proto='udp',
+                l_bind='0.0.0.0',
+                l_port=16667,
+                r_proto='udp',
+                r_host='127.0.0.1',
+                r_port=16666,
+                name='udp-publish',
+                lifecycle_hooks={'listener': {'on_created': {'argv': ['echo', 'created']}}},
+                options={'tag': 'alpha'},
+            )
+            payload = mux._encode_remote_services_set_v2([spec])
+            decoded = mux._decode_remote_services_set_v2(payload)
+            self.assertIsNotNone(decoded)
+            assert decoded is not None
+            _iid, _seq, services = decoded
+            self.assertEqual(len(services), 1)
+            self.assertEqual(services[0].name, 'udp-publish')
+            self.assertEqual(services[0].lifecycle_hooks, {'listener': {'on_created': {'argv': ['echo', 'created']}}})
+            self.assertEqual(services[0].options, {'tag': 'alpha'})
+        finally:
+            mux.loop.close()
+
+    def test_chunked_remote_services_transfer_reassembles_metadata(self):
+        session = _FakeSession(connected=True, max_app_payload_size=96)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            spec = ChannelMux.ServiceSpec(
+                svc_id=5,
+                l_proto='udp',
+                l_bind='0.0.0.0',
+                l_port=26667,
+                r_proto='udp',
+                r_host='127.0.0.1',
+                r_port=26666,
+                name='chunked-remote',
+                lifecycle_hooks={'listener': {'on_channel_connected': {'argv': ['echo', 'x' * 220]}}},
+                options={'meta': 'y' * 220},
+            )
+            mux._remote_services_requested = [spec]
+            mux._send_remote_services_catalog_if_any()
+            self.assertGreater(len(session.sent), 1)
+            chunk_frames = []
+            for wire in session.sent:
+                parsed = mux._unpack_mux(wire)
+                self.assertIsNotNone(parsed)
+                assert parsed is not None
+                _chan, proto, _ctr, mtype, payload_mv = parsed
+                self.assertEqual(proto, ChannelMux.Proto.UDP)
+                if mtype == ChannelMux.MType.REMOTE_SERVICES_SET_V2_CHUNK:
+                    chunk_frames.append(bytes(payload_mv))
+            self.assertGreaterEqual(len(chunk_frames), 2)
+
+            assembled = None
+            for chunk in chunk_frames:
+                assembled = mux._consume_control_chunk(
+                    chan_id=0,
+                    proto=ChannelMux.Proto.UDP,
+                    mtype=ChannelMux.MType.REMOTE_SERVICES_SET_V2_CHUNK,
+                    payload=chunk,
+                    peer_id=99,
+                ) or assembled
+            self.assertIsNotNone(assembled)
+            decoded = mux._decode_remote_services_set_v2(assembled or b"")
+            self.assertIsNotNone(decoded)
+            assert decoded is not None
+            _iid, _seq, services = decoded
+            self.assertEqual(services[0].name, 'chunked-remote')
+            self.assertIsInstance(services[0].lifecycle_hooks, dict)
+            self.assertIsInstance(services[0].options, dict)
+        finally:
+            mux.loop.close()
+
+    def test_chunked_open_transfer_reassembles_metadata(self):
+        session = _FakeSession(connected=True, max_app_payload_size=96)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            spec = ChannelMux.ServiceSpec(
+                svc_id=11,
+                l_proto='tcp',
+                l_bind='0.0.0.0',
+                l_port=31000,
+                r_proto='tcp',
+                r_host='127.0.0.1',
+                r_port=32000,
+                name='chunked-open',
+                lifecycle_hooks={'client': {'before_connect': {'argv': ['echo', 'z' * 220]}}},
+                options={'description': 'q' * 220},
+            )
+            mux._send_open_for_service(17, ChannelMux.Proto.TCP, spec)
+            self.assertGreater(len(session.sent), 1)
+            chunk_frames = []
+            for wire in session.sent:
+                parsed = mux._unpack_mux(wire)
+                self.assertIsNotNone(parsed)
+                assert parsed is not None
+                chan, proto, _ctr, mtype, payload_mv = parsed
+                self.assertEqual(chan, 17)
+                self.assertEqual(proto, ChannelMux.Proto.TCP)
+                if mtype == ChannelMux.MType.OPEN_CHUNK:
+                    chunk_frames.append(bytes(payload_mv))
+            self.assertGreaterEqual(len(chunk_frames), 2)
+
+            assembled = None
+            for chunk in chunk_frames:
+                assembled = mux._consume_control_chunk(
+                    chan_id=17,
+                    proto=ChannelMux.Proto.TCP,
+                    mtype=ChannelMux.MType.OPEN_CHUNK,
+                    payload=chunk,
+                    peer_id=7,
+                ) or assembled
+            self.assertIsNotNone(assembled)
+            parsed_open = mux._parse_open_with_meta(assembled or b"")
+            self.assertIsNotNone(parsed_open)
+            assert parsed_open is not None
+            self.assertEqual(parsed_open[9], 'chunked-open')
+            self.assertIsInstance(parsed_open[10], dict)
+            self.assertIsInstance(parsed_open[11], dict)
+        finally:
+            mux.loop.close()
+
     def test_listener_mode_ignores_own_servers_and_remote_servers(self):
         args = argparse.Namespace(
             peer=None,
