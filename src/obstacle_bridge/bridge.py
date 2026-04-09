@@ -4796,10 +4796,12 @@ class UdpSession(ISession):
         self._listener_mode = peer is None
 
         if (
-            not _prefer_unspec_listener_family()
-            and listen_host in ('::', '0.0.0.0')
+            listen_host in ('::', '0.0.0.0')
             and peer_family in (socket.AF_INET, socket.AF_INET6)
         ):
+            # If peer family is known (e.g., literal IPv4 peer), avoid AF_UNSPEC
+            # endpoint auto-selection that can create an IPv6-only socket and
+            # break sendto() to IPv4 peers on some runtimes/platforms.
             family = peer_family
             listen_host = _wildcard_host_for_family(peer_family)
         else:
@@ -16152,6 +16154,9 @@ class Runner:
             tmp.replace(path)
         except Exception as e:
             return (False, f"failed to persist config to {cfg_path}: {e}")
+        # Persisted runtime config is now present and no longer a first-start state.
+        setattr(self.args, "_first_start_detected", False)
+        setattr(self.args, "_config_file_state", "loaded")
         return (True, "")
 
     def update_config(self, updates: dict) -> tuple[bool, str]:
@@ -16372,6 +16377,12 @@ class AdminWebUI:
     CONFIG_CHALLENGE_TTL_SEC = 90
     LIVE_WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
     LIVE_TOPICS = ("status", "connections", "peers", "meta")
+    ONBOARDING_TOKEN_PREFIX = "ob1."
+
+    @staticmethod
+    def _transport_attr_prefix(transport: str) -> str:
+        t = str(transport or "").strip().lower()
+        return "udp" if t in {"udp", "myudp"} else t
 
     @staticmethod
     def register_cli(p):
@@ -16609,6 +16620,22 @@ class AdminWebUI:
                 await self._handle_connections(writer)
                 return
 
+            if path == "/api/onboarding/connection-profiles":
+                await self._handle_onboarding_connection_profiles(writer, method)
+                return
+
+            if path == "/api/onboarding/invite/generate":
+                await self._handle_onboarding_invite_generate(writer, method, body)
+                return
+
+            if path == "/api/onboarding/invite/preview":
+                await self._handle_onboarding_invite_preview(writer, method, body)
+                return
+
+            if path == "/api/onboarding/blueprints":
+                await self._handle_onboarding_blueprints(writer, method)
+                return
+
             if path == "/api/config":
                 await self._handle_config(writer, method, body)
                 return
@@ -16641,6 +16668,375 @@ class AdminWebUI:
     async def _handle_connections(self, writer):
         payload = self._build_connections_payload()
         self._log_api_response("/api/connections", 200, payload)
+        await self._send_json(writer, 200, payload)
+
+    @staticmethod
+    def _sanitize_onboarding_services(value: Any) -> list[dict]:
+        if not isinstance(value, list):
+            return []
+        out: list[dict] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            listen = item.get("listen")
+            target = item.get("target")
+            if not isinstance(listen, dict) or not isinstance(target, dict):
+                continue
+            l_proto = str(listen.get("protocol", "") or "").strip().lower()
+            t_proto = str(target.get("protocol", "") or "").strip().lower()
+            if l_proto not in {"udp", "tcp", "tun"} or t_proto not in {"udp", "tcp", "tun"}:
+                continue
+            spec: dict = {"listen": {"protocol": l_proto}, "target": {"protocol": t_proto}}
+            name = str(item.get("name", "") or "").strip()
+            if name:
+                spec["name"] = name
+            if l_proto == "tun":
+                ifname = str(listen.get("ifname", "") or "").strip()
+                if ifname:
+                    spec["listen"]["ifname"] = ifname
+                mtu = listen.get("mtu")
+                if mtu is not None:
+                    with contextlib.suppress(Exception):
+                        mtu_i = int(mtu)
+                        if 1 <= mtu_i <= 65535:
+                            spec["listen"]["mtu"] = mtu_i
+            else:
+                bind = str(listen.get("bind", "") or "").strip()
+                with contextlib.suppress(Exception):
+                    port_i = int(listen.get("port"))
+                    if bind and 1 <= port_i <= 65535:
+                        spec["listen"]["bind"] = bind
+                        spec["listen"]["port"] = port_i
+            if t_proto == "tun":
+                ifname = str(target.get("ifname", "") or "").strip()
+                if ifname:
+                    spec["target"]["ifname"] = ifname
+                mtu = target.get("mtu")
+                if mtu is not None:
+                    with contextlib.suppress(Exception):
+                        mtu_i = int(mtu)
+                        if 1 <= mtu_i <= 65535:
+                            spec["target"]["mtu"] = mtu_i
+            else:
+                host = str(target.get("host", "") or "").strip()
+                with contextlib.suppress(Exception):
+                    port_i = int(target.get("port"))
+                    if host and 1 <= port_i <= 65535:
+                        spec["target"]["host"] = host
+                        spec["target"]["port"] = port_i
+            hooks = item.get("lifecycle_hooks")
+            if isinstance(hooks, dict):
+                spec["lifecycle_hooks"] = hooks
+            opts = item.get("options")
+            if isinstance(opts, dict):
+                spec["options"] = opts
+            out.append(spec)
+        return out
+
+    @staticmethod
+    def _decode_host_port(value: Any) -> Tuple[str, Optional[int]]:
+        if isinstance(value, dict):
+            host = str(value.get("host", "") or "").strip()
+            with contextlib.suppress(Exception):
+                port_i = int(value.get("port"))
+                if host and 1 <= port_i <= 65535:
+                    return host, port_i
+            return host, None
+        if isinstance(value, (list, tuple)) and len(value) >= 2:
+            host = str(value[0] or "").strip()
+            with contextlib.suppress(Exception):
+                port_i = int(value[1])
+                if host and 1 <= port_i <= 65535:
+                    return host, port_i
+            return host, None
+        text = str(value or "").strip()
+        if not text:
+            return "", None
+        if text.startswith("[") and "]:" in text:
+            host, _, port_text = text[1:].partition("]:")
+            with contextlib.suppress(Exception):
+                port_i = int(port_text)
+                if 1 <= port_i <= 65535:
+                    return host, port_i
+            return host, None
+        if ":" in text:
+            host, _, port_text = text.rpartition(":")
+            with contextlib.suppress(Exception):
+                port_i = int(port_text)
+                if host and 1 <= port_i <= 65535:
+                    return host, port_i
+        return text, None
+
+    def _normalized_overlay_transports(self) -> list[str]:
+        raw = getattr(self.args, "overlay_transport", None)
+        values: list[str]
+        if isinstance(raw, str):
+            values = [item.strip().lower() for item in raw.split(",")]
+        elif isinstance(raw, (list, tuple, set)):
+            values = [str(item or "").strip().lower() for item in raw]
+        else:
+            values = []
+        out: list[str] = []
+        for item in values:
+            if item in {"udp", "myudp", "tcp", "quic", "ws"} and item not in out:
+                out.append(item)
+        if not out:
+            out = ["myudp"]
+        out = ["myudp" if item == "udp" else item for item in out]
+        return out
+
+    def _build_onboarding_connection_profiles(self) -> list[dict]:
+        profiles: list[dict] = []
+        secure_mode = str(getattr(self.args, "secure_link_mode", "off") or "off").strip().lower()
+        overlay_transports = self._normalized_overlay_transports()
+        for transport in overlay_transports:
+            attr_prefix = self._transport_attr_prefix(transport)
+            bind = str(getattr(self.args, f"{attr_prefix}_bind", "") or "").strip()
+            own_port = getattr(self.args, f"{attr_prefix}_own_port", None)
+            peer = str(getattr(self.args, f"{attr_prefix}_peer", "") or "").strip()
+            peer_port = getattr(self.args, f"{attr_prefix}_peer_port", None)
+            with contextlib.suppress(Exception):
+                own_port = int(own_port)
+            with contextlib.suppress(Exception):
+                peer_port = int(peer_port)
+            role = "client" if peer else "server"
+            endpoint_host = peer if role == "client" else bind
+            endpoint_port = peer_port if role == "client" else own_port
+            profile = {
+                "id": f"cfg:{transport}:{len(profiles)}",
+                "source": "config",
+                "transport": transport,
+                "role": role,
+                "endpoint_host": str(endpoint_host or ""),
+                "endpoint_port": endpoint_port if isinstance(endpoint_port, int) else None,
+                "listen_bind": bind,
+                "listen_port": own_port if isinstance(own_port, int) else None,
+                "peer_host": peer,
+                "peer_port": peer_port if isinstance(peer_port, int) else None,
+                "secure_link_mode": secure_mode,
+                "label": (
+                    f"{transport.upper()} peer {peer}:{peer_port}"
+                    if role == "client"
+                    else f"{transport.upper()} listen {bind}:{own_port}"
+                ),
+            }
+            if transport == "ws":
+                profile["ws_path"] = str(getattr(self.args, "ws_path", "/") or "/")
+                profile["ws_tls"] = bool(getattr(self.args, "ws_tls", False))
+            profiles.append(profile)
+        try:
+            peers_payload = self.runner.get_peer_connections_snapshot() or {}
+            for row in list(peers_payload.get("peers") or []):
+                transport = str(row.get("transport", "") or "").strip().lower()
+                if transport not in {"udp", "tcp", "quic", "ws", "myudp"}:
+                    continue
+                role = "server" if str(row.get("state", "")).strip().lower() == "listening" else "client"
+                endpoint_raw = row.get("listen") if role == "server" else row.get("peer")
+                host, port = self._decode_host_port(endpoint_raw)
+                profiles.append(
+                    {
+                        "id": f"live:{transport}:{row.get('id')}",
+                        "source": "live",
+                        "transport": "myudp" if transport == "udp" else transport,
+                        "role": role,
+                        "endpoint_host": host,
+                        "endpoint_port": port,
+                        "listen_bind": "",
+                        "listen_port": None,
+                        "peer_host": "",
+                        "peer_port": None,
+                        "secure_link_mode": secure_mode,
+                        "label": f"{transport.upper()} {role} {host}:{port}" if host and port else f"{transport.upper()} {role}",
+                    }
+                )
+        except Exception:
+            self.log.exception("failed to derive live onboarding connection profiles")
+        return profiles
+
+    def _build_onboarding_blueprints(self) -> list[dict]:
+        grouped: Dict[str, list[dict]] = {}
+        snapshot = self.runner.get_connections_snapshot() or {}
+        for proto in ("udp", "tcp"):
+            for row in list(snapshot.get(proto) or []):
+                state = str(row.get("state", "") or "").strip().lower()
+                if state == "listening":
+                    continue
+                peer_id = str(row.get("peer_id", "") or "").strip()
+                if not peer_id:
+                    continue
+                local_port = row.get("local_port")
+                with contextlib.suppress(Exception):
+                    local_port = int(local_port)
+                if not isinstance(local_port, int) or not (1 <= local_port <= 65535):
+                    continue
+                host, port = self._decode_host_port(row.get("remote_destination"))
+                if not host or not isinstance(port, int):
+                    continue
+                spec = {
+                    "name": f"bp-{peer_id}-{proto}-{local_port}",
+                    "listen": {"protocol": proto, "bind": "0.0.0.0", "port": local_port},
+                    "target": {"protocol": proto, "host": host, "port": port},
+                }
+                grouped.setdefault(peer_id, [])
+                token = json.dumps(spec, sort_keys=True, ensure_ascii=False)
+                if token not in {json.dumps(item, sort_keys=True, ensure_ascii=False) for item in grouped[peer_id]}:
+                    grouped[peer_id].append(spec)
+        out = [{"peer_id": peer_id, "own_servers": specs} for peer_id, specs in sorted(grouped.items()) if specs]
+        return out
+
+    @classmethod
+    def _encode_onboarding_token(cls, payload: dict) -> str:
+        raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        body = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+        return cls.ONBOARDING_TOKEN_PREFIX + body
+
+    @classmethod
+    def _decode_onboarding_token(cls, token: str) -> dict:
+        text = str(token or "").strip()
+        if text.startswith(cls.ONBOARDING_TOKEN_PREFIX):
+            text = text[len(cls.ONBOARDING_TOKEN_PREFIX):]
+        if not text:
+            raise ValueError("invite token is empty")
+        padding = "=" * ((4 - (len(text) % 4)) % 4)
+        try:
+            raw = base64.urlsafe_b64decode((text + padding).encode("ascii"))
+        except Exception as exc:
+            raise ValueError(f"invite token is not valid base64url: {exc}") from exc
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except Exception as exc:
+            raise ValueError(f"invite token has invalid JSON payload: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("invite token payload must be a JSON object")
+        return payload
+
+    @staticmethod
+    def _onboarding_updates_from_invite(payload: dict) -> dict:
+        updates: dict = {}
+        conn = payload.get("connection")
+        if not isinstance(conn, dict):
+            return updates
+        transport = str(conn.get("transport", "") or "").strip().lower()
+        if transport == "udp":
+            transport = "myudp"
+        host = str(conn.get("endpoint_host", "") or "").strip()
+        port = conn.get("endpoint_port")
+        if transport in {"myudp", "tcp", "quic", "ws"} and host:
+            updates["overlay_transport"] = transport
+            attr_prefix = AdminWebUI._transport_attr_prefix(transport)
+            updates[f"{attr_prefix}_peer"] = host
+            with contextlib.suppress(Exception):
+                port_i = int(port)
+                if 1 <= port_i <= 65535:
+                    updates[f"{attr_prefix}_peer_port"] = port_i
+        secure_mode = str(payload.get("secure_link_mode", "") or "").strip().lower()
+        if secure_mode in {"off", "none", "psk", "cert"}:
+            updates["secure_link_mode"] = "off" if secure_mode in {"off", "none"} else secure_mode
+            updates["secure_link"] = secure_mode not in {"off", "none"}
+        psk_value = payload.get("secure_link_psk")
+        if isinstance(psk_value, str) and psk_value.strip():
+            with contextlib.suppress(Exception):
+                updates["secure_link_psk"] = str(_decrypt_config_secret(psk_value) or "")
+        own = AdminWebUI._sanitize_onboarding_services(payload.get("own_servers"))
+        remote = AdminWebUI._sanitize_onboarding_services(payload.get("remote_servers"))
+        if own:
+            updates["own_servers"] = own
+        if remote:
+            updates["remote_servers"] = remote
+        return updates
+
+    async def _handle_onboarding_connection_profiles(self, writer, method: str):
+        if method != "GET":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+        profiles = self._build_onboarding_connection_profiles()
+        payload = {"ok": True, "count": len(profiles), "profiles": profiles}
+        self._log_api_response("/api/onboarding/connection-profiles", 200, payload, summary=f"count={len(profiles)}")
+        await self._send_json(writer, 200, payload)
+
+    async def _handle_onboarding_invite_generate(self, writer, method: str, body: bytes):
+        if method != "POST":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+        try:
+            req = json.loads((body or b"{}").decode("utf-8"))
+        except Exception:
+            await self._send_json(writer, 400, {"ok": False, "error": "invalid JSON body"})
+            return
+        profiles = self._build_onboarding_connection_profiles()
+        connection_id = str(req.get("connection_id", "") or "").strip()
+        selected = None
+        if len(profiles) > 1 and not connection_id:
+            await self._send_json(
+                writer,
+                409,
+                {"ok": False, "error": "multiple connection profiles available; select connection_id", "profiles": profiles},
+            )
+            return
+        if connection_id:
+            for item in profiles:
+                if str(item.get("id", "") or "") == connection_id:
+                    selected = item
+                    break
+            if selected is None:
+                await self._send_json(writer, 400, {"ok": False, "error": f"unknown connection_id: {connection_id}"})
+                return
+        elif profiles:
+            selected = profiles[0]
+        secure_mode = str(getattr(self.args, "secure_link_mode", "off") or "off").strip().lower()
+        own_services = self._sanitize_onboarding_services(req.get("own_servers", getattr(self.args, "own_servers", [])))
+        remote_services = self._sanitize_onboarding_services(req.get("remote_servers", getattr(self.args, "remote_servers", [])))
+        payload_doc = {
+            "version": 1,
+            "generated_unix_ts": int(time.time()),
+            "generated_by": str(getattr(self.args, "admin_web_name", "") or ""),
+            "connection": selected or {},
+            "secure_link_mode": secure_mode if secure_mode in {"off", "none", "psk", "cert"} else "off",
+            "secure_link_psk": _encrypt_config_secret(str(getattr(self.args, "secure_link_psk", "") or "")),
+            "secure_link_required": bool(getattr(self.args, "secure_link_require", False)),
+            "admin_auth_recommended": True,
+            "own_servers": own_services,
+            "remote_servers": remote_services,
+        }
+        token = self._encode_onboarding_token(payload_doc)
+        payload = {"ok": True, "invite_token": token, "preview": payload_doc}
+        self._log_api_response("/api/onboarding/invite/generate", 200, {"ok": True}, summary=f"connection_id={connection_id or '-'}")
+        await self._send_json(writer, 200, payload)
+
+    async def _handle_onboarding_invite_preview(self, writer, method: str, body: bytes):
+        if method != "POST":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+        try:
+            req = json.loads((body or b"{}").decode("utf-8"))
+        except Exception:
+            await self._send_json(writer, 400, {"ok": False, "error": "invalid JSON body"})
+            return
+        token = str(req.get("invite_token", "") or "").strip()
+        if not token:
+            await self._send_json(writer, 400, {"ok": False, "error": "invite_token is required"})
+            return
+        try:
+            payload_doc = self._decode_onboarding_token(token)
+        except Exception as exc:
+            await self._send_json(writer, 400, {"ok": False, "error": str(exc)})
+            return
+        updates = self._onboarding_updates_from_invite(payload_doc)
+        preview_doc = dict(payload_doc)
+        if isinstance(preview_doc.get("secure_link_psk"), str) and preview_doc.get("secure_link_psk"):
+            preview_doc["secure_link_psk"] = "***hidden***"
+            preview_doc["secure_link_psk_present"] = True
+        payload = {"ok": True, "preview": preview_doc, "suggested_updates": updates}
+        self._log_api_response("/api/onboarding/invite/preview", 200, {"ok": True}, summary=f"updates={len(updates)}")
+        await self._send_json(writer, 200, payload)
+
+    async def _handle_onboarding_blueprints(self, writer, method: str):
+        if method != "GET":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+        blueprints = self._build_onboarding_blueprints()
+        payload = {"ok": True, "count": len(blueprints), "blueprints": blueprints}
+        self._log_api_response("/api/onboarding/blueprints", 200, payload, summary=f"count={len(blueprints)}")
         await self._send_json(writer, 200, payload)
 
     def _build_meta_payload(self) -> dict:
@@ -16681,6 +17077,7 @@ class AdminWebUI:
             await self._send_json(writer, 400, {"ok": False, "error": "invalid JSON body"})
             return
         updates = req.get("updates", {})
+        restart_after_save = bool(req.get("restart_after_save", False))
         if self.auth_required():
             challenge_id = str(req.get("challenge_id", "") or "").strip()
             proof = str(req.get("proof", "") or "").strip().lower()
@@ -16714,9 +17111,23 @@ class AdminWebUI:
             return
         if any(key in AdminWebUI._secret_config_keys() or key in {"admin_web_auth_disable", "admin_web_username"} for key in updates.keys()):
             self.reset_auth_state()
-        payload = {"ok": True, "config": self.runner.get_config_snapshot()}
-        self._log_api_response("/api/config", 200, payload, summary=f"updated keys={list(updates.keys())}")
+        delay_restart = bool(self.runner._restart_requires_delay()) if restart_after_save else False
+        payload = {
+            "ok": True,
+            "config": self.runner.get_config_snapshot(),
+            "restart_requested": bool(restart_after_save),
+            "restart_mode": "delayed" if delay_restart else ("immediate" if restart_after_save else ""),
+            "restart_delay_sec": 40 if delay_restart else 0,
+        }
+        self._log_api_response(
+            "/api/config",
+            200,
+            payload,
+            summary=f"updated keys={list(updates.keys())} restart_after_save={restart_after_save}",
+        )
         await self._send_json(writer, 200, payload)
+        if restart_after_save:
+            self.runner.request_restart()
 
     async def _handle_logs(self, writer, raw_path: str):
         limit = 400

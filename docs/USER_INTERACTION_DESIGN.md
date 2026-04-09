@@ -218,6 +218,74 @@ The onboarding should defer advanced topics such as:
 
 Those topics remain important, but should be presented only after baseline connectivity is established.
 
+## Onboarding UI iteration 1 (implementation target)
+
+The first onboarding iteration should focus on eliminating manual config-file editing for common peer setup.
+
+### Core operator path
+
+1. start with `python -m obstacle_bridge`
+2. detect first start from default config state
+3. open onboarding screen instead of deep config tabs
+4. choose one of:
+   - Connect to peer server (I have an invite token)
+   - Set up this node as peer server
+   - Skip onboarding and open advanced setup
+
+### Connect-to-peer path
+
+The client-side onboarding should accept a shareable invite token and only ask for missing local values.
+
+Expected behavior:
+
+- input field for invite token text (base64-like payload)
+- optional admin username/password prompt with an explicit disable-auth checkbox
+- parse token and prefill transport, target, and secure-link expectations
+- show a human-readable review before apply
+
+### Peer-server token generation path
+
+The server-side onboarding must include a token-generation function that builds a peer-consumable invite from the current active settings.
+
+Expected behavior:
+
+- generate token from active runtime or current onboarding draft
+- include role, transport, endpoint, secure-link expectation, and service blueprint hints
+- exclude secrets by default (`admin_web_password`, PSK plaintext, private keys)
+- allow explicit operator opt-in for any sensitive export mode in a separate advanced step
+
+### Multiple connection selection
+
+When a server is configured with multiple possible connection entries, onboarding must ask which connection should be embedded into the generated invite.
+
+Expected behavior:
+
+- show each candidate with protocol/address/port summary
+- require explicit operator selection when more than one candidate exists
+- persist the chosen profile in onboarding state and use it for token generation
+
+### Service-definition editor support in onboarding
+
+Onboarding should expose a guided editor for structured `own_servers` and `remote_servers` entries so users can complete first deployments without opening raw JSON.
+
+Expected behavior:
+
+- typed row editor for own/remote service definitions
+- protocol-aware fields (`tcp`, `udp`, `tun`)
+- inline validation with fix-oriented error messages
+- preview of resulting structured JSON before apply
+
+### Blueprint reuse from connected peers
+
+To avoid repetitive data entry, the onboarding editor should support using an existing connected peer as a blueprint source for `own_servers` generation.
+
+Expected behavior:
+
+- choose a currently connected peer
+- import or clone compatible service shape into draft own-server entries
+- allow local adjustment before apply
+- clearly mark which values came from blueprint reuse versus local edits
+
 ## Interaction layers
 
 The UI should have three layers:

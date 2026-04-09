@@ -88,6 +88,9 @@ body.restart-locked .shell {
 
 .advisor-gate-card {
   width: min(100%, 720px);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .auth-copy {
@@ -247,6 +250,115 @@ h1 {
 .home-toggle input {
   width: 16px;
   height: 16px;
+}
+
+.onboarding-pane {
+  margin-top: 14px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.onboarding-pane h3,
+.onboarding-pane h4 {
+  margin-bottom: 10px;
+}
+
+#onboardingConnectPane {
+  min-height: 360px;
+}
+
+.onboarding-step {
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-evenly;
+  gap: 14px;
+}
+
+.onboarding-step p {
+  margin: 0;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.onboarding-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.onboarding-blueprint-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-top: 10px;
+}
+
+.onboarding-preview {
+  margin-top: 10px;
+  padding: 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(11, 17, 28, 0.8);
+  min-height: 150px;
+  max-height: 220px;
+  overflow-y: auto;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+#onboardingInviteOutput {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#onboardingInviteInput {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.onboarding-auth-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.onboarding-auth-two-col {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.onboarding-auth-grid .home-toggle {
+  margin-top: 0;
+  align-self: end;
+}
+
+.wizard-modal-header {
+  align-items: center;
+}
+
+.wizard-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  justify-content: flex-end;
+}
+
+.wizard-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
 }
 
 .advisor-findings {
@@ -816,6 +928,29 @@ h1 {
 
   .peer-state-control {
     flex-wrap: wrap;
+  }
+
+  .onboarding-grid,
+  .onboarding-auth-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .onboarding-auth-two-col {
+    grid-template-columns: 1fr;
+  }
+
+  .onboarding-blueprint-row {
+    grid-template-columns: 1fr;
+  }
+
+  .wizard-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .wizard-footer {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .peer-detail-metric-compact {
