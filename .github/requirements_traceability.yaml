@@ -497,6 +497,10 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_parse_remote_servers_accepts_structured_specs
     - tests/unit/test_channel_mux_listener_mode.py::test_select_hook_argv_uses_platform_specific_mapping
     - tests/unit/test_channel_mux_listener_mode.py::test_render_hook_value_replaces_known_placeholders
+    - tests/unit/test_channel_mux_listener_mode.py::test_open_payload_roundtrip_preserves_hook_metadata
+    - tests/unit/test_channel_mux_listener_mode.py::test_remote_services_roundtrip_preserves_hook_metadata
+    - tests/unit/test_channel_mux_listener_mode.py::test_chunked_remote_services_transfer_reassembles_metadata
+    - tests/unit/test_channel_mux_listener_mode.py::test_chunked_open_transfer_reassembles_metadata
 
 REQ-MYU-001:
   integration_tests:
