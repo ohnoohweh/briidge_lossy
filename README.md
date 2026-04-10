@@ -38,10 +38,10 @@ python -m obstacle_bridge
 2. click the startup link printed in the console, for example `Open WebAdmin interface http://127.0.0.1:18080/`
 3. run the Setup Wizard from the Home tab
 4. choose Admin Web exposure (`local` or `global`) and optional credentials
-5. paste an invite token from your peer/server admin
+5. paste an invite token from your peer/server admin, or paste a configuration snippet for the initial setup
 6. review, finish, and let the runtime restart
 
-On first start, missing or empty default config is treated as a valid bootstrap state. The wizard can populate the runtime config from invite-token data and save a durable JSON config automatically.
+On first start, missing or empty default config is treated as a valid bootstrap state. The wizard can populate the runtime config from invite-token data or from a pasted configuration snippet and save a durable JSON config automatically.
 
 In that empty-config bootstrap state, Admin Web binds to `127.0.0.1` by default. That is convenient for local installation, but it also means a fresh install on a remote VPS is not reachable from another machine until you intentionally change the Admin Web bind setting.
 
@@ -71,11 +71,11 @@ The wizard is designed for typical peer onboarding:
 
 - Step 1: Welcome
 - Step 2: Admin Web access scope and optional username/password
-- Step 3: Invite token paste/preview
+- Step 3: Invite token or configuration snippet paste/preview
 - Step 4: Review
 - Step 5: Apply + restart
 
-The token-based flow carries transport and service-definition onboarding data (`own_servers`, `remote_servers`, secure-link mode/PSK envelope, and peer endpoint settings). Admin credentials are entered locally in the wizard and are not sourced from the invite token.
+The onboarding flow accepts either an invite token or a paste-ready configuration snippet for the initial setup. Both paths can carry transport and service-definition onboarding data (`own_servers`, `remote_servers`, secure-link mode/PSK envelope, and peer endpoint settings). Admin credentials are entered locally in the wizard and are not sourced from the invite token.
 
 ### Manual/advanced startup (optional)
 If you prefer file-based bootstrap from the command line, use JSON config files:
@@ -85,8 +85,8 @@ python -m obstacle_bridge --config bridge_server.json
 python -m obstacle_bridge --config bridge_client.json
 ```
 
-### Paste-ready manual config samples
-The JSON blocks in the setup examples below are intentionally formatted so they can be pasted directly into a future manual-import flow in WebAdmin.
+### Paste-ready configuration snippets
+The JSON blocks in the setup examples below are intentionally formatted so they can be pasted directly into the Setup Wizard or Configuration import flow in WebAdmin.
 
 Parsing rules for these samples:
 
@@ -271,34 +271,67 @@ Using config files plus WebAdmin makes these multi-transport setups much easier 
 
 A TUN device is a virtual Layer 3 network interface. It is useful when you want to tunnel complete IP traffic between two hosts or sites instead of exposing only individual TCP or UDP ports. In practice, that means you can use ObstacleBridge to carry routed subnet traffic in the same general way that tools such as WireGuard or OpenVPN carry virtual network traffic.
 
-ChannelMux can expose a local TUN interface as a muxed packet service. The preferred config shape is a structured object:
+ChannelMux can expose a local TUN interface as a muxed packet service. For import into the wizard, use top-level runtime config snippets such as the following.
+
+**Paste-ready sample: Peer server (`myudp` listener)**
 
 ```json
 {
-  "listen": {
-    "protocol": "tun",
-    "ifname": "obtun0",
-    "mtu": 1400
-  },
-  "target": {
-    "protocol": "tun",
-    "ifname": "obtun1",
-    "mtu": 1400
-  }
+  "overlay_transport": "myudp",
+  "udp_bind": "0.0.0.0",
+  "udp_own_port": 4443
+}
+```
+
+**Paste-ready sample: Peer client (`myudp` with local and remote TUN interfaces)**
+
+```json
+{
+  "overlay_transport": "myudp",
+  "udp_peer": "bridge.example.com",
+  "udp_peer_port": 4443,
+  "udp_own_port": 0,
+  "own_servers": [
+    {
+      "name": "site-a-tun-local",
+      "listen": {
+        "protocol": "tun",
+        "ifname": "obtun0",
+        "mtu": 1400
+      },
+      "target": {
+        "protocol": "tun",
+        "ifname": "obtun1",
+        "mtu": 1400
+      }
+    }
+  ],
+  "remote_servers": [
+    {
+      "name": "site-a-tun-remote",
+      "listen": {
+        "protocol": "tun",
+        "ifname": "obtun1",
+        "mtu": 1400
+      },
+      "target": {
+        "protocol": "tun",
+        "ifname": "obtun0",
+        "mtu": 1400
+      }
+    }
+  ]
 }
 ```
 
 Interpretation:
 
-- `local_ifname` is the interface name to create on this side
-- `local_mtu` is the MTU to apply on this side
-- `remote_ifname` is the interface name the peer should create
-- `remote_mtu` is the MTU to apply on the peer side
+- `own_servers[0].listen.ifname` is the interface created on the peer-client side
+- `own_servers[0].target.ifname` is the interface name the peer-client expects on the remote side
+- `remote_servers[0].listen.ifname` is the interface created on the peer-server side
+- `remote_servers[0].target.ifname` mirrors the peer-client side so both tunnel ends describe the same routed pair
 
-Example pair:
-
-- client `own_servers`: `{"listen":{"protocol":"tun","ifname":"obtun0","mtu":1400},"target":{"protocol":"tun","ifname":"obtun1","mtu":1400}}`
-- server `remote_servers`: `{"listen":{"protocol":"tun","ifname":"obtun1","mtu":1400},"target":{"protocol":"tun","ifname":"obtun0","mtu":1400}}`
+The listener/server snippet stays transport-focused because listener mode does not use local `own_servers` editing the same way a peer client does. The client snippet above carries both the local TUN service and the remote TUN request in one importable JSON document.
 
 Linux (native) notes
 
@@ -403,6 +436,8 @@ Runtime behavior and caveats
 - direct bridge CLI help: `python -m obstacle_bridge.bridge --help`
 
 If your configuration includes any `tun,...` service entries, start ObstacleBridge with elevated operating-system privileges. On Linux that normally means root or equivalent permission to manage `/dev/net/tun`; on Windows that means an Administrator session plus a usable WinTun installation.
+
+## Configuration
 
 ### Best practice for editing parameters
 
@@ -537,17 +572,6 @@ Saving configuration changes uses a second challenge-response confirmation bound
 
 The admin-web design note in [docs/WEBADMIN_DESIGN.md](docs/WEBADMIN_DESIGN.md) explains the applied auth, session, live-update, and secret-redaction concepts in more detail.
 
-#### Admin web examples
-
-The repository includes two exported admin web snapshots:
-
-- [docs/refered_docs/ObstacleBridge Client.html](https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/refered_docs/ObstacleBridge%20Client.html) shows a peer/client-side view.
-- [docs/refered_docs/ObstacleBridge Server.html](https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/refered_docs/ObstacleBridge%20Server.html) shows a listener/server-side view.
-
-Client admin web screenshot:
-
-![ObstacleBridge client admin web screenshot](docs/refered_docs/ObstaceBridge%20Client.png)
-
 What the admin web shows:
 
 - A summary row with the currently open UDP and TCP channel counts.
@@ -558,11 +582,6 @@ What the admin web shows:
 - A configuration tab that exposes the live runtime options such as overlay transports, listener ports, `--remote-servers`, admin web settings, and log levels.
 - Structured service editors for `own_servers` and `remote_servers`, so services can be added and changed through protocol-aware fields instead of manual config-file editing.
 - A debug log tab with recent in-memory log lines, which is especially useful while investigating channel setup, backpressure, reconnects, and late-data cases.
-
-What is visible in the included snapshots:
-
-- The client snapshot shows a connected `myudp` peer session, one active UDP service, and TCP listener activity on the peer side where overlay traffic is being delivered back to local sockets.
-- The server snapshot shows a public listener role with a connected `myudp` session, an additional idle `ws` listener, and multiple active TCP channels being bridged through the overlay.
 
 ### Logging
 | Option(s) | Default | Description |
@@ -594,46 +613,50 @@ Hook execution model:
 - optional `timeout_ms` and `env` values are supported
 - placeholders are expanded from service/channel context (`{service_id}`, `{service_name}`, `{protocol}`, `{channel_id}`, `{ifname}`, `{target_host}`, `{target_port}`, `{listen_port}`, `{event}`, `{role}`, `{catalog}`, `{peer_id}`)
 
-TUN route hook example with Linux + Windows command variants:
+TUN route hook example with Linux + Windows command variants. This snippet is intentionally shaped as a top-level config object so it can be pasted into the wizard/import flow:
 
 ```json
 {
-  "name": "site-a-tun",
-  "listen": {
-    "protocol": "tun",
-    "ifname": "obtun0",
-    "mtu": 1400
-  },
-  "target": {
-    "protocol": "tun",
-    "ifname": "obtun1",
-    "mtu": 1400
-  },
-  "lifecycle_hooks": {
-    "listener": {
-      "on_created": {
-        "argv": {
-          "linux": ["ip", "link", "set", "dev", "{ifname}", "up"],
-          "windows": ["netsh", "interface", "set", "interface", "name={ifname}", "admin=enabled"]
-        },
-        "timeout_ms": 10000
+  "own_servers": [
+    {
+      "name": "site-a-tun",
+      "listen": {
+        "protocol": "tun",
+        "ifname": "obtun0",
+        "mtu": 1400
       },
-      "on_channel_connected": {
-        "argv": {
-          "linux": ["ip", "route", "replace", "{target_host}/32", "dev", "{ifname}"],
-          "windows": ["netsh", "interface", "ipv4", "add", "route", "prefix={target_host}/32", "interface={ifname}", "nexthop=0.0.0.0", "store=active"]
-        },
-        "timeout_ms": 10000
+      "target": {
+        "protocol": "tun",
+        "ifname": "obtun1",
+        "mtu": 1400
       },
-      "on_channel_closed": {
-        "argv": {
-          "linux": ["ip", "route", "del", "{target_host}/32", "dev", "{ifname}"],
-          "windows": ["netsh", "interface", "ipv4", "delete", "route", "prefix={target_host}/32", "interface={ifname}", "store=active"]
-        },
-        "timeout_ms": 10000
+      "lifecycle_hooks": {
+        "listener": {
+          "on_created": {
+            "argv": {
+              "linux": ["ip", "link", "set", "dev", "{ifname}", "up"],
+              "windows": ["netsh", "interface", "set", "interface", "name={ifname}", "admin=enabled"]
+            },
+            "timeout_ms": 10000
+          },
+          "on_channel_connected": {
+            "argv": {
+              "linux": ["ip", "route", "replace", "{target_host}/32", "dev", "{ifname}"],
+              "windows": ["netsh", "interface", "ipv4", "add", "route", "prefix={target_host}/32", "interface={ifname}", "nexthop=0.0.0.0", "store=active"]
+            },
+            "timeout_ms": 10000
+          },
+          "on_channel_closed": {
+            "argv": {
+              "linux": ["ip", "route", "del", "{target_host}/32", "dev", "{ifname}"],
+              "windows": ["netsh", "interface", "ipv4", "delete", "route", "prefix={target_host}/32", "interface={ifname}", "store=active"]
+            },
+            "timeout_ms": 10000
+          }
+        }
       }
     }
-  }
+  ]
 }
 ```
 
@@ -1012,10 +1035,8 @@ Debugging in a project like this can be difficult because the behavior emerges f
 - `scripts/` — development helpers.
 - `docs/` — main project documents such as requirements, architecture, development process, system boundary, testing guide, and whitepaper.
 - `docs/SECURE_LINK_DESIGN.md` — Phase 0 design baseline for transport-independent tunnel authentication and encryption.
-- `docs/refered_docs/` — referenced examples, exported admin snapshots, diagrams, images, and the smoke-test cheat sheet.
+- `docs/refered_docs/` — referenced examples, diagrams, images, and the smoke-test cheat sheet.
 - `.github/requirements_traceability.yaml` — product-requirement to test traceability manifest used by the requirements guard and coverage report.
-- `docs/refered_docs/ObstacleBridge Client.html` — exported example of the admin web UI on a peer/client instance. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/refered_docs/ObstacleBridge%20Client.html`
-- `docs/refered_docs/ObstacleBridge Server.html` — exported example of the admin web UI on a listener/server instance. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/refered_docs/ObstacleBridge%20Server.html`
 - `docs/WHITEPAPER.html` — full whitepaper requested for this repository update. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/WHITEPAPER.html`
 - `docs/README_TESTING.md` — consolidated testing catalog, execution commands, and regression coverage notes.
 - `wireshark/` — Wireshark dissectors grouped by framing/version.
