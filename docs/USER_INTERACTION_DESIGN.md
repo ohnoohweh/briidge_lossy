@@ -38,6 +38,8 @@ The operator should not need to memorize tuple formats, certificate field lists,
 
 The operator also should not need to inspect config files or guess which Admin Web address to open after startup. The runtime should present a useful clickable entrypoint immediately.
 
+For normal users, the CLI should remain a secondary surface for bootstrap, automation, and system administration rather than the primary way to understand or configure the product.
+
 ## Design principles
 
 - ask about goals before asking about fields
@@ -205,6 +207,7 @@ Recommended top-level entry actions:
 - Add certificates for more clients
 - Review current security posture
 - Help me choose protocol and settings
+- Ask AI to help configure me
 - Generate peer setup package
 - Import peer setup package
 - Open advanced configuration
@@ -814,6 +817,55 @@ Suggested steps:
    - secrets
    - private keys
    - local-only node settings
+
+#### Flow H: Ask AI to help configure me
+
+Suggested steps:
+
+1. Ask what the operator is trying to achieve in plain language
+  - set up a public listener
+  - connect a client from a restricted network
+  - publish one local service
+  - secure an existing deployment
+2. Ask for the few local facts the product cannot infer safely
+  - listener or client role
+  - whether inbound access is available
+  - whether UDP is likely to work
+  - whether Admin Web should stay local-only
+3. Generate a provider-neutral prompt template the operator can copy into an external AI tool of choice
+4. Ask the AI for a structured config snippet or setup artifact, not free-form prose
+5. Paste the returned draft back into WebAdmin
+6. Validate the draft before import
+  - reject malformed structure
+  - highlight risky exposure or missing auth
+  - warn about local OS or dependency mismatches
+  - explain which values remain operator-supplied assumptions
+7. Apply the validated draft as a reviewable configuration proposal rather than an immediate silent commit
+
+The AI-assisted flow should remain optional. It should help users express intent, but the product must still validate, explain, and constrain the resulting configuration.
+
+## AI-assisted configuration direction
+
+The interaction model should evolve in layers rather than jumping directly from CLI to full AI control.
+
+Recommended progression:
+
+1. one-command startup with a clickable Admin Web entrypoint
+2. beginner-first onboarding and task-oriented wizard flows
+3. protocol/settings advisor flows driven by operator goals
+4. AI-assisted draft generation with product-side validation and import
+5. raw CLI and direct config editing for advanced operators, automation, and recovery work
+
+This means AI should be treated as an assistive drafting layer, not as the source of truth.
+
+Product boundaries for that AI layer:
+
+- prefer provider-neutral design rather than hardwiring one external AI vendor into the product
+- generate prompt templates and accept pasted structured output rather than depending on one hosted API
+- request constrained output formats such as structured JSON snippets or setup artifacts instead of long prose answers
+- never export secrets, private keys, or existing protected material to the AI flow by default
+- require validation, review, and explicit operator apply before any imported AI-generated configuration becomes active
+- keep existing wizard, config-editor, and advanced manual paths available for users who do not want AI assistance
 
 ## Security advisor
 
