@@ -179,6 +179,8 @@ Admin Web should become the main operating console for normal users.
 
 The startup console output is part of that entrypoint design. It should provide a clickable entrypoint to WebAdmin so the user reaches the right surface with one click instead of reconstructing the URL manually.
 
+Any design examples for that startup output should use placeholders such as `<local-network-address>` or `<public-address>` rather than real addresses taken from a developer or customer machine.
+
 Recommended first-run experience:
 
 1. user starts the runtime with `python -m obstacle_bridge` and no manual config discussion

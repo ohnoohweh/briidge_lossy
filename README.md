@@ -45,6 +45,17 @@ On first start, missing or empty default config is treated as a valid bootstrap 
 
 When startup can identify a more useful Admin Web entrypoint for the configured exposure mode, it prints additional clickable hints in the console so the user can reach WebAdmin with less manual work.
 
+Typical startup output is described generically like this:
+
+```text
+Open WebAdmin interface http://127.0.0.1:<admin-web-port>/
+Open WebAdmin from local network http://<local-network-address>:<admin-web-port>/
+Public WebAdmin candidate http://<public-address>:<admin-web-port>/ (requires inbound routing/firewall access)
+Public DNS candidate http://<public-dns-name>:<admin-web-port>/ (if that name resolves externally)
+```
+
+The placeholders above describe the feature only. Project documentation should not publish any actual machine-local or public address discovered on a specific system.
+
 ### Invite-token onboarding flow
 The wizard is designed for typical peer onboarding:
 
