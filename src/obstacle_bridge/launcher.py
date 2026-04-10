@@ -227,14 +227,14 @@ def _discover_public_network_host() -> Tuple[Optional[str], Optional[str]]:
     return None, None
 
 
-def _format_admin_web_urls(forward_args: Sequence[str]) -> List[str]:
+def _resolve_admin_web_notice_settings(forward_args: Sequence[str]) -> Optional[Dict[str, Any]]:
     parser = _build_bridge_notice_parser()
     argv = list(forward_args)
     explicit_config = any(arg in {"--config", "-c"} for arg in argv)
     bootstrap_args, _ = parser.parse_known_args(argv)
 
     if bootstrap_args.dump_config or bootstrap_args.save_config:
-        return []
+        return None
 
     config_defaults = _load_config_defaults(pathlib.Path(bootstrap_args.config), explicit_config)
     parser.set_defaults(
@@ -246,58 +246,92 @@ def _format_admin_web_urls(forward_args: Sequence[str]) -> List[str]:
     effective_args, _ = parser.parse_known_args(argv)
 
     if not effective_args.admin_web:
-        return []
+        return None
 
     path = str(effective_args.admin_web_path or "/")
     if not path.startswith("/"):
         path = f"/{path}"
 
-    urls = [_format_url(_clickable_host(effective_args.admin_web_bind), effective_args.admin_web_port, path)]
-    if _is_wildcard_bind(effective_args.admin_web_bind):
-        lan_host = _discover_local_network_host()
-        if lan_host and lan_host != "127.0.0.1":
-            lan_url = _format_url(lan_host, effective_args.admin_web_port, path)
-            if lan_url not in urls:
-                urls.append(lan_url)
-        public_ip, public_dns = _discover_public_network_host()
-        if public_ip:
-            public_url = _format_url(public_ip, effective_args.admin_web_port, path)
-            if public_url not in urls:
-                urls.append(public_url)
-            if public_dns:
-                public_dns_url = _format_url(public_dns, effective_args.admin_web_port, path)
-                if public_dns_url not in urls:
-                    urls.append(public_dns_url)
-    return urls
+    return {
+        "bind": str(effective_args.admin_web_bind or "127.0.0.1"),
+        "port": int(effective_args.admin_web_port),
+        "path": path,
+    }
 
-
-def _print_startup_notice(forward_args: Sequence[str]) -> None:
-    admin_web_urls = _format_admin_web_urls(forward_args)
-    if not admin_web_urls:
+def _print_startup_notice_immediate(notice: Optional[Dict[str, Any]]) -> None:
+    if not notice:
         return
 
-    print(f"Open WebAdmin interface {admin_web_urls[0]}", flush=True)
-    if len(admin_web_urls) > 1:
-        print(f"Open WebAdmin from local network {admin_web_urls[1]}", flush=True)
-    if len(admin_web_urls) > 2:
+    bind = str(notice["bind"])
+    port = int(notice["port"])
+    path = str(notice["path"])
+
+    print(f"Open WebAdmin interface {_format_url(_clickable_host(bind), port, path)}", flush=True)
+
+
+def _print_startup_notice_deferred(notice: Optional[Dict[str, Any]]) -> None:
+    if not notice:
+        return
+
+    bind = str(notice["bind"])
+    port = int(notice["port"])
+    path = str(notice["path"])
+
+    if not _is_wildcard_bind(bind):
+        return
+
+    lan_host = _discover_local_network_host()
+    if lan_host and lan_host != "127.0.0.1":
+        print(f"Open WebAdmin from local network {_format_url(lan_host, port, path)}", flush=True)
+
+    print("Working on global IP address detection ...", flush=True)
+    public_ip, public_dns = _discover_public_network_host()
+    if public_ip:
         print(
-            f"Public WebAdmin candidate {admin_web_urls[2]} (requires inbound routing/firewall access)",
+            f"Public WebAdmin candidate {_format_url(public_ip, port, path)} (requires inbound routing/firewall access)",
             flush=True,
         )
-    if len(admin_web_urls) > 3:
+    if public_ip and public_dns:
         print(
-            f"Public DNS candidate {admin_web_urls[3]} (if that name resolves externally)",
+            f"Public DNS candidate {_format_url(public_dns, port, path)} (if that name resolves externally)",
             flush=True,
         )
+
+
+def _run_process_once(
+    cmd: Sequence[str],
+    *,
+    devnull: Optional[Any],
+    post_start_hook: Optional[Any] = None,
+) -> int:
+    if post_start_hook is None:
+        if devnull is not None:
+            result = subprocess.run(cmd, stdout=devnull, stderr=devnull)
+        else:
+            result = subprocess.run(cmd)
+        return int(result.returncode)
+
+    popen_kwargs: Dict[str, Any] = {}
+    if devnull is not None:
+        popen_kwargs["stdout"] = devnull
+        popen_kwargs["stderr"] = devnull
+
+    process = subprocess.Popen(cmd, **popen_kwargs)
+    try:
+        post_start_hook()
+    except Exception:
+        pass
+    return int(process.wait())
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = _build_parser()
     args, forward_args = parser.parse_known_args(argv)
     cmd = _resolve_command(args.command, forward_args)
+    startup_notice = _resolve_admin_web_notice_settings(forward_args) if args.command is None else None
 
     if args.command is None:
-        _print_startup_notice(forward_args)
+        _print_startup_notice_immediate(startup_notice)
 
     devnull = None
     if not args.no_redirect:
@@ -306,14 +340,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         while True:
             try:
-                if devnull is not None:
-                    result = subprocess.run(cmd, stdout=devnull, stderr=devnull)
-                else:
-                    result = subprocess.run(cmd)
+                post_start_hook = None
+                if startup_notice and _is_wildcard_bind(str(startup_notice["bind"])):
+                    post_start_hook = lambda: _print_startup_notice_deferred(startup_notice)
+                rc = _run_process_once(cmd, devnull=devnull, post_start_hook=post_start_hook)
             except FileNotFoundError as exc:
                 print(f"Command not found: {exc}", file=sys.stderr)
                 return 127
-            rc = int(result.returncode)
             if rc == 75:
                 continue
             if rc == 77:

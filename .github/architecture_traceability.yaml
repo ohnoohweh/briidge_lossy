@@ -59,6 +59,7 @@ ARC-CMP-004:
     - tests/unit/test_launcher_entrypoint.py::test_launcher_does_not_print_local_network_url_for_non_wildcard_bind
     - tests/unit/test_launcher_entrypoint.py::test_discover_local_network_host_prefers_private_ipv4
     - tests/unit/test_launcher_entrypoint.py::test_launcher_prints_public_candidates_for_wildcard_bind
+    - tests/unit/test_launcher_entrypoint.py::test_launcher_starts_bridge_before_public_detection
     - tests/unit/test_launcher_entrypoint.py::test_discover_public_network_host_uses_fallback_services
     - tests/unit/test_launcher_entrypoint.py::test_discover_public_network_host_returns_none_when_services_fail
     - tests/unit/test_config_bootstrap_cli.py::test_parse_args_explicit_missing_config_uses_defaults

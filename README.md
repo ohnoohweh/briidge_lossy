@@ -85,6 +85,19 @@ python -m obstacle_bridge --config bridge_server.json
 python -m obstacle_bridge --config bridge_client.json
 ```
 
+### Paste-ready manual config samples
+The JSON blocks in the setup examples below are intentionally formatted so they can be pasted directly into a future manual-import flow in WebAdmin.
+
+Parsing rules for these samples:
+
+- paste only the JSON content from the code block
+- each sample is a strict JSON object with runtime config keys at the top level
+- no comments, no trailing commas, and no Markdown markers belong in the pasted text
+- if a sample later includes `own_servers` or `remote_servers`, keep those nested objects exactly as shown
+- the transport samples intentionally omit unrelated `admin_web*` and `log*` settings so the examples stay focused on function; configure WebAdmin exposure, credentials, and logging separately in the Setup Wizard or Configuration tab
+
+Use the sample that best matches your role and transport, then adjust host names, ports, bindings, credentials, and service definitions for your environment.
+
 ### 1) NAS behind outbound-only internet, reached through a public server
 This setup fits a NAS or home server that can make outgoing connections but cannot accept incoming internet traffic directly.
 
@@ -105,32 +118,22 @@ Solution with a public ObstacleBridge server:
 
 ![NAS solution example](docs/refered_docs/NAS_solution.svg)
 
-**Public VPS initial config**
+**Paste-ready sample: Public VPS server (`myudp`)**
 ```json
 {
   "overlay_transport": "myudp",
   "udp_bind": "::",
-  "udp_own_port": 4443,
-  "admin_web": true,
-  "admin_web_bind": "127.0.0.1",
-  "admin_web_port": 18080,
-  "admin_web_name": "VPS",
-  "log": "INFO"
+  "udp_own_port": 4443
 }
 ```
 
-**NAS initial config**
+**Paste-ready sample: NAS peer client (`myudp`)**
 ```json
 {
   "overlay_transport": "myudp",
   "udp_peer": "bridge.example.com",
   "udp_peer_port": 4443,
-  "udp_own_port": 0,
-  "admin_web": true,
-  "admin_web_bind": "127.0.0.1",
-  "admin_web_port": 18081,
-  "admin_web_name": "NAS",
-  "log": "INFO"
+  "udp_own_port": 0
 }
 ```
 
@@ -159,32 +162,22 @@ Solution with an ObstacleBridge WebSocket bridge:
 
 ![Client solution example](docs/refered_docs/Client_solution.svg)
 
-**Public bridge config**
+**Paste-ready sample: Public bridge server (`ws`)**
 ```json
 {
   "overlay_transport": "ws",
   "ws_bind": "0.0.0.0",
-  "ws_own_port": 443,
-  "admin_web": true,
-  "admin_web_bind": "127.0.0.1",
-  "admin_web_port": 18080,
-  "admin_web_name": "Public WS Bridge",
-  "log": "INFO"
+  "ws_own_port": 443
 }
 ```
 
-**Restricted-side peer config**
+**Paste-ready sample: Restricted-side peer client (`ws`)**
 ```json
 {
   "overlay_transport": "ws",
   "ws_peer": "bridge.example.com",
   "ws_peer_port": 443,
-  "ws_own_port": 0,
-  "admin_web": true,
-  "admin_web_bind": "127.0.0.1",
-  "admin_web_port": 18081,
-  "admin_web_name": "Restricted Client",
-  "log": "INFO"
+  "ws_own_port": 0
 }
 ```
 
@@ -224,39 +217,29 @@ Solution with an ObstacleBridge `myudp` bridge:
 
 ![Client2 solution example](docs/refered_docs/Client2_solution.svg)
 
-**Public bridge config**
+**Paste-ready sample: Public bridge server (`myudp`)**
 ```json
 {
   "overlay_transport": "myudp",
   "udp_bind": "0.0.0.0",
-  "udp_own_port": 4433,
-  "admin_web": true,
-  "admin_web_bind": "127.0.0.1",
-  "admin_web_port": 18080,
-  "admin_web_name": "Public myudp Bridge",
-  "log": "INFO"
+  "udp_own_port": 4433
 }
 ```
 
-**Restricted-side peer config**
+**Paste-ready sample: Restricted-side peer client (`myudp`)**
 ```json
 {
   "overlay_transport": "myudp",
   "udp_peer": "bridge.example.com",
   "udp_peer_port": 4433,
-  "udp_own_port": 0,
-  "admin_web": true,
-  "admin_web_bind": "127.0.0.1",
-  "admin_web_port": 18081,
-  "admin_web_name": "Lossy Client",
-  "log": "INFO"
+  "udp_own_port": 0
 }
 ```
 
 Then use WebAdmin to add the same local UDP recreation for WireGuard or UDP OpenVPN, usually on `127.0.0.1:16666`.
 
 ### 4) Peer client with both inspected-path and high-loss-path transports
-If you want one peer config that can use both WebSocket and `myudp`, keep the bootstrap config simple and tune the rest in WebAdmin:
+If you want one peer config that can use both WebSocket and `myudp`, keep the bootstrap config simple and tune the rest in WebAdmin. The sample below is also paste-ready as a single JSON object:
 
 Assumptions:
 
@@ -272,12 +255,7 @@ Assumptions:
   "ws_own_port": 0,
   "udp_peer": "bridge.example.com",
   "udp_peer_port": 4433,
-  "udp_own_port": 0,
-  "admin_web": true,
-  "admin_web_bind": "127.0.0.1",
-  "admin_web_port": 18081,
-  "admin_web_name": "Dual Transport Client",
-  "log": "INFO"
+  "udp_own_port": 0
 }
 ```
 
@@ -747,11 +725,7 @@ Minimal listener example:
   "secure_link_psk": "change-this-demo-secret",
   "secure_link_rekey_after_frames": 0,
   "secure_link_rekey_after_seconds": 0.0,
-  "secure_link_require": true,
-  "admin_web": true,
-  "admin_web_bind": "127.0.0.1",
-  "admin_web_port": 18080,
-  "log": "INFO"
+  "secure_link_require": true
 }
 ```
 
@@ -783,11 +757,7 @@ Minimal peer example:
   "secure_link_psk": "change-this-demo-secret",
   "secure_link_rekey_after_frames": 0,
   "secure_link_rekey_after_seconds": 0.0,
-  "secure_link_require": true,
-  "admin_web": true,
-  "admin_web_bind": "127.0.0.1",
-  "admin_web_port": 18081,
-  "log": "INFO"
+  "secure_link_require": true
 }
 ```
 

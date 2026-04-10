@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <title>ObstacleBridge</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="style.css?v=20260409a">
+  <link rel="stylesheet" href="style.css?v=20260410a">
 </head>
 <body>
   <div id="restartGate" class="restart-gate hidden">
@@ -399,10 +399,11 @@
           <div id="setupAssistantRecommendation" class="onboarding-preview"></div>
         </div>
         <div id="setupAssistantStep4" class="onboarding-step hidden">
-          <h3>Invite Token</h3>
+          <h3>Invite Token Or Config Sample</h3>
+          <p>Paste either an invite token from a peer server or one paste-ready JSON configuration sample from the README.</p>
           <label class="service-field">
-            <span>Invite token</span>
-            <textarea id="onboardingInviteInput" class="config-editor config-editor-textarea mono" rows="4" placeholder="Paste invite token from peer server"></textarea>
+            <span>Invite token or config sample</span>
+            <textarea id="onboardingInviteInput" class="config-editor config-editor-textarea mono" rows="6" placeholder="Paste invite token from peer server or a paste-ready JSON config sample"></textarea>
           </label>
         </div>
         <div id="setupAssistantStep5" class="onboarding-step hidden">
@@ -411,8 +412,108 @@
         </div>
       </div>
       <div class="wizard-footer">
-        <button id="setupAssistantBackBtn" class="btn btn-secondary" type="button">Back</button>
-        <button id="setupAssistantNextBtn" class="btn btn-secondary" type="button">Next</button>
+        <div class="wizard-footer-slot wizard-footer-start">
+          <button id="setupAssistantBackBtn" class="btn btn-secondary" type="button">Back</button>
+        </div>
+        <div class="wizard-footer-slot wizard-footer-center">
+          <button id="setupAssistantManualBtn" class="btn btn-secondary hidden" type="button">Manual</button>
+        </div>
+        <div class="wizard-footer-slot wizard-footer-end">
+          <button id="setupAssistantNextBtn" class="btn btn-secondary" type="button">Next</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div id="manualSetupGate" class="config-gate hidden">
+    <section class="card config-card advisor-gate-card">
+      <div class="section-header compact wizard-modal-header">
+        <div>
+          <div class="eyebrow">Guided Setup</div>
+          <h2>Manual Setup</h2>
+        </div>
+        <button id="manualSetupCloseBtnTop" class="btn btn-secondary" type="button">Close</button>
+      </div>
+      <p id="manualSetupMessage" class="config-message"></p>
+      <div id="manualSetupPane" class="onboarding-pane">
+        <div id="manualSetupStepGuidedRole" class="onboarding-step">
+          <h3>Server or Client</h3>
+          <p>Build a peer server/client transport config step by step. The Admin Web exposure and credentials chosen in Setup Assistant still apply when this guided flow is saved.</p>
+          <label class="service-field">
+            <span>Role</span>
+            <select id="manualSetupRole" class="config-editor mono">
+              <option value="server">Peer server / listener</option>
+              <option value="client">Peer client / connector</option>
+            </select>
+          </label>
+        </div>
+        <div id="manualSetupStepGuidedProtocol" class="onboarding-step hidden">
+          <h3>Select Protocol</h3>
+          <p>Pick the overlay transport you want to bootstrap. You can fine-tune more settings later in Configuration.</p>
+          <label class="service-field">
+            <span>Protocol</span>
+            <select id="manualSetupProtocol" class="config-editor mono">
+              <option value="ws">WebSocket</option>
+              <option value="myudp">myudp</option>
+              <option value="tcp">TCP</option>
+              <option value="quic">QUIC</option>
+            </select>
+          </label>
+        </div>
+        <div id="manualSetupStepGuidedParams" class="onboarding-step hidden">
+          <h3>Connection Parameters</h3>
+          <p id="manualSetupParamsNote">Set the bind/interface, ports, and peer FQDN or IP for the chosen role and protocol.</p>
+          <div class="onboarding-grid manual-params-grid">
+            <label class="service-field">
+              <span id="manualSetupBindLabel">Bind / interface</span>
+              <input id="manualSetupBind" class="config-editor mono" type="text" autocomplete="off" />
+            </label>
+            <label class="service-field">
+              <span>Own port</span>
+              <input id="manualSetupOwnPort" class="config-editor mono" type="text" inputmode="numeric" autocomplete="off" />
+            </label>
+            <label id="manualSetupPeerHostField" class="service-field">
+              <span id="manualSetupPeerHostLabel">Peer FQDN or IP</span>
+              <input id="manualSetupPeerHost" class="config-editor mono" type="text" autocomplete="off" />
+            </label>
+            <label id="manualSetupPeerPortField" class="service-field">
+              <span id="manualSetupPeerPortLabel">Peer port</span>
+              <input id="manualSetupPeerPort" class="config-editor mono" type="number" min="1" max="65535" autocomplete="off" />
+            </label>
+            <label class="service-field">
+              <span>Admin instance name</span>
+              <input id="manualSetupInstanceName" class="config-editor mono" type="text" autocomplete="off" />
+            </label>
+          </div>
+        </div>
+        <div id="manualSetupStepGuidedSpecifics" class="onboarding-step hidden">
+          <h3>Protocol Specifics</h3>
+          <p id="manualSetupSpecificsNote">WebSocket can tune payload encoding here. Path and TLS setup stay in the full Configuration tab because they usually require additional static content or certificate work.</p>
+          <div id="manualSetupWsSpecifics" class="onboarding-grid manual-params-grid hidden">
+            <label class="service-field">
+              <span>WS payload mode</span>
+              <select id="manualSetupWsPayloadMode" class="config-editor mono">
+                <option value="binary">binary</option>
+                <option value="base64">base64</option>
+                <option value="json-base64">json-base64</option>
+                <option value="semi-text-shape">semi-text-shape</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div id="manualSetupStepReview" class="onboarding-step hidden">
+          <h3>Review Manual Configuration</h3>
+          <div id="manualSetupReview" class="onboarding-preview mono"></div>
+        </div>
+      </div>
+      <div class="wizard-footer">
+        <div class="wizard-footer-slot wizard-footer-start">
+          <button id="manualSetupBackBtn" class="btn btn-secondary" type="button">Back</button>
+        </div>
+        <div class="wizard-footer-slot wizard-footer-center"></div>
+        <div class="wizard-footer-slot wizard-footer-end">
+          <button id="manualSetupNextBtn" class="btn btn-secondary" type="button">Next</button>
+        </div>
       </div>
     </section>
   </div>
@@ -480,6 +581,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=20260409a"></script>
+  <script src="app.js?v=20260410a"></script>
 </body>
 </html>

@@ -7,6 +7,14 @@ from types import SimpleNamespace
 from obstacle_bridge import launcher
 
 
+class _FakeProcess:
+    def __init__(self, returncode: int = 0) -> None:
+        self._returncode = returncode
+
+    def wait(self) -> int:
+        return self._returncode
+
+
 def test_launcher_forwards_unknown_args_to_bridge(monkeypatch) -> None:
     calls = []
 
@@ -96,11 +104,7 @@ def test_launcher_prints_webadmin_url_from_default_config(monkeypatch, tmp_path,
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(launcher, "_discover_local_network_host", lambda: "192.168.1.77")
     monkeypatch.setattr(launcher, "_discover_public_network_host", lambda: (None, None))
-    monkeypatch.setattr(
-        launcher.subprocess,
-        "run",
-        lambda cmd, **kwargs: SimpleNamespace(returncode=0),
-    )
+    monkeypatch.setattr(launcher.subprocess, "Popen", lambda cmd, **kwargs: _FakeProcess(0))
 
     rc = launcher.main(["--no-redirect"])
 
@@ -108,6 +112,7 @@ def test_launcher_prints_webadmin_url_from_default_config(monkeypatch, tmp_path,
     output = capsys.readouterr().out
     assert "Open WebAdmin interface http://127.0.0.1:18090/" in output
     assert "Open WebAdmin from local network http://192.168.1.77:18090/" in output
+    assert "Working on global IP address detection ..." in output
 
 
 def test_launcher_prints_webadmin_url_with_cli_override(monkeypatch, tmp_path, capsys) -> None:
@@ -128,11 +133,7 @@ def test_launcher_prints_webadmin_url_with_cli_override(monkeypatch, tmp_path, c
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(launcher, "_discover_local_network_host", lambda: "10.0.0.25")
     monkeypatch.setattr(launcher, "_discover_public_network_host", lambda: (None, None))
-    monkeypatch.setattr(
-        launcher.subprocess,
-        "run",
-        lambda cmd, **kwargs: SimpleNamespace(returncode=0),
-    )
+    monkeypatch.setattr(launcher.subprocess, "Popen", lambda cmd, **kwargs: _FakeProcess(0))
 
     rc = launcher.main(
         [
@@ -150,6 +151,7 @@ def test_launcher_prints_webadmin_url_with_cli_override(monkeypatch, tmp_path, c
     output = capsys.readouterr().out
     assert "Open WebAdmin interface http://127.0.0.1:18123/status" in output
     assert "Open WebAdmin from local network http://10.0.0.25:18123/status" in output
+    assert "Working on global IP address detection ..." in output
 
 
 def test_launcher_skips_webadmin_notice_when_disabled_in_config(monkeypatch, tmp_path, capsys) -> None:
@@ -202,6 +204,7 @@ def test_launcher_does_not_print_local_network_url_for_non_wildcard_bind(monkeyp
     output = capsys.readouterr().out
     assert "Open WebAdmin interface http://192.168.50.10:18090/" in output
     assert "Open WebAdmin from local network" not in output
+    assert "Working on global IP address detection ..." not in output
 
 
 def test_discover_local_network_host_prefers_private_ipv4(monkeypatch) -> None:
@@ -253,18 +256,53 @@ def test_launcher_prints_public_candidates_for_wildcard_bind(monkeypatch, tmp_pa
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(launcher, "_discover_local_network_host", lambda: "192.168.1.77")
     monkeypatch.setattr(launcher, "_discover_public_network_host", lambda: ("203.0.113.9", "bridge.example.net"))
-    monkeypatch.setattr(
-        launcher.subprocess,
-        "run",
-        lambda cmd, **kwargs: SimpleNamespace(returncode=0),
-    )
+    monkeypatch.setattr(launcher.subprocess, "Popen", lambda cmd, **kwargs: _FakeProcess(0))
 
     rc = launcher.main(["--no-redirect"])
 
     assert rc == 0
     output = capsys.readouterr().out
+    assert "Working on global IP address detection ..." in output
     assert "Public WebAdmin candidate http://203.0.113.9:18090/ (requires inbound routing/firewall access)" in output
     assert "Public DNS candidate http://bridge.example.net:18090/ (if that name resolves externally)" in output
+
+
+def test_launcher_starts_bridge_before_public_detection(monkeypatch, tmp_path, capsys) -> None:
+    config_path = tmp_path / "ObstacleBridge.cfg"
+    config_path.write_text(
+        json.dumps(
+            {
+                "admin_web": {
+                    "admin_web": True,
+                    "admin_web_bind": "0.0.0.0",
+                    "admin_web_port": 18090,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    events = []
+
+    def _fake_popen(cmd, **kwargs):
+        events.append("process_started")
+        return _FakeProcess(0)
+
+    def _fake_public_detection():
+        events.append("public_detection")
+        return (None, None)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(launcher, "_discover_local_network_host", lambda: None)
+    monkeypatch.setattr(launcher, "_discover_public_network_host", _fake_public_detection)
+    monkeypatch.setattr(launcher.subprocess, "Popen", _fake_popen)
+
+    rc = launcher.main(["--no-redirect"])
+
+    assert rc == 0
+    assert events == ["process_started", "public_detection"]
+    output = capsys.readouterr().out
+    assert "Open WebAdmin interface http://127.0.0.1:18090/" in output
 
 
 def test_discover_public_network_host_uses_fallback_services(monkeypatch) -> None:
