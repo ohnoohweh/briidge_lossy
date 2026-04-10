@@ -43,6 +43,16 @@ python -m obstacle_bridge
 
 On first start, missing or empty default config is treated as a valid bootstrap state. The wizard can populate the runtime config from invite-token data and save a durable JSON config automatically.
 
+In that empty-config bootstrap state, Admin Web binds to `127.0.0.1` by default. That is convenient for local installation, but it also means a fresh install on a remote VPS is not reachable from another machine until you intentionally change the Admin Web bind setting.
+
+If you are installing on a VPS and need to reach WebAdmin remotely for the first setup, start it with an explicit global bind plus credentials, for example:
+
+```bash
+python -m obstacle_bridge --admin-web-bind 0.0.0.0 --admin-web-username admin --admin-web-password "change-me-now"
+```
+
+Use placeholder credentials only as a starting point. Replace them with deployment-specific values and apply the usual firewall or security-group restrictions for the exposed Admin Web port.
+
 When startup can identify a more useful Admin Web entrypoint for the configured exposure mode, it prints additional clickable hints in the console so the user can reach WebAdmin with less manual work. This behavior is part of the default `python -m obstacle_bridge` startup flow and is covered by focused launcher unit tests in the repository.
 
 Typical startup output is described generically like this:
@@ -74,14 +84,6 @@ If you prefer file-based bootstrap from the command line, use JSON config files:
 python -m obstacle_bridge --config bridge_server.json
 python -m obstacle_bridge --config bridge_client.json
 ```
-
-Notes:
-
-- `--config` expects JSON (not INI)
-- `python -m obstacle_bridge --dump-config json` prints a JSON template
-- saved config files store `admin_web_password` and `secure_link_psk` encrypted on disk
-
-![WebAdmin Config Editor](docs/refered_docs/WebAdmin%20ConfigEditor.png)
 
 ### 1) NAS behind outbound-only internet, reached through a public server
 This setup fits a NAS or home server that can make outgoing connections but cannot accept incoming internet traffic directly.
@@ -424,31 +426,13 @@ Runtime behavior and caveats
 
 If your configuration includes any `tun,...` service entries, start ObstacleBridge with elevated operating-system privileges. On Linux that normally means root or equivalent permission to manage `/dev/net/tun`; on Windows that means an Administrator session plus a usable WinTun installation.
 
-### Runtime launcher
+### Best practice for editing parameters
 
-Use `python -m obstacle_bridge` for normal runtime instances. It includes restart supervision and forwards bridge options.
-For local source checkouts, install the package in editable mode first (`pip install -e .`) so the module entrypoint resolves.
+Prefer WebAdmin for routine parameter editing once the process is reachable. It reduces command-line mistakes, keeps related settings visible in one place, and is the most practical way to review exposure, transport, and security options together before saving them.
 
-- Default (uses `ObstacleBridge.cfg`):
+![WebAdmin Config Editor](docs/refered_docs/WebAdmin%20ConfigEditor.png)
 
-```bash
-python -m obstacle_bridge
-```
-
-- Windows (show output; useful for debugging):
-
-```powershell
-python -m obstacle_bridge --no-redirect
-```
-
-- Use another config file:
-
-```bash
-python -m obstacle_bridge --config ObstacleBridge.cfg
-```
-
-Launcher options: `--interval` (seconds between restarts when the process exits with code 77), `--no-redirect`, and `--command`.
-Any unknown launcher options are forwarded to `bridge.py`.
+The CLI remains useful for bootstrap situations, automation, and remote-first setup on systems such as VPS installations where you may need to expose Admin Web intentionally before the configuration editor is reachable.
 
 ## CLI parameter reference
 The tables below are generated from the current parser registrations in `bridge.py`, so the defaults and descriptions match the live code.
@@ -703,6 +687,32 @@ TUN route hook example with Linux + Windows command variants:
 | `--secure-link-revoked-serials` | `` | Optional JSON-array or line-based revoked-serial file for `secure_link_mode=cert`. |
 | `--secure-link-cert-reload-on-restart` | `True` | Reload certificate material on process restart. In `secure_link_mode=cert`, operators can also trigger live reload through the admin API or WebAdmin. |
 
+### Runtime launcher
+
+Use `python -m obstacle_bridge` for normal runtime instances. It includes restart supervision and forwards bridge options.
+For local source checkouts, install the package in editable mode first (`pip install -e .`) so the module entrypoint resolves.
+
+- Default (uses `ObstacleBridge.cfg`):
+
+```bash
+python -m obstacle_bridge
+```
+
+- Windows (show output; useful for debugging):
+
+```powershell
+python -m obstacle_bridge --no-redirect
+```
+
+- Use another config file:
+
+```bash
+python -m obstacle_bridge --config ObstacleBridge.cfg
+```
+
+Launcher options: `--interval` (seconds between restarts when the process exits with code 77), `--no-redirect`, and `--command`.
+Any unknown launcher options are forwarded to `bridge.py`.
+
 #### Current secure-link quick start
 
 The current runtime includes both delivered secure-link modes:
@@ -717,26 +727,13 @@ Recommended operator flow:
 3. start both peers and open the peer cards in WebAdmin first
 4. use the API only for details that are not yet surfaced in WebAdmin
 
-What works today:
+Current limitations and operator caveats:
 
-- `overlay_transport=myudp`
-- `overlay_transport=tcp`
-- `overlay_transport=ws`
-- `overlay_transport=quic`
-- secure-link visibility in WebAdmin, with API fallback through `/api/status` and `/api/peers`
-- optional automatic rekey through `secure_link_rekey_after_frames`
-- optional time-based rekey through `secure_link_rekey_after_seconds`
-- operator-forced rekey from the peer security block in WebAdmin, with `/api/secure-link/rekey` available for automation
-- `myudp` PSK rekey that still completes under ongoing protected traffic and preserves healthy same-channel UDP flow across the `REKEY_COMMIT` to `REKEY_DONE` cutover window
-- cert-mode trust-anchor, role, validity-window, deployment-scope, and revoked-serial enforcement before protected traffic starts
-- cert-mode peer identity and trust diagnostics in WebAdmin, with additional detail available through `/api/peers`
-- cert-mode live reload from the Secure-Link tab in WebAdmin through the `Reload Revocation`, `Reload Local Identity`, and `Reload All` buttons, with `/api/secure-link/reload` available for automation
-- aggregate reload/apply summaries and some peer-scoped enforcement diagnostics through `/api/status` and `/api/peers`
-
-What is still planned:
-
-- operator tooling for certificate issuance/rotation
-- in-product certificate/key generation and signing workflows
+- WebAdmin is the preferred surface for secure-link visibility, but some aggregate reload/apply summaries and peer-scoped enforcement diagnostics are still easier to inspect through `/api/status` and `/api/peers`.
+- `secure_link_rekey_after_frames` and `secure_link_rekey_after_seconds` are optional controls. Leave them at `0` unless you intentionally want automatic rekey behavior.
+- operator-forced rekey is scoped to authenticated client-side secure-link sessions on the targeted peer row. If no protected client data has been sent yet, the WebAdmin action and `/api/secure-link/rekey` reject the request rather than guessing past the handshake boundary.
+- certificate-mode live reload depends on valid operator-supplied trust material for `secure_link_root_pub`, `secure_link_cert_body`, `secure_link_cert_sig`, `secure_link_private_key`, and optional `secure_link_revoked_serials`. The runtime applies and enforces that material, but certificate issuance and rotation tooling are still outside the product.
+- cert-mode operators can trigger `Reload Revocation`, `Reload Local Identity`, and `Reload All` from WebAdmin or `/api/secure-link/reload`, but some detailed enforcement results remain easier to audit through the API than through the current WebAdmin presentation.
 
 Minimal listener example:
 
