@@ -124,6 +124,7 @@ Current implementation note:
 - `REQ-LIFE-005`: Repeated failed reconnect attempts shall be throttled by a configurable minimum retry delay so client overlays do not hammer connection setup continuously while a peer remains unavailable.
 - `REQ-LIFE-006`: Operator-triggered reconnect requests exposed by the admin API and WebAdmin shall be scoped to the selected established peer connection rather than being process-global across unrelated peer sessions.
 - `REQ-LIFE-007`: Startup through the default runtime entrypoint shall tolerate a missing or empty default config file by continuing with built-in defaults, while malformed JSON config input shall fail fast with a clear error.
+- `REQ-LIFE-008`: When startup uses the default runtime entrypoint and Admin Web is enabled, the launcher shall print a clickable Admin Web entrypoint URL derived from the effective Admin Web bind/port/path configuration before handing control to the supervised bridge process. For wildcard/global Admin Web binds, the launcher may additionally print clearly labeled network-reachability hints derived from the local host and best-effort public address discovery, but those extra lines shall remain advisory rather than a guarantee of external reachability and may be emitted after the supervised bridge process has already started so slow public-address discovery does not delay local operator access.
 
 ## Listener and multi-peer requirements
 

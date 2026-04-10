@@ -12,6 +12,7 @@ The main goals are:
 - replace syntax-heavy configuration with guided workflows
 - make security posture visible early
 - help users reach a safe working configuration without reading the full manual first
+- reduce Admin Web access friction by turning URL discovery into a startup click
 
 This document complements:
 
@@ -26,13 +27,18 @@ ObstacleBridge should feel like a guided networking tool, not a syntax puzzle.
 The primary interaction model should be:
 
 1. install and start with `python -m obstacle_bridge`
-2. let the runtime detect first start from the default config state
-3. open Admin Web onboarding
-4. choose a simple goal
-5. answer only essential prompts
-6. connect and then expose advanced settings progressively
+2. click the startup-provided Admin Web link instead of manually typing a URL
+3. let the runtime detect first start from the default config state
+4. open Admin Web onboarding
+5. choose a simple goal
+6. answer only essential prompts
+7. connect and then expose advanced settings progressively
 
 The operator should not need to memorize tuple formats, certificate field lists, or every transport option just to publish one service or secure one deployment.
+
+The operator also should not need to inspect config files or guess which Admin Web address to open after startup. The runtime should present a useful clickable entrypoint immediately.
+
+For normal users, the CLI should remain a secondary surface for bootstrap, automation, and system administration rather than the primary way to understand or configure the product.
 
 ## Design principles
 
@@ -47,6 +53,7 @@ The operator should not need to memorize tuple formats, certificate field lists,
 - prefer autodetection and autovalidation over unnecessary manual entry
 - avoid asking for the same connection inputs multiple times
 - let one configured node generate reusable setup material for another node
+- move common next actions, such as opening Admin Web, from manual copy/paste to direct click targets
 
 ## Design direction and justification
 
@@ -77,6 +84,8 @@ Examples:
 - choosing between PSK and certificates is a tradeoff between quick deployment and longer-term trust management
 
 A raw config editor can expose those knobs, but it does not help the user choose well.
+
+The same principle applies to reaching the Admin Web surface itself. If the product already knows the effective bind address and port, requiring the user to reconstruct and type that URL is unnecessary friction.
 
 ### Why recommendations and warnings matter
 
@@ -170,6 +179,10 @@ It is a foundation step toward:
 
 Admin Web should become the main operating console for normal users.
 
+The startup console output is part of that entrypoint design. It should provide a clickable entrypoint to WebAdmin so the user reaches the right surface with one click instead of reconstructing the URL manually.
+
+Any design examples for that startup output should use placeholders such as `<local-network-address>` or `<public-address>` rather than real addresses taken from a developer or customer machine.
+
 Recommended first-run experience:
 
 1. user starts the runtime with `python -m obstacle_bridge` and no manual config discussion
@@ -194,6 +207,7 @@ Recommended top-level entry actions:
 - Add certificates for more clients
 - Review current security posture
 - Help me choose protocol and settings
+- Ask AI to help configure me
 - Generate peer setup package
 - Import peer setup package
 - Open advanced configuration
@@ -803,6 +817,55 @@ Suggested steps:
    - secrets
    - private keys
    - local-only node settings
+
+#### Flow H: Ask AI to help configure me
+
+Suggested steps:
+
+1. Ask what the operator is trying to achieve in plain language
+  - set up a public listener
+  - connect a client from a restricted network
+  - publish one local service
+  - secure an existing deployment
+2. Ask for the few local facts the product cannot infer safely
+  - listener or client role
+  - whether inbound access is available
+  - whether UDP is likely to work
+  - whether Admin Web should stay local-only
+3. Generate a provider-neutral prompt template the operator can copy into an external AI tool of choice
+4. Ask the AI for a structured config snippet or setup artifact, not free-form prose
+5. Paste the returned draft back into WebAdmin
+6. Validate the draft before import
+  - reject malformed structure
+  - highlight risky exposure or missing auth
+  - warn about local OS or dependency mismatches
+  - explain which values remain operator-supplied assumptions
+7. Apply the validated draft as a reviewable configuration proposal rather than an immediate silent commit
+
+The AI-assisted flow should remain optional. It should help users express intent, but the product must still validate, explain, and constrain the resulting configuration.
+
+## AI-assisted configuration direction
+
+The interaction model should evolve in layers rather than jumping directly from CLI to full AI control.
+
+Recommended progression:
+
+1. one-command startup with a clickable Admin Web entrypoint
+2. beginner-first onboarding and task-oriented wizard flows
+3. protocol/settings advisor flows driven by operator goals
+4. AI-assisted draft generation with product-side validation and import
+5. raw CLI and direct config editing for advanced operators, automation, and recovery work
+
+This means AI should be treated as an assistive drafting layer, not as the source of truth.
+
+Product boundaries for that AI layer:
+
+- prefer provider-neutral design rather than hardwiring one external AI vendor into the product
+- generate prompt templates and accept pasted structured output rather than depending on one hosted API
+- request constrained output formats such as structured JSON snippets or setup artifacts instead of long prose answers
+- never export secrets, private keys, or existing protected material to the AI flow by default
+- require validation, review, and explicit operator apply before any imported AI-generated configuration becomes active
+- keep existing wizard, config-editor, and advanced manual paths available for users who do not want AI assistance
 
 ## Security advisor
 

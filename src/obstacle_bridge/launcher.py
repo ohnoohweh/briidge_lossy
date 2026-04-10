@@ -8,12 +8,26 @@ to ``bridge.py``.
 from __future__ import annotations
 
 import argparse
+import ipaddress
+import json
 import os
+import pathlib
 import shlex
+import socket
 import subprocess
 import sys
 import time
-from typing import List, Optional, Sequence
+import urllib.error
+import urllib.request
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+
+PUBLIC_IP_DISCOVERY_SERVICES = (
+    "https://4.ipw.cn",
+    "https://api.ipify.org",
+    "https://ipv4.icanhazip.com",
+)
+PUBLIC_IP_DISCOVERY_TIMEOUT_S = 1.0
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -61,10 +75,263 @@ def _resolve_command(raw_command: Optional[str], forward_args: Sequence[str]) ->
     return _default_bridge_command(forward_args)
 
 
+def _build_bridge_notice_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--config", "-c", default="ObstacleBridge.cfg")
+    parser.add_argument("--dump-config", nargs="?")
+    parser.add_argument("--save-config")
+    parser.add_argument("--admin-web", action="store_true", default=True)
+    parser.add_argument("--admin-web-bind", default="127.0.0.1")
+    parser.add_argument("--admin-web-port", type=int, default=18080)
+    parser.add_argument("--admin-web-path", default="/")
+    return parser
+
+
+def _flatten_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    flat: Dict[str, Any] = {}
+    for key, value in config.items():
+        if isinstance(value, dict):
+            flat.update(value)
+        else:
+            flat[key] = value
+    return flat
+
+
+def _load_config_defaults(config_path: pathlib.Path, explicit_config: bool) -> Dict[str, Any]:
+    if not explicit_config and not config_path.exists():
+        return {}
+    try:
+        raw = config_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    if not raw.strip():
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return _flatten_config(payload)
+
+
+def _clickable_host(bind: str) -> str:
+    host = str(bind or "").strip()
+    if host in {"", "0.0.0.0", "::", "*", "localhost"}:
+        return "127.0.0.1"
+    return host
+
+
+def _is_wildcard_bind(bind: str) -> bool:
+    return str(bind or "").strip() in {"", "0.0.0.0", "::", "*"}
+
+
+def _normalize_ip_literal(host: str) -> Optional[str]:
+    value = str(host or "").strip()
+    if not value:
+        return None
+    if "%" in value:
+        value = value.split("%", 1)[0]
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        return None
+
+
+def _rank_local_ip(host: str) -> Tuple[int, str]:
+    ip_obj = ipaddress.ip_address(host)
+    if ip_obj.version == 4 and ip_obj.is_private:
+        return (0, host)
+    if ip_obj.version == 6 and ip_obj.is_private:
+        return (1, host)
+    if ip_obj.version == 4:
+        return (2, host)
+    return (3, host)
+
+
+def _discover_local_network_host() -> Optional[str]:
+    candidates = set()
+
+    for family, remote in (
+        (socket.AF_INET, ("192.0.2.1", 80)),
+        (socket.AF_INET6, ("2001:db8::1", 80, 0, 0)),
+    ):
+        try:
+            sock = socket.socket(family, socket.SOCK_DGRAM)
+        except OSError:
+            continue
+        try:
+            sock.connect(remote)
+            local_host = _normalize_ip_literal(sock.getsockname()[0])
+            if local_host:
+                candidates.add(local_host)
+        except OSError:
+            pass
+        finally:
+            sock.close()
+
+    try:
+        hostname = socket.gethostname()
+        for family, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
+            if family not in {socket.AF_INET, socket.AF_INET6}:
+                continue
+            local_host = _normalize_ip_literal(sockaddr[0])
+            if local_host:
+                candidates.add(local_host)
+    except socket.gaierror:
+        pass
+
+    filtered = []
+    for host in candidates:
+        ip_obj = ipaddress.ip_address(host)
+        if ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast or ip_obj.is_unspecified:
+            continue
+        filtered.append(host)
+
+    if not filtered:
+        return None
+    return sorted(filtered, key=_rank_local_ip)[0]
+
+
+def _format_url(host: str, port: int, path: str) -> str:
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"http://{host}:{port}{path}"
+
+
+def _discover_public_network_host() -> Tuple[Optional[str], Optional[str]]:
+    for service_url in PUBLIC_IP_DISCOVERY_SERVICES:
+        request = urllib.request.Request(
+            service_url,
+            headers={"User-Agent": "ObstacleBridge/0.1 public-ip-check"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=PUBLIC_IP_DISCOVERY_TIMEOUT_S) as response:
+                payload = response.read().decode("utf-8", errors="replace").strip()
+        except (OSError, urllib.error.URLError, TimeoutError):
+            continue
+
+        public_ip = _normalize_ip_literal(payload)
+        if not public_ip:
+            continue
+
+        public_dns = None
+        try:
+            reverse_name, _, _ = socket.gethostbyaddr(public_ip)
+        except (OSError, socket.herror, socket.gaierror):
+            reverse_name = None
+        if reverse_name and reverse_name != public_ip:
+            public_dns = reverse_name.rstrip(".")
+        return public_ip, public_dns
+
+    return None, None
+
+
+def _resolve_admin_web_notice_settings(forward_args: Sequence[str]) -> Optional[Dict[str, Any]]:
+    parser = _build_bridge_notice_parser()
+    argv = list(forward_args)
+    explicit_config = any(arg in {"--config", "-c"} for arg in argv)
+    bootstrap_args, _ = parser.parse_known_args(argv)
+
+    if bootstrap_args.dump_config or bootstrap_args.save_config:
+        return None
+
+    config_defaults = _load_config_defaults(pathlib.Path(bootstrap_args.config), explicit_config)
+    parser.set_defaults(
+        admin_web=bool(config_defaults.get("admin_web", True)),
+        admin_web_bind=str(config_defaults.get("admin_web_bind", "127.0.0.1") or "127.0.0.1"),
+        admin_web_port=int(config_defaults.get("admin_web_port", 18080) or 18080),
+        admin_web_path=str(config_defaults.get("admin_web_path", "/") or "/"),
+    )
+    effective_args, _ = parser.parse_known_args(argv)
+
+    if not effective_args.admin_web:
+        return None
+
+    path = str(effective_args.admin_web_path or "/")
+    if not path.startswith("/"):
+        path = f"/{path}"
+
+    return {
+        "bind": str(effective_args.admin_web_bind or "127.0.0.1"),
+        "port": int(effective_args.admin_web_port),
+        "path": path,
+    }
+
+def _print_startup_notice_immediate(notice: Optional[Dict[str, Any]]) -> None:
+    if not notice:
+        return
+
+    bind = str(notice["bind"])
+    port = int(notice["port"])
+    path = str(notice["path"])
+
+    print(f"Open WebAdmin interface {_format_url(_clickable_host(bind), port, path)}", flush=True)
+
+
+def _print_startup_notice_deferred(notice: Optional[Dict[str, Any]]) -> None:
+    if not notice:
+        return
+
+    bind = str(notice["bind"])
+    port = int(notice["port"])
+    path = str(notice["path"])
+
+    if not _is_wildcard_bind(bind):
+        return
+
+    lan_host = _discover_local_network_host()
+    if lan_host and lan_host != "127.0.0.1":
+        print(f"Open WebAdmin from local network {_format_url(lan_host, port, path)}", flush=True)
+
+    print("Working on global IP address detection ...", flush=True)
+    public_ip, public_dns = _discover_public_network_host()
+    if public_ip:
+        print(
+            f"Public WebAdmin candidate {_format_url(public_ip, port, path)} (requires inbound routing/firewall access)",
+            flush=True,
+        )
+    if public_ip and public_dns:
+        print(
+            f"Public DNS candidate {_format_url(public_dns, port, path)} (if that name resolves externally)",
+            flush=True,
+        )
+
+
+def _run_process_once(
+    cmd: Sequence[str],
+    *,
+    devnull: Optional[Any],
+    post_start_hook: Optional[Any] = None,
+) -> int:
+    if post_start_hook is None:
+        if devnull is not None:
+            result = subprocess.run(cmd, stdout=devnull, stderr=devnull)
+        else:
+            result = subprocess.run(cmd)
+        return int(result.returncode)
+
+    popen_kwargs: Dict[str, Any] = {}
+    if devnull is not None:
+        popen_kwargs["stdout"] = devnull
+        popen_kwargs["stderr"] = devnull
+
+    process = subprocess.Popen(cmd, **popen_kwargs)
+    try:
+        post_start_hook()
+    except Exception:
+        pass
+    return int(process.wait())
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = _build_parser()
     args, forward_args = parser.parse_known_args(argv)
     cmd = _resolve_command(args.command, forward_args)
+    startup_notice = _resolve_admin_web_notice_settings(forward_args) if args.command is None else None
+
+    if args.command is None:
+        _print_startup_notice_immediate(startup_notice)
 
     devnull = None
     if not args.no_redirect:
@@ -73,14 +340,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         while True:
             try:
-                if devnull is not None:
-                    result = subprocess.run(cmd, stdout=devnull, stderr=devnull)
-                else:
-                    result = subprocess.run(cmd)
+                post_start_hook = None
+                if startup_notice and _is_wildcard_bind(str(startup_notice["bind"])):
+                    post_start_hook = lambda: _print_startup_notice_deferred(startup_notice)
+                rc = _run_process_once(cmd, devnull=devnull, post_start_hook=post_start_hook)
             except FileNotFoundError as exc:
                 print(f"Command not found: {exc}", file=sys.stderr)
                 return 127
-            rc = int(result.returncode)
             if rc == 75:
                 continue
             if rc == 77:
