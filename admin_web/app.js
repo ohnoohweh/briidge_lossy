@@ -133,6 +133,41 @@ const uiState = {
   },
 };
 
+function getExistingOnboardingAdminUsername() {
+  return String(configState.config?.admin_web_username || authState.username || '').trim();
+}
+
+function shouldReuseExistingOnboardingAdminCredentials() {
+  return Boolean(authState.required && authState.authenticated && getExistingOnboardingAdminUsername());
+}
+
+function getOnboardingAdminCredentialState() {
+  const username = String(document.getElementById('onboardingAdminUser')?.value || '').trim();
+  const password = String(document.getElementById('onboardingAdminPass')?.value || '');
+  return {
+    reuseExisting: shouldReuseExistingOnboardingAdminCredentials(),
+    existingUsername: getExistingOnboardingAdminUsername(),
+    username,
+    password,
+    hasTypedCreds: Boolean(username && password),
+    hasAnyTypedCredPart: Boolean(username || password),
+  };
+}
+
+function syncOnboardingAdminCredentialUi() {
+  const reuseExisting = shouldReuseExistingOnboardingAdminCredentials();
+  const note = document.getElementById('onboardingAdminCredentialNote');
+  const authGrid = document.getElementById('onboardingAdminAuthGrid');
+  if (note) {
+    note.textContent = reuseExisting
+      ? `Admin Web credentials for '${getExistingOnboardingAdminUsername()}' are already active for this session and will be kept.`
+      : 'Please define credentials for accessing the WebAdmin page.';
+  }
+  if (authGrid) {
+    authGrid.classList.toggle('hidden', reuseExisting);
+  }
+}
+
 function isApiEnabled() {
   return !authState.required || authState.authenticated;
 }
@@ -956,9 +991,8 @@ function resolveOnboardingAdminBind(exposure) {
 
 function deriveSetupAssistantRecommendation() {
   const exposure = String(document.getElementById('onboardingAdminExposure')?.value || 'local').toLowerCase();
-  const username = String(document.getElementById('onboardingAdminUser')?.value || '').trim();
-  const password = String(document.getElementById('onboardingAdminPass')?.value || '');
-  const hasCreds = Boolean(username && password);
+  const credState = getOnboardingAdminCredentialState();
+  const hasCreds = credState.hasTypedCreds || credState.reuseExisting;
   if (exposure === 'global' && !hasCreds) {
     return {
       severity: 'warning',
@@ -990,15 +1024,21 @@ function renderSetupAssistantReview() {
   const node = document.getElementById('onboardingReviewConfig');
   if (!node) return;
   const exposure = String(document.getElementById('onboardingAdminExposure')?.value || 'local').toLowerCase();
-  const username = String(document.getElementById('onboardingAdminUser')?.value || '').trim();
-  const password = String(document.getElementById('onboardingAdminPass')?.value || '');
+  const credState = getOnboardingAdminCredentialState();
   const safeUpdates = { ...(uiState.onboarding.suggestedUpdates || {}) };
   safeUpdates.admin_web_bind = resolveOnboardingAdminBind(exposure);
-  if (username && password) {
+  let adminCredentialsSource = 'wizard_input_only';
+  if (credState.hasTypedCreds) {
     safeUpdates.admin_web_auth_disable = false;
-    safeUpdates.admin_web_username = username;
+    safeUpdates.admin_web_username = credState.username;
     safeUpdates.admin_web_password = '***hidden***';
+  } else if (credState.reuseExisting) {
+    adminCredentialsSource = 'existing_startup_credentials';
+    safeUpdates.admin_web_auth_disable = false;
+    safeUpdates.admin_web_username = credState.existingUsername;
+    safeUpdates.admin_web_password = '***preserved***';
   } else {
+    adminCredentialsSource = 'wizard_disables_auth';
     safeUpdates.admin_web_auth_disable = true;
     safeUpdates.admin_web_username = '';
     safeUpdates.admin_web_password = '';
@@ -1011,7 +1051,7 @@ function renderSetupAssistantReview() {
       connection: uiState.onboarding.invitePreview?.connection || {},
       secure_link_mode: uiState.onboarding.invitePreview?.secure_link_mode || 'off',
       secure_link_psk_present: Boolean(uiState.onboarding.invitePreview?.secure_link_psk_present),
-      admin_credentials_source: 'wizard_input_only',
+      admin_credentials_source: adminCredentialsSource,
       updates: safeUpdates,
     },
     null,
@@ -1035,6 +1075,11 @@ function openSetupAssistantGate() {
     const bind = String(configState.config?.admin_web_bind || '127.0.0.1');
     exposureSelect.value = isLikelyLocalAdminBind(bind) ? 'local' : 'global';
   }
+  const userInput = document.getElementById('onboardingAdminUser');
+  const passInput = document.getElementById('onboardingAdminPass');
+  if (userInput instanceof HTMLInputElement) userInput.value = '';
+  if (passInput instanceof HTMLInputElement) passInput.value = '';
+  syncOnboardingAdminCredentialUi();
   const reviewNode = document.getElementById('onboardingReviewConfig');
   if (reviewNode) reviewNode.textContent = '';
   setOnboardingMessage('');
@@ -1319,17 +1364,16 @@ async function applyOnboardingInvite() {
     const updates = { ...(uiState.onboarding.suggestedUpdates || {}) };
     const exposure = String(document.getElementById('onboardingAdminExposure')?.value || 'local').toLowerCase();
     updates.admin_web_bind = resolveOnboardingAdminBind(exposure);
-    const username = String(document.getElementById('onboardingAdminUser')?.value || '').trim();
-    const password = String(document.getElementById('onboardingAdminPass')?.value || '');
-    if ((username && !password) || (!username && password)) {
+    const credState = getOnboardingAdminCredentialState();
+    if (credState.hasAnyTypedCredPart && !credState.hasTypedCreds) {
       setOnboardingMessage('Set both admin username and password, or leave both empty.');
       return;
     }
-    if (username && password) {
+    if (credState.hasTypedCreds) {
       updates.admin_web_auth_disable = false;
-      updates.admin_web_username = username;
-      updates.admin_web_password = password;
-    } else {
+      updates.admin_web_username = credState.username;
+      updates.admin_web_password = credState.password;
+    } else if (!credState.reuseExisting) {
       updates.admin_web_auth_disable = true;
       updates.admin_web_username = '';
       updates.admin_web_password = '';
@@ -2879,13 +2923,12 @@ document.getElementById('setupAssistantNextBtn')?.addEventListener('click', asyn
     return;
   }
   if (step === 2) {
-    const username = String(document.getElementById('onboardingAdminUser')?.value || '').trim();
-    const password = String(document.getElementById('onboardingAdminPass')?.value || '');
-    if ((username && !password) || (!username && password)) {
+    const credState = getOnboardingAdminCredentialState();
+    if (credState.hasAnyTypedCredPart && !credState.hasTypedCreds) {
       setOnboardingMessage('Set both admin username and password, or leave both empty.');
       return;
     }
-    if (username && password) {
+    if (credState.hasTypedCreds || credState.reuseExisting) {
       setSetupAssistantStep(4);
       return;
     }
@@ -2948,9 +2991,11 @@ document.getElementById('onboardingAdminExposure')?.addEventListener('change', (
   if (uiState.onboarding.setupStep === 3) renderSetupAssistantRecommendation();
 });
 document.getElementById('onboardingAdminUser')?.addEventListener('input', () => {
+  syncOnboardingAdminCredentialUi();
   if (uiState.onboarding.setupStep === 3) renderSetupAssistantRecommendation();
 });
 document.getElementById('onboardingAdminPass')?.addEventListener('input', () => {
+  syncOnboardingAdminCredentialUi();
   if (uiState.onboarding.setupStep === 3) renderSetupAssistantRecommendation();
 });
 document.getElementById('onboardingLoadServicesBtn')?.addEventListener('click', onboardingLoadServicesFromConfig);
