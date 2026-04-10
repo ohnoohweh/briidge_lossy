@@ -43,13 +43,7 @@ python -m obstacle_bridge
 
 On first start, missing or empty default config is treated as a valid bootstrap state. The wizard can populate the runtime config from invite-token data and save a durable JSON config automatically.
 
-When Admin Web is configured with a global bind such as `0.0.0.0` or `::`, startup also prints additional clickable addresses:
-
-- a local-network link using the machine's detected LAN IP address
-- a best-effort public-IP candidate, if public IP discovery succeeds
-- a public DNS candidate when reverse DNS is available
-
-The public-internet lines are only hints. They do not prove that NAT, firewall rules, or port forwarding actually allow inbound access.
+When startup can identify a more useful Admin Web entrypoint for the configured exposure mode, it prints additional clickable hints in the console so the user can reach WebAdmin with less manual work.
 
 ### Invite-token onboarding flow
 The wizard is designed for typical peer onboarding:

@@ -36,7 +36,7 @@ The primary interaction model should be:
 
 The operator should not need to memorize tuple formats, certificate field lists, or every transport option just to publish one service or secure one deployment.
 
-The operator also should not need to inspect config files or guess which Admin Web address to open after startup. The runtime should present the most useful clickable addresses immediately.
+The operator also should not need to inspect config files or guess which Admin Web address to open after startup. The runtime should present a useful clickable entrypoint immediately.
 
 ## Design principles
 
@@ -177,7 +177,7 @@ It is a foundation step toward:
 
 Admin Web should become the main operating console for normal users.
 
-The startup console output is part of that entrypoint design. It should provide a clickable localhost URL by default and, when Admin Web is globally bound, additional LAN and best-effort public candidate links so the user reaches the right surface with one click.
+The startup console output is part of that entrypoint design. It should provide a clickable entrypoint to WebAdmin so the user reaches the right surface with one click instead of reconstructing the URL manually.
 
 Recommended first-run experience:
 
