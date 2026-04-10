@@ -43,7 +43,7 @@ python -m obstacle_bridge
 
 On first start, missing or empty default config is treated as a valid bootstrap state. The wizard can populate the runtime config from invite-token data and save a durable JSON config automatically.
 
-When startup can identify a more useful Admin Web entrypoint for the configured exposure mode, it prints additional clickable hints in the console so the user can reach WebAdmin with less manual work.
+When startup can identify a more useful Admin Web entrypoint for the configured exposure mode, it prints additional clickable hints in the console so the user can reach WebAdmin with less manual work. This behavior is part of the default `python -m obstacle_bridge` startup flow and is covered by focused launcher unit tests in the repository.
 
 Typical startup output is described generically like this:
 

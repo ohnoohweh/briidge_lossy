@@ -3,10 +3,11 @@
 This repository currently collects:
 
 - `140` integration tests across [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py), [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py), and [tests/integration/test_reconnect_regression.py](../tests/integration/test_reconnect_regression.py)
-- `157` unit tests in `tests/unit/`
+- `169` unit tests in `tests/unit/`
 
 Recent test/content updates:
 
+- 2026-04-10: Launcher startup requirements now include `REQ-LIFE-008` for the clickable WebAdmin entrypoint notice emitted by `python -m obstacle_bridge`. Focused unit coverage in [tests/unit/test_launcher_entrypoint.py](../tests/unit/test_launcher_entrypoint.py) now verifies default-config output, CLI override handling, suppression when Admin Web is disabled, wildcard-bind LAN/public candidate output, and public-IP fallback discovery behavior.
 - 2026-04-09: Lifecycle requirements now include `REQ-LIFE-007` for first-start config bootstrap behavior on the default module entrypoint. Config loading now treats empty JSON config files as a valid first-start state while still rejecting malformed JSON with a clear error. Unit coverage in [tests/unit/test_config_bootstrap_cli.py](../tests/unit/test_config_bootstrap_cli.py) verifies explicit missing-config fallback, empty-config acceptance, and invalid-config failure diagnostics.
 - 2026-04-09: Runtime entrypoint supervision now runs through `python -m obstacle_bridge` with launcher passthrough to `bridge.py`. Unit coverage in [tests/unit/test_launcher_entrypoint.py](../tests/unit/test_launcher_entrypoint.py) now defends restart-loop handling (`75` immediate retry and `77` delayed retry) plus forwarding of non-launcher options to `bridge.py`. Traceability now links this coverage to `REQ-LIFE-002` and `REQ-LIFE-005`.
 - 2026-04-09: Service-definition requirement coverage now includes `REQ-MUX-009` for structured JSON `own_servers`/`remote_servers` plus listener lifecycle-hook execution on structured `own_servers` entries. End-to-end coverage adds [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py) cases `test_overlay_e2e_structured_own_servers_lifecycle_hooks_execute` and `test_overlay_e2e_structured_remote_servers_udp_forwarding`, and traceability maps these with focused unit coverage in [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py).
