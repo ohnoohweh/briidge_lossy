@@ -12,6 +12,7 @@ The main goals are:
 - replace syntax-heavy configuration with guided workflows
 - make security posture visible early
 - help users reach a safe working configuration without reading the full manual first
+- reduce Admin Web access friction by turning URL discovery into a startup click
 
 This document complements:
 
@@ -26,13 +27,16 @@ ObstacleBridge should feel like a guided networking tool, not a syntax puzzle.
 The primary interaction model should be:
 
 1. install and start with `python -m obstacle_bridge`
-2. let the runtime detect first start from the default config state
-3. open Admin Web onboarding
-4. choose a simple goal
-5. answer only essential prompts
-6. connect and then expose advanced settings progressively
+2. click the startup-provided Admin Web link instead of manually typing a URL
+3. let the runtime detect first start from the default config state
+4. open Admin Web onboarding
+5. choose a simple goal
+6. answer only essential prompts
+7. connect and then expose advanced settings progressively
 
 The operator should not need to memorize tuple formats, certificate field lists, or every transport option just to publish one service or secure one deployment.
+
+The operator also should not need to inspect config files or guess which Admin Web address to open after startup. The runtime should present the most useful clickable addresses immediately.
 
 ## Design principles
 
@@ -47,6 +51,7 @@ The operator should not need to memorize tuple formats, certificate field lists,
 - prefer autodetection and autovalidation over unnecessary manual entry
 - avoid asking for the same connection inputs multiple times
 - let one configured node generate reusable setup material for another node
+- move common next actions, such as opening Admin Web, from manual copy/paste to direct click targets
 
 ## Design direction and justification
 
@@ -77,6 +82,8 @@ Examples:
 - choosing between PSK and certificates is a tradeoff between quick deployment and longer-term trust management
 
 A raw config editor can expose those knobs, but it does not help the user choose well.
+
+The same principle applies to reaching the Admin Web surface itself. If the product already knows the effective bind address and port, requiring the user to reconstruct and type that URL is unnecessary friction.
 
 ### Why recommendations and warnings matter
 
@@ -169,6 +176,8 @@ It is a foundation step toward:
 ## Primary user entrypoint
 
 Admin Web should become the main operating console for normal users.
+
+The startup console output is part of that entrypoint design. It should provide a clickable localhost URL by default and, when Admin Web is globally bound, additional LAN and best-effort public candidate links so the user reaches the right surface with one click.
 
 Recommended first-run experience:
 

@@ -35,13 +35,21 @@ For new users, the simplest path is:
 python -m obstacle_bridge
 ```
 
-2. open Admin Web at `http://127.0.0.1:18080/`
+2. click the startup link printed in the console, for example `Open WebAdmin interface http://127.0.0.1:18080/`
 3. run the Setup Wizard from the Home tab
 4. choose Admin Web exposure (`local` or `global`) and optional credentials
 5. paste an invite token from your peer/server admin
 6. review, finish, and let the runtime restart
 
 On first start, missing or empty default config is treated as a valid bootstrap state. The wizard can populate the runtime config from invite-token data and save a durable JSON config automatically.
+
+When Admin Web is configured with a global bind such as `0.0.0.0` or `::`, startup also prints additional clickable addresses:
+
+- a local-network link using the machine's detected LAN IP address
+- a best-effort public-IP candidate, if public IP discovery succeeds
+- a public DNS candidate when reverse DNS is available
+
+The public-internet lines are only hints. They do not prove that NAT, firewall rules, or port forwarding actually allow inbound access.
 
 ### Invite-token onboarding flow
 The wizard is designed for typical peer onboarding:
