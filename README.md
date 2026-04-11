@@ -956,6 +956,37 @@ This stays consistent with the current runtime boundary:
 - ObstacleBridge does not generate private keys or sign certificates
 - primitive signature verification and encryption/decryption are delegated to the selected crypto library in the delivered secure-link runtime
 
+#### 7. Enable certificate mode on each node
+
+After certificates are created and signed, wire cert-mode inputs on both nodes and restart.
+
+On each peer (server and client), set secure-link to cert mode in config:
+
+```json
+"secure_link": true,
+"secure_link_mode": "cert",
+"secure_link_require": true,
+"secure_link_root_pub": "/path/admin_root_pub.pem",
+"secure_link_cert_body": "/path/this_node_cert_body.json",
+"secure_link_cert_sig": "/path/this_node_cert.sig",
+"secure_link_private_key": "/path/this_node_key.pem",
+"secure_link_revoked_serials": ""
+```
+
+- use the same `admin_root_pub.pem` on both nodes, but different leaf cert/key per node
+- server node uses server leaf cert+key (roles should include `server`)
+- client node uses client leaf cert+key (roles should include `client`)
+- keep `secure_link_require=true` so the runtime fails closed (no plaintext fallback)
+
+Restart both peers, then verify in WebAdmin or API:
+
+- `/api/peers` shows `secure_link.state=authenticated`
+- certificate identity fields are populated (subject/issuer/deployment/trust)
+
+Optional operations follow-up:
+
+- maintain `secure_link_revoked_serials` and use `/api/secure-link/reload` (or WebAdmin reload actions) after updates
+
 ## Notes
 - Listener mode intentionally ignores `--own-servers`, because a multi-peer listener cannot unambiguously bind one local listener to one remote peer.
 - Multi-transport mode is currently intended for listening instances without configured transport peers (for example no `--udp-peer`, `--tcp-peer`, `--quic-peer`, or `--ws-peer`).
