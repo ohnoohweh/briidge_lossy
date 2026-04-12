@@ -660,6 +660,39 @@ TUN route hook example with Linux + Windows command variants. This snippet is in
 }
 ```
 
+### Compression layer
+
+Compression is now enabled by default and runs below `ChannelMux` and above secure-link/session wrappers.
+
+Behavior summary:
+
+- eligible mux frame types are compressed opportunistically
+- if compression does not shrink the payload, the frame is sent uncompressed
+- compressed frames use `0x80 + base_mtype` signaling, then are restored before `ChannelMux` processing on RX
+- peer clients may use compression settings that differ from the peer server; the receiver detects compressed frames from the mux `mtype` high bit and decodes them without requiring mirrored local thresholds or levels
+- for peer-server deployments, tune compression from the peer-client side first; server-side compression settings do not need to match the client for the client-to-server data path
+
+#### Compression parameters
+| Option(s) | Default | Description |
+|---|---:|---|
+| `--compress-layer` / `--no-compress-layer` | `True` | Enable or disable mux-aware compression wrapper. Default is enabled. |
+| `--compress-layer-algo` | `zlib` | Compression algorithm (`zlib` currently). |
+| `--compress-layer-level` | `3` | Compression level for `zlib` (`0..9`). |
+| `--compress-layer-min-bytes` | `64` | Minimum mux payload size before attempting compression. |
+| `--compress-layer-types` | `data,data_frag` | Comma-separated allow-list of mux message types eligible for compression. |
+
+Observability:
+
+- `/api/status` includes aggregate `compress_layer` counters
+- `/api/peers` includes per-peer `compress_layer` counters
+- WebAdmin shows compression statistics only when compression is enabled for the runtime
+
+To explicitly run without compression on both peers, set:
+
+```bash
+--no-compress-layer
+```
+
 ### Secure-link
 
 #### Common parameters
@@ -1002,7 +1035,7 @@ Optional operations follow-up:
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 - Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `140` integration tests, `161` unit tests. Current branch validation also includes the CI-aligned Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`, the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, and the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`.
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `142` integration tests, `177` unit tests. Latest local Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` completed with `134 passed`. The focused SecureLink PSK slice `RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` completed with `25 passed, 111 deselected`. Current branch validation also includes the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"` and the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`.
 
 For changes that touch `src/obstacle_bridge/bridge.py`, the most important regression signal after opening a pull request is the Linux shared integration lane in GitHub CI. Windows-local integration execution is still useful for targeted investigation, but it is not currently the most reliable green/red indicator for broad regression confidence on this branch history.
 
@@ -1011,11 +1044,11 @@ The shared integration harness now generates localhost TLS test certificates in 
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `71/76 = 93.4%`
-- Unit-covered: `54/76 = 71.1%`
-- Any-test-covered: `76/76 = 100.0%`
-- Tracked in manifest: `76/76 = 100.0%`
-- Requirements without integration coverage: `REQ-ADM-007`, `REQ-ADM-008`, `REQ-ADM-009`, `REQ-LIFE-006`, `REQ-LIFE-007`
+- Integration-covered: `72/79 = 91.1%`
+- Unit-covered: `58/79 = 73.4%`
+- Any-test-covered: `79/79 = 100.0%`
+- Tracked in manifest: `79/79 = 100.0%`
+- Requirements without integration coverage: `REQ-ADM-007`, `REQ-ADM-008`, `REQ-ADM-009`, `REQ-ADM-010`, `REQ-LIFE-006`, `REQ-LIFE-007`, `REQ-LIFE-008`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
 

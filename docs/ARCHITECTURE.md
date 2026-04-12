@@ -4,16 +4,17 @@ This document describes the main runtime components and how they contribute to t
 
 ## Architectural layers
 
-The current runtime can be understood in six layers:
+The current runtime can be understood in seven layers:
 
 1. transport/session layer
 2. secure-link layer
-3. reliability and framing layer
-4. channel/service multiplexing layer
-5. runner and process orchestration layer
-6. admin web and observability layer
+3. compression layer
+4. reliability and framing layer
+5. channel/service multiplexing layer
+6. runner and process orchestration layer
+7. admin web and observability layer
 
-The secure-link layer now exists as a delivered runtime slice between the transport/session layer and the current reliability/framing layer. The delivered modes now include both the Phase 1 PSK slice and the Phase 2 certificate-based trust-anchor / certificate-validation slice, so the boundary itself is no longer only a reservation.
+The secure-link layer now exists as a delivered runtime slice between the transport/session layer and the compression/reliability path. The delivered modes now include both the Phase 1 PSK slice and the Phase 2 certificate-based trust-anchor / certificate-validation slice, so the boundary itself is no longer only a reservation.
 
 ## Stable component IDs
 
@@ -27,6 +28,7 @@ The following component IDs are intended to stay stable so requirements, tests, 
 | `ARC-CMP-004` | Runner and process orchestration layer | CLI/config composition, lifecycle wiring, restart/shutdown coordination, process startup, and entrypoint supervision |
 | `ARC-CMP-005` | Admin web and observability layer | HTTP API/UI, auth/session control, runtime snapshots, logs, and operator visibility |
 | `ARC-CMP-006` | Secure-link layer | Delivered PSK-based and certificate-based authentication, frame protection, replay defense, rekeying, and secure-link diagnostics between transport sessions and `ChannelMux` |
+| `ARC-CMP-007` | Compression layer | Mux-aware per-frame compression/decompression between secure-link/session and `ChannelMux`, no-gain bypass, and compression observability counters |
 
 ## 1. Transport and session layer
 
@@ -307,6 +309,29 @@ Current status:
   - admin/API visibility of secure-link state and stronger operational diagnostics
 - certificate-mode trust-anchor validation, detached signature verification, richer peer identity semantics, and trust-failure visibility are now delivered
 - the design baseline and remaining planned work for this component are documented in [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md)
+
+## 2.5 Compression layer
+
+Primary responsibility:
+
+- reduce wire size for compressible mux payloads without changing `ChannelMux` semantics
+
+Current delivered boundary:
+
+- the compression wrapper sits below `ChannelMux` and above secure-link/session wrappers
+- compressed mux frames are signaled by setting the `mtype` high bit (`0x80`)
+
+Current contribution:
+
+- per-frame stateless compression and decompression
+- no-gain bypass (frames remain uncompressed when there is no size win)
+- bounded decode guardrails for malformed or oversized compressed payloads
+- aggregate and per-peer counters surfaced through Admin API and WebAdmin
+
+Technology boundary:
+
+- the current implementation deliberately uses state-of-the-art, battle-tested library compression (`zlib` / DEFLATE from Python stdlib)
+- the project does not attempt to invent a custom tunneling codec in this layer
 
 ### Functional decomposition for secure-link status visibility
 

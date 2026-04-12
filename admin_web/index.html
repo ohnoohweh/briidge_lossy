@@ -182,6 +182,57 @@
             </div>
           </section>
 
+          <section id="compressionSection" class="section-block hidden">
+            <div class="section-header">
+              <div>
+                <h2>Compression Layer</h2>
+                <p>Mux-aware compression counters and bandwidth savings</p>
+              </div>
+            </div>
+            <div class="summary-grid compression-grid">
+              <article class="metric-card card">
+                <div class="metric-label">Enabled Sessions</div>
+                <div class="metric-value" id="compressSessionsEnabled">0</div>
+                <div class="metric-note">overlay sessions with compress-layer</div>
+              </article>
+              <article class="metric-card card">
+                <div class="metric-label">Applied Frames</div>
+                <div class="metric-value" id="compressAppliedTotal">0</div>
+                <div class="metric-note">frames sent with compressed payload</div>
+              </article>
+              <article class="metric-card card">
+                <div class="metric-label">Skipped (No Gain)</div>
+                <div class="metric-value" id="compressSkippedNoGainTotal">0</div>
+                <div class="metric-note">attempted but sent uncompressed</div>
+              </article>
+              <article class="metric-card card">
+                <div class="metric-label">Input Bytes</div>
+                <div class="metric-value" id="compressInputBytesTotal">0</div>
+                <div class="metric-note">bytes considered for applied compression</div>
+              </article>
+              <article class="metric-card card">
+                <div class="metric-label">Output Bytes</div>
+                <div class="metric-value" id="compressOutputBytesTotal">0</div>
+                <div class="metric-note">bytes produced after applied compression</div>
+              </article>
+              <article class="metric-card card">
+                <div class="metric-label">Savings Ratio</div>
+                <div class="metric-value"><span id="compressSavingsRatio">n/a</span><span class="metric-unit">%</span></div>
+                <div class="metric-note" id="compressMetaLine">algo=n/a transports=n/a</div>
+              </article>
+              <article class="metric-card card">
+                <div class="metric-label">Decode OK</div>
+                <div class="metric-value" id="decompressOkTotal">0</div>
+                <div class="metric-note">received compressed frames decoded</div>
+              </article>
+              <article class="metric-card card">
+                <div class="metric-label">Decode Fail</div>
+                <div class="metric-value" id="decompressFailTotal">0</div>
+                <div class="metric-note">rejected malformed or oversized payloads</div>
+              </article>
+            </div>
+          </section>
+
           <section class="section-block">
             <div class="section-header">
               <div>
@@ -314,6 +365,7 @@
               <div>
                 <h2>Configuration</h2>
                 <p>Configuration is organized by section (for example: admin_web and ws_session), with description and built-in default value. Overlay settings are transport-specific (`udp_*`, `tcp_*`, `quic_*`, `ws_*`).</p>
+                <p>Compression note: peer client settings control that client's outbound compression profile; peer server-side compression fields do not need to mirror the client to decode client-to-server frames.</p>
               </div>
               <div class="config-actions">
                 <button id="configReloadBtn" class="btn btn-secondary" type="button">Reload</button>
@@ -581,6 +633,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=20260410a"></script>
+  <script src="app.js?v=20260412a"></script>
 </body>
 </html>

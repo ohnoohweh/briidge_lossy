@@ -64,6 +64,21 @@ class _RunnerStub:
             "secure_link_last_reload_result": "applied",
             "secure_link_last_reload_detail": "revoked_serials=1",
             "secure_link_peers_dropped_total": 2,
+            "compress_layer": {
+                "enabled": True,
+                "sessions_enabled": 1,
+                "algorithm": "zlib",
+                "algorithms": ["zlib"],
+                "transports": ["tcp"],
+                "compress_attempts_total": 12,
+                "compress_applied_total": 7,
+                "compress_skipped_no_gain_total": 5,
+                "compress_input_bytes_total": 2048,
+                "compress_output_bytes_total": 1024,
+                "decompress_ok_total": 9,
+                "decompress_fail_total": 0,
+                "compression_saving_ratio": 0.5,
+            },
         }
 
     def get_peer_connections_snapshot(self):
@@ -98,6 +113,20 @@ class _RunnerStub:
                         "authenticated_sessions_total": 1,
                         "rekeys_completed_total": 0,
                         "transport": "tcp",
+                    },
+                    "compress_layer": {
+                        "enabled": True,
+                        "algorithm": "zlib",
+                        "transport": "tcp",
+                        "level": 3,
+                        "min_bytes": 64,
+                        "compress_attempts_total": 12,
+                        "compress_applied_total": 7,
+                        "compress_skipped_no_gain_total": 5,
+                        "compress_input_bytes_total": 2048,
+                        "compress_output_bytes_total": 1024,
+                        "decompress_ok_total": 9,
+                        "decompress_fail_total": 0,
                     },
                 }
             ],
@@ -244,6 +273,10 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["secure_link_last_reload_scope"], "revocation")
         self.assertEqual(payload["secure_link_last_reload_result"], "applied")
         self.assertEqual(payload["secure_link_peers_dropped_total"], 2)
+        self.assertIn("compress_layer", payload)
+        self.assertTrue(payload["compress_layer"]["enabled"])
+        self.assertEqual(payload["compress_layer"]["algorithm"], "zlib")
+        self.assertEqual(payload["compress_layer"]["compress_applied_total"], 7)
         self.assertIn("admin_ui", payload)
         self.assertEqual(payload["admin_ui"]["first_start_detected"], False)
         self.assertEqual(payload["admin_ui"]["config_file_state"], "unknown")
@@ -382,6 +415,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["count"], 1)
         peer = payload["peers"][0]
         self.assertIn("secure_link", peer)
+        self.assertIn("compress_layer", peer)
         self.assertEqual(peer["secure_link"]["state"], "authenticated")
         self.assertEqual(peer["secure_link"]["session_id"], 42)
         self.assertIsNone(peer["secure_link"]["failure_code"])
@@ -392,6 +426,9 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(peer["secure_link"]["handshake_attempts_total"], 1)
         self.assertEqual(peer["secure_link"]["authenticated_sessions_total"], 1)
         self.assertEqual(peer["secure_link"]["connected_since_unix_ts"], 1699999900.0)
+        self.assertTrue(peer["compress_layer"]["enabled"])
+        self.assertEqual(peer["compress_layer"]["algorithm"], "zlib")
+        self.assertEqual(peer["compress_layer"]["compress_applied_total"], 7)
 
     def test_build_peers_payload_includes_cert_identity_and_trust_fields(self):
         args = argparse.Namespace(

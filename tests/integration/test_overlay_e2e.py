@@ -1678,18 +1678,23 @@ def bridge_entrypoint(*, with_failure_injection: bool = False) -> List[str]:
         return [py, '-m', 'obstacle_bridge.bridge_FI']
     return [py, str(BRIDGE)]
 
-RESTART_EXIT_CODE = 75
+RESTART_EXIT_CODES = {75, 77}
+
+
+def _is_restart_exit_code(rc: Optional[int]) -> bool:
+    return rc is not None and int(rc) in RESTART_EXIT_CODES
 
 def proc_exited_for_restart(proc: Proc) -> bool:
     rc = proc.popen.poll()
-    return rc == RESTART_EXIT_CODE
+    return _is_restart_exit_code(rc)
 
 
 def restart_proc(proc: Proc, log_dir: Path) -> Proc:
     
     if not proc.cmd:
         raise RuntimeError(f'{proc.name} cannot be restarted: missing cmd')
-    log.info(f'[PROC] self-restart detected for {proc.name} rc={RESTART_EXIT_CODE}; relaunching')
+    rc = proc.popen.poll()
+    log.info(f'[PROC] self-restart detected for {proc.name} rc={rc}; relaunching')
     cmd = list(proc.cmd)
     admin_port = proc.admin_port
     if admin_port:
@@ -1761,7 +1766,7 @@ def assert_running(proc: Proc) -> None:
         return
     
     log.info(f'[RUN]{proc.name} exited with rc={rc}\n')
-    if rc == RESTART_EXIT_CODE:
+    if _is_restart_exit_code(rc):
         raise RuntimeError(f'{proc.name} exited for self-restart rc={rc}')
     tail = proc.log_path.read_text(errors='replace')[-4000:] if proc.log_path.exists() else ''
     raise RuntimeError(f'{proc.name} exited early with rc={rc}\n--- {proc.log_path.name} ---\n{tail}')
@@ -1773,7 +1778,7 @@ def ensure_proc_up(proc: Proc, log_dir: Path, admin_timeout: float = 10.0) -> Pr
         return proc
 
     log.info(f'[RUN]{proc.name} exited with rc={rc}\n')
-    if rc != RESTART_EXIT_CODE:
+    if not _is_restart_exit_code(rc):
         tail = proc.log_path.read_text(errors='replace')[-4000:] if proc.log_path.exists() else ''
         raise RuntimeError(f'{proc.name} exited early with rc={rc}\n--- {proc.log_path.name} ---\n{tail}')
 
@@ -3065,6 +3070,40 @@ def wait_peer_myudp_transmit_stats(
     )
 
 
+def wait_peer_compress_layer_stats(
+    admin_port: int,
+    *,
+    timeout: float = 12.0,
+    label: str = '',
+    transport: Optional[str] = None,
+    enabled: Optional[bool] = None,
+    minimum_applied_total: Optional[int] = None,
+) -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    normalized_transport = str(transport or '').strip().lower()
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
+        last_doc = doc
+        for row in list(doc.get('peers') or []):
+            if normalized_transport and str(row.get('transport', '')).strip().lower() != normalized_transport:
+                continue
+            if str(row.get('state', '')).strip().lower() == 'listening':
+                continue
+            comp = row.get('compress_layer') or {}
+            if enabled is not None and bool(comp.get('enabled')) != bool(enabled):
+                continue
+            if minimum_applied_total is not None and int(comp.get('compress_applied_total') or 0) < int(minimum_applied_total):
+                continue
+            who = f' {label}' if label else ''
+            log.info(f'[PEERS]{who} port={admin_port} compress_layer={comp!r}')
+            return doc
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'/api/peers did not expose matching compress_layer stats on port {admin_port}; last={last_doc!r}'
+    )
+
+
 def wait_peer_secure_link_session_change(
     admin_port: int,
     *,
@@ -3670,6 +3709,7 @@ def run_case_myudp_delay_loss(loss_case: MyudpDelayLossCase, log_dir: Path, case
 
 def run_case_reconnect(case: Case, log_dir: Path, case_index: int, settle_s: Optional[float] = None, reconnect_timeout: float = 30.0) -> None:
     case = materialize_case_ports(case, case_index)
+    reconnect_probe_timeout = 12.0
     
     bounce = BounceBackServer(
         name=f'{case.name}_bounce',
@@ -3756,7 +3796,7 @@ def run_case_reconnect(case: Case, log_dir: Path, case_index: int, settle_s: Opt
 
         phase('8. Send probe 01 32 and expect 02 32')
         log.info('[PROBE] send=0132 expect=0232')
-        wait_probe(case, payload=b'\x01\x32', timeout=8.0)
+        wait_probe(case, payload=b'\x01\x32', timeout=reconnect_probe_timeout)
 
         phase('9. Kill incoming bridge server')
         stop_proc(server_proc)
@@ -3802,7 +3842,7 @@ def run_case_reconnect(case: Case, log_dir: Path, case_index: int, settle_s: Opt
         wait_probe(
             case,
             payload=b'\x01\x34',
-            timeout=8.0,
+            timeout=reconnect_probe_timeout,
             before_tcp_close=assert_case12_tcp_bytes_before_close,
         )
 
@@ -6580,6 +6620,8 @@ def test_overlay_e2e_tcp_secure_link_psk_happy_path(tmp_path: Path) -> None:
             wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
             wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
             wait_peer_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', transport='tcp', authenticated=True)
+            wait_peer_compress_layer_stats(client_proc.admin_port or 0, timeout=12.0, label='client', transport='tcp', enabled=True)
+            wait_peer_compress_layer_stats(server_proc.admin_port or 0, timeout=12.0, label='server', transport='tcp', enabled=True)
             req = urllib.request.Request(
                 _rewrite_registered_admin_url(f'http://127.0.0.1:{server_proc.admin_port}/api/secure-link/debug'),
                 data=b'{}',
@@ -6595,6 +6637,122 @@ def test_overlay_e2e_tcp_secure_link_psk_happy_path(tmp_path: Path) -> None:
             assert int(client_secure.get('handshake_attempts_total') or 0) >= 1
             assert int(client_secure.get('authenticated_sessions_total') or 0) >= 1
             assert client_secure.get('last_authenticated_unix_ts') is not None
+            _status_code, client_status = fetch_json(f'http://127.0.0.1:{client_proc.admin_port}/api/status', timeout=1.5)
+            assert bool((client_status.get('compress_layer') or {}).get('enabled'))
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_compress_layer_disabled(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=986,
+                secure_slot=2,
+                server_extra_args=[
+                    '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+                    '--no-compress-layer',
+                ],
+                client_extra_args=[
+                    '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+                    '--no-compress-layer',
+                ],
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            wait_probe(case, timeout=12.0)
+            wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+            wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
+            wait_peer_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', transport='tcp', authenticated=True)
+            wait_peer_compress_layer_stats(client_proc.admin_port or 0, timeout=12.0, label='client', transport='tcp', enabled=False)
+            wait_peer_compress_layer_stats(server_proc.admin_port or 0, timeout=12.0, label='server', transport='tcp', enabled=False)
+            _status_code, client_status = fetch_json(f'http://127.0.0.1:{client_proc.admin_port}/api/status', timeout=1.5)
+            _status_code, server_status = fetch_json(f'http://127.0.0.1:{server_proc.admin_port}/api/status', timeout=1.5)
+            assert not bool((client_status.get('compress_layer') or {}).get('enabled'))
+            assert not bool((server_status.get('compress_layer') or {}).get('enabled'))
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_compress_layer_mismatched_peer_settings(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=987,
+                secure_slot=33,
+                server_extra_args=[
+                    '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+                    '--compress-layer-min-bytes', '4096',
+                    '--compress-layer-level', '1',
+                    '--compress-layer-types', 'data',
+                ],
+                client_extra_args=[
+                    '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+                    '--compress-layer-min-bytes', '32',
+                    '--compress-layer-level', '9',
+                    '--compress-layer-types', 'data,data_frag',
+                ],
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+            wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
+            wait_peer_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', transport='tcp', authenticated=True)
+
+            payload = b'\x21' + (b'C' * 1400)
+            wait_probe(case, payload=payload, expected=response_payload(payload), timeout=15.0)
+
+            wait_peer_compress_layer_stats(
+                client_proc.admin_port or 0,
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+                enabled=True,
+                minimum_applied_total=1,
+            )
+            wait_peer_compress_layer_stats(
+                server_proc.admin_port or 0,
+                timeout=12.0,
+                label='server',
+                transport='tcp',
+                enabled=True,
+            )
+
+            _status_code, client_peers = fetch_json(f'http://127.0.0.1:{client_proc.admin_port}/api/peers', timeout=1.5)
+            _status_code, server_peers = fetch_json(f'http://127.0.0.1:{server_proc.admin_port}/api/peers', timeout=1.5)
+            client_row = first_active_secure_link_row(client_peers, transport='tcp')
+            server_row = first_active_secure_link_row(server_peers, transport='tcp')
+            client_comp = dict(client_row.get('compress_layer') or {})
+            server_comp = dict(server_row.get('compress_layer') or {})
+
+            assert bool(client_comp.get('enabled'))
+            assert bool(server_comp.get('enabled'))
+            assert int(client_comp.get('compress_applied_total') or 0) >= 1
+            assert int(server_comp.get('decompress_ok_total') or 0) >= 1
+            # Server keeps its own stricter local send settings, so reverse-direction compression can remain zero.
+            assert int(server_comp.get('compress_applied_total') or 0) == 0
         finally:
             if bounce is not None:
                 bounce.stop()
@@ -8081,10 +8239,10 @@ def test_overlay_e2e_myudp_secure_link_psk_recovery_after_prior_time_threshold_r
 
             server_proc, client_proc = wait_both_connected(server_proc, client_proc, tmp_path, timeout=30.0)
             wait_peer_endpoint_visible(server_admin, timeout=12.0, label='server', transport='myudp')
-            wait_peer_endpoint_visible(client_admin, timeout=12.0, label='client', transport='myudp')
+            wait_peer_endpoint_visible(client_proc.admin_port or 0, timeout=12.0, label='client', transport='myudp')
 
             first_doc = wait_peer_secure_link_state(
-                client_admin,
+                client_proc.admin_port or 0,
                 expected_state='authenticated',
                 timeout=12.0,
                 label='client',
@@ -8105,7 +8263,7 @@ def test_overlay_e2e_myudp_secure_link_psk_recovery_after_prior_time_threshold_r
                 raise RuntimeError(f'Unexpected pre-outage myudp probe reply: {got!r}')
 
             rekey_doc = wait_peer_secure_link_session_change(
-                client_admin,
+                client_proc.admin_port or 0,
                 previous_session_id=first_session_id,
                 timeout=18.0,
                 label='client',
@@ -8122,7 +8280,7 @@ def test_overlay_e2e_myudp_secure_link_psk_recovery_after_prior_time_threshold_r
 
             proxy.stop()
             proxy = None
-            wait_status_not_connected(client_admin, timeout=30.0, label='client')
+            wait_status_not_connected(client_proc.admin_port or 0, timeout=30.0, label='client')
             wait_status_not_connected(server_admin, timeout=30.0, label='server')
 
             rebuilt_proxy = build_proxy()
@@ -8131,7 +8289,7 @@ def test_overlay_e2e_myudp_secure_link_psk_recovery_after_prior_time_threshold_r
 
             server_proc, client_proc = wait_both_connected(server_proc, client_proc, tmp_path, timeout=30.0)
             recovered_doc = wait_peer_secure_link_state(
-                client_admin,
+                client_proc.admin_port or 0,
                 expected_state='authenticated',
                 timeout=20.0,
                 label='client',

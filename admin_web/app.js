@@ -3,6 +3,11 @@ function fmtNumber(value, digits = 1) {
   return Number(value).toFixed(digits);
 }
 
+function fmtPercentFraction(value, digits = 1) {
+  if (value == null || Number.isNaN(value)) return 'n/a';
+  return (Number(value) * 100.0).toFixed(digits);
+}
+
 function fmtInteger(value) {
   if (value == null || Number.isNaN(value)) return 'n/a';
   return String(value);
@@ -1842,8 +1847,22 @@ function renderPeerTable(rows) {
     const isListeningPeer = String(row.state || '').toLowerCase() === 'listening';
     const isConnectingPeer = String(row.state || '').toLowerCase() === 'connecting';
     const secureLink = row.secure_link || {};
+    const compressLayer = row.compress_layer || {};
     const secureLinkEnabled = Boolean(secureLink.enabled);
     const secureLinkMode = String(secureLink.mode || '').toLowerCase();
+    const compressEnabled = Boolean(compressLayer.enabled);
+    const compressInputBytes = Number(compressLayer.compress_input_bytes_total || 0);
+    const compressOutputBytes = Number(compressLayer.compress_output_bytes_total || 0);
+    const compressSavingsRatio = compressInputBytes > 0
+      ? Math.max(0, Math.min(1, 1.0 - (compressOutputBytes / compressInputBytes)))
+      : null;
+    const compressHasData = (
+      Number(compressLayer.compress_attempts_total || 0) > 0
+      || Number(compressLayer.compress_applied_total || 0) > 0
+      || Number(compressLayer.decompress_ok_total || 0) > 0
+      || Number(compressLayer.decompress_fail_total || 0) > 0
+    );
+    const showCompressionRow = compressEnabled || compressHasData;
     const isCertMode = secureLinkMode === 'cert';
     const trustFailureReason = String(secureLink.trust_failure_reason || '').trim();
     const trustFailureDetail = String(secureLink.trust_failure_detail || '').trim();
@@ -1957,10 +1976,13 @@ function renderPeerTable(rows) {
         renderMetric('disconnect_detail', secureLink.disconnect_detail),
       ] : []),
     ] : [];
-    const rowSpan = showSecurityLifecycle ? 4 : ((isListeningPeer || isConnectingPeer) ? 1 : 2);
+    const rowSpan = 1
+      + (showProtocolRow ? 1 : 0)
+      + (showCompressionRow ? 1 : 0)
+      + (showSecurityLifecycle ? 2 : 0);
     const detailRows = [
       `
-      <tr class="peer-detail-row peer-detail-row-start ${(isListeningPeer || isConnectingPeer) ? 'peer-detail-row-end' : ''}">
+      <tr class="peer-detail-row peer-detail-row-start ${rowSpan === 1 ? 'peer-detail-row-end' : ''}">
         <td class="mono peer-id-cell" rowspan="${rowSpan}">${escapeHtml(fmtPeerCompositeId(row.transport, row.id))}</td>
         <td class="peer-detail-kind">Connection</td>
         <td>${connectionMetrics}</td>
@@ -1969,9 +1991,38 @@ function renderPeerTable(rows) {
     ];
     if (showProtocolRow) {
       detailRows.push(`
-      <tr class="peer-detail-row ${showSecurityLifecycle ? '' : 'peer-detail-row-end'}">
+      <tr class="peer-detail-row ${showCompressionRow || showSecurityLifecycle ? '' : 'peer-detail-row-end'}">
         <td class="peer-detail-kind">Protocol</td>
         <td>${protocolMetrics}</td>
+      </tr>
+      `);
+    }
+    if (showCompressionRow) {
+      const compressionMetrics = renderMetricStack([
+        [
+          renderMetric('enabled', fmtBool(compressEnabled), { pill: true }),
+          renderMetric('algorithm', compressLayer.algorithm),
+          renderMetric('min_bytes', fmtInteger(compressLayer.min_bytes)),
+        ],
+        [
+          renderMetric('attempts_total', fmtInteger(compressLayer.compress_attempts_total)),
+          renderMetric('applied_total', fmtInteger(compressLayer.compress_applied_total)),
+          renderMetric('skipped_no_gain_total', fmtInteger(compressLayer.compress_skipped_no_gain_total)),
+        ],
+        [
+          renderMetric('input_bytes_total', fmtBytes(compressLayer.compress_input_bytes_total)),
+          renderMetric('output_bytes_total', fmtBytes(compressLayer.compress_output_bytes_total)),
+          renderMetric('saving_ratio', `${fmtPercentFraction(compressSavingsRatio)}%`),
+        ],
+        [
+          renderMetric('decompress_ok_total', fmtInteger(compressLayer.decompress_ok_total)),
+          renderMetric('decompress_fail_total', fmtInteger(compressLayer.decompress_fail_total)),
+        ],
+      ]);
+      detailRows.push(`
+      <tr class="peer-detail-row ${showSecurityLifecycle ? '' : 'peer-detail-row-end'}">
+        <td class="peer-detail-kind">Compression</td>
+        <td>${compressionMetrics}</td>
       </tr>
       `);
     }
@@ -2073,6 +2124,23 @@ function applyStatusDoc(j) {
   setText('secureLinkLastReloadResult', fmtText(j.secure_link_last_reload_result));
   setText('secureLinkLastReloadDetail', fmtText(j.secure_link_last_reload_detail));
   setText('secureLinkPeersDroppedTotal', fmtInteger(j.secure_link_peers_dropped_total));
+  const compress = j.compress_layer || {};
+  const compressionSection = document.getElementById('compressionSection');
+  if (compressionSection) {
+    compressionSection.classList.toggle('hidden', !Boolean(compress.enabled));
+  }
+  const compressTransports = Array.isArray(compress.transports) && compress.transports.length
+    ? compress.transports.join(',')
+    : 'n/a';
+  setText('compressSessionsEnabled', fmtInteger(compress.sessions_enabled ?? 0));
+  setText('compressAppliedTotal', fmtInteger(compress.compress_applied_total ?? 0));
+  setText('compressSkippedNoGainTotal', fmtInteger(compress.compress_skipped_no_gain_total ?? 0));
+  setText('compressInputBytesTotal', fmtBytes(compress.compress_input_bytes_total ?? 0));
+  setText('compressOutputBytesTotal', fmtBytes(compress.compress_output_bytes_total ?? 0));
+  setText('compressSavingsRatio', fmtPercentFraction(compress.compression_saving_ratio));
+  setText('compressMetaLine', `algo=${fmtText(compress.algorithm)} transports=${compressTransports}`);
+  setText('decompressOkTotal', fmtInteger(compress.decompress_ok_total ?? 0));
+  setText('decompressFailTotal', fmtInteger(compress.decompress_fail_total ?? 0));
 
   const errors = j.decode_errors?.unidentified_frames ?? 0;
   setText('decodeErrors', fmtInteger(errors));
@@ -2506,10 +2574,15 @@ function renderConfigRows(items, config) {
     const key = item.key;
     const current = Object.prototype.hasOwnProperty.call(config, key) ? config[key] : null;
     const defaultRaw = configValueToEditor(item.default);
+    const normalizedKey = String(key || '').toLowerCase();
+    const compressionControlNote = (normalizedKey === 'compress_layer' || normalizedKey.startsWith('compress_layer_'))
+      ? ' Peer client settings control that client outbound compression profile; peer server-side values do not need to mirror the client to decode client-to-server compressed frames.'
+      : '';
+    const description = `${item.description || '(no description)'}${compressionControlNote}`;
     return `
       <tr data-config-row="${key}">
         <td class="mono">${key}</td>
-        <td>${item.description || '(no description)'}</td>
+        <td>${description}</td>
         <td class="mono">${defaultRaw}</td>
         <td>${renderConfigValueCell(item, current)}</td>
       </tr>

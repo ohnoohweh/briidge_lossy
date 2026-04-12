@@ -6,7 +6,15 @@ import tempfile
 import unittest
 from unittest import mock
 
-from obstacle_bridge.bridge import Runner, TcpStreamSession, UdpSession, QuicSession, WebSocketSession, SecureLinkPskSession
+from obstacle_bridge.bridge import (
+    Runner,
+    TcpStreamSession,
+    UdpSession,
+    QuicSession,
+    WebSocketSession,
+    SecureLinkPskSession,
+    CompressLayerSession,
+)
 from tests.fixtures.secure_link_cert import materialize_secure_link_cert_fixture_set
 
 _FIXTURES_TMPDIR = tempfile.TemporaryDirectory()
@@ -37,6 +45,11 @@ def _args(**overrides):
         secure_link_private_key='',
         secure_link_revoked_serials='',
         secure_link_cert_reload_on_restart=True,
+        compress_layer=True,
+        compress_layer_algo='zlib',
+        compress_layer_level=3,
+        compress_layer_min_bytes=64,
+        compress_layer_types='data,data_frag',
     )
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -240,6 +253,7 @@ class RunnerOverlayTransportTests(unittest.TestCase):
                     secure_link=True,
                     secure_link_mode='psk',
                     secure_link_psk='lab-secret',
+                    compress_layer=False,
                     **{peer_attr: peer_value},
                 )
                 with mock.patch.object(cls, 'from_args', return_value=mock.Mock(spec=cls)) as factory:
@@ -261,6 +275,7 @@ class RunnerOverlayTransportTests(unittest.TestCase):
                     overlay_transport=overlay_transport,
                     secure_link=True,
                     secure_link_mode='cert',
+                    compress_layer=False,
                     secure_link_root_pub=str(FIXTURES / 'root_a_pub.pem'),
                     secure_link_cert_body=str(FIXTURES / 'client_valid_cert_body.json'),
                     secure_link_cert_sig=str(FIXTURES / 'client_valid_cert.sig'),
@@ -278,6 +293,7 @@ class RunnerOverlayTransportTests(unittest.TestCase):
             overlay_transport='tcp',
             secure_link=True,
             secure_link_mode='cert',
+            compress_layer=False,
             tcp_peer='127.0.0.1',
             secure_link_root_pub=str(FIXTURES / 'root_a_pub.pem'),
             secure_link_cert_body='',
@@ -287,6 +303,49 @@ class RunnerOverlayTransportTests(unittest.TestCase):
         with mock.patch.object(TcpStreamSession, 'from_args', return_value=mock.Mock(spec=TcpStreamSession)):
             with self.assertRaises(ValueError):
                 Runner.build_sessions_from_overlay(args)
+
+    def test_build_sessions_from_overlay_wraps_supported_transports_with_compress_layer(self):
+        cases = [
+            ('myudp', 'udp_peer', UdpSession, '127.0.0.1'),
+            ('tcp', 'tcp_peer', TcpStreamSession, '127.0.0.1'),
+            ('quic', 'quic_peer', QuicSession, '127.0.0.1'),
+            ('ws', 'ws_peer', WebSocketSession, '127.0.0.1'),
+        ]
+        for overlay_transport, peer_attr, cls, peer_value in cases:
+            with self.subTest(overlay_transport=overlay_transport):
+                args = _args(
+                    overlay_transport=overlay_transport,
+                    compress_layer=True,
+                    **{peer_attr: peer_value},
+                )
+                with mock.patch.object(cls, 'from_args', return_value=mock.Mock(spec=cls)) as factory:
+                    sessions = Runner.build_sessions_from_overlay(args)
+                self.assertEqual([name for name, _ in sessions], [overlay_transport])
+                self.assertIsInstance(sessions[0][1], CompressLayerSession)
+                factory.assert_called_once()
+
+    def test_build_sessions_from_overlay_enables_compress_layer_by_default(self):
+        args = _args(overlay_transport='tcp', tcp_peer='127.0.0.1')
+        with mock.patch.object(TcpStreamSession, 'from_args', return_value=mock.Mock(spec=TcpStreamSession)):
+            sessions = Runner.build_sessions_from_overlay(args)
+        self.assertEqual([name for name, _ in sessions], ['tcp'])
+        self.assertIsInstance(sessions[0][1], CompressLayerSession)
+
+    def test_build_sessions_from_overlay_wraps_compress_layer_above_secure_link(self):
+        args = _args(
+            overlay_transport='tcp',
+            secure_link=True,
+            secure_link_mode='psk',
+            secure_link_psk='lab-secret',
+            compress_layer=True,
+            tcp_peer='127.0.0.1',
+        )
+        with mock.patch.object(TcpStreamSession, 'from_args', return_value=mock.Mock(spec=TcpStreamSession)):
+            sessions = Runner.build_sessions_from_overlay(args)
+        self.assertEqual([name for name, _ in sessions], ['tcp'])
+        top = sessions[0][1]
+        self.assertIsInstance(top, CompressLayerSession)
+        self.assertIsInstance(top._inner, SecureLinkPskSession)
 
 
 if __name__ == '__main__':

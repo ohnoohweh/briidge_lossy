@@ -4516,6 +4516,332 @@ class SecureLinkPskSession(ISession):
             return len(payload) if self._queue_client_rekey_app_payload(payload, peer_id) else 0
         return self._send_app_immediate(payload, peer_id=peer_id)
 
+class CompressLayerSession(ISession):
+    _MUX_HDR = struct.Struct(">HBHBH")
+    _MTYPE_COMPRESSED_FLAG = 0x80
+    _MAX_MTYPE_VALUE = 0xFF
+    _KNOWN_BASE_MTYPES: Set[int] = {
+        0x00,  # DATA
+        0x01,  # OPEN
+        0x02,  # CLOSE
+        0x03,  # REMOTE_SERVICES_SET_V1
+        0x04,  # REMOTE_SERVICES_SET_V2
+        0x05,  # DATA_FRAG
+        0x06,  # REMOTE_SERVICES_SET_V2_CHUNK
+        0x07,  # OPEN_CHUNK
+    }
+    _DEFAULT_ALLOWED_MTYPE_NAMES = "data,data_frag"
+    _MTYPE_NAME_TO_ID: Dict[str, int] = {
+        "data": 0x00,
+        "open": 0x01,
+        "close": 0x02,
+        "remote_services_set_v1": 0x03,
+        "remote_services_set_v2": 0x04,
+        "data_frag": 0x05,
+        "remote_services_set_v2_chunk": 0x06,
+        "open_chunk": 0x07,
+    }
+
+    @staticmethod
+    def register_cli(p: argparse.ArgumentParser) -> None:
+        def _has(opt: str) -> bool:
+            try:
+                return any(opt in a.option_strings for a in p._actions)
+            except Exception:
+                return False
+
+        if not _has("--compress-layer") and not _has("--no-compress-layer"):
+            bool_action = getattr(argparse, "BooleanOptionalAction", None)
+            if bool_action is not None:
+                p.add_argument(
+                    "--compress-layer",
+                    action=bool_action,
+                    default=True,
+                    help="Enable mux-aware compression below ChannelMux and above secure-link/session (default: enabled).",
+                )
+            else:
+                p.add_argument(
+                    "--compress-layer",
+                    action="store_true",
+                    default=True,
+                    help="Enable mux-aware compression below ChannelMux and above secure-link/session (default: enabled).",
+                )
+                p.add_argument(
+                    "--no-compress-layer",
+                    action="store_false",
+                    dest="compress_layer",
+                    help="Disable mux-aware compression wrapper.",
+                )
+        if not _has("--compress-layer-algo"):
+            p.add_argument(
+                "--compress-layer-algo",
+                default="zlib",
+                choices=["zlib"],
+                help="Compression algorithm for compress-layer (phase-1: zlib only).",
+            )
+        if not _has("--compress-layer-level"):
+            p.add_argument(
+                "--compress-layer-level",
+                type=int,
+                default=3,
+                help="Compression level for zlib (0..9).",
+            )
+        if not _has("--compress-layer-min-bytes"):
+            p.add_argument(
+                "--compress-layer-min-bytes",
+                type=int,
+                default=64,
+                help="Minimum mux payload bytes before attempting compression.",
+            )
+        if not _has("--compress-layer-types"):
+            p.add_argument(
+                "--compress-layer-types",
+                default=CompressLayerSession._DEFAULT_ALLOWED_MTYPE_NAMES,
+                help=(
+                    "Comma-separated mux message types eligible for compression "
+                    "(data,open,close,remote_services_set_v1,remote_services_set_v2,"
+                    "data_frag,remote_services_set_v2_chunk,open_chunk)."
+                ),
+            )
+
+    def __init__(self, inner: ISession, args: argparse.Namespace, transport_name: str):
+        self._inner = inner
+        self._transport_name = str(transport_name or "")
+        self._log = logging.getLogger("compress_layer")
+        self._algo = str(getattr(args, "compress_layer_algo", "zlib") or "zlib").strip().lower()
+        self._level = max(0, min(9, int(getattr(args, "compress_layer_level", 3) or 3)))
+        self._min_bytes = max(0, int(getattr(args, "compress_layer_min_bytes", 64) or 0))
+        self._allowed_mtypes = self._parse_allowed_mtypes(getattr(args, "compress_layer_types", ""))
+        max_payload = 65535
+        getter = getattr(self._inner, "get_max_app_payload_size", None)
+        if callable(getter):
+            try:
+                max_payload = int(getter() or 65535)
+            except Exception:
+                max_payload = 65535
+        self._max_app_payload = max(0, int(max_payload))
+        self._max_mux_payload = max(0, self._max_app_payload - self._MUX_HDR.size)
+        self._outer_on_app = None
+        self._outer_on_state = None
+        self._outer_on_peer_rx = None
+        self._outer_on_peer_tx = None
+        self._outer_on_peer_set = None
+        self._outer_on_peer_disconnect = None
+        self._outer_on_app_from_peer_bytes = None
+        self._outer_on_transport_epoch_change = None
+        self._compress_attempts_total = 0
+        self._compress_applied_total = 0
+        self._compress_skipped_no_gain_total = 0
+        self._compress_input_bytes_total = 0
+        self._compress_output_bytes_total = 0
+        self._decompress_ok_total = 0
+        self._decompress_fail_total = 0
+
+    def __getattr__(self, name: str):
+        return getattr(self._inner, name)
+
+    @classmethod
+    def _parse_allowed_mtypes(cls, raw: Any) -> Set[int]:
+        value = str(raw or cls._DEFAULT_ALLOWED_MTYPE_NAMES).strip().lower()
+        if not value:
+            value = cls._DEFAULT_ALLOWED_MTYPE_NAMES
+        out: Set[int] = set()
+        for token in (item.strip() for item in value.split(",")):
+            if not token:
+                continue
+            if token in cls._MTYPE_NAME_TO_ID:
+                out.add(int(cls._MTYPE_NAME_TO_ID[token]))
+        if not out:
+            out = {
+                cls._MTYPE_NAME_TO_ID["data"],
+                cls._MTYPE_NAME_TO_ID["data_frag"],
+            }
+        return out
+
+    @classmethod
+    def _parse_mux_frame(cls, payload: bytes) -> Optional[Tuple[int, int, int, int, bytes]]:
+        if not isinstance(payload, (bytes, bytearray, memoryview)):
+            return None
+        mv = memoryview(payload)
+        if mv.nbytes < cls._MUX_HDR.size:
+            return None
+        try:
+            chan_id, proto, counter, mtype, dlen = cls._MUX_HDR.unpack(mv[:cls._MUX_HDR.size])
+        except Exception:
+            return None
+        if dlen < 0 or mv.nbytes < cls._MUX_HDR.size + int(dlen):
+            return None
+        body = bytes(mv[cls._MUX_HDR.size:cls._MUX_HDR.size + int(dlen)])
+        return int(chan_id), int(proto), int(counter), int(mtype), body
+
+    @classmethod
+    def _build_mux_frame(cls, chan_id: int, proto: int, counter: int, mtype: int, body: bytes) -> bytes:
+        return cls._MUX_HDR.pack(
+            int(chan_id) & 0xFFFF,
+            int(proto) & 0xFF,
+            int(counter) & 0xFFFF,
+            int(mtype) & cls._MAX_MTYPE_VALUE,
+            len(body),
+        ) + bytes(body or b"")
+
+    @classmethod
+    def _safe_decompress(cls, payload: bytes, max_out: int) -> Optional[bytes]:
+        if max_out < 0:
+            return None
+        try:
+            decomp = zlib.decompressobj()
+            out = decomp.decompress(bytes(payload or b""), max_out + 1)
+            if decomp.unconsumed_tail or decomp.unused_data:
+                return None
+            tail = decomp.flush()
+            if tail:
+                out += tail
+        except Exception:
+            return None
+        if len(out) > max_out:
+            return None
+        return bytes(out)
+
+    def _deliver_outer_app(self, payload: bytes, peer_id: Optional[int]) -> None:
+        if callable(self._outer_on_app):
+            try:
+                self._outer_on_app(payload, peer_id=peer_id)
+            except TypeError:
+                self._outer_on_app(payload)
+
+    def _on_inner_payload(self, payload: bytes, peer_id: Optional[int] = None) -> None:
+        parsed = self._parse_mux_frame(payload)
+        if parsed is None:
+            self._deliver_outer_app(payload, peer_id)
+            return
+        chan_id, proto, counter, mtype, body = parsed
+        if mtype < self._MTYPE_COMPRESSED_FLAG:
+            self._deliver_outer_app(payload, peer_id)
+            return
+        base_mtype = int(mtype - self._MTYPE_COMPRESSED_FLAG)
+        if base_mtype not in self._KNOWN_BASE_MTYPES:
+            self._decompress_fail_total += 1
+            self._log.warning(
+                "[COMPRESS/RX] unsupported compressed mtype=0x%02X transport=%s peer_id=%r",
+                int(mtype),
+                self._transport_name,
+                peer_id,
+            )
+            return
+        decoded = self._safe_decompress(body, self._max_mux_payload)
+        if decoded is None:
+            self._decompress_fail_total += 1
+            self._log.warning(
+                "[COMPRESS/RX] decode failed mtype=0x%02X transport=%s peer_id=%r in_len=%d cap=%d",
+                int(mtype),
+                self._transport_name,
+                peer_id,
+                len(body),
+                int(self._max_mux_payload),
+            )
+            return
+        self._decompress_ok_total += 1
+        wire = self._build_mux_frame(chan_id, proto, counter, base_mtype, decoded)
+        self._deliver_outer_app(wire, peer_id)
+
+    def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
+        parsed = self._parse_mux_frame(payload)
+        if parsed is None:
+            sent = self._inner.send_app(payload, peer_id=peer_id)
+            return len(payload) if sent else 0
+        chan_id, proto, counter, mtype, body = parsed
+        if (
+            self._algo != "zlib"
+            or mtype >= self._MTYPE_COMPRESSED_FLAG
+            or mtype not in self._KNOWN_BASE_MTYPES
+            or mtype not in self._allowed_mtypes
+            or len(body) < self._min_bytes
+        ):
+            sent = self._inner.send_app(payload, peer_id=peer_id)
+            return len(payload) if sent else 0
+        self._compress_attempts_total += 1
+        self._compress_input_bytes_total += len(body)
+        try:
+            compressed = zlib.compress(body, self._level)
+        except Exception:
+            compressed = b""
+        if not compressed or len(compressed) >= len(body):
+            self._compress_skipped_no_gain_total += 1
+            sent = self._inner.send_app(payload, peer_id=peer_id)
+            return len(payload) if sent else 0
+        self._compress_applied_total += 1
+        self._compress_output_bytes_total += len(compressed)
+        wire = self._build_mux_frame(
+            chan_id,
+            proto,
+            counter,
+            int(mtype + self._MTYPE_COMPRESSED_FLAG),
+            compressed,
+        )
+        sent = self._inner.send_app(wire, peer_id=peer_id)
+        return len(payload) if sent else 0
+
+    def set_on_app_payload(self, cb): self._outer_on_app = cb
+    def set_on_state_change(self, cb): self._outer_on_state = cb
+    def set_on_peer_rx(self, cb): self._outer_on_peer_rx = cb
+    def set_on_peer_tx(self, cb): self._outer_on_peer_tx = cb
+    def set_on_peer_set(self, cb): self._outer_on_peer_set = cb
+    def set_on_peer_disconnect(self, cb): self._outer_on_peer_disconnect = cb
+    def set_on_app_from_peer_bytes(self, cb): self._outer_on_app_from_peer_bytes = cb
+    def set_on_transport_epoch_change(self, cb): self._outer_on_transport_epoch_change = cb
+
+    async def start(self) -> None:
+        self._inner.set_on_app_payload(self._on_inner_payload)
+        self._inner.set_on_state_change(self._outer_on_state)
+        self._inner.set_on_peer_rx(self._outer_on_peer_rx)
+        self._inner.set_on_peer_tx(self._outer_on_peer_tx)
+        self._inner.set_on_peer_set(self._outer_on_peer_set)
+        self._inner.set_on_app_from_peer_bytes(self._outer_on_app_from_peer_bytes)
+        self._inner.set_on_transport_epoch_change(self._outer_on_transport_epoch_change)
+        try:
+            self._inner.set_on_peer_disconnect(self._outer_on_peer_disconnect)
+        except Exception:
+            pass
+        await self._inner.start()
+
+    async def stop(self) -> None:
+        await self._inner.stop()
+
+    async def wait_connected(self, timeout: Optional[float] = None) -> bool:
+        return await self._inner.wait_connected(timeout)
+
+    def is_connected(self) -> bool:
+        return bool(self._inner.is_connected())
+
+    def request_reconnect(self) -> bool:
+        trigger = getattr(self._inner, "request_reconnect", None)
+        if callable(trigger):
+            with contextlib.suppress(Exception):
+                return bool(trigger())
+        return False
+
+    def get_metrics(self) -> SessionMetrics:
+        return self._inner.get_metrics()
+
+    def get_max_app_payload_size(self) -> int:
+        return int(getattr(self._inner, "get_max_app_payload_size", lambda: 65535)() or 65535)
+
+    def get_compress_layer_status_snapshot(self) -> dict:
+        return {
+            "enabled": True,
+            "algorithm": self._algo,
+            "transport": self._transport_name,
+            "level": int(self._level),
+            "min_bytes": int(self._min_bytes),
+            "compress_attempts_total": int(self._compress_attempts_total),
+            "compress_applied_total": int(self._compress_applied_total),
+            "compress_skipped_no_gain_total": int(self._compress_skipped_no_gain_total),
+            "compress_input_bytes_total": int(self._compress_input_bytes_total),
+            "compress_output_bytes_total": int(self._compress_output_bytes_total),
+            "decompress_ok_total": int(self._decompress_ok_total),
+            "decompress_fail_total": int(self._decompress_fail_total),
+        }
+
 class UdpSession(ISession):
     """
     Adapter that owns the existing UDP overlay:
@@ -5345,6 +5671,20 @@ class UdpSession(ISession):
             pp.send_port.sendto(ctl.raw)
         except Exception as e:
             self._log.debug("[UdpSession] _on_control_needed_for_peer failed peer_id=%s err=%r", peer_id, e)
+
+    def reset_sender(self) -> None:
+        # Runner calls this on transport disconnect so reconnect starts from a fresh
+        # reliability window (ctr=1) instead of carrying stale counters across epochs.
+        with contextlib.suppress(Exception):
+            self.inner_session.reset_sender()
+        for ctx in self._server_peers.values():
+            if not isinstance(ctx, dict):
+                continue
+            sess = ctx.get("session")
+            if sess is None:
+                continue
+            with contextlib.suppress(Exception):
+                sess.reset_sender()
 
 # -----------------------------------------------------------------------------
 
@@ -15209,6 +15549,23 @@ class RunnerMuxAggregate:
             "disconnect_detail": "",
         }
 
+    @staticmethod
+    def _default_compress_layer_snapshot() -> dict:
+        return {
+            "enabled": False,
+            "algorithm": "",
+            "transport": None,
+            "level": 0,
+            "min_bytes": 0,
+            "compress_attempts_total": 0,
+            "compress_applied_total": 0,
+            "compress_skipped_no_gain_total": 0,
+            "compress_input_bytes_total": 0,
+            "compress_output_bytes_total": 0,
+            "decompress_ok_total": 0,
+            "decompress_fail_total": 0,
+        }
+
 
 class Runner:
     """
@@ -15420,13 +15777,12 @@ class Runner:
                 asyncio.get_running_loop().create_task(mux.on_overlay_state(connected))
             except RuntimeError:
                 pass
-        # Keep old behavior: reset sender on disconnect
-        s = self.stats.session
-        if not aggregate_connected and s:
-            try:
-                s.reset_sender()
-            except Exception:
-                pass
+        # Reset reliability sender state on disconnect so reconnect starts clean.
+        if not aggregate_connected:
+            resetter = getattr(session, "reset_sender", None)
+            if callable(resetter):
+                with contextlib.suppress(Exception):
+                    resetter()
 
     def _on_transport_epoch_change(self, transport_name: str, session: ISession, mux: "ChannelMux", epoch: int) -> None:
         self.log.info(
@@ -15496,6 +15852,7 @@ class Runner:
     def get_status_snapshot(self) -> dict:
         payload = dict(self.stats.snapshot_status())
         summaries: list[dict] = []
+        compress_summaries: list[dict] = []
         for session in self._sessions:
             getter = getattr(session, "get_secure_link_operational_summary", None)
             if callable(getter):
@@ -15503,6 +15860,12 @@ class Runner:
                     summary = dict(getter() or {})
                     if summary:
                         summaries.append(summary)
+            compress_getter = getattr(session, "get_compress_layer_status_snapshot", None)
+            if callable(compress_getter):
+                with contextlib.suppress(Exception):
+                    csum = dict(compress_getter() or {})
+                    if csum:
+                        compress_summaries.append(csum)
         enabled = [s for s in summaries if bool(s.get("enabled"))]
         payload["secure_link_material_generation"] = max((int(s.get("secure_link_material_generation") or 0) for s in enabled), default=0)
         latest = None
@@ -15517,6 +15880,38 @@ class Runner:
         payload["secure_link_last_reload_result"] = str(latest.get("secure_link_last_reload_result") or "") if latest is not None else ""
         payload["secure_link_last_reload_detail"] = str(latest.get("secure_link_last_reload_detail") or "") if latest is not None else ""
         payload["secure_link_peers_dropped_total"] = sum(int(s.get("secure_link_peers_dropped_total") or 0) for s in enabled)
+
+        compress_enabled = [s for s in compress_summaries if bool(s.get("enabled"))]
+        algorithms = sorted({
+            str(s.get("algorithm") or "").strip().lower()
+            for s in compress_enabled
+            if str(s.get("algorithm") or "").strip()
+        })
+        transports = sorted({
+            str(s.get("transport") or "").strip().lower()
+            for s in compress_enabled
+            if str(s.get("transport") or "").strip()
+        })
+        input_total = sum(int(s.get("compress_input_bytes_total") or 0) for s in compress_enabled)
+        output_total = sum(int(s.get("compress_output_bytes_total") or 0) for s in compress_enabled)
+        savings_ratio = None
+        if input_total > 0:
+            savings_ratio = max(0.0, min(1.0, 1.0 - (float(output_total) / float(input_total))))
+        payload["compress_layer"] = {
+            "enabled": bool(compress_enabled),
+            "sessions_enabled": int(len(compress_enabled)),
+            "algorithm": algorithms[0] if len(algorithms) == 1 else ("mixed" if algorithms else ""),
+            "algorithms": algorithms,
+            "transports": transports,
+            "compress_attempts_total": sum(int(s.get("compress_attempts_total") or 0) for s in compress_enabled),
+            "compress_applied_total": sum(int(s.get("compress_applied_total") or 0) for s in compress_enabled),
+            "compress_skipped_no_gain_total": sum(int(s.get("compress_skipped_no_gain_total") or 0) for s in compress_enabled),
+            "compress_input_bytes_total": int(input_total),
+            "compress_output_bytes_total": int(output_total),
+            "decompress_ok_total": sum(int(s.get("decompress_ok_total") or 0) for s in compress_enabled),
+            "decompress_fail_total": sum(int(s.get("decompress_fail_total") or 0) for s in compress_enabled),
+            "compression_saving_ratio": savings_ratio,
+        }
         return payload
 
     def get_connections_snapshot(self) -> dict:
@@ -15799,6 +16194,15 @@ class Runner:
                     return value
         return 0
 
+    def _session_compress_layer_snapshot(self, session_obj: Any) -> dict:
+        getter = getattr(session_obj, "get_compress_layer_status_snapshot", None)
+        if callable(getter):
+            with contextlib.suppress(Exception):
+                snap = dict(getter() or {})
+                if snap:
+                    return snap
+        return RunnerMuxAggregate._default_compress_layer_snapshot()
+
     def get_peer_connections_snapshot(self) -> dict:
         peers: list = []
         for idx, session in enumerate(self._sessions):
@@ -15845,6 +16249,7 @@ class Runner:
                             },
                             "myudp": self._session_retransmit_stats(listener_session),
                             "secure_link": dict(p.get("secure_link") or RunnerMuxAggregate._default_secure_link_snapshot()),
+                            "compress_layer": dict(self._session_compress_layer_snapshot(session)),
                         })
                         continue
                     row_session = session
@@ -15914,6 +16319,7 @@ class Runner:
                         },
                         "myudp": self._session_retransmit_stats(row_session),
                         "secure_link": dict(p.get("secure_link") or RunnerMuxAggregate._default_secure_link_snapshot()),
+                        "compress_layer": dict(self._session_compress_layer_snapshot(session)),
                     })
                 continue
 
@@ -15967,6 +16373,7 @@ class Runner:
                         RunnerMuxAggregate._default_secure_link_snapshot,
                     )()
                 ),
+                "compress_layer": dict(self._session_compress_layer_snapshot(session)),
             })
         return {"peers": peers, "count": len(peers)}
 
@@ -16344,6 +16751,16 @@ class Runner:
         return SecureLinkPskSession(session, args, transport_name)
 
     @staticmethod
+    def _maybe_wrap_compress_layer(args: argparse.Namespace, transport_name: str, session: ISession) -> ISession:
+        enabled = bool(getattr(args, "compress_layer", True))
+        if not enabled:
+            return session
+        algo = str(getattr(args, "compress_layer_algo", "zlib") or "zlib").strip().lower()
+        if algo != "zlib":
+            raise ValueError(f"compress_layer_algo={algo} is not implemented yet")
+        return CompressLayerSession(session, args, transport_name)
+
+    @staticmethod
     def build_sessions_from_overlay(args: argparse.Namespace) -> List[Tuple[str, ISession]]:
         """
         Return the ISession(s) that implement the chosen overlay transport(s).
@@ -16366,7 +16783,9 @@ class Runner:
                 session = WebSocketSession.from_args(session_args)
             else:
                 session = UdpSession.from_args(session_args)
-            out.append((choice, Runner._maybe_wrap_secure_link(session_args, choice, session)))
+            wrapped = Runner._maybe_wrap_secure_link(session_args, choice, session)
+            wrapped = Runner._maybe_wrap_compress_layer(session_args, choice, wrapped)
+            out.append((choice, wrapped))
         return out
 
 # ------------ Admin Webinterface ------------
@@ -18374,6 +18793,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     registrars: List[Tuple[str, Callable[[argparse.ArgumentParser], None]]] = [
         ("stats_board",        StatsBoard.register_cli),
         ("secure_link",       SecureLinkPskSession.register_cli),
+        ("compress_layer",    CompressLayerSession.register_cli),
         ("udp_session",        UdpSession.register_cli),
         ("ws_session",         WebSocketSession.register_cli),
         ("tcp_session",        TcpStreamSession.register_cli),
