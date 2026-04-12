@@ -365,7 +365,7 @@
               <div>
                 <h2>Configuration</h2>
                 <p>Configuration is organized by section (for example: admin_web and ws_session), with description and built-in default value. Overlay settings are transport-specific (`udp_*`, `tcp_*`, `quic_*`, `ws_*`).</p>
-                <p>Compression note: peer client settings control that client's outbound compression profile; peer server-side compression fields do not need to mirror the client to decode client-to-server frames.</p>
+                <p>Compression note: peer client settings control whether a peer connection uses compression. Peer servers show compression only for peer rows that activated it, and server-side fields do not need to mirror the client.</p>
               </div>
               <div class="config-actions">
                 <button id="configReloadBtn" class="btn btn-secondary" type="button">Reload</button>

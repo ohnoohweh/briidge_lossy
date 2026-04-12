@@ -2576,7 +2576,7 @@ function renderConfigRows(items, config) {
     const defaultRaw = configValueToEditor(item.default);
     const normalizedKey = String(key || '').toLowerCase();
     const compressionControlNote = (normalizedKey === 'compress_layer' || normalizedKey.startsWith('compress_layer_'))
-      ? ' Peer client settings control that client outbound compression profile; peer server-side values do not need to mirror the client to decode client-to-server compressed frames.'
+      ? ' Peer client settings control whether a peer connection uses compression; peer servers expose compression only for activated peer rows and do not need mirrored client values.'
       : '';
     const description = `${item.description || '(no description)'}${compressionControlNote}`;
     return `

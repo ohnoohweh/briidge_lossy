@@ -2422,6 +2422,18 @@ def admin_authenticate(
     return login_code, login_doc, op
 
 
+def config_change_proof(seed: str, username: str, password: str, updates_digest: str) -> str:
+    return hashlib.sha256(f'{seed}:{username}:{password}:{updates_digest}'.encode('utf-8')).hexdigest()
+
+
+def proc_config_path(proc: Proc) -> Path:
+    cmd = list(proc.cmd or [])
+    for idx, item in enumerate(cmd):
+        if item == '--config' and idx + 1 < len(cmd):
+            return Path(cmd[idx + 1])
+    raise RuntimeError(f'process command does not include --config: {cmd!r}')
+
+
 async def _admin_ws_collect_messages(
     admin_port: int,
     *,
@@ -3180,6 +3192,18 @@ def first_active_secure_link_row(doc: dict, *, transport: Optional[str] = None) 
             continue
         return row
     raise RuntimeError(f'Could not determine active secure-link peer row from peers doc: {doc!r}')
+
+
+def first_active_peer_row(doc: dict, *, transport: Optional[str] = None) -> dict:
+    normalized_transport = str(transport or '').strip().lower()
+    for row in list(doc.get('peers') or []):
+        if normalized_transport and str(row.get('transport', '')).strip().lower() != normalized_transport:
+            continue
+        if str(row.get('state', '')).strip().lower() == 'listening':
+            continue
+        if bool(row.get('connected')):
+            return row
+    raise RuntimeError(f'Could not determine active peer row from peers doc: {doc!r}')
 
 
 def wait_status_secure_link_state(
@@ -5944,6 +5968,261 @@ def test_overlay_e2e_admin_api_auth_isolated_per_concurrent_http_client(tmp_path
 
 @pytest.mark.integration
 @pytest.mark.slow
+def test_overlay_e2e_admin_config_challenge_masks_and_saves_secrets_encrypted(tmp_path: Path) -> None:
+    case = CASES['case01_udp_over_own_udp_ipv4']
+    username = 'admin'
+    password = 'secret-pass'
+    auth_args = [
+        '--admin-web-username', username,
+        '--admin-web-password', password,
+    ]
+    bounce = None
+    server_proc = client_proc = None
+    try:
+        bounce, server_proc, client_proc = _start_case_with_client_admin_auth(case, tmp_path, case_index=204, client_auth_args=auth_args)
+        login_code, login_doc, opener = admin_authenticate(client_proc.admin_port or 0, username, password)
+        assert login_code == 200
+        assert login_doc.get('authenticated') is True
+
+        code, config_doc = request_json(f'http://127.0.0.1:{client_proc.admin_port}/api/config', opener=opener)
+        assert code == 200
+        assert config_doc.get('ok') is True
+        config = dict(config_doc.get('config') or {})
+        schema = dict(config_doc.get('schema') or {})
+        schema_by_key = {
+            str(item.get('key')): dict(item)
+            for items in schema.values()
+            for item in list(items or [])
+            if isinstance(item, dict)
+        }
+        assert config.get('admin_web_password') == ''
+        assert config.get('secure_link_psk') == ''
+        assert (schema_by_key.get('admin_web_password') or {}).get('secret') is True
+        assert (schema_by_key.get('secure_link_psk') or {}).get('secret') is True
+
+        updates = {
+            'console_level': 'DEBUG',
+            'admin_web_password': 'rotated-pass',
+            'secure_link_psk': 'runtime-psk-secret',
+        }
+        no_challenge_code, no_challenge_doc = request_json(
+            f'http://127.0.0.1:{client_proc.admin_port}/api/config',
+            method='POST',
+            payload={'updates': updates},
+            opener=opener,
+        )
+        assert no_challenge_code == 428
+        assert 'confirmation required' in str(no_challenge_doc.get('error') or '')
+
+        challenge_code, challenge_doc = request_json(
+            f'http://127.0.0.1:{client_proc.admin_port}/api/config/challenge',
+            method='POST',
+            payload={'updates': updates},
+            opener=opener,
+        )
+        assert challenge_code == 200
+        proof = config_change_proof(
+            str(challenge_doc.get('seed') or ''),
+            username,
+            password,
+            str(challenge_doc.get('updates_digest') or ''),
+        )
+        save_code, save_doc = request_json(
+            f'http://127.0.0.1:{client_proc.admin_port}/api/config',
+            method='POST',
+            payload={'updates': updates, 'challenge_id': challenge_doc.get('challenge_id'), 'proof': proof},
+            opener=opener,
+        )
+        assert save_code == 200
+        assert save_doc.get('ok') is True
+        saved_config = dict(save_doc.get('config') or {})
+        assert saved_config.get('admin_web_password') == ''
+        assert saved_config.get('secure_link_psk') == ''
+
+        cfg_text = proc_config_path(client_proc).read_text(encoding='utf-8')
+        assert 'rotated-pass' not in cfg_text
+        assert 'runtime-psk-secret' not in cfg_text
+        assert 'enc:v1:' in cfg_text
+    finally:
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            _stop_proc_without_admin(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_onboarding_invite_api_masks_psk_and_returns_apply_updates(tmp_path: Path) -> None:
+    case = CASES['case01_udp_over_own_udp_ipv4']
+    auth_args = [
+        '--admin-web-auth-disable',
+        '--secure-link-mode', 'psk',
+        '--secure-link-psk', 'invite-psk-secret',
+    ]
+    bounce = None
+    server_proc = client_proc = None
+    try:
+        bounce, server_proc, client_proc = _start_case_with_client_admin_auth(case, tmp_path, case_index=205, client_auth_args=auth_args)
+        code, profiles_doc = request_json(f'http://127.0.0.1:{client_proc.admin_port}/api/onboarding/connection-profiles')
+        assert code == 200
+        profiles = list(profiles_doc.get('profiles') or [])
+        assert profiles
+        connection_id = str(profiles[0].get('id') or '')
+
+        generate_code, generate_doc = request_json(
+            f'http://127.0.0.1:{client_proc.admin_port}/api/onboarding/invite/generate',
+            method='POST',
+            payload={'connection_id': connection_id},
+        )
+        assert generate_code == 200
+        assert generate_doc.get('ok') is True
+        token = str(generate_doc.get('invite_token') or '')
+        assert token
+
+        preview_code, preview_doc = request_json(
+            f'http://127.0.0.1:{client_proc.admin_port}/api/onboarding/invite/preview',
+            method='POST',
+            payload={'invite_token': token},
+        )
+        assert preview_code == 200
+        assert preview_doc.get('ok') is True
+        preview = dict(preview_doc.get('preview') or {})
+        updates = dict(preview_doc.get('suggested_updates') or {})
+        assert preview.get('secure_link_psk') == '***hidden***'
+        assert preview.get('secure_link_psk_present') is True
+        assert updates.get('secure_link_psk') == 'invite-psk-secret'
+        assert updates.get('overlay_transport')
+    finally:
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            _stop_proc_without_admin(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_admin_reconnect_targets_selected_peer_id(tmp_path: Path) -> None:
+    case = CASES['case08_overlay_ws_ipv4']
+    auth_args = ['--admin-web-auth-disable']
+    bounce = None
+    server_proc = client_proc = None
+    try:
+        bounce, server_proc, client_proc = _start_case_with_client_admin_auth(case, tmp_path, case_index=206, client_auth_args=auth_args)
+        client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+        code, peers_doc = request_json(f'http://127.0.0.1:{client_proc.admin_port}/api/peers')
+        assert code == 200
+        row = first_active_peer_row(peers_doc, transport='ws')
+        peer_id = str(row.get('id'))
+        missing_code, missing_doc = request_json(
+            f'http://127.0.0.1:{client_proc.admin_port}/api/reconnect',
+            method='POST',
+            payload={'peer_id': f'{peer_id}-missing'},
+        )
+        assert missing_code == 404
+        assert missing_doc.get('reason') == 'unknown_peer_id'
+
+        reconnect_code, reconnect_doc = request_json(
+            f'http://127.0.0.1:{client_proc.admin_port}/api/reconnect',
+            method='POST',
+            payload={'peer_id': peer_id},
+        )
+        assert reconnect_code == 200
+        assert reconnect_doc.get('ok') is True
+        assert reconnect_doc.get('target_peer_id') == peer_id
+        assert int(reconnect_doc.get('requested') or 0) == 1
+        assert reconnect_doc.get('transports') == ['ws']
+    finally:
+        if bounce is not None:
+            bounce.stop()
+        if client_proc is not None:
+            _stop_proc_without_admin(client_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_default_entrypoint_config_bootstrap_and_webadmin_notice(tmp_path: Path) -> None:
+    case_index = 207
+    admin_port = alloc_admin_port(case_index=case_index, host_pair=('127.0.0.1', '::1'))
+    missing_cfg = tmp_path / 'missing-entrypoint.cfg'
+    env = dict(os.environ)
+    env['PYTHONPATH'] = f'{SRC}{os.pathsep}{env.get("PYTHONPATH", "")}'
+    cmd = [
+        sys.executable,
+        '-m',
+        'obstacle_bridge',
+        '--no-redirect',
+        '--config',
+        str(missing_cfg),
+        '--admin-web',
+        '--admin-web-auth-disable',
+        '--admin-web-bind',
+        '127.0.0.1',
+        '--admin-web-port',
+        str(admin_port),
+        '--no-dashboard',
+    ]
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(ROOT),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    lines: list[str] = []
+    try:
+        deadline = time.time() + 12.0
+        while time.time() < deadline:
+            assert proc.stdout is not None
+            ready, _, _ = select.select([proc.stdout], [], [], 0.25)
+            if ready:
+                line = proc.stdout.readline()
+                if line:
+                    lines.append(line.rstrip())
+                    if f'http://127.0.0.1:{admin_port}/' in line:
+                        break
+            if proc.poll() is not None:
+                break
+        assert any(f'Open WebAdmin interface http://127.0.0.1:{admin_port}/' in line for line in lines), lines
+        wait_admin_up(admin_port, timeout=10.0)
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5.0)
+
+    invalid_cfg = tmp_path / 'invalid-entrypoint.cfg'
+    invalid_cfg.write_text('{not-json', encoding='utf-8')
+    bad = subprocess.run(
+        [
+            sys.executable,
+            str(BRIDGE),
+            '--config',
+            str(invalid_cfg),
+            '--admin-web-port',
+            '0',
+        ],
+        cwd=str(ROOT),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=10.0,
+    )
+    assert bad.returncode != 0
+    assert 'Invalid JSON config' in (bad.stdout or '')
+
+
+@pytest.mark.integration
+@pytest.mark.slow
 def test_overlay_e2e_admin_live_ws_available_when_auth_disabled(tmp_path: Path) -> None:
     case = CASES['case01_udp_over_own_udp_ipv4']
     auth_args = [
@@ -6620,6 +6899,8 @@ def test_overlay_e2e_tcp_secure_link_psk_happy_path(tmp_path: Path) -> None:
             wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
             wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
             wait_peer_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', transport='tcp', authenticated=True)
+            compressible_payload = b'\x21' + (b'C' * 1400)
+            wait_probe(case, payload=compressible_payload, expected=response_payload(compressible_payload), timeout=12.0)
             wait_peer_compress_layer_stats(client_proc.admin_port or 0, timeout=12.0, label='client', transport='tcp', enabled=True)
             wait_peer_compress_layer_stats(server_proc.admin_port or 0, timeout=12.0, label='server', transport='tcp', enabled=True)
             req = urllib.request.Request(
@@ -6705,6 +6986,7 @@ def test_overlay_e2e_tcp_secure_link_psk_compress_layer_mismatched_peer_settings
                 secure_slot=33,
                 server_extra_args=[
                     '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+                    '--no-compress-layer',
                     '--compress-layer-min-bytes', '4096',
                     '--compress-layer-level', '1',
                     '--compress-layer-types', 'data',
@@ -6751,8 +7033,9 @@ def test_overlay_e2e_tcp_secure_link_psk_compress_layer_mismatched_peer_settings
             assert bool(server_comp.get('enabled'))
             assert int(client_comp.get('compress_applied_total') or 0) >= 1
             assert int(server_comp.get('decompress_ok_total') or 0) >= 1
-            # Server keeps its own stricter local send settings, so reverse-direction compression can remain zero.
-            assert int(server_comp.get('compress_applied_total') or 0) == 0
+            # Server-side local compression config is passive for peer-client-driven compression:
+            # once the client proves compression is active, the server compresses replies for that peer too.
+            assert int(server_comp.get('compress_applied_total') or 0) >= 1
         finally:
             if bounce is not None:
                 bounce.stop()

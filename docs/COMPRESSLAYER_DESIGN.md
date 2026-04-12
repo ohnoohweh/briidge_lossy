@@ -166,7 +166,8 @@ Compression uses independent per-frame state:
 Current delivered model:
 
 - compression is default-on for current peers
-- both peers must run a compression-capable runtime, or both must disable compression for a deliberately uncompressed deployment
+- peer-client configuration controls whether a peer connection actively uses compression
+- peer-server/listener sessions keep a passive compression decoder so they can detect client-selected compression even when server-side outbound compression was disabled locally
 - sender policy decides whether a specific outbound frame is compressed
 - receiver behavior is self-describing per frame via the `mtype` high bit
 - client and server compression thresholds, levels, and allowed types do not need to match for successful decoding
@@ -175,7 +176,7 @@ Peer-server deployments:
 
 - peer-client settings control the client-to-server effective send profile
 - the peer server decodes each received frame based on wire signaling, not on mirrored local thresholds or levels
-- the peer server may use its own local compression settings for server-to-client traffic
+- after a peer sends a valid compressed frame, the peer server marks only that peer connection compression-active and compresses replies for that peer using the baseline `zlib` policy
 - different concurrent peer clients can therefore send different compressed/uncompressed mixes to the same listener process
 
 Unsupported path:
@@ -195,7 +196,7 @@ This achieves the required asymmetric-setting behavior without a separate startu
 
 - a peer client can use `compress_layer_min_bytes=64` while a peer server uses `compress_layer_min_bytes=4096`
 - client-to-server frames still decode on the server when the client decides compression is beneficial
-- reverse-direction server-to-client frames follow the server's own outbound policy
+- reverse-direction server-to-client frames start using compression for that peer after the server has seen a valid compressed frame from the client
 - per-peer server state can report compression/decompression counters independently
 
 Future explicit negotiation remains useful for broader scenarios such as mixed-version compatibility, multi-codec selection, or administrative policy clamps. That is tracked as follow-up rather than as a blocker for the delivered client-directed behavior.
@@ -220,7 +221,7 @@ Runner composition:
 CLI/config surface:
 
 - `--compress-layer` enables the wrapper explicitly
-- `--no-compress-layer` disables the wrapper
+- `--no-compress-layer` disables peer-client outbound compression; on peer servers/listeners, the runtime still keeps a passive decoder so client-selected compression can be detected per peer
 - `--compress-layer-algo` selects the algorithm (`zlib` currently)
 - `--compress-layer-min-bytes` sets the sender-side eligibility threshold
 - `--compress-layer-level` sets the zlib compression level
@@ -230,7 +231,7 @@ Operational note:
 
 - compression is enabled by default
 - in peer-server deployments, tune client-side compression settings first because they control the client-to-server send profile
-- peer-server compression settings affect that server's own outbound traffic and local status/config display, not whether it can decode client-selected compressed frames
+- peer-server compression settings do not need to mirror the client; compression statistics and server replies activate per peer only after that peer sends a valid compressed frame
 
 ## Observability
 
@@ -250,9 +251,10 @@ Derived ratio:
 
 Admin/API behavior:
 
-- `/api/status` exposes aggregate compression state/statistics when the runtime has compression enabled
+- `/api/status` exposes aggregate compression state/statistics when compression is active in the runtime
 - `/api/peers` exposes peer-scoped compression counters for active peer rows
-- WebAdmin shows compression statistics only when compression is enabled via CLI/config, matching the secure-link pattern of hiding feature-specific operational detail when the feature is inactive
+- on peer servers, peer rows show compression only for connections where the peer client has activated compression
+- WebAdmin hides aggregate compression statistics until compression is active
 
 ## Delivered Coverage
 
@@ -263,6 +265,8 @@ Unit coverage includes:
 - malformed compressed payload rejection
 - decompression size cap enforcement
 - pass-through behavior for uncompressed frames
+- passive peer-server activation after receiving a valid compressed frame
+- server-side reply compression for a peer that activated compression, even when local server compression settings are disabled or stricter
 - admin payload and runner configuration behavior for compression settings/statistics
 
 Integration coverage includes:
@@ -270,19 +274,20 @@ Integration coverage includes:
 - existing overlay e2e cases running with default-on compression
 - secure-link PSK plus compression happy-path forwarding and statistics
 - disabled-compression operation as an explicit opt-out path
-- mismatched peer-client/peer-server compression settings proving client-selected send policy and server-side decode flexibility
+- mismatched peer-client/peer-server compression settings proving client-selected send policy, server-side passive decode activation, and server reply compression for the activated peer
 - reconnect/restart scenarios that preserve forwarding after wrapper/session reset
 
 Latest local validation for the shared Linux overlay suite:
 
 - `RUN_OVERLAY_E2E=1 pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` -> `134 passed`
+- `RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k "admin_config_challenge_masks_and_saves_secrets_encrypted or onboarding_invite_api_masks_psk_and_returns_apply_updates or admin_reconnect_targets_selected_peer_id or default_entrypoint_config_bootstrap_and_webadmin_notice or compress_layer_mismatched_peer_settings"` -> `5 passed, 135 deselected`
 - `RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` -> `25 passed, 111 deselected`
 
 ## Risks and mitigations
 
 - CPU overhead under incompressible traffic: mitigated with `min-bytes` threshold and strict no-gain bypass
 - decode-failure ambiguity: mitigated with fail-closed behavior and explicit counters/log reason
-- mixed-version interoperability: current supported deployment requires compression-capable peers or both sides explicitly disabled; explicit negotiation is future work if mixed-version rollout is required
+- mixed-version interoperability: peer clients define active compression use and peer servers keep a passive decoder, so mixed local settings are supported for compression-capable peers; fully mixed binary-version rollout still requires validating that older peers never receive compressed `0x80 + mtype` frames unexpectedly
 - complexity near mux framing boundary: mitigated by keeping the wrapper narrowly scoped, stateless per frame, and transparent to `ChannelMux` after receive-side restoration
 
 ## Current State and Follow-Up

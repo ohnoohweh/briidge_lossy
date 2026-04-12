@@ -4577,7 +4577,7 @@ class CompressLayerSession(ISession):
                 "--compress-layer-algo",
                 default="zlib",
                 choices=["zlib"],
-                help="Compression algorithm for compress-layer (phase-1: zlib only).",
+                help="Compression algorithm for compress-layer (zlib currently).",
             )
         if not _has("--compress-layer-level"):
             p.add_argument(
@@ -4608,10 +4608,15 @@ class CompressLayerSession(ISession):
         self._inner = inner
         self._transport_name = str(transport_name or "")
         self._log = logging.getLogger("compress_layer")
+        self._configured_enabled = bool(getattr(args, "compress_layer", True))
+        self._is_peer_client = bool(str(getattr(args, "peer", "") or "").strip())
         self._algo = str(getattr(args, "compress_layer_algo", "zlib") or "zlib").strip().lower()
         self._level = max(0, min(9, int(getattr(args, "compress_layer_level", 3) or 3)))
         self._min_bytes = max(0, int(getattr(args, "compress_layer_min_bytes", 64) or 0))
         self._allowed_mtypes = self._parse_allowed_mtypes(getattr(args, "compress_layer_types", ""))
+        self._peer_selected_level = 3
+        self._peer_selected_min_bytes = 64
+        self._peer_selected_allowed_mtypes = self._parse_allowed_mtypes(self._DEFAULT_ALLOWED_MTYPE_NAMES)
         max_payload = 65535
         getter = getattr(self._inner, "get_max_app_payload_size", None)
         if callable(getter):
@@ -4636,6 +4641,7 @@ class CompressLayerSession(ISession):
         self._compress_output_bytes_total = 0
         self._decompress_ok_total = 0
         self._decompress_fail_total = 0
+        self._peer_compress: Dict[Any, dict] = {}
 
     def __getattr__(self, name: str):
         return getattr(self._inner, name)
@@ -4709,6 +4715,70 @@ class CompressLayerSession(ISession):
             except TypeError:
                 self._outer_on_app(payload)
 
+    @staticmethod
+    def _peer_key(peer_id: Optional[int]) -> Any:
+        return int(peer_id) if peer_id is not None else "__single__"
+
+    def _new_peer_stats(self) -> dict:
+        return {
+            "active": False,
+            "compress_attempts_total": 0,
+            "compress_applied_total": 0,
+            "compress_skipped_no_gain_total": 0,
+            "compress_input_bytes_total": 0,
+            "compress_output_bytes_total": 0,
+            "decompress_ok_total": 0,
+            "decompress_fail_total": 0,
+        }
+
+    def _peer_stats(self, peer_id: Optional[int]) -> dict:
+        key = self._peer_key(peer_id)
+        stats = self._peer_compress.get(key)
+        if not isinstance(stats, dict):
+            stats = self._new_peer_stats()
+            self._peer_compress[key] = stats
+        return stats
+
+    def _mark_peer_active(self, peer_id: Optional[int]) -> None:
+        self._peer_stats(peer_id)["active"] = True
+
+    def _peer_send_enabled(self, peer_id: Optional[int]) -> bool:
+        if self._is_peer_client:
+            return bool(self._configured_enabled)
+        if peer_id is None:
+            return bool(self._configured_enabled)
+        stats = self._peer_stats(peer_id)
+        return bool(stats.get("active"))
+
+    def _send_policy(self, peer_id: Optional[int]) -> Tuple[int, int, Set[int]]:
+        if not self._is_peer_client and peer_id is not None and self._peer_send_enabled(peer_id):
+            return self._peer_selected_level, self._peer_selected_min_bytes, set(self._peer_selected_allowed_mtypes)
+        return self._level, self._min_bytes, set(self._allowed_mtypes)
+
+    def _stats_peer_id_for_send(self, peer_id: Optional[int]) -> Optional[int]:
+        if self._is_peer_client or peer_id is not None:
+            return peer_id
+        active_keys = [
+            key for key, stats in self._peer_compress.items()
+            if isinstance(key, int) and isinstance(stats, dict) and bool(stats.get("active"))
+        ]
+        if len(active_keys) == 1:
+            return int(active_keys[0])
+        return peer_id
+
+    def _add_peer_counter(self, peer_id: Optional[int], field: str, value: int = 1) -> None:
+        stats = self._peer_stats(peer_id)
+        stats[field] = int(stats.get(field) or 0) + int(value)
+
+    def _on_inner_peer_disconnect(self, peer_id: Optional[int] = None, *args, **kwargs) -> None:
+        if peer_id is not None:
+            self._peer_compress.pop(self._peer_key(peer_id), None)
+        if callable(self._outer_on_peer_disconnect):
+            try:
+                self._outer_on_peer_disconnect(peer_id, *args, **kwargs)
+            except TypeError:
+                self._outer_on_peer_disconnect(peer_id)
+
     def _on_inner_payload(self, payload: bytes, peer_id: Optional[int] = None) -> None:
         parsed = self._parse_mux_frame(payload)
         if parsed is None:
@@ -4721,6 +4791,7 @@ class CompressLayerSession(ISession):
         base_mtype = int(mtype - self._MTYPE_COMPRESSED_FLAG)
         if base_mtype not in self._KNOWN_BASE_MTYPES:
             self._decompress_fail_total += 1
+            self._add_peer_counter(peer_id, "decompress_fail_total")
             self._log.warning(
                 "[COMPRESS/RX] unsupported compressed mtype=0x%02X transport=%s peer_id=%r",
                 int(mtype),
@@ -4731,6 +4802,7 @@ class CompressLayerSession(ISession):
         decoded = self._safe_decompress(body, self._max_mux_payload)
         if decoded is None:
             self._decompress_fail_total += 1
+            self._add_peer_counter(peer_id, "decompress_fail_total")
             self._log.warning(
                 "[COMPRESS/RX] decode failed mtype=0x%02X transport=%s peer_id=%r in_len=%d cap=%d",
                 int(mtype),
@@ -4741,6 +4813,8 @@ class CompressLayerSession(ISession):
             )
             return
         self._decompress_ok_total += 1
+        self._mark_peer_active(peer_id)
+        self._add_peer_counter(peer_id, "decompress_ok_total")
         wire = self._build_mux_frame(chan_id, proto, counter, base_mtype, decoded)
         self._deliver_outer_app(wire, peer_id)
 
@@ -4750,27 +4824,35 @@ class CompressLayerSession(ISession):
             sent = self._inner.send_app(payload, peer_id=peer_id)
             return len(payload) if sent else 0
         chan_id, proto, counter, mtype, body = parsed
+        stats_peer_id = self._stats_peer_id_for_send(peer_id)
+        level, min_bytes, allowed_mtypes = self._send_policy(stats_peer_id)
         if (
             self._algo != "zlib"
+            or not self._peer_send_enabled(stats_peer_id)
             or mtype >= self._MTYPE_COMPRESSED_FLAG
             or mtype not in self._KNOWN_BASE_MTYPES
-            or mtype not in self._allowed_mtypes
-            or len(body) < self._min_bytes
+            or mtype not in allowed_mtypes
+            or len(body) < min_bytes
         ):
             sent = self._inner.send_app(payload, peer_id=peer_id)
             return len(payload) if sent else 0
         self._compress_attempts_total += 1
         self._compress_input_bytes_total += len(body)
+        self._add_peer_counter(stats_peer_id, "compress_attempts_total")
+        self._add_peer_counter(stats_peer_id, "compress_input_bytes_total", len(body))
         try:
-            compressed = zlib.compress(body, self._level)
+            compressed = zlib.compress(body, level)
         except Exception:
             compressed = b""
         if not compressed or len(compressed) >= len(body):
             self._compress_skipped_no_gain_total += 1
+            self._add_peer_counter(stats_peer_id, "compress_skipped_no_gain_total")
             sent = self._inner.send_app(payload, peer_id=peer_id)
             return len(payload) if sent else 0
         self._compress_applied_total += 1
         self._compress_output_bytes_total += len(compressed)
+        self._add_peer_counter(stats_peer_id, "compress_applied_total")
+        self._add_peer_counter(stats_peer_id, "compress_output_bytes_total", len(compressed))
         wire = self._build_mux_frame(
             chan_id,
             proto,
@@ -4799,7 +4881,7 @@ class CompressLayerSession(ISession):
         self._inner.set_on_app_from_peer_bytes(self._outer_on_app_from_peer_bytes)
         self._inner.set_on_transport_epoch_change(self._outer_on_transport_epoch_change)
         try:
-            self._inner.set_on_peer_disconnect(self._outer_on_peer_disconnect)
+            self._inner.set_on_peer_disconnect(self._on_inner_peer_disconnect)
         except Exception:
             pass
         await self._inner.start()
@@ -4826,21 +4908,57 @@ class CompressLayerSession(ISession):
     def get_max_app_payload_size(self) -> int:
         return int(getattr(self._inner, "get_max_app_payload_size", lambda: 65535)() or 65535)
 
-    def get_compress_layer_status_snapshot(self) -> dict:
+    def _compress_snapshot_from_counters(
+        self,
+        counters: dict,
+        *,
+        enabled: bool,
+        level: Optional[int] = None,
+        min_bytes: Optional[int] = None,
+    ) -> dict:
         return {
-            "enabled": True,
+            "enabled": bool(enabled),
             "algorithm": self._algo,
             "transport": self._transport_name,
-            "level": int(self._level),
-            "min_bytes": int(self._min_bytes),
-            "compress_attempts_total": int(self._compress_attempts_total),
-            "compress_applied_total": int(self._compress_applied_total),
-            "compress_skipped_no_gain_total": int(self._compress_skipped_no_gain_total),
-            "compress_input_bytes_total": int(self._compress_input_bytes_total),
-            "compress_output_bytes_total": int(self._compress_output_bytes_total),
-            "decompress_ok_total": int(self._decompress_ok_total),
-            "decompress_fail_total": int(self._decompress_fail_total),
+            "level": int(self._level if level is None else level),
+            "min_bytes": int(self._min_bytes if min_bytes is None else min_bytes),
+            "compress_attempts_total": int(counters.get("compress_attempts_total") or 0),
+            "compress_applied_total": int(counters.get("compress_applied_total") or 0),
+            "compress_skipped_no_gain_total": int(counters.get("compress_skipped_no_gain_total") or 0),
+            "compress_input_bytes_total": int(counters.get("compress_input_bytes_total") or 0),
+            "compress_output_bytes_total": int(counters.get("compress_output_bytes_total") or 0),
+            "decompress_ok_total": int(counters.get("decompress_ok_total") or 0),
+            "decompress_fail_total": int(counters.get("decompress_fail_total") or 0),
         }
+
+    def get_compress_layer_status_snapshot(self, peer_id: Optional[int] = None) -> dict:
+        if peer_id is not None:
+            stats = self._peer_compress.get(self._peer_key(peer_id))
+            if not isinstance(stats, dict) and self._is_peer_client:
+                stats = self._peer_compress.get(self._peer_key(None))
+            if not isinstance(stats, dict):
+                return self._compress_snapshot_from_counters({}, enabled=bool(self._configured_enabled) if self._is_peer_client else False)
+            enabled = bool(self._configured_enabled) if self._is_peer_client else bool(stats.get("active"))
+            if not self._is_peer_client and enabled:
+                return self._compress_snapshot_from_counters(
+                    stats,
+                    enabled=enabled,
+                    level=self._peer_selected_level,
+                    min_bytes=self._peer_selected_min_bytes,
+                )
+            return self._compress_snapshot_from_counters(stats, enabled=enabled)
+        counters = {
+            "compress_attempts_total": self._compress_attempts_total,
+            "compress_applied_total": self._compress_applied_total,
+            "compress_skipped_no_gain_total": self._compress_skipped_no_gain_total,
+            "compress_input_bytes_total": self._compress_input_bytes_total,
+            "compress_output_bytes_total": self._compress_output_bytes_total,
+            "decompress_ok_total": self._decompress_ok_total,
+            "decompress_fail_total": self._decompress_fail_total,
+        }
+        any_peer_active = any(bool(s.get("active")) for s in self._peer_compress.values() if isinstance(s, dict))
+        enabled = bool(self._configured_enabled) if self._is_peer_client else bool(any_peer_active)
+        return self._compress_snapshot_from_counters(counters, enabled=enabled)
 
 class UdpSession(ISession):
     """
@@ -16194,11 +16312,14 @@ class Runner:
                     return value
         return 0
 
-    def _session_compress_layer_snapshot(self, session_obj: Any) -> dict:
+    def _session_compress_layer_snapshot(self, session_obj: Any, peer_id: Optional[int] = None) -> dict:
         getter = getattr(session_obj, "get_compress_layer_status_snapshot", None)
         if callable(getter):
             with contextlib.suppress(Exception):
-                snap = dict(getter() or {})
+                try:
+                    snap = dict(getter(peer_id=peer_id) or {})
+                except TypeError:
+                    snap = dict(getter() or {})
                 if snap:
                     return snap
         return RunnerMuxAggregate._default_compress_layer_snapshot()
@@ -16249,7 +16370,7 @@ class Runner:
                             },
                             "myudp": self._session_retransmit_stats(listener_session),
                             "secure_link": dict(p.get("secure_link") or RunnerMuxAggregate._default_secure_link_snapshot()),
-                            "compress_layer": dict(self._session_compress_layer_snapshot(session)),
+                            "compress_layer": dict(self._session_compress_layer_snapshot(session, peer_id=p.get("peer_id"))),
                         })
                         continue
                     row_session = session
@@ -16319,7 +16440,7 @@ class Runner:
                         },
                         "myudp": self._session_retransmit_stats(row_session),
                         "secure_link": dict(p.get("secure_link") or RunnerMuxAggregate._default_secure_link_snapshot()),
-                        "compress_layer": dict(self._session_compress_layer_snapshot(session)),
+                        "compress_layer": dict(self._session_compress_layer_snapshot(session, peer_id=p.get("peer_id"))),
                     })
                 continue
 
@@ -16753,7 +16874,12 @@ class Runner:
     @staticmethod
     def _maybe_wrap_compress_layer(args: argparse.Namespace, transport_name: str, session: ISession) -> ISession:
         enabled = bool(getattr(args, "compress_layer", True))
-        if not enabled:
+        peer_host = str(getattr(args, "peer", "") or "").strip()
+        # Peer servers keep a passive compression wrapper even when their local
+        # config disables outbound compression. This lets a compression-capable
+        # listener decode client-selected compressed frames and activate
+        # compression only for peers that actually use it.
+        if not enabled and peer_host:
             return session
         algo = str(getattr(args, "compress_layer_algo", "zlib") or "zlib").strip().lower()
         if algo != "zlib":
