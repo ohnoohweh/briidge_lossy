@@ -101,6 +101,27 @@ Expected semantics of that input profile:
 - `roles` are expected to be machine-enforced by the project rather than treated as informational only
 - the signed certificate body is expected to exclude the `signature` field itself and follow one canonical serialization rule
 
+## Compression responsibility boundary
+
+For the mux-aware compression capability, the surrounding system boundary is:
+
+- External assumption:
+  - a proven compression implementation is available on the platform (the current implementation uses Python stdlib `zlib`)
+- Project responsibility:
+  - decide when compression should be attempted for eligible mux frame types
+  - enforce no-gain bypass so frames stay uncompressed when compression does not reduce size
+  - decode compressed mux frames safely with bounded output checks
+  - expose compression state and counters to operators through API and WebAdmin
+- Out of scope:
+  - inventing a novel compression algorithm specifically for ObstacleBridge tunnels
+  - replacing or reimplementing primitive compression internals that are already provided by mature libraries
+
+More concretely:
+
+- ObstacleBridge is expected to integrate compression policy into the overlay lifecycle and frame boundary.
+- ObstacleBridge is not expected to become a new compression-research project.
+- The project intentionally prefers state-of-the-art, maintained compression libraries over custom codec invention.
+
 ## Use-case boundary mapping
 
 ### NAS behind outbound-only internet
