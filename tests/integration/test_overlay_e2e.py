@@ -2498,11 +2498,23 @@ def _conn_rows_with_traffic(doc: dict) -> list[dict]:
 def _connections_totals(doc: dict) -> tuple[int, int]:
     rx_total = 0
     tx_total = 0
-    for key in ('udp', 'tcp'):
+    for key in ('udp', 'tcp', 'tun'):
         for row in doc.get(key, []) or []:
             stats = row.get('stats') or {}
             rx_total += int(stats.get('rx_bytes', 0) or 0)
             tx_total += int(stats.get('tx_bytes', 0) or 0)
+    return rx_total, tx_total
+
+
+def _peer_traffic_totals(doc: dict) -> tuple[int, int]:
+    rx_total = 0
+    tx_total = 0
+    for row in doc.get('peers', []) or []:
+        if str(row.get('state', '')).strip().lower() == 'listening':
+            continue
+        traffic = row.get('traffic') or {}
+        rx_total += int(traffic.get('rx_bytes', 0) or 0)
+        tx_total += int(traffic.get('tx_bytes', 0) or 0)
     return rx_total, tx_total
 
 
@@ -2561,7 +2573,7 @@ def wait_exact_transferred_bytes(
 ) -> dict:
     end = time.time() + timeout
     last_conn = None
-    last_status = None
+    last_peers = None
     while time.time() < end:
         _code, conn_doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/connections', timeout=1.5)
         last_conn = conn_doc
@@ -2578,33 +2590,31 @@ def wait_exact_transferred_bytes(
             return conn_doc
 
         # TCP probes can disconnect too quickly for /api/connections polling to
-        # observe a live row. Validate exact byte totals via aggregate counters.
-        _status_code, status_doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.5)
-        last_status = status_doc
-        app_traffic = (status_doc.get('traffic') or {}).get('app') or {}
-        app_rx = int(app_traffic.get('rx_total_bytes', 0) or 0)
-        app_tx = int(app_traffic.get('tx_total_bytes', 0) or 0)
-        if app_rx >= expected_bytes and app_tx >= expected_bytes:
+        # observe a live row. Validate byte totals via peer-scoped counters.
+        _peers_code, peers_doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
+        last_peers = peers_doc
+        peer_rx, peer_tx = _peer_traffic_totals(peers_doc)
+        if peer_rx >= expected_bytes and peer_tx >= expected_bytes:
             who = f' {label}' if label else ''
             log.info(
-                '[METRICS]%s port=%s aggregate bytes reached rx=%s tx=%s',
+                '[METRICS]%s port=%s peer bytes reached rx=%s tx=%s',
                 who,
                 admin_port,
-                app_rx,
-                app_tx,
+                peer_rx,
+                peer_tx,
             )
             return conn_doc
         time.sleep(0.25)
     raise RuntimeError(
         f'Exact byte counters not reached on port {admin_port}; expected={expected_bytes}; '
-        f'last_connections={last_conn!r}; last_status={last_status!r}'
+        f'last_connections={last_conn!r}; last_peers={last_peers!r}'
     )
 
 
 def wait_connections_metrics_updated(admin_port: int, timeout: float = 8.0, label: str = '') -> dict:
     end = time.time() + timeout
     last_doc = None
-    last_status = None
+    last_peers = None
     while time.time() < end:
         _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/connections', timeout=1.5)
         last_doc = doc
@@ -2616,24 +2626,24 @@ def wait_connections_metrics_updated(admin_port: int, timeout: float = 8.0, labe
 
         # TCP probes can be very short-lived, so a connection may complete and tear
         # down before /api/connections polling observes a live row. In that case,
-        # accept aggregate app counters from /api/status as proof of traffic.
-        _status_code, status_doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.5)
-        last_status = status_doc
-        app_traffic = (status_doc.get('traffic') or {}).get('app') or {}
-        if int(app_traffic.get('rx_total_bytes', 0) or 0) > 0 and int(app_traffic.get('tx_total_bytes', 0) or 0) > 0:
+        # accept peer-scoped counters from /api/peers as proof of traffic.
+        _peers_code, peers_doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
+        last_peers = peers_doc
+        peer_rx, peer_tx = _peer_traffic_totals(peers_doc)
+        if peer_rx > 0 and peer_tx > 0:
             who = f' {label}' if label else ''
             log.info(
-                '[METRICS]%s port=%s aggregate traffic rx=%s tx=%s',
+                '[METRICS]%s port=%s peer traffic rx=%s tx=%s',
                 who,
                 admin_port,
-                int(app_traffic.get('rx_total_bytes', 0) or 0),
-                int(app_traffic.get('tx_total_bytes', 0) or 0),
+                peer_rx,
+                peer_tx,
             )
             return doc
         time.sleep(0.25)
     raise RuntimeError(
         f'/api/connections metrics not updated on port {admin_port}; '
-        f'last_connections={last_doc!r}; last_status={last_status!r}'
+        f'last_connections={last_doc!r}; last_peers={last_peers!r}'
     )
 
 
@@ -4210,22 +4220,22 @@ def run_case_concurrent_tcp_channels(case: Case, log_dir: Path, case_index: int,
             if udp_probe_2 != b'\x02udp-two':
                 raise RuntimeError(f'Unexpected UDP probe response on {udp_probe_2_port}: {udp_probe_2!r}')
 
-        phase('6. Validate /api/connections and /api/status traffic counters')
+        phase('6. Validate /api/connections and /api/peers traffic counters')
         expected_bytes = sum(len(p) for p in payloads)
         for proc in (server_proc, client_proc):
             end = time.time() + 8.0
+            peer_rx = peer_tx = 0
+            peers_doc = {}
             while time.time() < end:
-                _status_code, status_doc = fetch_json(f'http://127.0.0.1:{proc.admin_port}/api/status', timeout=1.5)
-                app_traffic = (status_doc.get('traffic') or {}).get('app') or {}
-                app_rx = int(app_traffic.get('rx_total_bytes', 0) or 0)
-                app_tx = int(app_traffic.get('tx_total_bytes', 0) or 0)
-                if app_rx >= expected_bytes and app_tx >= expected_bytes:
+                _peers_code, peers_doc = fetch_json(f'http://127.0.0.1:{proc.admin_port}/api/peers', timeout=1.5)
+                peer_rx, peer_tx = _peer_traffic_totals(peers_doc)
+                if peer_rx >= expected_bytes and peer_tx >= expected_bytes:
                     break
                 time.sleep(0.25)
             else:
                 raise RuntimeError(
-                    f'/api/status app totals too small for {proc.name}: '
-                    f'rx={app_rx} tx={app_tx} expected_at_least={expected_bytes}'
+                    f'/api/peers traffic totals too small for {proc.name}: '
+                    f'rx={peer_rx} tx={peer_tx} expected_at_least={expected_bytes}; peers={peers_doc!r}'
                 )
 
             _code, conn_doc = fetch_json(f'http://127.0.0.1:{proc.admin_port}/api/connections', timeout=1.5)
@@ -6919,7 +6929,7 @@ def test_overlay_e2e_tcp_secure_link_psk_happy_path(tmp_path: Path) -> None:
             assert int(client_secure.get('authenticated_sessions_total') or 0) >= 1
             assert client_secure.get('last_authenticated_unix_ts') is not None
             _status_code, client_status = fetch_json(f'http://127.0.0.1:{client_proc.admin_port}/api/status', timeout=1.5)
-            assert bool((client_status.get('compress_layer') or {}).get('enabled'))
+            assert 'compress_layer' not in client_status
         finally:
             if bounce is not None:
                 bounce.stop()
@@ -6960,8 +6970,8 @@ def test_overlay_e2e_tcp_secure_link_psk_compress_layer_disabled(tmp_path: Path)
             wait_peer_compress_layer_stats(server_proc.admin_port or 0, timeout=12.0, label='server', transport='tcp', enabled=False)
             _status_code, client_status = fetch_json(f'http://127.0.0.1:{client_proc.admin_port}/api/status', timeout=1.5)
             _status_code, server_status = fetch_json(f'http://127.0.0.1:{server_proc.admin_port}/api/status', timeout=1.5)
-            assert not bool((client_status.get('compress_layer') or {}).get('enabled'))
-            assert not bool((server_status.get('compress_layer') or {}).get('enabled'))
+            assert 'compress_layer' not in client_status
+            assert 'compress_layer' not in server_status
         finally:
             if bounce is not None:
                 bounce.stop()

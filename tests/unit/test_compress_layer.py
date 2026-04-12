@@ -123,6 +123,11 @@ class CompressLayerSessionTests(unittest.TestCase):
         _chan, _proto, _counter, sent_mtype, sent_body = self._unpack_mux(sent_payload)
         self.assertEqual(sent_mtype, 0x00)
         self.assertEqual(sent_body, body)
+        snap = wrapper.get_compress_layer_status_snapshot()
+        self.assertEqual(int(snap["compress_attempts_total"]), 1)
+        self.assertEqual(int(snap["compress_skipped_no_gain_total"]), 1)
+        self.assertEqual(int(snap["compress_input_bytes_total"]), len(body))
+        self.assertEqual(int(snap["compress_output_bytes_total"]), len(body))
 
     def test_receive_invalid_compressed_frame_is_dropped(self):
         inner = FakeInnerSession()

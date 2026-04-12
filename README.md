@@ -683,10 +683,10 @@ Behavior summary:
 
 Observability:
 
-- `/api/status` includes aggregate `compress_layer` counters
-- `/api/peers` includes per-peer `compress_layer` counters
-- WebAdmin shows aggregate compression statistics only when compression is active for the runtime
-- On peer servers, WebAdmin shows compression on peer rows only for peer connections where the peer client activated compression
+- `/api/status` omits compression counters; compression telemetry is peer-scoped
+- `/api/peers` includes per-peer `compress_layer` counters and peer traffic rates
+- WebAdmin shows compression statistics only inside peer rows
+- On peer servers, WebAdmin shows compression on peer rows only for connected peer rows where the peer client activated compression
 
 To explicitly run without compression on both peers, set:
 
@@ -838,7 +838,8 @@ What to look for in WebAdmin first:
 API fallback for details not fully surfaced in WebAdmin yet:
 
 - `/api/peers` shows the peer row with `secure_link.authenticated=true`
-- `/api/status` remains limited to common runtime summary fields such as uptime, aggregate open-channel counts, and aggregate traffic rates
+- `/api/status` remains limited to runtime metadata and aggregate secure-link reload/apply summaries
+- connection, traffic, and compression telemetry are exposed through `/api/connections` and peer-scoped `/api/peers` rows
 - if the PSK does not match, the client and server stay disconnected and the failure is reported as:
   - `secure_link.state=failed`
   - `failure_code=1`
