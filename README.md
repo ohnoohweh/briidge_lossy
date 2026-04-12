@@ -551,58 +551,8 @@ Expected behavior:
 - On connected peer: bind TCP listener on `0.0.0.0:3128`, and connect forwarded TCP channel to `127.0.0.1:3128`.
 - Initiating peer sends a dedicated mux control command after overlay connection so the remote side can install or refresh the requested service catalog.
 
-### Admin web
-| Option(s) | Default | Description |
-|---|---:|---|
-| `--admin-web` | `True` | Enable admin web interface |
-| `--admin-web-bind` | `127.0.0.1` | Bind address for admin web interface |
-| `--admin-web-port` | `18080` | Port for admin web interface |
-| `--admin-web-path` | `/` | Base path for admin web interface |
-| `--admin-web-dir` | `./admin_web` | Directory containing admin web files |
-| `--admin-web-name` | `` | Optional instance name shown in the admin web window title and headline |
-| `--admin-web-token` | `` | Optional bearer token for admin restart endpoint |
-| `--admin-web-auth-disable` | `False` | Disable admin web username/password challenge |
-| `--admin-web-username` | `` | Username for admin web access when challenge-based authentication is enabled |
-| `--admin-web-password` | `` | Password for admin web access when challenge-based authentication is enabled; redacted from admin config snapshots |
-| `--admin-web-log-max-lines` | `1200` | Maximum number of debug log lines kept in memory for the admin web log view |
-
-When `--admin-web-username` and `--admin-web-password` are configured and auth is not disabled, the admin web page requires a challenge-response login. The browser requests a one-time seed, hashes `seed:username:password` client-side, and sends only the hash proof back to the server. The login flow works over HTTP as well as HTTPS; when the browser is not in a secure context, the admin page uses a JavaScript SHA-256 fallback instead of Web Crypto. The configured password is not returned by the admin config API.
-
-Saving configuration changes uses a second challenge-response confirmation bound to the exact update block, so the current admin password must be re-entered before the server applies guarded config writes.
-
-The admin-web design note in [docs/WEBADMIN_DESIGN.md](docs/WEBADMIN_DESIGN.md) explains the applied auth, session, live-update, and secret-redaction concepts in more detail.
-
-What the admin web shows:
-
-- A summary row with the currently open UDP and TCP channel counts.
-- Traffic cards for app-side RX/TX and peer-side RX/TX rates.
-- A peer-session table that now groups each peer into connection, protocol, security, and lifecycle rows so secure-link state stays with the peer it belongs to.
-- UDP and TCP connection tables that show current mappings, local listening ports, remote endpoints, and per-channel byte/message counters.
-- A peer-scoped rekey action inside each peer security block for operator-triggered secure-link rotation on authenticated client-side sessions.
-- A configuration tab that exposes the live runtime options such as overlay transports, listener ports, `--remote-servers`, admin web settings, and log levels.
-- Structured service editors for `own_servers` and `remote_servers`, so services can be added and changed through protocol-aware fields instead of manual config-file editing.
-- A debug log tab with recent in-memory log lines, which is especially useful while investigating channel setup, backpressure, reconnects, and late-data cases.
-
-### Logging
-| Option(s) | Default | Description |
-|---|---:|---|
-| `--log` | `WARNING` | logging level (default WARNING; try INFO or DEBUG) be aware of --console-level and --file-level |
-| `--log-file` | `None` | file path to also write logs enabled by --log |
-| `--log-file-max-bytes` | `0` | Maximum on-disk log file size in bytes before rotation; `0` disables rotation |
-| `--log-file-backup-count` | `5` | Number of rotated log files to keep when `--log-file-max-bytes` is enabled |
-| `--console-level` | `INFO` | console (stdout) logging level (default INFO) |
-| `--file-level` | `DEBUG` | file logging level (default: same as --log) |
-| `--debug-stderr` | `False` | mirror DEBUG lines to stderr (default: off) |
-
-### Runner
-| Option(s) | Default | Description |
-|---|---:|---|
-| `--overlay-transport` | `myudp` | Overlay transport between peers: comma-separated list from myudp,tcp,quic,ws. Multiple transports are supported simultaneously for listening instances. |
-| `--overlay-reconnect-retry-delay-ms` | `30000` | Delay in milliseconds between failed reconnect attempts for `tcp`/`quic`/`ws` client overlays. |
-| `--client-restart-if-disconnected` | `0.0` | If configured as a peer client (for example --udp-peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables. |
-
-### Advanced service lifecycle hooks
-This is an expert feature and is intentionally documented here (CLI/advanced area), not in the quick-start onboarding path.
+#### Advanced service lifecycle hooks
+This is an expert feature and is intentionally documented with the ChannelMux service catalogs, because hooks belong to structured `own_servers` and `remote_servers` entries.
 
 Service definitions can include optional `lifecycle_hooks` commands.
 
@@ -660,6 +610,56 @@ TUN route hook example with Linux + Windows command variants. This snippet is in
 }
 ```
 
+### Admin web
+| Option(s) | Default | Description |
+|---|---:|---|
+| `--admin-web` | `True` | Enable admin web interface |
+| `--admin-web-bind` | `127.0.0.1` | Bind address for admin web interface |
+| `--admin-web-port` | `18080` | Port for admin web interface |
+| `--admin-web-path` | `/` | Base path for admin web interface |
+| `--admin-web-dir` | `./admin_web` | Directory containing admin web files |
+| `--admin-web-name` | `` | Optional instance name shown in the admin web window title and headline |
+| `--admin-web-token` | `` | Optional bearer token for admin restart endpoint |
+| `--admin-web-auth-disable` | `False` | Disable admin web username/password challenge |
+| `--admin-web-username` | `` | Username for admin web access when challenge-based authentication is enabled |
+| `--admin-web-password` | `` | Password for admin web access when challenge-based authentication is enabled; redacted from admin config snapshots |
+| `--admin-web-log-max-lines` | `1200` | Maximum number of debug log lines kept in memory for the admin web log view |
+
+When `--admin-web-username` and `--admin-web-password` are configured and auth is not disabled, the admin web page requires a challenge-response login. The browser requests a one-time seed, hashes `seed:username:password` client-side, and sends only the hash proof back to the server. The login flow works over HTTP as well as HTTPS; when the browser is not in a secure context, the admin page uses a JavaScript SHA-256 fallback instead of Web Crypto. The configured password is not returned by the admin config API.
+
+Saving configuration changes uses a second challenge-response confirmation bound to the exact update block, so the current admin password must be re-entered before the server applies guarded config writes.
+
+The admin-web design note in [docs/WEBADMIN_DESIGN.md](docs/WEBADMIN_DESIGN.md) explains the applied auth, session, live-update, and secret-redaction concepts in more detail.
+
+What the admin web shows:
+
+- A summary row with the currently open UDP and TCP channel counts.
+- Traffic cards for app-side RX/TX and peer-side RX/TX rates.
+- A peer-session table that now groups each peer into connection, protocol, security, and lifecycle rows so secure-link state stays with the peer it belongs to.
+- UDP and TCP connection tables that show current mappings, local listening ports, remote endpoints, and per-channel byte/message counters.
+- A peer-scoped rekey action inside each peer security block for operator-triggered secure-link rotation on authenticated client-side sessions.
+- A configuration tab that exposes the live runtime options such as overlay transports, listener ports, `--remote-servers`, admin web settings, and log levels.
+- Structured service editors for `own_servers` and `remote_servers`, so services can be added and changed through protocol-aware fields instead of manual config-file editing.
+- A debug log tab with recent in-memory log lines, which is especially useful while investigating channel setup, backpressure, reconnects, and late-data cases.
+
+### Logging
+| Option(s) | Default | Description |
+|---|---:|---|
+| `--log` | `WARNING` | logging level (default WARNING; try INFO or DEBUG) be aware of --console-level and --file-level |
+| `--log-file` | `None` | file path to also write logs enabled by --log |
+| `--log-file-max-bytes` | `0` | Maximum on-disk log file size in bytes before rotation; `0` disables rotation |
+| `--log-file-backup-count` | `5` | Number of rotated log files to keep when `--log-file-max-bytes` is enabled |
+| `--console-level` | `INFO` | console (stdout) logging level (default INFO) |
+| `--file-level` | `DEBUG` | file logging level (default: same as --log) |
+| `--debug-stderr` | `False` | mirror DEBUG lines to stderr (default: off) |
+
+### Runner
+| Option(s) | Default | Description |
+|---|---:|---|
+| `--overlay-transport` | `myudp` | Overlay transport between peers: comma-separated list from myudp,tcp,quic,ws. Multiple transports are supported simultaneously for listening instances. |
+| `--overlay-reconnect-retry-delay-ms` | `30000` | Delay in milliseconds between failed reconnect attempts for `tcp`/`quic`/`ws` client overlays. |
+| `--client-restart-if-disconnected` | `0.0` | If configured as a peer client (for example --udp-peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables. |
+
 ### Compression layer
 
 Compression is now enabled by default and runs below `ChannelMux` and above secure-link/session wrappers.
@@ -669,8 +669,8 @@ Behavior summary:
 - eligible mux frame types are compressed opportunistically
 - if compression does not shrink the payload, the frame is sent uncompressed
 - compressed frames use `0x80 + base_mtype` signaling, then are restored before `ChannelMux` processing on RX
-- peer clients may use compression settings that differ from the peer server; the receiver detects compressed frames from the mux `mtype` high bit and decodes them without requiring mirrored local thresholds or levels
-- for peer-server deployments, tune compression from the peer-client side first; server-side compression settings do not need to match the client for the client-to-server data path
+- peer clients define whether a peer connection uses compression; peer-server listeners keep a passive decoder and activate compression statistics/replies only after a peer sends a valid compressed frame
+- peer-server local compression settings do not need to match the client; after activation, the server compresses replies for that peer using the baseline `zlib` policy
 
 #### Compression parameters
 | Option(s) | Default | Description |
@@ -685,7 +685,8 @@ Observability:
 
 - `/api/status` includes aggregate `compress_layer` counters
 - `/api/peers` includes per-peer `compress_layer` counters
-- WebAdmin shows compression statistics only when compression is enabled for the runtime
+- WebAdmin shows aggregate compression statistics only when compression is active for the runtime
+- On peer servers, WebAdmin shows compression on peer rows only for peer connections where the peer client activated compression
 
 To explicitly run without compression on both peers, set:
 
@@ -1035,7 +1036,7 @@ Optional operations follow-up:
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 - Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `142` integration tests, `177` unit tests. Latest local Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` completed with `134 passed`. The focused SecureLink PSK slice `RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` completed with `25 passed, 111 deselected`. Current branch validation also includes the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"` and the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`.
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `146` integration tests, `179` unit tests. Latest local Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` completed with `134 passed` before the latest focused integration additions. The focused compression/admin/lifecycle requirement-gap run completed with `5 passed, 135 deselected`, and the focused SecureLink PSK slice `RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` completed with `25 passed, 111 deselected`. Current branch validation also includes the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"` and the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`.
 
 For changes that touch `src/obstacle_bridge/bridge.py`, the most important regression signal after opening a pull request is the Linux shared integration lane in GitHub CI. Windows-local integration execution is still useful for targeted investigation, but it is not currently the most reliable green/red indicator for broad regression confidence on this branch history.
 
@@ -1044,11 +1045,11 @@ The shared integration harness now generates localhost TLS test certificates in 
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `72/79 = 91.1%`
+- Integration-covered: `79/79 = 100.0%`
 - Unit-covered: `58/79 = 73.4%`
 - Any-test-covered: `79/79 = 100.0%`
 - Tracked in manifest: `79/79 = 100.0%`
-- Requirements without integration coverage: `REQ-ADM-007`, `REQ-ADM-008`, `REQ-ADM-009`, `REQ-ADM-010`, `REQ-LIFE-006`, `REQ-LIFE-007`, `REQ-LIFE-008`
+- Requirements without integration coverage: `(none)`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
 

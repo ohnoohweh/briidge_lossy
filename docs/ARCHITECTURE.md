@@ -325,6 +325,7 @@ Current contribution:
 
 - per-frame stateless compression and decompression
 - no-gain bypass (frames remain uncompressed when there is no size win)
+- passive peer-server decode/activation so listener rows expose compression only for peers that selected it
 - bounded decode guardrails for malformed or oversized compressed payloads
 - aggregate and per-peer counters surfaced through Admin API and WebAdmin
 

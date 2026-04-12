@@ -331,6 +331,14 @@ class RunnerOverlayTransportTests(unittest.TestCase):
         self.assertEqual([name for name, _ in sessions], ['tcp'])
         self.assertIsInstance(sessions[0][1], CompressLayerSession)
 
+    def test_build_sessions_from_overlay_keeps_passive_compress_decoder_on_listener(self):
+        args = _args(overlay_transport='tcp', tcp_peer=None, compress_layer=False)
+        with mock.patch.object(TcpStreamSession, 'from_args', return_value=mock.Mock(spec=TcpStreamSession)):
+            sessions = Runner.build_sessions_from_overlay(args)
+        self.assertEqual([name for name, _ in sessions], ['tcp'])
+        self.assertIsInstance(sessions[0][1], CompressLayerSession)
+        self.assertFalse(sessions[0][1].get_compress_layer_status_snapshot()["enabled"])
+
     def test_build_sessions_from_overlay_wraps_compress_layer_above_secure_link(self):
         args = _args(
             overlay_transport='tcp',

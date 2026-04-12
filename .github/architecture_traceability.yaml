@@ -48,6 +48,7 @@ ARC-CMP-004:
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_cert
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_compress_layer
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_enables_compress_layer_by_default
+    - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_keeps_passive_compress_decoder_on_listener
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_compress_layer_above_secure_link
     - tests/unit/test_runner_overlay_transports.py::test_request_secure_link_reload_targets_matching_peer_id_only
     - tests/unit/test_runner_overlay_transports.py::test_request_secure_link_reload_rejects_unknown_peer_id
@@ -69,6 +70,8 @@ ARC-CMP-004:
     - tests/unit/test_config_bootstrap_cli.py::test_parse_args_empty_config_is_treated_as_first_start
     - tests/unit/test_config_bootstrap_cli.py::test_parse_args_invalid_json_config_raises_clear_error
   integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_reconnect_targets_selected_peer_id
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_default_entrypoint_config_bootstrap_and_webadmin_notice
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_secure_link_cert_happy_path_transports
@@ -87,6 +90,8 @@ ARC-CMP-005:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_compress_layer_disabled
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_compress_layer_mismatched_peer_settings
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_config_challenge_masks_and_saves_secrets_encrypted
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_onboarding_invite_api_masks_psk_and_returns_apply_updates
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_secure_link_cert_happy_path_transports
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_revocation_reload_happy_path
@@ -113,8 +118,10 @@ ARC-CMP-007:
     - tests/unit/test_compress_layer.py::test_send_app_compresses_when_profitable_and_restores_on_rx
     - tests/unit/test_compress_layer.py::test_receive_invalid_compressed_frame_is_dropped
     - tests/unit/test_compress_layer.py::test_receive_compressed_frame_exceeding_cap_is_dropped
+    - tests/unit/test_compress_layer.py::test_server_passive_wrapper_activates_peer_after_compressed_rx
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_compress_layer
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_enables_compress_layer_by_default
+    - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_keeps_passive_compress_decoder_on_listener
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_compress_layer_above_secure_link
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
     - tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_secure_link_rows

@@ -138,6 +138,51 @@ class CompressLayerSessionTests(unittest.TestCase):
         snap = wrapper.get_compress_layer_status_snapshot()
         self.assertEqual(int(snap["decompress_fail_total"]), 1)
 
+    def test_server_passive_wrapper_activates_peer_after_compressed_rx(self):
+        inner = FakeInnerSession()
+        wrapper = CompressLayerSession(
+            inner,
+            self._args(
+                compress_layer=False,
+                compress_layer_min_bytes=4096,
+                compress_layer_level=1,
+                compress_layer_types="data",
+            ),
+            "tcp",
+        )
+        out = []
+        wrapper.set_on_app_payload(lambda p, peer_id=None: out.append((bytes(p), peer_id)))
+        peer_id = 44
+        payload = self._pack_mux(0x00, b"C" * 512)
+
+        self.assertFalse(wrapper.get_compress_layer_status_snapshot(peer_id=peer_id)["enabled"])
+        self.assertEqual(wrapper.send_app(payload, peer_id=peer_id), len(payload))
+        sent_before_active, _ = inner.sent[-1]
+        self.assertEqual(self._unpack_mux(sent_before_active)[3], 0x00)
+
+        compressed_in = self._pack_mux(0x80, zlib.compress(b"D" * 512, 9))
+        wrapper._on_inner_payload(compressed_in, peer_id=peer_id)
+        self.assertEqual(len(out), 1)
+        self.assertTrue(wrapper.get_compress_layer_status_snapshot(peer_id=peer_id)["enabled"])
+        self.assertEqual(wrapper.get_compress_layer_status_snapshot(peer_id=peer_id)["min_bytes"], 64)
+
+        self.assertEqual(wrapper.send_app(payload, peer_id=peer_id), len(payload))
+        sent_after_active, _ = inner.sent[-1]
+        self.assertEqual(self._unpack_mux(sent_after_active)[3], 0x80)
+        self.assertGreaterEqual(
+            int(wrapper.get_compress_layer_status_snapshot(peer_id=peer_id)["compress_applied_total"]),
+            1,
+        )
+
+        self.assertEqual(wrapper.send_app(payload), len(payload))
+        sent_routed_later, routed_peer_id = inner.sent[-1]
+        self.assertIsNone(routed_peer_id)
+        self.assertEqual(self._unpack_mux(sent_routed_later)[3], 0x80)
+        self.assertGreaterEqual(
+            int(wrapper.get_compress_layer_status_snapshot(peer_id=peer_id)["compress_applied_total"]),
+            2,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
