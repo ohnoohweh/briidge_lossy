@@ -98,6 +98,19 @@ class CompressLayerSessionTests(unittest.TestCase):
         self.assertEqual(restored_peer_id, 11)
         self.assertEqual(restored_payload, payload)
 
+    def test_client_peer_snapshot_reports_configured_enabled_before_counters_exist(self):
+        inner = FakeInnerSession()
+        wrapper = CompressLayerSession(
+            inner,
+            self._args(peer="127.0.0.1", compress_layer=True),
+            "tcp",
+        )
+
+        snap = wrapper.get_compress_layer_status_snapshot(peer_id=0)
+
+        self.assertTrue(snap["enabled"])
+        self.assertEqual(int(snap["compress_applied_total"]), 0)
+
     def test_send_app_bypasses_when_no_gain(self):
         inner = FakeInnerSession()
         wrapper = CompressLayerSession(inner, self._args(compress_layer_min_bytes=1), "tcp")

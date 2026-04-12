@@ -116,6 +116,7 @@ ARC-CMP-006:
 ARC-CMP-007:
   unit_tests:
     - tests/unit/test_compress_layer.py::test_send_app_compresses_when_profitable_and_restores_on_rx
+    - tests/unit/test_compress_layer.py::test_client_peer_snapshot_reports_configured_enabled_before_counters_exist
     - tests/unit/test_compress_layer.py::test_receive_invalid_compressed_frame_is_dropped
     - tests/unit/test_compress_layer.py::test_receive_compressed_frame_exceeding_cap_is_dropped
     - tests/unit/test_compress_layer.py::test_server_passive_wrapper_activates_peer_after_compressed_rx

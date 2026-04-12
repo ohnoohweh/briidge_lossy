@@ -297,6 +297,7 @@ REQ-AUT-020:
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
     - tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_secure_link_rows
     - tests/unit/test_compress_layer.py::test_send_app_compresses_when_profitable_and_restores_on_rx
+    - tests/unit/test_compress_layer.py::test_client_peer_snapshot_reports_configured_enabled_before_counters_exist
     - tests/unit/test_compress_layer.py::test_receive_invalid_compressed_frame_is_dropped
     - tests/unit/test_compress_layer.py::test_receive_compressed_frame_exceeding_cap_is_dropped
     - tests/unit/test_compress_layer.py::test_server_passive_wrapper_activates_peer_after_compressed_rx

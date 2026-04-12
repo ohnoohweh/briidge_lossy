@@ -3,7 +3,7 @@
 This repository currently collects:
 
 - `146` integration tests across [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py), [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py), and [tests/integration/test_reconnect_regression.py](../tests/integration/test_reconnect_regression.py)
-- `179` unit tests in `tests/unit/`
+- `180` unit tests in `tests/unit/`
 
 Recent test/content updates:
 

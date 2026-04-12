@@ -4937,7 +4937,7 @@ class CompressLayerSession(ISession):
             if not isinstance(stats, dict) and self._is_peer_client:
                 stats = self._peer_compress.get(self._peer_key(None))
             if not isinstance(stats, dict):
-                return self._compress_snapshot_from_counters({}, enabled=False)
+                return self._compress_snapshot_from_counters({}, enabled=bool(self._configured_enabled) if self._is_peer_client else False)
             enabled = bool(self._configured_enabled) if self._is_peer_client else bool(stats.get("active"))
             if not self._is_peer_client and enabled:
                 return self._compress_snapshot_from_counters(

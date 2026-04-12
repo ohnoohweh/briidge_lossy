@@ -6899,6 +6899,8 @@ def test_overlay_e2e_tcp_secure_link_psk_happy_path(tmp_path: Path) -> None:
             wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
             wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
             wait_peer_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', transport='tcp', authenticated=True)
+            compressible_payload = b'\x21' + (b'C' * 1400)
+            wait_probe(case, payload=compressible_payload, expected=response_payload(compressible_payload), timeout=12.0)
             wait_peer_compress_layer_stats(client_proc.admin_port or 0, timeout=12.0, label='client', transport='tcp', enabled=True)
             wait_peer_compress_layer_stats(server_proc.admin_port or 0, timeout=12.0, label='server', transport='tcp', enabled=True)
             req = urllib.request.Request(
