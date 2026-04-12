@@ -165,6 +165,27 @@ class _MuxWithListeners:
         }
 
 
+class _MuxWithMutableTun:
+    def __init__(self):
+        self.rx_bytes = 100
+        self.tx_bytes = 200
+
+    def snapshot_connections(self):
+        return {
+            "udp": [],
+            "tcp": [],
+            "tun": [
+                {
+                    "protocol": "tun",
+                    "state": "connected",
+                    "chan_id": 101,
+                    "stats": {"rx_bytes": self.rx_bytes, "tx_bytes": self.tx_bytes},
+                }
+            ],
+            "counts": {"udp": 0, "tcp": 0, "tun": 1, "udp_listening": 0, "tcp_listening": 0},
+        }
+
+
 class RunnerPeerSnapshotTests(unittest.TestCase):
     def test_peer_open_connections_excludes_idle_listeners(self):
         args = argparse.Namespace(no_dashboard=True, overlay_transport="myudp")
@@ -180,6 +201,29 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(peer["open_connections"]["tcp"], 0)
         self.assertEqual(peer["traffic"]["rx_bytes"], 1234)
         self.assertEqual(peer["traffic"]["tx_bytes"], 4321)
+
+    def test_peer_snapshot_includes_tun_payload_and_rates(self):
+        args = argparse.Namespace(no_dashboard=True, overlay_transport="myudp")
+        runner = Runner(args)
+        mux = _MuxWithMutableTun()
+        runner._sessions = [_PeerSession()]
+        runner._muxes = [mux]
+        runner._session_labels = ["myudp"]
+
+        first = runner.get_peer_connections_snapshot()["peers"][0]
+        self.assertEqual(first["open_connections"]["tun"], 1)
+        self.assertEqual(first["traffic"]["rx_bytes"], 100)
+        self.assertEqual(first["traffic"]["tx_bytes"], 200)
+        self.assertEqual(first["traffic"]["rx_bytes_per_sec"], 0.0)
+        self.assertEqual(first["traffic"]["tx_bytes_per_sec"], 0.0)
+
+        mux.rx_bytes = 612
+        mux.tx_bytes = 712
+        second = runner.get_peer_connections_snapshot()["peers"][0]
+        self.assertEqual(second["traffic"]["rx_bytes"], 612)
+        self.assertEqual(second["traffic"]["tx_bytes"], 712)
+        self.assertGreater(second["traffic"]["rx_bytes_per_sec"], 0.0)
+        self.assertGreater(second["traffic"]["tx_bytes_per_sec"], 0.0)
 
     def test_listener_snapshot_includes_myudp_listener_row(self):
         class _ListenerSession:

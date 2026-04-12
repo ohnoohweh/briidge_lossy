@@ -247,14 +247,16 @@ Per-session and per-peer counters:
 
 Derived ratio:
 
-- `compression_saving_ratio = 1 - (output_bytes / input_bytes)` for applied frames
+- `compress_input_bytes_total` counts payload bytes considered by attempted compression.
+- `compress_output_bytes_total` counts emitted payload bytes for those attempts, including original uncompressed payload bytes when compression is skipped because it does not reduce size.
+- `compression_saving_ratio = 1 - (output_bytes / input_bytes)` across attempted compression candidates.
 
 Admin/API behavior:
 
-- `/api/status` exposes aggregate compression state/statistics when compression is active in the runtime
-- `/api/peers` exposes peer-scoped compression counters for active peer rows
+- `/api/status` omits compression state/statistics; compression telemetry is peer-scoped
+- `/api/peers` exposes peer-scoped compression counters and peer traffic rates for active peer rows
 - on peer servers, peer rows show compression only for connections where the peer client has activated compression
-- WebAdmin hides aggregate compression statistics until compression is active
+- WebAdmin shows compression statistics only inside peer rows and hides them while a peer is still connecting
 
 ## Delivered Coverage
 

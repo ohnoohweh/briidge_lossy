@@ -522,6 +522,7 @@ REQ-MUX-006:
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_ws_secure_link_channel_open
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_opens_channel_and_sends_data
+    - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
 
 REQ-MUX-007:
   integration_tests:
@@ -629,6 +630,7 @@ REQ-ADM-006:
     - tests/unit/test_connection_snapshots.py::test_tcp_server_snapshot_includes_last_incoming_age_seconds
     - tests/unit/test_connection_snapshots.py::test_quic_client_snapshot_includes_last_incoming_age_seconds
     - tests/unit/test_connection_snapshots.py::test_quic_server_snapshot_includes_last_incoming_age_seconds
+    - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
     - tests/unit/test_ws_multi_peer.py::test_server_peer_snapshot_includes_last_incoming_age_seconds
     - tests/unit/test_ws_multi_peer.py::test_client_peer_snapshot_includes_last_incoming_age_seconds
