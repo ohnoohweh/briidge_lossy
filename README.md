@@ -345,6 +345,8 @@ sudo ip addr add 10.20.0.1/30 dev obtun0
 sudo ip link set obtun0 up
 ```
 
+For repeatable site-to-site setup, prefer lifecycle hooks over manual one-off commands. The hook examples later in this README show how to use the repo-provided Linux scripts [scripts/client-tun-hook.sh](scripts/client-tun-hook.sh) and [scripts/server-tun-hook.sh](scripts/server-tun-hook.sh) to assign tunnel addresses, bring interfaces up, preserve the overlay route, adjust the default route, configure DNS, enable forwarding/NAT, and remove rules idempotently on disconnect.
+
 Windows (WinTun) notes — tested path
 
 - ObstacleBridge uses a WinTun adapter on Windows. This requires the Wintun driver (tested with Wintun 0.14.1 from https://www.wintun.net/).
@@ -563,7 +565,99 @@ Hook execution model:
 - optional `timeout_ms` and `env` values are supported
 - placeholders are expanded from service/channel context (`{service_id}`, `{service_name}`, `{protocol}`, `{channel_id}`, `{ifname}`, `{target_host}`, `{target_port}`, `{listen_port}`, `{event}`, `{role}`, `{catalog}`, `{peer_id}`)
 
-TUN route hook example with Linux + Windows command variants. This snippet is intentionally shaped as a top-level config object so it can be pasted into the wizard/import flow:
+Full-tunnel TUN lifecycle hook example for Linux. The repo’s lifecycle hooks are a good fit for this because hook entries can stay simple while small scripts do the idempotent setup and teardown. Hooks use argv arrays with no implicit shell, so multi-step network setup should live in scripts instead of raw one-liners.
+
+The examples below use repo-local script paths (`./scripts/...`) for development. For production, copy these scripts to a root-owned location such as `/usr/local/libexec/obbridge/`, make them executable, and update the `argv` paths accordingly.
+
+What the scripts automate:
+
+- Server: assign `10.20.0.2/30` to `obtun1`, bring the interface up, enable IPv4 forwarding, add forwarding rules between `obtun1` and `eth0`, add NAT for `10.20.0.0/30`, optionally add TCP MSS clamping, and clean those rules up on disconnect.
+- Client: assign `10.20.0.1/30` to `obtun0`, bring the interface up, auto-detect or preserve the route to the overlay server public IP outside the tunnel, replace the default route via `10.20.0.2 dev obtun0`, set tunnel DNS, and restore the previous default route on disconnect.
+- Client environment: because hook placeholders do not include the original default gateway or overlay public peer IP, pass these explicitly with hook `env`.
+
+Server assumptions:
+
+- Server TUN interface: `obtun1`
+- Server tunnel address: `10.20.0.2/30`
+- Client tunnel address: `10.20.0.1`
+- WAN interface: `eth0`
+
+Server config fragment:
+
+```json
+{
+  "own_servers": [
+    {
+      "name": "site-b-tun",
+      "listen": {
+        "protocol": "tun",
+        "ifname": "obtun1",
+        "mtu": 1400
+      },
+      "target": {
+        "protocol": "tun",
+        "ifname": "obtun0",
+        "mtu": 1400
+      },
+      "lifecycle_hooks": {
+        "listener": {
+          "on_created": {
+            "argv": {
+              "linux": ["./scripts/server-tun-hook.sh", "up", "{ifname}"]
+            },
+            "env": {
+              "TUN_ADDR": "10.20.0.2/30",
+              "PEER_ADDR": "10.20.0.1",
+              "WAN_IF": "eth0",
+              "TUN_SUBNET": "10.20.0.0/30",
+              "ENABLE_TCPMSS": "1"
+            },
+            "timeout_ms": 15000
+          },
+          "on_channel_connected": {
+            "argv": {
+              "linux": ["./scripts/server-tun-hook.sh", "up", "{ifname}"]
+            },
+            "env": {
+              "TUN_ADDR": "10.20.0.2/30",
+              "PEER_ADDR": "10.20.0.1",
+              "WAN_IF": "eth0",
+              "TUN_SUBNET": "10.20.0.0/30",
+              "ENABLE_TCPMSS": "1"
+            },
+            "timeout_ms": 15000
+          },
+          "on_channel_closed": {
+            "argv": {
+              "linux": ["./scripts/server-tun-hook.sh", "down", "{ifname}"]
+            },
+            "env": {
+              "TUN_ADDR": "10.20.0.2/30",
+              "PEER_ADDR": "10.20.0.1",
+              "WAN_IF": "eth0",
+              "TUN_SUBNET": "10.20.0.0/30",
+              "ENABLE_TCPMSS": "1"
+            },
+            "timeout_ms": 15000
+          }
+        }
+      }
+    }
+  ]
+}
+```
+
+Client assumptions:
+
+- Client TUN interface: `obtun0`
+- Client tunnel address: `10.20.0.1/30`
+- Tunnel gateway/server tunnel address: `10.20.0.2`
+- Server overlay public IP: `146.70.81.180`
+- Client underlay interface: `auto`, or an explicit interface such as `eth0`
+- Client underlay gateway: `auto`, or an explicit gateway such as `192.168.1.1`
+- DNS servers: `1.1.1.1` and `8.8.8.8`
+
+Client config fragment:
 
 ```json
 {
@@ -584,24 +678,48 @@ TUN route hook example with Linux + Windows command variants. This snippet is in
         "listener": {
           "on_created": {
             "argv": {
-              "linux": ["ip", "link", "set", "dev", "{ifname}", "up"],
-              "windows": ["netsh", "interface", "set", "interface", "name={ifname}", "admin=enabled"]
+              "linux": ["./scripts/client-tun-hook.sh", "up", "{ifname}"]
             },
-            "timeout_ms": 10000
+            "env": {
+              "TUN_ADDR": "10.20.0.1/30",
+              "TUN_GW": "10.20.0.2",
+              "OVERLAY_PEER_IP": "146.70.81.180",
+              "UNDERLAY_IF": "auto",
+              "UNDERLAY_GW": "auto",
+              "DNS1": "1.1.1.1",
+              "DNS2": "8.8.8.8"
+            },
+            "timeout_ms": 15000
           },
           "on_channel_connected": {
             "argv": {
-              "linux": ["ip", "route", "replace", "{target_host}/32", "dev", "{ifname}"],
-              "windows": ["netsh", "interface", "ipv4", "add", "route", "prefix={target_host}/32", "interface={ifname}", "nexthop=0.0.0.0", "store=active"]
+              "linux": ["./scripts/client-tun-hook.sh", "up", "{ifname}"]
             },
-            "timeout_ms": 10000
+            "env": {
+              "TUN_ADDR": "10.20.0.1/30",
+              "TUN_GW": "10.20.0.2",
+              "OVERLAY_PEER_IP": "146.70.81.180",
+              "UNDERLAY_IF": "auto",
+              "UNDERLAY_GW": "auto",
+              "DNS1": "1.1.1.1",
+              "DNS2": "8.8.8.8"
+            },
+            "timeout_ms": 15000
           },
           "on_channel_closed": {
             "argv": {
-              "linux": ["ip", "route", "del", "{target_host}/32", "dev", "{ifname}"],
-              "windows": ["netsh", "interface", "ipv4", "delete", "route", "prefix={target_host}/32", "interface={ifname}", "store=active"]
+              "linux": ["./scripts/client-tun-hook.sh", "down", "{ifname}"]
             },
-            "timeout_ms": 10000
+            "env": {
+              "TUN_ADDR": "10.20.0.1/30",
+              "TUN_GW": "10.20.0.2",
+              "OVERLAY_PEER_IP": "146.70.81.180",
+              "UNDERLAY_IF": "auto",
+              "UNDERLAY_GW": "auto",
+              "DNS1": "1.1.1.1",
+              "DNS2": "8.8.8.8"
+            },
+            "timeout_ms": 15000
           }
         }
       }
@@ -609,6 +727,20 @@ TUN route hook example with Linux + Windows command variants. This snippet is in
   ]
 }
 ```
+
+Make the repo-local scripts executable after checkout if your filesystem did not preserve executable bits:
+
+```bash
+chmod 0750 ./scripts/server-tun-hook.sh ./scripts/client-tun-hook.sh
+```
+
+Operational notes:
+
+- Verify interface names before hardcoding `eth0`: `ip route get 1.1.1.1`.
+- Preserve the overlay peer route on the client. Without the `/32` route for `OVERLAY_PEER_IP` via the original gateway, the tunnel may try to carry its own transport packets and collapse.
+- DNS can explain cases where `ping` works but web pages do not. The client script uses `resolvectl`; adapt that part if the system does not use `systemd-resolved`.
+- Keep TCP MSS clamping enabled on the server (`ENABLE_TCPMSS=1`) when tunneling full-path traffic over a reduced MTU.
+- The server script uses `iptables -C` checks before adding rules, so repeated `up` hooks do not create duplicate firewall rules.
 
 ### Admin web
 | Option(s) | Default | Description |
@@ -633,10 +765,10 @@ The admin-web design note in [docs/WEBADMIN_DESIGN.md](docs/WEBADMIN_DESIGN.md) 
 
 What the admin web shows:
 
-- A summary row with the currently open UDP and TCP channel counts.
+- A summary row with the currently open UDP, TCP, and TUN channel counts.
 - Traffic cards for app-side RX/TX and peer-side RX/TX rates.
 - A peer-session table that now groups each peer into connection, protocol, security, and lifecycle rows so secure-link state stays with the peer it belongs to.
-- UDP and TCP connection tables that show current mappings, local listening ports, remote endpoints, and per-channel byte/message counters.
+- UDP, TCP, and TUN connection tables that show current mappings or interfaces, local listening state, remote endpoints, and per-channel byte/message counters.
 - A peer-scoped rekey action inside each peer security block for operator-triggered secure-link rotation on authenticated client-side sessions.
 - A configuration tab that exposes the live runtime options such as overlay transports, listener ports, `--remote-servers`, admin web settings, and log levels.
 - Structured service editors for `own_servers` and `remote_servers`, so services can be added and changed through protocol-aware fields instead of manual config-file editing.

@@ -810,6 +810,10 @@ function setProgress(id, value, maxScale = 256.0) {
 function fmtEndpoint(ep) {
   if (!ep) return 'n/a';
   if (Array.isArray(ep) && ep.length >= 2) return `${ep[0]}:${ep[1]}`;
+  if (typeof ep === 'object' && ep.ifname != null) {
+    const mtu = ep.mtu != null ? ` mtu ${ep.mtu}` : '';
+    return `${ep.ifname}${mtu}`;
+  }
   if (typeof ep === 'object' && ep.host != null && ep.port != null) return `${ep.host}:${ep.port}`;
   return String(ep);
 }
@@ -827,12 +831,12 @@ function roleClass(role) {
   return 'role-pill role-unknown';
 }
 
-function renderConnectionTable(tbodyId, rows) {
+function renderConnectionTable(tbodyId, rows, protocolLabel = 'Connection') {
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
 
   if (!rows || rows.length === 0) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="12">No ${tbodyId.startsWith('udp') ? 'UDP' : 'TCP'} connections</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="12">No ${escapeHtml(protocolLabel)} connections</td></tr>`;
     return;
   }
 
@@ -845,18 +849,55 @@ function renderConnectionTable(tbodyId, rows) {
     const isListening = state === 'listening';
     return `
       <tr>
-        <td class="mono">${fmtConnectionId(row.peer_id)}</td>
-        <td class="mono">${fmtChan(row.chan_id)}</td>
-        <td class="mono">${fmtInteger(row.svc_id)}</td>
-        <td><span class="${isListening ? 'role-pill role-unknown' : 'role-pill role-client'}">${state}</span></td>
-        <td><span class="${roleClass(row.role)}">${row.role || 'unknown'}</span></td>
-        <td class="mono">${isListening ? 'n/a' : fmtEndpoint(row.source)}</td>
-        <td class="mono">${fmtInteger(row.local_port)}</td>
-        <td class="mono">${fmtDestination(row.remote_destination)}</td>
-        <td class="mono">${fmtBytes(rxBytes)}</td>
-        <td class="mono">${fmtBytes(txBytes)}</td>
-        <td class="mono">${fmtInteger(rxMsgs)}</td>
-        <td class="mono">${fmtInteger(txMsgs)}</td>        
+        <td class="mono">${escapeHtml(fmtConnectionId(row.peer_id))}</td>
+        <td class="mono">${escapeHtml(fmtChan(row.chan_id))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(row.svc_id))}</td>
+        <td><span class="${isListening ? 'role-pill role-unknown' : 'role-pill role-client'}">${escapeHtml(state)}</span></td>
+        <td><span class="${roleClass(row.role)}">${escapeHtml(row.role || 'unknown')}</span></td>
+        <td class="mono">${escapeHtml(isListening ? 'n/a' : fmtEndpoint(row.source))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(row.local_port))}</td>
+        <td class="mono">${escapeHtml(fmtDestination(row.remote_destination))}</td>
+        <td class="mono">${escapeHtml(fmtBytes(rxBytes))}</td>
+        <td class="mono">${escapeHtml(fmtBytes(txBytes))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(rxMsgs))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(txMsgs))}</td>        
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderTunConnectionTable(tbodyId, rows) {
+  const tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+
+  if (!rows || rows.length === 0) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="12">No TUN connections</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = rows.map((row) => {
+    const rxBytes = row.stats?.rx_bytes ?? 0;
+    const txBytes = row.stats?.tx_bytes ?? 0;
+    const rxMsgs = row.stats?.rx_msgs ?? 0;
+    const txMsgs = row.stats?.tx_msgs ?? 0;
+    const state = String(row.state || 'connected').toLowerCase();
+    const isListening = state === 'listening';
+    const local = row.local || {};
+    const remote = row.remote_destination || {};
+    return `
+      <tr>
+        <td class="mono">${escapeHtml(fmtConnectionId(row.peer_id))}</td>
+        <td class="mono">${escapeHtml(fmtChan(row.chan_id))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(row.svc_id))}</td>
+        <td><span class="${isListening ? 'role-pill role-unknown' : 'role-pill role-client'}">${escapeHtml(state)}</span></td>
+        <td><span class="${roleClass(row.role)}">${escapeHtml(row.role || 'unknown')}</span></td>
+        <td class="mono">${escapeHtml(fmtText(local.ifname))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(local.mtu))}</td>
+        <td class="mono">${escapeHtml(fmtEndpoint(remote))}</td>
+        <td class="mono">${escapeHtml(fmtBytes(rxBytes))}</td>
+        <td class="mono">${escapeHtml(fmtBytes(txBytes))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(rxMsgs))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(txMsgs))}</td>
       </tr>
     `;
   }).join('');
@@ -2140,12 +2181,15 @@ function applyStatusDoc(j) {
 }
 
 function applyConnectionsDoc(j) {
-  renderConnectionTable('udpConnectionsBody', j.udp || []);
-  renderConnectionTable('tcpConnectionsBody', j.tcp || []);
+  renderConnectionTable('udpConnectionsBody', j.udp || [], 'UDP');
+  renderConnectionTable('tcpConnectionsBody', j.tcp || [], 'TCP');
+  renderTunConnectionTable('tunConnectionsBody', j.tun || []);
   setText('udpOpen', fmtInteger(j.counts?.udp ?? (j.udp || []).length));
   setText('tcpOpen', fmtInteger(j.counts?.tcp ?? (j.tcp || []).length));
+  setText('tunOpen', fmtInteger(j.counts?.tun ?? (j.tun || []).length));
   setText('udpListening', fmtInteger(j.counts?.udp_listening ?? 0));
   setText('tcpListening', fmtInteger(j.counts?.tcp_listening ?? 0));
+  setText('tunListening', fmtInteger(j.counts?.tun_listening ?? 0));
 }
 
 function applyPeersDoc(j) {

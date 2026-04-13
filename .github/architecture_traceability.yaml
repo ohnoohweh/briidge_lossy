@@ -38,6 +38,8 @@ ARC-CMP-003:
     - tests/unit/test_connection_snapshots.py::test_closed_channel_stats_are_archived_by_owner_peer
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_archived_closed_channel_payload_totals
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
+    - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
+    - tests/unit/test_connection_snapshots.py::test_snapshot_counts_active_tun_channel_as_open
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_over_myudp_packet_carry
@@ -58,6 +60,9 @@ ARC-CMP-004:
     - tests/unit/test_runner_overlay_transports.py::test_request_secure_link_reload_rejects_unknown_peer_id
     - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_uses_child_myudp_session_stats
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
+    - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
+    - tests/unit/test_connection_snapshots.py::test_snapshot_counts_active_tun_channel_as_open
+    - tests/unit/test_channel_mux_listener_mode.py::test_resolve_hook_argv_resolves_relative_executable_against_base_dir
     - tests/unit/test_launcher_entrypoint.py::test_launcher_forwards_unknown_args_to_bridge
     - tests/unit/test_launcher_entrypoint.py::test_launcher_restarts_for_code_75
     - tests/unit/test_launcher_entrypoint.py::test_launcher_waits_interval_for_code_77
@@ -92,6 +97,8 @@ ARC-CMP-005:
     - tests/unit/test_connection_snapshots.py::test_closed_channel_stats_are_archived_by_owner_peer
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_archived_closed_channel_payload_totals
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
+    - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
+    - tests/unit/test_connection_snapshots.py::test_snapshot_counts_active_tun_channel_as_open
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_direct_preflight_requires_http_200_before_upgrade

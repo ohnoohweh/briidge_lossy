@@ -62,6 +62,21 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "argv list"):
             ChannelMux._select_hook_argv({"argv": "bad"}, platform_key="linux")
 
+    def test_resolve_hook_argv_resolves_relative_executable_against_base_dir(self):
+        mux = ChannelMux(_FakeSession(), asyncio.new_event_loop())
+        try:
+            mux._hook_base_dir = "/opt/obbridge"
+            self.assertEqual(
+                mux._resolve_hook_argv(["./scripts/server-tun-hook.sh", "up", "obtun1"]),
+                ["/opt/obbridge/scripts/server-tun-hook.sh", "up", "obtun1"],
+            )
+            self.assertEqual(
+                mux._resolve_hook_argv(["ip", "link", "show"]),
+                ["ip", "link", "show"],
+            )
+        finally:
+            mux.loop.close()
+
     def test_render_hook_value_replaces_known_placeholders(self):
         rendered = ChannelMux._render_hook_value(
             "route add {target_host} dev {ifname} svc={service_id}",

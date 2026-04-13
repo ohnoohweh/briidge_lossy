@@ -226,6 +226,42 @@
               </div>
             </div>
           </section>        
+
+          <section class="section-block">
+            <div class="section-header">
+              <div>
+                <h2>TUN Connections</h2>
+                <p>Current TUN interfaces and active packet channels · Open: <strong id="tunOpen">0</strong> · Listening: <strong id="tunListening">0</strong></p>
+              </div>
+            </div>
+            <div class="table-card card">
+              <div class="table-wrap">
+                <table class="conn-table">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Chan</th>
+                      <th>Svc</th>
+                      <th>State</th>
+                      <th>Role</th>
+                      <th>Interface</th>
+                      <th>MTU</th>
+                      <th>Remote Interface</th>
+                      <th>RX Bytes</th>
+                      <th>TX Bytes</th>
+                      <th>RX Msgs</th>
+                      <th>TX Msgs</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tunConnectionsBody">
+                    <tr class="empty-row">
+                      <td colspan="12">No TUN connections</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
                   
         
         </section>

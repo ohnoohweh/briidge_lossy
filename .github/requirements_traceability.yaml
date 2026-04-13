@@ -525,6 +525,8 @@ REQ-MUX-006:
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_opens_channel_and_sends_data
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
+    - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
+    - tests/unit/test_connection_snapshots.py::test_snapshot_counts_active_tun_channel_as_open
 
 REQ-MUX-007:
   integration_tests:
@@ -553,6 +555,7 @@ REQ-MUX-009:
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_parse_remote_servers_accepts_structured_specs
     - tests/unit/test_channel_mux_listener_mode.py::test_select_hook_argv_uses_platform_specific_mapping
+    - tests/unit/test_channel_mux_listener_mode.py::test_resolve_hook_argv_resolves_relative_executable_against_base_dir
     - tests/unit/test_channel_mux_listener_mode.py::test_render_hook_value_replaces_known_placeholders
     - tests/unit/test_channel_mux_listener_mode.py::test_open_payload_roundtrip_preserves_hook_metadata
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_services_roundtrip_preserves_hook_metadata
@@ -637,6 +640,8 @@ REQ-ADM-006:
     - tests/unit/test_connection_snapshots.py::test_closed_channel_stats_are_archived_by_owner_peer
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_archived_closed_channel_payload_totals
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
+    - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
+    - tests/unit/test_connection_snapshots.py::test_snapshot_counts_active_tun_channel_as_open
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
     - tests/unit/test_ws_multi_peer.py::test_server_peer_snapshot_includes_last_incoming_age_seconds
     - tests/unit/test_ws_multi_peer.py::test_client_peer_snapshot_includes_last_incoming_age_seconds

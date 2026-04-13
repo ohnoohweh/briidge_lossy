@@ -11348,6 +11348,10 @@ class ChannelMux:
         except Exception: mux._tcp_bp_latency_ms = 300
         try: mux._tcp_bp_poll_interval_s = float(getattr(args, 'mux_tcp_bp_poll_interval_ms', 50)) / 1000.0
         except Exception: mux._tcp_bp_poll_interval_s = 0.05
+        with contextlib.suppress(Exception):
+            config_path = str(getattr(args, "_config_path", "") or getattr(args, "config", "") or "")
+            if config_path:
+                mux._hook_base_dir = str(pathlib.Path(config_path).expanduser().resolve().parent)
         return mux
 
     @staticmethod
@@ -11477,6 +11481,7 @@ class ChannelMux:
         self.loop = loop
         self._on_local_rx = on_local_rx_bytes  # local->peer (overlay direction) counters hook
         self._on_local_tx = on_local_tx_bytes  # peer->local counters hook
+        self._hook_base_dir = os.getcwd()
 
         # Overlay state gate
         self._overlay_connected: bool = self.session.is_connected()
@@ -11635,6 +11640,16 @@ class ChannelMux:
             raise ValueError("hook command argv list must not be empty")
         return out
 
+    def _resolve_hook_argv(self, argv: list[str]) -> list[str]:
+        if not argv:
+            return argv
+        exe = str(argv[0])
+        has_path_separator = any(sep and sep in exe for sep in (os.sep, os.altsep))
+        if has_path_separator and not os.path.isabs(exe):
+            base = pathlib.Path(str(self._hook_base_dir or os.getcwd())).expanduser()
+            return [str((base / exe).resolve()), *argv[1:]]
+        return argv
+
     def _hook_command_spec_for(self, spec: "ChannelMux.ServiceSpec", role: str, event: str) -> Optional[dict]:
         hooks = spec.lifecycle_hooks
         if not isinstance(hooks, dict):
@@ -11692,7 +11707,7 @@ class ChannelMux:
         context = self._hook_context(spec, svc_key, event, role, channel_id=channel_id, peer_id=peer_id)
         try:
             argv_raw = self._select_hook_argv(command_spec)
-            argv = [self._render_hook_value(v, context) for v in argv_raw]
+            argv = self._resolve_hook_argv([self._render_hook_value(v, context) for v in argv_raw])
             timeout_ms_raw = command_spec.get("timeout_ms", self.HOOK_DEFAULT_TIMEOUT_MS)
             timeout_ms = int(timeout_ms_raw)
             if timeout_ms <= 0:
@@ -11803,6 +11818,9 @@ class ChannelMux:
 
     def tcp_open_count(self) -> int:
         return len(self._tcp_by_chan)
+
+    def tun_open_count(self) -> int:
+        return len(self._tun_by_chan)
 
     # OPEN v4 binary payload (no backward compatibility):
     # +------+-------------+----------+--------+----------+----------+-----------+----------+----------+----------+-----------+----------+
@@ -15142,10 +15160,13 @@ class ChannelMux:
 
     def snapshot_tun_connections(self) -> list[dict]:
         rows: list[dict] = []
+        active_service_keys: set[ChannelMux.ServiceKey] = set()
         for chan, dev in list(self._tun_by_chan.items()):
             stats = self._chan_stat_dict(chan, ChannelMux.Proto.TUN)
             svc_key = getattr(dev, "service_key", None)
             svc_id = int(svc_key[2]) if isinstance(svc_key, tuple) and len(svc_key) >= 3 else None
+            if isinstance(svc_key, tuple):
+                active_service_keys.add(svc_key)
             rows.append({
                 "protocol": "tun",
                 "role": "server" if svc_key is not None else "client",
@@ -15159,7 +15180,42 @@ class ChannelMux:
                 "remote_destination": {"ifname": str(getattr(dev, "ifname", "") or ""), "mtu": int(getattr(dev, "mtu", 0) or 0)},
                 "stats": stats,
             })
-        rows.sort(key=lambda x: x["chan_id"])
+
+        # TUN services are interface-backed rather than socket-backed. Show them
+        # as idle listener rows once the device is open, matching UDP/TCP listeners.
+        for svc_key, dev in list(self._svc_tun_devices.items()):
+            if svc_key in active_service_keys:
+                continue
+            try:
+                svc_id = int(svc_key[2])
+            except Exception:
+                continue
+            spec = self._svc_spec_or_none(svc_id)
+            local = {
+                "ifname": str(getattr(dev, "ifname", "") or ""),
+                "mtu": int(getattr(dev, "mtu", 0) or 0),
+            }
+            rows.append({
+                "protocol": "tun",
+                "role": "server",
+                "state": "listening",
+                "chan_id": None,
+                "svc_owner_peer_id": int(svc_key[1]) if len(svc_key) >= 2 and str(svc_key[0]) == "peer" else None,
+                "svc_id": svc_id,
+                "source": None,
+                "local": local,
+                "local_port": None,
+                "remote_destination": (
+                    {"ifname": str(spec.r_host), "mtu": int(spec.r_port)} if spec else local
+                ),
+                "stats": {
+                    "rx_msgs": 0,
+                    "tx_msgs": 0,
+                    "rx_bytes": 0,
+                    "tx_bytes": 0,
+                },
+            })
+        rows.sort(key=lambda x: (-1 if x["chan_id"] is None else int(x["chan_id"])))
         return rows
 
     def snapshot_connections(self) -> dict:
@@ -15168,6 +15224,7 @@ class ChannelMux:
         tun_rows = self.snapshot_tun_connections()
         udp_listening = sum(1 for row in udp_rows if str(row.get("state", "connected")).lower() == "listening")
         tcp_listening = sum(1 for row in tcp_rows if str(row.get("state", "connected")).lower() == "listening")
+        tun_listening = sum(1 for row in tun_rows if str(row.get("state", "connected")).lower() == "listening")
         return {
             "udp": udp_rows,
             "tcp": tcp_rows,
@@ -15175,9 +15232,10 @@ class ChannelMux:
             "counts": {
                 "udp": len(udp_rows) - udp_listening,
                 "tcp": len(tcp_rows) - tcp_listening,
-                "tun": len(tun_rows),
+                "tun": len(tun_rows) - tun_listening,
                 "udp_listening": udp_listening,
                 "tcp_listening": tcp_listening,
+                "tun_listening": tun_listening,
             },
         }
 
@@ -15437,6 +15495,7 @@ class StatsBoard:
 
         udp_count = self.mux.udp_open_count() if self.mux else 0
         tcp_count = self.mux.tcp_open_count() if self.mux else 0
+        tun_count = self.mux.tun_open_count() if self.mux and hasattr(self.mux, "tun_open_count") else 0
 
         def _fmt(v, nd=None):
             if v is None:
@@ -15602,6 +15661,7 @@ class StatsBoard:
             "open_connections": {
                 "udp": int(udp_count),
                 "tcp": int(tcp_count),
+                "tun": int(tun_count),
             },
             "traffic": {
                 "app": {
@@ -15672,12 +15732,21 @@ class RunnerMuxAggregate:
     def tcp_open_count(self) -> int:
         return sum(m.tcp_open_count() for m in self._muxes)
 
+    def tun_open_count(self) -> int:
+        total = 0
+        for mux in self._muxes:
+            getter = getattr(mux, "tun_open_count", None)
+            if callable(getter):
+                total += int(getter())
+        return total
+
     def snapshot_connections(self) -> dict:
         udp_rows: list[dict] = []
         tcp_rows: list[dict] = []
         tun_rows: list[dict] = []
         udp_listening = 0
         tcp_listening = 0
+        tun_listening = 0
         for mux in self._muxes:
             snap = mux.snapshot_connections()
             udp_rows.extend(snap.get("udp", []))
@@ -15686,6 +15755,7 @@ class RunnerMuxAggregate:
             counts = snap.get("counts", {}) or {}
             udp_listening += int(counts.get("udp_listening", 0) or 0)
             tcp_listening += int(counts.get("tcp_listening", 0) or 0)
+            tun_listening += int(counts.get("tun_listening", 0) or 0)
         return {
             "udp": udp_rows,
             "tcp": tcp_rows,
@@ -15693,9 +15763,10 @@ class RunnerMuxAggregate:
             "counts": {
                 "udp": len(udp_rows) - udp_listening,
                 "tcp": len(tcp_rows) - tcp_listening,
-                "tun": len(tun_rows),
+                "tun": len(tun_rows) - tun_listening,
                 "udp_listening": udp_listening,
                 "tcp_listening": tcp_listening,
+                "tun_listening": tun_listening,
             },
         }
 
@@ -16108,7 +16179,7 @@ class Runner:
                 "udp": [],
                 "tcp": [],
                 "tun": [],
-                "counts": {"udp": 0, "tcp": 0, "tun": 0, "udp_listening": 0, "tcp_listening": 0},
+                "counts": {"udp": 0, "tcp": 0, "tun": 0, "udp_listening": 0, "tcp_listening": 0, "tun_listening": 0},
             }
 
         udp_rows: list[dict] = []
@@ -16116,6 +16187,7 @@ class Runner:
         tun_rows: list[dict] = []
         udp_listening = 0
         tcp_listening = 0
+        tun_listening = 0
 
         for idx, mux in enumerate(self._muxes):
             snap = mux.snapshot_connections()
@@ -16191,6 +16263,7 @@ class Runner:
             counts = snap.get("counts", {}) or {}
             udp_listening += int(counts.get("udp_listening", 0) or 0)
             tcp_listening += int(counts.get("tcp_listening", 0) or 0)
+            tun_listening += int(counts.get("tun_listening", 0) or 0)
 
         return {
             "udp": udp_rows,
@@ -16199,9 +16272,10 @@ class Runner:
             "counts": {
                 "udp": len(udp_rows) - udp_listening,
                 "tcp": len(tcp_rows) - tcp_listening,
-                "tun": len(tun_rows),
+                "tun": len(tun_rows) - tun_listening,
                 "udp_listening": udp_listening,
                 "tcp_listening": tcp_listening,
+                "tun_listening": tun_listening,
             },
         }
 
@@ -16444,6 +16518,14 @@ class Runner:
 
     def get_peer_connections_snapshot(self) -> dict:
         peers: list = []
+        def _active_connection_count(rows: list) -> int:
+            return sum(
+                1
+                for row in rows
+                if row.get("chan_id") is not None
+                and str(row.get("state", "connected")).lower() != "listening"
+            )
+
         for idx, session in enumerate(self._sessions):
             mux = self._muxes[idx] if idx < len(self._muxes) else None
             label = self._session_labels[idx] if idx < len(self._session_labels) else f"session-{idx}"
@@ -16626,9 +16708,9 @@ class Runner:
                 "inflight": m.inflight,
                 "decode_errors": decode_errors,
                 "open_connections": {
-                    "udp": len(udp_rows),
-                    "tcp": len(tcp_rows),
-                    "tun": len(tun_rows),
+                    "udp": _active_connection_count(udp_rows),
+                    "tcp": _active_connection_count(tcp_rows),
+                    "tun": _active_connection_count(tun_rows),
                 },
                 "traffic": {
                     "rx_bytes": rx_bytes,
@@ -18660,6 +18742,7 @@ class ConfigAwareCLI:
         args.force = boot_args.force                   # bool
         args._config_file_state = self._config_file_state
         args._first_start_detected = self._first_start_detected
+        args._config_path = str(pathlib.Path(boot_args.config).expanduser().resolve()) if boot_args.config else ""
 
         # If dumping or saving was requested, perform it and exit right here.
         self._maybe_dump_or_save_and_exit(args)
