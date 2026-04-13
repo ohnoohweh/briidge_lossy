@@ -2526,6 +2526,7 @@ function renderConfigValueCell(item, current) {
   const isSecret = Boolean(item.secret);
   const isReadonly = Boolean(item.readonly);
   const isServiceCatalogSetting = !isSecret && !isReadonly && isServiceCatalogConfigSetting(key);
+  const isCompressLayerLevelSetting = isCompressionLevelConfigSetting(key);
   const isLevelSetting = isLoggingLevelSetting(key, current, item.default);
   const isLogFileSetting = isLogFileConfigSetting(key);
   const isDirectEntrySetting = isDirectEntryConfigSetting(key);
@@ -2551,9 +2552,11 @@ function renderConfigValueCell(item, current) {
         ? renderChoiceSelect(key, current, item.choices)
       : (isBooleanSetting
         ? renderBooleanSelect(key, current)
-        : (isLevelSetting
+        : (isCompressLayerLevelSetting
+          ? renderCompressionLevelSelect(key, current)
+          : (isLevelSetting
           ? renderLogLevelSelect(key, current)
-          : renderTextConfigEditor(key, current)));
+          : renderTextConfigEditor(key, current))));
   return `
     <div class="config-value-cell" data-config-cell="${key}">
       <button class="config-value-display" type="button" data-config-activate="${key}" aria-label="Edit ${key}">
@@ -2638,6 +2641,13 @@ function renderConfigSections(schema, config) {
 }
 
 const LOG_LEVEL_OPTIONS = ['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG', 'NOTSET'];
+const COMPRESS_LEVEL_OPTIONS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+
+function isCompressionLevelConfigSetting(key) {
+  const normalizedKey = String(key || '').toLowerCase();
+  return normalizedKey === 'compress_layer_level'
+    || normalizedKey.endsWith('.compress_layer_level');
+}
 
 function isLogFileConfigSetting(key) {
   const normalizedKey = String(key || '').toLowerCase();
@@ -2657,6 +2667,7 @@ function isDirectEntryConfigSetting(key) {
 
 function isLoggingLevelSetting(key, currentValue, defaultValue) {
   const normalizedKey = String(key || '').toLowerCase();
+  if (isCompressionLevelConfigSetting(normalizedKey)) return false;
   if (isLogFileConfigSetting(normalizedKey)) return false;
   if (isDirectEntryConfigSetting(normalizedKey)) return false;
   const byName = normalizedKey === 'log'
@@ -2674,6 +2685,18 @@ function renderLogLevelSelect(key, currentValue) {
   const options = LOG_LEVEL_OPTIONS.map((level) => {
     const selected = level === normalizedCurrent ? ' selected' : '';
     return `<option value="${JSON.stringify(level).replace(/"/g, '&quot;')}"${selected}>${level}</option>`;
+  }).join('');
+  return `<select class="config-editor mono" data-config-key="${key}" autocomplete="off" data-lpignore="true" data-1p-ignore="true">${options}</select>`;
+}
+
+function renderCompressionLevelSelect(key, currentValue) {
+  const normalizedCurrent = String(currentValue ?? '3');
+  const values = COMPRESS_LEVEL_OPTIONS.includes(normalizedCurrent)
+    ? COMPRESS_LEVEL_OPTIONS
+    : [...COMPRESS_LEVEL_OPTIONS, normalizedCurrent];
+  const options = values.map((level) => {
+    const selected = level === normalizedCurrent ? ' selected' : '';
+    return `<option value="${JSON.stringify(Number(level))}"${selected}>${level}</option>`;
   }).join('');
   return `<select class="config-editor mono" data-config-key="${key}" autocomplete="off" data-lpignore="true" data-1p-ignore="true">${options}</select>`;
 }
