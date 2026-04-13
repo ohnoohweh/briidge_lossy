@@ -11552,6 +11552,7 @@ class ChannelMux:
 
         # Per-channel stats (readable counters + CRC)
         self._chan_stats: dict[tuple[int, ChannelMux.Proto], _ChanCtr] = {}
+        self._peer_closed_channel_stats: dict[int, _ChanCtr] = {}
 
         # Tasks
         self._sweeper_task: Optional[asyncio.Task] = None
@@ -12142,6 +12143,7 @@ class ChannelMux:
                 except Exception:
                     pass
             self._drop_udp_fragment_reassembly(chan)
+            self._finalize_channel_stats(chan, ChannelMux.Proto.UDP, peer_id=peer_key)
             self._chan_owner_peer_id.pop(chan, None)
             self._forget_udp_open_key(chan)
             self.log.info("[MUX] peer=%s epoch reset -> drop UDP chan=%s", peer_key, chan)
@@ -12160,6 +12162,7 @@ class ChannelMux:
                     writer.close()
                 except Exception:
                     pass
+            self._finalize_channel_stats(chan, ChannelMux.Proto.TCP, peer_id=peer_key)
             self._chan_owner_peer_id.pop(chan, None)
             self._forget_tcp_open_key(chan)
             self.log.info("[MUX] peer=%s epoch reset -> drop TCP chan=%s", peer_key, chan)
@@ -12276,6 +12279,7 @@ class ChannelMux:
         self._tcp_open_key_by_chan.clear()
         self._tcp_chan_by_open_key.clear()
         self._chan_owner_peer_id.clear()
+        self._chan_stats.clear()
         # UDP server maps
         self._udp_by_client.clear()
         self._udp_by_chan.clear()
@@ -12361,8 +12365,7 @@ class ChannelMux:
             chan = self._alloc_udp_id()
             self._udp_by_client[key] = (chan, now)
             self._udp_by_chan[chan] = (svc_key, addr)
-            if str(svc_key[0]) == "peer":
-                self._chan_owner_peer_id[chan] = int(svc_key[1])
+            self._chan_owner_peer_id[chan] = int(svc_key[1]) if str(svc_key[0]) == "peer" else 0
             self._schedule_service_hook(spec, svc_key, "listener", "on_channel_connected", channel_id=chan)
             self.log.debug("[UDP/SRV] learn %s -> chan=%s svc=%s:%s", addr, chan, svc_key[0], spec.svc_id)
             try:
@@ -12402,6 +12405,7 @@ class ChannelMux:
                     if chan is None:
                         continue
                     self._udp_by_chan.pop(chan, None)
+                    self._finalize_channel_stats(chan, ChannelMux.Proto.UDP)
                     self.log.info("[UDP/SRV] chan=%s idle >= %.0fs -> CLOSE", chan, self.UDP_IDLE_S)
                     self._send_mux(chan, ChannelMux.Proto.UDP, ChannelMux.MType.CLOSE, b"")
                 # Client role transports (per chan)
@@ -12412,6 +12416,7 @@ class ChannelMux:
                 for chan in stale_cli:
                     tr = self._udp_client_transports.pop(chan, None)
                     self._udp_client_last_ts.pop(chan, None)
+                    self._finalize_channel_stats(chan, ChannelMux.Proto.UDP)
                     self._chan_owner_peer_id.pop(chan, None)
                     if tr:
                         try: tr.close()
@@ -13363,8 +13368,7 @@ class ChannelMux:
                 return
             chan = self._alloc_tun_id()
             self._bind_tun_channel(chan, dev)
-            if str(svc_key[0]) == "peer":
-                self._chan_owner_peer_id[chan] = int(svc_key[1])
+            self._chan_owner_peer_id[chan] = int(svc_key[1]) if str(svc_key[0]) == "peer" else 0
             self._schedule_service_hook(spec, svc_key, "listener", "on_channel_connected", channel_id=chan)
             self._send_open_for_service(chan, ChannelMux.Proto.TUN, spec)
         ctr = self._ctr(ChannelMux.Proto.TUN, chan)
@@ -13406,6 +13410,7 @@ class ChannelMux:
             options,
         ) = p
         peer_key = int(peer_id or 0)
+        self._chan_owner_peer_id[chan] = peer_key
         prev_epoch = self._peer_mux_epochs.get(peer_key)
         if not self._peer_epoch_is_new(peer_id, instance_id, connection_seq):
             self.log.debug("[TUN/CLI] chan=%s duplicate/replay OPEN instance_id=%s connection_seq=%s", chan, instance_id, connection_seq)
@@ -13546,7 +13551,7 @@ class ChannelMux:
 
     def _rx_tun_close(self, chan: int) -> None:
         dev = self._tun_by_chan.pop(chan, None)
-        self._chan_stats.pop((chan, ChannelMux.Proto.TUN), None)
+        self._finalize_channel_stats(chan, ChannelMux.Proto.TUN)
         self._chan_owner_peer_id.pop(chan, None)
         self._tun_frag_rx = {key: state for key, state in self._tun_frag_rx.items() if key[0] != chan}
         self._forget_tun_open_key(chan)
@@ -13981,7 +13986,7 @@ class ChannelMux:
         # Client role cleanup
         tr = self._udp_client_transports.pop(chan, None)
         self._udp_client_last_ts.pop(chan, None)
-        self._chan_stats.pop((chan, ChannelMux.Proto.UDP), None)
+        self._finalize_channel_stats(chan, ChannelMux.Proto.UDP)
         self._chan_owner_peer_id.pop(chan, None)
         self._drop_udp_fragment_reassembly(chan)
         if tr:
@@ -14073,8 +14078,7 @@ class ChannelMux:
             self._tcp_by_chan[chan] = (spec.svc_id, writer)
             self._tcp_by_writer[writer] = (spec.svc_id, chan)
             self._tcp_role_by_chan[chan] = "server"      
-            if str(svc_key[0]) == "peer":
-                self._chan_owner_peer_id[chan] = int(svc_key[1])
+            self._chan_owner_peer_id[chan] = int(svc_key[1]) if str(svc_key[0]) == "peer" else 0
             self.log.info(
                 "[TCP/SRV] accept peer=%s -> chan=%s svc=%s map_size=%s",
                 peer,
@@ -14130,6 +14134,7 @@ class ChannelMux:
                         pass
                     self._tcp_by_writer.pop(writer, None)
                     self._tcp_by_chan.pop(chan, None)
+                    self._finalize_channel_stats(chan, ChannelMux.Proto.TCP)
                     self._chan_owner_peer_id.pop(chan, None)
                     self._forget_tcp_open_key(chan)
                     self._schedule_service_hook(spec, svc_key, "listener", "on_channel_closed", channel_id=chan)
@@ -14169,6 +14174,7 @@ class ChannelMux:
             options,
         ) = p
         peer_key = int(peer_id or 0)
+        self._chan_owner_peer_id[chan] = peer_key
         prev_epoch = self._peer_mux_epochs.get(peer_key)
         epoch_is_new = self._peer_epoch_is_new(peer_id, instance_id, connection_seq)
         self.log.info(
@@ -14291,6 +14297,7 @@ class ChannelMux:
                             pass
                         self._tcp_by_writer.pop(writer, None)
                         self._tcp_by_chan.pop(chan, None)
+                        self._finalize_channel_stats(chan, ChannelMux.Proto.TCP)
                         self._forget_tcp_open_key(chan)
                         self._schedule_service_hook(peer_spec, None, "client", "after_closed", channel_id=chan, peer_id=peer_id)
                         self.log.info("[TCP/CLI] chan=%s CLOSE teardown complete map_size=%s", chan, len(self._tcp_by_chan))
@@ -14367,6 +14374,7 @@ class ChannelMux:
                 _, writer = tup
                 self._tcp_pending_data.pop(chan, None)
                 self._tcp_by_writer.pop(writer, None)
+                self._finalize_channel_stats(chan, ChannelMux.Proto.TCP)
                 self._chan_owner_peer_id.pop(chan, None)
                 try:
                     writer.close()
@@ -14530,6 +14538,41 @@ class ChannelMux:
             c = _ChanCtr()
             self._chan_stats[(chan, proto)] = c
         return c
+
+    def _finalize_channel_stats(
+        self,
+        chan: int,
+        proto: "ChannelMux.Proto",
+        *,
+        peer_id: Optional[int] = None,
+    ) -> None:
+        c = self._chan_stats.pop((chan, proto), None)
+        if c is None:
+            return
+        owner_peer_id = peer_id
+        if owner_peer_id is None:
+            owner_peer_id = self._chan_owner_peer_id.get(int(chan))
+        if owner_peer_id is None:
+            return
+        total = self._peer_closed_channel_stats.get(int(owner_peer_id))
+        if total is None:
+            total = _ChanCtr()
+            self._peer_closed_channel_stats[int(owner_peer_id)] = total
+        total.msgs_in += int(getattr(c, "msgs_in", 0) or 0)
+        total.msgs_out += int(getattr(c, "msgs_out", 0) or 0)
+        total.bytes_in += int(getattr(c, "bytes_in", 0) or 0)
+        total.bytes_out += int(getattr(c, "bytes_out", 0) or 0)
+
+    def snapshot_peer_payload_totals(self) -> dict[int, dict[str, int]]:
+        out: dict[int, dict[str, int]] = {}
+        for peer_id, total in list(self._peer_closed_channel_stats.items()):
+            out[int(peer_id)] = {
+                "rx_msgs": int(getattr(total, "msgs_in", 0) or 0),
+                "tx_msgs": int(getattr(total, "msgs_out", 0) or 0),
+                "rx_bytes": int(getattr(total, "bytes_in", 0) or 0),
+                "tx_bytes": int(getattr(total, "bytes_out", 0) or 0),
+            }
+        return out
 
     # ---------- Logging helpers ----------
 
@@ -16409,11 +16452,16 @@ class Runner:
             m = self._session_metrics_snapshot(session)
             udp_rows: list = []
             tcp_rows: list = []
+            peer_payload_totals: dict[int, dict] = {}
             if mux is not None:
                 snap = mux.snapshot_connections()
                 udp_rows = list(snap.get("udp", []))
                 tcp_rows = list(snap.get("tcp", []))
                 tun_rows = list(snap.get("tun", []))
+                payload_getter = getattr(mux, "snapshot_peer_payload_totals", None)
+                if callable(payload_getter):
+                    with contextlib.suppress(Exception):
+                        peer_payload_totals = dict(payload_getter() or {})
             else:
                 tun_rows = []
             overlay_rows = []
@@ -16505,6 +16553,9 @@ class Runner:
                         p_rx += int(st.get("rx_bytes", 0) or 0)
                         p_tx += int(st.get("tx_bytes", 0) or 0)
                         tun_open += 1
+                    archived = peer_payload_totals.get(int(p.get("peer_id", 0))) or {}
+                    p_rx += int(archived.get("rx_bytes", 0) or 0)
+                    p_tx += int(archived.get("tx_bytes", 0) or 0)
 
                     row_connected = bool(p.get("connected", session.is_connected()))
                     row_state = str(p.get("state") or ("connected" if row_connected else "connecting"))
@@ -16543,6 +16594,9 @@ class Runner:
                 st = row.get("stats", {})
                 rx_bytes += int(st.get("rx_bytes", 0) or 0)
                 tx_bytes += int(st.get("tx_bytes", 0) or 0)
+            for archived in peer_payload_totals.values():
+                rx_bytes += int(archived.get("rx_bytes", 0) or 0)
+                tx_bytes += int(archived.get("tx_bytes", 0) or 0)
             peer_label = None
             with contextlib.suppress(Exception):
                 if hasattr(session, "peer_proto") and getattr(session, "peer_proto"):

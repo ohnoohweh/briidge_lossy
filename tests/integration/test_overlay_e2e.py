@@ -637,36 +637,7 @@ def _shift_port_options(args: List[str], offset: int) -> List[str]:
     return out
 
 
-def materialize_case_ports(case: Case, case_index: int) -> Case:
-    case = _materialize_case_loopback_hosts(case, case_index)
-    cached_offset = ALLOCATED_CASE_PORT_OFFSETS.get(int(case_index))
-    if cached_offset is not None:
-        if cached_offset == 0:
-            return case
-        return replace(
-            case,
-            bounce_port=_shift_port(case.bounce_port, cached_offset),
-            probe_port=_shift_port(case.probe_port, cached_offset),
-            bridge_server_args=_shift_port_options(case.bridge_server_args, cached_offset),
-            bridge_client_args=_shift_port_options(case.bridge_client_args, cached_offset),
-        )
-    highest = _max_case_static_port(case)
-    selected_offset: Optional[int] = None
-    for candidate_offset in _case_port_offset_candidates(case_index, highest_static_port=highest):
-        candidate = replace(
-            case,
-            bounce_port=_shift_port(case.bounce_port, candidate_offset),
-            probe_port=_shift_port(case.probe_port, candidate_offset),
-            bridge_server_args=_shift_port_options(case.bridge_server_args, candidate_offset),
-            bridge_client_args=_shift_port_options(case.bridge_client_args, candidate_offset),
-        )
-        if all(_can_bind_local_endpoint(proto, host, port) for proto, host, port in _iter_case_local_bind_endpoints(candidate)):
-            selected_offset = candidate_offset
-            break
-    if selected_offset is None:
-        raise RuntimeError(f'no generic integration port slot available: case={case.name} case_index={case_index}')
-    offset = selected_offset
-    ALLOCATED_CASE_PORT_OFFSETS[int(case_index)] = offset
+def _materialize_case_with_offset(case: Case, offset: int) -> Case:
     if offset == 0:
         return case
     return replace(
@@ -676,6 +647,29 @@ def materialize_case_ports(case: Case, case_index: int) -> Case:
         bridge_server_args=_shift_port_options(case.bridge_server_args, offset),
         bridge_client_args=_shift_port_options(case.bridge_client_args, offset),
     )
+
+
+def materialize_case_ports(case: Case, case_index: int) -> Case:
+    case = _materialize_case_loopback_hosts(case, case_index)
+    cached_offset = ALLOCATED_CASE_PORT_OFFSETS.get(int(case_index))
+    if cached_offset is not None:
+        try:
+            return _materialize_case_with_offset(case, cached_offset)
+        except ValueError:
+            pass
+        ALLOCATED_CASE_PORT_OFFSETS.pop(int(case_index), None)
+    highest = _max_case_static_port(case)
+    selected_offset: Optional[int] = None
+    for candidate_offset in _case_port_offset_candidates(case_index, highest_static_port=highest):
+        candidate = _materialize_case_with_offset(case, candidate_offset)
+        if all(_can_bind_local_endpoint(proto, host, port) for proto, host, port in _iter_case_local_bind_endpoints(candidate)):
+            selected_offset = candidate_offset
+            break
+    if selected_offset is None:
+        raise RuntimeError(f'no generic integration port slot available: case={case.name} case_index={case_index}')
+    offset = selected_offset
+    ALLOCATED_CASE_PORT_OFFSETS[int(case_index)] = offset
+    return _materialize_case_with_offset(case, offset)
 
 
 def _max_port_in_shiftable_args(args: List[str]) -> int:
@@ -2534,6 +2528,35 @@ def _connected_tcp_rows(doc: dict) -> list[dict]:
         if str(row.get('state', '')).strip().lower() == 'connected':
             rows.append(row)
     return rows
+
+
+def wait_connected_tcp_rows_across_admins(
+    admin_ports: dict[str, int],
+    expected_count: int,
+    *,
+    timeout: float = 8.0,
+    label: str = '',
+) -> dict[str, dict]:
+    end = time.time() + timeout
+    last_docs: dict[str, dict] = {}
+    last_count = 0
+    while time.time() < end:
+        total_count = 0
+        docs: dict[str, dict] = {}
+        for name, admin_port in admin_ports.items():
+            _code, conn_doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/connections', timeout=1.5)
+            docs[str(name)] = conn_doc
+            total_count += len(_connected_tcp_rows(conn_doc))
+        last_docs = docs
+        last_count = total_count
+        if total_count >= int(expected_count):
+            return docs
+        time.sleep(0.1)
+    who = f' {label}' if label else ''
+    raise RuntimeError(
+        f'/api/connections{who} did not expose {expected_count} active TCP rows across admins; '
+        f'last_count={last_count}; last_docs={last_docs!r}'
+    )
 
 
 def wait_tcp_connections_exact_transferred_bytes(
@@ -4567,6 +4590,8 @@ def run_case_mixed_overlay_two_clients_concurrent_udp_tcp(
         time.sleep(case.settle_seconds if settle_s is None else settle_s)
 
         phase('4. Open 8 concurrent TCP channels and hold them during /api/connections polling')
+        for name, port, _payload in tcp_specs:
+            wait_tcp_listen(case.probe_host, port, timeout=8.0)
         start_evt = threading.Event()
         release_close_evt = threading.Event()
         ready_for_poll_evt = threading.Event()
@@ -4597,22 +4622,16 @@ def run_case_mixed_overlay_two_clients_concurrent_udp_tcp(
         start_evt.set()
 
         try:
-            poll_end = time.time() + 8.0
-            observed = False
-            last_docs: dict[str, dict] = {}
-            while time.time() < poll_end:
-                _code, conn_doc = fetch_json(f'http://127.0.0.1:{server_admin}/api/connections', timeout=1.5)
-                last_docs['server'] = conn_doc
-                connected_rows = _connected_tcp_rows(conn_doc)
-                if len(connected_rows) == 8:
-                    observed = True
-                    break
-                time.sleep(0.1)
-            if not observed:
-                raise RuntimeError(
-                    f'/api/connections on server did not expose 8 active TCP rows; '
-                    f'ready_count={ready_count}/{len(tcp_specs)} last_docs={last_docs!r}'
-                )
+            wait_connected_tcp_rows_across_admins(
+                {
+                    'server': server_admin,
+                    'ws_client': ws_client_admin,
+                    'myudp_client': udp_client_admin,
+                },
+                len(tcp_specs),
+                timeout=8.0,
+                label='mixed two-client TCP hold',
+            )
         finally:
             release_close_evt.set()
         for t in tcp_threads:
@@ -4790,6 +4809,8 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
             wait_peer_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', transport='myudp', authenticated=True)
 
         phase('5. Open 8 concurrent TCP channels and hold them during /api/connections polling')
+        for name, port, _payload in tcp_specs:
+            wait_tcp_listen(case.probe_host, port, timeout=8.0)
         start_evt = threading.Event()
         release_close_evt = threading.Event()
         ready_for_poll_evt = threading.Event()
@@ -4820,22 +4841,16 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
         start_evt.set()
 
         try:
-            poll_end = time.time() + 8.0
-            observed = False
-            last_docs: dict[str, dict] = {}
-            while time.time() < poll_end:
-                _code, conn_doc = fetch_json(f'http://127.0.0.1:{server_admin}/api/connections', timeout=1.5)
-                last_docs['server'] = conn_doc
-                connected_rows = _connected_tcp_rows(conn_doc)
-                if len(connected_rows) == 8:
-                    observed = True
-                    break
-                time.sleep(0.1)
-            if not observed:
-                raise RuntimeError(
-                    f'/api/connections on server did not expose 8 active TCP rows; '
-                    f'ready_count={ready_count}/{len(tcp_specs)} last_docs={last_docs!r}'
-                )
+            wait_connected_tcp_rows_across_admins(
+                {
+                    'server': server_admin,
+                    'client1': client1_admin,
+                    'client2': client2_admin,
+                },
+                len(tcp_specs),
+                timeout=8.0,
+                label='myudp two-client TCP hold',
+            )
         finally:
             release_close_evt.set()
 
@@ -5009,6 +5024,8 @@ def run_case_tcp_two_clients_concurrent_udp_tcp(
         wait_distinct_peer_endpoints(server_admin, transport='tcp', minimum_count=2, timeout=12.0, label='server')
 
         phase('5. Open 8 concurrent TCP channels and hold them during /api/connections polling')
+        for name, port, _payload in tcp_specs:
+            wait_tcp_listen(case.probe_host, port, timeout=8.0)
         start_evt = threading.Event()
         release_close_evt = threading.Event()
         ready_lock = threading.Lock()
@@ -5036,22 +5053,16 @@ def run_case_tcp_two_clients_concurrent_udp_tcp(
         start_evt.set()
 
         try:
-            poll_end = time.time() + 8.0
-            observed = False
-            last_docs: dict[str, dict] = {}
-            while time.time() < poll_end:
-                _code, conn_doc = fetch_json(f'http://127.0.0.1:{server_admin}/api/connections', timeout=1.5)
-                last_docs['server'] = conn_doc
-                connected_rows = _connected_tcp_rows(conn_doc)
-                if len(connected_rows) == 8:
-                    observed = True
-                    break
-                time.sleep(0.1)
-            if not observed:
-                raise RuntimeError(
-                    f'/api/connections on server did not expose 8 active TCP rows; '
-                    f'ready_count={ready_count}/{len(tcp_specs)} last_docs={last_docs!r}'
-                )
+            wait_connected_tcp_rows_across_admins(
+                {
+                    'server': server_admin,
+                    'client1': client1_admin,
+                    'client2': client2_admin,
+                },
+                len(tcp_specs),
+                timeout=8.0,
+                label='tcp two-client TCP hold',
+            )
         finally:
             release_close_evt.set()
 
@@ -5229,6 +5240,8 @@ def run_case_quic_two_clients_concurrent_udp_tcp(
             wait_peer_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', transport='quic', authenticated=True)
 
         phase('5. Open 8 concurrent TCP channels and hold them during /api/connections polling')
+        for name, port, _payload in tcp_specs:
+            wait_tcp_listen(case.probe_host, port, timeout=8.0)
         start_evt = threading.Event()
         release_close_evt = threading.Event()
         ready_lock = threading.Lock()
@@ -5256,22 +5269,16 @@ def run_case_quic_two_clients_concurrent_udp_tcp(
         start_evt.set()
 
         try:
-            poll_end = time.time() + 8.0
-            observed = False
-            last_docs: dict[str, dict] = {}
-            while time.time() < poll_end:
-                _code, conn_doc = fetch_json(f'http://127.0.0.1:{server_admin}/api/connections', timeout=1.5)
-                last_docs['server'] = conn_doc
-                connected_rows = _connected_tcp_rows(conn_doc)
-                if len(connected_rows) == 8:
-                    observed = True
-                    break
-                time.sleep(0.1)
-            if not observed:
-                raise RuntimeError(
-                    f'/api/connections on server did not expose 8 active TCP rows; '
-                    f'ready_count={ready_count}/{len(tcp_specs)} last_docs={last_docs!r}'
-                )
+            wait_connected_tcp_rows_across_admins(
+                {
+                    'server': server_admin,
+                    'client1': client1_admin,
+                    'client2': client2_admin,
+                },
+                len(tcp_specs),
+                timeout=8.0,
+                label='quic two-client TCP hold',
+            )
         finally:
             release_close_evt.set()
             for t in tcp_threads:

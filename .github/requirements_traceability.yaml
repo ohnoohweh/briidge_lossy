@@ -485,6 +485,8 @@ REQ-LST-006:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
   unit_tests:
+    - tests/unit/test_connection_snapshots.py::test_closed_channel_stats_are_archived_by_owner_peer
+    - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_archived_closed_channel_payload_totals
     - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_uses_child_myudp_session_stats
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
 
@@ -632,6 +634,8 @@ REQ-ADM-006:
     - tests/unit/test_connection_snapshots.py::test_tcp_server_snapshot_includes_last_incoming_age_seconds
     - tests/unit/test_connection_snapshots.py::test_quic_client_snapshot_includes_last_incoming_age_seconds
     - tests/unit/test_connection_snapshots.py::test_quic_server_snapshot_includes_last_incoming_age_seconds
+    - tests/unit/test_connection_snapshots.py::test_closed_channel_stats_are_archived_by_owner_peer
+    - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_archived_closed_channel_payload_totals
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
     - tests/unit/test_ws_multi_peer.py::test_server_peer_snapshot_includes_last_incoming_age_seconds

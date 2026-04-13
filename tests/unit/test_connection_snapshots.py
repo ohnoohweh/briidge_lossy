@@ -114,6 +114,23 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         self.assertIn("connected", {row.get("state") for row in snap["udp"]})
         self.assertIn("connected", {row.get("state") for row in snap["tcp"]})
 
+    def test_closed_channel_stats_are_archived_by_owner_peer(self):
+        self.mux._chan_owner_peer_id[201] = 7
+        ctr = self.mux._ctr(ChannelMux.Proto.TCP, 201)
+        ctr.msgs_in = 2
+        ctr.msgs_out = 3
+        ctr.bytes_in = 123
+        ctr.bytes_out = 456
+
+        self.mux._finalize_channel_stats(201, ChannelMux.Proto.TCP)
+
+        totals = self.mux.snapshot_peer_payload_totals()
+        self.assertEqual(totals[7]["rx_msgs"], 2)
+        self.assertEqual(totals[7]["tx_msgs"], 3)
+        self.assertEqual(totals[7]["rx_bytes"], 123)
+        self.assertEqual(totals[7]["tx_bytes"], 456)
+        self.assertNotIn((201, ChannelMux.Proto.TCP), self.mux._chan_stats)
+
 
 class _PeerSession:
     def __init__(self):
@@ -186,6 +203,33 @@ class _MuxWithMutableTun:
         }
 
 
+class _MuxWithArchivedPeerTotals:
+    def snapshot_connections(self):
+        return {
+            "udp": [],
+            "tcp": [
+                {
+                    "protocol": "tcp",
+                    "state": "connected",
+                    "chan_id": 101,
+                    "stats": {"rx_bytes": 10, "tx_bytes": 20},
+                }
+            ],
+            "tun": [],
+            "counts": {"udp": 0, "tcp": 1, "tun": 0, "udp_listening": 0, "tcp_listening": 0},
+        }
+
+    def snapshot_peer_payload_totals(self):
+        return {
+            7: {
+                "rx_msgs": 2,
+                "tx_msgs": 2,
+                "rx_bytes": 300,
+                "tx_bytes": 400,
+            }
+        }
+
+
 class RunnerPeerSnapshotTests(unittest.TestCase):
     def test_peer_open_connections_excludes_idle_listeners(self):
         args = argparse.Namespace(no_dashboard=True, overlay_transport="myudp")
@@ -201,6 +245,20 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(peer["open_connections"]["tcp"], 0)
         self.assertEqual(peer["traffic"]["rx_bytes"], 1234)
         self.assertEqual(peer["traffic"]["tx_bytes"], 4321)
+
+    def test_peer_snapshot_includes_archived_closed_channel_payload_totals(self):
+        args = argparse.Namespace(no_dashboard=True, overlay_transport="myudp")
+        runner = Runner(args)
+        runner._sessions = [_PeerSession()]
+        runner._muxes = [_MuxWithArchivedPeerTotals()]
+        runner._session_labels = ["myudp"]
+
+        out = runner.get_peer_connections_snapshot()
+        peer = out["peers"][0]
+
+        self.assertEqual(peer["open_connections"]["tcp"], 1)
+        self.assertEqual(peer["traffic"]["rx_bytes"], 310)
+        self.assertEqual(peer["traffic"]["tx_bytes"], 420)
 
     def test_peer_snapshot_includes_tun_payload_and_rates(self):
         args = argparse.Namespace(no_dashboard=True, overlay_transport="myudp")
