@@ -98,9 +98,6 @@ _BUILD_INFO_CACHE: Optional[dict] = None
 
 
 def _config_secret_seed() -> bytes:
-    override = os.environ.get("OBSTACLEBRIDGE_CONFIG_SECRET", "").strip()
-    if override:
-        return override.encode("utf-8")
     for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
         try:
             text = pathlib.Path(path).read_text(encoding="utf-8").strip()

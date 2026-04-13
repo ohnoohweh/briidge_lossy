@@ -1,6 +1,7 @@
 import argparse
 import json
 
+import obstacle_bridge.bridge as bridge
 from obstacle_bridge.bridge import ConfigAwareCLI, Runner
 
 
@@ -33,7 +34,7 @@ def test_update_config_persists_to_config_file(tmp_path):
 
 
 def test_runtime_config_encrypts_secret_fields_and_loads_them_back(tmp_path, monkeypatch):
-    monkeypatch.setenv("OBSTACLEBRIDGE_CONFIG_SECRET", "unit-test-config-secret")
+    monkeypatch.setattr(bridge.socket, "gethostname", lambda: "unit-test-host")
     runner = _make_runner(tmp_path)
     runner.args._config_sections = {
         "admin_web": ["admin_web_bind", "admin_web_password", "admin_web_port"],
