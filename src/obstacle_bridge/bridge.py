@@ -4843,7 +4843,9 @@ class CompressLayerSession(ISession):
             compressed = b""
         if not compressed or len(compressed) >= len(body):
             self._compress_skipped_no_gain_total += 1
+            self._compress_output_bytes_total += len(body)
             self._add_peer_counter(stats_peer_id, "compress_skipped_no_gain_total")
+            self._add_peer_counter(stats_peer_id, "compress_output_bytes_total", len(body))
             sent = self._inner.send_app(payload, peer_id=peer_id)
             return len(payload) if sent else 0
         self._compress_applied_total += 1
@@ -11550,6 +11552,7 @@ class ChannelMux:
 
         # Per-channel stats (readable counters + CRC)
         self._chan_stats: dict[tuple[int, ChannelMux.Proto], _ChanCtr] = {}
+        self._peer_closed_channel_stats: dict[int, _ChanCtr] = {}
 
         # Tasks
         self._sweeper_task: Optional[asyncio.Task] = None
@@ -12140,6 +12143,7 @@ class ChannelMux:
                 except Exception:
                     pass
             self._drop_udp_fragment_reassembly(chan)
+            self._finalize_channel_stats(chan, ChannelMux.Proto.UDP, peer_id=peer_key)
             self._chan_owner_peer_id.pop(chan, None)
             self._forget_udp_open_key(chan)
             self.log.info("[MUX] peer=%s epoch reset -> drop UDP chan=%s", peer_key, chan)
@@ -12158,6 +12162,7 @@ class ChannelMux:
                     writer.close()
                 except Exception:
                     pass
+            self._finalize_channel_stats(chan, ChannelMux.Proto.TCP, peer_id=peer_key)
             self._chan_owner_peer_id.pop(chan, None)
             self._forget_tcp_open_key(chan)
             self.log.info("[MUX] peer=%s epoch reset -> drop TCP chan=%s", peer_key, chan)
@@ -12274,6 +12279,7 @@ class ChannelMux:
         self._tcp_open_key_by_chan.clear()
         self._tcp_chan_by_open_key.clear()
         self._chan_owner_peer_id.clear()
+        self._chan_stats.clear()
         # UDP server maps
         self._udp_by_client.clear()
         self._udp_by_chan.clear()
@@ -12359,8 +12365,7 @@ class ChannelMux:
             chan = self._alloc_udp_id()
             self._udp_by_client[key] = (chan, now)
             self._udp_by_chan[chan] = (svc_key, addr)
-            if str(svc_key[0]) == "peer":
-                self._chan_owner_peer_id[chan] = int(svc_key[1])
+            self._chan_owner_peer_id[chan] = int(svc_key[1]) if str(svc_key[0]) == "peer" else 0
             self._schedule_service_hook(spec, svc_key, "listener", "on_channel_connected", channel_id=chan)
             self.log.debug("[UDP/SRV] learn %s -> chan=%s svc=%s:%s", addr, chan, svc_key[0], spec.svc_id)
             try:
@@ -12400,6 +12405,7 @@ class ChannelMux:
                     if chan is None:
                         continue
                     self._udp_by_chan.pop(chan, None)
+                    self._finalize_channel_stats(chan, ChannelMux.Proto.UDP)
                     self.log.info("[UDP/SRV] chan=%s idle >= %.0fs -> CLOSE", chan, self.UDP_IDLE_S)
                     self._send_mux(chan, ChannelMux.Proto.UDP, ChannelMux.MType.CLOSE, b"")
                 # Client role transports (per chan)
@@ -12410,6 +12416,7 @@ class ChannelMux:
                 for chan in stale_cli:
                     tr = self._udp_client_transports.pop(chan, None)
                     self._udp_client_last_ts.pop(chan, None)
+                    self._finalize_channel_stats(chan, ChannelMux.Proto.UDP)
                     self._chan_owner_peer_id.pop(chan, None)
                     if tr:
                         try: tr.close()
@@ -13361,10 +13368,12 @@ class ChannelMux:
                 return
             chan = self._alloc_tun_id()
             self._bind_tun_channel(chan, dev)
-            if str(svc_key[0]) == "peer":
-                self._chan_owner_peer_id[chan] = int(svc_key[1])
+            self._chan_owner_peer_id[chan] = int(svc_key[1]) if str(svc_key[0]) == "peer" else 0
             self._schedule_service_hook(spec, svc_key, "listener", "on_channel_connected", channel_id=chan)
             self._send_open_for_service(chan, ChannelMux.Proto.TUN, spec)
+        ctr = self._ctr(ChannelMux.Proto.TUN, chan)
+        ctr.msgs_in += 1
+        ctr.bytes_in += len(packet)
         self._send_mux(chan, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet)
 
     def _rx_tun(self, chan: int, mtype: ChannelMux.MType, data: bytes, peer_id: Optional[int] = None) -> None:
@@ -13401,6 +13410,7 @@ class ChannelMux:
             options,
         ) = p
         peer_key = int(peer_id or 0)
+        self._chan_owner_peer_id[chan] = peer_key
         prev_epoch = self._peer_mux_epochs.get(peer_key)
         if not self._peer_epoch_is_new(peer_id, instance_id, connection_seq):
             self.log.debug("[TUN/CLI] chan=%s duplicate/replay OPEN instance_id=%s connection_seq=%s", chan, instance_id, connection_seq)
@@ -13541,7 +13551,7 @@ class ChannelMux:
 
     def _rx_tun_close(self, chan: int) -> None:
         dev = self._tun_by_chan.pop(chan, None)
-        self._chan_stats.pop((chan, ChannelMux.Proto.TUN), None)
+        self._finalize_channel_stats(chan, ChannelMux.Proto.TUN)
         self._chan_owner_peer_id.pop(chan, None)
         self._tun_frag_rx = {key: state for key, state in self._tun_frag_rx.items() if key[0] != chan}
         self._forget_tun_open_key(chan)
@@ -13976,7 +13986,7 @@ class ChannelMux:
         # Client role cleanup
         tr = self._udp_client_transports.pop(chan, None)
         self._udp_client_last_ts.pop(chan, None)
-        self._chan_stats.pop((chan, ChannelMux.Proto.UDP), None)
+        self._finalize_channel_stats(chan, ChannelMux.Proto.UDP)
         self._chan_owner_peer_id.pop(chan, None)
         self._drop_udp_fragment_reassembly(chan)
         if tr:
@@ -14068,8 +14078,7 @@ class ChannelMux:
             self._tcp_by_chan[chan] = (spec.svc_id, writer)
             self._tcp_by_writer[writer] = (spec.svc_id, chan)
             self._tcp_role_by_chan[chan] = "server"      
-            if str(svc_key[0]) == "peer":
-                self._chan_owner_peer_id[chan] = int(svc_key[1])
+            self._chan_owner_peer_id[chan] = int(svc_key[1]) if str(svc_key[0]) == "peer" else 0
             self.log.info(
                 "[TCP/SRV] accept peer=%s -> chan=%s svc=%s map_size=%s",
                 peer,
@@ -14125,6 +14134,7 @@ class ChannelMux:
                         pass
                     self._tcp_by_writer.pop(writer, None)
                     self._tcp_by_chan.pop(chan, None)
+                    self._finalize_channel_stats(chan, ChannelMux.Proto.TCP)
                     self._chan_owner_peer_id.pop(chan, None)
                     self._forget_tcp_open_key(chan)
                     self._schedule_service_hook(spec, svc_key, "listener", "on_channel_closed", channel_id=chan)
@@ -14164,6 +14174,7 @@ class ChannelMux:
             options,
         ) = p
         peer_key = int(peer_id or 0)
+        self._chan_owner_peer_id[chan] = peer_key
         prev_epoch = self._peer_mux_epochs.get(peer_key)
         epoch_is_new = self._peer_epoch_is_new(peer_id, instance_id, connection_seq)
         self.log.info(
@@ -14286,6 +14297,7 @@ class ChannelMux:
                             pass
                         self._tcp_by_writer.pop(writer, None)
                         self._tcp_by_chan.pop(chan, None)
+                        self._finalize_channel_stats(chan, ChannelMux.Proto.TCP)
                         self._forget_tcp_open_key(chan)
                         self._schedule_service_hook(peer_spec, None, "client", "after_closed", channel_id=chan, peer_id=peer_id)
                         self.log.info("[TCP/CLI] chan=%s CLOSE teardown complete map_size=%s", chan, len(self._tcp_by_chan))
@@ -14362,6 +14374,7 @@ class ChannelMux:
                 _, writer = tup
                 self._tcp_pending_data.pop(chan, None)
                 self._tcp_by_writer.pop(writer, None)
+                self._finalize_channel_stats(chan, ChannelMux.Proto.TCP)
                 self._chan_owner_peer_id.pop(chan, None)
                 try:
                     writer.close()
@@ -14525,6 +14538,41 @@ class ChannelMux:
             c = _ChanCtr()
             self._chan_stats[(chan, proto)] = c
         return c
+
+    def _finalize_channel_stats(
+        self,
+        chan: int,
+        proto: "ChannelMux.Proto",
+        *,
+        peer_id: Optional[int] = None,
+    ) -> None:
+        c = self._chan_stats.pop((chan, proto), None)
+        if c is None:
+            return
+        owner_peer_id = peer_id
+        if owner_peer_id is None:
+            owner_peer_id = self._chan_owner_peer_id.get(int(chan))
+        if owner_peer_id is None:
+            return
+        total = self._peer_closed_channel_stats.get(int(owner_peer_id))
+        if total is None:
+            total = _ChanCtr()
+            self._peer_closed_channel_stats[int(owner_peer_id)] = total
+        total.msgs_in += int(getattr(c, "msgs_in", 0) or 0)
+        total.msgs_out += int(getattr(c, "msgs_out", 0) or 0)
+        total.bytes_in += int(getattr(c, "bytes_in", 0) or 0)
+        total.bytes_out += int(getattr(c, "bytes_out", 0) or 0)
+
+    def snapshot_peer_payload_totals(self) -> dict[int, dict[str, int]]:
+        out: dict[int, dict[str, int]] = {}
+        for peer_id, total in list(self._peer_closed_channel_stats.items()):
+            out[int(peer_id)] = {
+                "rx_msgs": int(getattr(total, "msgs_in", 0) or 0),
+                "tx_msgs": int(getattr(total, "msgs_out", 0) or 0),
+                "rx_bytes": int(getattr(total, "bytes_in", 0) or 0),
+                "tx_bytes": int(getattr(total, "bytes_out", 0) or 0),
+            }
+        return out
 
     # ---------- Logging helpers ----------
 
@@ -15092,17 +15140,42 @@ class ChannelMux:
         )
         return rows
 
+    def snapshot_tun_connections(self) -> list[dict]:
+        rows: list[dict] = []
+        for chan, dev in list(self._tun_by_chan.items()):
+            stats = self._chan_stat_dict(chan, ChannelMux.Proto.TUN)
+            svc_key = getattr(dev, "service_key", None)
+            svc_id = int(svc_key[2]) if isinstance(svc_key, tuple) and len(svc_key) >= 3 else None
+            rows.append({
+                "protocol": "tun",
+                "role": "server" if svc_key is not None else "client",
+                "state": "connected",
+                "chan_id": int(chan),
+                "svc_owner_peer_id": int(svc_key[1]) if isinstance(svc_key, tuple) and len(svc_key) >= 2 and str(svc_key[0]) == "peer" else None,
+                "svc_id": svc_id,
+                "source": None,
+                "local": {"ifname": str(getattr(dev, "ifname", "") or ""), "mtu": int(getattr(dev, "mtu", 0) or 0)},
+                "local_port": None,
+                "remote_destination": {"ifname": str(getattr(dev, "ifname", "") or ""), "mtu": int(getattr(dev, "mtu", 0) or 0)},
+                "stats": stats,
+            })
+        rows.sort(key=lambda x: x["chan_id"])
+        return rows
+
     def snapshot_connections(self) -> dict:
         udp_rows = self.snapshot_udp_connections()
         tcp_rows = self.snapshot_tcp_connections()
+        tun_rows = self.snapshot_tun_connections()
         udp_listening = sum(1 for row in udp_rows if str(row.get("state", "connected")).lower() == "listening")
         tcp_listening = sum(1 for row in tcp_rows if str(row.get("state", "connected")).lower() == "listening")
         return {
             "udp": udp_rows,
             "tcp": tcp_rows,
+            "tun": tun_rows,
             "counts": {
                 "udp": len(udp_rows) - udp_listening,
                 "tcp": len(tcp_rows) - tcp_listening,
+                "tun": len(tun_rows),
                 "udp_listening": udp_listening,
                 "tcp_listening": tcp_listening,
             },
@@ -15563,11 +15636,6 @@ class StatsBoard:
                 "peer_missed_count": _num(m.peer_missed_count),
                 "our_missed_count": _num(m.our_missed_count),
             },
-            "decode_errors": {
-                "unidentified_frames": int(
-                    getattr(self.peer_proto, "unidentified_frames", 0) if self.peer_proto else 0
-                ),
-            },
             "myudp": {
                 "retransmit": {
                     "created_total": int(hist.get("created_total", 0)),
@@ -15607,21 +15675,25 @@ class RunnerMuxAggregate:
     def snapshot_connections(self) -> dict:
         udp_rows: list[dict] = []
         tcp_rows: list[dict] = []
+        tun_rows: list[dict] = []
         udp_listening = 0
         tcp_listening = 0
         for mux in self._muxes:
             snap = mux.snapshot_connections()
             udp_rows.extend(snap.get("udp", []))
             tcp_rows.extend(snap.get("tcp", []))
+            tun_rows.extend(snap.get("tun", []))
             counts = snap.get("counts", {}) or {}
             udp_listening += int(counts.get("udp_listening", 0) or 0)
             tcp_listening += int(counts.get("tcp_listening", 0) or 0)
         return {
             "udp": udp_rows,
             "tcp": tcp_rows,
+            "tun": tun_rows,
             "counts": {
                 "udp": len(udp_rows) - udp_listening,
                 "tcp": len(tcp_rows) - tcp_listening,
+                "tun": len(tun_rows),
                 "udp_listening": udp_listening,
                 "tcp_listening": tcp_listening,
             },
@@ -15707,6 +15779,7 @@ class Runner:
         self._last_connected_monotonic: Optional[float] = None
         self._last_disconnected_monotonic: Optional[float] = None
         self._client_restart_watchdog_task: Optional[asyncio.Task] = None        
+        self._peer_traffic_rate_state: Dict[str, Tuple[float, int, int]] = {}
 
     def _ensure_runtime_events(self) -> None:
         if self._stop is None:
@@ -16034,11 +16107,13 @@ class Runner:
             return {
                 "udp": [],
                 "tcp": [],
-                "counts": {"udp": 0, "tcp": 0, "udp_listening": 0, "tcp_listening": 0},
+                "tun": [],
+                "counts": {"udp": 0, "tcp": 0, "tun": 0, "udp_listening": 0, "tcp_listening": 0},
             }
 
         udp_rows: list[dict] = []
         tcp_rows: list[dict] = []
+        tun_rows: list[dict] = []
         udp_listening = 0
         tcp_listening = 0
 
@@ -16046,6 +16121,7 @@ class Runner:
             snap = mux.snapshot_connections()
             mux_udp_rows = list(snap.get("udp", []))
             mux_tcp_rows = list(snap.get("tcp", []))
+            mux_tun_rows = list(snap.get("tun", []))
 
             chan_to_peer_id: dict[int, str] = {}
             owner_peer_to_label: dict[int, str] = {}
@@ -16097,6 +16173,21 @@ class Runner:
                         r["peer_id"] = owner_peer_to_label.get(owner_peer_id, f"{idx}:{owner_peer_id}")
                 tcp_rows.append(r)
 
+            for row in mux_tun_rows:
+                r = dict(row)
+                chan = r.get("chan_id")
+                if chan is not None:
+                    r["peer_id"] = chan_to_peer_id.get(int(chan), str(idx))
+                else:
+                    owner_peer_id = r.get("svc_owner_peer_id")
+                    if owner_peer_id is None:
+                        r["peer_id"] = str(idx)
+                    else:
+                        with contextlib.suppress(Exception):
+                            owner_peer_id = int(owner_peer_id)
+                        r["peer_id"] = owner_peer_to_label.get(owner_peer_id, f"{idx}:{owner_peer_id}")
+                tun_rows.append(r)
+
             counts = snap.get("counts", {}) or {}
             udp_listening += int(counts.get("udp_listening", 0) or 0)
             tcp_listening += int(counts.get("tcp_listening", 0) or 0)
@@ -16104,9 +16195,11 @@ class Runner:
         return {
             "udp": udp_rows,
             "tcp": tcp_rows,
+            "tun": tun_rows,
             "counts": {
                 "udp": len(udp_rows) - udp_listening,
                 "tcp": len(tcp_rows) - tcp_listening,
+                "tun": len(tun_rows),
                 "udp_listening": udp_listening,
                 "tcp_listening": tcp_listening,
             },
@@ -16321,6 +16414,34 @@ class Runner:
                     return snap
         return RunnerMuxAggregate._default_compress_layer_snapshot()
 
+    def _apply_peer_traffic_rates(self, peers: list[dict]) -> None:
+        now = time.monotonic()
+        seen: set[str] = set()
+        for peer in peers:
+            peer_id = str(peer.get("id", ""))
+            seen.add(peer_id)
+            traffic = peer.setdefault("traffic", {})
+            rx_bytes = int(traffic.get("rx_bytes", 0) or 0)
+            tx_bytes = int(traffic.get("tx_bytes", 0) or 0)
+            prev = self._peer_traffic_rate_state.get(peer_id)
+            rx_rate = 0.0
+            tx_rate = 0.0
+            if prev is not None:
+                prev_ts, prev_rx, prev_tx = prev
+                rx_bytes = max(rx_bytes, int(prev_rx))
+                tx_bytes = max(tx_bytes, int(prev_tx))
+                dt = max(1e-6, now - float(prev_ts))
+                rx_rate = max(0.0, float(rx_bytes - int(prev_rx)) / dt)
+                tx_rate = max(0.0, float(tx_bytes - int(prev_tx)) / dt)
+            traffic["rx_bytes"] = rx_bytes
+            traffic["tx_bytes"] = tx_bytes
+            traffic["rx_bytes_per_sec"] = rx_rate
+            traffic["tx_bytes_per_sec"] = tx_rate
+            self._peer_traffic_rate_state[peer_id] = (now, rx_bytes, tx_bytes)
+        for peer_id in list(self._peer_traffic_rate_state.keys()):
+            if peer_id not in seen:
+                self._peer_traffic_rate_state.pop(peer_id, None)
+
     def get_peer_connections_snapshot(self) -> dict:
         peers: list = []
         for idx, session in enumerate(self._sessions):
@@ -16331,10 +16452,18 @@ class Runner:
             m = self._session_metrics_snapshot(session)
             udp_rows: list = []
             tcp_rows: list = []
+            peer_payload_totals: dict[int, dict] = {}
             if mux is not None:
                 snap = mux.snapshot_connections()
                 udp_rows = list(snap.get("udp", []))
                 tcp_rows = list(snap.get("tcp", []))
+                tun_rows = list(snap.get("tun", []))
+                payload_getter = getattr(mux, "snapshot_peer_payload_totals", None)
+                if callable(payload_getter):
+                    with contextlib.suppress(Exception):
+                        peer_payload_totals = dict(payload_getter() or {})
+            else:
+                tun_rows = []
             overlay_rows = []
             with contextlib.suppress(Exception):
                 getter = getattr(session, "get_overlay_peers_snapshot", None)
@@ -16360,6 +16489,7 @@ class Runner:
                             "open_connections": {
                                 "udp": 0,
                                 "tcp": 0,
+                                "tun": 0,
                             },
                             "traffic": {
                                 "rx_bytes": 0,
@@ -16386,6 +16516,7 @@ class Runner:
                     p_tx = 0
                     udp_open = 0
                     tcp_open = 0
+                    tun_open = 0
                     for row in udp_rows:
                         chan_id = row.get("chan_id")
                         if chan_id is None:
@@ -16410,6 +16541,21 @@ class Runner:
                         p_rx += int(st.get("rx_bytes", 0) or 0)
                         p_tx += int(st.get("tx_bytes", 0) or 0)
                         tcp_open += 1
+                    for row in tun_rows:
+                        chan_id = row.get("chan_id")
+                        if chan_id is None:
+                            continue
+                        if str(row.get("state", "connected")).lower() == "listening":
+                            continue
+                        if mux_chans and chan_id not in mux_chans:
+                            continue
+                        st = row.get("stats", {})
+                        p_rx += int(st.get("rx_bytes", 0) or 0)
+                        p_tx += int(st.get("tx_bytes", 0) or 0)
+                        tun_open += 1
+                    archived = peer_payload_totals.get(int(p.get("peer_id", 0))) or {}
+                    p_rx += int(archived.get("rx_bytes", 0) or 0)
+                    p_tx += int(archived.get("tx_bytes", 0) or 0)
 
                     row_connected = bool(p.get("connected", session.is_connected()))
                     row_state = str(p.get("state") or ("connected" if row_connected else "connecting"))
@@ -16430,6 +16576,7 @@ class Runner:
                         "open_connections": {
                             "udp": udp_open,
                             "tcp": tcp_open,
+                            "tun": tun_open,
                         },
                         "traffic": {
                             "rx_bytes": p_rx,
@@ -16443,10 +16590,13 @@ class Runner:
 
             rx_bytes = 0
             tx_bytes = 0
-            for row in udp_rows + tcp_rows:
+            for row in udp_rows + tcp_rows + tun_rows:
                 st = row.get("stats", {})
                 rx_bytes += int(st.get("rx_bytes", 0) or 0)
                 tx_bytes += int(st.get("tx_bytes", 0) or 0)
+            for archived in peer_payload_totals.values():
+                rx_bytes += int(archived.get("rx_bytes", 0) or 0)
+                tx_bytes += int(archived.get("tx_bytes", 0) or 0)
             peer_label = None
             with contextlib.suppress(Exception):
                 if hasattr(session, "peer_proto") and getattr(session, "peer_proto"):
@@ -16478,6 +16628,7 @@ class Runner:
                 "open_connections": {
                     "udp": len(udp_rows),
                     "tcp": len(tcp_rows),
+                    "tun": len(tun_rows),
                 },
                 "traffic": {
                     "rx_bytes": rx_bytes,
@@ -16493,6 +16644,7 @@ class Runner:
                 ),
                 "compress_layer": dict(self._session_compress_layer_snapshot(session)),
             })
+        self._apply_peer_traffic_rates(peers)
         return {"peers": peers, "count": len(peers)}
 
     def _session_peer_row_ids(self, idx: int, session: ISession) -> list[str]:
@@ -18189,6 +18341,8 @@ class AdminWebUI:
 
     def _build_status_payload(self) -> dict:
         payload = self.runner.get_status_snapshot()
+        for aggregate_key in ("open_connections", "traffic", "compress_layer"):
+            payload.pop(aggregate_key, None)
         payload["admin_web_name"] = str(getattr(self.runner.args, "admin_web_name", "") or "")
         payload["uptime_sec"] = int(time.monotonic() - self.started_monotonic)
         payload["app"] = "udp-bidirectional-mux"
