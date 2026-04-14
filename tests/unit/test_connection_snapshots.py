@@ -145,6 +145,32 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         self.assertEqual(row["stats"]["rx_msgs"], 2)
         self.assertEqual(row["stats"]["tx_msgs"], 3)
 
+    def test_snapshot_collapses_tun_channel_aliases_into_one_logical_connection(self):
+        dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1400, service_key=self.tun_key)
+        dev.chan_id = 302
+        self.mux._svc_tun_devices[self.tun_key] = dev
+        self.mux._tun_by_chan[302] = dev
+        self.mux._tun_by_chan[301] = dev
+        ctr_a = self.mux._ctr(ChannelMux.Proto.TUN, 302)
+        ctr_a.msgs_in = 2
+        ctr_a.bytes_in = 100
+        ctr_b = self.mux._ctr(ChannelMux.Proto.TUN, 301)
+        ctr_b.msgs_out = 3
+        ctr_b.bytes_out = 200
+
+        snap = self.mux.snapshot_connections()
+
+        self.assertEqual(snap["counts"]["tun"], 1)
+        self.assertEqual(len(snap["tun"]), 1)
+        row = snap["tun"][0]
+        self.assertEqual(row["chan_id"], 302)
+        self.assertEqual(row["channel_aliases"], [301, 302])
+        self.assertEqual(row["stats"]["rx_msgs"], 2)
+        self.assertEqual(row["stats"]["tx_msgs"], 3)
+        self.assertEqual(row["stats"]["rx_bytes"], 100)
+        self.assertEqual(row["stats"]["tx_bytes"], 200)
+        self.assertEqual(self.mux.tun_open_count(), 1)
+
     def test_snapshot_mixed_listeners_and_active_connections(self):
         self.mux._svc_udp_servers[self.udp_key] = _FakeDatagramTransport(("0.0.0.0", 1111))
         self.mux._svc_tcp_servers[self.tcp_key] = _FakeTcpServer([_FakeSocket(("0.0.0.0", 2222))])

@@ -885,10 +885,13 @@ function renderTunConnectionTable(tbodyId, rows) {
     const isListening = state === 'listening';
     const local = row.local || {};
     const remote = row.remote_destination || {};
+    const chanText = Array.isArray(row.channel_aliases) && row.channel_aliases.length > 1
+      ? row.channel_aliases.map((v) => fmtChan(v)).join(', ')
+      : fmtChan(row.chan_id);
     return `
       <tr>
         <td class="mono">${escapeHtml(fmtConnectionId(row.peer_id))}</td>
-        <td class="mono">${escapeHtml(fmtChan(row.chan_id))}</td>
+        <td class="mono">${escapeHtml(chanText)}</td>
         <td class="mono">${escapeHtml(fmtInteger(row.svc_id))}</td>
         <td class="mono">${escapeHtml(fmtText(row.service_name || ''))}</td>
         <td><span class="${isListening ? 'role-pill role-unknown' : 'role-pill role-client'}">${escapeHtml(state)}</span></td>

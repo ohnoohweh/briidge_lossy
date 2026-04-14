@@ -11517,6 +11517,7 @@ class ChannelMux:
         self._local_services: dict[ChannelMux.ServiceKey, ChannelMux.ServiceSpec] = {}
         self._remote_services_requested: list[ChannelMux.ServiceSpec] = []
         self._peer_installed_services: dict[ChannelMux.ServiceKey, ChannelMux.ServiceSpec] = {}
+        self._pending_peer_service_catalogs: dict[int, dict[ChannelMux.ServiceKey, ChannelMux.ServiceSpec]] = {}
         self._svc_tcp_servers: dict[ChannelMux.ServiceKey, asyncio.base_events.Server] = {}
         self._svc_udp_servers: dict[ChannelMux.ServiceKey, asyncio.DatagramTransport] = {}
         self._svc_tun_devices: dict[ChannelMux.ServiceKey, ChannelMux.TunDevice] = {}
@@ -11853,7 +11854,7 @@ class ChannelMux:
         return len(self._tcp_by_chan)
 
     def tun_open_count(self) -> int:
-        return len(self._tun_by_chan)
+        return len({id(dev) for dev in self._tun_by_chan.values()})
 
     # OPEN v4 binary payload (no backward compatibility):
     # +------+-------------+----------+--------+----------+----------+-----------+----------+----------+----------+-----------+----------+
@@ -12335,10 +12336,12 @@ class ChannelMux:
         self._udp_open_key_by_chan.clear()
         self._udp_chan_by_open_key.clear()
         self._udp_frag_rx.clear()
+        closed_tun_devices: set[int] = set()
         for chan, dev in list(self._tun_by_chan.items()):
             if dev.service_key is not None and self._svc_tun_devices.get(dev.service_key) is dev:
                 dev.chan_id = None
-            else:
+            elif id(dev) not in closed_tun_devices:
+                closed_tun_devices.add(id(dev))
                 try:
                     self._close_tun_device(dev)
                 except Exception:
@@ -12682,10 +12685,7 @@ class ChannelMux:
         if proto_name == "tun":
             dev = self._svc_tun_devices.pop(svc_key, None)
             if dev is not None:
-                chan_id = getattr(dev, "chan_id", None)
-                if chan_id is not None:
-                    self._tun_by_chan.pop(chan_id, None)
-                self._tun_chan_by_service.pop(svc_key, None)
+                self._unbind_all_tun_channels_for_device(dev)
                 self._close_tun_device(dev)
             return
         srv = self._svc_tcp_servers.pop(svc_key, None)
@@ -12756,6 +12756,7 @@ class ChannelMux:
             self._peer_installed_services.pop(svc_key, None)
 
     def on_peer_disconnected(self, peer_id: int) -> None:
+        self._pending_peer_service_catalogs.pop(int(peer_id), None)
         self._peer_mux_epochs.pop(int(peer_id), None)
         self._reset_peer_open_channels(int(peer_id))
         try:
@@ -13302,12 +13303,16 @@ class ChannelMux:
         return None
 
     async def _start_tun_server_for(self, spec: ChannelMux.ServiceSpec, svc_key: "ChannelMux.ServiceKey"):
+        self._start_tun_server_for_sync(spec, svc_key)
+
+    def _start_tun_server_for_sync(self, spec: ChannelMux.ServiceSpec, svc_key: "ChannelMux.ServiceKey") -> "ChannelMux.TunDevice":
         mtu = max(68, int(spec.l_port or self.TUN_DEFAULT_MTU))
         dev = self._open_tun_device(spec.l_bind, mtu, svc_key=svc_key)
         self._svc_tun_devices[svc_key] = dev
         self._register_tun_reader(dev)
         self.log.info("[TUN/SRV] service=%s:%s opened if=%s mtu=%s", svc_key[0], spec.svc_id, dev.ifname, dev.mtu)
         self._schedule_service_hook(spec, svc_key, "listener", "on_created")
+        return dev
 
     def _tun_fragment_payload_limit(self) -> int:
         return max(0, self._session_max_app_payload - ChannelMux.MUX_HDR.size - ChannelMux.UDP_FRAG_HDR.size)
@@ -13331,13 +13336,81 @@ class ChannelMux:
             self._send_mux(chan_id, ChannelMux.Proto.TUN, ChannelMux.MType.DATA_FRAG, frag_payload)
 
     def _bind_tun_channel(self, chan: int, dev: "ChannelMux.TunDevice") -> None:
-        old_chan = dev.chan_id
-        if old_chan is not None and old_chan != chan:
-            self._tun_by_chan.pop(old_chan, None)
-        dev.chan_id = chan
+        # A full-duplex TUN pair can temporarily create symmetric OPENs from both
+        # peers. Keep every inbound channel routable; dev.chan_id is only the
+        # preferred outbound channel for locally-read packets.
         self._tun_by_chan[chan] = dev
+        if dev.chan_id is None:
+            dev.chan_id = chan
         if dev.service_key is not None:
-            self._tun_chan_by_service[dev.service_key] = chan
+            self._tun_chan_by_service.setdefault(dev.service_key, chan)
+
+    def _tun_channels_for_device(self, dev: "ChannelMux.TunDevice") -> list[int]:
+        return [chan for chan, mapped in self._tun_by_chan.items() if mapped is dev]
+
+    def _unbind_tun_channel(self, chan: int) -> Optional["ChannelMux.TunDevice"]:
+        dev = self._tun_by_chan.pop(chan, None)
+        if dev is None:
+            return None
+        remaining = self._tun_channels_for_device(dev)
+        if dev.chan_id == chan:
+            dev.chan_id = remaining[0] if remaining else None
+        if dev.service_key is not None and self._tun_chan_by_service.get(dev.service_key) == chan:
+            if dev.chan_id is not None:
+                self._tun_chan_by_service[dev.service_key] = dev.chan_id
+            else:
+                self._tun_chan_by_service.pop(dev.service_key, None)
+        return dev
+
+    def _unbind_all_tun_channels_for_device(self, dev: "ChannelMux.TunDevice") -> None:
+        for chan in list(self._tun_by_chan.keys()):
+            if self._tun_by_chan.get(chan) is dev:
+                self._tun_by_chan.pop(chan, None)
+                self._tun_frag_rx = {key: state for key, state in self._tun_frag_rx.items() if key[0] != chan}
+                self._forget_tun_open_key(chan)
+                self._finalize_channel_stats(chan, ChannelMux.Proto.TUN)
+                self._chan_owner_peer_id.pop(chan, None)
+        service_key = getattr(dev, "service_key", None)
+        if service_key is not None:
+            self._tun_chan_by_service.pop(service_key, None)
+        with contextlib.suppress(Exception):
+            dev.chan_id = None
+
+    def _peer_tun_listener_for_target(
+        self,
+        peer_key: int,
+        ifname: str,
+        mtu: int,
+    ) -> Optional[tuple["ChannelMux.ServiceKey", "ChannelMux.ServiceSpec"]]:
+        catalogs = (
+            self._peer_installed_services,
+            self._pending_peer_service_catalogs.get(int(peer_key), {}),
+        )
+        for catalog in catalogs:
+            for svc_key, spec in catalog.items():
+                if svc_key[0] != "peer" or int(svc_key[1]) != int(peer_key):
+                    continue
+                if spec.l_proto != "tun":
+                    continue
+                if str(spec.l_bind) == str(ifname) and int(spec.l_port) == int(mtu):
+                    return svc_key, spec
+        return None
+
+    def _ensure_peer_tun_listener_for_target(
+        self,
+        peer_key: int,
+        ifname: str,
+        mtu: int,
+    ) -> Optional["ChannelMux.TunDevice"]:
+        found = self._peer_tun_listener_for_target(peer_key, ifname, mtu)
+        if found is None:
+            return None
+        svc_key, spec = found
+        self._peer_installed_services.setdefault(svc_key, spec)
+        dev = self._svc_tun_devices.get(svc_key)
+        if dev is not None:
+            return dev
+        return self._start_tun_server_for_sync(spec, svc_key)
 
     def _on_tun_fd_readable(self, dev: "ChannelMux.TunDevice") -> None:
         while True:
@@ -13475,7 +13548,7 @@ class ChannelMux:
         else:
             if prev_epoch is not None:
                 self._reset_peer_open_channels(peer_key)
-            self.loop.create_task(self._drop_peer_installed_services(peer_id=peer_key))
+                self.loop.create_task(self._drop_peer_installed_services(peer_id=peer_key))
         if int(l_proto) != int(ChannelMux.Proto.TUN):
             self.log.warning("[TUN/CLI] chan=%s OPEN declares non-TUN l_proto=%s", chan, l_proto)
             return
@@ -13500,6 +13573,19 @@ class ChannelMux:
         )
         self._schedule_service_hook(peer_spec, None, "client", "before_connect", channel_id=chan, peer_id=peer_id)
         dev = self._find_service_tun_device(str(host), int(r_port))
+        if dev is None:
+            try:
+                dev = self._ensure_peer_tun_listener_for_target(peer_key, str(host), int(r_port))
+            except Exception as e:
+                self.log.info(
+                    "[TUN/CLI] chan=%s peer listener start failed if=%s mtu=%s: %r",
+                    chan,
+                    host,
+                    r_port,
+                    e,
+                )
+                self._forget_tun_open_key(chan)
+                return
         if dev is None:
             try:
                 dev = self._open_tun_device(str(host), max(68, int(r_port or self.TUN_DEFAULT_MTU)))
@@ -13608,16 +13694,14 @@ class ChannelMux:
         self._rx_tun_data(chan, bytes(assembled))
 
     def _rx_tun_close(self, chan: int) -> None:
-        dev = self._tun_by_chan.pop(chan, None)
+        dev = self._unbind_tun_channel(chan)
         self._finalize_channel_stats(chan, ChannelMux.Proto.TUN)
         self._chan_owner_peer_id.pop(chan, None)
         self._tun_frag_rx = {key: state for key, state in self._tun_frag_rx.items() if key[0] != chan}
         self._forget_tun_open_key(chan)
         if dev is None:
             return
-        if dev.service_key is not None and self._tun_chan_by_service.get(dev.service_key) == chan:
-            self._tun_chan_by_service.pop(dev.service_key, None)
-            dev.chan_id = None
+        if dev.service_key is not None and self._svc_tun_devices.get(dev.service_key) is dev:
             spec = self._effective_services_by_id().get(dev.service_key)
             if spec is not None:
                 self._schedule_service_hook(spec, dev.service_key, "listener", "on_channel_closed", channel_id=chan)
@@ -13667,7 +13751,10 @@ class ChannelMux:
         else:
             if prev_epoch is not None:
                 self._reset_peer_open_channels(peer_key)
-            self.loop.create_task(self._drop_peer_installed_services(peer_id=peer_key))
+                self.loop.create_task(self._drop_peer_installed_services(peer_id=peer_key))
+        self._pending_peer_service_catalogs[peer_key] = {
+            ("peer", peer_key, int(s.svc_id)): s for s in services
+        }
         self.loop.create_task(self._apply_peer_installed_services(services, peer_id=peer_id))
         self.log.info(
             "[MUX/CTRL] received REMOTE_SERVICES_SET_V2 with %d service(s) from peer_id=%s instance_id=%s connection_seq=%s",
@@ -13851,7 +13938,7 @@ class ChannelMux:
         else:
             if prev_epoch is not None:
                 self._reset_peer_open_channels(peer_key)
-            self.loop.create_task(self._drop_peer_installed_services(peer_id=peer_key))
+                self.loop.create_task(self._drop_peer_installed_services(peer_id=peer_key))
         self._udp_client_svc_id[chan] = int(svc_id)
         if int(l_proto) != int(ChannelMux.Proto.UDP):
             self.log.warning("[UDP/CLI] chan=%s OPEN declares non-UDP l_proto=%s (ignored)", chan, l_proto)
@@ -14252,7 +14339,7 @@ class ChannelMux:
         if epoch_is_new:
             if prev_epoch is not None:
                 self._reset_peer_open_channels(peer_key)
-            self.loop.create_task(self._drop_peer_installed_services(peer_id=peer_key))
+                self.loop.create_task(self._drop_peer_installed_services(peer_id=peer_key))
         else:
             self.log.debug(
                 "[TCP/CLI] duplicate/replay OPEN epoch observed but not treated as channel duplicate chan=%s iid=%s seq=%s",
@@ -15210,8 +15297,23 @@ class ChannelMux:
     def snapshot_tun_connections(self) -> list[dict]:
         rows: list[dict] = []
         active_service_keys: set[ChannelMux.ServiceKey] = set()
+        dev_channels: dict[int, tuple[ChannelMux.TunDevice, list[int]]] = {}
         for chan, dev in list(self._tun_by_chan.items()):
-            stats = self._chan_stat_dict(chan, ChannelMux.Proto.TUN)
+            key = id(dev)
+            if key not in dev_channels:
+                dev_channels[key] = (dev, [])
+            dev_channels[key][1].append(int(chan))
+
+        for _dev_key, (dev, chans) in dev_channels.items():
+            chans = sorted(chans)
+            primary_chan = int(getattr(dev, "chan_id", None) or chans[0])
+            stats = {"rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0}
+            for chan in chans:
+                chan_stats = self._chan_stat_dict(chan, ChannelMux.Proto.TUN)
+                stats["rx_msgs"] += int(chan_stats.get("rx_msgs", 0) or 0)
+                stats["tx_msgs"] += int(chan_stats.get("tx_msgs", 0) or 0)
+                stats["rx_bytes"] += int(chan_stats.get("rx_bytes", 0) or 0)
+                stats["tx_bytes"] += int(chan_stats.get("tx_bytes", 0) or 0)
             svc_key = getattr(dev, "service_key", None)
             svc_id = int(svc_key[2]) if isinstance(svc_key, tuple) and len(svc_key) >= 3 else None
             spec = self._svc_spec_or_none(svc_id) if svc_id is not None else None
@@ -15221,7 +15323,8 @@ class ChannelMux:
                 "protocol": "tun",
                 "role": "server" if svc_key is not None else "client",
                 "state": "connected",
-                "chan_id": int(chan),
+                "chan_id": primary_chan,
+                "channel_aliases": chans,
                 "svc_owner_peer_id": int(svc_key[1]) if isinstance(svc_key, tuple) and len(svc_key) >= 2 and str(svc_key[0]) == "peer" else None,
                 "svc_id": svc_id,
                 "service_name": str(spec.name) if spec and spec.name else "",
@@ -16305,7 +16408,14 @@ class Runner:
                 r = dict(row)
                 chan = r.get("chan_id")
                 if chan is not None:
-                    r["peer_id"] = chan_to_peer_id.get(int(chan), str(idx))
+                    aliases = r.get("channel_aliases") if isinstance(r.get("channel_aliases"), list) else [chan]
+                    peer_label = str(idx)
+                    for alias in aliases:
+                        with contextlib.suppress(Exception):
+                            peer_label = chan_to_peer_id.get(int(alias), peer_label)
+                            if peer_label != str(idx):
+                                break
+                    r["peer_id"] = peer_label
                 else:
                     owner_peer_id = r.get("svc_owner_peer_id")
                     if owner_peer_id is None:
@@ -16685,7 +16795,8 @@ class Runner:
                             continue
                         if str(row.get("state", "connected")).lower() == "listening":
                             continue
-                        if mux_chans and chan_id not in mux_chans:
+                        aliases = row.get("channel_aliases") if isinstance(row.get("channel_aliases"), list) else [chan_id]
+                        if mux_chans and not any(alias in mux_chans for alias in aliases):
                             continue
                         st = row.get("stats", {})
                         p_rx += int(st.get("rx_bytes", 0) or 0)
