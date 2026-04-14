@@ -4,7 +4,7 @@ import time
 import types
 import unittest
 
-from obstacle_bridge.bridge import ChannelMux, Runner, SessionMetrics, TcpStreamSession, QuicSession, UdpSession
+from obstacle_bridge.bridge import ChannelMux, Runner, SessionMetrics, StatsBoard, TcpStreamSession, QuicSession, UdpSession
 
 
 class _FakeSession:
@@ -247,6 +247,22 @@ class _MuxWithMutableTun:
         }
 
 
+class _MuxWithOpenCounts:
+    def __init__(self, udp=0, tcp=0, tun=0):
+        self.udp = udp
+        self.tcp = tcp
+        self.tun = tun
+
+    def udp_open_count(self):
+        return self.udp
+
+    def tcp_open_count(self):
+        return self.tcp
+
+    def tun_open_count(self):
+        return self.tun
+
+
 class _MuxWithArchivedPeerTotals:
     def snapshot_connections(self):
         return {
@@ -272,6 +288,18 @@ class _MuxWithArchivedPeerTotals:
                 "tx_bytes": 400,
             }
         }
+
+
+class StatsBoardSnapshotTests(unittest.TestCase):
+    def test_status_snapshot_includes_tun_open_connection_count(self):
+        board = StatsBoard(argparse.Namespace(no_dashboard=True, overlay_transport="myudp"))
+        board.set_mux_ref(_MuxWithOpenCounts(udp=1, tcp=2, tun=3))
+
+        status = board.snapshot_status()
+
+        self.assertEqual(status["open_connections"]["udp"], 1)
+        self.assertEqual(status["open_connections"]["tcp"], 2)
+        self.assertEqual(status["open_connections"]["tun"], 3)
 
 
 class RunnerPeerSnapshotTests(unittest.TestCase):

@@ -15640,6 +15640,7 @@ class StatsBoard:
 
         udp_count = self.mux.udp_open_count() if self.mux else 0
         tcp_count = self.mux.tcp_open_count() if self.mux else 0
+        tun_count = self.mux.tun_open_count() if self.mux and hasattr(self.mux, "tun_open_count") else 0
 
         def _num(v):
             return None if v is None else v
