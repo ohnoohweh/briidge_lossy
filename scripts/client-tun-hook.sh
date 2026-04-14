@@ -6,6 +6,8 @@ IFNAME="${2:?missing ifname}"
 
 : "${TUN_ADDR:?missing TUN_ADDR}"
 : "${TUN_GW:?missing TUN_GW}"
+TUN_ADDR6="${TUN_ADDR6:-}"
+TUN_GW6="${TUN_GW6:-}"
 OVERLAY_PEER_IP="${OVERLAY_PEER_IP:-${OB_OVERLAY_PEER_HOST:-}}"
 : "${OVERLAY_PEER_IP:?missing OVERLAY_PEER_IP or OB_OVERLAY_PEER_HOST}"
 UNDERLAY_IF="${UNDERLAY_IF:-auto}"
@@ -15,6 +17,7 @@ DNS2="${DNS2:-}"
 
 STATE_DIR="/run/obbridge"
 STATE_FILE="${STATE_DIR}/${IFNAME}.default-route"
+STATE_FILE6="${STATE_DIR}/${IFNAME}.default-route6"
 
 mkdir -p "$STATE_DIR"
 
@@ -47,6 +50,7 @@ detect_underlay() {
 
 save_default_route() {
   ip route show default | head -n1 > "$STATE_FILE" || true
+  ip -6 route show default | head -n1 > "$STATE_FILE6" || true
 }
 
 restore_default_route() {
@@ -54,6 +58,11 @@ restore_default_route() {
     local current_default
     current_default="$(cat "$STATE_FILE")"
     ip route replace $current_default
+  fi
+  if [[ -s "$STATE_FILE6" ]]; then
+    local current_default6
+    current_default6="$(cat "$STATE_FILE6")"
+    ip -6 route replace $current_default6
   fi
 }
 
@@ -79,6 +88,9 @@ case "$ACTION" in
   up)
     detect_underlay
     ip addr replace "$TUN_ADDR" dev "$IFNAME"
+    if [[ -n "$TUN_ADDR6" ]]; then
+      ip -6 addr replace "$TUN_ADDR6" dev "$IFNAME"
+    fi
     ip link set dev "$IFNAME" up
 
     save_default_route
@@ -89,12 +101,18 @@ case "$ACTION" in
       ip route replace "$(overlay_route_prefix)" dev "$UNDERLAY_IF"
     fi
     ip route replace default via "$TUN_GW" dev "$IFNAME"
+    if [[ -n "$TUN_GW6" ]]; then
+      ip -6 route replace default via "$TUN_GW6" dev "$IFNAME" metric 1
+    fi
 
     set_dns
     ;;
   down)
     detect_underlay
     ip route del default via "$TUN_GW" dev "$IFNAME" 2>/dev/null || true
+    if [[ -n "$TUN_GW6" ]]; then
+      ip -6 route del default via "$TUN_GW6" dev "$IFNAME" 2>/dev/null || true
+    fi
     restore_default_route
     if [[ -n "$UNDERLAY_GW" ]]; then
       ip route del "$(overlay_route_prefix)" via "$UNDERLAY_GW" dev "$UNDERLAY_IF" 2>/dev/null || true
@@ -103,6 +121,9 @@ case "$ACTION" in
     fi
 
     clear_dns
+    if [[ -n "$TUN_ADDR6" ]]; then
+      ip -6 addr del "$TUN_ADDR6" dev "$IFNAME" 2>/dev/null || true
+    fi
     ip addr del "$TUN_ADDR" dev "$IFNAME" 2>/dev/null || true
     ;;
   *)

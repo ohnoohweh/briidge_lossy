@@ -582,8 +582,10 @@ Single peer-client config assumptions:
 
 - Client TUN interface: `obtun0`
 - Client tunnel address: `10.20.0.1/30`
+- Client IPv6 tunnel address: `fd20:20::1/126`
 - Server TUN interface: `obtun1`
 - Server tunnel address: `10.20.0.2/30`
+- Server IPv6 tunnel address: `fd20:20::2/126`
 - Server WAN interface: `eth0`
 - Client underlay interface/gateway: `auto`, or explicit values such as `eth0` and `192.168.1.1`
 - DNS servers: `1.1.1.1` and `8.8.8.8`
@@ -614,13 +616,15 @@ Combined peer-client config fragment:
               "env": {
                 "TUN_ADDR": "10.20.0.1/30",
                 "TUN_GW": "10.20.0.2",
-              "UNDERLAY_IF": "auto",
-              "UNDERLAY_GW": "auto",
-              "DNS1": "1.1.1.1",
-              "DNS2": "8.8.8.8"
+                "TUN_ADDR6": "fd20:20::1/126",
+                "TUN_GW6": "fd20:20::2",
+                "UNDERLAY_IF": "auto",
+                "UNDERLAY_GW": "auto",
+                "DNS1": "1.1.1.1",
+                "DNS2": "8.8.8.8"
+              },
+              "timeout_ms": 15000
             },
-            "timeout_ms": 15000
-          },
           "on_channel_connected": {
             "argv": {
               "linux": ["./scripts/client-tun-hook.sh", "up", "{ifname}"]
@@ -628,13 +632,15 @@ Combined peer-client config fragment:
               "env": {
                 "TUN_ADDR": "10.20.0.1/30",
                 "TUN_GW": "10.20.0.2",
-              "UNDERLAY_IF": "auto",
-              "UNDERLAY_GW": "auto",
-              "DNS1": "1.1.1.1",
-              "DNS2": "8.8.8.8"
+                "TUN_ADDR6": "fd20:20::1/126",
+                "TUN_GW6": "fd20:20::2",
+                "UNDERLAY_IF": "auto",
+                "UNDERLAY_GW": "auto",
+                "DNS1": "1.1.1.1",
+                "DNS2": "8.8.8.8"
+              },
+              "timeout_ms": 15000
             },
-            "timeout_ms": 15000
-          },
           "on_stopped": {
             "argv": {
               "linux": ["./scripts/client-tun-hook.sh", "down", "{ifname}"]
@@ -642,13 +648,15 @@ Combined peer-client config fragment:
               "env": {
                 "TUN_ADDR": "10.20.0.1/30",
                 "TUN_GW": "10.20.0.2",
-              "UNDERLAY_IF": "auto",
-              "UNDERLAY_GW": "auto",
-              "DNS1": "1.1.1.1",
-              "DNS2": "8.8.8.8"
-            },
-            "timeout_ms": 15000
-          }
+                "TUN_ADDR6": "fd20:20::1/126",
+                "TUN_GW6": "fd20:20::2",
+                "UNDERLAY_IF": "auto",
+                "UNDERLAY_GW": "auto",
+                "DNS1": "1.1.1.1",
+                "DNS2": "8.8.8.8"
+              },
+              "timeout_ms": 15000
+            }
         }
       }
     }
@@ -675,8 +683,11 @@ Combined peer-client config fragment:
             "env": {
               "TUN_ADDR": "10.20.0.2/30",
               "PEER_ADDR": "10.20.0.1",
+              "TUN_ADDR6": "fd20:20::2/126",
+              "PEER_ADDR6": "fd20:20::1",
               "WAN_IF": "eth0",
               "TUN_SUBNET": "10.20.0.0/30",
+              "TUN_SUBNET6": "fd20:20::/126",
               "ENABLE_TCPMSS": "1"
             },
             "timeout_ms": 15000
@@ -688,8 +699,11 @@ Combined peer-client config fragment:
             "env": {
               "TUN_ADDR": "10.20.0.2/30",
               "PEER_ADDR": "10.20.0.1",
+              "TUN_ADDR6": "fd20:20::2/126",
+              "PEER_ADDR6": "fd20:20::1",
               "WAN_IF": "eth0",
               "TUN_SUBNET": "10.20.0.0/30",
+              "TUN_SUBNET6": "fd20:20::/126",
               "ENABLE_TCPMSS": "1"
             },
             "timeout_ms": 15000
@@ -701,8 +715,11 @@ Combined peer-client config fragment:
             "env": {
               "TUN_ADDR": "10.20.0.2/30",
               "PEER_ADDR": "10.20.0.1",
+              "TUN_ADDR6": "fd20:20::2/126",
+              "PEER_ADDR6": "fd20:20::1",
               "WAN_IF": "eth0",
               "TUN_SUBNET": "10.20.0.0/30",
+              "TUN_SUBNET6": "fd20:20::/126",
               "ENABLE_TCPMSS": "1"
             },
             "timeout_ms": 15000
@@ -716,6 +733,109 @@ Combined peer-client config fragment:
 
 In this combined form, the peer client defines both ends. The local `own_servers` hook runs on the peer client and configures `obtun0`. The `remote_servers` entry is sent to the connected peer server; its `listener` hooks run on that peer server and configure `obtun1`.
 
+#### Adding a second peer client to the same peer server
+
+A second peer can also use the same peer server as an Internet-exit TUN gateway, but it must not reuse the first peer's tunnel interface names or tunnel subnets on the peer server. Treat each client-to-server TUN as a separate point-to-point link:
+
+| Link | Client interface | Server interface | IPv4 client | IPv4 server | IPv6 client | IPv6 server |
+|---|---|---|---|---|---|---|
+| Peer client A | `obtun0` | `obtun1` | `10.20.0.1/30` | `10.20.0.2/30` | `fd20:20::1/126` | `fd20:20::2/126` |
+| Peer client B | `obtun0` | `obtun2` | `10.20.0.5/30` | `10.20.0.6/30` | `fd20:20::5/126` | `fd20:20::6/126` |
+
+For the second peer client, keep the client-side `own_servers` shape the same, but change its hook environment:
+
+```json
+{
+  "TUN_ADDR": "10.20.0.5/30",
+  "TUN_GW": "10.20.0.6",
+  "TUN_ADDR6": "fd20:20::5/126",
+  "TUN_GW6": "fd20:20::6",
+  "UNDERLAY_IF": "auto",
+  "UNDERLAY_GW": "auto",
+  "DNS1": "1.1.1.1",
+  "DNS2": "8.8.8.8"
+}
+```
+
+Also change the second peer client's `remote_servers` TUN listener to use a different server-side interface and subnet:
+
+```json
+{
+  "name": "site-b-tun-remote-client-b",
+  "listen": {
+    "protocol": "tun",
+    "ifname": "obtun2",
+    "mtu": 1400
+  },
+  "target": {
+    "protocol": "tun",
+    "ifname": "obtun0",
+    "mtu": 1400
+  },
+  "lifecycle_hooks": {
+    "listener": {
+      "on_created": {
+        "argv": {
+          "linux": ["./scripts/server-tun-hook.sh", "up", "{ifname}"]
+        },
+        "env": {
+          "TUN_ADDR": "10.20.0.6/30",
+          "PEER_ADDR": "10.20.0.5",
+          "TUN_ADDR6": "fd20:20::6/126",
+          "PEER_ADDR6": "fd20:20::5",
+          "WAN_IF": "eth0",
+          "TUN_SUBNET": "10.20.0.4/30",
+          "TUN_SUBNET6": "fd20:20::4/126",
+          "ENABLE_TCPMSS": "1"
+        },
+        "timeout_ms": 15000
+      },
+      "on_channel_connected": {
+        "argv": {
+          "linux": ["./scripts/server-tun-hook.sh", "up", "{ifname}"]
+        },
+        "env": {
+          "TUN_ADDR": "10.20.0.6/30",
+          "PEER_ADDR": "10.20.0.5",
+          "TUN_ADDR6": "fd20:20::6/126",
+          "PEER_ADDR6": "fd20:20::5",
+          "WAN_IF": "eth0",
+          "TUN_SUBNET": "10.20.0.4/30",
+          "TUN_SUBNET6": "fd20:20::4/126",
+          "ENABLE_TCPMSS": "1"
+        },
+        "timeout_ms": 15000
+      },
+      "on_stopped": {
+        "argv": {
+          "linux": ["./scripts/server-tun-hook.sh", "down", "{ifname}"]
+        },
+        "env": {
+          "TUN_ADDR": "10.20.0.6/30",
+          "PEER_ADDR": "10.20.0.5",
+          "TUN_ADDR6": "fd20:20::6/126",
+          "PEER_ADDR6": "fd20:20::5",
+          "WAN_IF": "eth0",
+          "TUN_SUBNET": "10.20.0.4/30",
+          "TUN_SUBNET6": "fd20:20::4/126",
+          "ENABLE_TCPMSS": "1"
+        },
+        "timeout_ms": 15000
+      }
+    }
+  }
+}
+```
+
+Important multi-peer notes:
+
+- Do not let two peer clients request the same server-side TUN interface such as `obtun1`. The operating system TUN device is exclusive; reusing it causes collisions or ambiguous packet routing.
+- Do not reuse the same `/30` IPv4 or `/126` IPv6 tunnel subnet for multiple peers. Allocate one point-to-point subnet per peer.
+- It is fine for every peer client to use `obtun0` locally because each client is a different machine. The server side is the shared machine, so the server-side names must be unique: `obtun1`, `obtun2`, `obtun3`, and so on.
+- The provided server hook NATs each TUN subnet toward `WAN_IF`, which is enough for multiple independent full-tunnel clients to reach the Internet through the same server.
+- The provided server hook does not add peer-to-peer forwarding rules between `obtun1` and `obtun2`. If clients should reach each other through the server, add explicit routes/firewall policy for that design instead of relying on the Internet-exit NAT rules.
+- Each peer client's `remote_servers` catalog is scoped to that overlay peer connection, so identical service IDs in different peer configs are acceptable. Interface names and tunnel subnets are the resources that must stay unique on the shared peer server.
+
 Make the repo-local scripts executable after checkout if your filesystem did not preserve executable bits:
 
 ```bash
@@ -728,6 +848,7 @@ Operational notes:
 - Verify interface names before hardcoding `eth0`: `ip route get 1.1.1.1`.
 - Preserve the overlay peer route on the client. The provided client hook uses `OB_OVERLAY_PEER_HOST` from the runtime to add the host route via the original gateway; without that route, the tunnel may try to carry its own transport packets and collapse.
 - DNS can explain cases where `ping` works but web pages do not. The client script uses `resolvectl`; adapt that part if the system does not use `systemd-resolved`.
+- IPv6 full-tunnel routing is opt-in. Set `TUN_ADDR6` and `TUN_GW6` on the client hook, and set `TUN_ADDR6`, `PEER_ADDR6`, and `TUN_SUBNET6` on the server hook. The server script enables IPv6 forwarding and adds an `ip6tables` MASQUERADE rule for `TUN_SUBNET6`, which is NAT66. NAT66 is not the ideal IPv6 design, but it is useful when the server has IPv6 Internet access and you do not have a routed IPv6 prefix for the tunnel.
 - Keep TCP MSS clamping enabled on the server (`ENABLE_TCPMSS=1`) when tunneling full-path traffic over a reduced MTU.
 - The server script uses `iptables -C` checks before adding rules, so repeated `up` hooks do not create duplicate firewall rules.
 - Use `listener.on_stopped` for route/firewall teardown because it runs for service-level shutdown caused by overlay disconnect, peer disconnect, catalog replacement, or process shutdown. `on_channel_closed` remains useful for per-channel cleanup, but `on_stopped` is the deterministic safety net for full-tunnel routing.
