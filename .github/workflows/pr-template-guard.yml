@@ -1,0 +1,25 @@
+name: PR Template Guard
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+jobs:
+  pr-template-guard:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check PR body follows template
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/check_pr_template_guard.py --pr "${{ github.event.pull_request.number }}"

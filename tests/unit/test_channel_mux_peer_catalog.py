@@ -51,9 +51,11 @@ class ChannelMuxPeerCatalogTests(unittest.IsolatedAsyncioTestCase):
     async def test_peer_disconnect_closes_tcp_udp_listeners_for_that_peer(self):
         session = _FakeSession()
         mux = ChannelMux(session, asyncio.get_running_loop())
+        udp_spec = ChannelMux.ServiceSpec(1, "udp", "127.0.0.1", 10001, "udp", "127.0.0.1", 20001)
+        tcp_spec = ChannelMux.ServiceSpec(2, "tcp", "127.0.0.1", 10002, "tcp", "127.0.0.1", 20002)
         mux._peer_installed_services = {
-            ("peer", 11, 1): ChannelMux.ServiceSpec(1, "udp", "127.0.0.1", 10001, "udp", "127.0.0.1", 20001),
-            ("peer", 11, 2): ChannelMux.ServiceSpec(2, "tcp", "127.0.0.1", 10002, "tcp", "127.0.0.1", 20002),
+            ("peer", 11, 1): udp_spec,
+            ("peer", 11, 2): tcp_spec,
             ("peer", 22, 1): ChannelMux.ServiceSpec(1, "udp", "127.0.0.1", 10003, "udp", "127.0.0.1", 20003),
         }
 
@@ -64,8 +66,8 @@ class ChannelMuxPeerCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stop_listener.await_count, 2)
         stop_listener.assert_has_awaits(
             [
-                mock.call(("peer", 11, 1), "udp"),
-                mock.call(("peer", 11, 2), "tcp"),
+                mock.call(("peer", 11, 1), "udp", spec=udp_spec),
+                mock.call(("peer", 11, 2), "tcp", spec=tcp_spec),
             ],
             any_order=True,
         )

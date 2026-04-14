@@ -810,6 +810,10 @@ function setProgress(id, value, maxScale = 256.0) {
 function fmtEndpoint(ep) {
   if (!ep) return 'n/a';
   if (Array.isArray(ep) && ep.length >= 2) return `${ep[0]}:${ep[1]}`;
+  if (typeof ep === 'object' && ep.ifname != null) {
+    const mtu = ep.mtu != null ? ` mtu ${ep.mtu}` : '';
+    return `${ep.ifname}${mtu}`;
+  }
   if (typeof ep === 'object' && ep.host != null && ep.port != null) return `${ep.host}:${ep.port}`;
   return String(ep);
 }
@@ -827,12 +831,12 @@ function roleClass(role) {
   return 'role-pill role-unknown';
 }
 
-function renderConnectionTable(tbodyId, rows) {
+function renderConnectionTable(tbodyId, rows, protocolLabel = 'Connection') {
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
 
   if (!rows || rows.length === 0) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="12">No ${tbodyId.startsWith('udp') ? 'UDP' : 'TCP'} connections</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="13">No ${escapeHtml(protocolLabel)} connections</td></tr>`;
     return;
   }
 
@@ -845,18 +849,57 @@ function renderConnectionTable(tbodyId, rows) {
     const isListening = state === 'listening';
     return `
       <tr>
-        <td class="mono">${fmtConnectionId(row.peer_id)}</td>
-        <td class="mono">${fmtChan(row.chan_id)}</td>
-        <td class="mono">${fmtInteger(row.svc_id)}</td>
-        <td><span class="${isListening ? 'role-pill role-unknown' : 'role-pill role-client'}">${state}</span></td>
-        <td><span class="${roleClass(row.role)}">${row.role || 'unknown'}</span></td>
-        <td class="mono">${isListening ? 'n/a' : fmtEndpoint(row.source)}</td>
-        <td class="mono">${fmtInteger(row.local_port)}</td>
-        <td class="mono">${fmtDestination(row.remote_destination)}</td>
-        <td class="mono">${fmtBytes(rxBytes)}</td>
-        <td class="mono">${fmtBytes(txBytes)}</td>
-        <td class="mono">${fmtInteger(rxMsgs)}</td>
-        <td class="mono">${fmtInteger(txMsgs)}</td>        
+        <td class="mono">${escapeHtml(fmtConnectionId(row.peer_id))}</td>
+        <td class="mono">${escapeHtml(fmtChan(row.chan_id))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(row.svc_id))}</td>
+        <td class="mono">${escapeHtml(fmtText(row.service_name || ''))}</td>
+        <td><span class="${isListening ? 'role-pill role-unknown' : 'role-pill role-client'}">${escapeHtml(state)}</span></td>
+        <td><span class="${roleClass(row.role)}">${escapeHtml(row.role || 'unknown')}</span></td>
+        <td class="mono">${escapeHtml(isListening ? 'n/a' : fmtEndpoint(row.source))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(row.local_port))}</td>
+        <td class="mono">${escapeHtml(fmtDestination(row.remote_destination))}</td>
+        <td class="mono">${escapeHtml(fmtBytes(rxBytes))}</td>
+        <td class="mono">${escapeHtml(fmtBytes(txBytes))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(rxMsgs))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(txMsgs))}</td>        
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderTunConnectionTable(tbodyId, rows) {
+  const tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+
+  if (!rows || rows.length === 0) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="13">No TUN connections</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = rows.map((row) => {
+    const rxBytes = row.stats?.rx_bytes ?? 0;
+    const txBytes = row.stats?.tx_bytes ?? 0;
+    const rxMsgs = row.stats?.rx_msgs ?? 0;
+    const txMsgs = row.stats?.tx_msgs ?? 0;
+    const state = String(row.state || 'connected').toLowerCase();
+    const isListening = state === 'listening';
+    const local = row.local || {};
+    const remote = row.remote_destination || {};
+    return `
+      <tr>
+        <td class="mono">${escapeHtml(fmtConnectionId(row.peer_id))}</td>
+        <td class="mono">${escapeHtml(fmtChan(row.chan_id))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(row.svc_id))}</td>
+        <td class="mono">${escapeHtml(fmtText(row.service_name || ''))}</td>
+        <td><span class="${isListening ? 'role-pill role-unknown' : 'role-pill role-client'}">${escapeHtml(state)}</span></td>
+        <td><span class="${roleClass(row.role)}">${escapeHtml(row.role || 'unknown')}</span></td>
+        <td class="mono">${escapeHtml(fmtText(local.ifname))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(local.mtu))}</td>
+        <td class="mono">${escapeHtml(fmtEndpoint(remote))}</td>
+        <td class="mono">${escapeHtml(fmtBytes(rxBytes))}</td>
+        <td class="mono">${escapeHtml(fmtBytes(txBytes))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(rxMsgs))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(txMsgs))}</td>
       </tr>
     `;
   }).join('');
@@ -2140,12 +2183,15 @@ function applyStatusDoc(j) {
 }
 
 function applyConnectionsDoc(j) {
-  renderConnectionTable('udpConnectionsBody', j.udp || []);
-  renderConnectionTable('tcpConnectionsBody', j.tcp || []);
+  renderConnectionTable('udpConnectionsBody', j.udp || [], 'UDP');
+  renderConnectionTable('tcpConnectionsBody', j.tcp || [], 'TCP');
+  renderTunConnectionTable('tunConnectionsBody', j.tun || []);
   setText('udpOpen', fmtInteger(j.counts?.udp ?? (j.udp || []).length));
   setText('tcpOpen', fmtInteger(j.counts?.tcp ?? (j.tcp || []).length));
+  setText('tunOpen', fmtInteger(j.counts?.tun ?? (j.tun || []).length));
   setText('udpListening', fmtInteger(j.counts?.udp_listening ?? 0));
   setText('tcpListening', fmtInteger(j.counts?.tcp_listening ?? 0));
+  setText('tunListening', fmtInteger(j.counts?.tun_listening ?? 0));
 }
 
 function applyPeersDoc(j) {
@@ -2474,18 +2520,13 @@ function renderServiceCatalogItemHtml(spec, rowIndex) {
 function renderServiceCatalogEditor(key, currentValue) {
   const specs = sanitizeServiceSpecs(currentValue);
   const serialized = escapeHtml(JSON.stringify(specs));
-  const emptyState = specs.length === 0 ? '' : ' hidden';
-  const itemsHtml = specs.map((spec, index) => renderServiceCatalogItemHtml(spec, index)).join('');
+  const previewText = escapeHtml(JSON.stringify(specs, null, 2));
+  const keyAttr = escapeHtml(key);
   return `
-    <div class="service-catalog-editor" data-service-catalog-root="${key}">
-      <textarea class="config-editor mono hidden" data-config-key="${key}" data-service-catalog-hidden="true">${serialized}</textarea>
-      <div class="service-catalog-toolbar">
-        <button class="btn btn-secondary" type="button" data-service-add="${key}">Add service</button>
-      </div>
-      <p class="service-catalog-empty${emptyState}" data-service-empty="${key}">No services configured.</p>
-      <div class="service-catalog-items" data-service-items="${key}">
-        ${itemsHtml}
-      </div>
+    <div class="service-catalog-editor" data-service-catalog-root="${keyAttr}">
+      <textarea class="config-editor mono hidden" data-config-key="${keyAttr}" data-service-catalog-hidden="true">${serialized}</textarea>
+      <textarea class="config-editor config-editor-textarea mono service-catalog-json-preview" data-service-catalog-preview="${keyAttr}" rows="4" readonly autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Edit ${keyAttr} services">${previewText}</textarea>
+      <div class="service-modal hidden" data-service-modal="${keyAttr}" role="dialog" aria-modal="true" aria-label="Edit ${keyAttr} service"></div>
     </div>
   `;
 }
@@ -2837,15 +2878,23 @@ function syncServiceCatalogEditor(key) {
   const sink = document.querySelector(`.config-editor[data-config-key="${CSS.escape(key)}"][data-service-catalog-hidden="true"]`);
   if (!root || !sink) return true;
 
-  const items = Array.from(root.querySelectorAll('[data-service-item]'));
-  const empty = root.querySelector(`[data-service-empty="${CSS.escape(key)}"]`);
-  if (empty) empty.classList.toggle('hidden', items.length > 0);
+  const specs = readServiceCatalogSpecsFromSink(root, key);
+  const activeItem = root.querySelector('[data-service-item]');
+  const activeIndex = Number(root.querySelector(`[data-service-modal="${CSS.escape(key)}"]`)?.getAttribute('data-service-active-index') ?? -1);
+  const preview = root.querySelector(`[data-service-catalog-preview="${CSS.escape(key)}"]`);
   try {
-    const specs = items.map((itemNode, index) => parseServiceSpecItem(itemNode, index));
-    sink.value = JSON.stringify(specs);
+    if (activeItem && Number.isInteger(activeIndex) && activeIndex >= 0 && activeIndex < specs.length) {
+      specs[activeIndex] = parseServiceSpecItem(activeItem, activeIndex);
+      sink.value = JSON.stringify(specs);
+    } else {
+      sink.value = JSON.stringify(specs);
+    }
+    if (preview) preview.value = JSON.stringify(specs, null, 2);
+    root.setAttribute('data-service-catalog-draft', JSON.stringify(specs));
     setServiceCatalogValidationState(key, '');
     return true;
   } catch (error) {
+    root.setAttribute('data-service-catalog-draft', JSON.stringify(specs));
     sink.value = '"__invalid_service_catalog__"';
     setServiceCatalogValidationState(key, String(error));
     return false;
@@ -2853,9 +2902,8 @@ function syncServiceCatalogEditor(key) {
 }
 
 function renderServiceCatalogItems(root, key, specs) {
-  const listNode = root.querySelector(`[data-service-items="${CSS.escape(key)}"]`);
-  if (!listNode) return;
-  listNode.innerHTML = specs.map((spec, index) => renderServiceCatalogItemHtml(spec, index)).join('');
+  const preview = root.querySelector(`[data-service-catalog-preview="${CSS.escape(key)}"]`);
+  if (preview) preview.value = JSON.stringify(sanitizeServiceSpecs(specs), null, 2);
 }
 
 function readServiceCatalogSpecsFromSink(root, key) {
@@ -2864,18 +2912,96 @@ function readServiceCatalogSpecsFromSink(root, key) {
   try {
     return sanitizeServiceSpecs(JSON.parse(raw));
   } catch (_error) {
-    return [];
+    try {
+      return sanitizeServiceSpecs(JSON.parse(root.getAttribute('data-service-catalog-draft') || '[]'));
+    } catch (_draftError) {
+      return [];
+    }
   }
+}
+
+function writeServiceCatalogSpecsToSink(root, key, specs) {
+  root.setAttribute('data-service-catalog-draft', JSON.stringify(sanitizeServiceSpecs(specs)));
+  const sink = root.querySelector(`.config-editor[data-config-key="${CSS.escape(key)}"][data-service-catalog-hidden="true"]`);
+  if (sink) sink.value = JSON.stringify(sanitizeServiceSpecs(specs));
+  const preview = root.querySelector(`[data-service-catalog-preview="${CSS.escape(key)}"]`);
+  if (preview) preview.value = JSON.stringify(sanitizeServiceSpecs(specs), null, 2);
+}
+
+function defaultServiceSpecDraft() {
+  return {
+    listen: { protocol: 'udp', bind: '0.0.0.0', port: 16667 },
+    target: { protocol: 'udp', host: '127.0.0.1', port: 16666 },
+  };
 }
 
 function resetServiceCatalogEditorValue(key) {
   const root = document.querySelector(`[data-service-catalog-root="${CSS.escape(key)}"]`);
   if (!root) return;
+  closeServiceCatalogModal(root, key, { rerender: false });
   const current = configState.config ? configState.config[key] : [];
   const specs = sanitizeServiceSpecs(current);
+  writeServiceCatalogSpecsToSink(root, key, specs);
   renderServiceCatalogItems(root, key, specs);
   initServiceCatalogEditor(root, key);
   syncServiceCatalogEditor(key);
+}
+
+function closeServiceCatalogModal(root, key, { rerender = true } = {}) {
+  const modal = root.querySelector(`[data-service-modal="${CSS.escape(key)}"]`);
+  if (!modal) return;
+  syncServiceCatalogEditor(key);
+  modal.classList.add('hidden');
+  modal.removeAttribute('data-service-active-index');
+  modal.innerHTML = '';
+  if (rerender) {
+    const specs = readServiceCatalogSpecsFromSink(root, key);
+    renderServiceCatalogItems(root, key, specs);
+    initServiceCatalogEditor(root, key);
+    refreshConfigPreview(key);
+  }
+}
+
+function renderServiceCatalogModal(root, key, activeIndex) {
+  const modal = root.querySelector(`[data-service-modal="${CSS.escape(key)}"]`);
+  if (!modal) return;
+  let specs = readServiceCatalogSpecsFromSink(root, key);
+  if (!specs.length) {
+    specs = [defaultServiceSpecDraft()];
+    writeServiceCatalogSpecsToSink(root, key, specs);
+    refreshConfigPreview(key);
+  }
+  const clampedIndex = Math.max(0, Math.min(Number(activeIndex) || 0, specs.length - 1));
+  const spec = specs[clampedIndex];
+  const serviceName = String(spec.name || '').trim() || `Service ${clampedIndex + 1}`;
+  const keyAttr = escapeHtml(key);
+  modal.setAttribute('data-service-active-index', String(clampedIndex));
+  modal.classList.remove('hidden');
+  modal.innerHTML = `
+    <div class="service-modal-backdrop" data-service-close="${keyAttr}"></div>
+    <section class="service-modal-card card">
+      <div class="service-modal-header">
+        <div>
+          <p class="service-modal-eyebrow">${escapeHtml(key)} · ${clampedIndex + 1} of ${specs.length}</p>
+          <h3>Edit ${escapeHtml(serviceName)}</h3>
+        </div>
+        <div class="service-modal-header-actions">
+          <button class="btn btn-secondary" type="button" data-service-add-modal="${keyAttr}">Add service</button>
+          <button class="btn btn-secondary service-modal-close" type="button" data-service-close="${keyAttr}">Close</button>
+        </div>
+      </div>
+      <div class="service-modal-body">
+        ${renderServiceCatalogItemHtml(spec, clampedIndex)}
+      </div>
+      <div class="service-modal-footer">
+        <button class="btn btn-secondary" type="button" data-service-prev="${keyAttr}"${clampedIndex <= 0 ? ' disabled' : ''}>Left</button>
+        <button class="btn btn-secondary" type="button" data-service-next="${keyAttr}"${clampedIndex >= specs.length - 1 ? ' disabled' : ''}>Right</button>
+      </div>
+    </section>
+  `;
+  initServiceCatalogEditor(root, key);
+  const firstInput = modal.querySelector('.service-editor-input');
+  firstInput?.focus();
 }
 
 function initServiceCatalogEditor(root, key) {
@@ -2906,7 +3032,9 @@ function initServiceCatalogEditor(root, key) {
       removeBtn?.addEventListener('click', () => {
         const specs = readServiceCatalogSpecsFromSink(root, key);
         specs.splice(rowIndex, 1);
+        writeServiceCatalogSpecsToSink(root, key, specs);
         renderServiceCatalogItems(root, key, specs);
+        closeServiceCatalogModal(root, key, { rerender: false });
         initServiceCatalogEditor(root, key);
         syncServiceCatalogEditor(key);
         refreshConfigPreview(key);
@@ -2914,20 +3042,67 @@ function initServiceCatalogEditor(root, key) {
     });
   };
 
-  const addBtn = root.querySelector(`[data-service-add="${CSS.escape(key)}"]`);
-  if (addBtn) {
-    addBtn.onclick = () => {
+  const preview = root.querySelector(`[data-service-catalog-preview="${CSS.escape(key)}"]`);
+  if (preview) {
+    preview.onclick = () => renderServiceCatalogModal(root, key, 0);
+    preview.onfocus = () => renderServiceCatalogModal(root, key, 0);
+  }
+
+  const addService = () => {
       const specs = readServiceCatalogSpecsFromSink(root, key);
-      specs.push({
-        listen: { protocol: 'udp', bind: '0.0.0.0', port: 16667 },
-        target: { protocol: 'udp', host: '127.0.0.1', port: 16666 },
-      });
+      specs.push(defaultServiceSpecDraft());
+      writeServiceCatalogSpecsToSink(root, key, specs);
       renderServiceCatalogItems(root, key, specs);
       initServiceCatalogEditor(root, key);
       syncServiceCatalogEditor(key);
       refreshConfigPreview(key);
-      const firstInput = root.querySelector('[data-service-item]:last-child .service-editor-input');
-      firstInput?.focus();
+      renderServiceCatalogModal(root, key, specs.length - 1);
+  };
+
+  const addModalBtn = root.querySelector(`[data-service-add-modal="${CSS.escape(key)}"]`);
+  if (addModalBtn) {
+    addModalBtn.onclick = addService;
+  }
+
+  root.querySelectorAll(`[data-service-close="${CSS.escape(key)}"]`).forEach((button) => {
+    button.onclick = () => closeServiceCatalogModal(root, key);
+  });
+
+  const prevBtn = root.querySelector(`[data-service-prev="${CSS.escape(key)}"]`);
+  if (prevBtn) {
+    prevBtn.onclick = () => {
+      syncServiceCatalogEditor(key);
+      const current = Number(root.querySelector(`[data-service-modal="${CSS.escape(key)}"]`)?.getAttribute('data-service-active-index') ?? 0);
+      renderServiceCatalogModal(root, key, current - 1);
+      refreshConfigPreview(key);
+    };
+  }
+
+  const nextBtn = root.querySelector(`[data-service-next="${CSS.escape(key)}"]`);
+  if (nextBtn) {
+    nextBtn.onclick = () => {
+      syncServiceCatalogEditor(key);
+      const current = Number(root.querySelector(`[data-service-modal="${CSS.escape(key)}"]`)?.getAttribute('data-service-active-index') ?? 0);
+      renderServiceCatalogModal(root, key, current + 1);
+      refreshConfigPreview(key);
+    };
+  }
+
+  const removeActiveBtn = root.querySelector(`[data-service-remove-active="${CSS.escape(key)}"]`);
+  if (removeActiveBtn) {
+    removeActiveBtn.onclick = () => {
+      const modal = root.querySelector(`[data-service-modal="${CSS.escape(key)}"]`);
+      const current = Number(modal?.getAttribute('data-service-active-index') ?? -1);
+      const specs = readServiceCatalogSpecsFromSink(root, key);
+      if (current >= 0 && current < specs.length) specs.splice(current, 1);
+      writeServiceCatalogSpecsToSink(root, key, specs);
+      renderServiceCatalogItems(root, key, specs);
+      refreshConfigPreview(key);
+      if (specs.length) {
+        renderServiceCatalogModal(root, key, Math.min(current, specs.length - 1));
+      } else {
+        closeServiceCatalogModal(root, key);
+      }
     };
   }
 

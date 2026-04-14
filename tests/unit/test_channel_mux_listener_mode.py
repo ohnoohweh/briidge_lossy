@@ -62,12 +62,56 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "argv list"):
             ChannelMux._select_hook_argv({"argv": "bad"}, platform_key="linux")
 
+    def test_resolve_hook_argv_resolves_relative_executable_against_base_dir(self):
+        mux = ChannelMux(_FakeSession(), asyncio.new_event_loop())
+        try:
+            mux._hook_base_dir = "/opt/obbridge"
+            self.assertEqual(
+                mux._resolve_hook_argv(["./scripts/server-tun-hook.sh", "up", "obtun1"]),
+                ["/opt/obbridge/scripts/server-tun-hook.sh", "up", "obtun1"],
+            )
+            self.assertEqual(
+                mux._resolve_hook_argv(["ip", "link", "show"]),
+                ["ip", "link", "show"],
+            )
+        finally:
+            mux.loop.close()
+
     def test_render_hook_value_replaces_known_placeholders(self):
         rendered = ChannelMux._render_hook_value(
             "route add {target_host} dev {ifname} svc={service_id}",
             {"target_host": "198.18.30.2", "ifname": "obtun0", "service_id": 3},
         )
         self.assertEqual(rendered, "route add 198.18.30.2 dev obtun0 svc=3")
+
+    def test_hook_context_exposes_resolved_overlay_peer(self):
+        args = argparse.Namespace(
+            own_servers=None,
+            remote_servers=None,
+            overlay_transport="myudp",
+            udp_bind="0.0.0.0",
+            udp_peer="127.0.0.1",
+            udp_peer_port=4433,
+            mux_tcp_bp_threshold=1,
+            mux_tcp_bp_latency_ms=300,
+            mux_tcp_bp_poll_interval_ms=50,
+        )
+        loop = asyncio.new_event_loop()
+        mux = ChannelMux.from_args(_FakeSession(), loop, args)
+        try:
+            spec = ChannelMux.ServiceSpec(3, "tun", "obtun0", 1400, "tun", "obtun1", 1400)
+            context = mux._hook_context(spec, ("local", 0, 3), "on_created", "listener")
+
+            self.assertEqual(context["overlay_transport"], "myudp")
+            self.assertEqual(context["overlay_peer_name"], "127.0.0.1")
+            self.assertEqual(context["overlay_peer_host"], "127.0.0.1")
+            self.assertEqual(context["overlay_peer_port"], 4433)
+            self.assertEqual(
+                ChannelMux._render_hook_value("{overlay_peer_host}:{overlay_peer_port}", context),
+                "127.0.0.1:4433",
+            )
+        finally:
+            mux.loop.close()
 
     def test_open_payload_roundtrip_preserves_hook_metadata(self):
         mux = ChannelMux(_FakeSession(), asyncio.new_event_loop())
@@ -434,7 +478,7 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
 
         start_udp.assert_awaited_once()
         start_tcp.assert_awaited_once()
-        stop_listener.assert_awaited_once_with(('peer', 7, 1), 'udp')
+        stop_listener.assert_awaited_once_with(('peer', 7, 1), 'udp', spec=svc1)
         self.assertNotIn(('peer', 7, 1), self.mux._peer_installed_services)
         self.assertIn(('peer', 7, 2), self.mux._peer_installed_services)
 
@@ -447,9 +491,33 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
             self.mux.on_peer_disconnected(11)
             await asyncio.sleep(0)
 
-        stop_listener.assert_awaited_once_with(('peer', 11, 1), 'udp')
+        stop_listener.assert_awaited_once_with(('peer', 11, 1), 'udp', spec=svc)
         self.assertNotIn(('peer', 11, 1), self.mux._peer_installed_services)
         self.assertIn(('peer', 22, 1), self.mux._peer_installed_services)
+
+    async def test_peer_installed_tun_stop_runs_listener_on_stopped_before_close(self):
+        svc_key = ('peer', 7, 1)
+        spec = ChannelMux.ServiceSpec(
+            1,
+            'tun',
+            'obtun1',
+            1500,
+            'tun',
+            'obtun0',
+            1500,
+            lifecycle_hooks={'listener': {'on_stopped': {'argv': ['echo', 'down']}}},
+        )
+        dev = object()
+        self.mux._peer_installed_services[svc_key] = spec
+        self.mux._svc_tun_devices[svc_key] = dev
+
+        with patch.object(self.mux, '_run_service_hook', new=AsyncMock()) as run_hook, patch.object(self.mux, '_close_tun_device') as close_tun:
+            await self.mux._drop_peer_installed_services(peer_id=7)
+
+        run_hook.assert_awaited_once_with(spec, svc_key, 'listener', 'on_stopped')
+        close_tun.assert_called_once_with(dev)
+        self.assertNotIn(svc_key, self.mux._peer_installed_services)
+        self.assertNotIn(svc_key, self.mux._svc_tun_devices)
 
 
 class ChannelMuxSessionBudgetTests(unittest.TestCase):

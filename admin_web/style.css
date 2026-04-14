@@ -860,20 +860,81 @@ select.config-editor option:disabled {
   gap: 10px;
 }
 
-.service-catalog-toolbar {
-  display: flex;
-  justify-content: flex-start;
+.service-catalog-json-preview {
+  cursor: pointer;
 }
 
-.service-catalog-empty {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
+.service-catalog-json-preview:focus {
+  border-color: rgba(79, 209, 197, 0.4);
+  box-shadow: inset 0 0 0 1px rgba(79, 209, 197, 0.12);
 }
 
 .service-catalog-items {
   display: grid;
   gap: 10px;
+}
+
+.service-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 21;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.service-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(6, 12, 22, 0.72);
+  backdrop-filter: blur(10px);
+}
+
+.service-modal-card {
+  position: relative;
+  width: min(100%, 920px);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  padding: 22px;
+  display: grid;
+  gap: 16px;
+}
+
+.service-modal-header,
+.service-modal-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.service-modal-header-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.service-modal-header h3 {
+  margin: 2px 0 0;
+}
+
+.service-modal-eyebrow {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.service-modal-body .service-item {
+  box-shadow: none;
+}
+
+.service-modal-footer {
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .service-item {
