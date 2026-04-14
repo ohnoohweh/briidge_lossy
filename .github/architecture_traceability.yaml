@@ -64,6 +64,7 @@ ARC-CMP-004:
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_active_tun_channel_as_open
     - tests/unit/test_channel_mux_listener_mode.py::test_resolve_hook_argv_resolves_relative_executable_against_base_dir
+    - tests/unit/test_channel_mux_listener_mode.py::test_hook_context_exposes_resolved_overlay_peer
     - tests/unit/test_channel_mux_listener_mode.py::test_peer_installed_tun_stop_runs_listener_on_stopped_before_close
     - tests/unit/test_launcher_entrypoint.py::test_launcher_forwards_unknown_args_to_bridge
     - tests/unit/test_launcher_entrypoint.py::test_launcher_restarts_for_code_75

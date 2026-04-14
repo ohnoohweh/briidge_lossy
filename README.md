@@ -565,7 +565,8 @@ Hook execution model:
 - optional `timeout_ms` and `env` values are supported
 - listener-side events are `on_created`, `on_channel_connected`, `on_channel_closed`, and `on_stopped`; `on_stopped` is awaited before the listener service is closed during overlay disconnect, peer disconnect, catalog replacement, or process shutdown
 - client-side channel events are `before_connect`, `on_connected`, and `after_closed`
-- placeholders are expanded from service/channel context (`{service_id}`, `{service_name}`, `{protocol}`, `{channel_id}`, `{ifname}`, `{target_host}`, `{target_port}`, `{listen_port}`, `{event}`, `{role}`, `{catalog}`, `{peer_id}`)
+- placeholders are expanded from service/channel context (`{service_id}`, `{service_name}`, `{protocol}`, `{channel_id}`, `{ifname}`, `{target_host}`, `{target_port}`, `{listen_port}`, `{event}`, `{role}`, `{catalog}`, `{peer_id}`, `{overlay_transport}`, `{overlay_peer_name}`, `{overlay_peer_host}`, `{overlay_peer_port}`)
+- every hook environment also receives `OB_OVERLAY_TRANSPORT`, `OB_OVERLAY_PEER_NAME`, `OB_OVERLAY_PEER_HOST`, and `OB_OVERLAY_PEER_PORT` so scripts can preserve the overlay route without duplicating the peer IP in hook config
 
 Full-tunnel TUN lifecycle hook example for Linux. The repo’s lifecycle hooks are a good fit for this because hook entries can stay simple while small scripts do the idempotent setup and teardown. Hooks use argv arrays with no implicit shell, so multi-step network setup should live in scripts instead of raw one-liners.
 
@@ -575,7 +576,7 @@ What the scripts automate:
 
 - Server: assign `10.20.0.2/30` to `obtun1`, bring the interface up, enable IPv4 forwarding, add forwarding rules between `obtun1` and `eth0`, add NAT for `10.20.0.0/30`, optionally add TCP MSS clamping, and clean those rules up on disconnect.
 - Client: assign `10.20.0.1/30` to `obtun0`, bring the interface up, auto-detect or preserve the route to the overlay server public IP outside the tunnel, replace the default route via `10.20.0.2 dev obtun0`, set tunnel DNS, and restore the previous default route on disconnect.
-- Client environment: because hook placeholders do not include the original default gateway or overlay public peer IP, pass these explicitly with hook `env`.
+- Client environment: the client hook script auto-detects the original default gateway/interface and reads the resolved overlay peer address from `OB_OVERLAY_PEER_HOST`, so the hook config only needs tunnel-specific values such as TUN addresses, gateway, optional DNS, and optional explicit underlay overrides.
 
 Single peer-client config assumptions:
 
@@ -583,7 +584,6 @@ Single peer-client config assumptions:
 - Client tunnel address: `10.20.0.1/30`
 - Server TUN interface: `obtun1`
 - Server tunnel address: `10.20.0.2/30`
-- Server overlay public IP: `146.70.81.180`
 - Server WAN interface: `eth0`
 - Client underlay interface/gateway: `auto`, or explicit values such as `eth0` and `192.168.1.1`
 - DNS servers: `1.1.1.1` and `8.8.8.8`
@@ -611,10 +611,9 @@ Combined peer-client config fragment:
             "argv": {
               "linux": ["./scripts/client-tun-hook.sh", "up", "{ifname}"]
             },
-            "env": {
-              "TUN_ADDR": "10.20.0.1/30",
-              "TUN_GW": "10.20.0.2",
-              "OVERLAY_PEER_IP": "146.70.81.180",
+              "env": {
+                "TUN_ADDR": "10.20.0.1/30",
+                "TUN_GW": "10.20.0.2",
               "UNDERLAY_IF": "auto",
               "UNDERLAY_GW": "auto",
               "DNS1": "1.1.1.1",
@@ -626,10 +625,9 @@ Combined peer-client config fragment:
             "argv": {
               "linux": ["./scripts/client-tun-hook.sh", "up", "{ifname}"]
             },
-            "env": {
-              "TUN_ADDR": "10.20.0.1/30",
-              "TUN_GW": "10.20.0.2",
-              "OVERLAY_PEER_IP": "146.70.81.180",
+              "env": {
+                "TUN_ADDR": "10.20.0.1/30",
+                "TUN_GW": "10.20.0.2",
               "UNDERLAY_IF": "auto",
               "UNDERLAY_GW": "auto",
               "DNS1": "1.1.1.1",
@@ -641,10 +639,9 @@ Combined peer-client config fragment:
             "argv": {
               "linux": ["./scripts/client-tun-hook.sh", "down", "{ifname}"]
             },
-            "env": {
-              "TUN_ADDR": "10.20.0.1/30",
-              "TUN_GW": "10.20.0.2",
-              "OVERLAY_PEER_IP": "146.70.81.180",
+              "env": {
+                "TUN_ADDR": "10.20.0.1/30",
+                "TUN_GW": "10.20.0.2",
               "UNDERLAY_IF": "auto",
               "UNDERLAY_GW": "auto",
               "DNS1": "1.1.1.1",
@@ -729,7 +726,7 @@ Operational notes:
 
 - Remote hook scripts must exist on the machine that executes them. If the peer client sends `./scripts/server-tun-hook.sh` inside `remote_servers`, the peer server must have that script at `./scripts/server-tun-hook.sh` relative to its own config file directory, or use an absolute path that exists on the peer server.
 - Verify interface names before hardcoding `eth0`: `ip route get 1.1.1.1`.
-- Preserve the overlay peer route on the client. Without the `/32` route for `OVERLAY_PEER_IP` via the original gateway, the tunnel may try to carry its own transport packets and collapse.
+- Preserve the overlay peer route on the client. The provided client hook uses `OB_OVERLAY_PEER_HOST` from the runtime to add the host route via the original gateway; without that route, the tunnel may try to carry its own transport packets and collapse.
 - DNS can explain cases where `ping` works but web pages do not. The client script uses `resolvectl`; adapt that part if the system does not use `systemd-resolved`.
 - Keep TCP MSS clamping enabled on the server (`ENABLE_TCPMSS=1`) when tunneling full-path traffic over a reduced MTU.
 - The server script uses `iptables -C` checks before adding rules, so repeated `up` hooks do not create duplicate firewall rules.
@@ -1162,7 +1159,7 @@ Optional operations follow-up:
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 - Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `146` integration tests, `188` unit tests. Latest local Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` completed with `134 passed` before the latest focused integration additions. The focused compression/admin/lifecycle requirement-gap run completed with `5 passed, 135 deselected`, and the focused SecureLink PSK slice `RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` completed with `25 passed, 111 deselected`. Current branch validation also includes the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`, the focused config-persistence slice `pytest -q tests/unit/test_runner_config_persistence.py` completed with `2 passed` after removing the environment override for config-secret seed derivation, focused peer-traffic/concurrent-listener validation with `pytest -q tests/unit/test_connection_snapshots.py` plus the `case14` through `case17` concurrent TCP overlay slice, and TUN WebAdmin status regression validation covering `/api/status` TUN open-connection counts.
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `146` integration tests, `189` unit tests. Latest local Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` completed with `134 passed` before the latest focused integration additions. The focused compression/admin/lifecycle requirement-gap run completed with `5 passed, 135 deselected`, and the focused SecureLink PSK slice `RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` completed with `25 passed, 111 deselected`. Current branch validation also includes the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`, the focused config-persistence slice `pytest -q tests/unit/test_runner_config_persistence.py` completed with `2 passed` after removing the environment override for config-secret seed derivation, focused peer-traffic/concurrent-listener validation with `pytest -q tests/unit/test_connection_snapshots.py` plus the `case14` through `case17` concurrent TCP overlay slice, and TUN WebAdmin/hook regression validation covering `/api/status` TUN open-connection counts plus overlay peer context exposure for lifecycle hooks.
 
 For changes that touch `src/obstacle_bridge/bridge.py`, the most important regression signal after opening a pull request is the Linux shared integration lane in GitHub CI. Windows-local integration execution is still useful for targeted investigation, but it is not currently the most reliable green/red indicator for broad regression confidence on this branch history.
 

@@ -6,7 +6,8 @@ IFNAME="${2:?missing ifname}"
 
 : "${TUN_ADDR:?missing TUN_ADDR}"
 : "${TUN_GW:?missing TUN_GW}"
-: "${OVERLAY_PEER_IP:?missing OVERLAY_PEER_IP}"
+OVERLAY_PEER_IP="${OVERLAY_PEER_IP:-${OB_OVERLAY_PEER_HOST:-}}"
+: "${OVERLAY_PEER_IP:?missing OVERLAY_PEER_IP or OB_OVERLAY_PEER_HOST}"
 UNDERLAY_IF="${UNDERLAY_IF:-auto}"
 UNDERLAY_GW="${UNDERLAY_GW:-auto}"
 DNS1="${DNS1:-}"
@@ -16,6 +17,14 @@ STATE_DIR="/run/obbridge"
 STATE_FILE="${STATE_DIR}/${IFNAME}.default-route"
 
 mkdir -p "$STATE_DIR"
+
+overlay_route_prefix() {
+  if [[ "$OVERLAY_PEER_IP" == *:* ]]; then
+    printf '%s/128' "$OVERLAY_PEER_IP"
+  else
+    printf '%s/32' "$OVERLAY_PEER_IP"
+  fi
+}
 
 detect_underlay() {
   local route_line
@@ -75,9 +84,9 @@ case "$ACTION" in
     save_default_route
 
     if [[ -n "$UNDERLAY_GW" ]]; then
-      ip route replace "${OVERLAY_PEER_IP}/32" via "$UNDERLAY_GW" dev "$UNDERLAY_IF"
+      ip route replace "$(overlay_route_prefix)" via "$UNDERLAY_GW" dev "$UNDERLAY_IF"
     else
-      ip route replace "${OVERLAY_PEER_IP}/32" dev "$UNDERLAY_IF"
+      ip route replace "$(overlay_route_prefix)" dev "$UNDERLAY_IF"
     fi
     ip route replace default via "$TUN_GW" dev "$IFNAME"
 
@@ -88,9 +97,9 @@ case "$ACTION" in
     ip route del default via "$TUN_GW" dev "$IFNAME" 2>/dev/null || true
     restore_default_route
     if [[ -n "$UNDERLAY_GW" ]]; then
-      ip route del "${OVERLAY_PEER_IP}/32" via "$UNDERLAY_GW" dev "$UNDERLAY_IF" 2>/dev/null || true
+      ip route del "$(overlay_route_prefix)" via "$UNDERLAY_GW" dev "$UNDERLAY_IF" 2>/dev/null || true
     else
-      ip route del "${OVERLAY_PEER_IP}/32" dev "$UNDERLAY_IF" 2>/dev/null || true
+      ip route del "$(overlay_route_prefix)" dev "$UNDERLAY_IF" 2>/dev/null || true
     fi
 
     clear_dns

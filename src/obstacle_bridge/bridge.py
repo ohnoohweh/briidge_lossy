@@ -11315,6 +11315,28 @@ class ChannelMux:
         services = ChannelMux._parse_own_servers(getattr(args, 'own_servers', None))
         remote_services = ChannelMux._parse_remote_servers(getattr(args, 'remote_servers', None))
         active_transport = str(getattr(args, "overlay_transport", "myudp") or "myudp").split(",", 1)[0].strip().lower()
+        mux._overlay_transport = active_transport
+        bind_attr, peer_attr, peer_port_attr, _listen_port_attr = _overlay_cli_attrs(active_transport)
+        raw_overlay_peer = str(getattr(args, peer_attr, None) or getattr(args, "peer", None) or "").strip()
+        raw_overlay_port = getattr(args, peer_port_attr, None)
+        if raw_overlay_port is None and peer_port_attr != "peer_port":
+            raw_overlay_port = getattr(args, "peer_port", None)
+        mux._overlay_peer_name = raw_overlay_peer
+        mux._overlay_peer_host = raw_overlay_peer
+        mux._overlay_peer_port = int(raw_overlay_port if raw_overlay_port is not None else 443) if raw_overlay_peer else 0
+        if raw_overlay_peer:
+            socktype = socket.SOCK_STREAM if active_transport in ("tcp", "ws") else socket.SOCK_DGRAM
+            with contextlib.suppress(Exception):
+                resolved = _resolve_cli_peer(
+                    args,
+                    peer_attr=peer_attr,
+                    peer_port_attr=peer_port_attr,
+                    bind_host=str(getattr(args, bind_attr, "") or ""),
+                    socktype=socktype,
+                )
+                if resolved is not None:
+                    mux._overlay_peer_host = str(resolved[0])
+                    mux._overlay_peer_port = int(resolved[1])
         listener_mode = not _has_configured_overlay_peer(args, active_transport)
         # Split channel-id space by role to avoid bidirectional OPEN collisions:
         # listener uses even ids, peer/client uses odd ids.
@@ -11482,6 +11504,10 @@ class ChannelMux:
         self._on_local_rx = on_local_rx_bytes  # local->peer (overlay direction) counters hook
         self._on_local_tx = on_local_tx_bytes  # peer->local counters hook
         self._hook_base_dir = os.getcwd()
+        self._overlay_transport = ""
+        self._overlay_peer_name = ""
+        self._overlay_peer_host = ""
+        self._overlay_peer_port = 0
 
         # Overlay state gate
         self._overlay_connected: bool = self.session.is_connected()
@@ -11688,6 +11714,10 @@ class ChannelMux:
             "ifname": str(spec.l_bind) if str(spec.l_proto) == "tun" else "",
             "peer_id": "" if peer_id is None else int(peer_id),
             "peer_endpoint": "",
+            "overlay_transport": str(self._overlay_transport or ""),
+            "overlay_peer_name": str(self._overlay_peer_name or ""),
+            "overlay_peer_host": str(self._overlay_peer_host or ""),
+            "overlay_peer_port": "" if not self._overlay_peer_port else int(self._overlay_peer_port),
             "role": str(role),
         }
 
@@ -11712,10 +11742,13 @@ class ChannelMux:
             timeout_ms = int(timeout_ms_raw)
             if timeout_ms <= 0:
                 timeout_ms = self.HOOK_DEFAULT_TIMEOUT_MS
-            env = None
+            env = dict(os.environ)
+            env["OB_OVERLAY_TRANSPORT"] = str(context.get("overlay_transport") or "")
+            env["OB_OVERLAY_PEER_NAME"] = str(context.get("overlay_peer_name") or "")
+            env["OB_OVERLAY_PEER_HOST"] = str(context.get("overlay_peer_host") or "")
+            env["OB_OVERLAY_PEER_PORT"] = str(context.get("overlay_peer_port") or "")
             env_extra = command_spec.get("env")
             if isinstance(env_extra, dict):
-                env = dict(os.environ)
                 for k, v in env_extra.items():
                     env[str(k)] = self._render_hook_value(v, context)
             self.log.info(

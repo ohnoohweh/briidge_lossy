@@ -84,6 +84,35 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         )
         self.assertEqual(rendered, "route add 198.18.30.2 dev obtun0 svc=3")
 
+    def test_hook_context_exposes_resolved_overlay_peer(self):
+        args = argparse.Namespace(
+            own_servers=None,
+            remote_servers=None,
+            overlay_transport="myudp",
+            udp_bind="0.0.0.0",
+            udp_peer="127.0.0.1",
+            udp_peer_port=4433,
+            mux_tcp_bp_threshold=1,
+            mux_tcp_bp_latency_ms=300,
+            mux_tcp_bp_poll_interval_ms=50,
+        )
+        loop = asyncio.new_event_loop()
+        mux = ChannelMux.from_args(_FakeSession(), loop, args)
+        try:
+            spec = ChannelMux.ServiceSpec(3, "tun", "obtun0", 1400, "tun", "obtun1", 1400)
+            context = mux._hook_context(spec, ("local", 0, 3), "on_created", "listener")
+
+            self.assertEqual(context["overlay_transport"], "myudp")
+            self.assertEqual(context["overlay_peer_name"], "127.0.0.1")
+            self.assertEqual(context["overlay_peer_host"], "127.0.0.1")
+            self.assertEqual(context["overlay_peer_port"], 4433)
+            self.assertEqual(
+                ChannelMux._render_hook_value("{overlay_peer_host}:{overlay_peer_port}", context),
+                "127.0.0.1:4433",
+            )
+        finally:
+            mux.loop.close()
+
     def test_open_payload_roundtrip_preserves_hook_metadata(self):
         mux = ChannelMux(_FakeSession(), asyncio.new_event_loop())
         try:

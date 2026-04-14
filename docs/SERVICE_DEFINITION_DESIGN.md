@@ -330,6 +330,10 @@ Initial placeholder candidates:
 - `{ifname}`
 - `{peer_id}`
 - `{peer_endpoint}`
+- `{overlay_transport}`
+- `{overlay_peer_name}`
+- `{overlay_peer_host}`
+- `{overlay_peer_port}`
 
 This placeholder list is intentionally limited so behavior stays understandable and testable.
 

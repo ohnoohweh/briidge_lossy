@@ -557,6 +557,7 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_select_hook_argv_uses_platform_specific_mapping
     - tests/unit/test_channel_mux_listener_mode.py::test_resolve_hook_argv_resolves_relative_executable_against_base_dir
     - tests/unit/test_channel_mux_listener_mode.py::test_render_hook_value_replaces_known_placeholders
+    - tests/unit/test_channel_mux_listener_mode.py::test_hook_context_exposes_resolved_overlay_peer
     - tests/unit/test_channel_mux_listener_mode.py::test_peer_installed_tun_stop_runs_listener_on_stopped_before_close
     - tests/unit/test_channel_mux_listener_mode.py::test_open_payload_roundtrip_preserves_hook_metadata
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_services_roundtrip_preserves_hook_metadata
