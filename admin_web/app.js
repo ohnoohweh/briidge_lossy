@@ -2521,11 +2521,12 @@ function renderServiceCatalogEditor(key, currentValue) {
   const specs = sanitizeServiceSpecs(currentValue);
   const serialized = escapeHtml(JSON.stringify(specs));
   const previewText = escapeHtml(JSON.stringify(specs, null, 2));
+  const keyAttr = escapeHtml(key);
   return `
-    <div class="service-catalog-editor" data-service-catalog-root="${key}">
-      <textarea class="config-editor mono hidden" data-config-key="${key}" data-service-catalog-hidden="true">${serialized}</textarea>
-      <textarea class="config-editor config-editor-textarea mono service-catalog-json-preview" data-service-catalog-preview="${key}" rows="4" readonly autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Edit ${key} services">${previewText}</textarea>
-      <div class="service-modal hidden" data-service-modal="${key}" role="dialog" aria-modal="true" aria-label="Edit ${key} service"></div>
+    <div class="service-catalog-editor" data-service-catalog-root="${keyAttr}">
+      <textarea class="config-editor mono hidden" data-config-key="${keyAttr}" data-service-catalog-hidden="true">${serialized}</textarea>
+      <textarea class="config-editor config-editor-textarea mono service-catalog-json-preview" data-service-catalog-preview="${keyAttr}" rows="4" readonly autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Edit ${keyAttr} services">${previewText}</textarea>
+      <div class="service-modal hidden" data-service-modal="${keyAttr}" role="dialog" aria-modal="true" aria-label="Edit ${keyAttr} service"></div>
     </div>
   `;
 }
@@ -2973,10 +2974,11 @@ function renderServiceCatalogModal(root, key, activeIndex) {
   const clampedIndex = Math.max(0, Math.min(Number(activeIndex) || 0, specs.length - 1));
   const spec = specs[clampedIndex];
   const serviceName = String(spec.name || '').trim() || `Service ${clampedIndex + 1}`;
+  const keyAttr = escapeHtml(key);
   modal.setAttribute('data-service-active-index', String(clampedIndex));
   modal.classList.remove('hidden');
   modal.innerHTML = `
-    <div class="service-modal-backdrop" data-service-close="${key}"></div>
+    <div class="service-modal-backdrop" data-service-close="${keyAttr}"></div>
     <section class="service-modal-card card">
       <div class="service-modal-header">
         <div>
@@ -2984,16 +2986,16 @@ function renderServiceCatalogModal(root, key, activeIndex) {
           <h3>Edit ${escapeHtml(serviceName)}</h3>
         </div>
         <div class="service-modal-header-actions">
-          <button class="btn btn-secondary" type="button" data-service-add-modal="${key}">Add service</button>
-          <button class="btn btn-secondary service-modal-close" type="button" data-service-close="${key}">Close</button>
+          <button class="btn btn-secondary" type="button" data-service-add-modal="${keyAttr}">Add service</button>
+          <button class="btn btn-secondary service-modal-close" type="button" data-service-close="${keyAttr}">Close</button>
         </div>
       </div>
       <div class="service-modal-body">
         ${renderServiceCatalogItemHtml(spec, clampedIndex)}
       </div>
       <div class="service-modal-footer">
-        <button class="btn btn-secondary" type="button" data-service-prev="${key}"${clampedIndex <= 0 ? ' disabled' : ''}>Left</button>
-        <button class="btn btn-secondary" type="button" data-service-next="${key}"${clampedIndex >= specs.length - 1 ? ' disabled' : ''}>Right</button>
+        <button class="btn btn-secondary" type="button" data-service-prev="${keyAttr}"${clampedIndex <= 0 ? ' disabled' : ''}>Left</button>
+        <button class="btn btn-secondary" type="button" data-service-next="${keyAttr}"${clampedIndex >= specs.length - 1 ? ' disabled' : ''}>Right</button>
       </div>
     </section>
   `;
