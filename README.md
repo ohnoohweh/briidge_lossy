@@ -563,11 +563,13 @@ Hook execution model:
 - hooks use `argv` arrays (no implicit shell)
 - each hook can define one shared `argv` list or OS-specific command lists (`linux`, `windows`, `darwin`, optional `default`)
 - optional `timeout_ms` and `env` values are supported
+- listener-side events are `on_created`, `on_channel_connected`, `on_channel_closed`, and `on_stopped`; `on_stopped` is awaited before the listener service is closed during overlay disconnect, peer disconnect, catalog replacement, or process shutdown
+- client-side channel events are `before_connect`, `on_connected`, and `after_closed`
 - placeholders are expanded from service/channel context (`{service_id}`, `{service_name}`, `{protocol}`, `{channel_id}`, `{ifname}`, `{target_host}`, `{target_port}`, `{listen_port}`, `{event}`, `{role}`, `{catalog}`, `{peer_id}`)
 
 Full-tunnel TUN lifecycle hook example for Linux. The repo’s lifecycle hooks are a good fit for this because hook entries can stay simple while small scripts do the idempotent setup and teardown. Hooks use argv arrays with no implicit shell, so multi-step network setup should live in scripts instead of raw one-liners.
 
-The examples below use repo-local script paths (`./scripts/...`) for development. For production, copy these scripts to a root-owned location such as `/usr/local/libexec/obbridge/`, make them executable, and update the `argv` paths accordingly.
+The examples below use repo-local script paths (`./scripts/...`) for development. A relative hook path is resolved on the machine that executes the hook, relative to that machine's loaded config file directory. For production, copy these scripts to a root-owned location such as `/usr/local/libexec/obbridge/`, make them executable, and update the `argv` paths accordingly.
 
 What the scripts automate:
 
@@ -575,20 +577,88 @@ What the scripts automate:
 - Client: assign `10.20.0.1/30` to `obtun0`, bring the interface up, auto-detect or preserve the route to the overlay server public IP outside the tunnel, replace the default route via `10.20.0.2 dev obtun0`, set tunnel DNS, and restore the previous default route on disconnect.
 - Client environment: because hook placeholders do not include the original default gateway or overlay public peer IP, pass these explicitly with hook `env`.
 
-Server assumptions:
+Single peer-client config assumptions:
 
+- Client TUN interface: `obtun0`
+- Client tunnel address: `10.20.0.1/30`
 - Server TUN interface: `obtun1`
 - Server tunnel address: `10.20.0.2/30`
-- Client tunnel address: `10.20.0.1`
-- WAN interface: `eth0`
+- Server overlay public IP: `146.70.81.180`
+- Server WAN interface: `eth0`
+- Client underlay interface/gateway: `auto`, or explicit values such as `eth0` and `192.168.1.1`
+- DNS servers: `1.1.1.1` and `8.8.8.8`
 
-Server config fragment:
+Combined peer-client config fragment:
 
 ```json
 {
   "own_servers": [
     {
-      "name": "site-b-tun",
+      "name": "site-a-tun-local",
+      "listen": {
+        "protocol": "tun",
+        "ifname": "obtun0",
+        "mtu": 1400
+      },
+      "target": {
+        "protocol": "tun",
+        "ifname": "obtun1",
+        "mtu": 1400
+      },
+      "lifecycle_hooks": {
+        "listener": {
+          "on_created": {
+            "argv": {
+              "linux": ["./scripts/client-tun-hook.sh", "up", "{ifname}"]
+            },
+            "env": {
+              "TUN_ADDR": "10.20.0.1/30",
+              "TUN_GW": "10.20.0.2",
+              "OVERLAY_PEER_IP": "146.70.81.180",
+              "UNDERLAY_IF": "auto",
+              "UNDERLAY_GW": "auto",
+              "DNS1": "1.1.1.1",
+              "DNS2": "8.8.8.8"
+            },
+            "timeout_ms": 15000
+          },
+          "on_channel_connected": {
+            "argv": {
+              "linux": ["./scripts/client-tun-hook.sh", "up", "{ifname}"]
+            },
+            "env": {
+              "TUN_ADDR": "10.20.0.1/30",
+              "TUN_GW": "10.20.0.2",
+              "OVERLAY_PEER_IP": "146.70.81.180",
+              "UNDERLAY_IF": "auto",
+              "UNDERLAY_GW": "auto",
+              "DNS1": "1.1.1.1",
+              "DNS2": "8.8.8.8"
+            },
+            "timeout_ms": 15000
+          },
+          "on_stopped": {
+            "argv": {
+              "linux": ["./scripts/client-tun-hook.sh", "down", "{ifname}"]
+            },
+            "env": {
+              "TUN_ADDR": "10.20.0.1/30",
+              "TUN_GW": "10.20.0.2",
+              "OVERLAY_PEER_IP": "146.70.81.180",
+              "UNDERLAY_IF": "auto",
+              "UNDERLAY_GW": "auto",
+              "DNS1": "1.1.1.1",
+              "DNS2": "8.8.8.8"
+            },
+            "timeout_ms": 15000
+          }
+        }
+      }
+    }
+  ],
+  "remote_servers": [
+    {
+      "name": "site-b-tun-remote",
       "listen": {
         "protocol": "tun",
         "ifname": "obtun1",
@@ -627,7 +697,7 @@ Server config fragment:
             },
             "timeout_ms": 15000
           },
-          "on_channel_closed": {
+          "on_stopped": {
             "argv": {
               "linux": ["./scripts/server-tun-hook.sh", "down", "{ifname}"]
             },
@@ -647,86 +717,7 @@ Server config fragment:
 }
 ```
 
-Client assumptions:
-
-- Client TUN interface: `obtun0`
-- Client tunnel address: `10.20.0.1/30`
-- Tunnel gateway/server tunnel address: `10.20.0.2`
-- Server overlay public IP: `146.70.81.180`
-- Client underlay interface: `auto`, or an explicit interface such as `eth0`
-- Client underlay gateway: `auto`, or an explicit gateway such as `192.168.1.1`
-- DNS servers: `1.1.1.1` and `8.8.8.8`
-
-Client config fragment:
-
-```json
-{
-  "own_servers": [
-    {
-      "name": "site-a-tun",
-      "listen": {
-        "protocol": "tun",
-        "ifname": "obtun0",
-        "mtu": 1400
-      },
-      "target": {
-        "protocol": "tun",
-        "ifname": "obtun1",
-        "mtu": 1400
-      },
-      "lifecycle_hooks": {
-        "listener": {
-          "on_created": {
-            "argv": {
-              "linux": ["./scripts/client-tun-hook.sh", "up", "{ifname}"]
-            },
-            "env": {
-              "TUN_ADDR": "10.20.0.1/30",
-              "TUN_GW": "10.20.0.2",
-              "OVERLAY_PEER_IP": "146.70.81.180",
-              "UNDERLAY_IF": "auto",
-              "UNDERLAY_GW": "auto",
-              "DNS1": "1.1.1.1",
-              "DNS2": "8.8.8.8"
-            },
-            "timeout_ms": 15000
-          },
-          "on_channel_connected": {
-            "argv": {
-              "linux": ["./scripts/client-tun-hook.sh", "up", "{ifname}"]
-            },
-            "env": {
-              "TUN_ADDR": "10.20.0.1/30",
-              "TUN_GW": "10.20.0.2",
-              "OVERLAY_PEER_IP": "146.70.81.180",
-              "UNDERLAY_IF": "auto",
-              "UNDERLAY_GW": "auto",
-              "DNS1": "1.1.1.1",
-              "DNS2": "8.8.8.8"
-            },
-            "timeout_ms": 15000
-          },
-          "on_channel_closed": {
-            "argv": {
-              "linux": ["./scripts/client-tun-hook.sh", "down", "{ifname}"]
-            },
-            "env": {
-              "TUN_ADDR": "10.20.0.1/30",
-              "TUN_GW": "10.20.0.2",
-              "OVERLAY_PEER_IP": "146.70.81.180",
-              "UNDERLAY_IF": "auto",
-              "UNDERLAY_GW": "auto",
-              "DNS1": "1.1.1.1",
-              "DNS2": "8.8.8.8"
-            },
-            "timeout_ms": 15000
-          }
-        }
-      }
-    }
-  ]
-}
-```
+In this combined form, the peer client defines both ends. The local `own_servers` hook runs on the peer client and configures `obtun0`. The `remote_servers` entry is sent to the connected peer server; its `listener` hooks run on that peer server and configure `obtun1`.
 
 Make the repo-local scripts executable after checkout if your filesystem did not preserve executable bits:
 
@@ -736,11 +727,13 @@ chmod 0750 ./scripts/server-tun-hook.sh ./scripts/client-tun-hook.sh
 
 Operational notes:
 
+- Remote hook scripts must exist on the machine that executes them. If the peer client sends `./scripts/server-tun-hook.sh` inside `remote_servers`, the peer server must have that script at `./scripts/server-tun-hook.sh` relative to its own config file directory, or use an absolute path that exists on the peer server.
 - Verify interface names before hardcoding `eth0`: `ip route get 1.1.1.1`.
 - Preserve the overlay peer route on the client. Without the `/32` route for `OVERLAY_PEER_IP` via the original gateway, the tunnel may try to carry its own transport packets and collapse.
 - DNS can explain cases where `ping` works but web pages do not. The client script uses `resolvectl`; adapt that part if the system does not use `systemd-resolved`.
 - Keep TCP MSS clamping enabled on the server (`ENABLE_TCPMSS=1`) when tunneling full-path traffic over a reduced MTU.
 - The server script uses `iptables -C` checks before adding rules, so repeated `up` hooks do not create duplicate firewall rules.
+- Use `listener.on_stopped` for route/firewall teardown because it runs for service-level shutdown caused by overlay disconnect, peer disconnect, catalog replacement, or process shutdown. `on_channel_closed` remains useful for per-channel cleanup, but `on_stopped` is the deterministic safety net for full-tunnel routing.
 
 ### Admin web
 | Option(s) | Default | Description |

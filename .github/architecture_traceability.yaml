@@ -32,6 +32,7 @@ ARC-CMP-003:
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_opens_channel_and_sends_data
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
+    - tests/unit/test_channel_mux_listener_mode.py::test_peer_installed_tun_stop_runs_listener_on_stopped_before_close
     - tests/unit/test_channel_mux_listener_mode.py::test_send_mux_fragments_oversized_udp_data
     - tests/unit/test_channel_mux_listener_mode.py::test_send_mux_fragments_oversized_tun_packet
     - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_state_is_scoped_by_peer_id
@@ -63,6 +64,7 @@ ARC-CMP-004:
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_active_tun_channel_as_open
     - tests/unit/test_channel_mux_listener_mode.py::test_resolve_hook_argv_resolves_relative_executable_against_base_dir
+    - tests/unit/test_channel_mux_listener_mode.py::test_peer_installed_tun_stop_runs_listener_on_stopped_before_close
     - tests/unit/test_launcher_entrypoint.py::test_launcher_forwards_unknown_args_to_bridge
     - tests/unit/test_launcher_entrypoint.py::test_launcher_restarts_for_code_75
     - tests/unit/test_launcher_entrypoint.py::test_launcher_waits_interval_for_code_77

@@ -170,6 +170,9 @@ This block is part of the proposed schema now, but Phase 1 only parses, stores, 
       },
       "on_channel_closed": {
         "argv": ["scripts/service_hook.cmd", "listener-closed", "{service_name}", "{channel_id}"]
+      },
+      "on_stopped": {
+        "argv": ["scripts/service_hook.cmd", "listener-stopped", "{service_name}"]
       }
     },
     "client": {
@@ -214,6 +217,7 @@ class ServiceLifecycleHooks:
     listener_on_created: Optional[HookCommandSpec] = None
     listener_on_channel_connected: Optional[HookCommandSpec] = None
     listener_on_channel_closed: Optional[HookCommandSpec] = None
+    listener_on_stopped: Optional[HookCommandSpec] = None
     client_before_connect: Optional[HookCommandSpec] = None
     client_on_connected: Optional[HookCommandSpec] = None
     client_after_closed: Optional[HookCommandSpec] = None
@@ -266,6 +270,7 @@ Proposed event names:
   - `on_created`
   - `on_channel_connected`
   - `on_channel_closed`
+  - `on_stopped`
 - client side:
   - `before_connect`
   - `on_connected`
@@ -276,6 +281,7 @@ These names match the requested behavior:
 - listener socket generated
 - accepted/connected socket derived from listening socket connected
 - accepted/connected socket closed
+- listener service stopped during overlay disconnect, peer disconnect, catalog replacement, or process shutdown
 - client socket about to be generated
 - client socket connected
 - client socket closed

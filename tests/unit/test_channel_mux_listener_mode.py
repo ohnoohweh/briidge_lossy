@@ -449,7 +449,7 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
 
         start_udp.assert_awaited_once()
         start_tcp.assert_awaited_once()
-        stop_listener.assert_awaited_once_with(('peer', 7, 1), 'udp')
+        stop_listener.assert_awaited_once_with(('peer', 7, 1), 'udp', spec=svc1)
         self.assertNotIn(('peer', 7, 1), self.mux._peer_installed_services)
         self.assertIn(('peer', 7, 2), self.mux._peer_installed_services)
 
@@ -462,9 +462,33 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
             self.mux.on_peer_disconnected(11)
             await asyncio.sleep(0)
 
-        stop_listener.assert_awaited_once_with(('peer', 11, 1), 'udp')
+        stop_listener.assert_awaited_once_with(('peer', 11, 1), 'udp', spec=svc)
         self.assertNotIn(('peer', 11, 1), self.mux._peer_installed_services)
         self.assertIn(('peer', 22, 1), self.mux._peer_installed_services)
+
+    async def test_peer_installed_tun_stop_runs_listener_on_stopped_before_close(self):
+        svc_key = ('peer', 7, 1)
+        spec = ChannelMux.ServiceSpec(
+            1,
+            'tun',
+            'obtun1',
+            1500,
+            'tun',
+            'obtun0',
+            1500,
+            lifecycle_hooks={'listener': {'on_stopped': {'argv': ['echo', 'down']}}},
+        )
+        dev = object()
+        self.mux._peer_installed_services[svc_key] = spec
+        self.mux._svc_tun_devices[svc_key] = dev
+
+        with patch.object(self.mux, '_run_service_hook', new=AsyncMock()) as run_hook, patch.object(self.mux, '_close_tun_device') as close_tun:
+            await self.mux._drop_peer_installed_services(peer_id=7)
+
+        run_hook.assert_awaited_once_with(spec, svc_key, 'listener', 'on_stopped')
+        close_tun.assert_called_once_with(dev)
+        self.assertNotIn(svc_key, self.mux._peer_installed_services)
+        self.assertNotIn(svc_key, self.mux._svc_tun_devices)
 
 
 class ChannelMuxSessionBudgetTests(unittest.TestCase):

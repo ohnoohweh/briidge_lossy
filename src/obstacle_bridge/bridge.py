@@ -12257,29 +12257,19 @@ class ChannelMux:
                 self.log.warning("[MUX] service %s:%s start failed: %r", svc_key[0], svc.svc_id, e)
 
     async def _stop_all_services(self):
+        effective = self._effective_services_by_id()
         # UDP first
-        for sid, tr in list(self._svc_udp_servers.items()):
-            try:
-                self.log.info("[MUX] stopping UDP service %s", sid)
-                tr.close()
-            except Exception: pass
-            self._svc_udp_servers.pop(sid, None)
+        for sid in list(self._svc_udp_servers.keys()):
+            spec = effective.get(sid)
+            await self._stop_listener_for_service_id(sid, spec.l_proto if spec else "udp", spec=spec)
         # TCP
-        for sid, srv in list(self._svc_tcp_servers.items()):
-            try:
-                self.log.info("[MUX] stopping TCP service %s", sid)
-                srv.close()
-                await srv.wait_closed()
-            except Exception: pass
-            self._svc_tcp_servers.pop(sid, None)
+        for sid in list(self._svc_tcp_servers.keys()):
+            spec = effective.get(sid)
+            await self._stop_listener_for_service_id(sid, spec.l_proto if spec else "tcp", spec=spec)
         # TUN
-        for sid, dev in list(self._svc_tun_devices.items()):
-            try:
-                self.log.info("[MUX] stopping TUN service %s", sid)
-                self._close_tun_device(dev)
-            except Exception:
-                pass
-            self._svc_tun_devices.pop(sid, None)
+        for sid in list(self._svc_tun_devices.keys()):
+            spec = effective.get(sid)
+            await self._stop_listener_for_service_id(sid, spec.l_proto if spec else "tun", spec=spec)
 
     async def _close_all_channels(self):
         # TCP
@@ -12637,7 +12627,17 @@ class ChannelMux:
         except Exception as e:
             self.log.warning("[MUX/CTRL] failed sending REMOTE_SERVICES_SET_V2: %r", e)
 
-    async def _stop_listener_for_service_id(self, svc_key: "ChannelMux.ServiceKey", proto_name: str) -> None:
+    async def _stop_listener_for_service_id(
+        self,
+        svc_key: "ChannelMux.ServiceKey",
+        proto_name: str,
+        *,
+        spec: Optional["ChannelMux.ServiceSpec"] = None,
+    ) -> None:
+        if spec is None:
+            spec = self._effective_services_by_id().get(svc_key)
+        if spec is not None:
+            await self._run_service_hook(spec, svc_key, "listener", "on_stopped")
         if proto_name == "udp":
             tr = self._svc_udp_servers.pop(svc_key, None)
             if tr:
@@ -12649,6 +12649,10 @@ class ChannelMux:
         if proto_name == "tun":
             dev = self._svc_tun_devices.pop(svc_key, None)
             if dev is not None:
+                chan_id = getattr(dev, "chan_id", None)
+                if chan_id is not None:
+                    self._tun_by_chan.pop(chan_id, None)
+                self._tun_chan_by_service.pop(svc_key, None)
                 self._close_tun_device(dev)
             return
         srv = self._svc_tcp_servers.pop(svc_key, None)
@@ -12677,15 +12681,18 @@ class ChannelMux:
                 to_stop.add(sid)
                 to_start.add(sid)
 
-        for svc_key in set(old_map.keys()) - set(new_map.keys()):
-            self._peer_installed_services.pop(svc_key, None)
-        for svc_key, spec in new_map.items():
-            self._peer_installed_services[svc_key] = spec
-
         for svc_key in sorted(to_stop):
             old = old_map.get(svc_key)
             if old:
-                await self._stop_listener_for_service_id(svc_key, old.l_proto)
+                await self._stop_listener_for_service_id(svc_key, old.l_proto, spec=old)
+
+        for svc_key in set(old_map.keys()) - set(new_map.keys()):
+            self._peer_installed_services.pop(svc_key, None)
+        for svc_key, old in old_map.items():
+            if svc_key in new_map and svc_key in to_stop:
+                self._peer_installed_services.pop(svc_key, None)
+        for svc_key, spec in new_map.items():
+            self._peer_installed_services[svc_key] = spec
 
         if self._overlay_connected and self._accepting_enabled:
             for svc_key in sorted(to_start):
@@ -12712,8 +12719,8 @@ class ChannelMux:
                 if k[0] == "peer" and int(k[1]) == owner_peer_id
             }
         for svc_key, spec in list(to_stop.items()):
+            await self._stop_listener_for_service_id(svc_key, spec.l_proto, spec=spec)
             self._peer_installed_services.pop(svc_key, None)
-            await self._stop_listener_for_service_id(svc_key, spec.l_proto)
 
     def on_peer_disconnected(self, peer_id: int) -> None:
         self._peer_mux_epochs.pop(int(peer_id), None)
