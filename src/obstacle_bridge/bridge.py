@@ -14844,6 +14844,7 @@ class ChannelMux:
                 "state": "connected",
                 "chan_id": int(chan),
                 "svc_id": int(svc_id),
+                "service_name": str(spec.name) if spec and spec.name else "",
                 "source": src_ep,
                 "local": local_ep,
                 "local_port": int(local_ep[1]) if local_ep else (int(spec.l_port) if spec else None),
@@ -14869,6 +14870,7 @@ class ChannelMux:
                 "chan_id": None,
                 "svc_owner_peer_id": int(svc_key[1]) if len(svc_key) >= 2 and str(svc_key[0]) == "peer" else None,
                 "svc_id": svc_id,
+                "service_name": str(spec.name) if spec and spec.name else "",
                 "source": None,
                 "local": local_ep,
                 "local_port": int(local_ep[1]) if local_ep else (int(spec.l_port) if spec else None),
@@ -14900,6 +14902,7 @@ class ChannelMux:
                     "state": "connected",
                     "chan_id": int(chan),
                     "svc_id": int(svc_id) if svc_id is not None else None,
+                    "service_name": str(spec.name) if spec and spec.name else "",
                     "source": local_ep,
                     "local": local_ep,
                     "local_port": int(local_ep[1]) if local_ep else None,
@@ -14956,6 +14959,7 @@ class ChannelMux:
                 "state": "connected",
                 "chan_id": int(chan),
                 "svc_id": int(svc_id),
+                "service_name": str(spec.name) if spec and spec.name else "",
                 "source": source,
                 "local": local,
                 "local_port": int(local[1]) if local else (int(spec.l_port) if spec else None),
@@ -15032,6 +15036,7 @@ class ChannelMux:
                 "state": "connected",
                 "chan_id": int(chan),
                 "svc_id": int(svc_id),
+                "service_name": str(spec.name) if spec and spec.name else "",
                 "source": src_ep,
                 "local": local_ep,
                 "local_port": int(local_ep[1]) if local_ep else (int(spec.l_port) if spec else None),
@@ -15057,6 +15062,7 @@ class ChannelMux:
                 "chan_id": None,
                 "svc_owner_peer_id": int(svc_key[1]) if len(svc_key) >= 2 and str(svc_key[0]) == "peer" else None,
                 "svc_id": svc_id,
+                "service_name": str(spec.name) if spec and spec.name else "",
                 "source": None,
                 "local": local_ep,
                 "local_port": int(local_ep[1]) if local_ep else (int(spec.l_port) if spec else None),
@@ -15088,6 +15094,7 @@ class ChannelMux:
                     "state": "connected",
                     "chan_id": int(chan),
                     "svc_id": int(svc_id) if svc_id is not None else None,
+                    "service_name": str(spec.name) if spec and spec.name else "",
                     "source": local_ep,
                     "local": local_ep,
                     "local_port": int(local_ep[1]) if local_ep else None,
@@ -15144,6 +15151,7 @@ class ChannelMux:
                 "state": "connected",
                 "chan_id": int(chan),
                 "svc_id": int(svc_id),
+                "service_name": str(spec.name) if spec and spec.name else "",
                 "source": source,
                 "local": local,
                 "local_port": int(local[1]) if local else (int(spec.l_port) if spec else None),
@@ -15174,6 +15182,7 @@ class ChannelMux:
                     "chan_id": None,
                     "svc_owner_peer_id": int(svc_key[1]) if len(svc_key) >= 2 and str(svc_key[0]) == "peer" else None,
                     "svc_id": svc_id,
+                    "service_name": str(spec.name) if spec and spec.name else "",
                     "source": None,
                     "local": local_ep,
                     "local_port": int(local_ep[1]) if local_ep else (int(spec.l_port) if spec else None),
@@ -15205,6 +15214,7 @@ class ChannelMux:
             stats = self._chan_stat_dict(chan, ChannelMux.Proto.TUN)
             svc_key = getattr(dev, "service_key", None)
             svc_id = int(svc_key[2]) if isinstance(svc_key, tuple) and len(svc_key) >= 3 else None
+            spec = self._svc_spec_or_none(svc_id) if svc_id is not None else None
             if isinstance(svc_key, tuple):
                 active_service_keys.add(svc_key)
             rows.append({
@@ -15214,10 +15224,14 @@ class ChannelMux:
                 "chan_id": int(chan),
                 "svc_owner_peer_id": int(svc_key[1]) if isinstance(svc_key, tuple) and len(svc_key) >= 2 and str(svc_key[0]) == "peer" else None,
                 "svc_id": svc_id,
+                "service_name": str(spec.name) if spec and spec.name else "",
                 "source": None,
                 "local": {"ifname": str(getattr(dev, "ifname", "") or ""), "mtu": int(getattr(dev, "mtu", 0) or 0)},
                 "local_port": None,
-                "remote_destination": {"ifname": str(getattr(dev, "ifname", "") or ""), "mtu": int(getattr(dev, "mtu", 0) or 0)},
+                "remote_destination": (
+                    {"ifname": str(spec.r_host), "mtu": int(spec.r_port)} if spec else
+                    {"ifname": str(getattr(dev, "ifname", "") or ""), "mtu": int(getattr(dev, "mtu", 0) or 0)}
+                ),
                 "stats": stats,
             })
 
@@ -15242,6 +15256,7 @@ class ChannelMux:
                 "chan_id": None,
                 "svc_owner_peer_id": int(svc_key[1]) if len(svc_key) >= 2 and str(svc_key[0]) == "peer" else None,
                 "svc_id": svc_id,
+                "service_name": str(spec.name) if spec and spec.name else "",
                 "source": None,
                 "local": local,
                 "local_port": None,

@@ -758,10 +758,10 @@ What the admin web shows:
 - A summary row with the currently open UDP, TCP, and TUN channel counts.
 - Traffic cards for app-side RX/TX and peer-side RX/TX rates.
 - A peer-session table that now groups each peer into connection, protocol, security, and lifecycle rows so secure-link state stays with the peer it belongs to.
-- UDP, TCP, and TUN connection tables that show current mappings or interfaces, local listening state, remote endpoints, and per-channel byte/message counters.
+- UDP, TCP, and TUN connection tables that show open/listening summaries, configured service names, current mappings or interfaces, local listening state, remote endpoints, and per-channel byte/message counters.
 - A peer-scoped rekey action inside each peer security block for operator-triggered secure-link rotation on authenticated client-side sessions.
 - A configuration tab that exposes the live runtime options such as overlay transports, listener ports, `--remote-servers`, admin web settings, and log levels.
-- Structured service editors for `own_servers` and `remote_servers`, so services can be added and changed through protocol-aware fields instead of manual config-file editing.
+- Structured service editors for `own_servers` and `remote_servers`, so the JSON preview opens a focused per-service popup with protocol-aware fields, add/remove controls, and left/right navigation.
 - A debug log tab with recent in-memory log lines, which is especially useful while investigating channel setup, backpressure, reconnects, and late-data cases.
 
 ### Logging
@@ -1159,7 +1159,7 @@ Optional operations follow-up:
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 - Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `146` integration tests, `189` unit tests. Latest local Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` completed with `134 passed` before the latest focused integration additions. The focused compression/admin/lifecycle requirement-gap run completed with `5 passed, 135 deselected`, and the focused SecureLink PSK slice `RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` completed with `25 passed, 111 deselected`. Current branch validation also includes the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`, the focused config-persistence slice `pytest -q tests/unit/test_runner_config_persistence.py` completed with `2 passed` after removing the environment override for config-secret seed derivation, focused peer-traffic/concurrent-listener validation with `pytest -q tests/unit/test_connection_snapshots.py` plus the `case14` through `case17` concurrent TCP overlay slice, and TUN WebAdmin/hook regression validation covering `/api/status` TUN open-connection counts plus overlay peer context exposure for lifecycle hooks.
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `146` integration tests, `189` unit tests. Latest local Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` completed with `134 passed` before the latest focused integration additions. The focused compression/admin/lifecycle requirement-gap run completed with `5 passed, 135 deselected`, and the focused SecureLink PSK slice `RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` completed with `25 passed, 111 deselected`. Current branch validation also includes the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`, the focused config-persistence slice `pytest -q tests/unit/test_runner_config_persistence.py` completed with `2 passed` after removing the environment override for config-secret seed derivation, focused peer-traffic/concurrent-listener validation with `pytest -q tests/unit/test_connection_snapshots.py` plus the `case14` through `case17` concurrent TCP overlay slice, TUN WebAdmin/hook regression validation covering `/api/status` TUN open-connection counts plus overlay peer context exposure for lifecycle hooks, and focused WebAdmin service-editor/service-name validation with `node --check admin_web/app.js` plus `pytest -q tests/unit/test_admin_web_payloads.py tests/unit/test_connection_snapshots.py`.
 
 For changes that touch `src/obstacle_bridge/bridge.py`, the most important regression signal after opening a pull request is the Linux shared integration lane in GitHub CI. Windows-local integration execution is still useful for targeted investigation, but it is not currently the most reliable green/red indicator for broad regression confidence on this branch history.
 
@@ -1168,11 +1168,11 @@ The shared integration harness now generates localhost TLS test certificates in 
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `79/79 = 100.0%`
-- Unit-covered: `58/79 = 73.4%`
-- Any-test-covered: `79/79 = 100.0%`
-- Tracked in manifest: `79/79 = 100.0%`
-- Requirements without integration coverage: `(none)`
+- Integration-covered: `79/80 = 98.8%`
+- Unit-covered: `59/80 = 73.8%`
+- Any-test-covered: `80/80 = 100.0%`
+- Tracked in manifest: `80/80 = 100.0%`
+- Requirements without integration coverage: `REQ-ADM-011`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
 

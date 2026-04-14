@@ -69,9 +69,9 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
     def setUp(self):
         self.loop = asyncio.new_event_loop()
         self.mux = ChannelMux(_FakeSession(), self.loop)
-        self.udp_spec = ChannelMux.ServiceSpec(1, "udp", "0.0.0.0", 1111, "udp", "192.0.2.10", 9991)
-        self.tcp_spec = ChannelMux.ServiceSpec(2, "tcp", "0.0.0.0", 2222, "tcp", "192.0.2.20", 9992)
-        self.tun_spec = ChannelMux.ServiceSpec(3, "tun", "obtun0", 1400, "tun", "obtun1", 1400)
+        self.udp_spec = ChannelMux.ServiceSpec(1, "udp", "0.0.0.0", 1111, "udp", "192.0.2.10", 9991, name="lab-udp")
+        self.tcp_spec = ChannelMux.ServiceSpec(2, "tcp", "0.0.0.0", 2222, "tcp", "192.0.2.20", 9992, name="lab-tcp")
+        self.tun_spec = ChannelMux.ServiceSpec(3, "tun", "obtun0", 1400, "tun", "obtun1", 1400, name="lab-tun")
         self.udp_key = ("local", 0, 1)
         self.tcp_key = ("local", 0, 2)
         self.tun_key = ("local", 0, 3)
@@ -99,6 +99,8 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         self.assertEqual(len(tcp_listener), 1)
         self.assertIsNone(udp_listener[0]["chan_id"])
         self.assertIsNone(tcp_listener[0]["chan_id"])
+        self.assertEqual(udp_listener[0]["service_name"], "lab-udp")
+        self.assertEqual(tcp_listener[0]["service_name"], "lab-tcp")
 
     def test_snapshot_counts_idle_tun_interface_as_listening_not_open(self):
         self.mux._svc_tun_devices[self.tun_key] = ChannelMux.TunDevice(
@@ -116,6 +118,7 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         row = snap["tun"][0]
         self.assertEqual(row["state"], "listening")
         self.assertIsNone(row["chan_id"])
+        self.assertEqual(row["service_name"], "lab-tun")
         self.assertEqual(row["local"]["ifname"], "obtun0")
         self.assertEqual(row["remote_destination"]["ifname"], "obtun1")
 
@@ -138,6 +141,7 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         row = snap["tun"][0]
         self.assertEqual(row["state"], "connected")
         self.assertEqual(row["chan_id"], 301)
+        self.assertEqual(row["service_name"], "lab-tun")
         self.assertEqual(row["stats"]["rx_msgs"], 2)
         self.assertEqual(row["stats"]["tx_msgs"], 3)
 
@@ -153,6 +157,10 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
 
         self.assertEqual(snap["counts"]["udp"], 1)
         self.assertEqual(snap["counts"]["tcp"], 1)
+        udp_connected = [row for row in snap["udp"] if row.get("state") == "connected"]
+        tcp_connected = [row for row in snap["tcp"] if row.get("state") == "connected"]
+        self.assertEqual(udp_connected[0]["service_name"], "lab-udp")
+        self.assertEqual(tcp_connected[0]["service_name"], "lab-tcp")
         self.assertEqual(snap["counts"]["udp_listening"], 1)
         self.assertEqual(snap["counts"]["tcp_listening"], 1)
         self.assertIn("connected", {row.get("state") for row in snap["udp"]})

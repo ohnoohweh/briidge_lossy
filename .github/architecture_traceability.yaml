@@ -102,6 +102,8 @@ ARC-CMP-005:
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_active_tun_channel_as_open
+    - tests/unit/test_connection_snapshots.py::test_snapshot_counts_listeners_when_no_clients_connected
+    - tests/unit/test_connection_snapshots.py::test_snapshot_mixed_listeners_and_active_connections
     - tests/unit/test_connection_snapshots.py::test_status_snapshot_includes_tun_open_connection_count
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
   integration_tests:

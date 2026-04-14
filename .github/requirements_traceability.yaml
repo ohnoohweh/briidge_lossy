@@ -644,6 +644,8 @@ REQ-ADM-006:
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_active_tun_channel_as_open
+    - tests/unit/test_connection_snapshots.py::test_snapshot_counts_listeners_when_no_clients_connected
+    - tests/unit/test_connection_snapshots.py::test_snapshot_mixed_listeners_and_active_connections
     - tests/unit/test_connection_snapshots.py::test_status_snapshot_includes_tun_open_connection_count
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
     - tests/unit/test_ws_multi_peer.py::test_server_peer_snapshot_includes_last_incoming_age_seconds
@@ -670,3 +672,7 @@ REQ-ADM-010:
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_roundtrip_and_suggested_updates
     - tests/unit/test_admin_web_payloads.py::test_onboarding_blueprints_group_active_peer_connections
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_preview_hides_psk_and_updates_keep_plaintext
+
+REQ-ADM-011:
+  unit_tests:
+    - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_roundtrip_and_suggested_updates

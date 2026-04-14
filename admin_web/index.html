@@ -159,7 +159,7 @@
             <div class="section-header">
               <div>
                 <h2>UDP Connections</h2>
-                <p>Current UDP mappings and client transports · Listening: <strong id="udpListening">0</strong></p>
+                <p>Current UDP mappings and client transports · Open: <strong id="udpOpen">0</strong> · Listening: <strong id="udpListening">0</strong></p>
               </div>
             </div>
             <div class="table-card card">
@@ -170,6 +170,7 @@
                       <th>ID</th>
                       <th>Chan</th>
                       <th>Svc</th>
+                      <th>Name</th>
                       <th>State</th>
                       <th>Role</th>
                       <th>Source</th>
@@ -183,7 +184,7 @@
                   </thead>
                   <tbody id="udpConnectionsBody">
                     <tr class="empty-row">
-                      <td colspan="12">No UDP connections</td>
+                      <td colspan="13">No UDP connections</td>
                     </tr>
                   </tbody>
                 </table>
@@ -195,7 +196,7 @@
             <div class="section-header">
               <div>
                 <h2>TCP Connections</h2>
-                <p>Current TCP mappings and active streams · Listening: <strong id="tcpListening">0</strong></p>
+                <p>Current TCP mappings and active streams · Open: <strong id="tcpOpen">0</strong> · Listening: <strong id="tcpListening">0</strong></p>
               </div>
             </div>
             <div class="table-card card">
@@ -206,6 +207,7 @@
                       <th>ID</th>
                       <th>Chan</th>
                       <th>Svc</th>
+                      <th>Name</th>
                       <th>State</th>
                       <th>Role</th>
                       <th>Source</th>
@@ -219,7 +221,7 @@
                   </thead>
                   <tbody id="tcpConnectionsBody">
                     <tr class="empty-row">
-                      <td colspan="12">No TCP connections</td>
+                      <td colspan="13">No TCP connections</td>
                     </tr>
                   </tbody>
                 </table>
@@ -242,6 +244,7 @@
                       <th>ID</th>
                       <th>Chan</th>
                       <th>Svc</th>
+                      <th>Name</th>
                       <th>State</th>
                       <th>Role</th>
                       <th>Interface</th>
@@ -255,7 +258,7 @@
                   </thead>
                   <tbody id="tunConnectionsBody">
                     <tr class="empty-row">
-                      <td colspan="12">No TUN connections</td>
+                      <td colspan="13">No TUN connections</td>
                     </tr>
                   </tbody>
                 </table>
