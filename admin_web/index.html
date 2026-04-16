@@ -37,7 +37,7 @@
   <div id="configGate" class="config-gate hidden">
     <section class="config-card card">
       <div class="eyebrow">Confirm Configuration</div>
-      <h2>Re-enter Password</h2>
+      <h2 id="configGateTitle">Re-enter Password</h2>
       <p id="configGateCopy" class="auth-copy">Enter the current admin password to confirm the configuration changes.</p>
       <form id="configGateForm" class="auth-form">
         <label class="auth-field">
@@ -45,6 +45,7 @@
           <input id="configGatePassword" type="password" autocomplete="current-password" required />
         </label>
         <p id="configGateMessage" class="auth-message"></p>
+        <code id="configGateSecretOutput" class="config-gate-secret-output hidden"></code>
         <div class="auth-actions">
           <button id="configGateConfirmBtn" class="btn btn-secondary auth-submit" type="submit">Confirm Save</button>
           <button id="configGateCancelBtn" class="btn btn-secondary" type="button">Cancel</button>

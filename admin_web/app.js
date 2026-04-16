@@ -550,6 +550,7 @@ function setConfigGateMessage(message, isOk = false) {
 
 const configGateState = {
   resolver: null,
+  onSubmit: null,
 };
 
 function anyOverlayOpen() {
@@ -566,34 +567,90 @@ function syncConfigLockBodyClass() {
   document.body.classList.toggle('config-locked', anyOverlayOpen());
 }
 
-function openConfigGate(message) {
+function openConfigGate(message, options = {}) {
   const gate = document.getElementById('configGate');
+  const title = document.getElementById('configGateTitle');
   const copy = document.getElementById('configGateCopy');
   const passwordInput = document.getElementById('configGatePassword');
   const messageNode = document.getElementById('configGateMessage');
+  const confirmBtn = document.getElementById('configGateConfirmBtn');
+  const cancelBtn = document.getElementById('configGateCancelBtn');
+  const secretOutput = document.getElementById('configGateSecretOutput');
   if (!gate || !copy || !passwordInput || !messageNode) {
     return Promise.resolve(null);
   }
+  if (title) title.textContent = String(options.title || 'Re-enter Password');
   copy.textContent = message || 'Enter the current admin password to confirm the configuration changes.';
+  if (confirmBtn) confirmBtn.textContent = String(options.confirmLabel || 'Confirm Save');
+  if (cancelBtn) cancelBtn.textContent = String(options.cancelLabel || 'Cancel');
+  if (secretOutput) {
+    secretOutput.textContent = '';
+    secretOutput.title = '';
+    secretOutput.classList.add('hidden');
+  }
   messageNode.textContent = '';
   passwordInput.value = '';
+  passwordInput.disabled = false;
+  passwordInput.closest('.auth-field')?.classList.remove('hidden');
+  confirmBtn?.classList.remove('hidden');
   gate.classList.remove('hidden');
   syncConfigLockBodyClass();
   window.setTimeout(() => passwordInput.focus(), 0);
   return new Promise((resolve) => {
     configGateState.resolver = resolve;
+    configGateState.onSubmit = typeof options.onSubmit === 'function' ? options.onSubmit : null;
   });
 }
 
 function closeConfigGate(result = null) {
   const gate = document.getElementById('configGate');
+  const title = document.getElementById('configGateTitle');
   const passwordInput = document.getElementById('configGatePassword');
+  const confirmBtn = document.getElementById('configGateConfirmBtn');
+  const cancelBtn = document.getElementById('configGateCancelBtn');
+  const secretOutput = document.getElementById('configGateSecretOutput');
   if (gate) gate.classList.add('hidden');
   syncConfigLockBodyClass();
-  if (passwordInput) passwordInput.value = '';
+  if (title) title.textContent = 'Re-enter Password';
+  if (passwordInput) {
+    passwordInput.value = '';
+    passwordInput.disabled = false;
+    passwordInput.closest('.auth-field')?.classList.remove('hidden');
+  }
+  if (confirmBtn) confirmBtn.textContent = 'Confirm Save';
+  confirmBtn?.classList.remove('hidden');
+  if (cancelBtn) cancelBtn.textContent = 'Cancel';
+  if (secretOutput) {
+    secretOutput.textContent = '';
+    secretOutput.title = '';
+    secretOutput.classList.add('hidden');
+  }
   const resolver = configGateState.resolver;
   configGateState.resolver = null;
+  configGateState.onSubmit = null;
   if (resolver) resolver(result);
+}
+
+function showConfigGateSecret(secret) {
+  const title = document.getElementById('configGateTitle');
+  const copy = document.getElementById('configGateCopy');
+  const passwordInput = document.getElementById('configGatePassword');
+  const confirmBtn = document.getElementById('configGateConfirmBtn');
+  const cancelBtn = document.getElementById('configGateCancelBtn');
+  const secretOutput = document.getElementById('configGateSecretOutput');
+  if (passwordInput) {
+    passwordInput.value = '';
+    passwordInput.disabled = true;
+    passwordInput.closest('.auth-field')?.classList.add('hidden');
+  }
+  confirmBtn?.classList.add('hidden');
+  if (cancelBtn) cancelBtn.textContent = 'Close';
+  if (secretOutput) {
+    const value = secret || '(empty)';
+    secretOutput.textContent = value;
+    secretOutput.title = value;
+    secretOutput.classList.remove('hidden');
+  }
 }
 
 function browserLoginHashHint() {
@@ -770,6 +827,49 @@ async function sha256Hex(text) {
     return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
   }
   return sha256HexFallback(text);
+}
+
+function base64ToBytes(text) {
+  const bin = window.atob(String(text || ''));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) {
+    bytes[i] = bin.charCodeAt(i);
+  }
+  return bytes;
+}
+
+async function decryptAdminSecretEnvelope(envelope, password) {
+  if (!window.isSecureContext || !window.crypto?.subtle) {
+    throw new Error('Secret reveal requires Web Crypto in a secure browser context.');
+  }
+  const salt = base64ToBytes(envelope?.salt);
+  const nonce = base64ToBytes(envelope?.nonce);
+  const aad = base64ToBytes(envelope?.aad);
+  const ciphertext = base64ToBytes(envelope?.ciphertext);
+  const iterations = Number(envelope?.iterations || 0);
+  if (!salt.length || !nonce.length || !ciphertext.length || !iterations) {
+    throw new Error('Encrypted secret envelope is incomplete.');
+  }
+  const passwordKey = await window.crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(String(password || '')),
+    'PBKDF2',
+    false,
+    ['deriveKey']
+  );
+  const key = await window.crypto.subtle.deriveKey(
+    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations },
+    passwordKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['decrypt']
+  );
+  const plaintext = await window.crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: nonce, additionalData: aad },
+    key,
+    ciphertext
+  );
+  return new TextDecoder().decode(plaintext);
 }
 
 async function fetchAuthState() {
@@ -2289,6 +2389,57 @@ async function saveConfigUpdates(updates, successMessage, options = {}) {
   }
 }
 
+async function revealSecureLinkPsk() {
+  const username = String(configState.config?.admin_web_username || authState.username || '').trim();
+  if (!username) {
+    setText('configMessage', 'secure_link_psk reveal failed: admin username is required.');
+    return;
+  }
+  await openConfigGate(
+    'Enter the current admin password again to reveal secure_link_psk locally.',
+    {
+      title: 'Reveal secure_link_psk',
+      confirmLabel: 'Reveal Secret',
+      onSubmit: async (password) => {
+        try {
+          setConfigGateMessage('Checking password and decrypting...', true);
+          const challengeResp = await apiFetch('/api/config/secret/secure-link-psk/challenge', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+          });
+          const challengeDoc = await challengeResp.json();
+          if (!challengeResp.ok || !challengeDoc.ok) {
+            throw new Error(challengeDoc.error || `HTTP ${challengeResp.status}`);
+          }
+
+          const secretName = String(challengeDoc.secret_name || 'secure_link_psk');
+          const proof = await sha256Hex(`${String(challengeDoc.seed || '')}:${username}:${password}:${secretName}`);
+          const revealResp = await apiFetch('/api/config/secret/secure-link-psk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              challenge_id: String(challengeDoc.challenge_id || ''),
+              proof,
+            }),
+          });
+          const revealDoc = await revealResp.json();
+          if (!revealResp.ok || !revealDoc.ok) {
+            throw new Error(revealDoc.error || `HTTP ${revealResp.status}`);
+          }
+          const secret = await decryptAdminSecretEnvelope(revealDoc.encrypted || {}, password);
+          showConfigGateSecret(secret);
+          setConfigGateMessage('secure_link_psk decrypted locally.', true);
+          setText('configMessage', 'secure_link_psk decrypted locally.', true);
+        } catch (e) {
+          setConfigGateMessage(`Reveal failed: ${e}`);
+        }
+        return false;
+      },
+    }
+  );
+}
+
 async function saveConfig() {
   if (!syncAllServiceCatalogEditors()) {
     return;
@@ -2540,6 +2691,15 @@ function renderSecretInput(key, { readonly = false } = {}) {
   return `<input type="password" class="config-editor mono" data-config-key="${key}" data-secret="true"${readonlyAttr} placeholder="${placeholder}" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" />`;
 }
 
+function renderSecretRevealControls(key) {
+  if (key !== 'secure_link_psk') return '';
+  return `
+    <div class="config-secret-reveal">
+      <button class="btn btn-secondary config-secret-eye-btn" type="button" data-config-reveal-secret="${key}" aria-label="Reveal secure_link_psk" title="Reveal secure_link_psk">&#128065;</button>
+    </div>
+  `;
+}
+
 function renderReadonlySecretValue(key) {
   return `
     <div class="config-value-display config-value-display-readonly" data-config-readonly="${key}">
@@ -2599,6 +2759,7 @@ function renderConfigValueCell(item, current) {
       <button class="config-value-display" type="button" data-config-activate="${key}" aria-label="Edit ${key}">
         <span class="${previewClass}" data-config-preview="${key}" title="${escapeHtml(previewText)}">${escapeHtml(previewText)}</span>
       </button>
+      ${isSecret ? renderSecretRevealControls(key) : ''}
       <div class="config-value-editor hidden" data-config-editor-wrap="${key}">
         ${editorHtml}
         <div class="config-inline-actions">
@@ -2639,7 +2800,7 @@ function renderConfigCard(title, rowsHtml) {
         </div>
       </div>
       <div class="table-wrap config-table-wrap">
-        <table class="conn-table">
+        <table class="conn-table config-table">
           <thead>
             <tr>
               <th>Key</th>
@@ -3203,6 +3364,15 @@ function initConfigEditors() {
     });
   });
 
+  document.querySelectorAll('[data-config-reveal-secret]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const key = button.getAttribute('data-config-reveal-secret');
+      if (key === 'secure_link_psk') {
+        await revealSecureLinkPsk();
+      }
+    });
+  });
+
   document.querySelectorAll('.config-editor[data-config-key]').forEach((input) => {
     if (input.getAttribute('data-service-catalog-hidden') === 'true') {
       return;
@@ -3539,12 +3709,17 @@ document.getElementById('secureLinkReloadIdentityBtn')?.addEventListener('click'
 document.getElementById('secureLinkReloadAllBtn')?.addEventListener('click', () => requestSecureLinkReload('all'));
 document.getElementById('configReloadBtn')?.addEventListener('click', loadConfig);
 document.getElementById('configSaveBtn')?.addEventListener('click', saveConfig);
-document.getElementById('configGateForm')?.addEventListener('submit', (event) => {
+document.getElementById('configGateForm')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const passwordInput = document.getElementById('configGatePassword');
   const password = String(passwordInput?.value || '');
   if (!password) {
     setConfigGateMessage('Password is required.');
+    return;
+  }
+  if (configGateState.onSubmit) {
+    const shouldClose = await configGateState.onSubmit(password);
+    if (shouldClose) closeConfigGate(password);
     return;
   }
   closeConfigGate(password);
@@ -3743,3 +3918,5 @@ initTabs();
 initMetaToggle();
 updateAuthUi();
 bootstrapAdmin();
+  if (title) title.textContent = 'secure_link_psk';
+  if (copy) copy.textContent = 'This value was decrypted locally and will disappear when you close this popup.';

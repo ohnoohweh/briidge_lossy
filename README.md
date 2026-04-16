@@ -872,7 +872,11 @@ When `--admin-web-username` and `--admin-web-password` are configured and auth i
 
 Saving configuration changes uses a second challenge-response confirmation bound to the exact update block, so the current admin password must be re-entered before the server applies guarded config writes.
 
+The Configuration tab normally keeps `secure_link_psk` write-only. When admin authentication is enabled, the row also offers a small reveal action: the operator must re-enter the current admin password, the server verifies a fresh reveal proof, returns only an encrypted envelope, and the browser decrypts the PSK locally in the popup. The displayed value disappears when the popup is closed.
+
 The admin-web design note in [docs/WEBADMIN_DESIGN.md](docs/WEBADMIN_DESIGN.md) explains the applied auth, session, live-update, and secret-redaction concepts in more detail.
+
+The broader security design note in [docs/SECURITY_DESIGN.md](docs/SECURITY_DESIGN.md) summarizes secure-link protection, WebAdmin auth, encrypted config-secret persistence, controlled secret reveal, API attack scenarios, malformed-frame handling, file-access threats, and remaining deployment boundaries.
 
 What the admin web shows:
 
@@ -1071,7 +1075,7 @@ python -m obstacle_bridge --config secure_link_client.json
 What to look for in WebAdmin first:
 
 - WebAdmin shows secure-link details inside each peer block instead of a single legacy headline state, with peer cards laid out full-width across the browser
-- the Configuration tab masks `secure_link_psk` and keeps it write-only in the web UI so the PSK secret is not exposed for editing after startup
+- the Configuration tab masks `secure_link_psk` and keeps it write-only in the web UI during normal editing; authenticated operators can use the eye action to reveal it only after a fresh password proof, with local browser decryption inside the popup
 - peer cards show connection uptime, and myudp-specific protocol statistics remain visible only when the peer is actually using the myudp transport
 - when `secure_link.mode=cert`, WebAdmin also shows peer identity and trust details such as subject id/name, roles, deployment id, serial, issuer, trust-anchor id, and trust-validation status
 - when rekeying is enabled, the peer block can briefly show `rekey_in_progress=true` while the session rotates to a fresh `secure_link.session_id`
@@ -1277,10 +1281,11 @@ Optional operations follow-up:
 - User use-cases in the README: [README.md](README.md)
 - System boundary and assumptions: [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md)
 - Requirements: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)
+- Security design and threat scenarios: [docs/SECURITY_DESIGN.md](docs/SECURITY_DESIGN.md)
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 - Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `146` integration tests, `189` unit tests. Latest local Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` completed with `134 passed` before the latest focused integration additions. The focused compression/admin/lifecycle requirement-gap run completed with `5 passed, 135 deselected`, and the focused SecureLink PSK slice `RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` completed with `25 passed, 111 deselected`. Current branch validation also includes the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`, the focused config-persistence slice `pytest -q tests/unit/test_runner_config_persistence.py` completed with `2 passed` after removing the environment override for config-secret seed derivation, focused peer-traffic/concurrent-listener validation with `pytest -q tests/unit/test_connection_snapshots.py` plus the `case14` through `case17` concurrent TCP overlay slice, TUN WebAdmin/hook regression validation covering `/api/status` TUN open-connection counts plus overlay peer context exposure for lifecycle hooks, and focused WebAdmin service-editor/service-name validation with `node --check admin_web/app.js` plus `pytest -q tests/unit/test_admin_web_payloads.py tests/unit/test_connection_snapshots.py`.
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `146` integration tests, `193` unit tests. Latest local Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` completed with `134 passed` before the latest focused integration additions. The focused compression/admin/lifecycle requirement-gap run completed with `5 passed, 135 deselected`, and the focused SecureLink PSK slice `RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` completed with `25 passed, 111 deselected`. Current branch validation also includes the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`, the focused config-persistence slice `pytest -q tests/unit/test_runner_config_persistence.py` completed with `2 passed` after removing the environment override for config-secret seed derivation, focused peer-traffic/concurrent-listener validation with `pytest -q tests/unit/test_connection_snapshots.py` plus the `case14` through `case17` concurrent TCP overlay slice, TUN WebAdmin/hook regression validation covering `/api/status` TUN open-connection counts plus overlay peer context exposure for lifecycle hooks, focused WebAdmin service-editor/service-name validation with `node --check admin_web/app.js` plus `pytest -q tests/unit/test_admin_web_payloads.py tests/unit/test_connection_snapshots.py`, and focused WebAdmin PSK reveal validation with `pytest -q tests/unit/test_admin_web_payloads.py` plus `node --check admin_web/app.js`.
 
 For changes that touch `src/obstacle_bridge/bridge.py`, the most important regression signal after opening a pull request is the Linux shared integration lane in GitHub CI. Windows-local integration execution is still useful for targeted investigation, but it is not currently the most reliable green/red indicator for broad regression confidence on this branch history.
 
@@ -1289,11 +1294,11 @@ The shared integration harness now generates localhost TLS test certificates in 
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `79/80 = 98.8%`
-- Unit-covered: `59/80 = 73.8%`
-- Any-test-covered: `80/80 = 100.0%`
-- Tracked in manifest: `80/80 = 100.0%`
-- Requirements without integration coverage: `REQ-ADM-011`
+- Integration-covered: `79/81 = 97.5%`
+- Unit-covered: `60/81 = 74.1%`
+- Any-test-covered: `81/81 = 100.0%`
+- Tracked in manifest: `81/81 = 100.0%`
+- Requirements without integration coverage: `REQ-ADM-011`, `REQ-ADM-012`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
 

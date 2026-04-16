@@ -808,7 +808,11 @@ select.config-editor option:disabled {
 }
 
 .config-value-cell {
-  min-width: 320px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
 }
 
 .config-value-display {
@@ -843,6 +847,7 @@ select.config-editor option:disabled {
 
 .config-value-editor {
   display: grid;
+  grid-column: 1 / -1;
   gap: 10px;
 }
 
@@ -853,6 +858,32 @@ select.config-editor option:disabled {
 
 .config-inline-btn {
   padding: 8px 12px;
+}
+
+.config-secret-reveal {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.config-secret-eye-btn {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 8px;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.config-gate-secret-output {
+  display: block;
+  max-width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(120, 170, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .service-catalog-editor {
@@ -1049,7 +1080,7 @@ select.config-editor option:disabled {
   }
 
   .config-value-cell {
-    min-width: 240px;
+    min-width: 0;
   }
 
   .peer-detail-rekey-row {
@@ -1400,7 +1431,39 @@ select.config-editor option:disabled {
 
 .config-table-wrap {
   max-height: none;
+  overflow-x: visible;
   overflow-y: visible;
+}
+
+.config-table {
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.config-table th,
+.config-table td {
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.config-table th:nth-child(1),
+.config-table td:nth-child(1) {
+  width: 20%;
+}
+
+.config-table th:nth-child(2),
+.config-table td:nth-child(2) {
+  width: 34%;
+}
+
+.config-table th:nth-child(3),
+.config-table td:nth-child(3) {
+  width: 16%;
+}
+
+.config-table th:nth-child(4),
+.config-table td:nth-child(4) {
+  width: 30%;
 }
 
 .conn-table thead th {
