@@ -74,14 +74,17 @@ from typing import Dict, Optional, Tuple, List, Set, Deque, Any, Callable, Liter
 
 try:
     from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM, ChaCha20Poly1305
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
 except Exception:
     hashes = None
+    AESGCM = None
     ChaCha20Poly1305 = None
     HKDF = None
+    PBKDF2HMAC = None
     serialization = None
     ed25519 = None
     x25519 = None
@@ -92,6 +95,8 @@ CONFIG_SECRET_PREFIX = "enc:v1:"
 CONFIG_SECRET_SALT = b"ObstacleBridge config secret v1"
 CONFIG_SECRET_INFO = b"ObstacleBridge config field encryption"
 CONFIG_SECRET_AAD = b"ObstacleBridge cfg secret"
+ADMIN_SECRET_REVEAL_AAD = b"ObstacleBridge WebAdmin secret reveal v1"
+ADMIN_SECRET_REVEAL_ITERATIONS = 200000
 RESTART_EXIT_CODE_IMMEDIATE = 75
 RESTART_EXIT_CODE_DELAYED = 77
 _BUILD_INFO_CACHE: Optional[dict] = None
@@ -17418,6 +17423,7 @@ class AdminWebUI:
         self._auth_challenges: Dict[str, dict] = {}
         self._auth_sessions: Dict[str, float] = {}
         self._config_challenges: Dict[str, dict] = {}
+        self._secret_reveal_challenges: Dict[str, dict] = {}
 
     async def start(self):
         if not getattr(self.args, "admin_web", False):
@@ -17519,6 +17525,10 @@ class AdminWebUI:
                 await self._handle_config_challenge(writer, method, headers, body)
                 return
 
+            if path == "/api/config/secret/secure-link-psk/challenge":
+                await self._handle_config_secret_secure_link_psk_challenge(writer, method, headers)
+                return
+
             if path.startswith("/api/") and not self._is_authenticated(headers):
                 payload = {"ok": False, "authenticated": False, "error": "authentication required"}
                 self._log_api_response(path, 401, payload, summary="auth required")
@@ -17553,6 +17563,10 @@ class AdminWebUI:
 
             if path == "/api/secure-link/reload":
                 await self._handle_secure_link_reload(writer, method, body)
+                return
+
+            if path == "/api/config/secret/secure-link-psk":
+                await self._handle_config_secret_secure_link_psk(writer, method, body)
                 return
 
             if path == "/api/status":
@@ -18248,6 +18262,7 @@ class AdminWebUI:
         self._auth_challenges.clear()
         self._auth_sessions.clear()
         self._config_challenges.clear()
+        self._secret_reveal_challenges.clear()
 
     def _prune_auth_state(self) -> None:
         now = time.time()
@@ -18263,6 +18278,9 @@ class AdminWebUI:
         expired_config_challenges = [key for key, item in self._config_challenges.items() if float(item.get("expires_at", 0.0)) <= now]
         for key in expired_config_challenges:
             self._config_challenges.pop(key, None)
+        expired_reveal_challenges = [key for key, item in self._secret_reveal_challenges.items() if float(item.get("expires_at", 0.0)) <= now]
+        for key in expired_reveal_challenges:
+            self._secret_reveal_challenges.pop(key, None)
 
     def _parse_cookie_header(self, headers: dict) -> Dict[str, str]:
         raw = str(headers.get("cookie", "") or "")
@@ -18417,6 +18435,13 @@ class AdminWebUI:
         msg = f"{seed}:{username}:{password}:{updates_digest}".encode("utf-8")
         return hashlib.sha256(msg).hexdigest()
 
+    def _build_secret_reveal_seed(self, challenge_id: str) -> str:
+        return secrets.token_hex(32) + challenge_id
+
+    def _build_secret_reveal_response(self, seed: str, username: str, password: str, secret_name: str) -> str:
+        msg = f"{seed}:{username}:{password}:{secret_name}".encode("utf-8")
+        return hashlib.sha256(msg).hexdigest()
+
     def _issue_config_challenge(self, updates: dict) -> dict:
         self._prune_auth_state()
         challenge_id = secrets.token_hex(16)
@@ -18431,6 +18456,48 @@ class AdminWebUI:
             "challenge_id": challenge_id,
             "seed": seed,
             "updates_digest": updates_digest,
+        }
+
+    def _issue_secret_reveal_challenge(self, secret_name: str) -> dict:
+        self._prune_auth_state()
+        challenge_id = secrets.token_hex(16)
+        seed = self._build_secret_reveal_seed(challenge_id)
+        self._secret_reveal_challenges[challenge_id] = {
+            "seed": seed,
+            "secret_name": secret_name,
+            "expires_at": time.time() + self.CONFIG_CHALLENGE_TTL_SEC,
+        }
+        return {
+            "challenge_id": challenge_id,
+            "seed": seed,
+            "secret_name": secret_name,
+        }
+
+    def _encrypt_admin_secret_for_reveal(self, secret_name: str, secret_value: str) -> dict:
+        password = str(getattr(self.args, "admin_web_password", "") or "")
+        if AESGCM is None or hashes is None or PBKDF2HMAC is None:
+            raise RuntimeError("admin secret reveal encryption requires cryptography")
+        if not self.auth_required() or not password:
+            raise ValueError("admin password authentication is required to reveal secrets")
+        salt = secrets.token_bytes(16)
+        nonce = secrets.token_bytes(12)
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=ADMIN_SECRET_REVEAL_ITERATIONS,
+        )
+        key = kdf.derive(password.encode("utf-8"))
+        aad = ADMIN_SECRET_REVEAL_AAD + b":" + secret_name.encode("utf-8")
+        ciphertext = AESGCM(key).encrypt(nonce, str(secret_value or "").encode("utf-8"), aad)
+        return {
+            "algorithm": "AES-GCM",
+            "kdf": "PBKDF2-HMAC-SHA256",
+            "iterations": ADMIN_SECRET_REVEAL_ITERATIONS,
+            "salt": base64.b64encode(salt).decode("ascii"),
+            "nonce": base64.b64encode(nonce).decode("ascii"),
+            "aad": base64.b64encode(aad).decode("ascii"),
+            "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
         }
 
     def _issue_session_headers(self) -> List[Tuple[str, str]]:
@@ -18539,6 +18606,80 @@ class AdminWebUI:
             200,
             {"ok": True, "auth_required": True, "updates_digest": payload["updates_digest"]},
             summary="issued config change challenge",
+        )
+        await self._send_json(writer, 200, payload)
+
+    async def _handle_config_secret_secure_link_psk_challenge(self, writer, method: str, headers: dict):
+        if method != "POST":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+        if not self.auth_required():
+            payload = {"ok": False, "error": "admin password authentication is required to reveal secure_link_psk"}
+            self._log_api_response("/api/config/secret/secure-link-psk/challenge", 403, payload, summary="auth disabled")
+            await self._send_json(writer, 403, payload)
+            return
+        if not self._is_authenticated(headers):
+            payload = {"ok": False, "authenticated": False, "error": "authentication required"}
+            self._log_api_response("/api/config/secret/secure-link-psk/challenge", 401, payload, summary="auth required")
+            await self._send_json(writer, 401, payload)
+            return
+        payload = {"ok": True, "auth_required": True, **self._issue_secret_reveal_challenge("secure_link_psk")}
+        self._log_api_response(
+            "/api/config/secret/secure-link-psk/challenge",
+            200,
+            {"ok": True, "auth_required": True, "secret_name": "secure_link_psk"},
+            summary="issued secret reveal challenge",
+        )
+        await self._send_json(writer, 200, payload)
+
+    async def _handle_config_secret_secure_link_psk(self, writer, method: str, body: bytes):
+        if method != "POST":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+        if not self.auth_required():
+            payload = {"ok": False, "error": "admin password authentication is required to reveal secure_link_psk"}
+            self._log_api_response("/api/config/secret/secure-link-psk", 403, payload, summary="auth disabled")
+            await self._send_json(writer, 403, payload)
+            return
+        try:
+            req = json.loads((body or b"{}").decode("utf-8"))
+        except Exception:
+            await self._send_json(writer, 400, {"ok": False, "error": "invalid JSON body"})
+            return
+        challenge_id = str(req.get("challenge_id", "") or "").strip()
+        proof = str(req.get("proof", "") or "").strip().lower()
+        if not challenge_id or not proof:
+            await self._send_json(writer, 428, {"ok": False, "error": "secure_link_psk reveal confirmation required"})
+            return
+        self._prune_auth_state()
+        challenge = self._secret_reveal_challenges.pop(challenge_id, None)
+        if not challenge:
+            await self._send_json(writer, 403, {"ok": False, "error": "invalid or expired secure_link_psk reveal challenge"})
+            return
+        secret_name = str(challenge.get("secret_name", "") or "")
+        if secret_name != "secure_link_psk":
+            await self._send_json(writer, 403, {"ok": False, "error": "secret reveal payload mismatch"})
+            return
+        expected = self._build_secret_reveal_response(
+            str(challenge.get("seed", "") or ""),
+            str(getattr(self.args, "admin_web_username", "") or ""),
+            str(getattr(self.args, "admin_web_password", "") or ""),
+            secret_name,
+        )
+        if proof != expected:
+            await self._send_json(writer, 403, {"ok": False, "error": "secure_link_psk reveal confirmation failed"})
+            return
+        try:
+            envelope = self._encrypt_admin_secret_for_reveal(secret_name, str(getattr(self.args, "secure_link_psk", "") or ""))
+        except Exception as e:
+            await self._send_json(writer, 500, {"ok": False, "error": str(e)})
+            return
+        payload = {"ok": True, "secret_name": secret_name, "encrypted": envelope}
+        self._log_api_response(
+            "/api/config/secret/secure-link-psk",
+            200,
+            {"ok": True, "secret_name": secret_name, "encrypted": {"algorithm": envelope.get("algorithm")}},
+            summary="encrypted secret reveal",
         )
         await self._send_json(writer, 200, payload)
 
