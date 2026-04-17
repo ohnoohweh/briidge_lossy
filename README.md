@@ -27,19 +27,50 @@ The complete whitepaper is available as a rendered preview at [`docs/WHITEPAPER.
 - ObstacleBridge adds the `myudp` transport to better handle network obstacles and traffic degradation conditions seen in large-scale Asian network environments.
 
 ### Quick start (Setup Wizard)
-For new users, the simplest path is:
+For new users, the simplest path is to download the project from GitHub, install it into a local Python virtual environment, and start the Setup Wizard.
 
-1. start ObstacleBridge with defaults:
+1. Download the source from GitHub:
+
+```bash
+git clone https://github.com/ohnoohweh/briidge_lossy.git
+cd briidge_lossy
+```
+
+If you do not use `git`, download the ZIP from `https://github.com/ohnoohweh/briidge_lossy`, extract it, and open a terminal in the extracted project directory.
+
+2. Create and activate a local Python virtual environment:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+On Windows PowerShell, use:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+3. Install ObstacleBridge and its runtime dependencies:
+
+```bash
+python -m pip install -e .
+```
+
+4. Start ObstacleBridge for the first time:
 
 ```bash
 python -m obstacle_bridge
 ```
 
-2. click the startup link printed in the console, for example `Open WebAdmin interface http://127.0.0.1:18080/`
-3. run the Setup Wizard from the Home tab
-4. choose Admin Web exposure (`local` or `global`) and optional credentials
-5. paste an invite token from your peer/server admin, or paste a configuration snippet for the initial setup
-6. review, finish, and let the runtime restart
+5. Click the startup link printed in the console, for example `Open WebAdmin interface http://127.0.0.1:18080/`
+6. Run the Setup Wizard from the Home tab
+7. Choose Admin Web exposure (`local` or `global`) and optional credentials
+8. Paste an invite token from your peer/server admin, or paste a configuration snippet for the initial setup
+9. Review, finish, and let the runtime restart
+
+If you start from a source checkout before installing dependencies, `python -m obstacle_bridge` detects missing runtime packages and asks whether it should run the editable install for you. The virtual-environment path above is still recommended on every platform because it keeps ObstacleBridge dependencies isolated from the rest of your system Python.
 
 On first start, missing or empty default config is treated as a valid bootstrap state. The wizard can populate the runtime config from invite-token data or from a pasted configuration snippet and save a durable JSON config automatically.
 
@@ -1285,7 +1316,7 @@ Optional operations follow-up:
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 - Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `146` integration tests, `193` unit tests. Latest local Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` completed with `134 passed` before the latest focused integration additions. The focused compression/admin/lifecycle requirement-gap run completed with `5 passed, 135 deselected`, and the focused SecureLink PSK slice `RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` completed with `25 passed, 111 deselected`. Current branch validation also includes the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`, the focused config-persistence slice `pytest -q tests/unit/test_runner_config_persistence.py` completed with `2 passed` after removing the environment override for config-secret seed derivation, focused peer-traffic/concurrent-listener validation with `pytest -q tests/unit/test_connection_snapshots.py` plus the `case14` through `case17` concurrent TCP overlay slice, TUN WebAdmin/hook regression validation covering `/api/status` TUN open-connection counts plus overlay peer context exposure for lifecycle hooks, focused WebAdmin service-editor/service-name validation with `node --check admin_web/app.js` plus `pytest -q tests/unit/test_admin_web_payloads.py tests/unit/test_connection_snapshots.py`, and focused WebAdmin PSK reveal validation with `pytest -q tests/unit/test_admin_web_payloads.py` plus `node --check admin_web/app.js`.
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `146` integration tests, `195` unit tests. Latest local Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` completed with `134 passed` before the latest focused integration additions. The focused compression/admin/lifecycle requirement-gap run completed with `5 passed, 135 deselected`, and the focused SecureLink PSK slice `RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` completed with `25 passed, 111 deselected`. Current branch validation also includes the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`, the focused config-persistence slice `pytest -q tests/unit/test_runner_config_persistence.py` completed with `2 passed` after removing the environment override for config-secret seed derivation, focused peer-traffic/concurrent-listener validation with `pytest -q tests/unit/test_connection_snapshots.py` plus the `case14` through `case17` concurrent TCP overlay slice, TUN WebAdmin/hook regression validation covering `/api/status` TUN open-connection counts plus overlay peer context exposure for lifecycle hooks, focused WebAdmin service-editor/service-name validation with `node --check admin_web/app.js` plus `pytest -q tests/unit/test_admin_web_payloads.py tests/unit/test_connection_snapshots.py`, focused WebAdmin PSK reveal validation with `pytest -q tests/unit/test_admin_web_payloads.py` plus `node --check admin_web/app.js`, and focused launcher dependency-assistance validation with `pytest -q tests/unit/test_launcher_entrypoint.py`.
 
 For changes that touch `src/obstacle_bridge/bridge.py`, the most important regression signal after opening a pull request is the Linux shared integration lane in GitHub CI. Windows-local integration execution is still useful for targeted investigation, but it is not currently the most reliable green/red indicator for broad regression confidence on this branch history.
 
@@ -1294,11 +1325,11 @@ The shared integration harness now generates localhost TLS test certificates in 
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `79/81 = 97.5%`
-- Unit-covered: `60/81 = 74.1%`
-- Any-test-covered: `81/81 = 100.0%`
-- Tracked in manifest: `81/81 = 100.0%`
-- Requirements without integration coverage: `REQ-ADM-011`, `REQ-ADM-012`
+- Integration-covered: `79/82 = 96.3%`
+- Unit-covered: `61/82 = 74.4%`
+- Any-test-covered: `82/82 = 100.0%`
+- Tracked in manifest: `82/82 = 100.0%`
+- Requirements without integration coverage: `REQ-ADM-011`, `REQ-ADM-012`, `REQ-LIFE-009`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
 

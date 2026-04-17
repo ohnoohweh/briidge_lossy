@@ -75,6 +75,8 @@ ARC-CMP-004:
     - tests/unit/test_launcher_entrypoint.py::test_launcher_restarts_for_code_75
     - tests/unit/test_launcher_entrypoint.py::test_launcher_waits_interval_for_code_77
     - tests/unit/test_launcher_entrypoint.py::test_launcher_appends_unknown_args_to_custom_command
+    - tests/unit/test_launcher_entrypoint.py::test_launcher_offers_dependency_install_before_default_command
+    - tests/unit/test_launcher_entrypoint.py::test_launcher_continues_when_dependency_install_declined
     - tests/unit/test_launcher_entrypoint.py::test_launcher_prints_webadmin_url_from_default_config
     - tests/unit/test_launcher_entrypoint.py::test_launcher_prints_webadmin_url_with_cli_override
     - tests/unit/test_launcher_entrypoint.py::test_launcher_skips_webadmin_notice_when_disabled_in_config

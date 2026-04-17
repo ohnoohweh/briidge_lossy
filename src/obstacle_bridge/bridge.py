@@ -186,6 +186,30 @@ def _detect_build_info() -> dict:
     return dict(info)
 
 
+def _runtime_dependency_status() -> dict:
+    packages = {
+        "cryptography": {
+            "available": bool(hashes and ChaCha20Poly1305 and HKDF),
+            "purpose": "configuration secret encryption and secure-link cryptography",
+        },
+        "aioquic": {
+            "available": importlib.util.find_spec("aioquic") is not None,
+            "purpose": "QUIC overlay transport",
+        },
+        "websockets": {
+            "available": importlib.util.find_spec("websockets") is not None,
+            "purpose": "WebSocket overlay transport",
+        },
+    }
+    missing = [name for name, item in packages.items() if not item["available"]]
+    return {
+        "ok": not missing,
+        "missing": missing,
+        "packages": packages,
+        "install_hint": "python3 -m pip install -e .",
+    }
+
+
 def _encrypt_config_secret(value: Any) -> Any:
     if not isinstance(value, str) or value == "":
         return value
@@ -18006,6 +18030,7 @@ class AdminWebUI:
             "dashboard_enabled": getattr(self.runner.args, "dashboard", None),
             "milestone": "C",
             "build": _detect_build_info(),
+            "runtime_dependencies": _runtime_dependency_status(),
         }
 
     async def _handle_meta(self, writer):
@@ -18404,6 +18429,7 @@ class AdminWebUI:
             "first_tab": str(getattr(self.args, "admin_web_first_tab", "home") or "home"),
             "first_start_detected": bool(getattr(self.args, "_first_start_detected", False)),
             "config_file_state": str(getattr(self.args, "_config_file_state", "unknown") or "unknown"),
+            "runtime_dependencies": _runtime_dependency_status(),
         }
 
     def _is_authenticated(self, headers: dict) -> bool:
