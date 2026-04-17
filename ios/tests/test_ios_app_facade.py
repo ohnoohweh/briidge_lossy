@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "ios" / "src"))
 from obstacle_bridge.bridge import _encrypt_config_secret
 from obstacle_bridge.onboarding import encode_invite_token
 from obstacle_bridge_ios.app import ObstacleBridgeIOSApp
+from obstacle_bridge_ios.m25_ui import M25Config
 from obstacle_bridge_ios.profiles import ProfileStore
 from obstacle_bridge_ios.secure_store import InMemorySecretStore
 
@@ -65,3 +66,32 @@ def test_app_preview_import_handles_runtime_config_json() -> None:
 
     assert preview["kind"] == "config"
     assert preview["preview"]["overlay_transport"] == "ws"
+
+
+def test_app_exposes_m2_dependency_spike_runner() -> None:
+    app = ObstacleBridgeIOSApp()
+    report = app.run_m2_dependency_spike()
+
+    assert report["milestone"] == "M2"
+    assert isinstance(report["checks"], list)
+
+
+def test_app_builds_profile_from_m25_config() -> None:
+    app = ObstacleBridgeIOSApp()
+    profile = app.build_profile_from_m25_config(
+        M25Config(
+            profile_id="ios-m25-a",
+            display_name="M2.5",
+            transport="tcp",
+            peer_host="bridge.example.net",
+            peer_port=4433,
+            local_tcp_port=18080,
+            local_udp_port=18081,
+            target_host="127.0.0.1",
+            target_tcp_port=8080,
+            target_udp_port=8081,
+        )
+    )
+
+    assert profile["profile_id"] == "ios-m25-a"
+    assert profile["obstacle_bridge"]["overlay_transport"] == "tcp"

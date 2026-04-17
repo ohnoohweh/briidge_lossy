@@ -8,3 +8,4 @@ Cert_SecureLink/
 .venv/
 .pytest_cache/
 /ios/build/
+/ios/logs/

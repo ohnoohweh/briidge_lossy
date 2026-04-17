@@ -383,6 +383,24 @@ Mitigation:
 - run basic crypto, WebSocket, UDP, TCP, and QUIC smoke tests on simulator and real device
 - keep a native Swift fallback plan for packet-tunnel-critical networking
 
+### Explicit Impact When `cryptography` Is Unavailable On iOS
+
+The absence of `cryptography` is a high-impact security and feature constraint for this project.
+
+Direct implications:
+
+- SecureLink cannot be considered production-capable on the affected iOS runtime path. This includes PSK/certificate protected-session expectations that depend on the project crypto boundary.
+- Config-secret handling that depends on project crypto primitives must not be treated as equivalent to the desktop/server security path.
+- Password/challenge and secret-envelope workflows that rely on authenticated encryption primitives must be treated as unavailable or reduced on that runtime path.
+- Security parity between desktop/server and iOS cannot be claimed while this dependency gap exists.
+
+Required guardrails while this gap exists:
+
+- Do not market the iOS path as full secure-link parity.
+- Treat this as a release gate for security-sensitive milestones (M3+), not as a cosmetic warning.
+- Keep sensitive values in Keychain and avoid writing plaintext secrets to normal app files, but do not treat storage hygiene alone as a replacement for missing cryptographic feature parity.
+- Maintain an explicit fallback plan (native iOS crypto path and/or extension-side native implementation) before enabling production secure tunnel claims.
+
 ## Configuration Model
 
 The app should reuse the existing runtime config shape where possible, with an iOS profile wrapper around it.
@@ -735,6 +753,42 @@ M1 status:
 - `cryptography` smoke test runs on device or fallback is selected.
 - `aioquic` smoke test result is documented.
 - asyncio TCP/UDP behavior is validated on simulator and device.
+
+Current implementation slice:
+
+- `ios/src/obstacle_bridge_ios/dependency_spike.py` provides an executable M2 harness that runs websocket loopback, cryptography-or-fallback, aioquic result-documentation, and asyncio TCP/UDP loopback checks.
+- `ios/src/obstacle_bridge_ios/__main__.py` supports a headless run mode (`--m2-dependency-spike`) that writes a JSON report to `.obstaclebridge-ios/m2-dependency-spike-latest.json` inside the app data container.
+- `ios/src/obstacle_bridge_ios/app.py` exposes M2 facade helpers so the app path can trigger and persist dependency-spike reports.
+- `ios/tests/test_dependency_spike.py` and `ios/tests/test_ios_app_facade.py` cover the harness contract and app-facade entrypoints.
+- Simulator validation result (iPhone 17 Pro, iOS 26.4.1): websocket smoke passed (`websockets 16.0`), asyncio TCP/UDP loopback passed, cryptography fallback selected because iOS package import is unavailable, and aioquic unavailability is explicitly documented in the generated report.
+
+Security decision record for M2:
+
+- `cryptography` is currently unavailable in this iOS package path.
+- This is not a minor dependency warning; it is a security-parity gap that blocks secure-link production claims on this path until a native or otherwise approved crypto path is in place.
+
+M2 status:
+
+- Implemented and simulator-validated.
+- Physical-device execution command is ready (`briefcase run iOS -u -r --no-input -d "<device>" -- --m2-dependency-spike`) and should be run when a real device is attached.
+
+### M2.5: Minimal Config + Status UI
+
+- App has a minimal configuration UI for profile setup (transport, peer host/port, localhost TCP/UDP exposure intents).
+- App has a status tab that can report successful connection reachability checks.
+- Profile persistence stores M2.5 config through the secret-aware profile store.
+- Platform constraints for localhost exposure are documented in-app and in docs.
+
+Current implementation slice:
+
+- `ios/src/obstacle_bridge_ios/m25_ui.py` defines the M2.5 config model, profile-builder logic, and TCP reachability status probe helpers.
+- `ios/src/obstacle_bridge_ios/app.py` now renders two tabs (`Configuration`, `Status`) and wires save/check actions to app-facade methods.
+- `ios/tests/test_m25_ui.py` and `ios/tests/test_ios_app_facade.py` cover M2.5 config/profile generation and status-probe behavior.
+
+Important platform note:
+
+- The M2.5 localhost TCP/UDP settings are an intent/configuration step.
+- System-wide traffic use by other apps (for example Safari) requires Network Extension packet-tunnel behavior in M3; a normal containing app alone cannot deliver full WireGuard/OpenVPN-style system routing.
 
 ### M3: Packet Tunnel POC
 

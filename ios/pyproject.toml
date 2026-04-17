@@ -21,6 +21,7 @@ sources = [
 ]
 requires = [
     "toga>=0.4.8",
+    "websockets",
 ]
 
 [tool.briefcase.app.obstacle_bridge_ios.iOS]
