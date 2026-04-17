@@ -715,6 +715,14 @@ Current implementation slice:
 - App imports and previews invite/config snippets.
 - App stores a profile without plaintext secrets in normal app files.
 
+Current implementation slice:
+
+- `ios/pyproject.toml` and `ios/src/obstacle_bridge_ios/app.py` provide a minimal BeeWare companion-app scaffold for iOS packaging spikes.
+- `src/obstacle_bridge/onboarding.py` exposes shared invite/config import preview helpers so non-WebAdmin hosts can reuse onboarding token logic.
+- `ios/src/obstacle_bridge_ios/onboarding.py` imports the shared onboarding helper and exposes invite/config preview behavior for the iOS prototype path.
+- `ios/src/obstacle_bridge_ios/profiles.py` and `ios/src/obstacle_bridge_ios/secure_store.py` implement profile persistence that keeps `secure_link_psk` and `admin_web_password` out of normal profile JSON files by storing them in a secret-store abstraction.
+- `ios/tests/test_invite_import.py` and `ios/tests/test_ios_profile_config.py` cover invite/config preview and no-plaintext-secret profile persistence behavior.
+
 ### M2: Dependency Spike
 
 - `websockets` smoke test runs on device.
