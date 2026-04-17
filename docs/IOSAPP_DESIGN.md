@@ -721,7 +721,13 @@ Current implementation slice:
 - `src/obstacle_bridge/onboarding.py` exposes shared invite/config import preview helpers so non-WebAdmin hosts can reuse onboarding token logic.
 - `ios/src/obstacle_bridge_ios/onboarding.py` imports the shared onboarding helper and exposes invite/config preview behavior for the iOS prototype path.
 - `ios/src/obstacle_bridge_ios/profiles.py` and `ios/src/obstacle_bridge_ios/secure_store.py` implement profile persistence that keeps `secure_link_psk` and `admin_web_password` out of normal profile JSON files by storing them in a secret-store abstraction.
-- `ios/tests/test_invite_import.py` and `ios/tests/test_ios_profile_config.py` cover invite/config preview and no-plaintext-secret profile persistence behavior.
+- `ios/src/obstacle_bridge_ios/app.py` now includes a small facade path that previews invite/config imports and stores resulting profile material through the secret-aware profile store.
+- `ios/tests/test_invite_import.py`, `ios/tests/test_ios_profile_config.py`, and `ios/tests/test_ios_app_facade.py` cover invite/config preview, app-level import/store flow, and no-plaintext-secret profile persistence behavior.
+- `briefcase create iOS`, `briefcase build iOS`, and `briefcase run iOS -u --no-input -d "iPhone 17 Pro"` have been validated on macOS with Xcode installed, and the simulator launch renders the M1 prototype screen.
+
+M1 status:
+
+- Complete.
 
 ### M2: Dependency Spike
 

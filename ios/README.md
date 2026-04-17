@@ -14,7 +14,7 @@ Current scope:
 From repository root:
 
 ```bash
-pytest -q ios/tests/test_invite_import.py ios/tests/test_ios_profile_config.py
+pytest -q ios/tests/test_invite_import.py ios/tests/test_ios_profile_config.py ios/tests/test_ios_app_facade.py
 ```
 
 ## Briefcase bootstrap

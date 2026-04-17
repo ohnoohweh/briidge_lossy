@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any, Mapping
 
 from obstacle_bridge.core import ObstacleBridgeClient
 
@@ -31,6 +32,27 @@ class ObstacleBridgeIOSApp:
 
     def preview_import(self, text: str) -> dict:
         return preview_import_text(text)
+
+    def save_profile(self, profile: Mapping[str, Any]) -> dict[str, Any]:
+        return self.profile_store.save_profile(profile)
+
+    def import_and_store_profile(
+        self,
+        import_text: str,
+        *,
+        profile_id: str,
+        display_name: str,
+    ) -> dict[str, Any]:
+        preview = self.preview_import(import_text)
+        updates = preview.get("suggested_updates")
+        if not isinstance(updates, dict):
+            raise ValueError("import preview did not produce suggested_updates")
+        profile = {
+            "profile_id": str(profile_id),
+            "display_name": str(display_name),
+            "obstacle_bridge": dict(updates),
+        }
+        return self.save_profile(profile)
 
 
 def main():
