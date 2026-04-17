@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from obstacle_bridge.core import ObstacleBridgeClient
@@ -13,6 +14,12 @@ try:
     import toga
 except Exception:  # pragma: no cover - exercised in iOS build/runtime, not unit tests.
     toga = None
+
+
+def _configure_ios_safe_locale() -> None:
+    """Ensure Toga's locale bootstrap has a supported default on iOS."""
+    os.environ["LC_ALL"] = "C"
+    os.environ["LANG"] = "C"
 
 
 class ObstacleBridgeIOSApp:
@@ -29,6 +36,7 @@ class ObstacleBridgeIOSApp:
 def main():
     if toga is None:
         raise RuntimeError("Toga is required to run the iOS app UI")
+    _configure_ios_safe_locale()
 
     class _TogaObstacleBridgeApp(toga.App):
         def startup(self):
