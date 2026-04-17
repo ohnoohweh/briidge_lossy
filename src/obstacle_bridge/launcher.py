@@ -8,6 +8,7 @@ to ``bridge.py``.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import ipaddress
 import json
 import os
@@ -28,6 +29,7 @@ PUBLIC_IP_DISCOVERY_SERVICES = (
     "https://ipv4.icanhazip.com",
 )
 PUBLIC_IP_DISCOVERY_TIMEOUT_S = 1.0
+RUNTIME_DEPENDENCIES = ("aioquic", "cryptography", "websockets")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -73,6 +75,44 @@ def _resolve_command(raw_command: Optional[str], forward_args: Sequence[str]) ->
     if raw_command:
         return [*shlex.split(raw_command), *list(forward_args)]
     return _default_bridge_command(forward_args)
+
+
+def _missing_runtime_dependencies() -> List[str]:
+    return [name for name in RUNTIME_DEPENDENCIES if importlib.util.find_spec(name) is None]
+
+
+def _repo_root() -> pathlib.Path:
+    here = pathlib.Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "pyproject.toml").exists():
+            return parent
+    return here.parents[2]
+
+
+def _maybe_offer_dependency_install(missing: Sequence[str]) -> bool:
+    if not missing:
+        return True
+    names = ", ".join(missing)
+    install_cmd = [sys.executable, "-m", "pip", "install", "-e", str(_repo_root())]
+    hint = " ".join(shlex.quote(part) for part in install_cmd)
+    print(f"Missing Python package dependencies: {names}", file=sys.stderr, flush=True)
+    print(f"Install command: {hint}", file=sys.stderr, flush=True)
+    if not sys.stdin.isatty():
+        print("Non-interactive startup; continuing without installing dependencies.", file=sys.stderr, flush=True)
+        return True
+    try:
+        answer = input("Would you like to start installation of dependent packages? [y/N] ")
+    except (EOFError, KeyboardInterrupt):
+        print("", file=sys.stderr, flush=True)
+        return False
+    if answer.strip().lower() not in {"y", "yes"}:
+        print("Dependency installation skipped.", file=sys.stderr, flush=True)
+        return True
+    result = subprocess.run(install_cmd)
+    if result.returncode != 0:
+        print(f"Dependency installation failed with exit code {result.returncode}.", file=sys.stderr, flush=True)
+        return False
+    return True
 
 
 def _build_bridge_notice_parser() -> argparse.ArgumentParser:
@@ -328,6 +368,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = _build_parser()
     args, forward_args = parser.parse_known_args(argv)
     cmd = _resolve_command(args.command, forward_args)
+    if args.command is None and not _maybe_offer_dependency_install(_missing_runtime_dependencies()):
+        return 1
     startup_notice = _resolve_admin_web_notice_settings(forward_args) if args.command is None else None
 
     if args.command is None:

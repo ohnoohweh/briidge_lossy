@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import json
 import urllib.error
 from types import SimpleNamespace
@@ -83,6 +84,45 @@ def test_launcher_appends_unknown_args_to_custom_command(monkeypatch) -> None:
 
     assert rc == 0
     assert calls == [["python", "-m", "obstacle_bridge.bridge", "--tcp-bind", "127.0.0.1"]]
+
+
+def test_launcher_offers_dependency_install_before_default_command(monkeypatch) -> None:
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(launcher, "_missing_runtime_dependencies", lambda: ["cryptography"])
+    monkeypatch.setattr(launcher.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(builtins, "input", lambda prompt: "yes")
+    monkeypatch.setattr(launcher.subprocess, "run", _fake_run)
+
+    rc = launcher.main(["--no-redirect"])
+
+    assert rc == 0
+    assert calls[0][:4] == [launcher.sys.executable, "-m", "pip", "install"]
+    assert calls[0][4] == "-e"
+    assert calls[1][:3] == [launcher.sys.executable, "-m", "obstacle_bridge.bridge"]
+
+
+def test_launcher_continues_when_dependency_install_declined(monkeypatch) -> None:
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(launcher, "_missing_runtime_dependencies", lambda: ["cryptography"])
+    monkeypatch.setattr(launcher.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(builtins, "input", lambda prompt: "no")
+    monkeypatch.setattr(launcher.subprocess, "run", _fake_run)
+
+    rc = launcher.main(["--no-redirect"])
+
+    assert rc == 0
+    assert len(calls) == 1
+    assert calls[0][:3] == [launcher.sys.executable, "-m", "obstacle_bridge.bridge"]
 
 
 def test_launcher_prints_webadmin_url_from_default_config(monkeypatch, tmp_path, capsys) -> None:
