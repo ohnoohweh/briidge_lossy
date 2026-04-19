@@ -1,0 +1,30 @@
+[build-system]
+requires = ["briefcase>=0.3.16"]
+build-backend = "briefcase"
+
+[tool.briefcase]
+project_name = "ObstacleBridge"
+bundle = "com.obstaclebridge"
+version = "0.1.0"
+url = "https://github.com/ohnoohweh/briidge_lossy"
+license.text = "Proprietary"
+author = "ObstacleBridge"
+author_email = "opensource@example.com"
+
+[tool.briefcase.app.obstacle_bridge_ios]
+formal_name = "ObstacleBridge"
+description = "ObstacleBridge iOS companion app prototype"
+long_description = "Imports and previews ObstacleBridge onboarding artifacts."
+sources = [
+    "src/obstacle_bridge_ios",
+    "../src/obstacle_bridge",
+]
+requires = [
+    "toga>=0.4.8",
+    "websockets",
+]
+
+[tool.briefcase.app.obstacle_bridge_ios.iOS]
+requires = [
+    "toga-iOS>=0.4.8",
+]

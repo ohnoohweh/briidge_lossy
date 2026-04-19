@@ -1316,7 +1316,7 @@ Optional operations follow-up:
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 - Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `146` integration tests, `195` unit tests. Latest local Linux shared run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` completed with `134 passed` before the latest focused integration additions. The focused compression/admin/lifecycle requirement-gap run completed with `5 passed, 135 deselected`, and the focused SecureLink PSK slice `RUN_OVERLAY_E2E=1 pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` completed with `25 passed, 111 deselected`. Current branch validation also includes the Linux elevated TUN subset `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`, the Windows elevated TUN subset `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`, the focused config-persistence slice `pytest -q tests/unit/test_runner_config_persistence.py` completed with `2 passed` after removing the environment override for config-secret seed derivation, focused peer-traffic/concurrent-listener validation with `pytest -q tests/unit/test_connection_snapshots.py` plus the `case14` through `case17` concurrent TCP overlay slice, TUN WebAdmin/hook regression validation covering `/api/status` TUN open-connection counts plus overlay peer context exposure for lifecycle hooks, focused WebAdmin service-editor/service-name validation with `node --check admin_web/app.js` plus `pytest -q tests/unit/test_admin_web_payloads.py tests/unit/test_connection_snapshots.py`, focused WebAdmin PSK reveal validation with `pytest -q tests/unit/test_admin_web_payloads.py` plus `node --check admin_web/app.js`, and focused launcher dependency-assistance validation with `pytest -q tests/unit/test_launcher_entrypoint.py`.
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `146` integration tests, `200` unit tests. Latest local non-elevated integration validation used `RUN_OVERLAY_E2E=1 pytest -q -n 16 tests/integration -m "not windows_only and not linux_elevated"` and completed with `140 passed`; standalone unit validation used `pytest -q tests/unit` and completed with `200 passed, 15 subtests passed`. The iOS app M0 embeddable-runtime slice adds focused coverage in `tests/unit/test_embeddable_core.py` for in-memory runtime argument construction, the `ObstacleBridgeClient` facade, and the `PacketIO` / `MemoryPacketIO` packet-boundary abstraction. Current branch validation also attempted the Linux elevated TUN subset with `pytest -q -rs tests/integration/test_linux_elevated.py -m linux_elevated --run-linux-elevated`; it skipped because the host lacks root/CAP_NET_ADMIN permission. Earlier focused validation includes compression/admin/lifecycle, SecureLink PSK, config persistence, peer-traffic/concurrent-listener, TUN WebAdmin/hook, WebAdmin service-editor/service-name, WebAdmin PSK reveal, and launcher dependency-assistance slices documented in [docs/README_TESTING.md](docs/README_TESTING.md).
 
 For changes that touch `src/obstacle_bridge/bridge.py`, the most important regression signal after opening a pull request is the Linux shared integration lane in GitHub CI. Windows-local integration execution is still useful for targeted investigation, but it is not currently the most reliable green/red indicator for broad regression confidence on this branch history.
 
@@ -1325,11 +1325,11 @@ The shared integration harness now generates localhost TLS test certificates in 
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `79/82 = 96.3%`
-- Unit-covered: `61/82 = 74.4%`
-- Any-test-covered: `82/82 = 100.0%`
-- Tracked in manifest: `82/82 = 100.0%`
-- Requirements without integration coverage: `REQ-ADM-011`, `REQ-ADM-012`, `REQ-LIFE-009`
+- Integration-covered: `79/83 = 95.2%`
+- Unit-covered: `62/83 = 74.7%`
+- Any-test-covered: `83/83 = 100.0%`
+- Tracked in manifest: `83/83 = 100.0%`
+- Requirements without integration coverage: `REQ-ADM-011`, `REQ-ADM-012`, `REQ-LIFE-009`, `REQ-LIFE-010`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
 
@@ -1354,7 +1354,7 @@ This top-level section is a compact coverage snapshot. Update the counts and sup
 - On each change, the focus is on test feedback and on extending the test environment to cover the functional increase.
 - Integration testing is executed on a local machine running Python 3.13.12.
 - After successful local validation, deployment is tested on a VPS running Ubuntu 24.04.03 LTS with Python 3.12.3 and a Fedora 42 client system.
-- After successful validation there, deployment is also intended for the productive NAS environment running DSM 7.12 with Python 3.9.
+- After successful validation there, deployment is also intended for the productive NAS environment running Synology DSM with Python 3.8.
 
 ### Trouble shooting recommendations
 Debugging in a project like this can be difficult because the behavior emerges from the interaction of different peers, while the relevant evidence is often hidden in a large amount of runtime data.

@@ -89,6 +89,11 @@ ARC-CMP-004:
     - tests/unit/test_config_bootstrap_cli.py::test_parse_args_explicit_missing_config_uses_defaults
     - tests/unit/test_config_bootstrap_cli.py::test_parse_args_empty_config_is_treated_as_first_start
     - tests/unit/test_config_bootstrap_cli.py::test_parse_args_invalid_json_config_raises_clear_error
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_flat_config
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_sectioned_config
+    - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_cli_metadata
+    - tests/unit/test_embeddable_core.py::test_client_lifecycle_uses_runner_without_process_entrypoint
+    - tests/unit/test_embeddable_core.py::test_memory_packet_io_round_trip_boundaries
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_reconnect_targets_selected_peer_id
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_default_entrypoint_config_bootstrap_and_webadmin_notice

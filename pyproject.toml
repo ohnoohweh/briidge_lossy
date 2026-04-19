@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "ObstacleBridge"
 version = "0.1.0"
 description = "Lossy overlay bridge utilities and test tooling"
-requires-python = ">=3.9"
+requires-python = ">=3.8"
 dependencies = [
     "aioquic",
     "cryptography",

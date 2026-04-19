@@ -7,3 +7,5 @@ Cert_SecureLink/
 .vscode/
 .venv/
 .pytest_cache/
+/ios/build/
+/ios/logs/

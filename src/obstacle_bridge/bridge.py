@@ -18989,10 +18989,10 @@ class AdminWebUI:
         await writer.drain()
 
 
-# ------------ CLI ------------
+# ------------ Runtime argument helpers / CLI ------------
 # ============================ ConfigAwareCLI (JSON) ===========================
 import os, json, argparse, pathlib, sys
-from typing import Any, Dict, List, Tuple, Callable, Optional, Set
+from typing import Any, Dict, List, Tuple, Callable, Optional, Set, Mapping, Sequence
 
 class ConfigAwareCLI:
     """
@@ -19477,14 +19477,14 @@ class ConfigAwareCLI:
             parser.set_defaults(**defaults)
 # ========================= End ConfigAwareCLI (JSON) ==========================
 
-def main(argv: Optional[List[str]] = None) -> None:
+RUNTIME_CLI_DESCRIPTION = (
+    'Bidirectional UDP/TCP multiplexed transfer with keepalive, '
+    'auto-discovery, meters, dashboard, and overlay state machine'
+)
 
-    cli = ConfigAwareCLI(
-        description='Bidirectional UDP/TCP multiplexed transfer with keepalive, '
-                    'auto-discovery, meters, dashboard, and overlay state machine'
-    )
 
-    registrars: List[Tuple[str, Callable[[argparse.ArgumentParser], None]]] = [
+def default_runtime_registrars() -> List[Tuple[str, Callable[[argparse.ArgumentParser], None]]]:
+    return [
         ("stats_board",        StatsBoard.register_cli),
         ("secure_link",       SecureLinkPskSession.register_cli),
         ("compress_layer",    CompressLayerSession.register_cli),
@@ -19497,14 +19497,69 @@ def main(argv: Optional[List[str]] = None) -> None:
         ("debug_logging",      DebugLoggingConfigurator.register_cli),
         ("runner",             Runner.register_overlay_cli),
     ]
-    args = cli.parse_args(argv, registrars)
+
+
+def _attach_runtime_cli_metadata(args: argparse.Namespace, cli: ConfigAwareCLI) -> argparse.Namespace:
     args._config_sections = {k: sorted(v) for k, v in cli.sections.items()}
     args._config_defaults = dict(cli._baseline_defaults)
     args._config_help = dict(cli._action_help)
     args._config_choices = dict(cli._action_choices)
+    return args
 
-    # Apply logging in one line (behavior unchanged)
-    DebugLoggingConfigurator.from_args(args).apply()
+
+def parse_runtime_args(
+    argv: Optional[List[str]] = None,
+    *,
+    apply_logging: bool = True,
+) -> argparse.Namespace:
+    cli = ConfigAwareCLI(description=RUNTIME_CLI_DESCRIPTION)
+    args = cli.parse_args(argv, default_runtime_registrars())
+    _attach_runtime_cli_metadata(args, cli)
+    if apply_logging:
+        DebugLoggingConfigurator.from_args(args).apply()
+    return args
+
+
+def build_runtime_args_from_config(
+    config: Optional[Mapping[str, Any]] = None,
+    argv: Optional[Sequence[str]] = None,
+    *,
+    apply_logging: bool = False,
+) -> argparse.Namespace:
+    """
+    Build a runtime argparse namespace from an in-memory config mapping.
+
+    This is the programmatic counterpart to ``parse_runtime_args``. It avoids
+    CLI-only actions such as ``--dump-config``/``--save-config`` and gives
+    embedders a stable way to create a ``Runner`` without invoking the process
+    entrypoint.
+    """
+    cli = ConfigAwareCLI(description=RUNTIME_CLI_DESCRIPTION)
+    parser = cli._build_full_parser(default_runtime_registrars())
+    if config:
+        cli._raw_config = dict(config)
+        cli._apply_config_defaults_from_json(parser, dict(config))
+        cli._config_file_state = "loaded"
+    else:
+        cli._config_file_state = "missing"
+    args = parser.parse_args(list(argv or []))
+    args.config = ""
+    args.dump_config = None
+    args.save_config = None
+    args.save_format = "json"
+    args.force = False
+    args._config_file_state = cli._config_file_state
+    args._first_start_detected = False
+    args._config_path = ""
+    _attach_runtime_cli_metadata(args, cli)
+    cli._apply_per_section_overrides(args)
+    if apply_logging:
+        DebugLoggingConfigurator.from_args(args).apply()
+    return args
+
+
+def main(argv: Optional[List[str]] = None) -> None:
+    args = parse_runtime_args(argv, apply_logging=True)
 
     r = Runner(args)
     try:
