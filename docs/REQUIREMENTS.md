@@ -26,6 +26,10 @@ The detailed realization concept remains in [SECURE_LINK_DESIGN.md](/home/ohnooh
 
 Security controls that span multiple requirement areas, including WebAdmin authentication, guarded config writes, encrypted persisted secrets, controlled secret reveal, and threat scenarios, are summarized in [SECURITY_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURITY_DESIGN.md).
 
+## Runtime compatibility requirements
+
+- `REQ-RUN-001`: ObstacleBridge shall maintain Python 3.8 compatibility for Synology DSM deployments. Runtime code shall avoid syntax and import-time evaluated type expressions that require Python 3.9 or newer. The package metadata shall declare this support with `requires-python = ">=3.8"` in [pyproject.toml](/home/ohnoohweh/quic_br/pyproject.toml).
+
 ## Overlay and transport requirements
 
 - `REQ-OVL-001`: A peer client shall be able to establish a native UDP (`myudp`) overlay session to a listener and carry UDP application traffic across it.

@@ -51,7 +51,7 @@ Recent test/content updates:
 
 ### Environment and install constraints
 
-- Python `>= 3.9` is required, as declared in [pyproject.toml](../pyproject.toml).
+- Python `>= 3.8` is required, as declared in [pyproject.toml](../pyproject.toml). Python 3.8 compatibility is maintained for Synology DSM deployments.
 - Runtime dependencies include `aioquic`, `cryptography`, and `websockets`.
 - Test execution additionally uses `pytest` and `pytest-xdist`.
 - The integration suite opens real sockets, starts subprocesses, and is intended to run on a local machine where loopback networking and subprocess creation are available.

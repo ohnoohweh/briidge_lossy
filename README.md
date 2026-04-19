@@ -1354,7 +1354,7 @@ This top-level section is a compact coverage snapshot. Update the counts and sup
 - On each change, the focus is on test feedback and on extending the test environment to cover the functional increase.
 - Integration testing is executed on a local machine running Python 3.13.12.
 - After successful local validation, deployment is tested on a VPS running Ubuntu 24.04.03 LTS with Python 3.12.3 and a Fedora 42 client system.
-- After successful validation there, deployment is also intended for the productive NAS environment running DSM 7.12 with Python 3.9.
+- After successful validation there, deployment is also intended for the productive NAS environment running Synology DSM with Python 3.8.
 
 ### Trouble shooting recommendations
 Debugging in a project like this can be difficult because the behavior emerges from the interaction of different peers, while the relevant evidence is often hidden in a large amount of runtime data.

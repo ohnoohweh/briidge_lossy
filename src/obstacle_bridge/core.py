@@ -9,14 +9,14 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from .bridge import Runner, build_runtime_args_from_config
 from .packet_io import PacketIO
 
 
 RuntimeConfig = Mapping[str, Any]
-RuntimeSnapshot = dict[str, Any]
+RuntimeSnapshot = Dict[str, Any]
 
 
 @dataclass
