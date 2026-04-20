@@ -687,6 +687,9 @@ ios/
     onboarding.py
     secure_store.py
     diagnostics.py
+  e2e_app/
+    src/obstacle_bridge_ios_e2e/
+      runner.py
   native/
     ObstacleBridgeTunnel/
       PacketTunnelProvider.swift
@@ -797,6 +800,26 @@ Important platform note:
 - Extension reads and writes packets through `NEPacketTunnelFlow`.
 - One ObstacleBridge transport connects to a Linux/server peer.
 - TUN packets cross the overlay.
+
+Current implementation slice:
+
+- `ios/src/obstacle_bridge_ios/m3_tunnel.py` defines the M3 provider-configuration schema and builds an install descriptor for `NETunnelProviderManager` from existing iOS profiles.
+- `ios/src/obstacle_bridge_ios/app.py` exposes `build_m3_vpn_profile(...)` so the companion app/facade can hand native tunnel installation code a validated provider payload.
+- `ios/native/ObstacleBridgeTunnel/PacketTunnelProvider.swift` implements a native `NEPacketTunnelProvider` POC that applies IPv4/DNS/MTU settings, starts/stops the packet bridge, and returns status snapshots through provider messages.
+- `ios/native/ObstacleBridgeTunnel/PacketFlowBridge.swift` adapts `NEPacketTunnelFlow` to a single TCP peer using length-prefixed packet frames for the M3 POC transport.
+- `ios/native/ObstacleBridgeTunnel/TunnelStatus.swift` defines the extension status/counter response shape.
+- `ios/tests/test_m3_tunnel.py`, `ios/tests/test_m3_native_sources.py`, and `ios/tests/test_ios_app_facade.py` cover the M3 app/native configuration contract.
+- `tests/integration/test_ios_e2e.py` adds a non-entitled iOS packet-flow integration slice that round-trips packet bytes through the M3 length-prefixed TCP contract.
+- `ios/e2e_app/src/obstacle_bridge_ios_e2e/runner.py` defines the standalone iOS E2E probe harness used by simulator/device integration tests, including host WebSocket reachability and WS-overlay UDP service probes.
+- `ios/pyproject.toml` defines `obstacle_bridge_ios_e2e` as a separate Briefcase iOS app target so test-only probes stay outside the ObstacleBridge iOS application.
+- `tests/integration/test_ios_e2e.py` validates that the iOS E2E harness can bind a local UDP service, connect by WS to a host-side ObstacleBridge peer, reach a host UDP echo target, and evaluate the returned UDP frame.
+- `tests/integration/test_ios_simulator_e2e.py` adds opt-in simulator-to-macOS-host tests using the E2E app's headless `--host-websocket-probe` and `--ws-udp-echo-probe` modes.
+
+M3 status:
+
+- Implemented as source-of-truth app contract plus native packet tunnel POC sources.
+- Implemented an opt-in simulator connection test for host WebSocket reachability from a standalone iOS E2E app process.
+- Pending device/Xcode validation: add the native files to a packet tunnel extension target, enable the required Network Extension entitlement, install via `NETunnelProviderManager`, and run against a matching TCP packet-frame peer.
 
 ### M4: Secure Tunnel Beta
 

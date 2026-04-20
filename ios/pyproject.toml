@@ -28,3 +28,17 @@ requires = [
 requires = [
     "toga-iOS>=0.4.8",
 ]
+
+[tool.briefcase.app.obstacle_bridge_ios_e2e]
+formal_name = "ObstacleBridge E2E"
+description = "Standalone iOS E2E probe app for ObstacleBridge integration tests"
+long_description = "Runs headless simulator/device probes without embedding test framework code in the ObstacleBridge iOS app."
+sources = [
+    "e2e_app/src/obstacle_bridge_ios_e2e",
+    "../src/obstacle_bridge",
+]
+requires = [
+    "websockets",
+]
+
+[tool.briefcase.app.obstacle_bridge_ios_e2e.iOS]

@@ -8,6 +8,7 @@ This repository currently collects:
 Recent test/content updates:
 
 - 2026-04-17: iOS app M2.5 UI coverage now includes [ios/src/obstacle_bridge_ios/m25_ui.py](../ios/src/obstacle_bridge_ios/m25_ui.py) and [ios/tests/test_m25_ui.py](../ios/tests/test_m25_ui.py), validating minimal configuration-profile generation for localhost TCP/UDP exposure intent and status-tab TCP reachability checks. The BeeWare app entrypoint in [ios/src/obstacle_bridge_ios/app.py](../ios/src/obstacle_bridge_ios/app.py) now renders `Configuration` and `Status` tabs and routes save/check actions through app-facade methods. Local validation used `.venv/bin/python -m pytest -q ios/tests/test_dependency_spike.py ios/tests/test_m25_ui.py ios/tests/test_invite_import.py ios/tests/test_ios_profile_config.py ios/tests/test_ios_app_facade.py`.
+- 2026-04-20: iOS M3 integration coverage now includes [tests/integration/test_ios_e2e.py](../tests/integration/test_ios_e2e.py), which round-trips packet bytes through the M3 app/provider length-prefixed TCP contract without requiring Network Extension entitlements and also validates an iOS-harness WS overlay UDP service against a host-side ObstacleBridge peer plus UDP echo target. [tests/integration/test_ios_simulator_e2e.py](../tests/integration/test_ios_simulator_e2e.py) adds opt-in simulator checks for basic host WebSocket reachability and the WS-overlay UDP service path. The simulator lane is gated by `--run-ios-simulator` or `OBSTACLEBRIDGE_RUN_IOS_SIMULATOR=1` and launches the standalone Briefcase-built E2E app target `obstacle_bridge_ios_e2e`, keeping test-only probe code outside the ObstacleBridge iOS application bundle.
 - 2026-04-17: iOS app M2 dependency-spike coverage now includes [ios/src/obstacle_bridge_ios/dependency_spike.py](../ios/src/obstacle_bridge_ios/dependency_spike.py), [ios/tests/test_dependency_spike.py](../ios/tests/test_dependency_spike.py), and app-facade wiring in [ios/src/obstacle_bridge_ios/app.py](../ios/src/obstacle_bridge_ios/app.py). The M2 harness executes websocket loopback smoke, cryptography-or-fallback verification, aioquic result documentation, and asyncio TCP/UDP loopback checks, then persists a JSON report inside the iOS app data container. Local validation used `.venv/bin/python -m pytest -q ios/tests/test_dependency_spike.py ios/tests/test_invite_import.py ios/tests/test_ios_profile_config.py ios/tests/test_ios_app_facade.py` (`7 passed`), `briefcase run iOS -u -r --no-input -d "iPhone 17 Pro" -- --m2-dependency-spike`, and report extraction via `xcrun simctl get_app_container booted com.obstaclebridge.obstacle-bridge-ios data`. The simulator report showed websocket/TCP/UDP checks passing, cryptography fallback selected due missing iOS package import, and aioquic marked unavailable with the result documented.
 - 2026-04-17: iOS app M1 milestone closure now includes app-facade coverage in [ios/tests/test_ios_app_facade.py](../ios/tests/test_ios_app_facade.py), validating that `ObstacleBridgeIOSApp` can preview onboarding import text and store a derived profile while keeping plaintext secrets out of normal profile JSON files. The iOS app wrapper in [ios/src/obstacle_bridge_ios/app.py](../ios/src/obstacle_bridge_ios/app.py) now includes a direct import-and-store flow over the shared onboarding helpers and secret-aware profile store. Local validation used `.venv/bin/python -m pytest -q ios/tests/test_invite_import.py ios/tests/test_ios_profile_config.py ios/tests/test_ios_app_facade.py`, plus `briefcase create iOS`, `briefcase build iOS`, and `briefcase run iOS -u --no-input -d "iPhone 17 Pro"` on macOS with Xcode installed (simulator launch rendered the M1 prototype app screen).
 - 2026-04-17: iOS app M1 prototype coverage now includes [ios/tests/test_invite_import.py](../ios/tests/test_invite_import.py) and [ios/tests/test_ios_profile_config.py](../ios/tests/test_ios_profile_config.py), which validate shared invite/config import preview behavior and profile persistence that keeps plaintext secrets out of normal profile files. The M1 scaffold also adds [ios/src/obstacle_bridge_ios](../ios/src/obstacle_bridge_ios) plus shared onboarding helpers in [src/obstacle_bridge/onboarding.py](../src/obstacle_bridge/onboarding.py) so BeeWare-facing flows reuse existing runtime onboarding logic. Local validation used `pytest -q ios/tests/test_invite_import.py ios/tests/test_ios_profile_config.py`.
@@ -187,7 +188,41 @@ Typical checks:
 - multi-client listener behavior remains correct
 - admin API reports the expected runtime state
 
-### 2. Parallel-safe integration execution
+### 2. iOS application integration concept
+
+iOS integration testing is shaped differently from the desktop/Linux E2E harness because the iOS program under test must be packaged, signed, installed into a simulator or device, and launched through iOS lifecycle rules.
+
+Current iOS lanes:
+
+- `ios/tests/*`: Python-level unit/facade tests for the iOS companion-app modules. These do not launch an iOS app.
+- [tests/integration/test_ios_e2e.py](../tests/integration/test_ios_e2e.py): host-side integration for the M3 packet-flow contract. It starts a loopback TCP packet-frame peer on macOS and runs a simulated `NEPacketTunnelFlow` adapter in Python. It also starts a host-side ObstacleBridge WS listener and UDP echo target, then runs the standalone iOS E2E harness code to bind a local UDP service, stimulate it, and verify the returned UDP frame through the WS overlay. These cases prove app/native provider configuration and iOS-harness bridge behavior without requiring Apple Network Extension entitlements.
+- [tests/integration/test_ios_simulator_e2e.py](../tests/integration/test_ios_simulator_e2e.py): opt-in simulator integration. Pytest starts host-side stimulation services on macOS, builds/updates the standalone Briefcase iOS E2E app, installs that test application into the simulator, launches it, and reads the probe report from the E2E app data container. The implemented simulator probes are host WebSocket reachability and WS overlay UDP service to host UDP echo.
+
+The current simulator smoke uses a separate Briefcase-built test application, `com.obstaclebridge.obstacle-bridge-ios-e2e`. macOS-side pytest owns the echo/stimulation services. The simulator E2E app is the client that reaches back to the macOS host over loopback networking. When the Packet Tunnel Provider is wired into Xcode, it should be a Network Extension target inside the ObstacleBridge iOS app product, while the E2E app remains a test harness outside that product.
+
+Important distinction:
+
+- The current simulator tests launch `obstacle_bridge_ios_e2e` with probe arguments such as `--host-websocket-probe` and `--ws-udp-echo-probe`, so the test framework lives in a separate app bundle instead of adding hidden diagnostic behavior to the ObstacleBridge app. These are still simulator networking and bridge-service smokes, not equivalent to the future unmodified-app acceptance lane.
+- The preferred acceptance direction for iOS is to run the program under test unmodified: install the normal app, provision profiles/configuration through the same app storage or user-facing app path that production uses, start the normal app or Network Extension target through iOS mechanisms, and stimulate it only from outside through host services, simulator APIs, UI automation, or `NETunnelProviderManager`.
+- Test-only iOS modes must be treated like the failure-injection policy below: narrowly scoped, explicitly named, excluded from claims that require the unmodified shipped surface, and replaced by normal-entrypoint tests once the app has enough production control surface to support them.
+
+Target iOS E2E shape:
+
+- macOS pytest starts one or more real host-side ObstacleBridge peers plus echo/stimulation services, as the Linux suite does.
+- The simulator contains the ObstacleBridge iOS app when testing product behavior, and may also contain the standalone E2E app when the lane needs test-only probes. Future packet-tunnel coverage will include the ObstacleBridge app's embedded Network Extension target.
+- The test provisions the iOS profile through normal app/profile storage or UI automation.
+- The test starts the iOS app or tunnel through normal iOS APIs.
+- Assertions come from external effects: host peer connection state, WebSocket/TCP traffic crossing, app/tunnel status snapshots, and simulator container logs/reports that the normal app would produce.
+
+Run the current simulator smoke explicitly:
+
+```bash
+OBSTACLEBRIDGE_RUN_IOS_SIMULATOR=1 pytest -q tests/integration/test_ios_simulator_e2e.py -m ios_simulator
+```
+
+It is skipped by default because it needs macOS, Xcode, Briefcase, a bootable simulator, local socket support, and enough time for Xcode to build/install the app.
+
+### 3. Parallel-safe integration execution
 
 The integration harness rewrites transport, service, probe, bounce, and admin ports into worker-specific ranges. This allows:
 
@@ -201,7 +236,7 @@ Admin ports are additionally reserved from a dedicated band starting at `ADMIN_P
 
 The harness also partitions the regular admin-port allocator and the Secure Link admin-port allocator into disjoint sub-ranges. Normal integration cases stay below `SECURE_LINK_ADMIN_BASE`, while Secure Link cases allocate at or above that base, so unrelated WS and Secure Link subprocesses cannot race for the same admin port across different `xdist` workers.
 
-### 3. Delay/loss man-in-the-middle tests
+### 4. Delay/loss man-in-the-middle tests
 
 The `myudp` delay/loss coverage is part of the main integration harness. A loopback UDP proxy sits between peer client and peer server and can:
 
@@ -211,7 +246,7 @@ The `myudp` delay/loss coverage is part of the main integration harness. A loopb
 
 This gives controlled reproduction of retransmission and missed-frame behavior using the real bridge processes instead of an in-memory simulator.
 
-### 4. API/auth integration tests
+### 5. API/auth integration tests
 
 The admin web interface is tested through real HTTP requests against the running bridge process. These tests verify:
 
@@ -220,7 +255,7 @@ The admin web interface is tested through real HTTP requests against the running
 - successful login behavior
 - per-client session isolation
 
-### 5. Focused unit tests
+### 6. Focused unit tests
 
 Unit tests cover narrowly scoped logic that is easier and faster to validate without starting full bridge processes, for example:
 

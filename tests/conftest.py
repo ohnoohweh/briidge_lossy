@@ -20,6 +20,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="run Linux-only elevated integration tests that require /dev/net/tun and interface-create permission",
     )
+    parser.addoption(
+        "--run-ios-simulator",
+        action="store_true",
+        default=False,
+        help="run iOS simulator integration tests that require Xcode, Briefcase, and a bootable simulator",
+    )
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -27,9 +33,16 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     if not want_linux_elevated:
         env_value = str(os.environ.get("OBSTACLEBRIDGE_RUN_LINUX_ELEVATED") or "").strip().lower()
         want_linux_elevated = env_value in {"1", "true", "yes", "on"}
+    want_ios_simulator = bool(config.getoption("--run-ios-simulator"))
+    if not want_ios_simulator:
+        env_value = str(os.environ.get("OBSTACLEBRIDGE_RUN_IOS_SIMULATOR") or "").strip().lower()
+        want_ios_simulator = env_value in {"1", "true", "yes", "on"}
 
     skip_linux_elevated = pytest.mark.skip(
         reason="linux_elevated tests require explicit opt-in via --run-linux-elevated or OBSTACLEBRIDGE_RUN_LINUX_ELEVATED=1"
+    )
+    skip_ios_simulator = pytest.mark.skip(
+        reason="ios_simulator tests require explicit opt-in via --run-ios-simulator or OBSTACLEBRIDGE_RUN_IOS_SIMULATOR=1"
     )
     socket_unavailable_reason = _local_socket_unavailable_reason()
     skip_integration_sockets = pytest.mark.skip(
@@ -38,6 +51,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     for item in items:
         if "linux_elevated" in item.keywords and not want_linux_elevated:
             item.add_marker(skip_linux_elevated)
+        if "ios_simulator" in item.keywords and not want_ios_simulator:
+            item.add_marker(skip_ios_simulator)
         if socket_unavailable_reason and "integration" in item.keywords:
             item.add_marker(skip_integration_sockets)
 

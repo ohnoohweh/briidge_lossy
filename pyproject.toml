@@ -37,6 +37,8 @@ markers = [
     "integration: end-to-end integration tests",
     "slow: long-running tests",
     "linux_elevated: Linux-only integration tests that require /dev/net/tun and elevated interface-management permission",
+    "ios: iOS app, simulator, or packet-tunnel integration tests",
+    "ios_simulator: opt-in iOS simulator integration tests that require Xcode and Briefcase",
     "windows_elevated: Windows-only integration tests that require Administrator privileges and Wintun-backed interface management",
     "windows_only: integration tests that must run on Windows and should be excluded from Linux shared gates",
 ]

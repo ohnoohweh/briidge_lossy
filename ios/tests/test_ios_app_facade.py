@@ -95,3 +95,30 @@ def test_app_builds_profile_from_m25_config() -> None:
 
     assert profile["profile_id"] == "ios-m25-a"
     assert profile["obstacle_bridge"]["overlay_transport"] == "tcp"
+
+
+def test_app_builds_m3_vpn_profile_from_saved_profile_contract() -> None:
+    app = ObstacleBridgeIOSApp()
+    profile = app.build_profile_from_m25_config(
+        M25Config(
+            profile_id="ios-m3-a",
+            display_name="M3",
+            transport="tcp",
+            peer_host="bridge.example.net",
+            peer_port=4433,
+            local_tcp_port=18080,
+            local_udp_port=18081,
+            target_host="127.0.0.1",
+            target_tcp_port=8080,
+            target_udp_port=8081,
+        )
+    )
+
+    vpn_profile = app.build_m3_vpn_profile(
+        profile,
+        provider_bundle_identifier="com.obstaclebridge.ObstacleBridge.PacketTunnel",
+    )
+
+    assert vpn_profile["install_path"] == "NETunnelProviderManager"
+    assert vpn_profile["provider_configuration"]["milestone"] == "M3"
+    assert vpn_profile["provider_configuration"]["peer"]["host"] == "bridge.example.net"
