@@ -61,9 +61,11 @@ async def _check_websockets_loopback() -> str:
 
 async def _check_cryptography_roundtrip() -> str:
     try:
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    except ModuleNotFoundError:
-        return "cryptography unavailable in iOS package; fallback selected (defer secure-link crypto to native path for M2)"
+        from obstacle_bridge.crypto_extract import AESGCM, available_crypto_extract
+    except Exception:
+        return "crypto extract unavailable in iOS package; fallback selected (defer secure-link crypto to native path)"
+    if AESGCM is None:
+        return "crypto extract unavailable in iOS package; fallback selected (native crypto bridge not loaded)"
 
     key = AESGCM.generate_key(bit_length=128)
     aead = AESGCM(key)
@@ -74,7 +76,8 @@ async def _check_cryptography_roundtrip() -> str:
     recovered = aead.decrypt(nonce, ciphertext, aad)
     if recovered != plaintext:
         raise RuntimeError("cryptography decrypt mismatch")
-    return "AESGCM roundtrip passed"
+    backend = str(available_crypto_extract().get("backend") or "unknown")
+    return f"AESGCM roundtrip passed via {backend}"
 
 
 async def _check_aioquic_import() -> str:

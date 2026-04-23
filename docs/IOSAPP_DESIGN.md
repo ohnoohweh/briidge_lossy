@@ -387,6 +387,20 @@ Mitigation:
 
 The absence of `cryptography` is a high-impact security and feature constraint for this project.
 
+Analysis of the currently used crypto surface:
+
+- The project does not use the full `cryptography` package. The active surface is limited to:
+- config-secret encryption/decryption: `HKDF(SHA-256)` plus `ChaCha20Poly1305`
+- WebAdmin secret-reveal envelope: `PBKDF2-HMAC-SHA256` plus `AESGCM`
+- secure-link certificate mode: `Ed25519`, `X25519`, and PEM/DER public/private key loading via `serialization`
+- Test fixtures also use broader certificate helpers, but those are not part of the iOS runtime requirement.
+
+Meaning for the current iOS milestones:
+
+- M1/M2/M2.5 do not need the entire desktop/server crypto stack.
+- The main runtime gap for the current iOS app path is not "all cryptography", but a smaller set of authenticated-encryption and secure-link identity primitives.
+- Even with that smaller scope, the remaining primitives are still security-critical and include native/compiled functionality that is not reasonable to reimplement as an ad hoc Python-only fork for production.
+
 Direct implications:
 
 - SecureLink cannot be considered production-capable on the affected iOS runtime path. This includes PSK/certificate protected-session expectations that depend on the project crypto boundary.
@@ -400,6 +414,12 @@ Required guardrails while this gap exists:
 - Treat this as a release gate for security-sensitive milestones (M3+), not as a cosmetic warning.
 - Keep sensitive values in Keychain and avoid writing plaintext secrets to normal app files, but do not treat storage hygiene alone as a replacement for missing cryptographic feature parity.
 - Maintain an explicit fallback plan (native iOS crypto path and/or extension-side native implementation) before enabling production secure tunnel claims.
+
+Decision:
+
+- Do not attempt to ship a hand-trimmed or partially copied Python fork of `cryptography` for iOS.
+- Instead, keep an internal "crypto extract" boundary that names the exact primitives ObstacleBridge needs, and treat that as the contract for a future iOS-native backend.
+- For current iOS milestones, continue using Keychain-backed secret storage for local profile persistence and keep secure-link runtime cryptography out of scope until a native implementation is approved.
 
 ## Configuration Model
 
@@ -702,6 +722,47 @@ ios/
 
 If Briefcase is used, generated Xcode output should either be ignored or kept in a controlled path with clear regeneration instructions. The source of truth should remain the Python app code, native extension code, and configuration templates.
 
+## How To Run ObstacleBridge In iOS Simulator
+
+This quick path is for running the BeeWare iOS companion app in the iOS Simulator.
+
+Prerequisites:
+
+- macOS with Xcode installed (including simulator runtimes).
+- Python virtual environment for this repository.
+
+From repository root:
+
+```bash
+cd ios
+python -m pip install briefcase
+```
+
+First-time project bootstrap (or after major iOS template changes):
+
+```bash
+briefcase create iOS
+briefcase build iOS
+```
+
+Run the ObstacleBridge iOS app in simulator:
+
+```bash
+briefcase run iOS -a obstacle_bridge_ios -u --no-input -d "iPhone 17 Pro"
+```
+
+If the simulator device name differs on your machine, list available devices and replace the `-d` value:
+
+```bash
+xcrun simctl list devices available
+```
+
+Optional: run the standalone E2E probe app target (used by simulator integration tests):
+
+```bash
+briefcase run iOS -a obstacle_bridge_ios_e2e -u --no-input -d "iPhone 17 Pro"
+```
+
 ## Open Design Questions
 
 - Can the required Apple Network Extension entitlement be obtained for the intended distribution model?
@@ -769,6 +830,12 @@ Security decision record for M2:
 
 - `cryptography` is currently unavailable in this iOS package path.
 - This is not a minor dependency warning; it is a security-parity gap that blocks secure-link production claims on this path until a native or otherwise approved crypto path is in place.
+- Code analysis confirms the project only needs a narrow subset of `cryptography` APIs on the iOS path:
+- `HKDF(SHA-256)` and `ChaCha20Poly1305` for config-secret handling
+- `PBKDF2-HMAC-SHA256` and `AESGCM` for WebAdmin secret reveal
+- `Ed25519`, `X25519`, and PEM/DER key loading for secure-link certificate mode
+- Decision for M2: do not pursue an extracted Python-side mini-fork of `cryptography` for iOS packaging.
+- Decision for M2: preserve a narrow internal crypto boundary, rely on Keychain for iOS secret storage in current milestones, and plan any future secure-link-capable iOS path around a native backend that implements only the required primitives.
 
 M2 status:
 

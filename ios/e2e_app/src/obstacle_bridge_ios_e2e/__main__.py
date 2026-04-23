@@ -2,8 +2,15 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
-from .runner import run_host_websocket_probe_sync, run_ws_udp_echo_probe_sync, write_report
+from .runner import (
+    run_host_websocket_probe_sync,
+    run_runtime_config_sync,
+    run_ws_secure_link_probe_sync,
+    run_ws_udp_echo_probe_sync,
+    write_report,
+)
 
 
 def _arg_value(args: list[str], name: str, default: str | None = None) -> str:
@@ -20,6 +27,65 @@ def _arg_value(args: list[str], name: str, default: str | None = None) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if "--runtime-config" in args:
+        try:
+            config_path = Path(_arg_value(args, "--runtime-config")).expanduser()
+            hold_sec = float(_arg_value(args, "--hold-sec", "600"))
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            if not isinstance(config, dict):
+                raise ValueError("runtime config root must be a JSON object")
+        except Exception as exc:
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "app": "obstacle_bridge_ios_e2e",
+                        "probe": "runtime-config",
+                        "error": f"invalid --runtime-config arguments: {type(exc).__name__}: {exc}",
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 2
+
+        report = run_runtime_config_sync(
+            config=config,
+            hold_sec=hold_sec,
+        )
+        report_path = write_report(report)
+        print(json.dumps({**report, "report_path": str(report_path)}, indent=2, sort_keys=True))
+        return 0 if bool(report.get("ok")) else 1
+
+    if "--ws-secure-link-probe" in args:
+        try:
+            ws_url = _arg_value(args, "--ws-secure-link-probe")
+            secure_link_psk = _arg_value(args, "--secure-link-psk")
+            timeout_sec = float(_arg_value(args, "--timeout-sec", "12"))
+            hold_after_success_sec = float(_arg_value(args, "--hold-after-success-sec", "3"))
+        except Exception as exc:
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "app": "obstacle_bridge_ios_e2e",
+                        "probe": "ws-secure-link",
+                        "error": f"invalid --ws-secure-link-probe arguments: {type(exc).__name__}: {exc}",
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 2
+
+        report = run_ws_secure_link_probe_sync(
+            ws_url=ws_url,
+            secure_link_psk=secure_link_psk,
+            timeout_sec=timeout_sec,
+            hold_after_success_sec=hold_after_success_sec,
+        )
+        report_path = write_report(report)
+        print(json.dumps({**report, "report_path": str(report_path)}, indent=2, sort_keys=True))
+        return 0 if bool(report.get("ok")) else 1
+
     if "--ws-udp-echo-probe" in args:
         try:
             ws_url = _arg_value(args, "--ws-udp-echo-probe")

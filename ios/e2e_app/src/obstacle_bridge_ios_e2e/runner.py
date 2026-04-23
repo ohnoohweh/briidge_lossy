@@ -3,18 +3,55 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import urlparse
 
 from obstacle_bridge.core import ObstacleBridgeClient
+from obstacle_bridge.crypto_extract import available_crypto_extract
 
 
 REPORT_DIRNAME = ".obstaclebridge-ios-e2e"
 HOST_WEBSOCKET_REPORT_NAME = "host-websocket-latest.json"
 WS_UDP_ECHO_REPORT_NAME = "ws-udp-echo-latest.json"
+WS_SECURE_LINK_REPORT_NAME = "ws-secure-link-latest.json"
+RUNTIME_CONFIG_REPORT_NAME = "runtime-config-latest.json"
+
+
+def _report_root(root: Path | None = None) -> Path:
+    base = root or Path.home() / REPORT_DIRNAME
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def _probe_logging_config(*, root: Path | None, name: str) -> dict[str, Any]:
+    log_path = _report_root(root) / f"{name}.log"
+    return {
+        "log": "DEBUG",
+        "console_level": "DEBUG",
+        "file_level": "DEBUG",
+        "log_file": str(log_path),
+        "debug_stderr": True,
+        "log_secure_link": "DEBUG",
+        "log_ws_session": "DEBUG",
+        "log_runner": "DEBUG",
+        "log_admin_web": "DEBUG",
+    }
+
+
+def _webadmin_url_from_config(config: Mapping[str, Any]) -> str | None:
+    if not isinstance(config, Mapping) or not bool(config.get("admin_web")):
+        return None
+    bind = str(config.get("admin_web_bind") or "127.0.0.1").strip() or "127.0.0.1"
+    port = int(config.get("admin_web_port") or 18080)
+    path = str(config.get("admin_web_path") or "/").strip() or "/"
+    if not path.startswith("/"):
+        path = "/" + path
+    host = "127.0.0.1" if bind in {"0.0.0.0", "::", "*", "localhost"} else bind
+    return f"http://{host}:{port}{path}"
 
 
 async def run_host_websocket_probe(url: str, timeout_sec: float = 5.0) -> dict[str, Any]:
@@ -118,6 +155,7 @@ def _ios_ws_udp_bridge_config(
     local_udp_port: int,
     target_udp_host: str,
     target_udp_port: int,
+    report_root: Path | None = None,
 ) -> dict[str, Any]:
     peer_host, peer_port = _ws_peer_from_url(ws_url)
     return {
@@ -140,7 +178,52 @@ def _ios_ws_udp_bridge_config(
                 },
             }
         ],
+        **_probe_logging_config(root=report_root, name="ws-udp-echo-runtime"),
     }
+
+
+def _ios_ws_secure_link_config(
+    *,
+    ws_url: str,
+    secure_link_psk: str,
+    report_root: Path | None = None,
+) -> dict[str, Any]:
+    peer_host, peer_port = _ws_peer_from_url(ws_url)
+    return {
+        "overlay_transport": "ws",
+        "ws_peer": peer_host,
+        "ws_peer_port": int(peer_port),
+        "ws_bind": "127.0.0.1",
+        "ws_own_port": 0,
+        "secure_link": True,
+        "secure_link_mode": "psk",
+        "secure_link_psk": str(secure_link_psk),
+        "admin_web": False,
+        "status": False,
+        **_probe_logging_config(root=report_root, name="ws-secure-link-runtime"),
+    }
+
+
+def _extract_secure_link_peer_doc(client: ObstacleBridgeClient) -> dict[str, Any] | None:
+    runner = getattr(client, "runner", None)
+    getter = getattr(runner, "get_peer_connections_snapshot", None) if runner is not None else None
+    if not callable(getter):
+        return None
+    try:
+        doc = dict(getter() or {})
+    except Exception:
+        return None
+    peers = list(doc.get("peers") or [])
+    for row in peers:
+        if str(row.get("state") or "").strip().lower() == "listening":
+            continue
+        secure_link = row.get("secure_link") or {}
+        if bool(secure_link.get("authenticated")):
+            return {
+                "peer": dict(row),
+                "count": int(doc.get("count") or len(peers)),
+            }
+    return None
 
 
 async def run_ws_udp_echo_probe(
@@ -156,14 +239,16 @@ async def run_ws_udp_echo_probe(
     """Run an iOS-side UDP service over a WS ObstacleBridge peer and validate the reply."""
 
     started = time.perf_counter()
+    report_root = _report_root()
     expected_payload = payload if expected is None else expected
     config = _ios_ws_udp_bridge_config(
         ws_url=ws_url,
         local_udp_port=local_udp_port,
         target_udp_host=target_udp_host,
         target_udp_port=target_udp_port,
+        report_root=report_root,
     )
-    client = ObstacleBridgeClient(config)
+    client = ObstacleBridgeClient(config, apply_logging=True)
     last_detail = ""
     try:
         await client.start()
@@ -228,10 +313,151 @@ def run_ws_udp_echo_probe_sync(**kwargs: Any) -> dict[str, Any]:
     return asyncio.run(run_ws_udp_echo_probe(**kwargs))
 
 
+async def run_ws_secure_link_probe(
+    *,
+    ws_url: str,
+    secure_link_psk: str,
+    timeout_sec: float = 12.0,
+    hold_after_success_sec: float = 3.0,
+) -> dict[str, Any]:
+    """Connect from the iOS E2E app process to a WS peer using SecureLink PSK."""
+
+    started = time.perf_counter()
+    report_root = _report_root()
+    config = _ios_ws_secure_link_config(ws_url=ws_url, secure_link_psk=secure_link_psk, report_root=report_root)
+    client = ObstacleBridgeClient(config, apply_logging=True)
+    last_doc: dict[str, Any] | None = None
+    crypto_status = available_crypto_extract()
+    log_file = str(report_root / "ws-secure-link-runtime.log")
+    try:
+        await client.start()
+        deadline = time.perf_counter() + float(timeout_sec)
+        while time.perf_counter() < deadline:
+            match = _extract_secure_link_peer_doc(client)
+            if match is not None:
+                peer_row = dict(match.get("peer") or {})
+                secure_link = dict(peer_row.get("secure_link") or {})
+                if hold_after_success_sec > 0:
+                    await asyncio.sleep(float(hold_after_success_sec))
+                return {
+                    "ok": True,
+                    "app": "obstacle_bridge_ios_e2e",
+                    "probe": "ws-secure-link",
+                    "ws_url": ws_url,
+                    "crypto_extract": crypto_status,
+                    "runtime_log_file": log_file,
+                    "secure_link_mode": "psk",
+                    "peer_count": int(match.get("count") or 0),
+                    "peer_transport": str(peer_row.get("transport") or ""),
+                    "peer_state": str(peer_row.get("state") or ""),
+                    "secure_link_state": str(secure_link.get("state") or ""),
+                    "secure_link_authenticated": bool(secure_link.get("authenticated")),
+                    "detail": "SecureLink authenticated over WebSocket",
+                    "latency_ms": int((time.perf_counter() - started) * 1000),
+                }
+            runner = getattr(client, "runner", None)
+            getter = getattr(runner, "get_peer_connections_snapshot", None) if runner is not None else None
+            if callable(getter):
+                with contextlib.suppress(Exception):
+                    last_doc = dict(getter() or {})
+            await asyncio.sleep(0.25)
+        return {
+            "ok": False,
+            "app": "obstacle_bridge_ios_e2e",
+            "probe": "ws-secure-link",
+            "ws_url": ws_url,
+            "crypto_extract": crypto_status,
+            "runtime_log_file": log_file,
+            "secure_link_mode": "psk",
+            "detail": "SecureLink did not authenticate before timeout",
+            "last_peer_doc": last_doc,
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "app": "obstacle_bridge_ios_e2e",
+            "probe": "ws-secure-link",
+            "ws_url": ws_url,
+            "crypto_extract": crypto_status,
+            "runtime_log_file": log_file,
+            "secure_link_mode": "psk",
+            "detail": f"SecureLink probe failed: {type(exc).__name__}: {exc}",
+            "last_peer_doc": last_doc,
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+        }
+    finally:
+        await client.stop()
+
+
+def run_ws_secure_link_probe_sync(**kwargs: Any) -> dict[str, Any]:
+    return asyncio.run(run_ws_secure_link_probe(**kwargs))
+
+
+async def run_runtime_config(
+    *,
+    config: Mapping[str, Any],
+    hold_sec: float = 600.0,
+) -> dict[str, Any]:
+    """Start an ObstacleBridge runtime from config and keep it alive for inspection."""
+
+    started = time.perf_counter()
+    report_root = _report_root()
+    runtime_config = dict(config)
+    if not any(key in runtime_config for key in ("log", "console_level", "log_file")):
+        runtime_config.update(_probe_logging_config(root=report_root, name="runtime-config"))
+    client = ObstacleBridgeClient(runtime_config, apply_logging=True)
+    runtime_log_file = str(runtime_config.get("log_file") or "")
+    try:
+        await client.start()
+        snapshot = dict(client.snapshot() or {})
+        await asyncio.sleep(max(0.0, float(hold_sec)))
+        final_snapshot = dict(client.snapshot() or {})
+        return {
+            "ok": True,
+            "app": "obstacle_bridge_ios_e2e",
+            "probe": "runtime-config",
+            "hold_sec": float(hold_sec),
+            "crypto_extract": available_crypto_extract(),
+            "runtime_log_file": runtime_log_file,
+            "started": bool(final_snapshot.get("started")),
+            "webadmin_url": _webadmin_url_from_config(runtime_config),
+            "config": runtime_config,
+            "initial_snapshot": snapshot,
+            "final_snapshot": final_snapshot,
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "app": "obstacle_bridge_ios_e2e",
+            "probe": "runtime-config",
+            "hold_sec": float(hold_sec),
+            "crypto_extract": available_crypto_extract(),
+            "runtime_log_file": runtime_log_file,
+            "webadmin_url": _webadmin_url_from_config(runtime_config),
+            "config": runtime_config,
+            "detail": f"runtime-config failed: {type(exc).__name__}: {exc}",
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+        }
+    finally:
+        await client.stop()
+
+
+def run_runtime_config_sync(**kwargs: Any) -> dict[str, Any]:
+    return asyncio.run(run_runtime_config(**kwargs))
+
+
 def write_report(report: dict[str, Any], root: Path | None = None) -> Path:
-    base = root or Path.home() / REPORT_DIRNAME
-    base.mkdir(parents=True, exist_ok=True)
-    report_name = WS_UDP_ECHO_REPORT_NAME if report.get("probe") == "ws-udp-echo" else HOST_WEBSOCKET_REPORT_NAME
+    base = _report_root(root)
+    if report.get("probe") == "ws-udp-echo":
+        report_name = WS_UDP_ECHO_REPORT_NAME
+    elif report.get("probe") == "ws-secure-link":
+        report_name = WS_SECURE_LINK_REPORT_NAME
+    elif report.get("probe") == "runtime-config":
+        report_name = RUNTIME_CONFIG_REPORT_NAME
+    else:
+        report_name = HOST_WEBSOCKET_REPORT_NAME
     target = base / report_name
     target.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     return target

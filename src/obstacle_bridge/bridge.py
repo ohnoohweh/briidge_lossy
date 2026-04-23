@@ -73,12 +73,16 @@ from collections import deque
 from typing import Dict, Optional, Tuple, List, Set, Deque, Any, Callable, Literal
 
 try:
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM, ChaCha20Poly1305
-    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
+    from .crypto_extract import (
+        AESGCM,
+        ChaCha20Poly1305,
+        HKDF,
+        PBKDF2HMAC,
+        ed25519,
+        hashes,
+        serialization,
+        x25519,
+    )
 except Exception:
     hashes = None
     AESGCM = None
@@ -18725,8 +18729,28 @@ class AdminWebUI:
             headers=[("Set-Cookie", f"{self._session_cookie_name()}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")],
         )
 
+    def _resolve_static_base(self) -> pathlib.Path:
+        configured = pathlib.Path(str(getattr(self.args, "admin_web_dir", "") or "./admin_web")).expanduser()
+        candidates = [configured]
+
+        package_static = pathlib.Path(__file__).resolve().parent / "admin_web"
+        if package_static not in candidates:
+            candidates.append(package_static)
+
+        repo_static = pathlib.Path(__file__).resolve().parents[2] / "admin_web"
+        if repo_static not in candidates:
+            candidates.append(repo_static)
+
+        for candidate in candidates:
+            resolved = candidate.resolve()
+            index = resolved / "index.html"
+            if resolved.is_dir() and index.is_file():
+                return resolved
+
+        return configured.resolve()
+
     async def _handle_static(self, writer, req_path):
-        base = pathlib.Path(self.args.admin_web_dir).resolve()
+        base = self._resolve_static_base()
 
         if req_path in ("", "/"):
             req_path = "/index.html"

@@ -208,6 +208,33 @@ def _http_json_body(writer: _WriterStub) -> dict:
 
 
 class AdminWebPayloadTests(unittest.TestCase):
+    def test_resolve_static_base_falls_back_to_packaged_admin_web(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./definitely-missing-admin-web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            admin_web_security_advisor_disable=False,
+            admin_web_security_advisor_startup_disable=False,
+            admin_web_first_tab="home",
+            secure_link_mode="off",
+            secure_link_psk="",
+            overlay_transport="ws",
+        )
+
+        ui = AdminWebUI(args, _RunnerStub())
+
+        base = ui._resolve_static_base()
+
+        self.assertTrue(base.is_dir())
+        self.assertTrue((base / "index.html").is_file())
+        self.assertEqual(base.name, "admin_web")
+
     def test_config_snapshot_hides_secure_link_psk_and_marks_it_read_only(self):
         args = argparse.Namespace(
             admin_web=True,
