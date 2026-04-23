@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
+import threading
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -32,15 +35,106 @@ def _configure_ios_safe_locale() -> None:
 class ObstacleBridgeIOSApp:
     """Thin wrapper that keeps shared runtime/onboarding imports explicit."""
 
+    WEBADMIN_DEFAULT_BIND = "127.0.0.1"
+    WEBADMIN_DEFAULT_PORT = 18080
+    WEBADMIN_DEFAULT_PATH = "/"
+
     def __init__(self) -> None:
-        self.client = ObstacleBridgeClient({"admin_web": False})
+        self.client = ObstacleBridgeClient(
+            {
+                "admin_web": True,
+                "admin_web_bind": self.WEBADMIN_DEFAULT_BIND,
+                "admin_web_port": self.WEBADMIN_DEFAULT_PORT,
+                "admin_web_path": self.WEBADMIN_DEFAULT_PATH,
+            }
+        )
         self.profile_store = ProfileStore(Path.home() / ".obstaclebridge-ios" / "profiles")
+        self._active_profile_id: Optional[str] = None
+
+    def _run_async_sync(self, awaitable: Any) -> Any:
+        """Run an awaitable from sync UI callbacks."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(awaitable)
+
+        result: dict[str, Any] = {"value": None}
+        error: dict[str, BaseException] = {}
+
+        def _runner() -> None:
+            try:
+                result["value"] = asyncio.run(awaitable)
+            except BaseException as exc:  # pragma: no cover - defensive path.
+                error["exc"] = exc
+
+        thread = threading.Thread(target=_runner, daemon=True)
+        thread.start()
+        thread.join()
+        if "exc" in error:
+            raise error["exc"]
+        return result["value"]
+
+    @staticmethod
+    def _runtime_config_from_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
+        ob_cfg = profile.get("obstacle_bridge")
+        if isinstance(ob_cfg, Mapping):
+            runtime_cfg = dict(ob_cfg)
+        elif "overlay_transport" in profile:
+            runtime_cfg = dict(profile)
+        else:
+            raise ValueError("profile obstacle_bridge config is required")
+        runtime_cfg.setdefault("admin_web", True)
+        runtime_cfg.setdefault("admin_web_bind", ObstacleBridgeIOSApp.WEBADMIN_DEFAULT_BIND)
+        runtime_cfg.setdefault("admin_web_port", ObstacleBridgeIOSApp.WEBADMIN_DEFAULT_PORT)
+        runtime_cfg.setdefault("admin_web_path", ObstacleBridgeIOSApp.WEBADMIN_DEFAULT_PATH)
+        return runtime_cfg
+
+    @staticmethod
+    def webadmin_url_from_config(config: Mapping[str, Any]) -> Optional[str]:
+        if not isinstance(config, Mapping) or not bool(config.get("admin_web")):
+            return None
+        bind = str(config.get("admin_web_bind") or ObstacleBridgeIOSApp.WEBADMIN_DEFAULT_BIND).strip() or ObstacleBridgeIOSApp.WEBADMIN_DEFAULT_BIND
+        port = int(config.get("admin_web_port") or ObstacleBridgeIOSApp.WEBADMIN_DEFAULT_PORT)
+        path = str(config.get("admin_web_path") or ObstacleBridgeIOSApp.WEBADMIN_DEFAULT_PATH).strip() or ObstacleBridgeIOSApp.WEBADMIN_DEFAULT_PATH
+        if not path.startswith("/"):
+            path = "/" + path
+        host = "127.0.0.1" if bind in {"0.0.0.0", "::", "*", "localhost"} else bind
+        return f"http://{host}:{port}{path}"
 
     def preview_import(self, text: str) -> dict:
         return preview_import_text(text)
 
     def save_profile(self, profile: Mapping[str, Any]) -> dict[str, Any]:
         return self.profile_store.save_profile(profile)
+
+    def connect_profile(
+        self,
+        *,
+        profile: Optional[Mapping[str, Any]] = None,
+        profile_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        selected = profile
+        if selected is None:
+            target_id = str(profile_id or "").strip()
+            if not target_id:
+                raise ValueError("profile or profile_id is required")
+            selected = self.profile_store.load_profile(target_id, include_secrets=True)
+        runtime_cfg = self._runtime_config_from_profile(selected)
+        self._run_async_sync(self.client.start(config=runtime_cfg))
+        self._active_profile_id = str(selected.get("profile_id", "") or "").strip() or None
+        return self.connection_snapshot()
+
+    def disconnect_profile(self) -> dict[str, Any]:
+        self._run_async_sync(self.client.stop())
+        self._active_profile_id = None
+        return self.connection_snapshot()
+
+    def connection_snapshot(self) -> dict[str, Any]:
+        snap = dict(self.client.snapshot())
+        snap["active_profile_id"] = self._active_profile_id
+        runtime_cfg = snap.get("config")
+        snap["webadmin_url"] = self.webadmin_url_from_config(runtime_cfg) if isinstance(runtime_cfg, Mapping) else None
+        return snap
 
     def import_and_store_profile(
         self,
@@ -163,9 +257,43 @@ def main():
                     scroll.content = content
                     return scroll
 
+            def _set_webview_url(widget, url: str) -> bool:
+                if widget is None or not url:
+                    return False
+                for attr in ("url",):
+                    try:
+                        setattr(widget, attr, url)
+                        return True
+                    except Exception:
+                        pass
+                for method_name in ("load_url", "set_url"):
+                    method = getattr(widget, method_name, None)
+                    if callable(method):
+                        try:
+                            method(url)
+                            return True
+                        except Exception:
+                            pass
+                return False
+
             cfg_status = _label("Ready for a demo profile.", role="muted", padding_top=8)
             status_label = _label("Run a reachability check when the host peer is listening.", role="muted", padding_top=8)
+            connect_label = _label("Overlay session is idle.", role="muted", padding_top=8)
+            snapshot_label = _label("Snapshot pending.", role="muted", padding_top=8)
             route_status = _label("System tunnel: POC source ready, entitlement/device validation pending.", role="warning")
+            webadmin_label = _label("WebAdmin appears inside the app after connect.", role="muted", padding_top=8)
+            webadmin_status_label = _label("Connect the overlay to open WebAdmin here.", role="muted", padding_top=8)
+            webadmin_url_label = _label("WebAdmin URL unavailable.", role="muted", padding_top=6)
+            webview_cls = getattr(toga, "WebView", None)
+            webadmin_view = None
+            webadmin_view_ready = False
+            if webview_cls is not None:
+                try:
+                    webadmin_view = webview_cls(style=_pack(flex=1))
+                    webadmin_view_ready = True
+                except Exception:
+                    webadmin_view = None
+                    webadmin_view_ready = False
 
             profile_id_input = toga.TextInput(value="ios-m25-default")
             display_name_input = toga.TextInput(value="Demo Client")
@@ -214,6 +342,105 @@ def main():
                     status_label.text = f"Online: host answered in {int(result.get('latency_ms', 0))} ms."
                 else:
                     status_label.text = "Offline: start the macOS host peer, then try again."
+
+            def _format_snapshot() -> str:
+                snap = bridge_app.connection_snapshot()
+                started = bool(snap.get("started"))
+                active_profile_id = str(snap.get("active_profile_id") or "-")
+                runtime_cfg = snap.get("config") if isinstance(snap.get("config"), Mapping) else {}
+                transport = str(runtime_cfg.get("overlay_transport") or "-")
+                webadmin_url = str(snap.get("webadmin_url") or "-")
+
+                peer_host = "-"
+                peer_port = "-"
+                for prefix in ("ws", "tcp", "udp", "quic"):
+                    host_key = f"{prefix}_peer"
+                    port_key = f"{prefix}_peer_port"
+                    if runtime_cfg.get(host_key):
+                        peer_host = str(runtime_cfg.get(host_key))
+                        peer_port = str(runtime_cfg.get(port_key) or "-")
+                        break
+
+                connections = snap.get("connections")
+                if isinstance(connections, list):
+                    connection_count = len(connections)
+                elif isinstance(connections, Mapping):
+                    if isinstance(connections.get("channels"), list):
+                        connection_count = len(connections.get("channels"))
+                    elif isinstance(connections.get("items"), list):
+                        connection_count = len(connections.get("items"))
+                    else:
+                        connection_count = len(connections)
+                else:
+                    connection_count = 0
+
+                brief = (
+                    f"started={started} | profile={active_profile_id} | transport={transport} | "
+                    f"peer={peer_host}:{peer_port} | connections={connection_count} | webadmin={webadmin_url}"
+                )
+                return f"{brief}\n{json.dumps(snap, indent=2, sort_keys=True)}"
+
+            def _refresh_snapshot(widget=None) -> None:
+                try:
+                    snap = bridge_app.connection_snapshot()
+                    webadmin_url = str(snap.get("webadmin_url") or "").strip()
+                    if webadmin_url:
+                        webadmin_label.text = "WebAdmin is available inside this app session."
+                        webadmin_url_label.text = f"Runtime URL: {webadmin_url}"
+                        if webadmin_view_ready and _set_webview_url(webadmin_view, webadmin_url):
+                            webadmin_status_label.text = "WebAdmin loaded in the embedded view."
+                        elif webadmin_view_ready:
+                            webadmin_status_label.text = "WebAdmin URL is ready, but the embedded view could not navigate yet."
+                        else:
+                            webadmin_status_label.text = "This runtime has WebAdmin enabled, but this build does not expose a native WebView widget."
+                    else:
+                        webadmin_label.text = "WebAdmin is disabled for the current runtime config."
+                        webadmin_url_label.text = "WebAdmin URL unavailable."
+                        webadmin_status_label.text = "Connect the overlay to open WebAdmin here."
+                    snapshot_label.text = _format_snapshot()
+                except Exception as exc:
+                    webadmin_label.text = "WebAdmin URL unavailable."
+                    webadmin_url_label.text = "WebAdmin URL unavailable."
+                    webadmin_status_label.text = f"WebAdmin refresh failed: {type(exc).__name__}: {exc}"
+                    snapshot_label.text = f"Snapshot failed: {type(exc).__name__}: {exc}"
+
+            def _connect_overlay(widget) -> None:
+                try:
+                    cfg = M25Config(
+                        profile_id=str(profile_id_input.value or "").strip(),
+                        display_name=str(display_name_input.value or "").strip(),
+                        transport=str(transport_select.value or "ws"),
+                        peer_host=str(peer_host_input.value or "").strip(),
+                        peer_port=_num(peer_port_input.value, 443),
+                        local_tcp_port=_num(local_tcp_input.value, 18080),
+                        local_udp_port=_num(local_udp_input.value, 18081),
+                        target_host=str(target_host_input.value or "127.0.0.1").strip() or "127.0.0.1",
+                        target_tcp_port=_num(target_tcp_input.value, 8080),
+                        target_udp_port=_num(target_udp_input.value, 8081),
+                    )
+                    profile = bridge_app.build_profile_from_m25_config(cfg)
+                    stored = bridge_app.save_profile(profile)
+                    snap = bridge_app.connect_profile(profile=stored)
+                    if snap.get("started"):
+                        connect_label.text = f"Connected: {cfg.transport.upper()} {cfg.peer_host}:{cfg.peer_port}"
+                    else:
+                        connect_label.text = "Connect requested, but runtime is not started."
+                    _refresh_snapshot()
+                except Exception as exc:
+                    connect_label.text = f"Connect failed: {type(exc).__name__}: {exc}"
+                    _refresh_snapshot()
+
+            def _disconnect_overlay(widget) -> None:
+                try:
+                    snap = bridge_app.disconnect_profile()
+                    if snap.get("started"):
+                        connect_label.text = "Disconnect requested, but runtime still reports active."
+                    else:
+                        connect_label.text = "Disconnected."
+                    _refresh_snapshot()
+                except Exception as exc:
+                    connect_label.text = f"Disconnect failed: {type(exc).__name__}: {exc}"
+                    _refresh_snapshot()
 
             def _load_demo(widget) -> None:
                 profile_id_input.value = "ios-demo-client"
@@ -282,12 +509,21 @@ def main():
             runtime_section = _section("Runtime", "Shared code is packaged into the iOS app.")
             runtime_section.add(_label(f"Loaded: {bridge_app.client.__class__.__name__}", role="success"))
             runtime_section.add(route_status)
+            runtime_section.add(webadmin_label)
             status_box.add(runtime_section)
 
             connection_section = _section("Host connection", "Checks the configured host and port from the app facade.")
+            connection_section.add(toga.Button("Connect overlay", on_press=_connect_overlay, style=_pack(padding_bottom=6)))
+            connection_section.add(toga.Button("Disconnect overlay", on_press=_disconnect_overlay, style=_pack(padding_bottom=8)))
+            connection_section.add(connect_label)
             connection_section.add(toga.Button("Check host", on_press=_check_status, style=_pack(padding_bottom=8)))
             connection_section.add(status_label)
             status_box.add(connection_section)
+
+            snapshot_section = _section("Runtime snapshot", "Live facade/runtime state for the current app session.")
+            snapshot_section.add(toga.Button("Refresh snapshot", on_press=_refresh_snapshot, style=_pack(padding_bottom=8)))
+            snapshot_section.add(snapshot_label)
+            status_box.add(snapshot_section)
 
             story_section = _section("What is real today", "A clear demo boundary keeps trust high.")
             story_section.add(_label("Profile storage, invite preview, dependency checks, and host reachability are live.", role="body"))
@@ -300,9 +536,43 @@ def main():
             )
             status_box.add(story_section)
 
+            webadmin_box = toga.Box(
+                style=_pack(direction="column", padding=16, background_color="#f5f7fb")
+            )
+            webadmin_box.add(_label("WEBADMIN", role="eyebrow", padding_bottom=4))
+            webadmin_box.add(_label("Embedded operator view", role="hero", padding_bottom=6))
+            webadmin_box.add(
+                _label(
+                    "This loads the runtime's WebAdmin inside the app instead of assuming the macOS host browser can reach simulator localhost.",
+                    role="body",
+                    padding_bottom=12,
+                )
+            )
+
+            webadmin_runtime_section = _section("WebAdmin session", "Start the overlay runtime first, then refresh this view if needed.")
+            webadmin_runtime_section.add(toga.Button("Refresh WebAdmin", on_press=_refresh_snapshot, style=_pack(padding_bottom=8)))
+            webadmin_runtime_section.add(webadmin_label)
+            webadmin_runtime_section.add(webadmin_status_label)
+            webadmin_runtime_section.add(webadmin_url_label)
+            webadmin_box.add(webadmin_runtime_section)
+
+            webadmin_view_section = _section("Live view", "The embedded browser is the intended access path for the simulator app.")
+            if webadmin_view_ready and webadmin_view is not None:
+                webadmin_view_section.add(webadmin_view)
+            else:
+                webadmin_view_section.add(
+                    _label(
+                        "WebView is not available in this runtime build. The runtime URL is still shown above for diagnostics.",
+                        role="warning",
+                    )
+                )
+            webadmin_box.add(webadmin_view_section)
+
             tabs = toga.OptionContainer(style=_pack(flex=1))
             tabs.content.append("Connect", _scrollable(config_box))
             tabs.content.append("Health", _scrollable(status_box))
+            tabs.content.append("WebAdmin", _scrollable(webadmin_box))
+            _refresh_snapshot()
 
             window = toga.MainWindow(title=self.formal_name)
             window.content = tabs

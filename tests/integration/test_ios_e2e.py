@@ -21,6 +21,7 @@ from obstacle_bridge.core import ObstacleBridgeClient
 from obstacle_bridge_ios.m25_ui import M25Config, profile_from_m25_config
 from obstacle_bridge_ios.m3_tunnel import M3NetworkSettings, m3_vpn_profile_from_profile
 from obstacle_bridge_ios_e2e.runner import run_ws_udp_echo_probe
+from obstacle_bridge_ios_e2e.runner import run_ws_secure_link_probe
 
 
 IOS_REQUEST_PACKET = bytes.fromhex("4500002400004000401100000a4d00020a4d00010035003500100000") + b"ios?"
@@ -176,6 +177,22 @@ def _ws_bridge_server_config(ws_port: int) -> dict:
     }
 
 
+def _ws_secure_link_server_config(ws_port: int) -> dict:
+    return {
+        "overlay_transport": "ws",
+        "ws_bind": "127.0.0.1",
+        "ws_own_port": int(ws_port),
+        "secure_link": True,
+        "secure_link_mode": "psk",
+        "secure_link_psk": "ios-e2e-secure-link-psk",
+        "admin_web": True,
+        "admin_web_bind": "127.0.0.1",
+        "admin_web_port": _unused_port(socket.SOCK_STREAM),
+        "admin_web_auth_disable": True,
+        "status": False,
+    }
+
+
 @pytest.mark.integration
 @pytest.mark.ios
 def test_ios_m3_packet_tunnel_poc_provider_config_round_trips_packets() -> None:
@@ -240,5 +257,32 @@ def test_ios_e2e_app_ws_overlay_udp_service_reaches_linux_peer_udp_echo() -> Non
         assert report["payload_hex"] == IOS_WS_UDP_REQUEST.hex()
         assert report["response_hex"] == IOS_WS_UDP_RESPONSE.hex()
         assert udp_bounce.received == [IOS_WS_UDP_REQUEST]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.integration
+@pytest.mark.ios
+def test_ios_e2e_app_ws_secure_link_probe_authenticates_against_host_peer() -> None:
+    async def scenario() -> None:
+        ws_port = _unused_port(socket.SOCK_STREAM)
+        bridge_server = ObstacleBridgeClient(_ws_secure_link_server_config(ws_port))
+        try:
+            await bridge_server.start()
+            report = await run_ws_secure_link_probe(
+                ws_url=f"ws://127.0.0.1:{ws_port}/obstaclebridge-ios-e2e",
+                secure_link_psk="ios-e2e-secure-link-psk",
+                timeout_sec=8.0,
+                hold_after_success_sec=0.0,
+            )
+        finally:
+            await bridge_server.stop()
+
+        assert report["ok"] is True, report
+        assert report["probe"] == "ws-secure-link"
+        assert report["secure_link_mode"] == "psk"
+        assert report["secure_link_authenticated"] is True
+        assert report["peer_transport"] == "ws"
+        assert report["secure_link_state"] == "authenticated"
 
     asyncio.run(scenario())

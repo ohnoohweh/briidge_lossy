@@ -39,6 +39,7 @@ sources = [
 ]
 requires = [
     "websockets",
+    "rubicon-objc>=0.5.3",
 ]
 
 [tool.briefcase.app.obstacle_bridge_ios_e2e.iOS]

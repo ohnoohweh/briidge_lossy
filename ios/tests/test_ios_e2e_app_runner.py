@@ -17,7 +17,9 @@ if str(E2E_SRC) not in sys.path:
 
 from obstacle_bridge_ios_e2e.__main__ import main
 from obstacle_bridge_ios_e2e.runner import (
+    run_runtime_config,
     run_host_websocket_probe,
+    run_ws_secure_link_probe,
     run_ws_udp_echo_probe,
     write_report,
 )
@@ -78,6 +80,20 @@ def test_e2e_runner_writes_ws_udp_echo_report_to_dedicated_app_directory(tmp_pat
     assert json.loads(report_path.read_text(encoding="utf-8")) == {"ok": True, "probe": "ws-udp-echo"}
 
 
+def test_e2e_runner_writes_ws_secure_link_report_to_dedicated_app_directory(tmp_path: Path) -> None:
+    report_path = write_report({"ok": True, "probe": "ws-secure-link"}, root=tmp_path)
+
+    assert report_path == tmp_path / "ws-secure-link-latest.json"
+    assert json.loads(report_path.read_text(encoding="utf-8")) == {"ok": True, "probe": "ws-secure-link"}
+
+
+def test_e2e_runner_writes_runtime_config_report_to_dedicated_app_directory(tmp_path: Path) -> None:
+    report_path = write_report({"ok": True, "probe": "runtime-config"}, root=tmp_path)
+
+    assert report_path == tmp_path / "runtime-config-latest.json"
+    assert json.loads(report_path.read_text(encoding="utf-8")) == {"ok": True, "probe": "runtime-config"}
+
+
 def test_e2e_main_requires_probe_url(capsys) -> None:
     exit_code = main(["--host-websocket-probe"])
 
@@ -99,6 +115,28 @@ def test_e2e_main_validates_ws_udp_echo_arguments(capsys) -> None:
     assert "--local-udp-port is required" in report["error"]
 
 
+def test_e2e_main_validates_ws_secure_link_arguments(capsys) -> None:
+    exit_code = main(["--ws-secure-link-probe", "ws://127.0.0.1:8080"])
+
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert exit_code == 2
+    assert report["app"] == "obstacle_bridge_ios_e2e"
+    assert report["probe"] == "ws-secure-link"
+    assert "--secure-link-psk is required" in report["error"]
+
+
+def test_e2e_main_validates_runtime_config_arguments(capsys) -> None:
+    exit_code = main(["--runtime-config", "/definitely/missing.json"])
+
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert exit_code == 2
+    assert report["app"] == "obstacle_bridge_ios_e2e"
+    assert report["probe"] == "runtime-config"
+    assert "No such file or directory" in report["error"]
+
+
 def test_e2e_runner_ws_udp_echo_reports_startup_failure_on_missing_peer() -> None:
     async def scenario() -> None:
         report = await run_ws_udp_echo_probe(
@@ -116,5 +154,45 @@ def test_e2e_runner_ws_udp_echo_reports_startup_failure_on_missing_peer() -> Non
         assert report["probe"] == "ws-udp-echo"
         assert report["payload_hex"] == b"\x01ios-udp".hex()
         assert report["expected_hex"] == b"\x02ios-udp".hex()
+
+    asyncio.run(scenario())
+
+
+def test_e2e_runner_ws_secure_link_reports_startup_failure_on_missing_peer() -> None:
+    async def scenario() -> None:
+        report = await run_ws_secure_link_probe(
+            ws_url="ws://127.0.0.1:9/obstaclebridge",
+            secure_link_psk="ios-sim-psk",
+            timeout_sec=0.5,
+            hold_after_success_sec=0.0,
+        )
+
+        assert report["ok"] is False
+        assert report["app"] == "obstacle_bridge_ios_e2e"
+        assert report["probe"] == "ws-secure-link"
+        assert report["secure_link_mode"] == "psk"
+
+    asyncio.run(scenario())
+
+
+def test_e2e_runner_runtime_config_reports_webadmin_url_and_started_state() -> None:
+    async def scenario() -> None:
+        report = await run_runtime_config(
+            config={
+                "overlay_transport": "ws",
+                "ws_peer": "127.0.0.1",
+                "ws_peer_port": 9,
+                "admin_web": True,
+                "admin_web_bind": "127.0.0.1",
+                "admin_web_port": 18080,
+                "status": False,
+            },
+            hold_sec=0.0,
+        )
+
+        assert report["ok"] is True
+        assert report["probe"] == "runtime-config"
+        assert report["started"] is True
+        assert report["webadmin_url"] == "http://127.0.0.1:18080/"
 
     asyncio.run(scenario())
