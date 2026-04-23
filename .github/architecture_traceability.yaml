@@ -46,6 +46,8 @@ ARC-CMP-003:
     - tests/unit/test_connection_snapshots.py::test_snapshot_collapses_tun_channel_aliases_into_one_logical_connection
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+    - tests/integration/test_ios_e2e.py::test_ios_e2e_app_ws_overlay_udp_service_reaches_linux_peer_udp_echo
+    - tests/integration/test_ios_simulator_e2e.py::test_ios_simulator_e2e_app_ws_overlay_udp_service_reaches_macos_peer_udp_echo
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_over_myudp_packet_carry
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_over_ws_secure_link_fragments
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_link_myudp_peer_on_mixed_listener
@@ -94,6 +96,9 @@ ARC-CMP-004:
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_cli_metadata
     - tests/unit/test_embeddable_core.py::test_client_lifecycle_uses_runner_without_process_entrypoint
     - tests/unit/test_embeddable_core.py::test_memory_packet_io_round_trip_boundaries
+    - ios/tests/test_ios_app_facade.py::test_app_connect_profile_starts_runtime_with_obstacle_bridge_section
+    - ios/tests/test_ios_app_facade.py::test_app_disconnect_profile_stops_runtime_and_clears_active_profile
+    - ios/tests/test_ios_e2e_app_runner.py::test_e2e_runner_runtime_config_reports_webadmin_url_and_started_state
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_reconnect_targets_selected_peer_id
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_default_entrypoint_config_bootstrap_and_webadmin_notice
@@ -109,6 +114,7 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_preserves_connection_failure_fields
     - tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_secure_link_rows
     - tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_cert_identity_and_trust_fields
+    - tests/unit/test_admin_web_payloads.py::test_resolve_static_base_falls_back_to_packaged_admin_web
     - tests/unit/test_admin_web_payloads.py::test_secure_link_psk_reveal_requires_password_proof_and_returns_encrypted_envelope
     - tests/unit/test_connection_snapshots.py::test_closed_channel_stats_are_archived_by_owner_peer
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_archived_closed_channel_payload_totals
@@ -131,6 +137,7 @@ ARC-CMP-005:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_secure_link_cert_happy_path_transports
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_revocation_reload_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_local_identity_reload_happy_path
+    - tests/integration/test_ios_simulator_e2e.py::test_ios_simulator_e2e_app_ws_secure_link_client_authenticates_and_is_visible_via_host_webadmin_api
 
 ARC-CMP-006:
   unit_tests:
@@ -143,6 +150,8 @@ ARC-CMP-006:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_secure_link_psk_happy_path_other_transports
+    - tests/integration/test_ios_e2e.py::test_ios_e2e_app_ws_secure_link_probe_authenticates_against_host_peer
+    - tests/integration/test_ios_simulator_e2e.py::test_ios_simulator_e2e_app_ws_secure_link_client_authenticates_and_is_visible_via_host_webadmin_api
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_secure_link_cert_happy_path_transports
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_rejection_matrix
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_revocation_reload_happy_path
