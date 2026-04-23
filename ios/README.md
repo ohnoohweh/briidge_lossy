@@ -11,7 +11,14 @@ Current scope:
 - M2 dependency spike harness for `websockets`, `cryptography`, `aioquic`, and asyncio TCP/UDP loopback checks
 - M2.5 minimal two-tab UI (`Configuration` + `Status`) for setup and reachability checks
 - M3 packet tunnel provider configuration helpers and native `NEPacketTunnelProvider` POC source
+- native iOS crypto bridging for the subset of `cryptography` primitives ObstacleBridge actually uses
+- packaged WebAdmin assets plus in-app and simulator-hosted WebAdmin validation paths
 - standalone iOS E2E probe application used by simulator/device integration tests, kept outside the ObstacleBridge app bundle
+
+Current iOS testing statistics:
+
+- `38` tests in `ios/tests/`
+- `7` iOS-focused integration tests across `tests/integration/test_ios_e2e.py` and `tests/integration/test_ios_simulator_e2e.py`
 
 ## Local developer checks
 
@@ -30,7 +37,7 @@ pytest -q ios/tests/test_m3_tunnel.py ios/tests/test_m3_native_sources.py
 ```
 
 ```bash
-pytest -q ios/tests/test_ios_e2e_app_runner.py
+pytest -q ios/tests/test_native_crypto.py ios/tests/test_ios_e2e_app_runner.py
 ```
 
 ```bash
@@ -50,6 +57,12 @@ briefcase build iOS
 The app module is `obstacle_bridge_ios.app:main`.
 
 The E2E probe module is a separate Briefcase app target, `obstacle_bridge_ios_e2e`. It is intentionally outside the companion app source tree so test-only probes do not become hidden behavior in the ObstacleBridge iOS application.
+
+The E2E app can now be used in three modes:
+
+- `--host-websocket-probe` for basic simulator-to-host reachability
+- `--ws-udp-echo-probe` and `--ws-secure-link-probe` for overlay and SecureLink transport checks
+- `--runtime-config <json>` for booting a packaged runtime from JSON config and keeping it alive for host-side inspection such as WebAdmin checks
 
 Build or run the E2E app target explicitly when working on simulator/device integration tests:
 
@@ -120,8 +133,22 @@ The simulator lane also includes a WS overlay plus UDP service probe. Pytest sta
 OBSTACLEBRIDGE_RUN_IOS_SIMULATOR=1 pytest -q tests/integration/test_ios_simulator_e2e.py -m ios_simulator
 ```
 
+The same simulator lane now also includes a WS SecureLink probe plus a packaged-runtime path that lets the iOS runtime expose WebAdmin locally and publish it back to the macOS host through `remote_servers`.
+
 Equivalent E2E app command shape:
 
 ```bash
 briefcase run iOS -a obstacle_bridge_ios_e2e -u --no-input -d "iPhone 17 Pro" -- --ws-udp-echo-probe ws://127.0.0.1:<ws-port>/obstaclebridge-ios-e2e --local-udp-port 18081 --target-udp-host 127.0.0.1 --target-udp-port <udp-echo-port> --payload-hex 01696f732d73696d756c61746f722d77732d756470 --expected-hex 02696f732d73696d756c61746f722d77732d756470
+```
+
+Equivalent SecureLink E2E app command shape:
+
+```bash
+briefcase run iOS -a obstacle_bridge_ios_e2e -u --no-input -d "iPhone 17 Pro" -- --ws-secure-link-probe ws://127.0.0.1:<ws-port>/obstaclebridge-ios-e2e --secure-link-psk <shared-psk>
+```
+
+Equivalent runtime-config command shape:
+
+```bash
+briefcase run iOS -a obstacle_bridge_ios_e2e -u --no-input -d "iPhone 17 Pro" -- --runtime-config /absolute/path/to/runtime.json --hold-sec 900
 ```
