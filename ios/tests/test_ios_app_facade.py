@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import types
 import json
 import sys
 from pathlib import Path
@@ -10,6 +11,7 @@ sys.path.insert(0, str(ROOT / "ios" / "src"))
 
 from obstacle_bridge.bridge import _encrypt_config_secret
 from obstacle_bridge.onboarding import encode_invite_token
+from obstacle_bridge_ios import app as ios_app_module
 from obstacle_bridge_ios.app import ObstacleBridgeIOSApp
 from obstacle_bridge_ios.m25_ui import M25Config
 from obstacle_bridge_ios.profiles import ProfileStore
@@ -195,6 +197,31 @@ def test_app_disconnect_profile_stops_runtime_and_clears_active_profile(tmp_path
     assert snapshot["started"] is False
     assert snapshot["active_profile_id"] is None
     assert app.client.stop_calls == 1
+
+
+def test_app_start_embedded_webadmin_starts_default_runtime() -> None:
+    app = ObstacleBridgeIOSApp()
+    app.client = _FakeClient()
+
+    snapshot = app.start_embedded_webadmin()
+
+    assert snapshot["started"] is True
+    assert app.client.start_calls == 1
+    assert app.client.last_config["admin_web"] is True
+    assert app.client.last_config["admin_web_bind"] == "127.0.0.1"
+    assert app.client.last_config["admin_web_port"] == 18080
+    assert snapshot["webadmin_url"] == "http://127.0.0.1:18080/"
+
+
+def test_resolve_toga_webview_class_uses_widget_module_fallback(monkeypatch) -> None:
+    sentinel = object()
+    fake_toga = types.SimpleNamespace()
+    fake_module = types.SimpleNamespace(WebView=sentinel)
+
+    monkeypatch.setattr(ios_app_module, "toga", fake_toga)
+    monkeypatch.setattr(ios_app_module.importlib, "import_module", lambda name: fake_module)
+
+    assert ios_app_module._resolve_toga_webview_class() is sentinel
 
 
 def test_webadmin_url_from_config_normalizes_wildcard_bind() -> None:
