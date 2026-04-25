@@ -18,6 +18,7 @@ long_description = "Imports and previews ObstacleBridge onboarding artifacts."
 sources = [
     "src/obstacle_bridge_ios",
     "../src/obstacle_bridge",
+    "../web",
 ]
 requires = [
     "toga>=0.4.8",
@@ -28,6 +29,11 @@ requires = [
 requires = [
     "toga-iOS>=0.4.8",
 ]
+
+[tool.briefcase.app.obstacle_bridge_ios.iOS.info]
+UIFileSharingEnabled = true
+LSSupportsOpeningDocumentsInPlace = true
+NSAppTransportSecurity = { NSAllowsLocalNetworking = true, NSAllowsArbitraryLoadsInWebContent = true }
 
 [tool.briefcase.app.obstacle_bridge_ios_e2e]
 formal_name = "ObstacleBridge E2E"

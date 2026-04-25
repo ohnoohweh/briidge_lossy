@@ -19548,6 +19548,7 @@ def build_runtime_args_from_config(
     config: Optional[Mapping[str, Any]] = None,
     argv: Optional[Sequence[str]] = None,
     *,
+    config_path: Optional[str] = None,
     apply_logging: bool = False,
 ) -> argparse.Namespace:
     """
@@ -19560,21 +19561,33 @@ def build_runtime_args_from_config(
     """
     cli = ConfigAwareCLI(description=RUNTIME_CLI_DESCRIPTION)
     parser = cli._build_full_parser(default_runtime_registrars())
-    if config:
+    persisted_config_path = str(config_path or "")
+    loaded_config: Dict[str, Any] = {}
+    if persisted_config_path and pathlib.Path(persisted_config_path).exists():
+        loaded_config = cli._load_json_config(persisted_config_path)
+        cli._raw_config = dict(loaded_config)
+        cli._apply_config_defaults_from_json(parser, loaded_config)
+        cli._config_file_state = "empty" if not loaded_config else "loaded"
+    elif config:
         cli._raw_config = dict(config)
         cli._apply_config_defaults_from_json(parser, dict(config))
         cli._config_file_state = "loaded"
     else:
-        cli._config_file_state = "missing"
-    args = parser.parse_args(list(argv or []))
-    args.config = ""
+        cli._config_file_state = "missing" if persisted_config_path else "missing"
+    if config and loaded_config:
+        cli._raw_config = dict(config)
+        cli._apply_config_defaults_from_json(parser, dict(config))
+        cli._config_file_state = "loaded"
+    argv_list = list(argv or [])
+    args = parser.parse_args(argv_list)
+    args.config = persisted_config_path
     args.dump_config = None
     args.save_config = None
     args.save_format = "json"
     args.force = False
     args._config_file_state = cli._config_file_state
     args._first_start_detected = False
-    args._config_path = ""
+    args._config_path = str(pathlib.Path(persisted_config_path).expanduser().resolve()) if persisted_config_path else ""
     _attach_runtime_cli_metadata(args, cli)
     cli._apply_per_section_overrides(args)
     if apply_logging:

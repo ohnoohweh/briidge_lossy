@@ -82,8 +82,7 @@ Then retrieve the generated JSON report from the iOS app container:
 
 ```bash
 APP_DATA_DIR="$(xcrun simctl get_app_container booted com.obstaclebridge.obstacle-bridge-ios data)"
-cat "${APP_DATA_DIR}/Documents/.obstaclebridge-ios/m2-dependency-spike-latest.json" || \
-cat "${APP_DATA_DIR}/.obstaclebridge-ios/m2-dependency-spike-latest.json"
+cat "${APP_DATA_DIR}/Documents/ObstacleBridge/m2-dependency-spike-latest.json"
 ```
 
 Run on a physical iOS device by replacing `-d` with the connected device UDID or name.

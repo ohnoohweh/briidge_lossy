@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
+from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
@@ -37,6 +40,26 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         self.assertEqual(args.overlay_transport, "tcp")
         self.assertEqual(args.tcp_peer, "peer.example")
         self.assertEqual(args.tcp_peer_port, 8443)
+
+    def test_build_runtime_args_preserves_explicit_config_path_for_embedders(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "ObstacleBridge.cfg"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "admin_web": {
+                            "admin_web": True,
+                            "admin_web_port": 19090,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = build_runtime_args_from_config(config_path=str(config_path))
+
+        self.assertEqual(args.config, str(config_path))
+        self.assertEqual(args._config_path, str(config_path.resolve()))
+        self.assertEqual(args.admin_web_port, 19090)
 
     def test_parse_runtime_args_exposes_cli_metadata(self) -> None:
         args = parse_runtime_args(
