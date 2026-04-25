@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import unittest
 from unittest import mock
 
@@ -37,6 +38,15 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         self.assertEqual(args.overlay_transport, "tcp")
         self.assertEqual(args.tcp_peer, "peer.example")
         self.assertEqual(args.tcp_peer_port, 8443)
+
+    def test_build_runtime_args_preserves_explicit_config_path_for_embedders(self) -> None:
+        args = build_runtime_args_from_config(
+            {"admin_web": True},
+            config_path="/tmp/obstaclebridge-ios/ObstacleBridge.cfg",
+        )
+
+        self.assertEqual(args.config, "/tmp/obstaclebridge-ios/ObstacleBridge.cfg")
+        self.assertEqual(args._config_path, str(Path("/tmp/obstaclebridge-ios/ObstacleBridge.cfg").resolve()))
 
     def test_parse_runtime_args_exposes_cli_metadata(self) -> None:
         args = parse_runtime_args(

@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT / "ios" / "src"))
 from obstacle_bridge.bridge import _encrypt_config_secret
 from obstacle_bridge.onboarding import encode_invite_token
 from obstacle_bridge_ios import app as ios_app_module
-from obstacle_bridge_ios.app import ObstacleBridgeIOSApp
+from obstacle_bridge_ios.app import ObstacleBridgeIOSApp, _write_startup_artifacts
 from obstacle_bridge_ios.m25_ui import M25Config
 from obstacle_bridge_ios.profiles import ProfileStore
 from obstacle_bridge_ios.secure_store import InMemorySecretStore
@@ -173,6 +173,9 @@ def test_app_connect_profile_starts_runtime_with_obstacle_bridge_section(tmp_pat
     assert app.client.last_config["admin_web"] is True
     assert app.client.last_config["admin_web_bind"] == "127.0.0.1"
     assert app.client.last_config["admin_web_port"] == 18080
+    assert app.client.last_config["admin_web_dir"] == str(ObstacleBridgeIOSApp.ADMIN_WEB_DIR)
+    assert app.client.last_config["ws_static_dir"] == str(ObstacleBridgeIOSApp.WEB_DIR)
+    assert app.client.last_config["log_file"] == str(ObstacleBridgeIOSApp.LOG_FILE)
     assert snapshot["webadmin_url"] == "http://127.0.0.1:18080/"
 
 
@@ -210,7 +213,29 @@ def test_app_start_embedded_webadmin_starts_default_runtime() -> None:
     assert app.client.last_config["admin_web"] is True
     assert app.client.last_config["admin_web_bind"] == "127.0.0.1"
     assert app.client.last_config["admin_web_port"] == 18080
+    assert app.client.last_config["admin_web_dir"] == str(ObstacleBridgeIOSApp.ADMIN_WEB_DIR)
+    assert app.client.last_config["ws_static_dir"] == str(ObstacleBridgeIOSApp.WEB_DIR)
+    assert app.client.last_config["log_file"] == str(ObstacleBridgeIOSApp.LOG_FILE)
     assert snapshot["webadmin_url"] == "http://127.0.0.1:18080/"
+
+
+def test_startup_artifacts_seed_documents_config_logs_and_web_files(tmp_path: Path) -> None:
+    root = tmp_path / "Documents" / "ObstacleBridge"
+
+    result = _write_startup_artifacts(root)
+
+    assert result == root
+    assert (root / "config" / "ObstacleBridge.cfg").is_file()
+    assert (root / "logs").is_dir()
+    assert (root / "profiles").is_dir()
+    assert (root / "admin_web" / "index.html").is_file()
+    assert (root / "web" / "index.html").is_file()
+
+    manifest = json.loads((root / "documents-manifest.json").read_text(encoding="utf-8"))
+    assert manifest["config_file"] == str(root / "config" / "ObstacleBridge.cfg")
+    assert manifest["log_file"] == str(root / "logs" / "obstaclebridge.log")
+    assert manifest["admin_web_files_copied"] is True
+    assert manifest["web_files_copied"] is True
 
 
 def test_resolve_toga_webview_class_uses_widget_module_fallback(monkeypatch) -> None:
