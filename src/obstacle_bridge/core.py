@@ -29,6 +29,7 @@ class ObstacleBridgeClient:
 
     config: RuntimeConfig = field(default_factory=dict)
     argv: Sequence[str] = field(default_factory=tuple)
+    config_path: Optional[str] = None
     packet_io: Optional[PacketIO] = None
     apply_logging: bool = False
     _args: Optional[argparse.Namespace] = field(default=None, init=False, repr=False)
@@ -41,6 +42,7 @@ class ObstacleBridgeClient:
             self._args = build_runtime_args_from_config(
                 self.config,
                 self.argv,
+                config_path=self.config_path,
                 apply_logging=self.apply_logging,
             )
         return self._args

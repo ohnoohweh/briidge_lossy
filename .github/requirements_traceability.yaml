@@ -457,6 +457,7 @@ REQ-LIFE-007:
     - tests/unit/test_config_bootstrap_cli.py::test_parse_args_invalid_json_config_raises_clear_error
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_flat_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_sectioned_config
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_explicit_config_path_for_embedders
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_cli_metadata
     - tests/unit/test_embeddable_core.py::test_client_lifecycle_uses_runner_without_process_entrypoint
     - tests/unit/test_embeddable_core.py::test_memory_packet_io_round_trip_boundaries
@@ -484,6 +485,7 @@ REQ-LIFE-010:
   unit_tests:
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_flat_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_sectioned_config
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_explicit_config_path_for_embedders
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_cli_metadata
     - tests/unit/test_embeddable_core.py::test_client_lifecycle_uses_runner_without_process_entrypoint
     - tests/unit/test_embeddable_core.py::test_memory_packet_io_round_trip_boundaries

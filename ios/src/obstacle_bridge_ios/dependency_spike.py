@@ -186,7 +186,7 @@ def run_m2_dependency_spike_sync() -> dict[str, Any]:
 
 
 def write_m2_dependency_spike_report(report: dict[str, Any], base_dir: Path | None = None) -> Path:
-    root = Path(base_dir) if base_dir is not None else (Path.home() / ".obstaclebridge-ios")
+    root = Path(base_dir) if base_dir is not None else (Path.home() / "Documents" / "ObstacleBridge")
     root.mkdir(parents=True, exist_ok=True)
     target = root / "m2-dependency-spike-latest.json"
     target.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")

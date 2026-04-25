@@ -19548,6 +19548,7 @@ def build_runtime_args_from_config(
     config: Optional[Mapping[str, Any]] = None,
     argv: Optional[Sequence[str]] = None,
     *,
+    config_path: Optional[str] = None,
     apply_logging: bool = False,
 ) -> argparse.Namespace:
     """
@@ -19566,15 +19567,17 @@ def build_runtime_args_from_config(
         cli._config_file_state = "loaded"
     else:
         cli._config_file_state = "missing"
-    args = parser.parse_args(list(argv or []))
-    args.config = ""
+    argv_list = list(argv or [])
+    args = parser.parse_args(argv_list)
+    persisted_config_path = str(config_path or "")
+    args.config = persisted_config_path
     args.dump_config = None
     args.save_config = None
     args.save_format = "json"
     args.force = False
     args._config_file_state = cli._config_file_state
     args._first_start_detected = False
-    args._config_path = ""
+    args._config_path = str(pathlib.Path(persisted_config_path).expanduser().resolve()) if persisted_config_path else ""
     _attach_runtime_cli_metadata(args, cli)
     cli._apply_per_section_overrides(args)
     if apply_logging:
