@@ -17,6 +17,7 @@ if str(E2E_SRC) not in sys.path:
 
 from obstacle_bridge_ios_e2e.__main__ import main
 from obstacle_bridge_ios_e2e.runner import (
+    run_config_persistence_probe,
     run_runtime_config,
     run_host_websocket_probe,
     run_ws_secure_link_probe,
@@ -94,6 +95,13 @@ def test_e2e_runner_writes_runtime_config_report_to_dedicated_app_directory(tmp_
     assert json.loads(report_path.read_text(encoding="utf-8")) == {"ok": True, "probe": "runtime-config"}
 
 
+def test_e2e_runner_writes_config_persistence_report_to_dedicated_app_directory(tmp_path: Path) -> None:
+    report_path = write_report({"ok": True, "probe": "config-persistence"}, root=tmp_path)
+
+    assert report_path == tmp_path / "config-persistence-latest.json"
+    assert json.loads(report_path.read_text(encoding="utf-8")) == {"ok": True, "probe": "config-persistence"}
+
+
 def test_e2e_main_requires_probe_url(capsys) -> None:
     exit_code = main(["--host-websocket-probe"])
 
@@ -135,6 +143,28 @@ def test_e2e_main_validates_runtime_config_arguments(capsys) -> None:
     assert report["app"] == "obstacle_bridge_ios_e2e"
     assert report["probe"] == "runtime-config"
     assert "No such file or directory" in report["error"]
+
+
+def test_e2e_main_validates_runtime_config_json_arguments(capsys) -> None:
+    exit_code = main(["--runtime-config-json", "[]", "--hold-sec", "0"])
+
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert exit_code == 2
+    assert report["app"] == "obstacle_bridge_ios_e2e"
+    assert report["probe"] == "runtime-config"
+    assert "runtime config root must be a JSON object" in report["error"]
+
+
+def test_e2e_main_validates_config_persistence_arguments(capsys) -> None:
+    exit_code = main(["--config-persistence-probe", "--timeout-sec", "nope"])
+
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert exit_code == 2
+    assert report["app"] == "obstacle_bridge_ios_e2e"
+    assert report["probe"] == "config-persistence"
+    assert "invalid --config-persistence-probe arguments" in report["error"]
 
 
 def test_e2e_runner_ws_udp_echo_reports_startup_failure_on_missing_peer() -> None:
@@ -194,5 +224,20 @@ def test_e2e_runner_runtime_config_reports_webadmin_url_and_started_state() -> N
         assert report["probe"] == "runtime-config"
         assert report["started"] is True
         assert report["webadmin_url"] == "http://127.0.0.1:18080/"
+
+    asyncio.run(scenario())
+
+
+def test_e2e_runner_config_persistence_saves_restarts_and_reloads_via_webadmin_api() -> None:
+    async def scenario() -> None:
+        report = await run_config_persistence_probe(timeout_sec=4.0)
+
+        assert report["ok"] is True
+        assert report["probe"] == "config-persistence"
+        assert report["restart_requested_flag"] is True
+        assert report["save_response"]["ok"] is True
+        assert report["restart_response"]["ok"] is True
+        assert report["reloaded_config"]["admin_web_name"] == report["updated"]["admin_web_name"]
+        assert report["reloaded_config"]["admin_web_port"] == int(report["webadmin_url"].rsplit(":", 1)[1])
 
     asyncio.run(scenario())

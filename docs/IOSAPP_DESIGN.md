@@ -763,6 +763,160 @@ Optional: run the standalone E2E probe app target (used by simulator integration
 briefcase run iOS -a obstacle_bridge_ios_e2e -u --no-input -d "iPhone 17 Pro"
 ```
 
+## Requirements To Build And Deploy On iPhone
+
+Physical iPhone deployment has stricter requirements than simulator execution. A normal unsigned or ad-hoc IPA can validate packaging shape, but it cannot make iOS run ObstacleBridge as a background VPN unless the app is signed with the required Apple Network Extension entitlement and the tunnel is installed through Apple's VPN configuration APIs.
+
+### Apple Developer Requirements
+
+Required Apple account and portal setup:
+
+- Paid Apple Developer Program membership for the team that will sign the app.
+- Explicit App ID for the containing app, for example `com.obstaclebridge.obstacle-bridge-ios`.
+- Explicit App ID for the packet tunnel provider extension, for example `com.obstaclebridge.obstacle-bridge-ios.PacketTunnel`.
+- `Network Extensions` capability enabled for the App IDs that need it.
+- A development, Ad Hoc, enterprise, or TestFlight/App Store distribution plan that allows the selected Network Extension capability.
+
+Required entitlement for the packet tunnel provider:
+
+```xml
+<key>com.apple.developer.networking.networkextension</key>
+<array>
+  <string>packet-tunnel-provider</string>
+</array>
+```
+
+The containing app and extension must each be signed with matching provisioning profiles. The extension profile must include the packet tunnel entitlement. Depending on the distribution model and Apple account status, Apple may need to approve Network Extension use before the capability is available for production distribution.
+
+### Xcode Target Requirements
+
+The generated iOS project must contain two signed targets:
+
+- The containing ObstacleBridge app target.
+- The `NEPacketTunnelProvider` app extension target.
+
+The packet tunnel extension target must include:
+
+- `ios/native/ObstacleBridgeTunnel/PacketTunnelProvider.swift`
+- `ios/native/ObstacleBridgeTunnel/ObstacleBridgeExtensionRuntime.swift`
+- `ios/native/ObstacleBridgeTunnel/ObstacleBridgePythonRuntime.h`
+- `ios/native/ObstacleBridgeTunnel/ObstacleBridgePythonRuntime.m`
+- `ios/native/ObstacleBridgeTunnel/ObstacleBridgeTunnel-Bridging-Header.h`
+- `ios/native/ObstacleBridgeTunnel/PacketFlowBridge.swift`
+- `ios/native/ObstacleBridgeTunnel/TunnelStatus.swift`
+- `ios/native/ObstacleBridgeTunnel/LocalWebAdminServer.swift`
+- `ios/native/ObstacleBridgeTunnel/Info.plist`
+- `ios/native/ObstacleBridgeTunnel/PacketTunnel.entitlements`
+- The embedded Python framework and bundled app Python sources needed by the extension-hosted runtime.
+
+The containing app target must embed the extension in `PlugIns/ObstacleBridgeTunnel.appex` and must use the same extension bundle identifier that the app passes into `NETunnelProviderProtocol.providerBundleIdentifier`.
+
+### Runtime Installation Requirements
+
+iOS does not start a packet tunnel extension just because the app launches. The containing app must install and start a VPN configuration with `NETunnelProviderManager`.
+
+The containing app must:
+
+- Create or load a `NETunnelProviderManager`.
+- Set a `NETunnelProviderProtocol`.
+- Set `providerBundleIdentifier` to the packet tunnel extension bundle identifier.
+- Set `serverAddress` to a user-visible label or endpoint string.
+- Put the validated ObstacleBridge provider payload into `providerConfiguration`.
+- Enable and save the manager with `saveToPreferences`.
+- Reload the manager with `loadFromPreferences`.
+- Start the tunnel with `manager.connection.startVPNTunnel()`.
+
+Expected user-visible behavior:
+
+- On first install/start, iOS prompts the user to allow adding a VPN configuration.
+- After permission is granted, iOS owns the packet tunnel lifecycle.
+- When the VPN is connected, iOS can run the packet tunnel provider while the containing app is backgrounded.
+- Safari, other apps, and system traffic only use ObstacleBridge if the tunnel route/DNS settings include that traffic.
+
+Minimal native start flow:
+
+```swift
+let manager = NETunnelProviderManager()
+let proto = NETunnelProviderProtocol()
+proto.providerBundleIdentifier = "com.obstaclebridge.obstacle-bridge-ios.PacketTunnel"
+proto.serverAddress = "ObstacleBridge"
+proto.providerConfiguration = providerConfiguration
+
+manager.protocolConfiguration = proto
+manager.localizedDescription = "ObstacleBridge"
+manager.isEnabled = true
+
+manager.saveToPreferences { saveError in
+    guard saveError == nil else { return }
+    manager.loadFromPreferences { loadError in
+        guard loadError == nil else { return }
+        do {
+            try manager.connection.startVPNTunnel()
+        } catch {
+            NSLog("ObstacleBridge VPN start failed: \(error)")
+        }
+    }
+}
+```
+
+### Verification Before Device Testing
+
+Before installing on a physical iPhone, verify the IPA contains and signs the expected pieces:
+
+```bash
+unzip -q ObstacleBridge.ipa -d /tmp/ObstacleBridgeIPA
+
+codesign -d --entitlements :- /tmp/ObstacleBridgeIPA/Payload/ObstacleBridge.app
+codesign -d --entitlements :- /tmp/ObstacleBridgeIPA/Payload/ObstacleBridge.app/PlugIns/ObstacleBridgeTunnel.appex
+
+security cms -D -i /tmp/ObstacleBridgeIPA/Payload/ObstacleBridge.app/embedded.mobileprovision
+security cms -D -i /tmp/ObstacleBridgeIPA/Payload/ObstacleBridge.app/PlugIns/ObstacleBridgeTunnel.appex/embedded.mobileprovision
+```
+
+The extension entitlement output and extension provisioning profile must both contain `com.apple.developer.networking.networkextension` with `packet-tunnel-provider`.
+
+Also verify architecture and packaging:
+
+```bash
+lipo -info /tmp/ObstacleBridgeIPA/Payload/ObstacleBridge.app/ObstacleBridge
+lipo -info /tmp/ObstacleBridgeIPA/Payload/ObstacleBridge.app/PlugIns/ObstacleBridgeTunnel.appex/ObstacleBridgeTunnel
+otool -L /tmp/ObstacleBridgeIPA/Payload/ObstacleBridge.app/PlugIns/ObstacleBridgeTunnel.appex/ObstacleBridgeTunnel
+```
+
+Expected result:
+
+- App binary is `arm64`.
+- Extension binary is `arm64`.
+- Extension links to `NetworkExtension.framework`.
+- Extension can locate the embedded Python framework and bundled `obstacle_bridge_ios.extension_runtime` module when using the embedded-Python strategy.
+
+### Deployment Channels
+
+Practical deployment options:
+
+- Xcode development install to a registered device for local testing.
+- Ad Hoc IPA signed for registered device UDIDs.
+- Enterprise/internal distribution if the organization has the correct Apple program and policy approval.
+- TestFlight/App Store distribution after entitlement, privacy, review, and production hardening work.
+
+Unsigned IPAs are useful only for archive inspection or non-standard sideloading experiments. They should not be expected to start the iOS VPN extension with background privileges.
+
+### Physical Device Test Checklist
+
+Minimum acceptance checks on a real iPhone:
+
+- App installs with the containing app and packet tunnel extension present.
+- iOS shows the VPN permission prompt when the profile is first installed.
+- VPN profile appears in iOS Settings.
+- Tapping Connect starts the `NEPacketTunnelProvider`.
+- The extension receives the expected `providerConfiguration`.
+- WebAdmin/status responds from the extension-hosted runtime.
+- ChannelMux traffic reaches a macOS or Linux peer.
+- SecureLink PSK authenticates when enabled.
+- The connection remains active after the containing app is backgrounded.
+- Safari or another app can use the tunnel when route settings include that traffic.
+- Logs and status remain accessible without exposing secrets.
+
 ## Open Design Questions
 
 - Can the required Apple Network Extension entitlement be obtained for the intended distribution model?
@@ -872,7 +1026,8 @@ Current implementation slice:
 
 - `ios/src/obstacle_bridge_ios/m3_tunnel.py` defines the M3 provider-configuration schema and builds an install descriptor for `NETunnelProviderManager` from existing iOS profiles.
 - `ios/src/obstacle_bridge_ios/app.py` exposes `build_m3_vpn_profile(...)` so the companion app/facade can hand native tunnel installation code a validated provider payload.
-- `ios/native/ObstacleBridgeTunnel/PacketTunnelProvider.swift` implements a native `NEPacketTunnelProvider` POC that applies IPv4/DNS/MTU settings, starts/stops the packet bridge, and returns status snapshots through provider messages.
+- `ios/native/ObstacleBridgeTunnel/PacketTunnelProvider.swift` implements a native `NEPacketTunnelProvider` POC that applies IPv4/DNS/MTU settings, starts/stops the extension runtime, and returns status snapshots through provider messages.
+- `ios/native/ObstacleBridgeTunnel/ObstacleBridgeExtensionRuntime.swift` defines the extension-owned boundary for WebAdmin, ChannelMux, compression, SecureLink, overlay transports, and packet I/O. The provider configuration carries the full `obstacle_bridge_config` so the containing app can install a tunnel without keeping network runtime code in the foreground app process.
 - `ios/native/ObstacleBridgeTunnel/PacketFlowBridge.swift` adapts `NEPacketTunnelFlow` to a single TCP peer using length-prefixed packet frames for the M3 POC transport.
 - `ios/native/ObstacleBridgeTunnel/TunnelStatus.swift` defines the extension status/counter response shape.
 - `ios/tests/test_m3_tunnel.py`, `ios/tests/test_m3_native_sources.py`, and `ios/tests/test_ios_app_facade.py` cover the M3 app/native configuration contract.

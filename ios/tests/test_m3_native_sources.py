@@ -16,7 +16,54 @@ def test_m3_native_packet_tunnel_provider_source_exists() -> None:
     assert "NETunnelProviderProtocol" in provider
     assert "setTunnelNetworkSettings" in provider
     assert "handleAppMessage" in provider
+    assert "ObstacleBridgeExtensionRuntime" in provider
+    assert "obstacleBridgeConfig" in provider
     assert "obstaclebridge.ios.packet-tunnel.v1" in provider
+
+
+def test_m3_native_extension_runtime_source_owns_obstaclebridge_layers() -> None:
+    runtime = (NATIVE_DIR / "ObstacleBridgeExtensionRuntime.swift").read_text(encoding="utf-8")
+
+    assert "final class ObstacleBridgeExtensionRuntime" in runtime
+    assert "NEPacketTunnelFlow" in runtime
+    assert "PacketFlowBridge" in runtime
+    assert "ObstacleBridgePythonRuntime" in runtime
+    assert "LocalWebAdminServer" in runtime
+    assert "runtimeLayers" in runtime
+
+
+def test_m3_native_extension_python_runtime_host_exists() -> None:
+    header = (NATIVE_DIR / "ObstacleBridgePythonRuntime.h").read_text(encoding="utf-8")
+    runtime = (NATIVE_DIR / "ObstacleBridgePythonRuntime.m").read_text(encoding="utf-8")
+    bridge = (NATIVE_DIR / "ObstacleBridgeTunnel-Bridging-Header.h").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgePythonRuntime" in header
+    assert "startWithProviderConfigurationJSON" in header
+    assert "#include <Python/Python.h>" in runtime
+    assert 'PyImport_ImportModule("obstacle_bridge_ios.extension_runtime")' in runtime
+    assert "Py_InitializeFromConfig" in runtime
+    assert 'ObstacleBridgePythonRuntime.h' in bridge
+
+
+def test_m3_python_extension_runtime_starts_obstaclebridge_client() -> None:
+    runtime = (ROOT / "ios" / "src" / "obstacle_bridge_ios" / "extension_runtime.py").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgeClient" in runtime
+    assert "packet-tunnel-extension-python" in runtime
+    assert "provider_configuration" in runtime
+    assert "secure_link_mode" in runtime
+    assert "compress_layer" in runtime
+
+
+def test_m3_native_extension_webadmin_source_exists() -> None:
+    webadmin = (NATIVE_DIR / "LocalWebAdminServer.swift").read_text(encoding="utf-8")
+
+    assert "final class LocalWebAdminServer" in webadmin
+    assert "NWListener" in webadmin
+    assert '"/api/config"' in webadmin
+    assert '"/api/status"' in webadmin
+    assert '"/api/logs"' in webadmin
+    assert '"packet-tunnel-extension"' in webadmin
 
 
 def test_m3_native_packet_flow_bridge_reads_and_writes_packet_flow() -> None:

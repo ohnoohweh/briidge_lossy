@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from .runner import (
+    run_config_persistence_probe_sync,
     run_host_websocket_probe_sync,
     run_runtime_config_sync,
     run_ws_secure_link_probe_sync,
@@ -27,11 +28,36 @@ def _arg_value(args: list[str], name: str, default: str | None = None) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    if "--runtime-config" in args:
+    if "--config-persistence-probe" in args:
         try:
-            config_path = Path(_arg_value(args, "--runtime-config")).expanduser()
+            timeout_sec = float(_arg_value(args, "--timeout-sec", "12"))
+        except Exception as exc:
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "app": "obstacle_bridge_ios_e2e",
+                        "probe": "config-persistence",
+                        "error": f"invalid --config-persistence-probe arguments: {type(exc).__name__}: {exc}",
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 2
+
+        report = run_config_persistence_probe_sync(timeout_sec=timeout_sec)
+        report_path = write_report(report)
+        print(json.dumps({**report, "report_path": str(report_path)}, indent=2, sort_keys=True))
+        return 0 if bool(report.get("ok")) else 1
+
+    if "--runtime-config" in args or "--runtime-config-json" in args:
+        try:
             hold_sec = float(_arg_value(args, "--hold-sec", "600"))
-            config = json.loads(config_path.read_text(encoding="utf-8"))
+            if "--runtime-config-json" in args:
+                config = json.loads(_arg_value(args, "--runtime-config-json"))
+            else:
+                config_path = Path(_arg_value(args, "--runtime-config")).expanduser()
+                config = json.loads(config_path.read_text(encoding="utf-8"))
             if not isinstance(config, dict):
                 raise ValueError("runtime config root must be a JSON object")
         except Exception as exc:
