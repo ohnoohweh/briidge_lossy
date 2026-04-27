@@ -25,6 +25,8 @@ IOS_E2E_APP_NAME = "obstacle_bridge_ios_e2e"
 IOS_E2E_BUNDLE_ID = "com.obstaclebridge.obstacle-bridge-ios-e2e"
 IOS_WS_UDP_REQUEST = b"\x01ios-simulator-ws-udp"
 IOS_WS_UDP_RESPONSE = b"\x02ios-simulator-ws-udp"
+IOS_WS_TCP_REQUEST = b"ios-simulator-ws-tcp"
+IOS_WS_TCP_RESPONSE = b"ios-simulator-ws-tcp-ok"
 IOS_SECURE_LINK_PSK = "ios-simulator-secure-link-psk"
 
 
@@ -163,6 +165,54 @@ class HostWsUdpBridgePeer:
             udp_transport.close()
 
 
+class HostTcpEcho:
+    def __init__(self) -> None:
+        self.port = _unused_port(socket.SOCK_STREAM)
+        self.messages: list[bytes] = []
+        self._ready = threading.Event()
+        self._thread = threading.Thread(target=self._thread_main, daemon=True)
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._server: asyncio.AbstractServer | None = None
+        self._error: BaseException | None = None
+
+    def __enter__(self) -> "HostTcpEcho":
+        self._thread.start()
+        if not self._ready.wait(timeout=10.0):
+            raise RuntimeError("host TCP echo server did not start")
+        if self._error is not None:
+            raise RuntimeError("host TCP echo server failed to start") from self._error
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._loop is not None and self._server is not None:
+            self._loop.call_soon_threadsafe(self._server.close)
+        self._thread.join(timeout=10.0)
+
+    def _thread_main(self) -> None:
+        try:
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            self._loop.run_until_complete(self._run())
+        except BaseException as exc:
+            self._error = exc
+            self._ready.set()
+
+    async def _run(self) -> None:
+        async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            try:
+                payload = await reader.read(4096)
+                self.messages.append(bytes(payload))
+                writer.write(IOS_WS_TCP_RESPONSE)
+                await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        self._server = await asyncio.start_server(handle, "127.0.0.1", self.port)
+        self._ready.set()
+        await self._server.wait_closed()
+
+
 class HostWsSecureLinkPeer:
     def __init__(self) -> None:
         self.ws_port = _unused_port(socket.SOCK_STREAM)
@@ -273,6 +323,8 @@ def _read_e2e_app_probe_report(*, probe: str) -> dict[str, Any]:
         report_name = "ws-udp-echo-latest.json"
     elif probe == "ws-secure-link":
         report_name = "ws-secure-link-latest.json"
+    elif probe == "config-persistence":
+        report_name = "config-persistence-latest.json"
     else:
         report_name = "host-websocket-latest.json"
     candidates = [
@@ -322,6 +374,121 @@ def _briefcase_command(app_args: list[str]) -> list[str]:
 def _fetch_json(url: str, *, timeout: float = 2.0) -> dict[str, Any]:
     with urllib.request.urlopen(url, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def _wait_for_json(url: str, *, timeout_sec: float = 20.0) -> dict[str, Any]:
+    deadline = time.time() + float(timeout_sec)
+    last_error = ""
+    while time.time() < deadline:
+        try:
+            return _fetch_json(url, timeout=1.5)
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            time.sleep(0.25)
+    raise AssertionError(f"{url} did not respond before timeout: {last_error}")
+
+
+def _tcp_round_trip(host: str, port: int, payload: bytes, *, timeout_sec: float = 5.0) -> bytes:
+    with socket.create_connection((host, int(port)), timeout=timeout_sec) as sock:
+        sock.settimeout(timeout_sec)
+        sock.sendall(payload)
+        return sock.recv(4096)
+
+
+def _wait_for_tcp_round_trip(
+    host: str,
+    port: int,
+    payload: bytes,
+    *,
+    timeout_sec: float = 20.0,
+) -> bytes:
+    deadline = time.time() + float(timeout_sec)
+    last_error = ""
+    while time.time() < deadline:
+        try:
+            return _tcp_round_trip(host, port, payload, timeout_sec=3.0)
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            time.sleep(0.25)
+    raise AssertionError(f"TCP round trip to {host}:{port} did not succeed before timeout: {last_error}")
+
+
+def _background_simulator_app_with_safari(url: str) -> None:
+    launch_stderr = ""
+    openurl_stderr = ""
+    osascript_stderr = ""
+    try:
+        launched = subprocess.run(
+            ["xcrun", "simctl", "launch", "booted", "com.apple.mobilesafari", url],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5.0,
+        )
+    except subprocess.TimeoutExpired:
+        launched = None
+        launch_stderr = "timed out"
+        # On some Simulator/Xcode combinations the launch request is delivered
+        # but simctl does not return promptly. Opening Safari is only used to
+        # push the E2E app to background, so a delivered-but-hung request is
+        # good enough for the following WebAdmin/ChannelMux probes to prove it.
+        return
+    else:
+        launch_stderr = launched.stderr
+    if launched is not None and launched.returncode == 0:
+        return
+    try:
+        completed = subprocess.run(
+            ["xcrun", "simctl", "openurl", "booted", url],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5.0,
+        )
+    except subprocess.TimeoutExpired:
+        completed = None
+        openurl_stderr = "timed out"
+        return
+    else:
+        openurl_stderr = completed.stderr
+    if completed is not None and completed.returncode == 0:
+        return
+    home = subprocess.run(
+        ["xcrun", "simctl", "ui", "booted", "press", "home"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30.0,
+    )
+    if home.returncode == 0:
+        return
+    try:
+        fallback = subprocess.run(
+            [
+                "osascript",
+                "-e",
+                'tell application "Simulator" to activate',
+                "-e",
+                'tell application "System Events" to keystroke "h" using {command down, shift down}',
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5.0,
+        )
+    except subprocess.TimeoutExpired:
+        fallback = None
+        osascript_stderr = "timed out"
+    else:
+        osascript_stderr = fallback.stderr
+    if fallback is None or fallback.returncode != 0:
+        pytest.skip(
+            "simulator backgrounding automation is unavailable in this macOS session; "
+            f"safari launch stderr={launch_stderr!r}; "
+            f"openurl stderr={openurl_stderr!r}; "
+            f"home stderr={home.stderr!r}; "
+            f"osascript stderr={osascript_stderr!r}"
+        )
 
 
 def _wait_for_host_secure_link_authenticated(
@@ -566,3 +733,160 @@ def test_ios_simulator_e2e_app_ws_secure_link_client_authenticates_and_is_visibl
     secure_link = matching_rows[0].get("secure_link") or {}
     assert bool(secure_link.get("authenticated")) is True
     assert str(secure_link.get("state") or "").strip().lower() == "authenticated"
+
+
+@pytest.mark.integration
+@pytest.mark.ios
+@pytest.mark.ios_simulator
+@pytest.mark.slow
+def test_ios_simulator_e2e_app_config_change_persists_across_api_restart() -> None:
+    if shutil.which("xcrun") is None:
+        pytest.skip("xcrun is required for iOS simulator integration tests")
+
+    try:
+        completed = subprocess.run(
+            _briefcase_command(["--config-persistence-probe", "--timeout-sec", "20"]),
+            cwd=IOS_DIR,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=float(os.environ.get("OBSTACLEBRIDGE_IOS_SIMULATOR_TIMEOUT", "600")),
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = exc.output.decode("utf-8", errors="replace") if isinstance(exc.output, bytes) else str(exc.output or "")
+        pytest.fail(f"iOS simulator Briefcase config-persistence run timed out after {exc.timeout}s:\n{output}")
+
+    try:
+        report = _extract_json_object(completed.stdout, probe="config-persistence")
+    except AssertionError:
+        report = _read_e2e_app_probe_report(probe="config-persistence")
+    ios_log = _read_e2e_app_runtime_log(report=report)
+    if completed.returncode != 0 and not bool(report.get("ok")):
+        raise AssertionError(
+            "iOS simulator config-persistence probe failed\n"
+            f"briefcase_output:\n{completed.stdout}\n\n"
+            f"ios_report:\n{json.dumps(report, indent=2, sort_keys=True)}\n\n"
+            f"ios_runtime_log:\n{ios_log}"
+        )
+
+    assert report["ok"] is True
+    assert report["probe"] == "config-persistence"
+    assert report["restart_requested_flag"] is True
+    assert report["save_response"]["ok"] is True
+    assert report["restart_response"]["ok"] is True
+    assert report["reloaded_config"]["admin_web_name"] == report["updated"]["admin_web_name"]
+
+
+@pytest.mark.integration
+@pytest.mark.ios
+@pytest.mark.ios_simulator
+@pytest.mark.slow
+def test_ios_simulator_webadmin_and_channelmux_survive_app_backgrounding(tmp_path: Path) -> None:
+    if shutil.which("xcrun") is None:
+        pytest.skip("xcrun is required for iOS simulator integration tests")
+
+    admin_port = _unused_port(socket.SOCK_STREAM)
+    local_tcp_port = _unused_port(socket.SOCK_STREAM)
+    log_path = tmp_path / "ios-background-runtime.log"
+    briefcase_log_path = tmp_path / "briefcase-background-output.log"
+    with HostWsUdpBridgePeer() as host, HostTcpEcho() as tcp_echo:
+        runtime_config = {
+            "overlay_transport": "ws",
+            "ws_peer": "127.0.0.1",
+            "ws_peer_port": host.ws_port,
+            "ws_bind": "127.0.0.1",
+            "ws_own_port": 0,
+            "secure_link_mode": "off",
+            "admin_web": True,
+            "admin_web_bind": "127.0.0.1",
+            "admin_web_port": admin_port,
+            "admin_web_auth_disable": True,
+            "admin_web_name": "ios-background-e2e",
+            "own_servers": [
+                {
+                    "name": "ios-background-local-tcp",
+                    "listen": {
+                        "protocol": "tcp",
+                        "bind": "127.0.0.1",
+                        "port": local_tcp_port,
+                    },
+                    "target": {
+                        "protocol": "tcp",
+                        "host": "127.0.0.1",
+                        "port": tcp_echo.port,
+                    },
+                }
+            ],
+            "status": False,
+            "log": "DEBUG",
+            "console_level": "DEBUG",
+            "file_level": "DEBUG",
+            "log_file": str(log_path),
+            "log_ws_session": "DEBUG",
+            "log_runner": "DEBUG",
+            "log_admin_web": "DEBUG",
+        }
+        with briefcase_log_path.open("w", encoding="utf-8") as briefcase_log:
+            proc = subprocess.Popen(
+                _briefcase_command(
+                    [
+                        "--runtime-config-json",
+                        json.dumps(runtime_config, sort_keys=True),
+                        "--hold-sec",
+                        "60",
+                    ]
+                ),
+                cwd=IOS_DIR,
+                text=True,
+                stdout=briefcase_log,
+                stderr=subprocess.STDOUT,
+            )
+            try:
+                foreground_doc = _wait_for_json(
+                    f"http://127.0.0.1:{admin_port}/api/config",
+                    timeout_sec=float(os.environ.get("OBSTACLEBRIDGE_IOS_SIMULATOR_TIMEOUT", "600")),
+                )
+                foreground_tcp = _wait_for_tcp_round_trip(
+                    "127.0.0.1",
+                    local_tcp_port,
+                    IOS_WS_TCP_REQUEST,
+                    timeout_sec=30.0,
+                )
+
+                _background_simulator_app_with_safari(f"http://127.0.0.1:{admin_port}/")
+                time.sleep(3.0)
+
+                background_doc = _wait_for_json(f"http://127.0.0.1:{admin_port}/api/config", timeout_sec=15.0)
+                background_tcp = _wait_for_tcp_round_trip(
+                    "127.0.0.1",
+                    local_tcp_port,
+                    IOS_WS_TCP_REQUEST,
+                    timeout_sec=15.0,
+                )
+            except Exception:
+                if proc.poll() is None:
+                    proc.terminate()
+                try:
+                    proc.wait(timeout=30.0)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=30.0)
+                raise AssertionError(
+                    "iOS simulator background WebAdmin/ChannelMux probe failed\n"
+                    f"briefcase_output:\n{_read_text_if_exists(briefcase_log_path)}\n\n"
+                    f"runtime_log:\n{_read_text_if_exists(log_path)}"
+                )
+            finally:
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=30.0)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=30.0)
+
+    assert foreground_doc["config"]["admin_web_name"] == "ios-background-e2e"
+    assert background_doc["config"]["admin_web_name"] == "ios-background-e2e"
+    assert foreground_tcp == IOS_WS_TCP_RESPONSE
+    assert background_tcp == IOS_WS_TCP_RESPONSE
+    assert tcp_echo.messages == [IOS_WS_TCP_REQUEST, IOS_WS_TCP_REQUEST]

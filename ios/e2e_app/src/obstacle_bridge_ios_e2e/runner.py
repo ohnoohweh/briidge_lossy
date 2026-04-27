@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import socket
 import time
+import urllib.request
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlparse
@@ -19,6 +21,7 @@ HOST_WEBSOCKET_REPORT_NAME = "host-websocket-latest.json"
 WS_UDP_ECHO_REPORT_NAME = "ws-udp-echo-latest.json"
 WS_SECURE_LINK_REPORT_NAME = "ws-secure-link-latest.json"
 RUNTIME_CONFIG_REPORT_NAME = "runtime-config-latest.json"
+CONFIG_PERSISTENCE_REPORT_NAME = "config-persistence-latest.json"
 
 
 def _report_root(root: Path | None = None) -> Path:
@@ -52,6 +55,42 @@ def _webadmin_url_from_config(config: Mapping[str, Any]) -> str | None:
         path = "/" + path
     host = "127.0.0.1" if bind in {"0.0.0.0", "::", "*", "localhost"} else bind
     return f"http://{host}:{port}{path}"
+
+
+def _unused_tcp_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _fetch_admin_json(
+    url: str,
+    *,
+    method: str = "GET",
+    payload: Mapping[str, Any] | None = None,
+    timeout: float = 3.0,
+) -> dict[str, Any]:
+    body = None
+    headers = {"Accept": "application/json"}
+    if payload is not None:
+        body = json.dumps(payload, sort_keys=True).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=body, headers=headers, method=method)
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+async def _wait_for_admin_config(base_url: str, *, timeout_sec: float) -> dict[str, Any]:
+    deadline = time.perf_counter() + float(timeout_sec)
+    last_detail = ""
+    while time.perf_counter() < deadline:
+        try:
+            return await asyncio.to_thread(_fetch_admin_json, f"{base_url}/api/config")
+        except Exception as exc:
+            last_detail = f"{type(exc).__name__}: {exc}"
+            await asyncio.sleep(0.1)
+    raise TimeoutError(f"WebAdmin /api/config did not become ready: {last_detail}")
 
 
 async def run_host_websocket_probe(url: str, timeout_sec: float = 5.0) -> dict[str, Any]:
@@ -448,6 +487,108 @@ def run_runtime_config_sync(**kwargs: Any) -> dict[str, Any]:
     return asyncio.run(run_runtime_config(**kwargs))
 
 
+async def run_config_persistence_probe(*, timeout_sec: float = 12.0) -> dict[str, Any]:
+    """Persist a WebAdmin config change, restart, and confirm reload from disk."""
+
+    started = time.perf_counter()
+    report_root = _report_root()
+    config_path = report_root / "ObstacleBridge.cfg"
+    admin_port = _unused_tcp_port()
+    base_url = f"http://127.0.0.1:{admin_port}"
+    updated_name = f"ios-e2e-config-{int(started * 1000)}"
+    initial_config = {
+        "overlay_transport": "ws",
+        "ws_bind": "127.0.0.1",
+        "ws_own_port": 0,
+        "secure_link_mode": "off",
+        "admin_web": True,
+        "admin_web_bind": "127.0.0.1",
+        "admin_web_port": admin_port,
+        "admin_web_auth_disable": True,
+        "admin_web_name": "ios-e2e-initial",
+        "status": False,
+        **_probe_logging_config(root=report_root, name="config-persistence-runtime"),
+    }
+    runtime_log_file = str(initial_config.get("log_file") or "")
+    client = ObstacleBridgeClient(initial_config, config_path=str(config_path), apply_logging=True)
+    restart_response: dict[str, Any] | None = None
+    saved_response: dict[str, Any] | None = None
+    initial_response: dict[str, Any] | None = None
+    reloaded_response: dict[str, Any] | None = None
+    try:
+        await client.start()
+        initial_response = await _wait_for_admin_config(base_url, timeout_sec=timeout_sec)
+        saved_response = await asyncio.to_thread(
+            _fetch_admin_json,
+            f"{base_url}/api/config",
+            method="POST",
+            payload={"updates": {"admin_web_name": updated_name}, "restart_after_save": False},
+        )
+        restart_response = await asyncio.to_thread(
+            _fetch_admin_json,
+            f"{base_url}/api/restart",
+            method="POST",
+            payload={},
+        )
+        restart_flag_seen = bool(getattr(getattr(client, "runner", None), "_restart_requested_flag", False))
+        await client.stop()
+
+        reloaded_client = ObstacleBridgeClient(config_path=str(config_path), apply_logging=True)
+        try:
+            await reloaded_client.start()
+            reloaded_response = await _wait_for_admin_config(base_url, timeout_sec=timeout_sec)
+        finally:
+            await reloaded_client.stop()
+
+        reloaded_config = dict((reloaded_response or {}).get("config") or {})
+        ok = (
+            bool(saved_response and saved_response.get("ok"))
+            and bool(restart_response and restart_response.get("ok"))
+            and restart_flag_seen
+            and reloaded_config.get("admin_web_name") == updated_name
+            and reloaded_config.get("admin_web_port") == admin_port
+        )
+        return {
+            "ok": bool(ok),
+            "app": "obstacle_bridge_ios_e2e",
+            "probe": "config-persistence",
+            "config_path": str(config_path),
+            "runtime_log_file": runtime_log_file,
+            "webadmin_url": base_url,
+            "updated": {"admin_web_name": updated_name},
+            "restart_requested_flag": restart_flag_seen,
+            "initial_config": dict((initial_response or {}).get("config") or {}),
+            "save_response": saved_response,
+            "restart_response": restart_response,
+            "reloaded_config": reloaded_config,
+            "detail": "configuration persisted and reloaded after API restart"
+            if ok
+            else "configuration persistence/reload check failed",
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "app": "obstacle_bridge_ios_e2e",
+            "probe": "config-persistence",
+            "config_path": str(config_path),
+            "runtime_log_file": runtime_log_file,
+            "webadmin_url": base_url,
+            "detail": f"config-persistence failed: {type(exc).__name__}: {exc}",
+            "initial_config": dict((initial_response or {}).get("config") or {}) if initial_response else None,
+            "save_response": saved_response,
+            "restart_response": restart_response,
+            "reloaded_config": dict((reloaded_response or {}).get("config") or {}) if reloaded_response else None,
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+        }
+    finally:
+        await client.stop()
+
+
+def run_config_persistence_probe_sync(**kwargs: Any) -> dict[str, Any]:
+    return asyncio.run(run_config_persistence_probe(**kwargs))
+
+
 def write_report(report: dict[str, Any], root: Path | None = None) -> Path:
     base = _report_root(root)
     if report.get("probe") == "ws-udp-echo":
@@ -456,6 +597,8 @@ def write_report(report: dict[str, Any], root: Path | None = None) -> Path:
         report_name = WS_SECURE_LINK_REPORT_NAME
     elif report.get("probe") == "runtime-config":
         report_name = RUNTIME_CONFIG_REPORT_NAME
+    elif report.get("probe") == "config-persistence":
+        report_name = CONFIG_PERSISTENCE_REPORT_NAME
     else:
         report_name = HOST_WEBSOCKET_REPORT_NAME
     target = base / report_name

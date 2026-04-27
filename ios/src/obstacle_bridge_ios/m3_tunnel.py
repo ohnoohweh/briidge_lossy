@@ -38,6 +38,7 @@ class M3TunnelConfig:
     peer_host: str
     peer_port: int
     server_address: str
+    obstacle_bridge_config: dict[str, Any]
     network: M3NetworkSettings = field(default_factory=M3NetworkSettings)
 
 
@@ -101,6 +102,7 @@ def m3_tunnel_config_from_profile(
         peer_host=peer_host,
         peer_port=peer_port,
         server_address=f"{peer_host}:{peer_port}",
+        obstacle_bridge_config=dict(ob_cfg),
         network=settings,
     )
 
@@ -127,10 +129,25 @@ def provider_configuration_from_m3_config(cfg: M3TunnelConfig) -> dict[str, Any]
             "dns_servers": list(cfg.network.dns_servers),
             "mtu": int(cfg.network.mtu),
         },
+        "runtime": {
+            "owner": "packet-tunnel-extension",
+            "entrypoint": "ObstacleBridgeExtensionRuntime",
+            "layers": [
+                "webadmin",
+                "channelmux",
+                "compression",
+                "securelink",
+                "overlay-transports",
+                "packet-io",
+            ],
+            "packet_flow": "NEPacketTunnelFlow",
+            "configuration_source": "providerConfiguration.obstacle_bridge_config",
+        },
+        "obstacle_bridge_config": dict(cfg.obstacle_bridge_config),
         "poc": {
             "packet_flow": "NEPacketTunnelFlow",
-            "transport_bridge": "tcp-length-prefixed-packets",
-            "secure_link": "deferred-to-M4",
+            "transport_bridge": "extension-owned-obstaclebridge-runtime",
+            "secure_link": "extension-owned-obstaclebridge-runtime",
         },
     }
 

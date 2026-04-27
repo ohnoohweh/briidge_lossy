@@ -15,6 +15,10 @@ struct TunnelStatus: Codable {
     var packetsToSystem: UInt64
     var bytesFromSystem: UInt64
     var bytesToSystem: UInt64
+    var runtimeOwner: String
+    var runtimeLayers: [String]
+    var webAdminURL: String?
+    var webAdminRunning: Bool
     var lastError: String?
 
     static var idle: TunnelStatus {
@@ -24,6 +28,10 @@ struct TunnelStatus: Codable {
             packetsToSystem: 0,
             bytesFromSystem: 0,
             bytesToSystem: 0,
+            runtimeOwner: "packet-tunnel-extension",
+            runtimeLayers: [],
+            webAdminURL: nil,
+            webAdminRunning: false,
             lastError: nil
         )
     }

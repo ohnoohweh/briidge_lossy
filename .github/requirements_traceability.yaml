@@ -606,6 +606,24 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_chunked_remote_services_transfer_reassembles_metadata
     - tests/unit/test_channel_mux_listener_mode.py::test_chunked_open_transfer_reassembles_metadata
 
+REQ-IOS-001:
+  unit_tests:
+    - ios/tests/test_m3_tunnel.py::test_provider_configuration_is_native_extension_contract
+    - ios/tests/test_m3_native_sources.py::test_m3_native_extension_runtime_source_owns_obstaclebridge_layers
+
+REQ-IOS-002:
+  unit_tests:
+    - ios/tests/test_m3_native_sources.py::test_m3_native_extension_python_runtime_host_exists
+    - ios/tests/test_m3_native_sources.py::test_m3_python_extension_runtime_starts_obstaclebridge_client
+    - ios/tests/test_m3_native_sources.py::test_m3_native_extension_webadmin_source_exists
+
+REQ-IOS-003:
+  integration_tests:
+    - tests/integration/test_ios_simulator_e2e.py::test_ios_simulator_webadmin_and_channelmux_survive_app_backgrounding
+    - tests/integration/test_ios_simulator_e2e.py::test_ios_simulator_e2e_app_ws_secure_link_client_authenticates_and_is_visible_via_host_webadmin_api
+  unit_tests:
+    - ios/tests/test_ios_e2e_app_runner.py::test_e2e_runner_config_persistence_saves_restarts_and_reloads_via_webadmin_api
+
 REQ-MYU-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss

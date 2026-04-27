@@ -207,7 +207,9 @@ def test_ios_m3_packet_tunnel_poc_provider_config_round_trips_packets() -> None:
             assert flow.outgoing_packets == [IOS_RESPONSE_PACKET]
             assert provider_configuration["schema"] == "obstaclebridge.ios.packet-tunnel.v1"
             assert provider_configuration["poc"]["packet_flow"] == "NEPacketTunnelFlow"
-            assert provider_configuration["poc"]["transport_bridge"] == "tcp-length-prefixed-packets"
+            assert provider_configuration["poc"]["transport_bridge"] == "extension-owned-obstaclebridge-runtime"
+            assert provider_configuration["runtime"]["owner"] == "packet-tunnel-extension"
+            assert "channelmux" in provider_configuration["runtime"]["layers"]
 
         await _with_packet_frame_peer(IOS_RESPONSE_PACKET, run_client)
 
@@ -224,7 +226,9 @@ def test_ios_m3_vpn_profile_descriptor_survives_app_to_extension_serialization()
     assert restored["peer"] == {"host": "127.0.0.1", "port": 4433}
     assert restored["network_settings"]["tunnel_address"] == "10.77.0.2"
     assert restored["network_settings"]["included_routes"] == ["10.77.0.0/24"]
-    assert restored["poc"]["secure_link"] == "deferred-to-M4"
+    assert restored["obstacle_bridge_config"]["overlay_transport"] == "tcp"
+    assert restored["runtime"]["configuration_source"] == "providerConfiguration.obstacle_bridge_config"
+    assert restored["poc"]["secure_link"] == "extension-owned-obstaclebridge-runtime"
 
 
 @pytest.mark.integration

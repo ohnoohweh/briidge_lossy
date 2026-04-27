@@ -48,6 +48,7 @@ ARC-CMP-003:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
     - tests/integration/test_ios_e2e.py::test_ios_e2e_app_ws_overlay_udp_service_reaches_linux_peer_udp_echo
     - tests/integration/test_ios_simulator_e2e.py::test_ios_simulator_e2e_app_ws_overlay_udp_service_reaches_macos_peer_udp_echo
+    - tests/integration/test_ios_simulator_e2e.py::test_ios_simulator_webadmin_and_channelmux_survive_app_backgrounding
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_over_myudp_packet_carry
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_over_ws_secure_link_fragments
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_link_myudp_peer_on_mixed_listener
@@ -139,6 +140,7 @@ ARC-CMP-005:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_revocation_reload_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_local_identity_reload_happy_path
     - tests/integration/test_ios_simulator_e2e.py::test_ios_simulator_e2e_app_ws_secure_link_client_authenticates_and_is_visible_via_host_webadmin_api
+    - tests/integration/test_ios_simulator_e2e.py::test_ios_simulator_webadmin_and_channelmux_survive_app_backgrounding
 
 ARC-CMP-006:
   unit_tests:

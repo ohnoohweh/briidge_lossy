@@ -65,8 +65,19 @@ def test_provider_configuration_is_native_extension_contract() -> None:
     assert provider_config["milestone"] == "M3"
     assert provider_config["peer"] == {"host": "bridge.example.net", "port": 4433}
     assert provider_config["network_settings"]["tunnel_address"] == "10.77.0.2"
+    assert provider_config["obstacle_bridge_config"]["overlay_transport"] == "tcp"
+    assert provider_config["runtime"]["owner"] == "packet-tunnel-extension"
+    assert provider_config["runtime"]["configuration_source"] == "providerConfiguration.obstacle_bridge_config"
+    assert provider_config["runtime"]["layers"] == [
+        "webadmin",
+        "channelmux",
+        "compression",
+        "securelink",
+        "overlay-transports",
+        "packet-io",
+    ]
     assert provider_config["poc"]["packet_flow"] == "NEPacketTunnelFlow"
-    assert provider_config["poc"]["secure_link"] == "deferred-to-M4"
+    assert provider_config["poc"]["secure_link"] == "extension-owned-obstaclebridge-runtime"
 
 
 def test_m3_vpn_profile_describes_netunnel_provider_install() -> None:
