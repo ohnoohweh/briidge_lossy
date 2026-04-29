@@ -1,10 +1,8 @@
 import Foundation
 import NetworkExtension
-import os.log
 
 final class PacketTunnelProvider: NEPacketTunnelProvider {
-    private let logger = Logger(subsystem: "com.obstaclebridge.tunnel", category: "PacketTunnelProvider")
-    private var bridge: PacketFlowBridge?
+    private var runtime: ObstacleBridgeExtensionRuntime?
     private var status = TunnelStatus.idle
 
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
@@ -26,12 +24,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     return
                 }
 
-                let bridge = PacketFlowBridge(packetFlow: self.packetFlow) { [weak self] status in
+                let runtime = ObstacleBridgeExtensionRuntime(configuration: configuration, packetFlow: self.packetFlow) { [weak self] status in
                     self?.status = status
                 }
-                self.bridge = bridge
-                bridge.start(host: configuration.peerHost, port: configuration.peerPort)
-                self.logger.info("ObstacleBridge M3 packet tunnel started")
+                self.runtime = runtime
+                runtime.start()
+                NSLog("ObstacleBridge packet tunnel extension runtime started")
                 completionHandler(nil)
             }
         } catch {
@@ -42,10 +40,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
-        bridge?.stop()
-        bridge = nil
+        runtime?.stop()
+        runtime = nil
         status.state = .stopped
-        logger.info("ObstacleBridge M3 packet tunnel stopped, reason: \(reason.rawValue)")
+        NSLog("ObstacleBridge M3 packet tunnel stopped, reason: \(reason.rawValue)")
         completionHandler()
     }
 
@@ -91,10 +89,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 }
 
-private struct TunnelProviderConfiguration {
+struct TunnelProviderConfiguration {
     let profileID: String
     let peerHost: String
     let peerPort: UInt16
+    let runtimeOwner: String
+    let runtimeLayers: [String]
+    let obstacleBridgeConfig: [String: Any]
+    let providerConfiguration: [String: Any]
     let tunnelAddress: String
     let tunnelSubnetMask: String
     let includedRoutes: [String]
@@ -106,6 +108,7 @@ private struct TunnelProviderConfiguration {
         guard providerConfiguration["schema"] as? String == "obstaclebridge.ios.packet-tunnel.v1" else {
             throw TunnelError.unsupportedSchema
         }
+        self.providerConfiguration = providerConfiguration
         profileID = providerConfiguration["profile_id"] as? String ?? "unknown"
 
         guard let peer = providerConfiguration["peer"] as? [String: Any],
@@ -116,6 +119,14 @@ private struct TunnelProviderConfiguration {
         }
         peerHost = host
         peerPort = port
+        obstacleBridgeConfig = providerConfiguration["obstacle_bridge_config"] as? [String: Any] ?? [:]
+        if let runtime = providerConfiguration["runtime"] as? [String: Any] {
+            runtimeOwner = runtime["owner"] as? String ?? "packet-tunnel-extension"
+            runtimeLayers = runtime["layers"] as? [String] ?? []
+        } else {
+            runtimeOwner = "packet-tunnel-extension"
+            runtimeLayers = []
+        }
 
         guard let network = providerConfiguration["network_settings"] as? [String: Any],
               let address = network["tunnel_address"] as? String,
@@ -143,7 +154,7 @@ private struct TunnelProviderConfiguration {
     }
 }
 
-private enum TunnelError: LocalizedError {
+enum TunnelError: LocalizedError {
     case missingProviderConfiguration
     case unsupportedSchema
     case invalidPeer

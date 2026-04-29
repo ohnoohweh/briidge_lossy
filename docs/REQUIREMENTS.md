@@ -161,6 +161,12 @@ Current implementation note:
 - `REQ-MUX-008`: When a UDP service datagram or TUN packet does not fit into one effective wrapped-session payload budget, the mux layer shall preserve the logical message boundary by fragmenting it across multiple mux messages and reassembling it before local delivery.
 - `REQ-MUX-009`: The service-definition runtime surface shall accept structured JSON entries for both `own_servers` and `remote_servers`, and a structured service entry may include lifecycle hook commands that execute on listener-side service events (`on_created`, `on_channel_connected`, `on_channel_closed`, `on_stopped`) with placeholder-driven argument/environment rendering. Hook context shall include the configured overlay transport plus the configured and resolved overlay peer endpoint so route-preserving scripts do not need a duplicate peer IP in hook-specific config. The `on_stopped` listener hook shall run before the listener service is closed during overlay disconnect, peer disconnect, catalog replacement, or process shutdown so operator routing/firewall teardown can run while the local service resources still exist. Hook executable paths that include a path separator may be relative to the loaded configuration file directory, while bare command names remain resolved through the process `PATH`.
 
+## iOS packet tunnel requirements
+
+- `REQ-IOS-001`: The iOS packet tunnel provider configuration shall identify the packet tunnel extension as the runtime owner and shall carry the WebAdmin, ChannelMux, compression, SecureLink, overlay transport, and packet I/O layer list so the containing app can install a tunnel profile without owning network runtime code in the foreground app process.
+- `REQ-IOS-002`: The iOS packet tunnel extension shall host the ObstacleBridge runtime stack needed for background operation, including WebAdmin, ChannelMux, compression, SecureLink, overlay transports, and packet-flow bridging, and shall expose status that identifies whether extension-hosted WebAdmin is available.
+- `REQ-IOS-003`: The iOS E2E harness shall verify that a simulator-hosted ObstacleBridge client can keep WebAdmin and ChannelMux traffic functional after the containing app is pushed to background by Safari, using a macOS-hosted peer/listener and a local service probe.
+
 ## Loss and delay requirements
 
 - `REQ-MYU-001`: The myudp transport shall continue to function under added propagation delay.

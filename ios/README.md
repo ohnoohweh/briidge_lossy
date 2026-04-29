@@ -99,10 +99,11 @@ Source of truth:
 
 - `ios/src/obstacle_bridge_ios/m3_tunnel.py` builds the `NETunnelProviderProtocol.providerConfiguration` payload from an existing iOS profile.
 - `ios/native/ObstacleBridgeTunnel/PacketTunnelProvider.swift` starts/stops the native packet tunnel extension and applies `NEPacketTunnelNetworkSettings`.
+- `ios/native/ObstacleBridgeTunnel/ObstacleBridgeExtensionRuntime.swift` is the extension-owned runtime boundary for the network stack. The provider configuration now carries the full `obstacle_bridge_config` and declares WebAdmin, ChannelMux, compression, SecureLink, overlay transports, and packet I/O as packet-tunnel-extension layers.
 - `ios/native/ObstacleBridgeTunnel/PacketFlowBridge.swift` reads packets from `NEPacketTunnelFlow`, sends them to one TCP peer as length-prefixed packet frames, receives frames, and writes packets back to `NEPacketTunnelFlow`.
 - `ios/native/ObstacleBridgeTunnel/TunnelStatus.swift` defines the app-message status/counter response.
 
-The M3 bridge is intentionally a POC transport (`tcp-length-prefixed-packets`) so packet-flow behavior can be validated before M4 secure-link parity. Production secure-link, DNS/route hardening, and App Store entitlement/distribution validation remain M4+ work.
+The M3 bridge now treats the packet tunnel extension as the owner of the network runtime. The current native source still needs the production runtime implementation behind `ObstacleBridgeExtensionRuntime` plus entitlement/device validation before it can replace the foreground BeeWare runtime on physical iPhone.
 
 The native files are not generated Briefcase output. Add them to an Xcode packet tunnel extension target with the bundle identifier used when calling `build_m3_vpn_profile(...)`, then install through `NETunnelProviderManager`.
 
