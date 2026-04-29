@@ -166,6 +166,7 @@ REQ-AUT-006:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_reconnects_with_fresh_session
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_reconnect_drops_stale_buffered_old_session_data
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_replay_after_reconnect_is_rejected
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_replay_after_rekey_is_rejected
   unit_tests:
@@ -176,6 +177,7 @@ REQ-AUT-006:
 REQ-AUT-007:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_reconnect_drops_stale_buffered_old_session_data
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_replay_after_reconnect_is_rejected
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_replay_after_rekey_is_rejected
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_malformed_frame_fails_closed_subprocess
@@ -201,6 +203,7 @@ REQ-AUT-009:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_rekeys_after_time_threshold_under_live_traffic
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_operator_forced_rekey
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_reconnects_with_fresh_session
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_reconnect_drops_stale_buffered_old_session_data
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_recovery_after_prior_time_threshold_rekey_reports_fresh_authentication
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_client_restart_after_prior_time_threshold_rekey_drops_stale_pre_restart_row
   unit_tests:

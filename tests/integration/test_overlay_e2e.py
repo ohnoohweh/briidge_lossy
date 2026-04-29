@@ -8454,6 +8454,110 @@ def test_overlay_e2e_tcp_secure_link_psk_reconnects_with_fresh_session(tmp_path:
 
 @pytest.mark.integration
 @pytest.mark.slow
+def test_overlay_e2e_ws_secure_link_psk_reconnect_drops_stale_buffered_old_session_data(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case08_overlay_ws_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
+        client_secure_args = secure_args + [
+            '--ws-reconnect-grace', '8.0',
+            '--overlay-reconnect-retry-delay-ms', '100',
+        ]
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=420,
+                secure_slot=6,
+                server_extra_args=secure_args,
+                client_extra_args=client_secure_args,
+                client_restart_if_disconnected=30,
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            first_doc = wait_peer_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=12.0,
+                label='client',
+                transport='ws',
+                authenticated=True,
+            )
+            first_session_id = int(((first_active_secure_link_row(first_doc, transport='ws').get('secure_link') or {}).get('session_id') or 0))
+            if first_session_id <= 0:
+                raise RuntimeError(f'Could not determine initial WS secure-link session id: {first_doc!r}')
+            wait_probe(case, payload=b'\x01ws-reconnect-prime', timeout=12.0)
+
+            old_server = server_proc
+            stop_proc(server_proc)
+            server_proc = None
+            time.sleep(0.5)
+
+            with contextlib.suppress(Exception):
+                probe_udp(
+                    case.probe_host,
+                    case.probe_port,
+                    case.probe_bind,
+                    b'\x01ws-stale-during-reconnect',
+                    timeout=0.2,
+                )
+
+            server_proc = start_proc(
+                old_server.name,
+                list(old_server.cmd or []),
+                tmp_path,
+                env_extra=old_server.env_extra,
+                admin_port=old_server.admin_port,
+            )
+            wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+            wait_tcp_listen(
+                _connect_host_for_bind(_listener_overlay_bind_host(case, 'ws'), _secure_link_loopback_key(6)),
+                _listener_overlay_port(case, 'ws'),
+                timeout=10.0,
+            )
+
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=25.0, label='client')
+            wait_probe(case, payload=b'\x01ws-reconnect-after-stale-buffer', timeout=20.0)
+            client_doc = wait_peer_secure_link_session_change(
+                client_proc.admin_port or 0,
+                previous_session_id=first_session_id,
+                timeout=20.0,
+                label='client',
+                transport='ws',
+            )
+            client_secure = dict((first_active_secure_link_row(client_doc, transport='ws').get('secure_link') or {}))
+            assert str(client_secure.get('state') or '').strip().lower() == 'authenticated'
+            assert bool(client_secure.get('authenticated')) is True
+            assert not client_secure.get('failure_code'), client_secure
+            server_doc = wait_peer_secure_link_state(
+                server_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=20.0,
+                label='server',
+                transport='ws',
+                authenticated=True,
+            )
+            server_secure = dict((first_active_secure_link_row(server_doc, transport='ws').get('secure_link') or {}))
+            assert not server_secure.get('failure_code'), server_secure
+            wait_probe(case, payload=b'\x01ws-reconnect-after-verify', timeout=12.0)
+            client_log_text = '\n'.join(
+                path.read_text(encoding='utf-8', errors='replace')
+                for path in tmp_path.glob(f'{case.name}_bridge_client*')
+                if path.is_file()
+            )
+            assert 'dropping stale early-buf on transport epoch change' in client_log_text
+            assert 'auth failure transport=ws side=client' not in client_log_text
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
 def test_overlay_e2e_myudp_secure_link_psk_recovery_after_prior_time_threshold_rekey_reports_fresh_authentication(tmp_path: Path) -> None:
     with secure_link_test_lock():
         case_index = 389
