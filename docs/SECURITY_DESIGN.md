@@ -187,6 +187,8 @@ The reveal flow is deliberately separate from normal config loading:
 6. the server returns only an encrypted envelope, not plaintext PSK
 7. the envelope is encrypted with AES-GCM using a PBKDF2-HMAC-SHA256 key derived from the configured admin password
 8. the browser decrypts the PSK locally with Web Crypto
+
+Remote HTTP origins are not secure browser contexts in Firefox, Safari/iOS, and other modern browsers, so they do not expose Web Crypto for the local PSK decrypt step. Operators who need remote secret reveal should prefer exposing the admin endpoint through the own-server/server-role overlay path, or open WebAdmin through HTTPS, localhost, a VPN/TUN route, or an SSH tunnel to localhost; the server does not downgrade this flow to return plaintext PSKs over HTTP.
 9. the PSK is displayed inside the popup only
 10. closing the popup clears the displayed value
 

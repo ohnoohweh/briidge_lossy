@@ -633,6 +633,46 @@ function closeConfigGate(result = null) {
   if (resolver) resolver(result);
 }
 
+function openConfigNoticeGate(titleText, messageText, options = {}) {
+  const gate = document.getElementById('configGate');
+  const title = document.getElementById('configGateTitle');
+  const copy = document.getElementById('configGateCopy');
+  const passwordInput = document.getElementById('configGatePassword');
+  const messageNode = document.getElementById('configGateMessage');
+  const confirmBtn = document.getElementById('configGateConfirmBtn');
+  const cancelBtn = document.getElementById('configGateCancelBtn');
+  const secretOutput = document.getElementById('configGateSecretOutput');
+  if (!gate || !copy) {
+    window.alert(messageText || titleText || 'Action unavailable.');
+    return Promise.resolve(null);
+  }
+  if (title) title.textContent = String(titleText || 'Action Unavailable');
+  copy.textContent = String(messageText || '');
+  if (passwordInput) {
+    passwordInput.value = '';
+    passwordInput.disabled = true;
+    passwordInput.closest('.auth-field')?.classList.add('hidden');
+  }
+  if (messageNode) {
+    messageNode.textContent = String(options.detail || '');
+    messageNode.classList.toggle('ok', false);
+  }
+  confirmBtn?.classList.add('hidden');
+  if (cancelBtn) cancelBtn.textContent = String(options.closeLabel || 'Close');
+  if (secretOutput) {
+    secretOutput.textContent = '';
+    secretOutput.title = '';
+    secretOutput.classList.add('hidden');
+  }
+  gate.classList.remove('hidden');
+  syncConfigLockBodyClass();
+  window.setTimeout(() => cancelBtn?.focus(), 0);
+  return new Promise((resolve) => {
+    configGateState.resolver = resolve;
+    configGateState.onSubmit = null;
+  });
+}
+
 function showConfigGateSecret(secret) {
   const title = document.getElementById('configGateTitle');
   const copy = document.getElementById('configGateCopy');
@@ -840,9 +880,22 @@ function base64ToBytes(text) {
   return bytes;
 }
 
+function adminSecretRevealCapabilityError() {
+  if (window.crypto?.subtle) return '';
+  if (!window.isSecureContext) {
+    return 'This browser only allows the local PSK decrypt step in a secure context. Remote plain HTTP can let an active network attacker replace the WebAdmin JavaScript before you enter the password.';
+  }
+  return 'Secret reveal requires browser Web Crypto, but this browser does not expose crypto.subtle.';
+}
+
+function adminSecretRevealCapabilityHint() {
+  return 'Recommended: expose the admin endpoint through your own-server configuration/server role so the browser reaches WebAdmin through the protected overlay path. Alternatives are HTTPS, localhost access, a VPN/TUN route, or an SSH tunnel such as ssh -L 18090:127.0.0.1:18090 user@remote-host followed by http://localhost:18090.';
+}
+
 async function decryptAdminSecretEnvelope(envelope, password) {
-  if (!window.isSecureContext || !window.crypto?.subtle) {
-    throw new Error('Secret reveal requires Web Crypto in a secure browser context.');
+  const capabilityError = adminSecretRevealCapabilityError();
+  if (capabilityError) {
+    throw new Error(capabilityError);
   }
   const salt = base64ToBytes(envelope?.salt);
   const nonce = base64ToBytes(envelope?.nonce);
@@ -2423,6 +2476,13 @@ async function revealSecureLinkPsk() {
   const username = String(configState.config?.admin_web_username || authState.username || '').trim();
   if (!username) {
     setText('configMessage', 'secure_link_psk reveal failed: admin username is required.');
+    return;
+  }
+  const capabilityError = adminSecretRevealCapabilityError();
+  if (capabilityError) {
+    const detail = adminSecretRevealCapabilityHint();
+    setText('configMessage', `${capabilityError} ${detail}`);
+    await openConfigNoticeGate('Cannot Reveal secure_link_psk', capabilityError, { detail });
     return;
   }
   await openConfigGate(

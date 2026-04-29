@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import base64
 import json
+import pathlib
 import time
 import unittest
 
@@ -488,6 +489,21 @@ class AdminWebPayloadTests(unittest.TestCase):
             self.assertEqual(plaintext, "bridge-secret")
 
         asyncio.run(run_flow())
+
+    def test_secure_link_psk_reveal_insecure_context_notice_prefers_own_server_path(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        app_paths = [
+            repo_root / "admin_web" / "app.js",
+            repo_root / "src" / "obstacle_bridge" / "admin_web" / "app.js",
+        ]
+
+        for app_path in app_paths:
+            with self.subTest(app_path=str(app_path.relative_to(repo_root))):
+                text = app_path.read_text(encoding="utf-8")
+                self.assertIn("openConfigNoticeGate('Cannot Reveal secure_link_psk'", text)
+                self.assertIn("own-server configuration/server role", text)
+                self.assertIn("protected overlay path", text)
+                self.assertIn("Remote plain HTTP can let an active network attacker replace the WebAdmin JavaScript", text)
 
     def test_build_peers_payload_includes_secure_link_rows(self):
         args = argparse.Namespace(
