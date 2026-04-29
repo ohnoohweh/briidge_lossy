@@ -728,3 +728,4 @@ REQ-ADM-011:
 REQ-ADM-012:
   unit_tests:
     - tests/unit/test_admin_web_payloads.py::test_secure_link_psk_reveal_requires_password_proof_and_returns_encrypted_envelope
+    - tests/unit/test_admin_web_payloads.py::test_secure_link_psk_reveal_insecure_context_notice_prefers_own_server_path
