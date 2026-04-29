@@ -10415,6 +10415,15 @@ class WebSocketSession(ISession):
             remote = getattr(ws, "remote_address", None)
             self._clear_connection_failure()
             self._log.info(f"[WS-SESSION] ({self._probe_id}) connected in {dt:.1f} ms local={local} peer={remote}")
+            if had_previous_connection:
+                if self._early_buf:
+                    self._log.info(
+                        f"[WS/TX] ({self._probe_id}) dropping stale early-buf on transport epoch change "
+                        f"frames={len(self._early_buf)} bytes={self._early_buf_bytes}"
+                    )
+                    self._early_buf.clear()
+                    self._early_buf_bytes = 0
+                    self._early_deadline = 0.0
             await self._on_accept(ws)
             if self._ws is ws:
                 self.connection_epoch += 1
