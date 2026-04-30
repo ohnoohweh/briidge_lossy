@@ -136,6 +136,7 @@ ARC-CMP-005:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_config_challenge_masks_and_saves_secrets_encrypted
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_onboarding_invite_api_masks_psk_and_returns_apply_updates
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_listener_two_clients_peer_traffic_stats_are_scoped
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_secure_link_cert_happy_path_transports
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_revocation_reload_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_local_identity_reload_happy_path
@@ -145,6 +146,8 @@ ARC-CMP-006:
   unit_tests:
     - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_prevents_authenticated_session
+    - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_schedules_transport_reconnect_recovery
+    - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_recovery_can_be_disabled
     - tests/unit/test_secure_link_cert.py::test_cert_mode_happy_path_authenticates_and_exposes_peer_identity
     - tests/unit/test_secure_link_cert.py::test_revocation_reload_drops_existing_authenticated_peer
     - tests/unit/test_secure_link_cert.py::test_local_identity_reload_failure_is_atomic
@@ -152,7 +155,9 @@ ARC-CMP-006:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_secure_link_psk_happy_path_other_transports
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_authenticated_failure_recovers_with_reconnect
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_reconnect_drops_stale_buffered_old_session_data
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_listener_two_clients_peer_traffic_stats_are_scoped
     - tests/integration/test_ios_e2e.py::test_ios_e2e_app_ws_secure_link_probe_authenticates_against_host_peer
     - tests/integration/test_ios_simulator_e2e.py::test_ios_simulator_e2e_app_ws_secure_link_client_authenticates_and_is_visible_via_host_webadmin_api
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_secure_link_cert_happy_path_transports
