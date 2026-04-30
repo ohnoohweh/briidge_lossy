@@ -2495,6 +2495,8 @@ class SecureLinkPskSession(ISession):
         self._last_auth_fail_detail: str = ""
         self._last_auth_fail_unix_ts: Optional[float] = None
         self._last_auth_fail_session_id: Optional[int] = None
+        self._last_disconnect_reason: str = ""
+        self._last_disconnect_detail: str = ""
         self._last_secure_link_event: str = ""
         self._last_secure_link_event_unix_ts: Optional[float] = None
         self._last_authenticated_unix_ts: Optional[float] = None
@@ -3520,6 +3522,8 @@ class SecureLinkPskSession(ISession):
         now = time.time()
         state.disconnect_reason = str(reason or "")
         state.disconnect_detail = str(detail or "")
+        self._last_disconnect_reason = state.disconnect_reason
+        self._last_disconnect_detail = state.disconnect_detail
         state.trust_enforced_unix_ts = now
         state.connected_since_unix_ts = None
         state.last_event = "trust_enforced_disconnect"
@@ -3535,7 +3539,12 @@ class SecureLinkPskSession(ISession):
         self._trust_enforced_unix_ts = now
         self._secure_link_peers_dropped_total += 1
         self._record_secure_link_event("trust_enforced_disconnect", now)
-        if self._client_mode and self._started and bool(getattr(self._inner, "is_connected", lambda: False)()):
+        if (
+            self._client_mode
+            and self._started
+            and str(reason or "") != "revocation_applied"
+            and bool(getattr(self._inner, "is_connected", lambda: False)())
+        ):
             self._maybe_begin_client_handshake()
 
     def request_secure_link_reload(self, scope: str = "all", target_peer_id: Optional[str] = None) -> dict:
@@ -3791,13 +3800,6 @@ class SecureLinkPskSession(ISession):
             r = dict(row)
             listening = bool(r.get("listening")) or str(r.get("state") or "").strip().lower() == "listening"
             peer_id = int(r.get("peer_id", 0) or 0)
-            if not self._client_mode and not listening:
-                mux_chans = set()
-                for chan in list(r.get("mux_chans") or []):
-                    with contextlib.suppress(Exception):
-                        mux_chans.add(int(chan))
-                mux_chans.update(secure_mux_by_peer.get(peer_id, set()))
-                r["mux_chans"] = sorted(mux_chans)
             key = self._peer_key(None if self._client_mode else peer_id)
             state = self._peer_states.get(key)
             authenticated = False
@@ -3873,7 +3875,18 @@ class SecureLinkPskSession(ISession):
                 "disconnect_detail": str(state.disconnect_detail or "") if state is not None else "",
             }
             out.append(r)
-        return self._filter_superseded_myudp_listener_rows(out)
+        out = self._filter_superseded_myudp_listener_rows(out)
+        if not self._client_mode and secure_mux_by_peer:
+            for row in out:
+                if bool(row.get("listening")) or str(row.get("state") or "").strip().lower() == "listening":
+                    continue
+                mux_chans = set()
+                for chan in list(row.get("mux_chans") or []):
+                    with contextlib.suppress(Exception):
+                        mux_chans.add(int(chan))
+                mux_chans.update(secure_mux_by_peer.get(int(row.get("peer_id", 0) or 0), set()))
+                row["mux_chans"] = sorted(mux_chans)
+        return out
 
     def get_secure_link_status_snapshot(self) -> dict:
         any_failed = False
@@ -3959,8 +3972,8 @@ class SecureLinkPskSession(ISession):
             "last_material_reload_result": self._last_material_reload_result,
             "last_material_reload_detail": self._last_material_reload_detail,
             "trust_enforced_unix_ts": self._trust_enforced_unix_ts,
-            "disconnect_reason": str(primary_state.disconnect_reason or "") if primary_state is not None else "",
-            "disconnect_detail": str(primary_state.disconnect_detail or "") if primary_state is not None else "",
+            "disconnect_reason": (str(primary_state.disconnect_reason or "") if primary_state is not None else "") or self._last_disconnect_reason,
+            "disconnect_detail": (str(primary_state.disconnect_detail or "") if primary_state is not None else "") or self._last_disconnect_detail,
             "peers_dropped_total": int(self._secure_link_peers_dropped_total or 0),
         }
 
