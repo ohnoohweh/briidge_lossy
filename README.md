@@ -1320,7 +1320,7 @@ Optional operations follow-up:
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 - Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `156` integration tests, `205` unit tests, and `39` iOS-focused tests in `ios/tests/`. Latest focused validation for the iOS Documents-backed WebAdmin/config/log slice used `.venv/bin/python -m pytest -q ios/tests/test_ios_app_facade.py tests/unit/test_embeddable_core.py ios/tests/test_ios_profile_config.py ios/tests/test_dependency_spike.py` and completed with `21 passed`; this slice also ran the requirements, README/testing, and PR-template guards, launched the normal iOS app in the simulator, and generated an unsigned `iphoneos` arm64 IPA. The iOS app/runtime slice now adds focused coverage for the `ObstacleBridgeClient` embeddable surface, host-provided config-path persistence, the packaged and Documents-backed `admin_web` fallback, native iOS crypto bridging, simulator SecureLink authentication, and host-visible iOS WebAdmin forwarding. Earlier focused validation includes compression/admin/lifecycle, SecureLink PSK, WebSocket SecureLink PSK reconnect stale-buffer recovery, WebSocket listener peer traffic statistics, SecureLink authenticated failure reconnect recovery, SecureLink revocation metadata and myudp stale-row guard fixes, config persistence, peer-traffic/concurrent-listener, TUN WebAdmin/hook, WebAdmin service-editor/service-name, WebAdmin PSK reveal, and launcher dependency-assistance slices documented in [docs/README_TESTING.md](docs/README_TESTING.md).
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `156` integration tests, `215` unit tests, and `39` iOS-focused tests in `ios/tests/`. Latest focused validation for unit requirement-gap closure used `pytest -q tests/unit/test_requirements_unit_gaps.py` and completed with `10 passed`; this slice adds unit-side coverage for Admin Web authentication gates, multi-listener peer snapshot identity, IPv4/IPv6 UDP peer labeling, and core `myudp` reliability invariants. Earlier focused validation includes the iOS Documents-backed WebAdmin/config/log slice, compression/admin/lifecycle, SecureLink PSK, WebSocket SecureLink PSK reconnect stale-buffer recovery, WebSocket listener peer traffic statistics, SecureLink authenticated failure reconnect recovery, SecureLink revocation metadata and myudp stale-row guard fixes, config persistence, peer-traffic/concurrent-listener, TUN WebAdmin/hook, WebAdmin service-editor/service-name, WebAdmin PSK reveal, and launcher dependency-assistance slices documented in [docs/README_TESTING.md](docs/README_TESTING.md).
 
 For changes that touch `src/obstacle_bridge/bridge.py`, the most important regression signal after opening a pull request is the Linux shared integration lane in GitHub CI. Windows-local integration execution is still useful for targeted investigation, but it is not currently the most reliable green/red indicator for broad regression confidence on this branch history.
 
@@ -1329,11 +1329,11 @@ The shared integration harness now generates localhost TLS test certificates in 
 ### Current requirements coverage
 Current snapshot from `python scripts/report_requirements_coverage.py`:
 
-- Integration-covered: `79/83 = 95.2%`
-- Unit-covered: `62/83 = 74.7%`
-- Any-test-covered: `83/83 = 100.0%`
-- Tracked in manifest: `83/83 = 100.0%`
-- Requirements without integration coverage: `REQ-ADM-011`, `REQ-ADM-012`, `REQ-LIFE-009`, `REQ-LIFE-010`
+- Integration-covered: `79/84 = 94.0%`
+- Unit-covered: `84/84 = 100.0%`
+- Any-test-covered: `84/84 = 100.0%`
+- Tracked in manifest: `84/84 = 100.0%`
+- Requirements without integration coverage: `REQ-ADM-011`, `REQ-ADM-012`, `REQ-LIFE-009`, `REQ-LIFE-010`, `REQ-RUN-001`
 
 The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
 

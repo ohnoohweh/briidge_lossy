@@ -24,6 +24,12 @@ ARC-CMP-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_peer
 
 ARC-CMP-002:
+  unit_tests:
+    - tests/unit/test_requirements_unit_gaps.py::test_myudp_large_payload_is_chunked_and_backpressured_by_inflight_window
+    - tests/unit/test_requirements_unit_gaps.py::test_myudp_out_of_order_delivery_tracks_missing_and_reassembles_without_corruption
+    - tests/unit/test_requirements_unit_gaps.py::test_myudp_control_feedback_retransmits_only_reported_missing_frames
+    - tests/unit/test_requirements_unit_gaps.py::test_myudp_bidirectional_sessions_deliver_independent_payloads
+    - tests/unit/test_requirements_unit_gaps.py::test_myudp_sender_reset_clears_stale_reconnect_state
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_udp_fragmentation_survives_text_mode
@@ -44,6 +50,7 @@ ARC-CMP-003:
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_active_tun_channel_as_open
     - tests/unit/test_connection_snapshots.py::test_snapshot_collapses_tun_channel_aliases_into_one_logical_connection
+    - tests/unit/test_requirements_unit_gaps.py::test_listener_peer_snapshot_preserves_distinct_peers_across_listener_transports
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
     - tests/integration/test_ios_e2e.py::test_ios_e2e_app_ws_overlay_udp_service_reaches_linux_peer_udp_echo
@@ -65,6 +72,8 @@ ARC-CMP-004:
     - tests/unit/test_runner_overlay_transports.py::test_request_secure_link_reload_targets_matching_peer_id_only
     - tests/unit/test_runner_overlay_transports.py::test_request_secure_link_reload_rejects_unknown_peer_id
     - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_uses_child_myudp_session_stats
+    - tests/unit/test_requirements_unit_gaps.py::test_udp_peer_labels_bracket_ipv6_and_plain_ipv4
+    - tests/unit/test_requirements_unit_gaps.py::test_myudp_sender_reset_clears_stale_reconnect_state
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_active_tun_channel_as_open
@@ -127,6 +136,10 @@ ARC-CMP-005:
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_listeners_when_no_clients_connected
     - tests/unit/test_connection_snapshots.py::test_snapshot_mixed_listeners_and_active_connections
     - tests/unit/test_connection_snapshots.py::test_status_snapshot_includes_tun_open_connection_count
+    - tests/unit/test_requirements_unit_gaps.py::test_auth_disabled_reports_authenticated_without_session
+    - tests/unit/test_requirements_unit_gaps.py::test_auth_required_rejects_bad_login_and_accepts_challenge_proof
+    - tests/unit/test_requirements_unit_gaps.py::test_admin_auth_sessions_are_cookie_scoped_per_client
+    - tests/unit/test_requirements_unit_gaps.py::test_listener_peer_snapshot_preserves_distinct_peers_across_listener_transports
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_direct_preflight_requires_http_200_before_upgrade
