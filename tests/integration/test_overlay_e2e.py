@@ -3923,6 +3923,7 @@ def run_case_two_peer_clients_listener(
     server_extra_args: Optional[List[str]] = None,
     client1_extra_args: Optional[List[str]] = None,
     client2_extra_args: Optional[List[str]] = None,
+    verify_listener_peer_traffic_split: bool = False,
 ) -> None:
     case = materialize_secure_link_case_ports(case, secure_slot) if secure_slot is not None else materialize_case_ports(case, case_index)
     bounce = BounceBackServer(
@@ -4006,6 +4007,61 @@ def run_case_two_peer_clients_listener(
         with_ip = [row for row in rows if row.get('peer') not in (None, '', 'n/a')]
         if len(with_ip) < 2:
             raise RuntimeError(f'Expected >=2 peer rows with endpoint labels, got rows={rows!r}')
+
+        if verify_listener_peer_traffic_split:
+            phase('8. Verify listener peer traffic counters stay scoped per websocket peer')
+            # Establish a fresh rate baseline after the first equal-length probes above, then
+            # send deliberately different volumes through each peer-owned service.
+            fetch_json(f'http://127.0.0.1:{server_proc.admin_port}/api/peers')
+            first_payloads = [b'\x01' + (b'A' * 17), b'\x01' + (b'B' * 211)]
+            second_payloads = [b'\x01' + (b'C' * 29), b'\x01' + (b'D' * 307)]
+            for payloads in (first_payloads, second_payloads):
+                reply1 = probe_udp(case.probe_host, case.probe_port, case.probe_bind, payloads[0], timeout=2.0)
+                expected1 = response_payload(payloads[0])
+                if reply1 != expected1:
+                    raise RuntimeError(f'Unexpected first client split-traffic reply: got={reply1!r} expected={expected1!r}')
+                reply2 = probe_udp(case.probe_host, second_client_local_port, case.probe_bind, payloads[1], timeout=2.0)
+                expected2 = response_payload(payloads[1])
+                if reply2 != expected2:
+                    raise RuntimeError(f'Unexpected second client split-traffic reply: got={reply2!r} expected={expected2!r}')
+                time.sleep(0.25)
+
+            def _traffic_rows_differ() -> tuple[bool, str]:
+                _code, doc = fetch_json(f'http://127.0.0.1:{server_proc.admin_port}/api/peers')
+                peer_rows = [
+                    row for row in (doc.get('peers') or [])
+                    if row.get('peer') not in (None, '', 'n/a') and not bool(row.get('listening'))
+                ]
+                if len(peer_rows) < 2:
+                    return False, f'expected two connected peer rows, got {peer_rows!r}'
+                peer_rows = sorted(peer_rows, key=lambda row: str(row.get('id')))
+                observed = []
+                for row in peer_rows[:2]:
+                    traffic = row.get('traffic') or {}
+                    observed.append(
+                        (
+                            int(traffic.get('rx_bytes', 0) or 0),
+                            int(traffic.get('tx_bytes', 0) or 0),
+                            float(traffic.get('rx_bytes_per_sec', 0.0) or 0.0),
+                            float(traffic.get('tx_bytes_per_sec', 0.0) or 0.0),
+                        )
+                    )
+                counters_differ = (observed[0][0], observed[0][1]) != (observed[1][0], observed[1][1])
+                rates_differ = (observed[0][2], observed[0][3]) != (observed[1][2], observed[1][3])
+                if counters_differ and rates_differ:
+                    return True, f'observed split peer traffic {observed!r}'
+                return False, f'peer traffic still identical or unscoped: {observed!r} rows={peer_rows[:2]!r}'
+
+            deadline = time.time() + 8.0
+            last_detail = ''
+            while time.time() < deadline:
+                ok, detail = _traffic_rows_differ()
+                last_detail = detail
+                if ok:
+                    break
+                time.sleep(0.25)
+            else:
+                raise RuntimeError(f'listener peer traffic split did not become scoped: {last_detail}')
 
         if secure_slot is not None:
             transport = 'unknown'
@@ -9040,6 +9096,91 @@ def test_overlay_e2e_tcp_secure_link_psk_malformed_frame_fails_closed_subprocess
 
 @pytest.mark.integration
 @pytest.mark.slow
+def test_overlay_e2e_tcp_secure_link_psk_authenticated_failure_recovers_with_reconnect(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case06_overlay_tcp_ipv4']
+        bounce = None
+        server_proc = client_proc = None
+        secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
+        client_secure_args = secure_args + [
+            '--secure-link-recover-delay-seconds', '1.0',
+            '--overlay-reconnect-retry-delay-ms', '100',
+        ]
+        try:
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=291,
+                secure_slot=16,
+                server_extra_args=secure_args,
+                client_extra_args=client_secure_args,
+                client_restart_if_disconnected=30,
+                use_failure_injection_entrypoint=True,
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            first_doc = wait_peer_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=12.0,
+                label='client',
+                transport='tcp',
+                authenticated=True,
+            )
+            first_secure = dict((first_active_secure_link_row(first_doc, transport='tcp').get('secure_link') or {}))
+            first_session_id = int(first_secure.get('session_id') or 0)
+            if first_session_id <= 0:
+                raise RuntimeError(f'Could not determine initial secure-link session id from peers doc: {first_doc!r}')
+            wait_probe(case, payload=b'\x01recovery-e2e-prime', timeout=12.0)
+
+            code, body = request_json(
+                f'http://127.0.0.1:{client_proc.admin_port}/api/secure-link/debug',
+                method='POST',
+                payload={'action': 'inject_raw', 'payload_b64': base64.b64encode(b'\x01\x02\x03').decode('ascii')},
+                timeout=2.0,
+            )
+            assert code == 200
+            assert body.get('ok') is True
+
+            failed_doc = wait_peer_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='failed',
+                timeout=8.0,
+                label='client',
+                transport='tcp',
+                authenticated=False,
+                failure_code=4,
+                failure_reason='decode',
+            )
+            failed_secure = dict((first_active_secure_link_row(failed_doc, transport='tcp').get('secure_link') or {}))
+            assert failed_secure.get('last_event') == 'recovery_reconnect_scheduled'
+            assert bool(failed_secure.get('recovery_enabled')) is True
+            assert float(failed_secure.get('recovery_reconnect_sec') or 0.0) > 0.0
+            assert failed_secure.get('next_recovery_reconnect_unix_ts') is not None
+
+            recovered_doc = wait_peer_secure_link_session_change(
+                client_proc.admin_port or 0,
+                previous_session_id=first_session_id,
+                timeout=20.0,
+                label='client',
+                transport='tcp',
+            )
+            recovered_secure = dict((first_active_secure_link_row(recovered_doc, transport='tcp').get('secure_link') or {}))
+            assert str(recovered_secure.get('state') or '').strip().lower() == 'authenticated'
+            assert bool(recovered_secure.get('authenticated')) is True
+            assert not recovered_secure.get('failure_code'), recovered_secure
+            assert int(recovered_secure.get('session_id') or 0) != first_session_id
+            wait_probe(case, payload=b'\x01recovery-e2e-after', timeout=12.0)
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("case_name", "case_index", "secure_slot"),
     [
@@ -9444,6 +9585,24 @@ def test_overlay_e2e_ws_secure_link_psk_listener_two_clients(tmp_path: Path) -> 
             server_extra_args=secure_args,
             client1_extra_args=secure_args,
             client2_extra_args=secure_args,
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_ws_secure_link_psk_listener_two_clients_peer_traffic_stats_are_scoped(tmp_path: Path) -> None:
+    with secure_link_test_lock():
+        case = CASES['case12_overlay_ws_ipv4_listener_two_clients']
+        secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
+        run_case_two_peer_clients_listener(
+            case,
+            tmp_path,
+            case_index=282,
+            secure_slot=7,
+            server_extra_args=secure_args,
+            client1_extra_args=secure_args,
+            client2_extra_args=secure_args,
+            verify_listener_peer_traffic_split=True,
         )
 
 

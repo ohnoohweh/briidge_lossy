@@ -2387,6 +2387,28 @@ class SecureLinkPskSession(ISession):
                 default=5000,
                 help='Maximum client-side secure-link retry backoff after repeated authentication failures, in milliseconds.'
             )
+        if not _has('--secure-link-recover-after-failure'):
+            try:
+                p.add_argument(
+                    '--secure-link-recover-after-failure',
+                    action=argparse.BooleanOptionalAction,
+                    default=True,
+                    help='Reconnect the lower client transport after an already-authenticated secure-link session fails closed.'
+                )
+            except Exception:
+                p.add_argument(
+                    '--secure-link-recover-after-failure',
+                    action='store_true',
+                    default=True,
+                    help='Reconnect the lower client transport after an already-authenticated secure-link session fails closed.'
+                )
+        if not _has('--secure-link-recover-delay-seconds'):
+            p.add_argument(
+                '--secure-link-recover-delay-seconds',
+                type=float,
+                default=30.0,
+                help='Delay before reconnecting a lower client transport after authenticated secure-link failure recovery.'
+            )
         if not _has('--secure-link-root-pub'):
             p.add_argument(
                 '--secure-link-root-pub',
@@ -2459,6 +2481,8 @@ class SecureLinkPskSession(ISession):
             self._retry_backoff_initial_s,
             float(int(getattr(args, "secure_link_retry_backoff_max_ms", 5000) or 0)) / 1000.0,
         )
+        self._recover_after_failure = bool(getattr(args, "secure_link_recover_after_failure", True))
+        self._recover_delay_s = max(0.0, float(getattr(args, "secure_link_recover_delay_seconds", 30.0) or 0.0))
         self._peer_states: Dict[int, _SecureLinkPeerState] = {}
         self._server_chan_to_peer: Dict[int, Tuple[int, int]] = {}
         self._server_peer_chan_to_mux: Dict[Tuple[int, int], int] = {}
@@ -2471,6 +2495,8 @@ class SecureLinkPskSession(ISession):
         self._last_auth_fail_detail: str = ""
         self._last_auth_fail_unix_ts: Optional[float] = None
         self._last_auth_fail_session_id: Optional[int] = None
+        self._last_disconnect_reason: str = ""
+        self._last_disconnect_detail: str = ""
         self._last_secure_link_event: str = ""
         self._last_secure_link_event_unix_ts: Optional[float] = None
         self._last_authenticated_unix_ts: Optional[float] = None
@@ -2479,10 +2505,13 @@ class SecureLinkPskSession(ISession):
         self._authenticated_sessions_total: int = 0
         self._rekeys_completed_total: int = 0
         self._client_retry_task: Optional[asyncio.Task] = None
+        self._client_recovery_task: Optional[asyncio.Task] = None
         self._client_rekey_task: Optional[asyncio.Task] = None
         self._client_retry_consecutive_failures: int = 0
         self._client_retry_not_before_mono: float = 0.0
         self._client_retry_not_before_unix_ts: Optional[float] = None
+        self._client_recovery_not_before_mono: float = 0.0
+        self._client_recovery_not_before_unix_ts: Optional[float] = None
         self._client_rekey_due_mono: float = 0.0
         self._client_rekey_due_unix_ts: Optional[float] = None
         self._client_rekey_hold_after_commit: bool = False
@@ -2942,6 +2971,7 @@ class SecureLinkPskSession(ISession):
             self._peer_states[key] = state
         elif int(session_id or 0) > 0:
             state.session_id = int(session_id)
+        was_authenticated = bool(state.authenticated or int(state.authenticated_sessions_total or 0) > 0)
         state.authenticated = False
         state.client_handshake_proof_sent = False
         state.client_nonce = b""
@@ -2987,7 +3017,10 @@ class SecureLinkPskSession(ISession):
             int(state.consecutive_failures or 0),
             max(0.0, self._client_retry_not_before_mono - time.monotonic()) if self._client_mode else 0.0,
         )
-        if self._client_mode and self._started and bool(getattr(self._inner, "is_connected", lambda: False)()):
+        if self._client_mode and self._started and was_authenticated:
+            self._cancel_client_retry_task(clear_schedule=True)
+            self._schedule_client_recovery()
+        elif self._client_mode and self._started and bool(getattr(self._inner, "is_connected", lambda: False)()):
             self._schedule_client_retry()
         self._refresh_connected_state()
 
@@ -3008,6 +3041,7 @@ class SecureLinkPskSession(ISession):
 
     def _clear_all_states(self) -> None:
         self._cancel_client_rekey_task(clear_schedule=True)
+        self._cancel_client_recovery_task(clear_schedule=True)
         self._clear_client_rekey_app_queue()
         self._peer_states.clear()
         self._server_chan_to_peer.clear()
@@ -3149,7 +3183,91 @@ class SecureLinkPskSession(ISession):
 
     def _reset_client_retry_backoff(self) -> None:
         self._cancel_client_retry_task(clear_schedule=True)
+        self._cancel_client_recovery_task(clear_schedule=True)
         self._client_retry_consecutive_failures = 0
+
+    def _cancel_client_recovery_task(self, *, clear_schedule: bool) -> None:
+        task = self._client_recovery_task
+        self._client_recovery_task = None
+        current = None
+        try:
+            current = asyncio.current_task()
+        except Exception:
+            current = None
+        if task is not None and task is not current and not task.done():
+            task.cancel()
+        if clear_schedule:
+            self._client_recovery_not_before_mono = 0.0
+            self._client_recovery_not_before_unix_ts = None
+
+    async def _delayed_client_recovery(self, target_mono: float, expected_session_id: int) -> None:
+        try:
+            while True:
+                remaining = float(target_mono) - time.monotonic()
+                if remaining <= 0.0:
+                    break
+                await asyncio.sleep(min(remaining, 0.25))
+            if not self._started or not self._client_mode:
+                return
+            state = self._peer_states.get(0)
+            if state is None or state.authenticated:
+                return
+            if int(state.session_id or 0) != int(expected_session_id or 0):
+                return
+            self._client_recovery_not_before_mono = 0.0
+            self._client_recovery_not_before_unix_ts = None
+            state.last_event = "recovery_reconnect_started"
+            state.last_event_unix_ts = time.time()
+            self._record_secure_link_event("recovery_reconnect_started", state.last_event_unix_ts)
+            if not self.request_reconnect():
+                self._log.warning(
+                    "[SECURE-LINK] recovery reconnect unavailable transport=%s side=client session_id=%s",
+                    self._transport_name,
+                    int(expected_session_id or 0),
+                )
+        except asyncio.CancelledError:
+            return
+        finally:
+            current = None
+            try:
+                current = asyncio.current_task()
+            except Exception:
+                current = None
+            if self._client_recovery_task is current:
+                self._client_recovery_task = None
+
+    def _schedule_client_recovery(self) -> None:
+        if (
+            not self._client_mode
+            or not self._started
+            or not self._recover_after_failure
+            or self._recover_delay_s <= 0.0
+        ):
+            return
+        state = self._peer_states.get(0)
+        if state is None:
+            return
+        target_mono = time.monotonic() + self._recover_delay_s
+        self._client_recovery_not_before_mono = target_mono
+        self._client_recovery_not_before_unix_ts = time.time() + self._recover_delay_s
+        self._cancel_client_recovery_task(clear_schedule=False)
+        state.last_event = "recovery_reconnect_scheduled"
+        state.last_event_unix_ts = time.time()
+        self._record_secure_link_event("recovery_reconnect_scheduled", state.last_event_unix_ts)
+        self._log.warning(
+            "[SECURE-LINK] scheduled recovery reconnect transport=%s side=client session_id=%s delay_sec=%.3f",
+            self._transport_name,
+            int(state.session_id or 0),
+            self._recover_delay_s,
+        )
+        try:
+            self._client_recovery_task = asyncio.create_task(
+                self._delayed_client_recovery(target_mono, int(state.session_id or 0))
+            )
+        except Exception:
+            self._client_recovery_task = None
+            self._client_recovery_not_before_mono = 0.0
+            self._client_recovery_not_before_unix_ts = None
 
     async def _delayed_client_retry(self, target_mono: float) -> None:
         try:
@@ -3404,6 +3522,8 @@ class SecureLinkPskSession(ISession):
         now = time.time()
         state.disconnect_reason = str(reason or "")
         state.disconnect_detail = str(detail or "")
+        self._last_disconnect_reason = state.disconnect_reason
+        self._last_disconnect_detail = state.disconnect_detail
         state.trust_enforced_unix_ts = now
         state.connected_since_unix_ts = None
         state.last_event = "trust_enforced_disconnect"
@@ -3419,7 +3539,12 @@ class SecureLinkPskSession(ISession):
         self._trust_enforced_unix_ts = now
         self._secure_link_peers_dropped_total += 1
         self._record_secure_link_event("trust_enforced_disconnect", now)
-        if self._client_mode and self._started and bool(getattr(self._inner, "is_connected", lambda: False)()):
+        if (
+            self._client_mode
+            and self._started
+            and str(reason or "") != "revocation_applied"
+            and bool(getattr(self._inner, "is_connected", lambda: False)())
+        ):
             self._maybe_begin_client_handshake()
 
     def request_secure_link_reload(self, scope: str = "all", target_peer_id: Optional[str] = None) -> dict:
@@ -3665,6 +3790,12 @@ class SecureLinkPskSession(ISession):
         rows = list(getter() or []) if callable(getter) else []
         out: list[dict] = []
         inner_is_connected = bool(getattr(self._inner, "is_connected", lambda: False)())
+        secure_mux_by_peer: dict[int, set[int]] = {}
+        if not self._client_mode:
+            for mux_chan, mapped in list(self._server_chan_to_peer.items()):
+                with contextlib.suppress(Exception):
+                    peer_id, _peer_chan = mapped
+                    secure_mux_by_peer.setdefault(int(peer_id), set()).add(int(mux_chan))
         for row in rows:
             r = dict(row)
             listening = bool(r.get("listening")) or str(r.get("state") or "").strip().lower() == "listening"
@@ -3712,6 +3843,10 @@ class SecureLinkPskSession(ISession):
                 "consecutive_failures": int(state.consecutive_failures or 0) if state is not None else 0,
                 "retry_backoff_sec": max(0.0, self._client_retry_not_before_mono - time.monotonic()) if self._client_mode and self._client_retry_not_before_mono > 0.0 else 0.0,
                 "next_retry_unix_ts": self._client_retry_not_before_unix_ts if self._client_mode else None,
+                "recovery_enabled": bool(self._recover_after_failure) if self._client_mode else False,
+                "recovery_delay_sec": self._recover_delay_s if self._client_mode else 0.0,
+                "recovery_reconnect_sec": max(0.0, self._client_recovery_not_before_mono - time.monotonic()) if self._client_mode and self._client_recovery_not_before_mono > 0.0 else 0.0,
+                "next_recovery_reconnect_unix_ts": self._client_recovery_not_before_unix_ts if self._client_mode else None,
                 "handshake_attempts_total": int(state.handshake_attempts_total or 0) if state is not None else 0,
                 "last_event": str(state.last_event or "") if state is not None else "",
                 "last_event_unix_ts": state.last_event_unix_ts if state is not None else None,
@@ -3740,7 +3875,18 @@ class SecureLinkPskSession(ISession):
                 "disconnect_detail": str(state.disconnect_detail or "") if state is not None else "",
             }
             out.append(r)
-        return self._filter_superseded_myudp_listener_rows(out)
+        out = self._filter_superseded_myudp_listener_rows(out)
+        if not self._client_mode and secure_mux_by_peer:
+            for row in out:
+                if bool(row.get("listening")) or str(row.get("state") or "").strip().lower() == "listening":
+                    continue
+                mux_chans = set()
+                for chan in list(row.get("mux_chans") or []):
+                    with contextlib.suppress(Exception):
+                        mux_chans.add(int(chan))
+                mux_chans.update(secure_mux_by_peer.get(int(row.get("peer_id", 0) or 0), set()))
+                row["mux_chans"] = sorted(mux_chans)
+        return out
 
     def get_secure_link_status_snapshot(self) -> dict:
         any_failed = False
@@ -3798,6 +3944,10 @@ class SecureLinkPskSession(ISession):
             "consecutive_failures": int(self._client_retry_consecutive_failures or 0) if self._client_mode else 0,
             "retry_backoff_sec": max(0.0, self._client_retry_not_before_mono - time.monotonic()) if self._client_mode and self._client_retry_not_before_mono > 0.0 else 0.0,
             "next_retry_unix_ts": self._client_retry_not_before_unix_ts if self._client_mode else None,
+            "recovery_enabled": bool(self._recover_after_failure) if self._client_mode else False,
+            "recovery_delay_sec": self._recover_delay_s if self._client_mode else 0.0,
+            "recovery_reconnect_sec": max(0.0, self._client_recovery_not_before_mono - time.monotonic()) if self._client_mode and self._client_recovery_not_before_mono > 0.0 else 0.0,
+            "next_recovery_reconnect_unix_ts": self._client_recovery_not_before_unix_ts if self._client_mode else None,
             "handshake_attempts_total": int(self._handshake_attempts_total or 0),
             "last_event": self._last_secure_link_event,
             "last_event_unix_ts": self._last_secure_link_event_unix_ts,
@@ -3822,8 +3972,8 @@ class SecureLinkPskSession(ISession):
             "last_material_reload_result": self._last_material_reload_result,
             "last_material_reload_detail": self._last_material_reload_detail,
             "trust_enforced_unix_ts": self._trust_enforced_unix_ts,
-            "disconnect_reason": str(primary_state.disconnect_reason or "") if primary_state is not None else "",
-            "disconnect_detail": str(primary_state.disconnect_detail or "") if primary_state is not None else "",
+            "disconnect_reason": (str(primary_state.disconnect_reason or "") if primary_state is not None else "") or self._last_disconnect_reason,
+            "disconnect_detail": (str(primary_state.disconnect_detail or "") if primary_state is not None else "") or self._last_disconnect_detail,
             "peers_dropped_total": int(self._secure_link_peers_dropped_total or 0),
         }
 
@@ -15990,6 +16140,10 @@ class RunnerMuxAggregate:
             "consecutive_failures": 0,
             "retry_backoff_sec": 0.0,
             "next_retry_unix_ts": None,
+            "recovery_enabled": False,
+            "recovery_delay_sec": 0.0,
+            "recovery_reconnect_sec": 0.0,
+            "next_recovery_reconnect_unix_ts": None,
             "handshake_attempts_total": 0,
             "last_event": "",
             "last_event_unix_ts": None,

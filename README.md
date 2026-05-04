@@ -981,6 +981,8 @@ To explicitly run without compression on both peers, set:
 | `--secure-link-mode` | `off` | Secure-link mode. Supported values are `off`, `psk`, and `cert`. |
 | `--secure-link-retry-backoff-initial-ms` | `1000` | Initial client-side retry backoff after a secure-link authentication failure, in milliseconds. |
 | `--secure-link-retry-backoff-max-ms` | `5000` | Maximum client-side retry backoff after repeated secure-link authentication failures, in milliseconds. |
+| `--secure-link-recover-after-failure` / `--no-secure-link-recover-after-failure` | `True` | Reconnect the lower client transport after an already-authenticated secure-link session fails closed. |
+| `--secure-link-recover-delay-seconds` | `30.0` | Delay before reconnecting the lower client transport for authenticated secure-link failure recovery. |
 | `--secure-link-require` | `False` | Fail closed if secure-link cannot be negotiated or authenticated. |
 
 #### PSK mode parameters
@@ -1123,6 +1125,7 @@ API fallback for details not fully surfaced in WebAdmin yet:
   - `failure_code=1`
   - `failure_reason=bad_psk`
   - repeated client-side retries show increasing `consecutive_failures`, a bounded `retry_backoff_sec`, a populated `next_retry_unix_ts`, a populated `failure_session_id`, increasing `handshake_attempts_total`, and `last_event=retry_scheduled`
+- if an already-authenticated client-side secure-link session later fails closed, the client schedules lower-transport reconnect recovery and reports `recovery_enabled`, `recovery_delay_sec`, `recovery_reconnect_sec`, `next_recovery_reconnect_unix_ts`, and `last_event=recovery_reconnect_scheduled`
 
 Current WebAdmin gap to close in a future update:
 
@@ -1144,6 +1147,7 @@ Operator notes:
 - use `secure_link_rekey_after_seconds` when you want automatic rotation on long-lived authenticated client-side sessions without waiting for a frame-count threshold
 - operator-forced rekey currently applies to authenticated client-side secure-link sessions for the targeted peer row; if no protected client data has been sent yet, the WebAdmin action and admin API both reject the request rather than guessing its way past the handshake boundary
 - if you are intentionally testing wrong-PSK or rollout mistakes, `secure_link_retry_backoff_initial_ms` and `secure_link_retry_backoff_max_ms` let you tune how aggressively the client retries after secure-link auth failures
+- `secure_link_recover_after_failure` keeps post-authentication secure-link failures from remaining permanently stuck by closing/reconnecting the lower client transport after `secure_link_recover_delay_seconds`; leave it enabled unless you want purely manual recovery during fault investigation
 - the current PSK runtime uses strictly monotonic per-direction protected-data counters starting at `1`; counter `0` is reserved and counter exhaustion fails closed rather than wrapping
 - malformed or unexpected secure-link frames fail closed and remain observable through the admin/API surface; they do not continue forwarding overlay traffic on the affected peer
 - the delivered PSK mode remains useful for development/testing/lab bring-up, while the delivered cert mode is the deployment-rooted trust model described in [docs/SECURE_LINK_DESIGN.md](docs/SECURE_LINK_DESIGN.md)
@@ -1316,7 +1320,7 @@ Optional operations follow-up:
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 - Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `154` integration tests, `203` unit tests, and `39` iOS-focused tests in `ios/tests/`. Latest focused validation for the iOS Documents-backed WebAdmin/config/log slice used `.venv/bin/python -m pytest -q ios/tests/test_ios_app_facade.py tests/unit/test_embeddable_core.py ios/tests/test_ios_profile_config.py ios/tests/test_dependency_spike.py` and completed with `21 passed`; this slice also ran the requirements, README/testing, and PR-template guards, launched the normal iOS app in the simulator, and generated an unsigned `iphoneos` arm64 IPA. The iOS app/runtime slice now adds focused coverage for the `ObstacleBridgeClient` embeddable surface, host-provided config-path persistence, the packaged and Documents-backed `admin_web` fallback, native iOS crypto bridging, simulator SecureLink authentication, and host-visible iOS WebAdmin forwarding. Earlier focused validation includes compression/admin/lifecycle, SecureLink PSK, WebSocket SecureLink PSK reconnect stale-buffer recovery, config persistence, peer-traffic/concurrent-listener, TUN WebAdmin/hook, WebAdmin service-editor/service-name, WebAdmin PSK reveal, and launcher dependency-assistance slices documented in [docs/README_TESTING.md](docs/README_TESTING.md).
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `156` integration tests, `205` unit tests, and `39` iOS-focused tests in `ios/tests/`. Latest focused validation for the iOS Documents-backed WebAdmin/config/log slice used `.venv/bin/python -m pytest -q ios/tests/test_ios_app_facade.py tests/unit/test_embeddable_core.py ios/tests/test_ios_profile_config.py ios/tests/test_dependency_spike.py` and completed with `21 passed`; this slice also ran the requirements, README/testing, and PR-template guards, launched the normal iOS app in the simulator, and generated an unsigned `iphoneos` arm64 IPA. The iOS app/runtime slice now adds focused coverage for the `ObstacleBridgeClient` embeddable surface, host-provided config-path persistence, the packaged and Documents-backed `admin_web` fallback, native iOS crypto bridging, simulator SecureLink authentication, and host-visible iOS WebAdmin forwarding. Earlier focused validation includes compression/admin/lifecycle, SecureLink PSK, WebSocket SecureLink PSK reconnect stale-buffer recovery, WebSocket listener peer traffic statistics, SecureLink authenticated failure reconnect recovery, SecureLink revocation metadata and myudp stale-row guard fixes, config persistence, peer-traffic/concurrent-listener, TUN WebAdmin/hook, WebAdmin service-editor/service-name, WebAdmin PSK reveal, and launcher dependency-assistance slices documented in [docs/README_TESTING.md](docs/README_TESTING.md).
 
 For changes that touch `src/obstacle_bridge/bridge.py`, the most important regression signal after opening a pull request is the Linux shared integration lane in GitHub CI. Windows-local integration execution is still useful for targeted investigation, but it is not currently the most reliable green/red indicator for broad regression confidence on this branch history.
 

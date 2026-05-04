@@ -963,6 +963,7 @@ Current Phase 1 runtime decision:
 - once a peer enters secure-link failure, overlay forwarding stops for that peer
 - listener/server-side mux routing state for the failed peer is dropped so stale channels cannot continue to route through an unauthenticated peer slot
 - the failure remains observable through `/api/status` and `/api/peers` until a later healthy authenticated session replaces it
+- client-side sessions that had already authenticated and then fail closed schedule a lower-transport reconnect, defaulting to a 30 second delay, so availability can recover through a fresh transport epoch and a fresh secure-link handshake instead of reusing the failed cryptographic session
 
 Acceptance criteria:
 
@@ -975,6 +976,8 @@ Current Phase 1 runtime decision:
 
 - repeated client-side PSK authentication failures now retry under bounded exponential backoff rather than immediate tight looping
 - the current admin/API surface exposes `consecutive_failures`, `retry_backoff_sec`, and `next_retry_unix_ts` for that throttle window
+- authenticated-session failure recovery is distinct from wrong-secret retry: initial PSK mismatch stays on the bounded handshake retry path, while a post-authentication secure-link failure schedules lower-transport reconnect recovery through `secure_link_recover_after_failure` and `secure_link_recover_delay_seconds`
+- the current admin/API surface exposes `recovery_enabled`, `recovery_delay_sec`, `recovery_reconnect_sec`, and `next_recovery_reconnect_unix_ts` so operators can see when a failed client-side secure-link session is waiting for reconnect recovery
 - the current admin/API surface also exposes stronger operational diagnostics such as `failure_session_id`, `handshake_attempts_total`, `last_event`, `last_event_unix_ts`, `last_authenticated_unix_ts`, `authenticated_sessions_total`, and `rekeys_completed_total`
 
 Current status:
@@ -986,7 +989,7 @@ Evidence:
 
 - runtime:
   - [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py)
-    malformed-frame rejection, auth-failure handling, retry throttling, and admin/API snapshot fields
+    malformed-frame rejection, auth-failure handling, retry throttling, recovery reconnect scheduling, and admin/API snapshot fields
 - requirements:
   - [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
     `REQ-AUT-007`, `REQ-AUT-008`, and `REQ-AUT-009`
@@ -994,6 +997,7 @@ Evidence:
   - [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py):
     - malformed/out-of-order fail-closed tests
     - wrong-PSK retry/backoff tests
+    - authenticated failure recovery reconnect tests
     - operational diagnostics assertions
   - [test_admin_web_payloads.py](/home/ohnoohweh/quic_br/tests/unit/test_admin_web_payloads.py)
 - integration evidence:

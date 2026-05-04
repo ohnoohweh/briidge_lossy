@@ -70,6 +70,10 @@ REQ-OVL-007:
 # views are limited to aggregate runtime summary. Peer-card rendering now also
 # preserves connection uptime and transport-appropriate protocol statistics
 # without exposing the secure-link PSK as an editable config value.
+# The 2026-04-30 SecureLink guard fix keeps the existing REQ-AUT-009 and
+# REQ-AUT-016 mappings intact while preserving revocation disconnect metadata
+# and filtering superseded myudp listener rows before synthetic mux hints are
+# added for peer-scoped traffic accounting.
 REQ-AUT-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
@@ -80,6 +84,7 @@ REQ-AUT-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_listener_two_clients_concurrent_udp_tcp
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_quic_secure_link_psk_listener_two_clients_concurrent_udp_tcp
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_listener_two_clients
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_listener_two_clients_peer_traffic_stats_are_scoped
     - tests/integration/test_ios_e2e.py::test_ios_e2e_app_ws_secure_link_probe_authenticates_against_host_peer
     - tests/integration/test_ios_simulator_e2e.py::test_ios_simulator_e2e_app_ws_secure_link_client_authenticates_and_is_visible_via_host_webadmin_api
   unit_tests:
@@ -138,6 +143,7 @@ REQ-AUT-005:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_listener_two_clients_concurrent_udp_tcp
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_quic_secure_link_psk_listener_two_clients_concurrent_udp_tcp
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_listener_two_clients
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_listener_two_clients_peer_traffic_stats_are_scoped
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_peer_on_mixed_listener
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener
   unit_tests:
@@ -181,6 +187,7 @@ REQ-AUT-007:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_replay_after_reconnect_is_rejected
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_replay_after_rekey_is_rejected
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_malformed_frame_fails_closed_subprocess
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_authenticated_failure_recovers_with_reconnect
   unit_tests:
     - tests/unit/test_secure_link_psk.py::test_malformed_frame_after_authentication_fails_closed
     - tests/unit/test_secure_link_psk.py::test_unexpected_rekey_commit_fails_closed
@@ -188,9 +195,12 @@ REQ-AUT-007:
 REQ-AUT-008:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_authenticated_failure_recovers_with_reconnect
   unit_tests:
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_retries_with_bounded_backoff_and_reports_retry_window
     - tests/unit/test_secure_link_psk.py::test_reconnect_respects_remaining_retry_backoff_after_auth_failure
+    - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_schedules_transport_reconnect_recovery
+    - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_recovery_can_be_disabled
 REQ-AUT-009:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
@@ -203,7 +213,9 @@ REQ-AUT-009:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_rekeys_after_time_threshold_under_live_traffic
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_operator_forced_rekey
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_reconnects_with_fresh_session
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_authenticated_failure_recovers_with_reconnect
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_reconnect_drops_stale_buffered_old_session_data
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_listener_two_clients_peer_traffic_stats_are_scoped
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_recovery_after_prior_time_threshold_rekey_reports_fresh_authentication
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_client_restart_after_prior_time_threshold_rekey_drops_stale_pre_restart_row
   unit_tests:
@@ -212,6 +224,7 @@ REQ-AUT-009:
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
     - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_prevents_authenticated_session
+    - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_schedules_transport_reconnect_recovery
 REQ-AUT-010:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_rekeys_after_time_threshold
