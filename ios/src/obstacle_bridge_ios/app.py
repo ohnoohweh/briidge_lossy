@@ -12,6 +12,7 @@ import traceback
 import threading
 import urllib.error
 import urllib.request
+from concurrent.futures import Future
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -269,6 +270,7 @@ class ObstacleBridgeIOSApp:
         self._active_profile_id: Optional[str] = None
         self._runtime_loop: Optional[asyncio.AbstractEventLoop] = None
         self._runtime_loop_thread: Optional[threading.Thread] = None
+        self._embedded_restart_future: Optional[Future[Any]] = None
 
     def _ensure_runtime_loop(self) -> asyncio.AbstractEventLoop:
         loop = self._runtime_loop
@@ -308,20 +310,32 @@ class ObstacleBridgeIOSApp:
     def _attach_embedded_restart_hook(self) -> None:
         runner = self.client.runner
         if runner is not None:
-            setattr(runner, "_embedded_restart_callback", self._restart_embedded_runtime)
+            setattr(runner, "_embedded_restart_callback", self._request_embedded_restart)
+
+    def _request_embedded_restart(self) -> Future[Any]:
+        future = self._embedded_restart_future
+        if future is not None and not future.done():
+            return future
+        loop = self._ensure_runtime_loop()
+        future = asyncio.run_coroutine_threadsafe(self._restart_embedded_runtime(), loop)
+        self._embedded_restart_future = future
+        return future
 
     async def _restart_embedded_runtime(self) -> None:
         runner = self.client.runner
         if runner is None:
             return
         current_config = runner.get_config_snapshot(include_secrets=True)
-        await self.client.stop()
-        self.client = ObstacleBridgeClient(
+        old_client = self.client
+        new_client = ObstacleBridgeClient(
             dict(current_config),
             config_path=str(self.CONFIG_FILE),
             apply_logging=True,
         )
-        await self.client.start(config=self.client.config)
+        await asyncio.sleep(0.2)
+        await old_client.stop()
+        self.client = new_client
+        await new_client.start(config=new_client.config)
         self._attach_embedded_restart_hook()
 
     def close(self) -> None:

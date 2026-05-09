@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import types
 import json
 import sys
@@ -304,7 +303,8 @@ def test_app_embedded_restart_hook_restarts_client_with_current_config(monkeypat
 
     app.start_embedded_webadmin()
     original_client = app.client
-    asyncio.run(app.client.runner._embedded_restart_callback())
+    future = app.client.runner._embedded_restart_callback()
+    future.result(timeout=2.0)
 
     assert original_client.stop_calls == 1
     assert app.client is not original_client

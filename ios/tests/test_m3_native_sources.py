@@ -48,11 +48,13 @@ def test_native_crypto_bridge_source_exists() -> None:
     assert "sealed.ciphertext + sealed.tag" in bridge
 
 
-def test_ios_e2e_briefcase_config_includes_rubicon_for_native_crypto_bridge() -> None:
+def test_ios_briefcase_configs_include_rubicon_for_native_crypto_bridge() -> None:
     pyproject = tomllib.loads((ROOT / "ios" / "pyproject.toml").read_text(encoding="utf-8"))
 
+    app_requires = pyproject["tool"]["briefcase"]["app"]["obstacle_bridge_ios"]["requires"]
     requires = pyproject["tool"]["briefcase"]["app"]["obstacle_bridge_ios_e2e"]["requires"]
 
+    assert "rubicon-objc>=0.5.3" in app_requires
     assert "websockets" in requires
     assert "rubicon-objc>=0.5.3" in requires
 

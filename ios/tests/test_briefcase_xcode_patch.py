@@ -205,7 +205,11 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "Embed App Extensions" in patched
     assert "native/IPServer/PacketTunnelProvider.swift" in patched
     assert "native/IPServer/IPServer.entitlements" in patched
+    assert "native/ObstacleBridgeShared/ObstacleBridgeNativeCrypto.swift" in patched
+    assert "ObstacleBridgeNativeCrypto.swift in Sources" in patched
+    assert "ObstacleBridgeNativeCrypto.swift in IPServer Sources" in patched
     assert "SWIFT_OBJC_BRIDGING_HEADER" in patched
+    assert "SWIFT_VERSION = 5.0;" in patched
     assert 'CODE_SIGN_ENTITLEMENTS = "../../../../native/ObstacleBridgeApp/ObstacleBridge.entitlements";' in patched
     assert 'export EXPANDED_CODE_SIGN_IDENTITY=-' in patched
     assert "ObstacleBridgeTunnel.appex" not in patched

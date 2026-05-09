@@ -2,7 +2,7 @@ import Foundation
 import NetworkExtension
 
 final class PacketTunnelProvider: NEPacketTunnelProvider {
-    private let pythonBridge = ObstacleBridgePythonBridge.sharedBridge()
+    private let pythonBridge = ObstacleBridgePythonBridge.shared()
     private let errorDomain = "ObstacleBridge.IPServer"
 
     private func bridgeResponse(for payload: [String: Any]) throws -> [String: Any] {

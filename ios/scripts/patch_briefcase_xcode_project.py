@@ -34,6 +34,87 @@ def replace_once(text: str, old: str, new: str) -> str:
     return text.replace(old, new, 1)
 
 
+def add_app_native_crypto_source(text: str) -> str:
+    if "71C300000000000000000001 /* ObstacleBridgeNativeCrypto.swift in Sources */" in text:
+        return text
+    old_empty = (
+        "\t\t60796EDE19190F4100A9926B /* Sources */ = {\n"
+        "\t\t\tisa = PBXSourcesBuildPhase;\n"
+        "\t\t\tbuildActionMask = 2147483647;\n"
+        "\t\t\tfiles = (\n"
+        "\t\t\t);\n"
+        "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
+        "\t\t};\n"
+    )
+    new_empty = (
+        "\t\t60796EDE19190F4100A9926B /* Sources */ = {\n"
+        "\t\t\tisa = PBXSourcesBuildPhase;\n"
+        "\t\t\tbuildActionMask = 2147483647;\n"
+        "\t\t\tfiles = (\n"
+        "\t\t\t\t71C300000000000000000001 /* ObstacleBridgeNativeCrypto.swift in Sources */,\n"
+        "\t\t\t);\n"
+        "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
+        "\t\t};\n"
+    )
+    if old_empty in text:
+        return text.replace(old_empty, new_empty, 1)
+    old_main = (
+        "\t\t60796EDE19190F4100A9926B /* Sources */ = {\n"
+        "\t\t\tisa = PBXSourcesBuildPhase;\n"
+        "\t\t\tbuildActionMask = 2147483647;\n"
+        "\t\t\tfiles = (\n"
+        "\t\t\t\t600000000000000000100100 /* main.m in Sources */,\n"
+        "\t\t\t);\n"
+        "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
+        "\t\t};\n"
+    )
+    new_main = (
+        "\t\t60796EDE19190F4100A9926B /* Sources */ = {\n"
+        "\t\t\tisa = PBXSourcesBuildPhase;\n"
+        "\t\t\tbuildActionMask = 2147483647;\n"
+        "\t\t\tfiles = (\n"
+        "\t\t\t\t600000000000000000100100 /* main.m in Sources */,\n"
+        "\t\t\t\t71C300000000000000000001 /* ObstacleBridgeNativeCrypto.swift in Sources */,\n"
+        "\t\t\t);\n"
+        "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
+        "\t\t};\n"
+    )
+    if old_main not in text:
+        raise ValueError("ObstacleBridge sources build phase not found")
+    return text.replace(old_main, new_main, 1)
+
+
+def add_ipserver_native_crypto_source(text: str) -> str:
+    if "71C300000000000000000002 /* ObstacleBridgeNativeCrypto.swift in IPServer Sources */" in text:
+        return text
+    old = (
+        "\t\t71C200000000000000000080 /* Sources */ = {\n"
+        "\t\t\tisa = PBXSourcesBuildPhase;\n"
+        "\t\t\tbuildActionMask = 2147483647;\n"
+        "\t\t\tfiles = (\n"
+        "\t\t\t\t71C200000000000000000001 /* PacketTunnelProvider.swift in Sources */,\n"
+        "\t\t\t\t71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */,\n"
+        "\t\t\t);\n"
+        "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
+        "\t\t};\n"
+    )
+    new = (
+        "\t\t71C200000000000000000080 /* Sources */ = {\n"
+        "\t\t\tisa = PBXSourcesBuildPhase;\n"
+        "\t\t\tbuildActionMask = 2147483647;\n"
+        "\t\t\tfiles = (\n"
+        "\t\t\t\t71C200000000000000000001 /* PacketTunnelProvider.swift in Sources */,\n"
+        "\t\t\t\t71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */,\n"
+        "\t\t\t\t71C300000000000000000002 /* ObstacleBridgeNativeCrypto.swift in IPServer Sources */,\n"
+        "\t\t\t);\n"
+        "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
+        "\t\t};\n"
+    )
+    if old not in text:
+        raise ValueError("IPServer sources build phase not found")
+    return text.replace(old, new, 1)
+
+
 def patch_python_build_script(text: str) -> str:
     script_variants = (
         (
@@ -66,6 +147,17 @@ def patch_python_build_script(text: str) -> str:
 
 
 def patch_app_target(text: str) -> str:
+    text = insert_before(
+        text,
+        "/* End PBXBuildFile section */\n",
+        "\t\t71C300000000000000000001 /* ObstacleBridgeNativeCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71C300000000000000000010 /* ObstacleBridgeNativeCrypto.swift */; };\n"
+        "\t\t71C300000000000000000002 /* ObstacleBridgeNativeCrypto.swift in IPServer Sources */ = {isa = PBXBuildFile; fileRef = 71C300000000000000000010 /* ObstacleBridgeNativeCrypto.swift */; };\n",
+    )
+    text = insert_before(
+        text,
+        "/* End PBXFileReference section */\n",
+        "\t\t71C300000000000000000010 /* ObstacleBridgeNativeCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgeNativeCrypto.swift; path = \"../../../../native/ObstacleBridgeShared/ObstacleBridgeNativeCrypto.swift\"; sourceTree = SOURCE_ROOT; };\n",
+    )
     text = replace_once(
         text,
         "\t\t\t\t609384A628B5B958005B2A5D /* Process Python libraries */,\n\t\t\t\t6060E7A12AF8BF4400C04AE0 /* Embed Frameworks */,\n\t\t\t);\n",
@@ -79,12 +171,25 @@ def patch_app_target(text: str) -> str:
     text = replace_once(
         text,
         "\t\t60796F0F19190F4100A9926B /* Debug */ = {\n\t\t\tisa = XCBuildConfiguration;\n\t\t\tbuildSettings = {\n\t\t\t\tASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;\n\t\t\t\tCLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = NO;\n",
-        "\t\t60796F0F19190F4100A9926B /* Debug */ = {\n\t\t\tisa = XCBuildConfiguration;\n\t\t\tbuildSettings = {\n\t\t\t\tASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;\n\t\t\t\tCODE_SIGN_ENTITLEMENTS = \"../../../../native/ObstacleBridgeApp/ObstacleBridge.entitlements\";\n\t\t\t\tCLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = NO;\n",
+        "\t\t60796F0F19190F4100A9926B /* Debug */ = {\n\t\t\tisa = XCBuildConfiguration;\n\t\t\tbuildSettings = {\n\t\t\t\tASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;\n\t\t\t\tCODE_SIGN_ENTITLEMENTS = \"../../../../native/ObstacleBridgeApp/ObstacleBridge.entitlements\";\n\t\t\t\tCLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = NO;\n\t\t\t\tSWIFT_VERSION = 5.0;\n",
     )
     text = replace_once(
         text,
         "\t\t60796F1019190F4100A9926B /* Release */ = {\n\t\t\tisa = XCBuildConfiguration;\n\t\t\tbuildSettings = {\n\t\t\t\tASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;\n\t\t\t\tCLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = NO;\n",
-        "\t\t60796F1019190F4100A9926B /* Release */ = {\n\t\t\tisa = XCBuildConfiguration;\n\t\t\tbuildSettings = {\n\t\t\t\tASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;\n\t\t\t\tCODE_SIGN_ENTITLEMENTS = \"../../../../native/ObstacleBridgeApp/ObstacleBridge.entitlements\";\n\t\t\t\tCLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = NO;\n",
+        "\t\t60796F1019190F4100A9926B /* Release */ = {\n\t\t\tisa = XCBuildConfiguration;\n\t\t\tbuildSettings = {\n\t\t\t\tASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;\n\t\t\t\tCODE_SIGN_ENTITLEMENTS = \"../../../../native/ObstacleBridgeApp/ObstacleBridge.entitlements\";\n\t\t\t\tCLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = NO;\n\t\t\t\tSWIFT_VERSION = 5.0;\n",
+    )
+    text = add_app_native_crypto_source(text)
+    text = insert_before(
+        text,
+        "/* End PBXGroup section */\n",
+        "\t\t71C300000000000000000020 /* Shared Native */ = {\n"
+        "\t\t\tisa = PBXGroup;\n"
+        "\t\t\tchildren = (\n"
+        "\t\t\t\t71C300000000000000000010 /* ObstacleBridgeNativeCrypto.swift */,\n"
+        "\t\t\t);\n"
+        "\t\t\tname = \"Shared Native\";\n"
+        "\t\t\tsourceTree = \"<group>\";\n"
+        "\t\t};\n",
     )
     return text
 
@@ -229,19 +334,23 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
         "\t\t};\n",
     )
-    text = insert_before(
-        text,
-        "/* End PBXSourcesBuildPhase section */\n",
-        "\t\t71C200000000000000000080 /* Sources */ = {\n"
-        "\t\t\tisa = PBXSourcesBuildPhase;\n"
-        "\t\t\tbuildActionMask = 2147483647;\n"
-        "\t\t\tfiles = (\n"
-        "\t\t\t\t71C200000000000000000001 /* PacketTunnelProvider.swift in Sources */,\n"
-        "\t\t\t\t71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */,\n"
-        "\t\t\t);\n"
-        "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
-        "\t\t};\n",
-    )
+    if "71C200000000000000000080 /* Sources */ = {" in text:
+        text = add_ipserver_native_crypto_source(text)
+    else:
+        text = insert_before(
+            text,
+            "/* End PBXSourcesBuildPhase section */\n",
+            "\t\t71C200000000000000000080 /* Sources */ = {\n"
+            "\t\t\tisa = PBXSourcesBuildPhase;\n"
+            "\t\t\tbuildActionMask = 2147483647;\n"
+            "\t\t\tfiles = (\n"
+            "\t\t\t\t71C200000000000000000001 /* PacketTunnelProvider.swift in Sources */,\n"
+            "\t\t\t\t71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */,\n"
+            "\t\t\t\t71C300000000000000000002 /* ObstacleBridgeNativeCrypto.swift in IPServer Sources */,\n"
+            "\t\t\t);\n"
+            "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
+            "\t\t};\n",
+        )
     text = insert_before(
         text,
         "/* Begin PBXVariantGroup section */\n",

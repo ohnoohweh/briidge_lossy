@@ -24,6 +24,7 @@ sources = [
 requires = [
     "toga>=0.4.8",
     "websockets",
+    "rubicon-objc>=0.5.3",
 ]
 
 [tool.briefcase.app.obstacle_bridge_ios.iOS]
