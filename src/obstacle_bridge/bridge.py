@@ -214,6 +214,26 @@ def _runtime_dependency_status() -> dict:
     }
 
 
+def _admin_ui_platform() -> str:
+    override = str(os.environ.get("OBSTACLEBRIDGE_ADMIN_UI_PLATFORM") or "").strip()
+    if override:
+        return override
+    return str(sys.platform or "")
+
+
+def _runtime_dependency_status_for_platform(platform: str | None = None) -> dict:
+    status = _runtime_dependency_status()
+    normalized = str(platform or _admin_ui_platform()).strip().lower()
+    if normalized == "ios":
+        return {
+            **status,
+            "ok": True,
+            "missing": [],
+            "install_hint": "",
+        }
+    return status
+
+
 def _encrypt_config_secret(value: Any) -> Any:
     if not isinstance(value, str) or value == "":
         return value
@@ -16417,6 +16437,20 @@ class Runner:
 
     def request_restart(self) -> None:
         self.log.debug("[SERVER] Runner restart requested")
+        callback = getattr(self, "_embedded_restart_callback", None)
+        if callable(callback):
+            self.log.debug("[SERVER] dispatching embedded restart callback")
+            try:
+                result = callback()
+            except Exception:
+                self.log.exception("[SERVER] embedded restart callback failed")
+            else:
+                if inspect.isawaitable(result):
+                    try:
+                        asyncio.get_running_loop().create_task(result)
+                    except RuntimeError:
+                        self.log.exception("[SERVER] no running loop for embedded restart callback")
+            return
         self._restart_requested_flag = True
         self._restart_exit_code = RESTART_EXIT_CODE_DELAYED if self._restart_requires_delay() else RESTART_EXIT_CODE_IMMEDIATE
         if self._restart_requested is not None:
@@ -18188,6 +18222,7 @@ class AdminWebUI:
         await self._send_json(writer, 200, payload)
 
     def _build_meta_payload(self) -> dict:
+        platform = _admin_ui_platform()
         return {
             "app": "udp-bidirectional-mux",
             "pid": os.getpid(),
@@ -18197,7 +18232,7 @@ class AdminWebUI:
             "dashboard_enabled": getattr(self.runner.args, "dashboard", None),
             "milestone": "C",
             "build": _detect_build_info(),
-            "runtime_dependencies": _runtime_dependency_status(),
+            "runtime_dependencies": _runtime_dependency_status_for_platform(platform),
         }
 
     async def _handle_meta(self, writer):
@@ -18365,10 +18400,12 @@ class AdminWebUI:
                 await self._send(writer, 403, b"Forbidden", "text/plain; charset=utf-8")
                 return
 
-        delay_restart = bool(self.runner._restart_requires_delay())
+        embedded_restart = callable(getattr(self.runner, "_embedded_restart_callback", None))
+        delay_restart = False if embedded_restart else bool(self.runner._restart_requires_delay())
         payload = {
             "ok": True,
             "restarting": True,
+            "restart_embedded": embedded_restart,
             "restart_mode": "delayed" if delay_restart else "immediate",
             "restart_delay_sec": 40 if delay_restart else 0,
         }
@@ -18588,6 +18625,7 @@ class AdminWebUI:
         }
 
     def _build_admin_ui_payload(self) -> dict:
+        platform = _admin_ui_platform()
         return {
             "home_tab_enabled": True,
             "landing_page_enabled": False,
@@ -18596,7 +18634,8 @@ class AdminWebUI:
             "first_tab": str(getattr(self.args, "admin_web_first_tab", "home") or "home"),
             "first_start_detected": bool(getattr(self.args, "_first_start_detected", False)),
             "config_file_state": str(getattr(self.args, "_config_file_state", "unknown") or "unknown"),
-            "runtime_dependencies": _runtime_dependency_status(),
+            "platform": platform,
+            "runtime_dependencies": _runtime_dependency_status_for_platform(platform),
         }
 
     def _is_authenticated(self, headers: dict) -> bool:

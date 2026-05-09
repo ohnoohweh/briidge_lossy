@@ -13,6 +13,9 @@ _TRANSPORT_PEER_KEYS = {
     "myudp": ("udp_peer", "udp_peer_port"),
     "quic": ("quic_peer", "quic_peer_port"),
 }
+M3_TUNNEL_SCHEMA = "obstaclebridge.ios.packet-tunnel.v1"
+M3_APP_MESSAGE_SCHEMA = "obstaclebridge.ios.packet-tunnel.app-message.v1"
+M3_TUNNEL_STATUS_STATES = {"idle", "starting", "running", "stopping", "stopped", "failed"}
 
 
 @dataclass
@@ -41,6 +44,18 @@ class M3TunnelConfig:
     network: M3NetworkSettings = field(default_factory=M3NetworkSettings)
 
 
+@dataclass
+class M3TunnelStatus:
+    """App-facing status snapshot returned by the packet tunnel extension."""
+
+    state: str
+    packets_from_system: int = 0
+    packets_to_system: int = 0
+    bytes_from_system: int = 0
+    bytes_to_system: int = 0
+    last_error: str = ""
+
+
 def _required_string(value: Any, name: str) -> str:
     text = str(value or "").strip()
     if not text:
@@ -67,6 +82,20 @@ def _validate_network_settings(settings: M3NetworkSettings) -> None:
         ipaddress.ip_network(route, strict=False)
     for server in settings.dns_servers:
         ipaddress.ip_address(server)
+
+
+def _validate_tunnel_status_state(value: Any) -> str:
+    state = _required_string(value, "state").lower()
+    if state not in M3_TUNNEL_STATUS_STATES:
+        raise ValueError(f"unsupported M3 tunnel status state: {state}")
+    return state
+
+
+def _non_negative_int(value: Any, name: str) -> int:
+    amount = int(value)
+    if amount < 0:
+        raise ValueError(f"{name} must be non-negative")
+    return amount
 
 
 def m3_tunnel_config_from_profile(
@@ -110,7 +139,7 @@ def provider_configuration_from_m3_config(cfg: M3TunnelConfig) -> dict[str, Any]
 
     _validate_network_settings(cfg.network)
     return {
-        "schema": "obstaclebridge.ios.packet-tunnel.v1",
+        "schema": M3_TUNNEL_SCHEMA,
         "milestone": "M3",
         "profile_id": _required_string(cfg.profile_id, "profile_id"),
         "display_name": _required_string(cfg.display_name, "display_name"),
@@ -156,3 +185,43 @@ def m3_vpn_profile_from_profile(
         "provider_configuration": provider_configuration_from_m3_config(cfg),
         "install_path": "NETunnelProviderManager",
     }
+
+
+def provider_status_request_message(*, request_id: str = "status") -> dict[str, Any]:
+    """Return the versioned app-message request payload for tunnel status."""
+
+    return {
+        "schema": M3_APP_MESSAGE_SCHEMA,
+        "request_id": _required_string(request_id, "request_id"),
+        "action": "status",
+    }
+
+
+def tunnel_status_from_provider_payload(payload: Mapping[str, Any]) -> M3TunnelStatus:
+    """Decode a packet tunnel provider status payload.
+
+    Supports both the current native raw `TunnelStatus` JSON object and a future
+    versioned app-message envelope that stores the same object under `status`.
+    """
+
+    doc: Mapping[str, Any] = payload
+    if str(payload.get("schema", "") or "").strip() == M3_APP_MESSAGE_SCHEMA:
+        action = _required_string(payload.get("action"), "action").lower()
+        if action != "status":
+            raise ValueError(f"unsupported M3 app message action: {action}")
+        nested = payload.get("status")
+        if not isinstance(nested, Mapping):
+            raise ValueError("status payload is required")
+        doc = nested
+
+    last_error = payload.get("last_error", "")
+    if doc is not payload:
+        last_error = doc.get("last_error", "")
+    return M3TunnelStatus(
+        state=_validate_tunnel_status_state(doc.get("state")),
+        packets_from_system=_non_negative_int(doc.get("packetsFromSystem", doc.get("packets_from_system", 0)), "packets_from_system"),
+        packets_to_system=_non_negative_int(doc.get("packetsToSystem", doc.get("packets_to_system", 0)), "packets_to_system"),
+        bytes_from_system=_non_negative_int(doc.get("bytesFromSystem", doc.get("bytes_from_system", 0)), "bytes_from_system"),
+        bytes_to_system=_non_negative_int(doc.get("bytesToSystem", doc.get("bytes_to_system", 0)), "bytes_to_system"),
+        last_error=str(last_error or ""),
+    )

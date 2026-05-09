@@ -9,9 +9,12 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 E2E_SRC = ROOT / "ios" / "e2e_app" / "src"
+IOS_SRC = ROOT / "ios" / "src"
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+if str(IOS_SRC) not in sys.path:
+    sys.path.insert(0, str(IOS_SRC))
 if str(E2E_SRC) not in sys.path:
     sys.path.insert(0, str(E2E_SRC))
 
@@ -94,6 +97,13 @@ def test_e2e_runner_writes_runtime_config_report_to_dedicated_app_directory(tmp_
     assert json.loads(report_path.read_text(encoding="utf-8")) == {"ok": True, "probe": "runtime-config"}
 
 
+def test_e2e_runner_writes_embedded_webadmin_report_to_dedicated_app_directory(tmp_path: Path) -> None:
+    report_path = write_report({"ok": True, "probe": "embedded-webadmin"}, root=tmp_path)
+
+    assert report_path == tmp_path / "embedded-webadmin-latest.json"
+    assert json.loads(report_path.read_text(encoding="utf-8")) == {"ok": True, "probe": "embedded-webadmin"}
+
+
 def test_e2e_main_requires_probe_url(capsys) -> None:
     exit_code = main(["--host-websocket-probe"])
 
@@ -135,6 +145,33 @@ def test_e2e_main_validates_runtime_config_arguments(capsys) -> None:
     assert report["app"] == "obstacle_bridge_ios_e2e"
     assert report["probe"] == "runtime-config"
     assert "No such file or directory" in report["error"]
+
+
+def test_e2e_main_accepts_embedded_webadmin_probe(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        "obstacle_bridge_ios_e2e.__main__.run_embedded_webadmin_probe_sync",
+        lambda **kwargs: {"ok": True, "app": "obstacle_bridge_ios_e2e", "probe": "embedded-webadmin", **kwargs},
+    )
+
+    exit_code = main(["--embedded-webadmin-probe", "--timeout-sec", "5", "--restart-timeout-sec", "3"])
+
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert exit_code == 0
+    assert report["probe"] == "embedded-webadmin"
+    assert report["timeout_sec"] == 5.0
+    assert report["restart_timeout_sec"] == 3.0
+
+
+def test_e2e_main_validates_embedded_webadmin_probe_arguments(capsys) -> None:
+    exit_code = main(["--embedded-webadmin-probe", "--timeout-sec", "bad"])
+
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert exit_code == 2
+    assert report["app"] == "obstacle_bridge_ios_e2e"
+    assert report["probe"] == "embedded-webadmin"
+    assert "invalid --embedded-webadmin-probe arguments" in report["error"]
 
 
 def test_e2e_runner_ws_udp_echo_reports_startup_failure_on_missing_peer() -> None:

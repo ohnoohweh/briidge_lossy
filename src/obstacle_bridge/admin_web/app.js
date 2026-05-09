@@ -1470,6 +1470,8 @@ function renderHomeTab(statusDoc) {
 }
 
 function runtimeDependencyWarningText() {
+  const platform = String(configState.status?.admin_ui?.platform || '').trim().toLowerCase();
+  if (platform === 'ios') return '';
   const deps = uiState.runtimeDependencies;
   const missing = Array.isArray(deps?.missing) ? deps.missing : [];
   if (missing.length === 0) return '';

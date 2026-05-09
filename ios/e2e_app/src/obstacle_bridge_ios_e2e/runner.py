@@ -5,13 +5,17 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Mapping
+import urllib.error
+import urllib.request
 from urllib.parse import urlparse
 
 from obstacle_bridge.core import ObstacleBridgeClient
 from obstacle_bridge.crypto_extract import available_crypto_extract
+from obstacle_bridge_ios.app import ObstacleBridgeIOSApp, _default_ios_grouped_config
 
 
 REPORT_DIRNAME = ".obstaclebridge-ios-e2e"
@@ -19,6 +23,7 @@ HOST_WEBSOCKET_REPORT_NAME = "host-websocket-latest.json"
 WS_UDP_ECHO_REPORT_NAME = "ws-udp-echo-latest.json"
 WS_SECURE_LINK_REPORT_NAME = "ws-secure-link-latest.json"
 RUNTIME_CONFIG_REPORT_NAME = "runtime-config-latest.json"
+EMBEDDED_WEBADMIN_REPORT_NAME = "embedded-webadmin-latest.json"
 
 
 def _report_root(root: Path | None = None) -> Path:
@@ -52,6 +57,74 @@ def _webadmin_url_from_config(config: Mapping[str, Any]) -> str | None:
         path = "/" + path
     host = "127.0.0.1" if bind in {"0.0.0.0", "::", "*", "localhost"} else bind
     return f"http://{host}:{port}{path}"
+
+
+def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(dict(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _http_json_sync(
+    url: str,
+    *,
+    method: str = "GET",
+    payload: Mapping[str, Any] | None = None,
+    timeout_sec: float = 2.0,
+) -> dict[str, Any]:
+    body = None if payload is None else json.dumps(dict(payload)).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method=method,
+        headers={"Content-Type": "application/json"} if body is not None else {},
+    )
+    with urllib.request.urlopen(request, timeout=timeout_sec) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+async def _http_json(
+    url: str,
+    *,
+    method: str = "GET",
+    payload: Mapping[str, Any] | None = None,
+    timeout_sec: float = 2.0,
+) -> dict[str, Any]:
+    return await asyncio.to_thread(
+        _http_json_sync,
+        url,
+        method=method,
+        payload=payload,
+        timeout_sec=timeout_sec,
+    )
+
+
+async def _wait_for_json(url: str, *, timeout_sec: float = 10.0) -> dict[str, Any]:
+    deadline = time.perf_counter() + float(timeout_sec)
+    last_error = "unknown"
+    while time.perf_counter() < deadline:
+        try:
+            return await _http_json(url, timeout_sec=min(1.5, max(0.5, deadline - time.perf_counter())))
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            await asyncio.sleep(0.25)
+    raise TimeoutError(f"timed out waiting for JSON from {url}: {last_error}")
+
+
+async def _wait_for_uptime_reset(url: str, *, previous_uptime: int, timeout_sec: float = 10.0) -> dict[str, Any]:
+    deadline = time.perf_counter() + float(timeout_sec)
+    last_doc: dict[str, Any] | None = None
+    while time.perf_counter() < deadline:
+        try:
+            doc = await _http_json(url, timeout_sec=min(1.5, max(0.5, deadline - time.perf_counter())))
+        except Exception:
+            await asyncio.sleep(0.25)
+            continue
+        last_doc = doc
+        uptime = int(doc.get("uptime_sec") or 0)
+        if uptime < int(previous_uptime):
+            return doc
+        await asyncio.sleep(0.25)
+    raise TimeoutError(f"uptime did not reset before timeout; last_meta={last_doc!r}")
 
 
 async def run_host_websocket_probe(url: str, timeout_sec: float = 5.0) -> dict[str, Any]:
@@ -448,6 +521,125 @@ def run_runtime_config_sync(**kwargs: Any) -> dict[str, Any]:
     return asyncio.run(run_runtime_config(**kwargs))
 
 
+async def run_embedded_webadmin_probe(
+    *,
+    timeout_sec: float = 20.0,
+    restart_timeout_sec: float = 10.0,
+) -> dict[str, Any]:
+    """Exercise the app-style embedded WebAdmin stack through its local HTTP API."""
+
+    started = time.perf_counter()
+    os.environ["OBSTACLEBRIDGE_ADMIN_UI_PLATFORM"] = "ios"
+    app = ObstacleBridgeIOSApp()
+    baseline_config = _default_ios_grouped_config(app.DOCUMENTS_ROOT)
+    baseline_config.setdefault("admin_web", {})
+    baseline_config["admin_web"]["admin_web_auth_disable"] = True
+    baseline_config["admin_web"]["admin_web_name"] = ""
+    _write_json(app.CONFIG_FILE, baseline_config)
+    first_app_closed = False
+    second_app: ObstacleBridgeIOSApp | None = None
+    persisted_name = "Embedded E2E Persisted"
+
+    def _stop_embedded_app(target: ObstacleBridgeIOSApp) -> None:
+        if getattr(target.client, "runner", None) is not None:
+            target._run_async_sync(target.client.stop())
+        target.close()
+
+    try:
+        start_snapshot = app.start_embedded_webadmin()
+        webadmin_url = str(start_snapshot.get("webadmin_url") or "http://127.0.0.1:18080/")
+        meta_url = webadmin_url.rstrip("/") + "/api/meta"
+        status_url = webadmin_url.rstrip("/") + "/api/status"
+        config_url = webadmin_url.rstrip("/") + "/api/config"
+
+        meta_ready = await _wait_for_json(meta_url, timeout_sec=timeout_sec)
+        status_ready = await _wait_for_json(status_url, timeout_sec=timeout_sec)
+        config_ready = await _wait_for_json(config_url, timeout_sec=timeout_sec)
+
+        uptime_before = int(meta_ready.get("uptime_sec") or 0)
+        if uptime_before < 2:
+            deadline = time.perf_counter() + float(timeout_sec)
+            while uptime_before < 2 and time.perf_counter() < deadline:
+                await asyncio.sleep(0.5)
+                meta_ready = await _wait_for_json(meta_url, timeout_sec=2.0)
+                uptime_before = int(meta_ready.get("uptime_sec") or 0)
+
+        save_doc = await _http_json(
+            config_url,
+            method="POST",
+            payload={"updates": {"admin_web_name": persisted_name}},
+            timeout_sec=3.0,
+        )
+        config_after_save = await _wait_for_json(config_url, timeout_sec=timeout_sec)
+
+        restart_doc = await _http_json(
+            webadmin_url.rstrip("/") + "/api/restart",
+            method="POST",
+            payload={},
+            timeout_sec=3.0,
+        )
+        meta_after_restart = await _wait_for_uptime_reset(
+            meta_url,
+            previous_uptime=uptime_before,
+            timeout_sec=restart_timeout_sec,
+        )
+        status_after_restart = await _wait_for_json(status_url, timeout_sec=timeout_sec)
+
+        _stop_embedded_app(app)
+        first_app_closed = True
+
+        second_app = ObstacleBridgeIOSApp()
+        second_app.start_embedded_webadmin()
+        config_after_relaunch = await _wait_for_json(config_url, timeout_sec=timeout_sec)
+
+        return {
+            "ok": True,
+            "app": "obstacle_bridge_ios_e2e",
+            "probe": "embedded-webadmin",
+            "webadmin_url": webadmin_url,
+            "config_file": str(app.CONFIG_FILE),
+            "uptime_before_restart_sec": uptime_before,
+            "uptime_after_restart_sec": int(meta_after_restart.get("uptime_sec") or 0),
+            "uptime_reset": int(meta_after_restart.get("uptime_sec") or 0) < uptime_before,
+            "status_platform": str(((status_ready.get("admin_ui") or {}).get("platform") or "")),
+            "restart_doc": restart_doc,
+            "save_doc": save_doc,
+            "saved_admin_web_name": str((((config_after_save.get("config") or {}).get("admin_web_name")) or "")),
+            "relaunch_admin_web_name": str((((config_after_relaunch.get("config") or {}).get("admin_web_name")) or "")),
+            "config_persisted_after_relaunch": str((((config_after_relaunch.get("config") or {}).get("admin_web_name")) or "")) == persisted_name,
+            "runtime_log_file": str(app.LOG_FILE),
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+            "meta_before_restart": meta_ready,
+            "meta_after_restart": meta_after_restart,
+            "status_before_restart": status_ready,
+            "status_after_restart": status_after_restart,
+            "config_before_save": config_ready,
+            "config_after_save": config_after_save,
+            "config_after_relaunch": config_after_relaunch,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "app": "obstacle_bridge_ios_e2e",
+            "probe": "embedded-webadmin",
+            "config_file": str(app.CONFIG_FILE),
+            "runtime_log_file": str(app.LOG_FILE),
+            "detail": f"embedded-webadmin failed: {type(exc).__name__}: {exc}",
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+        }
+    finally:
+        if second_app is not None:
+            with contextlib.suppress(Exception):
+                _stop_embedded_app(second_app)
+        if not first_app_closed:
+            with contextlib.suppress(Exception):
+                _stop_embedded_app(app)
+
+
+def run_embedded_webadmin_probe_sync(**kwargs: Any) -> dict[str, Any]:
+    return asyncio.run(run_embedded_webadmin_probe(**kwargs))
+
+
 def write_report(report: dict[str, Any], root: Path | None = None) -> Path:
     base = _report_root(root)
     if report.get("probe") == "ws-udp-echo":
@@ -456,6 +648,8 @@ def write_report(report: dict[str, Any], root: Path | None = None) -> Path:
         report_name = WS_SECURE_LINK_REPORT_NAME
     elif report.get("probe") == "runtime-config":
         report_name = RUNTIME_CONFIG_REPORT_NAME
+    elif report.get("probe") == "embedded-webadmin":
+        report_name = EMBEDDED_WEBADMIN_REPORT_NAME
     else:
         report_name = HOST_WEBSOCKET_REPORT_NAME
     target = base / report_name

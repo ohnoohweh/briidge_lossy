@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document describes how ObstacleBridge can grow into an iOS application comparable in user experience to WireGuard or OpenVPN clients while still reusing as much of the current Python runtime as iOS realistically allows.
+This document describes how ObstacleBridge can grow into an iOS application that reuses as much of the current Python runtime as iOS realistically allows.
 
 The target product is an iPhone/iPad app that can:
 
@@ -14,6 +14,12 @@ The target product is an iPhone/iPad app that can:
 
 This document intentionally separates the first practical mobile step from the full VPN-style endpoint. A normal iOS application and a system VPN tunnel provider have different Apple platform requirements, lifecycles, entitlements, and packaging constraints.
 
+Scope note:
+
+- The current implementation already supports a useful iOS foreground app path for onboarding, diagnostics, and app-scoped TCP/UDP behavior.
+- However, generic background execution for `admin_web`, `ChannelMux`, or a long-lived TCP/UDP server should not be assumed merely because the app can request Background Tasks capabilities.
+- Apple background processing tasks are better treated as bounded maintenance hooks, not as the durable runtime host for a live networking control plane.
+
 ## External platform facts checked
 
 The design is based on the current project plus these platform references:
@@ -22,6 +28,9 @@ The design is based on the current project plus these platform references:
 - Briefcase iOS platform reference: https://briefcase.beeware.org/en/v0.3.16/reference/platforms/iOS.html
 - Apple Network Extension framework: https://developer.apple.com/documentation/NetworkExtension
 - Apple packet tunnel provider documentation: https://developer.apple.com/documentation/networkextension/packet-tunnel-provider
+- Apple app life-cycle guidance: https://developer.apple.com/documentation/uikit/app_and_environment/managing_your_app_s_life_cycle
+- Apple Background Tasks framework: https://developer.apple.com/documentation/backgroundtasks
+- Apple `BGProcessingTaskRequest`: https://developer.apple.com/documentation/backgroundtasks/bgprocessingtaskrequest
 - Python 3.13 iOS support notes: https://docs.python.org/3/whatsnew/3.13.html
 - PEP 730, adding iOS as a supported CPython platform: https://peps.python.org/pep-0730/
 
@@ -30,6 +39,24 @@ Important interpretation:
 - BeeWare/Briefcase is a promising way to package a Python-powered iOS app and produce an Xcode project.
 - A WireGuard/OpenVPN-like iOS client is not just a normal app. It requires Apple's Network Extension framework, specifically a packet tunnel provider app extension for custom packet-oriented VPN protocols.
 - Therefore, BeeWare is best treated as the management-app path first, while the packet tunnel itself should be designed as an iOS Network Extension with a clear bridge to reusable ObstacleBridge logic.
+- Background Tasks does not change that conclusion for long-lived runtime ownership. `BGProcessingTask` is appropriate for deferred or maintenance-style work, not for keeping a generic WebAdmin server or ChannelMux loop continuously alive after the app loses focus.
+
+## Apple Account Requirement
+
+Developing and signing the packet-tunnel path requires more than a free Apple account.
+
+Requirements:
+
+- An Apple account enrolled in the Apple Developer Program.
+- Access to an Apple Developer team that can sign iOS apps and Network Extension targets.
+- Xcode configured locally with that account and team.
+- The app ID and extension ID configured for Network Extension packet-tunnel use in the Apple Developer portal or the equivalent team-managed signing setup.
+
+Practical consequence:
+
+- Simulator-only work does not prove the full product path.
+- Real-device builds for the packet-tunnel target require local signing material and team access.
+- This repository should not contain personal Apple IDs, team IDs, device UDIDs, or provisioning-profile identifiers. Those stay local to the developer machine and Apple account.
 
 ## Relationship To Existing Project Architecture
 
@@ -324,6 +351,34 @@ Platform implementations:
 - `IOSPacketTunnelFlowIO`
 
 If the extension is implemented in Swift, the same abstraction should still exist conceptually. Swift can feed packets into a compatibility layer that emits/accepts the same mux TUN frames as Python.
+
+## Background Task Boundary
+
+The iOS app may request Background Tasks capabilities, but those capabilities should be used narrowly.
+
+Allowed design intent:
+
+- schedule bounded maintenance such as config refresh, log packaging, redacted diagnostics upload, or retryable housekeeping work
+- finish short user-initiated work when iOS grants time
+- persist state so the foreground app can resume quickly
+
+Disallowed product assumption:
+
+- do not treat `BGProcessingTask` as the host for `admin_web`
+- do not treat `BGProcessingTask` as the host for `ChannelMux`
+- do not treat `BGProcessingTask` as a generic always-on TCP or UDP server runtime
+
+Reasoning:
+
+- Background processing tasks are opportunistic and system-scheduled.
+- iOS may delay them until the device is idle and external power/network conditions are favorable.
+- iOS may interrupt them when system conditions change.
+- That execution model is the opposite of what a live control plane or active mux/service runtime needs.
+
+Decision:
+
+- Keep `admin_web`, `ChannelMux`, and active transport sessions in the foreground app path unless or until a platform-specific durable runtime is introduced.
+- Use background tasks only for bounded resume/sync/export work around that foreground runtime.
 
 ## Reusing Current Python Code
 
@@ -711,10 +766,10 @@ ios/
     src/obstacle_bridge_ios_e2e/
       runner.py
   native/
-    ObstacleBridgeTunnel/
+    IPServer/
       PacketTunnelProvider.swift
-      PacketFlowBridge.swift
-      TunnelStatus.swift
+      ObstacleBridgePythonBridge.m
+      ObstacleBridgePythonBridge.h
   tests/
     test_ios_profile_config.py
     test_invite_import.py
@@ -729,21 +784,37 @@ This quick path is for running the BeeWare iOS companion app in the iOS Simulato
 Prerequisites:
 
 - macOS with Xcode installed (including simulator runtimes).
+- Python greater than `3.10` is required for the iOS app path. The current validated setup has been tested with Python `3.14`.
 - Python virtual environment for this repository.
+
+If Python is not already installed on macOS, install Homebrew first:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+After Homebrew is installed, follow the `brew shellenv` step printed by the installer for your machine, then install Python:
+
+```bash
+brew install python
+python3 --version
+```
 
 From repository root:
 
 ```bash
 cd ios
-python -m pip install briefcase
+python3 -m pip install briefcase
 ```
 
 First-time project bootstrap (or after major iOS template changes):
 
 ```bash
-briefcase create iOS
+./scripts/create_ios_xcode_project.sh
 briefcase build iOS
 ```
+
+`./scripts/create_ios_xcode_project.sh` wraps `briefcase create iOS` and then applies the repo-owned packet-tunnel Xcode target patch automatically, so no manual Xcode project editing step is required after project generation.
 
 Run the ObstacleBridge iOS app in simulator:
 
@@ -763,6 +834,84 @@ Optional: run the standalone E2E probe app target (used by simulator integration
 briefcase run iOS -a obstacle_bridge_ios_e2e -u --no-input -d "iPhone 17 Pro"
 ```
 
+## How To Build For A Real iPhone Without Exposing Personal Apple IDs
+
+Use local shell variables or Xcode-managed signing rather than committing personal identifiers into the repository.
+
+Recommended local-only variables:
+
+```bash
+export OB_APPLE_TEAM_ID="<YOUR_LOCAL_TEAM_ID>"
+export OB_IOS_DEVICE_ID="<YOUR_LOCAL_DEVICE_UDID>"
+export OB_IOS_DEVICE_NAME="<YOUR_LOCAL_IPHONE_NAME>"
+```
+
+These values should be set only in your local shell profile, a local helper script outside version control, or an interactive terminal session.
+
+Prepare the generated project:
+
+```bash
+cd ios
+./scripts/create_ios_xcode_project.sh
+briefcase build iOS
+```
+
+Discover the attached device locally:
+
+```bash
+xcrun devicectl list devices
+```
+
+Build for the attached iPhone using local-only environment variables:
+
+```bash
+xcodebuild \
+  -project build/obstacle_bridge_ios/ios/xcode/ObstacleBridge.xcodeproj \
+  -scheme ObstacleBridge \
+  -configuration Debug \
+  -destination "id=${OB_IOS_DEVICE_ID}" \
+  -allowProvisioningUpdates \
+  DEVELOPMENT_TEAM="${OB_APPLE_TEAM_ID}" \
+  CODE_SIGN_STYLE=Automatic \
+  -derivedDataPath /tmp/obstaclebridge-ios-device \
+  build
+```
+
+Install the built app on the attached iPhone:
+
+```bash
+xcrun devicectl device install app \
+  --device "${OB_IOS_DEVICE_ID}" \
+  /tmp/obstaclebridge-ios-device/Build/Products/Debug-iphoneos/ObstacleBridge.app
+```
+
+Launch the app:
+
+```bash
+xcrun devicectl device process launch \
+  --device "${OB_IOS_DEVICE_ID}" \
+  com.obstaclebridge.obstacle-bridge-ios
+```
+
+Notes:
+
+- If you prefer Xcode UI signing, open `build/obstacle_bridge_ios/ios/xcode/ObstacleBridge.xcodeproj`, select your local Apple team in `Signing & Capabilities` for both `ObstacleBridge` and `IPServer`, then return to the CLI commands above.
+- Keep placeholder names such as `<YOUR_LOCAL_TEAM_ID>` and `<YOUR_LOCAL_DEVICE_UDID>` in documentation and scripts committed to the repo.
+- Do not hardcode personal identifiers in `pyproject.toml`, native plist files, entitlements, or tracked shell scripts.
+- If a reusable local helper is needed, create an untracked file such as `ios/.local-device-env` and source it manually:
+
+```bash
+source ios/.local-device-env
+```
+
+Example untracked file contents:
+
+```bash
+export OB_APPLE_TEAM_ID="<YOUR_LOCAL_TEAM_ID>"
+export OB_IOS_DEVICE_ID="<YOUR_LOCAL_DEVICE_UDID>"
+export OB_IOS_DEVICE_NAME="<YOUR_LOCAL_IPHONE_NAME>"
+```
+
 ## Open Design Questions
 
 - Can the required Apple Network Extension entitlement be obtained for the intended distribution model?
@@ -773,6 +922,124 @@ briefcase run iOS -a obstacle_bridge_ios_e2e -u --no-input -d "iPhone 17 Pro"
 - How much of WebAdmin should be reimplemented as native UI versus exposed through a local embedded page for development only?
 - What is the minimum supported iOS version?
 - Should Android be considered in parallel once the core packet I/O abstraction exists?
+
+## Background Runtime Transition Plan
+
+Problem statement:
+
+- The current BeeWare iOS app can host WebAdmin and embedded runtime experiments while the app is in the foreground.
+- That execution model is not sufficient for VPN-style behavior on iOS.
+- When the containing app loses focus or is suspended, the app process cannot be treated as a durable host for `admin_web`, `ChannelMux`, overlay transports, or secure tunnel processing.
+- The long-running path must move into an Apple Network Extension, with the containing app reduced to management, onboarding, configuration, and diagnostics.
+
+Important constraint:
+
+- Adding Background Tasks capability does not change this architecture.
+- `BGProcessingTask` is not a substitute for a packet tunnel provider or any other durable always-on networking runtime.
+- Therefore, do not plan to move `admin_web` or `ChannelMux` into a background processing task as the primary iOS runtime shape.
+
+Guiding decisions:
+
+- Treat the packet tunnel provider as the durable runtime host for all traffic-carrying layers below the management UI.
+- Do not depend on an embedded localhost WebAdmin server for background-safe control on iOS.
+- Keep the app/extension boundary explicit: profile install, tunnel start/stop, status snapshots, error reporting, and log retrieval should all flow through a defined message/config contract.
+- Preserve reusable Python logic where safe, but allow native Swift ownership of packet-flow and lifecycle-critical paths when that is the lower-risk iOS shape.
+- If VPN scope is reduced in a future product decision, the fallback is a foreground-only app-scoped TCP/UDP runtime, not a `BGProcessingTask`-hosted server.
+
+### Step 1: Entitlement + Extension Target Baseline
+
+Goal:
+
+- Create and sign a real packet tunnel extension target that can be installed on a device and launched through `NETunnelProviderManager`.
+
+Definition of done:
+
+- The Xcode project contains a packet tunnel extension target wired to the existing native sources under `ios/native/ObstacleBridgeTunnel/`.
+- The app ID and extension ID have the required Network Extension entitlement enabled for packet tunnel use.
+- A development-signed build installs on a physical iPhone.
+- The containing app can save a `NETunnelProviderManager` profile and request tunnel start/stop without crashing.
+- A device-side validation note captures the exact entitlement, bundle IDs, and Xcode signing settings that were used.
+
+### Step 2: App <-> Extension Control Plane Contract
+
+Goal:
+
+- Formalize the message/config contract between the containing app and the packet tunnel extension.
+
+Definition of done:
+
+- Provider configuration schema is versioned and documented as the source of truth for extension startup input.
+- App-message request and response payloads are versioned and documented for status, health, and error reporting.
+- Python-side tests cover serialization and validation for the shared control-plane contract.
+- Native source uses the same named schema/version identifiers as the Python-side contract.
+- The containing app can request at least a status snapshot from the extension and decode the response into a stable app-facing structure.
+
+### Step 3: Background-Safe Tunnel Lifecycle POC
+
+Goal:
+
+- Prove that the tunnel runtime keeps running after the containing app loses focus.
+
+Definition of done:
+
+- With the tunnel started, the user can background the containing app and the packet tunnel provider remains alive.
+- Extension-side counters continue changing while traffic is flowing.
+- Re-opening the containing app shows the latest extension status instead of requiring the app-hosted WebAdmin loop to still be active.
+- A device validation run records at least one case where foreground loss does not interrupt traffic processing.
+- Any remaining lifecycle gaps are documented as extension-side issues, not foreground-app issues.
+
+### Step 4: Shared Profile, Secret, and Diagnostics Boundary
+
+Goal:
+
+- Move app/extension shared state onto an iOS-safe storage boundary.
+
+Definition of done:
+
+- Profiles needed by the extension are stored in an App Group-accessible location or equivalent approved iOS sharing mechanism.
+- Secrets required by the extension are available through an approved boundary without writing plaintext copies into normal files.
+- Extension logs/status snapshots can be surfaced in the containing app without relying on the containing app process staying alive.
+- The repo documents which values are app-owned, extension-owned, and shared.
+
+### Step 5: Move ChannelMux + Transport Runtime Below The App
+
+Goal:
+
+- Make the containing app optional for active traffic processing once the tunnel is running.
+
+Definition of done:
+
+- `ChannelMux`, packet adapter logic, and the selected overlay transport path run in the extension or an explicitly defined extension-owned runtime boundary.
+- Tunnel traffic continues while the containing app is backgrounded or fully not visible.
+- Config save/status UI in the app no longer depend on the foreground app hosting `admin_web`.
+- The repo documents which runtime layers remain Python and which are now native Swift.
+
+### Step 6: Replace Embedded WebAdmin As Primary iOS Control Surface
+
+Goal:
+
+- Make native app UI the primary operational surface on iOS.
+
+Definition of done:
+
+- Start/stop tunnel, profile selection, tunnel status, and key diagnostics are available from native app UI flows.
+- Critical operations no longer require an embedded localhost browser UI.
+- Any retained WebAdmin path is explicitly marked as development-only or foreground-only.
+- The user-facing iOS behavior is documented in terms of app + extension lifecycle rather than desktop WebAdmin assumptions.
+
+### Step 7: Production Hardening For Background Operation
+
+Goal:
+
+- Convert the background-capable architecture into a release candidate path.
+
+Definition of done:
+
+- Route handling, DNS handling, reconnect behavior, and low-memory behavior are tested on physical devices.
+- Wi-Fi to cellular and cellular to Wi-Fi transitions are exercised with recorded outcomes.
+- Crash/error telemetry is sufficient to distinguish app-layer failures from extension-layer failures.
+- Entitlement/distribution constraints are documented for internal, TestFlight, and any broader release paths.
+- Remaining unsupported behaviors are explicitly called out in docs and UI.
 
 ## Milestone Checklist
 
@@ -859,6 +1126,7 @@ Important platform note:
 
 - The M2.5 localhost TCP/UDP settings are an intent/configuration step.
 - System-wide traffic use by other apps (for example Safari) requires Network Extension packet-tunnel behavior in M3; a normal containing app alone cannot deliver full WireGuard/OpenVPN-style system routing.
+- Background Tasks capability does not change that limitation and should not be used to promise an always-on localhost service on iPhone.
 
 ### M3: Packet Tunnel POC
 
@@ -871,10 +1139,11 @@ Important platform note:
 Current implementation slice:
 
 - `ios/src/obstacle_bridge_ios/m3_tunnel.py` defines the M3 provider-configuration schema and builds an install descriptor for `NETunnelProviderManager` from existing iOS profiles.
+- `ios/src/obstacle_bridge_ios/m3_tunnel.py` also defines the first version of the app-message status contract so the containing app and packet tunnel extension can converge on a stable control-plane boundary.
 - `ios/src/obstacle_bridge_ios/app.py` exposes `build_m3_vpn_profile(...)` so the companion app/facade can hand native tunnel installation code a validated provider payload.
-- `ios/native/ObstacleBridgeTunnel/PacketTunnelProvider.swift` implements a native `NEPacketTunnelProvider` POC that applies IPv4/DNS/MTU settings, starts/stops the packet bridge, and returns status snapshots through provider messages.
-- `ios/native/ObstacleBridgeTunnel/PacketFlowBridge.swift` adapts `NEPacketTunnelFlow` to a single TCP peer using length-prefixed packet frames for the M3 POC transport.
-- `ios/native/ObstacleBridgeTunnel/TunnelStatus.swift` defines the extension status/counter response shape.
+- `ios/native/IPServer/PacketTunnelProvider.swift` is now the single native `NEPacketTunnelProvider` entrypoint. It applies tunnel settings, boots the shared Python bridge, and keeps provider messaging aligned with the app-side control contract.
+- `ios/native/IPServer/ObstacleBridgePythonBridge.m` and `.h` bootstrap the packaged Python runtime inside the packet-tunnel extension so WebAdmin, ChannelMux, and the lower Python layers can run in the extension process.
+- Step 1 background-runtime wiring now standardizes on a two-target Xcode project: the containing `ObstacleBridge` app plus the `IPServer` packet-tunnel extension target, backed by `ios/native/IPServer/Info.plist` and Network Extension entitlement files for both the containing app and extension.
 - `ios/tests/test_m3_tunnel.py`, `ios/tests/test_m3_native_sources.py`, and `ios/tests/test_ios_app_facade.py` cover the M3 app/native configuration contract.
 - `tests/integration/test_ios_e2e.py` adds a non-entitled iOS packet-flow integration slice that round-trips packet bytes through the M3 length-prefixed TCP contract.
 - `ios/e2e_app/src/obstacle_bridge_ios_e2e/runner.py` defines the standalone iOS E2E probe harness used by simulator/device integration tests, including host WebSocket reachability and WS-overlay UDP service probes.
@@ -886,6 +1155,14 @@ M3 status:
 
 - Implemented as source-of-truth app contract plus native packet tunnel POC sources.
 - Implemented an opt-in simulator connection test for host WebSocket reachability from a standalone iOS E2E app process.
+- Step 1 target baseline is now wired into the current generated Xcode project with:
+  - containing app bundle ID: `com.obstaclebridge.obstacle-bridge-ios`
+  - packet tunnel extension bundle ID: `com.obstaclebridge.obstacle-bridge-ios.IPServer`
+  - app entitlement file: `ios/native/ObstacleBridgeApp/ObstacleBridge.entitlements`
+  - extension entitlement file: `ios/native/IPServer/IPServer.entitlements`
+  - generated Xcode target/scheme: `IPServer`
+  - current project team setting: `99WZ498FCV`
+- Local no-sign validation showed `xcodebuild -list` exposing the new target and scheme, and the generated project patch automation now emits `IPServer.appex` directly instead of carrying a separate `ObstacleBridgeTunnel` target.
 - Pending device/Xcode validation: add the native files to a packet tunnel extension target, enable the required Network Extension entitlement, install via `NETunnelProviderManager`, and run against a matching TCP packet-frame peer.
 
 ### M4: Secure Tunnel Beta

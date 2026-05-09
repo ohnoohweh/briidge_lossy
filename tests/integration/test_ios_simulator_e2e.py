@@ -273,6 +273,8 @@ def _read_e2e_app_probe_report(*, probe: str) -> dict[str, Any]:
         report_name = "ws-udp-echo-latest.json"
     elif probe == "ws-secure-link":
         report_name = "ws-secure-link-latest.json"
+    elif probe == "embedded-webadmin":
+        report_name = "embedded-webadmin-latest.json"
     else:
         report_name = "host-websocket-latest.json"
     candidates = [
@@ -566,3 +568,53 @@ def test_ios_simulator_e2e_app_ws_secure_link_client_authenticates_and_is_visibl
     secure_link = matching_rows[0].get("secure_link") or {}
     assert bool(secure_link.get("authenticated")) is True
     assert str(secure_link.get("state") or "").strip().lower() == "authenticated"
+
+
+@pytest.mark.integration
+@pytest.mark.ios
+@pytest.mark.ios_simulator
+@pytest.mark.slow
+def test_ios_simulator_e2e_app_embedded_webadmin_probe_exercises_restart_and_persistence() -> None:
+    if shutil.which("xcrun") is None:
+        pytest.skip("xcrun is required for iOS simulator integration tests")
+
+    try:
+        completed = subprocess.run(
+            _briefcase_command(
+                [
+                    "--embedded-webadmin-probe",
+                    "--timeout-sec",
+                    "20",
+                    "--restart-timeout-sec",
+                    "10",
+                ]
+            ),
+            cwd=IOS_DIR,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=float(os.environ.get("OBSTACLEBRIDGE_IOS_SIMULATOR_TIMEOUT", "600")),
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = exc.output.decode("utf-8", errors="replace") if isinstance(exc.output, bytes) else str(exc.output or "")
+        pytest.fail(f"iOS simulator Briefcase run timed out after {exc.timeout}s:\n{output}")
+
+    try:
+        report = _extract_json_object(completed.stdout, probe="embedded-webadmin")
+    except AssertionError:
+        report = _read_e2e_app_probe_report(probe="embedded-webadmin")
+    if completed.returncode != 0 and not bool(report.get("ok")):
+        raise AssertionError(completed.stdout)
+    assert report["ok"] is True
+    assert report["webadmin_url"] == "http://127.0.0.1:18080/"
+    assert report["status_platform"] == "ios"
+    assert report["restart_doc"]["restart_mode"] == "immediate"
+    assert report["restart_doc"]["restart_embedded"] is True
+    assert report["uptime_reset"] is True
+    assert report["config_persisted_after_relaunch"] is True
+    assert report["status_before_restart"]["admin_ui"]["runtime_dependencies"]["missing"] == []
+    assert report["status_after_restart"]["admin_ui"]["runtime_dependencies"]["missing"] == []
+    assert report["meta_before_restart"]["runtime_dependencies"]["missing"] == []
+    assert report["meta_after_restart"]["runtime_dependencies"]["missing"] == []
+    assert report["saved_admin_web_name"] == "Embedded E2E Persisted"
+    assert report["relaunch_admin_web_name"] == "Embedded E2E Persisted"

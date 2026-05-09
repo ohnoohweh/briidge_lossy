@@ -3,7 +3,7 @@ import NetworkExtension
 import os.log
 
 final class PacketTunnelProvider: NEPacketTunnelProvider {
-    private let logger = Logger(subsystem: "com.obstaclebridge.tunnel", category: "PacketTunnelProvider")
+    private let logger = OSLog(subsystem: "com.obstaclebridge.tunnel", category: "PacketTunnelProvider")
     private var bridge: PacketFlowBridge?
     private var status = TunnelStatus.idle
 
@@ -31,7 +31,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 }
                 self.bridge = bridge
                 bridge.start(host: configuration.peerHost, port: configuration.peerPort)
-                self.logger.info("ObstacleBridge M3 packet tunnel started")
+                os_log("ObstacleBridge M3 packet tunnel started", log: self.logger, type: .info)
                 completionHandler(nil)
             }
         } catch {
@@ -45,7 +45,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         bridge?.stop()
         bridge = nil
         status.state = .stopped
-        logger.info("ObstacleBridge M3 packet tunnel stopped, reason: \(reason.rawValue)")
+        os_log("ObstacleBridge M3 packet tunnel stopped, reason: %{public}ld", log: logger, type: .info, reason.rawValue)
         completionHandler()
     }
 

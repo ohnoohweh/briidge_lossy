@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import types
 import json
 import sys
@@ -12,7 +13,7 @@ sys.path.insert(0, str(ROOT / "ios" / "src"))
 from obstacle_bridge.bridge import _encrypt_config_secret
 from obstacle_bridge.onboarding import encode_invite_token
 from obstacle_bridge_ios import app as ios_app_module
-from obstacle_bridge_ios.app import ObstacleBridgeIOSApp, _write_startup_artifacts
+from obstacle_bridge_ios.app import ObstacleBridgeIOSApp, _load_grouped_runtime_config, _write_startup_artifacts
 from obstacle_bridge_ios.m25_ui import M25Config
 from obstacle_bridge_ios.profiles import ProfileStore
 from obstacle_bridge_ios.secure_store import InMemorySecretStore
@@ -24,11 +25,15 @@ class _FakeClient:
         self.last_config = None
         self.start_calls = 0
         self.stop_calls = 0
+        self.runner = None
 
     async def start(self, config=None, packet_io=None) -> None:
         self.started = True
         self.last_config = config
         self.start_calls += 1
+        self.runner = types.SimpleNamespace(
+            get_config_snapshot=lambda include_secrets=False: dict(self.last_config or {}),
+        )
 
     async def stop(self) -> None:
         self.started = False
@@ -210,13 +215,103 @@ def test_app_start_embedded_webadmin_starts_default_runtime() -> None:
 
     assert snapshot["started"] is True
     assert app.client.start_calls == 1
-    assert app.client.last_config["admin_web"] is True
-    assert app.client.last_config["admin_web_bind"] == "127.0.0.1"
-    assert app.client.last_config["admin_web_port"] == 18080
-    assert app.client.last_config["admin_web_dir"] == str(ObstacleBridgeIOSApp.ADMIN_WEB_DIR)
-    assert app.client.last_config["ws_static_dir"] == str(ObstacleBridgeIOSApp.WEB_DIR)
-    assert app.client.last_config["log_file"] == str(ObstacleBridgeIOSApp.LOG_FILE)
+    assert app.client.last_config["admin_web"]["admin_web"] is True
+    assert app.client.last_config["admin_web"]["admin_web_bind"] == "127.0.0.1"
+    assert app.client.last_config["admin_web"]["admin_web_port"] == 18080
+    assert app.client.last_config["admin_web"]["admin_web_dir"] == str(ObstacleBridgeIOSApp.ADMIN_WEB_DIR)
+    assert app.client.last_config["ws_session"]["ws_static_dir"] == str(ObstacleBridgeIOSApp.WEB_DIR)
+    assert app.client.last_config["debug_logging"]["log_file"] == str(ObstacleBridgeIOSApp.LOG_FILE)
     assert snapshot["webadmin_url"] == "http://127.0.0.1:18080/"
+    assert callable(getattr(app.client.runner, "_embedded_restart_callback", None))
+
+
+def test_load_grouped_runtime_config_preserves_saved_transport_fields(tmp_path: Path) -> None:
+    root = tmp_path / "Documents"
+    (root / "config").mkdir(parents=True, exist_ok=True)
+    (root / "config" / "ObstacleBridge.cfg").write_text(
+        json.dumps(
+            {
+                "tcp_session": {
+                    "overlay_transport": "tcp",
+                    "tcp_peer": "bridge.example.net",
+                    "tcp_peer_port": 4433,
+                },
+                "admin_web": {
+                    "admin_web_bind": "0.0.0.0",
+                    "admin_web_port": 19090,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = _load_grouped_runtime_config(root)
+
+    assert loaded["tcp_session"]["overlay_transport"] == "tcp"
+    assert loaded["tcp_session"]["tcp_peer"] == "bridge.example.net"
+    assert loaded["tcp_session"]["tcp_peer_port"] == 4433
+    assert loaded["admin_web"]["admin_web_bind"] == "127.0.0.1"
+    assert loaded["admin_web"]["admin_web_port"] == 18080
+    assert loaded["admin_web"]["admin_web_dir"] == str(root / "admin_web")
+
+
+def test_app_start_embedded_webadmin_reloads_saved_runtime_config(tmp_path: Path) -> None:
+    root = tmp_path / "Documents"
+    _write_startup_artifacts(root)
+    (root / "config" / "ObstacleBridge.cfg").write_text(
+        json.dumps(
+            {
+                "tcp_session": {
+                    "overlay_transport": "tcp",
+                    "tcp_peer": "bridge.example.net",
+                    "tcp_peer_port": 4433,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    app = ObstacleBridgeIOSApp()
+    app.client = _FakeClient()
+    app.DOCUMENTS_ROOT = root
+    app.CONFIG_DIR = root / "config"
+    app.CONFIG_FILE = app.CONFIG_DIR / "ObstacleBridge.cfg"
+    app.ADMIN_WEB_DIR = root / "admin_web"
+    app.WEB_DIR = root / "web"
+    app.LOG_FILE = root / "logs" / "obstaclebridge.log"
+
+    snapshot = app.start_embedded_webadmin()
+
+    assert app.client.last_config["tcp_session"]["overlay_transport"] == "tcp"
+    assert app.client.last_config["tcp_session"]["tcp_peer"] == "bridge.example.net"
+    assert app.client.last_config["tcp_session"]["tcp_peer_port"] == 4433
+    assert app.client.last_config["admin_web"]["admin_web_bind"] == "127.0.0.1"
+    assert app.client.last_config["admin_web"]["admin_web_port"] == 18080
+    assert snapshot["webadmin_url"] == "http://127.0.0.1:18080/"
+
+
+def test_app_embedded_restart_hook_restarts_client_with_current_config(monkeypatch) -> None:
+    app = ObstacleBridgeIOSApp()
+    app.client = _FakeClient()
+    replacement_clients: list[_FakeClient] = []
+
+    def _client_factory(config, config_path=None, apply_logging=False):
+        client = _FakeClient()
+        client.config = config
+        replacement_clients.append(client)
+        return client
+
+    monkeypatch.setattr(ios_app_module, "ObstacleBridgeClient", _client_factory)
+
+    app.start_embedded_webadmin()
+    original_client = app.client
+    asyncio.run(app.client.runner._embedded_restart_callback())
+
+    assert original_client.stop_calls == 1
+    assert app.client is not original_client
+    assert replacement_clients
+    assert app.client.snapshot()["started"] is True
+    assert app.client.snapshot()["config"]["admin_web"]["admin_web_bind"] == "127.0.0.1"
+    assert callable(getattr(app.client.runner, "_embedded_restart_callback", None))
 
 
 def test_startup_artifacts_seed_documents_config_logs_and_web_files(tmp_path: Path) -> None:

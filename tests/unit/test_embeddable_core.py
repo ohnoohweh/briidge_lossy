@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import logging
 from pathlib import Path
 import unittest
 from unittest import mock
 
 from obstacle_bridge import MemoryPacketIO, ObstacleBridgeClient, PacketIO
-from obstacle_bridge.bridge import build_runtime_args_from_config, parse_runtime_args
+from obstacle_bridge.bridge import Runner, build_runtime_args_from_config, parse_runtime_args
 
 
 class EmbeddableRuntimeArgsTests(unittest.TestCase):
@@ -71,6 +73,27 @@ class PacketIOTests(unittest.IsolatedAsyncioTestCase):
 
         await packet_io.write_packets([bytearray(b"out")])
         self.assertEqual(packet_io.drain_outgoing(), [b"out"])
+
+
+class RunnerEmbeddedRestartTests(unittest.IsolatedAsyncioTestCase):
+    async def test_request_restart_uses_embedded_callback_when_present(self) -> None:
+        runner = Runner.__new__(Runner)
+        runner.log = logging.getLogger("test.runner.embedded_restart")
+        runner._restart_requested_flag = False
+        runner._restart_exit_code = 0
+        runner._restart_requested = None
+        runner._restart_requires_delay = lambda: False
+        called = asyncio.Event()
+
+        async def restart_cb() -> None:
+            called.set()
+
+        runner._embedded_restart_callback = restart_cb
+
+        runner.request_restart()
+
+        await asyncio.wait_for(called.wait(), timeout=1.0)
+        self.assertFalse(runner._restart_requested_flag)
 
 
 class ObstacleBridgeClientTests(unittest.IsolatedAsyncioTestCase):

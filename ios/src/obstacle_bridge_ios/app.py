@@ -7,6 +7,7 @@ import importlib
 import json
 import os
 import shutil
+import sys
 import traceback
 import threading
 import urllib.error
@@ -14,6 +15,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from obstacle_bridge.bridge import ConfigAwareCLI
 from obstacle_bridge.core import ObstacleBridgeClient
 
 from .dependency_spike import (
@@ -53,6 +55,7 @@ def _configure_ios_safe_locale() -> None:
     """Ensure Toga's locale bootstrap has a supported default on iOS."""
     os.environ["LC_ALL"] = "C"
     os.environ["LANG"] = "C"
+    os.environ["OBSTACLEBRIDGE_ADMIN_UI_PLATFORM"] = "ios"
 
 
 def _probe_http_ok(url: str, timeout_sec: float = 1.0) -> bool:
@@ -67,9 +70,19 @@ def _probe_http_ok(url: str, timeout_sec: float = 1.0) -> bool:
 
 def _ios_documents_root() -> Path:
     """Return a USB-shareable app Documents root for configs and logs."""
+    if sys.platform == "ios":
+        root = Path.home() / "Documents"
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
     root = Path.home() / "Documents" / "ObstacleBridge"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+    except PermissionError:
+        fallback = Path.cwd() / ".obstaclebridge-ios-documents"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
 
 
 def _source_dir_candidates(name: str) -> list[Path]:
@@ -125,29 +138,56 @@ def _default_ios_runtime_config(root: Path) -> dict[str, Any]:
     }
 
 
+def _default_ios_grouped_config(root: Path) -> dict[str, Any]:
+    return {
+        "admin_web": {
+            "admin_web": True,
+            "admin_web_bind": WEBADMIN_DEFAULT_BIND,
+            "admin_web_port": WEBADMIN_DEFAULT_PORT,
+            "admin_web_path": WEBADMIN_DEFAULT_PATH,
+            "admin_web_dir": str(root / "admin_web"),
+        },
+        "debug_logging": {
+            "log": "DEBUG",
+            "file_level": "DEBUG",
+            "console_level": "INFO",
+            "log_file": str(root / "logs" / "obstaclebridge.log"),
+            "log_file_max_bytes": 1_048_576,
+            "log_file_backup_count": 5,
+        },
+        "ws_session": {
+            "ws_static_dir": str(root / "web"),
+        },
+    }
+
+
+def _load_grouped_runtime_config(root: Path) -> dict[str, Any]:
+    path = root / "config" / "ObstacleBridge.cfg"
+    defaults = _default_ios_grouped_config(root)
+    if not path.exists():
+        return defaults
+    try:
+        payload = ConfigAwareCLI(description="ios-app")._load_json_config(str(path))
+    except Exception:
+        return defaults
+    if not isinstance(payload, dict):
+        return defaults
+    merged = dict(payload)
+    for section, values in defaults.items():
+        existing = merged.get(section)
+        if isinstance(existing, Mapping):
+            block = dict(existing)
+            block.update(values)
+            merged[section] = block
+        else:
+            merged[section] = dict(values)
+    return merged
+
+
 def _write_default_config_file(root: Path) -> Path:
     path = root / "config" / "ObstacleBridge.cfg"
     if not path.exists():
-        payload = {
-            "admin_web": {
-                "admin_web": True,
-                "admin_web_bind": WEBADMIN_DEFAULT_BIND,
-                "admin_web_port": WEBADMIN_DEFAULT_PORT,
-                "admin_web_path": WEBADMIN_DEFAULT_PATH,
-                "admin_web_dir": str(root / "admin_web"),
-            },
-            "debug_logging": {
-                "log": "DEBUG",
-                "file_level": "DEBUG",
-                "console_level": "INFO",
-                "log_file": str(root / "logs" / "obstaclebridge.log"),
-                "log_file_max_bytes": 1_048_576,
-                "log_file_backup_count": 5,
-            },
-            "ws_session": {
-                "ws_static_dir": str(root / "web"),
-            },
-        }
+        payload = _default_ios_grouped_config(root)
         path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path
 
@@ -221,7 +261,7 @@ class ObstacleBridgeIOSApp:
     def __init__(self) -> None:
         _write_startup_artifacts(self.DOCUMENTS_ROOT)
         self.client = ObstacleBridgeClient(
-            _default_ios_runtime_config(self.DOCUMENTS_ROOT),
+            _load_grouped_runtime_config(self.DOCUMENTS_ROOT),
             config_path=str(self.CONFIG_FILE),
             apply_logging=True,
         )
@@ -264,6 +304,25 @@ class ObstacleBridgeIOSApp:
         loop = self._ensure_runtime_loop()
         future = asyncio.run_coroutine_threadsafe(awaitable, loop)
         return future.result()
+
+    def _attach_embedded_restart_hook(self) -> None:
+        runner = self.client.runner
+        if runner is not None:
+            setattr(runner, "_embedded_restart_callback", self._restart_embedded_runtime)
+
+    async def _restart_embedded_runtime(self) -> None:
+        runner = self.client.runner
+        if runner is None:
+            return
+        current_config = runner.get_config_snapshot(include_secrets=True)
+        await self.client.stop()
+        self.client = ObstacleBridgeClient(
+            dict(current_config),
+            config_path=str(self.CONFIG_FILE),
+            apply_logging=True,
+        )
+        await self.client.start(config=self.client.config)
+        self._attach_embedded_restart_hook()
 
     def close(self) -> None:
         loop = self._runtime_loop
@@ -336,6 +395,7 @@ class ObstacleBridgeIOSApp:
             selected = self.profile_store.load_profile(target_id, include_secrets=True)
         runtime_cfg = self._runtime_config_from_profile(selected)
         self._run_async_sync(self.client.start(config=runtime_cfg))
+        self._attach_embedded_restart_hook()
         self._active_profile_id = str(selected.get("profile_id", "") or "").strip() or None
         return self.connection_snapshot()
 
@@ -352,24 +412,10 @@ class ObstacleBridgeIOSApp:
         return snap
 
     def start_embedded_webadmin(self) -> dict[str, Any]:
-        self._run_async_sync(
-            self.client.start(
-                config={
-                    "admin_web": True,
-                    "admin_web_bind": self.WEBADMIN_DEFAULT_BIND,
-                    "admin_web_port": self.WEBADMIN_DEFAULT_PORT,
-                    "admin_web_path": self.WEBADMIN_DEFAULT_PATH,
-                    "admin_web_dir": str(self.ADMIN_WEB_DIR),
-                    "ws_static_dir": str(self.WEB_DIR),
-                    "log": "DEBUG",
-                    "file_level": "DEBUG",
-                    "console_level": "INFO",
-                    "log_file": str(self.LOG_FILE),
-                    "log_file_max_bytes": 1_048_576,
-                    "log_file_backup_count": 5,
-                }
-            )
-        )
+        self.client.config = _load_grouped_runtime_config(self.DOCUMENTS_ROOT)
+        self.client._args = None
+        self._run_async_sync(self.client.start(config=self.client.config))
+        self._attach_embedded_restart_hook()
         return self.connection_snapshot()
 
     def import_and_store_profile(
