@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any, Mapping
@@ -27,7 +28,12 @@ EMBEDDED_WEBADMIN_REPORT_NAME = "embedded-webadmin-latest.json"
 
 
 def _report_root(root: Path | None = None) -> Path:
-    base = root or Path.home() / REPORT_DIRNAME
+    if root is not None:
+        base = root
+    elif sys.platform == "ios":
+        base = Path.home() / "Documents" / REPORT_DIRNAME
+    else:
+        base = Path.home() / REPORT_DIRNAME
     base.mkdir(parents=True, exist_ok=True)
     return base
 
