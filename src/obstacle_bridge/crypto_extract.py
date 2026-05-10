@@ -438,11 +438,19 @@ except Exception:
 
 def available_crypto_extract() -> dict[str, Any]:
     native_features = {}
+    native_load_error = ""
     if _IOS_NATIVE_BACKEND is not None:
         try:
             native_features = dict(_IOS_NATIVE_BACKEND.available_features() or {})
         except Exception:
             native_features = {}
+    else:
+        try:
+            from .ios_native_crypto import ios_native_crypto_load_error
+
+            native_load_error = str(ios_native_crypto_load_error() or "")
+        except Exception as exc:
+            native_load_error = f"load error unavailable: {type(exc).__name__}: {exc}"
     return {
         "backend": _BACKEND_NAME,
         "hashes": hashes is not None,
@@ -454,5 +462,6 @@ def available_crypto_extract() -> dict[str, Any]:
         "ed25519": ed25519 is not None,
         "x25519": x25519 is not None,
         "ios_native_features": native_features,
+        "ios_native_load_error": native_load_error,
         "api_groups": dict(CRYPTO_EXTRACT_APIS),
     }

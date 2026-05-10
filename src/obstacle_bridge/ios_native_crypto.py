@@ -10,23 +10,32 @@ import ctypes
 from ctypes import POINTER, c_char, cast
 from typing import Any, Optional
 
+_LAST_LOAD_ERROR = ""
+
 
 def _load_rubicon():
+    global _LAST_LOAD_ERROR
     try:
         from rubicon.objc import ObjCClass
-    except Exception:
+    except Exception as exc:
+        _LAST_LOAD_ERROR = f"rubicon import failed: {type(exc).__name__}: {exc}"
         return None, None, None
     try:
         nsdata_cls = ObjCClass("NSData")
         bridge_cls = ObjCClass("ObstacleBridgeNativeCrypto")
-    except Exception:
+    except Exception as exc:
+        _LAST_LOAD_ERROR = f"Objective-C class lookup failed: {type(exc).__name__}: {exc}"
         return None, None, None
+    _LAST_LOAD_ERROR = ""
     return ObjCClass, nsdata_cls, bridge_cls
 
 
 def _bytes_to_nsdata(nsdata_cls: Any, value: bytes) -> Any:
     payload = bytes(value or b"")
-    return nsdata_cls.dataWithBytes(payload, length=len(payload))
+    try:
+        return nsdata_cls.dataWithBytes_length_(payload, len(payload))
+    except Exception:
+        return nsdata_cls.dataWithBytes(payload, length=len(payload))
 
 
 def _nsdata_to_bytes(data: Any) -> bytes:
@@ -150,7 +159,14 @@ class IOSNativeCryptoBackend:
 
 
 def load_ios_native_crypto_backend() -> Optional[IOSNativeCryptoBackend]:
+    global _LAST_LOAD_ERROR
     try:
         return IOSNativeCryptoBackend()
-    except Exception:
+    except Exception as exc:
+        if not _LAST_LOAD_ERROR:
+            _LAST_LOAD_ERROR = f"backend initialization failed: {type(exc).__name__}: {exc}"
         return None
+
+
+def ios_native_crypto_load_error() -> str:
+    return _LAST_LOAD_ERROR

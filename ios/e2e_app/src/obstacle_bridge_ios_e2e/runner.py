@@ -78,8 +78,22 @@ def _http_json_sync(
         method=method,
         headers={"Content-Type": "application/json"} if body is not None else {},
     )
-    with urllib.request.urlopen(request, timeout=timeout_sec) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_sec) as response:
+            doc = json.loads(response.read().decode("utf-8"))
+            if isinstance(doc, dict):
+                doc.setdefault("http_status", int(getattr(response, "status", 0) or 0))
+            return doc
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            doc = json.loads(raw)
+            if isinstance(doc, dict):
+                doc.setdefault("http_status", int(exc.code))
+                return doc
+        except Exception:
+            pass
+        return {"ok": False, "http_status": int(exc.code), "error": raw}
 
 
 async def _http_json(
@@ -486,6 +500,7 @@ async def run_runtime_config(
         snapshot = dict(client.snapshot() or {})
         await asyncio.sleep(max(0.0, float(hold_sec)))
         final_snapshot = dict(client.snapshot() or {})
+
         return {
             "ok": True,
             "app": "obstacle_bridge_ios_e2e",
@@ -539,6 +554,7 @@ async def run_embedded_webadmin_probe(
     first_app_closed = False
     second_app: ObstacleBridgeIOSApp | None = None
     persisted_name = "Embedded E2E Persisted"
+    persisted_psk = "embedded-e2e-secure-link-psk"
 
     def _stop_embedded_app(target: ObstacleBridgeIOSApp) -> None:
         if getattr(target.client, "runner", None) is not None:
@@ -555,6 +571,8 @@ async def run_embedded_webadmin_probe(
         meta_ready = await _wait_for_json(meta_url, timeout_sec=timeout_sec)
         status_ready = await _wait_for_json(status_url, timeout_sec=timeout_sec)
         config_ready = await _wait_for_json(config_url, timeout_sec=timeout_sec)
+        crypto_before = dict(meta_ready.get("crypto_extract") or {})
+        build_before = dict(meta_ready.get("build") or {})
 
         uptime_before = int(meta_ready.get("uptime_sec") or 0)
         if uptime_before < 2:
@@ -567,7 +585,7 @@ async def run_embedded_webadmin_probe(
         save_doc = await _http_json(
             config_url,
             method="POST",
-            payload={"updates": {"admin_web_name": persisted_name}},
+            payload={"updates": {"admin_web_name": persisted_name, "secure_link_psk": persisted_psk}},
             timeout_sec=3.0,
         )
         config_after_save = await _wait_for_json(config_url, timeout_sec=timeout_sec)
@@ -591,22 +609,31 @@ async def run_embedded_webadmin_probe(
         second_app = ObstacleBridgeIOSApp()
         second_app.start_embedded_webadmin()
         config_after_relaunch = await _wait_for_json(config_url, timeout_sec=timeout_sec)
+        uptime_after_restart = int(meta_after_restart.get("uptime_sec") or 0)
+        relaunch_name = str((((config_after_relaunch.get("config") or {}).get("admin_web_name")) or ""))
+        save_ok = bool(save_doc.get("ok"))
+        uptime_reset = uptime_after_restart < uptime_before
+        config_persisted = relaunch_name == persisted_name
 
         return {
-            "ok": True,
+            "ok": bool(save_ok and uptime_reset and config_persisted),
             "app": "obstacle_bridge_ios_e2e",
             "probe": "embedded-webadmin",
             "webadmin_url": webadmin_url,
             "config_file": str(app.CONFIG_FILE),
             "uptime_before_restart_sec": uptime_before,
-            "uptime_after_restart_sec": int(meta_after_restart.get("uptime_sec") or 0),
-            "uptime_reset": int(meta_after_restart.get("uptime_sec") or 0) < uptime_before,
+            "uptime_after_restart_sec": uptime_after_restart,
+            "uptime_reset": uptime_reset,
             "status_platform": str(((status_ready.get("admin_ui") or {}).get("platform") or "")),
             "restart_doc": restart_doc,
             "save_doc": save_doc,
+            "save_ok": save_ok,
             "saved_admin_web_name": str((((config_after_save.get("config") or {}).get("admin_web_name")) or "")),
-            "relaunch_admin_web_name": str((((config_after_relaunch.get("config") or {}).get("admin_web_name")) or "")),
-            "config_persisted_after_relaunch": str((((config_after_relaunch.get("config") or {}).get("admin_web_name")) or "")) == persisted_name,
+            "saved_secure_link_psk_hidden": str((((config_after_save.get("config") or {}).get("secure_link_psk")) or "")) == "",
+            "relaunch_admin_web_name": relaunch_name,
+            "config_persisted_after_relaunch": config_persisted,
+            "crypto_extract": crypto_before,
+            "build": build_before,
             "runtime_log_file": str(app.LOG_FILE),
             "latency_ms": int((time.perf_counter() - started) * 1000),
             "meta_before_restart": meta_ready,
@@ -624,6 +651,7 @@ async def run_embedded_webadmin_probe(
             "probe": "embedded-webadmin",
             "config_file": str(app.CONFIG_FILE),
             "runtime_log_file": str(app.LOG_FILE),
+            "crypto_extract": available_crypto_extract(),
             "detail": f"embedded-webadmin failed: {type(exc).__name__}: {exc}",
             "latency_ms": int((time.perf_counter() - started) * 1000),
         }

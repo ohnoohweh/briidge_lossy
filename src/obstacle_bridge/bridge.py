@@ -78,6 +78,7 @@ try:
         ChaCha20Poly1305,
         HKDF,
         PBKDF2HMAC,
+        available_crypto_extract,
         ed25519,
         hashes,
         serialization,
@@ -92,6 +93,9 @@ except Exception:
     serialization = None
     ed25519 = None
     x25519 = None
+
+    def available_crypto_extract() -> dict:
+        return {"backend": "unavailable"}
 
 
 CONFIG_SECRET_FIELDS = {"admin_web_password", "secure_link_psk"}
@@ -122,7 +126,7 @@ def _config_secret_seed() -> bytes:
 
 def _derive_config_secret_key() -> bytes:
     if hashes is None or HKDF is None:
-        raise RuntimeError("config secret encryption requires cryptography")
+        raise RuntimeError("config secret encryption requires cryptography or the iOS native crypto backend")
     hkdf = HKDF(
         algorithm=hashes.SHA256(),
         length=32,
@@ -138,12 +142,32 @@ def _detect_build_info() -> dict:
         return dict(_BUILD_INFO_CACHE)
     info = {
         "commit": "unknown",
+        "source": "git",
         "repo_root": "",
         "tainted": False,
         "tracked_changes": 0,
         "untracked_changes": 0,
         "available": False,
     }
+    try:
+        from .build_info import BUILD_COMMIT, BUILD_DIFF_SHA, BUILD_DIRTY, BUILD_SOURCE
+
+        commit = str(BUILD_COMMIT or "").strip()
+        if commit:
+            info.update(
+                {
+                    "commit": commit,
+                    "source": str(BUILD_SOURCE or "embedded"),
+                    "diff_sha": str(BUILD_DIFF_SHA or ""),
+                    "repo_root": "",
+                    "tainted": bool(BUILD_DIRTY),
+                    "available": True,
+                }
+            )
+            _BUILD_INFO_CACHE = dict(info)
+            return dict(info)
+    except Exception:
+        pass
     try:
         repo_root = pathlib.Path(__file__).resolve().parents[2]
     except Exception:
@@ -191,6 +215,7 @@ def _detect_build_info() -> dict:
 
 
 def _runtime_dependency_status() -> dict:
+    crypto_status = available_crypto_extract()
     packages = {
         "cryptography": {
             "available": bool(hashes and ChaCha20Poly1305 and HKDF),
@@ -210,6 +235,7 @@ def _runtime_dependency_status() -> dict:
         "ok": not missing,
         "missing": missing,
         "packages": packages,
+        "crypto_extract": crypto_status,
         "install_hint": "python3 -m pip install -e .",
     }
 
@@ -238,7 +264,10 @@ def _encrypt_config_secret(value: Any) -> Any:
     if not isinstance(value, str) or value == "":
         return value
     if ChaCha20Poly1305 is None:
-        raise RuntimeError("config secret encryption requires cryptography")
+        raise RuntimeError(
+            "config secret encryption requires cryptography or the iOS native crypto backend; "
+            f"crypto_extract={available_crypto_extract()!r}"
+        )
     key = _derive_config_secret_key()
     nonce = secrets.token_bytes(12)
     ciphertext = ChaCha20Poly1305(key).encrypt(nonce, value.encode("utf-8"), CONFIG_SECRET_AAD)
@@ -250,7 +279,10 @@ def _decrypt_config_secret(value: Any) -> Any:
     if not isinstance(value, str) or not value.startswith(CONFIG_SECRET_PREFIX):
         return value
     if ChaCha20Poly1305 is None:
-        raise RuntimeError("config secret decryption requires cryptography")
+        raise RuntimeError(
+            "config secret decryption requires cryptography or the iOS native crypto backend; "
+            f"crypto_extract={available_crypto_extract()!r}"
+        )
     raw = base64.urlsafe_b64decode(value[len(CONFIG_SECRET_PREFIX):].encode("ascii"))
     if len(raw) < 13:
         raise ValueError("invalid encrypted config secret")
@@ -16241,6 +16273,11 @@ class Runner:
 
         
         self.log.debug("[SERVER] Runner start on session id=%x", id(self))
+        self.log.info(
+            "[SERVER] ObstacleBridge build=%r crypto_extract=%r",
+            _detect_build_info(),
+            available_crypto_extract(),
+        )
         self._ensure_runtime_events()
 
         loop = asyncio.get_running_loop()
@@ -16361,7 +16398,8 @@ class Runner:
         if self.admin_web is not None:
             await self.admin_web.stop()
             self.admin_web = None        
-        self._stop.set()
+        if self._stop is not None:
+            self._stop.set()
 
         self.log.debug("[RUNNER] stop: entering stats.stop")
         try:
@@ -17309,6 +17347,12 @@ class Runner:
                 f.write("\n")
             tmp.replace(path)
         except Exception as e:
+            logging.getLogger("obstacle_bridge.config").exception(
+                "failed to persist runtime config path=%s crypto_extract=%r build=%r",
+                cfg_path,
+                available_crypto_extract(),
+                _detect_build_info(),
+            )
             return (False, f"failed to persist config to {cfg_path}: {e}")
         # Persisted runtime config is now present and no longer a first-start state.
         setattr(self.args, "_first_start_detected", False)
@@ -18233,6 +18277,7 @@ class AdminWebUI:
             "milestone": "C",
             "build": _detect_build_info(),
             "runtime_dependencies": _runtime_dependency_status_for_platform(platform),
+            "crypto_extract": available_crypto_extract(),
         }
 
     async def _handle_meta(self, writer):
@@ -18291,6 +18336,13 @@ class AdminWebUI:
                 return
         ok, err = self.runner.update_config(updates)
         if not ok:
+            logging.getLogger("obstacle_bridge.admin_web").error(
+                "configuration update failed error=%s updates_keys=%s crypto_extract=%r build=%r",
+                err,
+                sorted(updates.keys()) if isinstance(updates, dict) else [],
+                available_crypto_extract(),
+                _detect_build_info(),
+            )
             await self._send_json(writer, 400, {"ok": False, "error": err})
             return
         if any(key in AdminWebUI._secret_config_keys() or key in {"admin_web_auth_disable", "admin_web_username"} for key in updates.keys()):
@@ -18410,6 +18462,12 @@ class AdminWebUI:
             "restart_delay_sec": 40 if delay_restart else 0,
         }
         self._log_api_response("/api/restart", 200, payload)
+        logging.getLogger("obstacle_bridge.admin_web").warning(
+            "restart requested embedded=%s mode=%s build=%r",
+            embedded_restart,
+            payload.get("restart_mode"),
+            _detect_build_info(),
+        )
         await self._send_json(writer, 200, payload)
         self.runner.request_restart()
 
