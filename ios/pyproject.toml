@@ -18,6 +18,7 @@ long_description = "Imports and previews ObstacleBridge onboarding artifacts."
 icon = "resources/obstaclebridge-icon"
 sources = [
     "src/obstacle_bridge_ios",
+    "src",
     "../src/obstacle_bridge",
     "../web",
 ]

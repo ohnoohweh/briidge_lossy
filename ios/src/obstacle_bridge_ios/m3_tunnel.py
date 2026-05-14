@@ -41,6 +41,7 @@ class M3TunnelConfig:
     peer_host: str
     peer_port: int
     server_address: str
+    runtime_config: dict[str, Any] = field(default_factory=dict)
     network: M3NetworkSettings = field(default_factory=M3NetworkSettings)
 
 
@@ -130,6 +131,7 @@ def m3_tunnel_config_from_profile(
         peer_host=peer_host,
         peer_port=peer_port,
         server_address=f"{peer_host}:{peer_port}",
+        runtime_config=dict(ob_cfg),
         network=settings,
     )
 
@@ -144,6 +146,7 @@ def provider_configuration_from_m3_config(cfg: M3TunnelConfig) -> dict[str, Any]
         "profile_id": _required_string(cfg.profile_id, "profile_id"),
         "display_name": _required_string(cfg.display_name, "display_name"),
         "transport": _required_string(cfg.transport, "transport").lower(),
+        "runtime_config": dict(cfg.runtime_config),
         "peer": {
             "host": _required_string(cfg.peer_host, "peer_host"),
             "port": _validate_port(cfg.peer_port, "peer_port"),

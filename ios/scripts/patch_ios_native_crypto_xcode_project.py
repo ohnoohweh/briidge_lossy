@@ -34,11 +34,12 @@ def patch_native_crypto(text: str) -> str:
         "/* End PBXFileReference section */\n",
         "\t\t71C300000000000000000010 /* ObstacleBridgeNativeCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgeNativeCrypto.swift; path = \"../../../../native/ObstacleBridgeShared/ObstacleBridgeNativeCrypto.swift\"; sourceTree = SOURCE_ROOT; };\n",
     )
-    text = replace_once(
-        text,
-        "\t\t60796EDE19190F4100A9926B /* Sources */ = {\n\t\t\tisa = PBXSourcesBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n\t\t\t\t600000000000000000100100 /* main.m in Sources */,\n\t\t\t);\n\t\t\trunOnlyForDeploymentPostprocessing = 0;\n\t\t};\n",
-        "\t\t60796EDE19190F4100A9926B /* Sources */ = {\n\t\t\tisa = PBXSourcesBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n\t\t\t\t600000000000000000100100 /* main.m in Sources */,\n\t\t\t\t71C300000000000000000001 /* ObstacleBridgeNativeCrypto.swift in Sources */,\n\t\t\t);\n\t\t\trunOnlyForDeploymentPostprocessing = 0;\n\t\t};\n",
-    )
+    if "71C300000000000000000001 /* ObstacleBridgeNativeCrypto.swift in Sources */," not in text:
+        text = replace_once(
+            text,
+            "\t\t60796EDE19190F4100A9926B /* Sources */ = {\n\t\t\tisa = PBXSourcesBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n\t\t\t\t600000000000000000100100 /* main.m in Sources */,\n\t\t\t);\n\t\t\trunOnlyForDeploymentPostprocessing = 0;\n\t\t};\n",
+            "\t\t60796EDE19190F4100A9926B /* Sources */ = {\n\t\t\tisa = PBXSourcesBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n\t\t\t\t600000000000000000100100 /* main.m in Sources */,\n\t\t\t\t71C300000000000000000001 /* ObstacleBridgeNativeCrypto.swift in Sources */,\n\t\t\t);\n\t\t\trunOnlyForDeploymentPostprocessing = 0;\n\t\t};\n",
+        )
     text = replace_once(
         text,
         "\t\t\t\tCLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = NO;\n",

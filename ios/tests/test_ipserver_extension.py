@@ -14,8 +14,8 @@ class _FakeController:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object]] = []
 
-    def start_embedded_webadmin(self) -> dict[str, object]:
-        self.calls.append(("start_embedded_webadmin", None))
+    def start_embedded_webadmin(self, runtime_config=None) -> dict[str, object]:
+        self.calls.append(("start_embedded_webadmin", runtime_config))
         return {"started": True, "webadmin_url": "http://127.0.0.1:18080/"}
 
     def connect_profile(self, *, profile=None, profile_id=None) -> dict[str, object]:
@@ -30,6 +30,10 @@ class _FakeController:
         self.calls.append(("connection_snapshot", None))
         return {"started": False, "active_profile_id": None}
 
+    def diagnostics_snapshot(self) -> dict[str, object]:
+        self.calls.append(("diagnostics_snapshot", None))
+        return {"event_log": "/tmp/ios-diagnostics.jsonl"}
+
 
 def test_handle_message_starts_embedded_webadmin(monkeypatch) -> None:
     controller = _FakeController()
@@ -40,6 +44,36 @@ def test_handle_message_starts_embedded_webadmin(monkeypatch) -> None:
     assert response["ok"] is True
     assert response["result"]["started"] is True
     assert controller.calls == [("start_embedded_webadmin", None)]
+
+
+def test_handle_message_starts_with_provider_runtime_config(monkeypatch) -> None:
+    controller = _FakeController()
+    monkeypatch.setattr(ipserver_extension, "_controller", lambda: controller)
+
+    response = ipserver_extension.handle_message(
+        {
+            "command": "start_embedded_webadmin",
+            "provider_configuration": {
+                "runtime_config": {
+                    "overlay_transport": "myudp",
+                    "udp_peer": "bridge.example.net",
+                    "udp_peer_port": 4433,
+                }
+            },
+        }
+    )
+
+    assert response["ok"] is True
+    assert controller.calls == [
+        (
+            "start_embedded_webadmin",
+            {
+                "overlay_transport": "myudp",
+                "udp_peer": "bridge.example.net",
+                "udp_peer_port": 4433,
+            },
+        )
+    ]
 
 
 def test_handle_message_connects_profile_by_id(monkeypatch) -> None:
@@ -64,3 +98,14 @@ def test_handle_message_json_returns_error_payload_for_unknown_command(monkeypat
     assert response["ok"] is False
     assert response["error_type"] == "ValueError"
     assert "unsupported command" in response["error"]
+
+
+def test_handle_message_returns_diagnostics_snapshot(monkeypatch) -> None:
+    controller = _FakeController()
+    monkeypatch.setattr(ipserver_extension, "_controller", lambda: controller)
+
+    response = ipserver_extension.handle_message({"command": "diagnostics_snapshot"})
+
+    assert response["ok"] is True
+    assert response["result"]["event_log"] == "/tmp/ios-diagnostics.jsonl"
+    assert controller.calls == [("diagnostics_snapshot", None)]

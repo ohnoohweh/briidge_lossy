@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 
@@ -35,57 +36,85 @@ def replace_once(text: str, old: str, new: str) -> str:
 
 
 def add_app_native_crypto_source(text: str) -> str:
-    if "71C300000000000000000001 /* ObstacleBridgeNativeCrypto.swift in Sources */" in text:
-        return text
-    old_empty = (
-        "\t\t60796EDE19190F4100A9926B /* Sources */ = {\n"
-        "\t\t\tisa = PBXSourcesBuildPhase;\n"
-        "\t\t\tbuildActionMask = 2147483647;\n"
-        "\t\t\tfiles = (\n"
-        "\t\t\t);\n"
-        "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
-        "\t\t};\n"
-    )
-    new_empty = (
-        "\t\t60796EDE19190F4100A9926B /* Sources */ = {\n"
-        "\t\t\tisa = PBXSourcesBuildPhase;\n"
-        "\t\t\tbuildActionMask = 2147483647;\n"
-        "\t\t\tfiles = (\n"
-        "\t\t\t\t71C300000000000000000001 /* ObstacleBridgeNativeCrypto.swift in Sources */,\n"
-        "\t\t\t);\n"
-        "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
-        "\t\t};\n"
-    )
-    if old_empty in text:
-        return text.replace(old_empty, new_empty, 1)
-    old_main = (
-        "\t\t60796EDE19190F4100A9926B /* Sources */ = {\n"
-        "\t\t\tisa = PBXSourcesBuildPhase;\n"
-        "\t\t\tbuildActionMask = 2147483647;\n"
-        "\t\t\tfiles = (\n"
-        "\t\t\t\t600000000000000000100100 /* main.m in Sources */,\n"
-        "\t\t\t);\n"
-        "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
-        "\t\t};\n"
-    )
-    new_main = (
-        "\t\t60796EDE19190F4100A9926B /* Sources */ = {\n"
-        "\t\t\tisa = PBXSourcesBuildPhase;\n"
-        "\t\t\tbuildActionMask = 2147483647;\n"
-        "\t\t\tfiles = (\n"
-        "\t\t\t\t600000000000000000100100 /* main.m in Sources */,\n"
-        "\t\t\t\t71C300000000000000000001 /* ObstacleBridgeNativeCrypto.swift in Sources */,\n"
-        "\t\t\t);\n"
-        "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
-        "\t\t};\n"
-    )
-    if old_main not in text:
-        raise ValueError("ObstacleBridge sources build phase not found")
-    return text.replace(old_main, new_main, 1)
+    required_entries = [
+        "\t\t\t\t71C300000000000000000001 /* ObstacleBridgeNativeCrypto.swift in Sources */,\n",
+        "\t\t\t\t71C400000000000000000001 /* ObstacleBridgeTunnelControl.swift in Sources */,\n",
+    ]
 
+    if all(entry in text for entry in required_entries):
+        return text
+
+    match = re.search(
+        r"\t\t60796EE119190F4100A9926B /\* ObstacleBridge \*/ = \{\n"
+        r"\t\t\tisa = PBXNativeTarget;.*?"
+        r"\t\t\tbuildPhases = \(\n"
+        r"(?P<phases>.*?)"
+        r"\t\t\t\);",
+        text,
+        flags=re.DOTALL,
+    )
+    if not match:
+        raise ValueError("ObstacleBridge native target not found")
+
+    source_phase_match = re.search(
+        r"\t\t\t\t(?P<id>[0-9A-F]{24}) /\* Sources \*/,\n",
+        match.group("phases"),
+    )
+    if not source_phase_match:
+        raise ValueError("ObstacleBridge Sources build phase id not found")
+
+    source_phase_id = source_phase_match.group("id")
+
+    phase_match = re.search(
+        rf"(?P<head>\t\t{source_phase_id} /\* Sources \*/ = \{{\n"
+        rf"\t\t\tisa = PBXSourcesBuildPhase;\n"
+        rf"\t\t\tbuildActionMask = 2147483647;\n"
+        rf"\t\t\tfiles = \(\n)"
+        rf"(?P<body>.*?)"
+        rf"(?P<tail>\t\t\t\);\n"
+        rf"\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
+        rf"\t\t\}};)",
+        text,
+        flags=re.DOTALL,
+    )
+    if not phase_match:
+        raise ValueError("ObstacleBridge Sources build phase block not found")
+
+    body = phase_match.group("body")
+
+    for entry in required_entries:
+        if entry not in body:
+            body += entry
+
+    return (
+        text[:phase_match.start()]
+        + phase_match.group("head")
+        + body
+        + phase_match.group("tail")
+        + text[phase_match.end():]
+    )
 
 def add_ipserver_native_crypto_source(text: str) -> str:
-    if "71C300000000000000000002 /* ObstacleBridgeNativeCrypto.swift in IPServer Sources */" in text:
+    source_phase = "71C200000000000000000080 /* Sources */ = {"
+    if source_phase in text:
+        text = text.replace(
+            "\t\t\t\t71C300000000000000000002 /* ObstacleBridgeNativeCrypto.swift in Sources */,\n",
+            "",
+        )
+        if "71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */," not in text:
+            text = text.replace(
+                "\t\t\t\t71C200000000000000000001 /* PacketTunnelProvider.swift in Sources */,\n",
+                "\t\t\t\t71C200000000000000000001 /* PacketTunnelProvider.swift in Sources */,\n"
+                "\t\t\t\t71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */,\n",
+                1,
+            )
+        if "71C300000000000000000002 /* ObstacleBridgeNativeCrypto.swift in IPServer Sources */," not in text:
+            text = text.replace(
+                "\t\t\t\t71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */,\n",
+                "\t\t\t\t71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */,\n"
+                "\t\t\t\t71C300000000000000000002 /* ObstacleBridgeNativeCrypto.swift in IPServer Sources */,\n",
+                1,
+            )
         return text
     old = (
         "\t\t71C200000000000000000080 /* Sources */ = {\n"
@@ -145,6 +174,56 @@ def patch_python_build_script(text: str) -> str:
         return text
     raise ValueError("Process Python libraries shell script not found")
 
+def add_app_network_extension_framework(text: str) -> str:
+    build_file = (
+        "\t\t71C400000000000000000002 /* NetworkExtension.framework in App Frameworks */ = "
+        "{isa = PBXBuildFile; fileRef = 71C200000000000000000030 /* NetworkExtension.framework */; };\n"
+    )
+    text = insert_before(text, "/* End PBXBuildFile section */\n", build_file)
+
+    if "71C400000000000000000002 /* NetworkExtension.framework in App Frameworks */," in text:
+        return text
+
+    match = re.search(
+        r"(\t\t[0-9A-F]{24} /\* ObstacleBridge \*/ = \{\n"
+        r"\t\t\tisa = PBXNativeTarget;.*?"
+        r"\t\t\tbuildPhases = \(\n"
+        r"(?P<phases>.*?)"
+        r"\t\t\t\);)",
+        text,
+        flags=re.DOTALL,
+    )
+    if not match:
+        raise ValueError("ObstacleBridge native target build phases not found")
+
+    phases = match.group("phases")
+    framework_phase_match = re.search(
+        r"\t\t\t\t(?P<id>[0-9A-F]{24}) /\* Frameworks \*/,\n",
+        phases,
+    )
+    if not framework_phase_match:
+        raise ValueError("ObstacleBridge Frameworks build phase id not found")
+
+    framework_phase_id = framework_phase_match.group("id")
+
+    phase_pattern = (
+        rf"(\t\t{framework_phase_id} /\* Frameworks \*/ = \{{\n"
+        rf"\t\t\tisa = PBXFrameworksBuildPhase;\n"
+        rf"\t\t\tbuildActionMask = 2147483647;\n"
+        rf"\t\t\tfiles = \(\n)"
+    )
+
+    replacement = (
+        r"\1"
+        "\t\t\t\t71C400000000000000000002 /* NetworkExtension.framework in App Frameworks */,\n"
+    )
+
+    patched, count = re.subn(phase_pattern, replacement, text, count=1)
+    if count != 1:
+        raise ValueError("ObstacleBridge Frameworks build phase block not found")
+
+    return patched
+
 
 def patch_app_target(text: str) -> str:
     text = insert_before(
@@ -155,8 +234,18 @@ def patch_app_target(text: str) -> str:
     )
     text = insert_before(
         text,
+        "/* End PBXBuildFile section */\n",
+        "\t\t71C400000000000000000001 /* ObstacleBridgeTunnelControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71C400000000000000000010 /* ObstacleBridgeTunnelControl.swift */; };\n",
+    )
+    text = insert_before(
+        text,
         "/* End PBXFileReference section */\n",
         "\t\t71C300000000000000000010 /* ObstacleBridgeNativeCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgeNativeCrypto.swift; path = \"../../../../native/ObstacleBridgeShared/ObstacleBridgeNativeCrypto.swift\"; sourceTree = SOURCE_ROOT; };\n",
+    )
+    text = insert_before(
+        text,
+        "/* End PBXFileReference section */\n",
+        "\t\t71C400000000000000000010 /* ObstacleBridgeTunnelControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgeTunnelControl.swift; path = \"../../../../native/ObstacleBridgeApp/ObstacleBridgeTunnelControl.swift\"; sourceTree = SOURCE_ROOT; };\n",
     )
     text = replace_once(
         text,
@@ -186,11 +275,13 @@ def patch_app_target(text: str) -> str:
         "\t\t\tisa = PBXGroup;\n"
         "\t\t\tchildren = (\n"
         "\t\t\t\t71C300000000000000000010 /* ObstacleBridgeNativeCrypto.swift */,\n"
+        "\t\t\t\t71C400000000000000000010 /* ObstacleBridgeTunnelControl.swift */,\n"
         "\t\t\t);\n"
         "\t\t\tname = \"Shared Native\";\n"
         "\t\t\tsourceTree = \"<group>\";\n"
         "\t\t};\n",
     )
+    text = add_app_network_extension_framework(text)
     return text
 
 
@@ -265,21 +356,24 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
         "\t\t};\n",
     )
-    text = replace_once(
-        text,
-        "\t\t60796ED919190F4100A9926B = {\n\t\t\tisa = PBXGroup;\n\t\t\tchildren = (\n\t\t\t\t60A04BC228B35E9F00DAA9E5 /* Support */,\n\t\t\t\t60796EEB19190F4100A9926B /* ObstacleBridge */,\n\t\t\t\t60796EE419190F4100A9926B /* Frameworks */,\n\t\t\t\t60796EE319190F4100A9926B /* Products */,\n\t\t\t);\n\t\t\tsourceTree = \"<group>\";\n\t\t};\n",
-        "\t\t60796ED919190F4100A9926B = {\n\t\t\tisa = PBXGroup;\n\t\t\tchildren = (\n\t\t\t\t60A04BC228B35E9F00DAA9E5 /* Support */,\n\t\t\t\t60796EEB19190F4100A9926B /* ObstacleBridge */,\n\t\t\t\t71C200000000000000000050 /* IPServer Extension */,\n\t\t\t\t60796EE419190F4100A9926B /* Frameworks */,\n\t\t\t\t60796EE319190F4100A9926B /* Products */,\n\t\t\t);\n\t\t\tsourceTree = \"<group>\";\n\t\t};\n",
-    )
-    text = replace_once(
-        text,
-        "\t\t60796EE319190F4100A9926B /* Products */ = {\n\t\t\tisa = PBXGroup;\n\t\t\tchildren = (\n\t\t\t\t610000000000000000100400 /* ObstacleBridge.app */,\n\t\t\t);\n\t\t\tname = Products;\n\t\t\tsourceTree = \"<group>\";\n\t\t};\n",
-        "\t\t60796EE319190F4100A9926B /* Products */ = {\n\t\t\tisa = PBXGroup;\n\t\t\tchildren = (\n\t\t\t\t610000000000000000100400 /* ObstacleBridge.app */,\n\t\t\t\t71C200000000000000000031 /* IPServer.appex */,\n\t\t\t);\n\t\t\tname = Products;\n\t\t\tsourceTree = \"<group>\";\n\t\t};\n",
-    )
-    text = replace_once(
-        text,
-        "\t\t60796EE419190F4100A9926B /* Frameworks */ = {\n\t\t\tisa = PBXGroup;\n\t\t\tchildren = (\n\t\t\t\t610000000000000000000800 /* CoreGraphics.framework */,\n\t\t\t\t610000000000000000000900 /* Foundation.framework */,\n\t\t\t\t610000000000000000000A00 /* UIKit.framework */,\n\t\t\t\t60C0057828F7DB9A008B9E84 /* WebKit.framework */,\n\t\t\t);\n\t\t\tname = Frameworks;\n\t\t\tsourceTree = \"<group>\";\n\t\t};\n",
-        "\t\t60796EE419190F4100A9926B /* Frameworks */ = {\n\t\t\tisa = PBXGroup;\n\t\t\tchildren = (\n\t\t\t\t610000000000000000000800 /* CoreGraphics.framework */,\n\t\t\t\t610000000000000000000900 /* Foundation.framework */,\n\t\t\t\t71C200000000000000000030 /* NetworkExtension.framework */,\n\t\t\t\t610000000000000000000A00 /* UIKit.framework */,\n\t\t\t\t60C0057828F7DB9A008B9E84 /* WebKit.framework */,\n\t\t\t);\n\t\t\tname = Frameworks;\n\t\t\tsourceTree = \"<group>\";\n\t\t};\n",
-    )
+    if "71C200000000000000000050 /* IPServer Extension */" not in text:
+        text = replace_once(
+            text,
+            "\t\t60796ED919190F4100A9926B = {\n\t\t\tisa = PBXGroup;\n\t\t\tchildren = (\n\t\t\t\t60A04BC228B35E9F00DAA9E5 /* Support */,\n\t\t\t\t60796EEB19190F4100A9926B /* ObstacleBridge */,\n\t\t\t\t60796EE419190F4100A9926B /* Frameworks */,\n\t\t\t\t60796EE319190F4100A9926B /* Products */,\n\t\t\t);\n\t\t\tsourceTree = \"<group>\";\n\t\t};\n",
+            "\t\t60796ED919190F4100A9926B = {\n\t\t\tisa = PBXGroup;\n\t\t\tchildren = (\n\t\t\t\t60A04BC228B35E9F00DAA9E5 /* Support */,\n\t\t\t\t60796EEB19190F4100A9926B /* ObstacleBridge */,\n\t\t\t\t71C200000000000000000050 /* IPServer Extension */,\n\t\t\t\t60796EE419190F4100A9926B /* Frameworks */,\n\t\t\t\t60796EE319190F4100A9926B /* Products */,\n\t\t\t);\n\t\t\tsourceTree = \"<group>\";\n\t\t};\n",
+        )
+    if "71C200000000000000000031 /* IPServer.appex */" not in text:
+        text = replace_once(
+            text,
+            "\t\t60796EE319190F4100A9926B /* Products */ = {\n\t\t\tisa = PBXGroup;\n\t\t\tchildren = (\n\t\t\t\t610000000000000000100400 /* ObstacleBridge.app */,\n\t\t\t);\n\t\t\tname = Products;\n\t\t\tsourceTree = \"<group>\";\n\t\t};\n",
+            "\t\t60796EE319190F4100A9926B /* Products */ = {\n\t\t\tisa = PBXGroup;\n\t\t\tchildren = (\n\t\t\t\t610000000000000000100400 /* ObstacleBridge.app */,\n\t\t\t\t71C200000000000000000031 /* IPServer.appex */,\n\t\t\t);\n\t\t\tname = Products;\n\t\t\tsourceTree = \"<group>\";\n\t\t};\n",
+        )
+    if "71C200000000000000000030 /* NetworkExtension.framework */" not in text:
+        text = replace_once(
+            text,
+            "\t\t60796EE419190F4100A9926B /* Frameworks */ = {\n\t\t\tisa = PBXGroup;\n\t\t\tchildren = (\n\t\t\t\t610000000000000000000800 /* CoreGraphics.framework */,\n\t\t\t\t610000000000000000000900 /* Foundation.framework */,\n\t\t\t\t610000000000000000000A00 /* UIKit.framework */,\n\t\t\t\t60C0057828F7DB9A008B9E84 /* WebKit.framework */,\n\t\t\t);\n\t\t\tname = Frameworks;\n\t\t\tsourceTree = \"<group>\";\n\t\t};\n",
+            "\t\t60796EE419190F4100A9926B /* Frameworks */ = {\n\t\t\tisa = PBXGroup;\n\t\t\tchildren = (\n\t\t\t\t610000000000000000000800 /* CoreGraphics.framework */,\n\t\t\t\t610000000000000000000900 /* Foundation.framework */,\n\t\t\t\t71C200000000000000000030 /* NetworkExtension.framework */,\n\t\t\t\t610000000000000000000A00 /* UIKit.framework */,\n\t\t\t\t60C0057828F7DB9A008B9E84 /* WebKit.framework */,\n\t\t\t);\n\t\t\tname = Frameworks;\n\t\t\tsourceTree = \"<group>\";\n\t\t};\n",
+        )
     text = insert_before(
         text,
         "/* End PBXGroup section */\n",
@@ -307,6 +401,7 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t\t\t71C200000000000000000080 /* Sources */,\n"
         "\t\t\t\t71C200000000000000000040 /* Frameworks */,\n"
         "\t\t\t\t71C200000000000000000070 /* Resources */,\n"
+        "\t\t\t\t71C2000000000000000000C0 /* Process Python libraries for IPServer */,\n"
         "\t\t\t);\n"
         "\t\t\tbuildRules = (\n"
         "\t\t\t);\n"
@@ -332,6 +427,29 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t\tfiles = (\n"
         "\t\t\t);\n"
         "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
+        "\t\t};\n",
+    )
+    text = insert_before(
+        text,
+        "/* End PBXShellScriptBuildPhase section */\n",
+        "\t\t71C2000000000000000000C0 /* Process Python libraries for IPServer */ = {\n"
+        "\t\t\tisa = PBXShellScriptBuildPhase;\n"
+        "\t\t\talwaysOutOfDate = 1;\n"
+        "\t\t\tbuildActionMask = 2147483647;\n"
+        "\t\t\tfiles = (\n"
+        "\t\t\t);\n"
+        "\t\t\tinputFileListPaths = (\n"
+        "\t\t\t);\n"
+        "\t\t\tinputPaths = (\n"
+        "\t\t\t);\n"
+        "\t\t\tname = \"Process Python libraries for IPServer\";\n"
+        "\t\t\toutputFileListPaths = (\n"
+        "\t\t\t);\n"
+        "\t\t\toutputPaths = (\n"
+        "\t\t\t);\n"
+        "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
+        "\t\t\tshellPath = /bin/sh;\n"
+        "\t\t\tshellScript = \"set -e\\nsource $PROJECT_DIR/Support/Python.xcframework/build/utils.sh\\n\\nif [ \\\"$EFFECTIVE_PLATFORM_NAME\\\" = \\\"-iphonesimulator\\\" ]; then\\n    PACKAGES_PATH=\\\"app_packages.iphonesimulator\\\"\\n    if [ -z \\\"${EXPANDED_CODE_SIGN_IDENTITY:-}\\\" ]; then\\n        export EXPANDED_CODE_SIGN_IDENTITY=-\\n        export EXPANDED_CODE_SIGN_IDENTITY_NAME=\\\"Ad Hoc\\\"\\n    fi\\nelse\\n    PACKAGES_PATH=\\\"app_packages.iphoneos\\\"\\nfi\\nrsync -au --delete \\\"$PROJECT_DIR/ObstacleBridge/$PACKAGES_PATH/\\\" \\\"$CODESIGNING_FOLDER_PATH/app_packages\\\"\\ninstall_python Support/Python.xcframework app_packages\\n\";\n"
         "\t\t};\n",
     )
     if "71C200000000000000000080 /* Sources */ = {" in text:
@@ -441,6 +559,10 @@ def patch_ipserver_target(text: str) -> str:
 
 
 def patch_pbxproj_text(text: str) -> str:
+    # Diagnostic builds may inject these flags manually. They must never
+    # persist into the normal generated project because they bypass Python
+    # startup or WebAdmin startup inside the Network Extension.
+    text = re.sub(r'\n\t+\t*OTHER_SWIFT_FLAGS = "-D OB_IPSERVER_(?:SWIFT_SMOKE|PYTHON_PROBE)";', "", text)
     text = patch_python_build_script(text)
     text = patch_app_target(text)
     text = patch_ipserver_target(text)

@@ -150,8 +150,29 @@ def test_app_builds_m3_vpn_profile_from_saved_profile_contract() -> None:
     assert vpn_profile["provider_configuration"]["peer"]["host"] == "bridge.example.net"
 
 
-def test_app_connect_profile_starts_runtime_with_obstacle_bridge_section(tmp_path: Path) -> None:
+def test_app_default_facade_does_not_own_runtime() -> None:
     app = ObstacleBridgeIOSApp()
+
+    snapshot = app.connection_snapshot()
+
+    assert app.client is None
+    assert snapshot["started"] is False
+    assert snapshot["runtime_owner"] == "IPServer Network Extension"
+
+
+def test_app_default_facade_rejects_runtime_start() -> None:
+    app = ObstacleBridgeIOSApp()
+
+    try:
+        app.start_embedded_webadmin()
+    except RuntimeError as exc:
+        assert "IPServer Network Extension" in str(exc)
+    else:  # pragma: no cover - makes the test failure message clearer.
+        raise AssertionError("foreground app facade unexpectedly started the runtime")
+
+
+def test_app_connect_profile_starts_runtime_with_obstacle_bridge_section(tmp_path: Path) -> None:
+    app = ObstacleBridgeIOSApp(owns_runtime=True)
     app.profile_store = ProfileStore(tmp_path, secret_store=InMemorySecretStore())
     app.client = _FakeClient()
 
@@ -175,7 +196,7 @@ def test_app_connect_profile_starts_runtime_with_obstacle_bridge_section(tmp_pat
     assert app.client.last_config["overlay_transport"] == "ws"
     assert app.client.last_config["ws_peer_port"] == 8080
     assert app.client.last_config["admin_web"] is True
-    assert app.client.last_config["admin_web_bind"] == "127.0.0.1"
+    assert app.client.last_config["admin_web_bind"] == "0.0.0.0"
     assert app.client.last_config["admin_web_port"] == 18080
     assert app.client.last_config["admin_web_dir"] == str(ObstacleBridgeIOSApp.ADMIN_WEB_DIR)
     assert app.client.last_config["ws_static_dir"] == str(ObstacleBridgeIOSApp.WEB_DIR)
@@ -184,7 +205,7 @@ def test_app_connect_profile_starts_runtime_with_obstacle_bridge_section(tmp_pat
 
 
 def test_app_disconnect_profile_stops_runtime_and_clears_active_profile(tmp_path: Path) -> None:
-    app = ObstacleBridgeIOSApp()
+    app = ObstacleBridgeIOSApp(owns_runtime=True)
     app.profile_store = ProfileStore(tmp_path, secret_store=InMemorySecretStore())
     app.client = _FakeClient()
 
@@ -207,7 +228,7 @@ def test_app_disconnect_profile_stops_runtime_and_clears_active_profile(tmp_path
 
 
 def test_app_start_embedded_webadmin_starts_default_runtime() -> None:
-    app = ObstacleBridgeIOSApp()
+    app = ObstacleBridgeIOSApp(owns_runtime=True)
     app.client = _FakeClient()
 
     snapshot = app.start_embedded_webadmin()
@@ -215,7 +236,7 @@ def test_app_start_embedded_webadmin_starts_default_runtime() -> None:
     assert snapshot["started"] is True
     assert app.client.start_calls == 1
     assert app.client.last_config["admin_web"]["admin_web"] is True
-    assert app.client.last_config["admin_web"]["admin_web_bind"] == "127.0.0.1"
+    assert app.client.last_config["admin_web"]["admin_web_bind"] == "0.0.0.0"
     assert app.client.last_config["admin_web"]["admin_web_port"] == 18080
     assert app.client.last_config["admin_web"]["admin_web_dir"] == str(ObstacleBridgeIOSApp.ADMIN_WEB_DIR)
     assert app.client.last_config["ws_session"]["ws_static_dir"] == str(ObstacleBridgeIOSApp.WEB_DIR)
@@ -249,7 +270,7 @@ def test_load_grouped_runtime_config_preserves_saved_transport_fields(tmp_path: 
     assert loaded["tcp_session"]["overlay_transport"] == "tcp"
     assert loaded["tcp_session"]["tcp_peer"] == "bridge.example.net"
     assert loaded["tcp_session"]["tcp_peer_port"] == 4433
-    assert loaded["admin_web"]["admin_web_bind"] == "127.0.0.1"
+    assert loaded["admin_web"]["admin_web_bind"] == "0.0.0.0"
     assert loaded["admin_web"]["admin_web_port"] == 18080
     assert loaded["admin_web"]["admin_web_dir"] == str(root / "admin_web")
 
@@ -269,7 +290,7 @@ def test_app_start_embedded_webadmin_reloads_saved_runtime_config(tmp_path: Path
         ),
         encoding="utf-8",
     )
-    app = ObstacleBridgeIOSApp()
+    app = ObstacleBridgeIOSApp(owns_runtime=True)
     app.client = _FakeClient()
     app.DOCUMENTS_ROOT = root
     app.CONFIG_DIR = root / "config"
@@ -283,13 +304,13 @@ def test_app_start_embedded_webadmin_reloads_saved_runtime_config(tmp_path: Path
     assert app.client.last_config["tcp_session"]["overlay_transport"] == "tcp"
     assert app.client.last_config["tcp_session"]["tcp_peer"] == "bridge.example.net"
     assert app.client.last_config["tcp_session"]["tcp_peer_port"] == 4433
-    assert app.client.last_config["admin_web"]["admin_web_bind"] == "127.0.0.1"
+    assert app.client.last_config["admin_web"]["admin_web_bind"] == "0.0.0.0"
     assert app.client.last_config["admin_web"]["admin_web_port"] == 18080
     assert snapshot["webadmin_url"] == "http://127.0.0.1:18080/"
 
 
 def test_app_embedded_restart_hook_restarts_client_with_current_config(monkeypatch) -> None:
-    app = ObstacleBridgeIOSApp()
+    app = ObstacleBridgeIOSApp(owns_runtime=True)
     app.client = _FakeClient()
     replacement_clients: list[_FakeClient] = []
 
@@ -310,7 +331,7 @@ def test_app_embedded_restart_hook_restarts_client_with_current_config(monkeypat
     assert app.client is not original_client
     assert replacement_clients
     assert app.client.snapshot()["started"] is True
-    assert app.client.snapshot()["config"]["admin_web"]["admin_web_bind"] == "127.0.0.1"
+    assert app.client.snapshot()["config"]["admin_web"]["admin_web_bind"] == "0.0.0.0"
     assert callable(getattr(app.client.runner, "_embedded_restart_callback", None))
 
 
@@ -329,6 +350,8 @@ def test_startup_artifacts_seed_documents_config_logs_and_web_files(tmp_path: Pa
     manifest = json.loads((root / "documents-manifest.json").read_text(encoding="utf-8"))
     assert manifest["config_file"] == str(root / "config" / "ObstacleBridge.cfg")
     assert manifest["log_file"] == str(root / "logs" / "obstaclebridge.log")
+    assert manifest["diagnostics_file"] == str(root / "logs" / "ios-diagnostics.jsonl")
+    assert manifest["heartbeat_file"] == str(root / "logs" / "ios-heartbeat.json")
     assert manifest["admin_web_files_copied"] is True
     assert manifest["web_files_copied"] is True
 

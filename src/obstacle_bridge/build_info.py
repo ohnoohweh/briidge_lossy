@@ -1,6 +1,6 @@
 """Build metadata embedded into packaged ObstacleBridge applications."""
 
-BUILD_COMMIT = "unknown"
-BUILD_SOURCE = "not-generated"
-BUILD_DIRTY = False
-BUILD_DIFF_SHA = ""
+BUILD_COMMIT = "f8a2adecee34"
+BUILD_SOURCE = "embedded-build-info"
+BUILD_DIRTY = True
+BUILD_DIFF_SHA = "68e380070bc3"

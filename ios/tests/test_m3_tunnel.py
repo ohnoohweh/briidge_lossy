@@ -67,6 +67,9 @@ def test_provider_configuration_is_native_extension_contract() -> None:
     assert provider_config["schema"] == "obstaclebridge.ios.packet-tunnel.v1"
     assert provider_config["milestone"] == "M3"
     assert provider_config["peer"] == {"host": "bridge.example.net", "port": 4433}
+    assert provider_config["runtime_config"]["overlay_transport"] == "tcp"
+    assert provider_config["runtime_config"]["tcp_peer"] == "bridge.example.net"
+    assert provider_config["runtime_config"]["tcp_peer_port"] == 4433
     assert provider_config["network_settings"]["tunnel_address"] == "10.77.0.2"
     assert provider_config["poc"]["packet_flow"] == "NEPacketTunnelFlow"
     assert provider_config["poc"]["secure_link"] == "deferred-to-M4"

@@ -41,6 +41,21 @@ Important interpretation:
 - Therefore, BeeWare is best treated as the management-app path first, while the packet tunnel itself should be designed as an iOS Network Extension with a clear bridge to reusable ObstacleBridge logic.
 - Background Tasks does not change that conclusion for long-lived runtime ownership. `BGProcessingTask` is appropriate for deferred or maintenance-style work, not for keeping a generic WebAdmin server or ChannelMux loop continuously alive after the app loses focus.
 
+Local implementation samples reviewed:
+
+- `/Users/ohnoohweh/ios_vpn_samples/proxypin`
+- `/Users/ohnoohweh/ios_vpn_samples/SimpleTunnel`
+- `/Users/ohnoohweh/ios_vpn_samples/NEPacketTunnelVPNDemo`
+
+Sample-derived implementation recipes:
+
+- The containing app should use `NETunnelProviderManager.loadAllFromPreferences`, reuse the existing ObstacleBridge manager when present, configure one `NETunnelProviderProtocol`, call `saveToPreferences`, then `loadFromPreferences`, and only then call `startVPNTunnel`.
+- The extension principal class should follow the standard packet-tunnel form `$(PRODUCT_MODULE_NAME).PacketTunnelProvider` in the extension `Info.plist`.
+- `PacketTunnelProvider.startTunnel` should be the single owner of runtime startup. It reads `providerConfiguration`, applies `NEPacketTunnelNetworkSettings`, starts the ObstacleBridge runtime, starts packet/service loops, and calls the completion handler only after those startup steps are complete.
+- `PacketTunnelProvider.stopTunnel` should be the single owner of runtime shutdown. It must stop WebAdmin, ChannelMux, SecureLink, packet readers, and transport sessions before completing.
+- The app must communicate with the extension through `NETunnelProviderSession.sendProviderMessage` and shared App Group storage, not by directly owning the Python runtime that carries traffic.
+- Extension diagnostics must be written from the extension process, because foreground-app logs cannot prove that the packet tunnel provider started or stayed alive.
+
 ## Apple Account Requirement
 
 Developing and signing the packet-tunnel path requires more than a free Apple account.
@@ -254,11 +269,15 @@ The containing app owns:
 - high-level status
 - logs and diagnostics
 - import/export/share workflows
+- a WebView/browser surface that opens `http://127.0.0.1:18080` when the extension-hosted WebAdmin is running
 
 The packet tunnel provider extension owns:
 
 - active tunnel lifecycle
 - packet I/O through `NEPacketTunnelFlow`
+- local WebAdmin service on `127.0.0.1:18080`
+- TCP and UDP service listeners that must survive foreground app suspension
+- ChannelMux service lifecycle
 - overlay connection to the peer server
 - secure-link handshake and data protection
 - mux TUN packet forwarding
@@ -279,16 +298,59 @@ iOS apps and system traffic
   -> remote TUN/service target
 ```
 
+Conceptual local admin path:
+
+```text
+ObstacleBridge app WebView or Safari
+  -> http://127.0.0.1:18080
+  -> extension-owned WebAdmin listener
+  -> extension-owned config/status APIs
+  -> ChannelMux, SecureLink, and transport runtime state
+```
+
 Conceptual control path:
 
 ```text
 Containing app
-  -> stored profile/config
+  -> App Group profile/config and Keychain/App Group secret boundary
   -> NETunnelProviderManager
   -> packet tunnel provider extension
-  -> runtime snapshots/events
+  -> NETunnelProviderSession provider messages
+  -> runtime snapshots/events/logs
   -> containing app status UI
 ```
+
+### Current Packet-Tunnel Routing Concept
+
+The current iOS target should use a minimal split packet tunnel, not a full-device VPN route.
+
+Reasoning:
+
+- The immediate goal is to make iOS launch and keep alive the `IPServer` Network Extension so WebAdmin, ChannelMux, SecureLink, and lower runtime layers can run independently from the foreground app.
+- A private tunnel address such as `10.77.0.2` gives the packet tunnel provider a real iOS-managed virtual interface and a stable diagnostic address.
+- The extension-hosted WebAdmin service remains a local admin endpoint, initially `http://127.0.0.1:18080`.
+- If loopback access from Safari or the containing app is unreliable, the same WebAdmin service may also bind to the tunnel address, for example `http://10.77.0.2:18080`, but that does not require a full-device VPN route.
+
+Current route policy:
+
+- Use a narrow included route such as `10.77.0.0/24`.
+- Avoid `0.0.0.0/0` and `::/0` while the provider is only hosting local services and diagnostics.
+- Keep DNS settings conservative and only add them when required for the selected tunnel behavior.
+- Treat `10.77.0.2` as the extension/tunnel address and `127.0.0.1:18080` as the local AdminWeb entrypoint.
+
+Full-tunnel policy:
+
+- A full route such as `0.0.0.0/0` means iOS will send general device traffic into `NEPacketTunnelFlow`.
+- Full-tunnel mode must not be enabled until the provider continuously reads packets from `packetFlow`, forwards them through ChannelMux/SecureLink/transport, receives return packets, and writes them back to `packetFlow`.
+- Without that transparent packet forwarding loop, a full-tunnel profile can break Safari, DNS, and unrelated app networking.
+- Full-tunnel mode is therefore a later M3/M4 capability, not the current AdminWeb bring-up target.
+
+Critical boundary:
+
+- The containing app must be disposable while traffic is active. If iOS suspends or terminates the app after the user opens Safari, locks the phone, or switches applications, the extension-hosted runtime must continue independently.
+- The containing app may render WebAdmin, but it must not host WebAdmin.
+- The containing app may start, stop, and inspect the tunnel, but it must not own ChannelMux, SecureLink, or lower transport loops.
+- The extension must be able to boot the complete traffic path from persisted provider configuration and shared storage without requiring a foreground Python process in the app.
 
 ## BeeWare Role
 
@@ -352,6 +414,44 @@ Platform implementations:
 
 If the extension is implemented in Swift, the same abstraction should still exist conceptually. Swift can feed packets into a compatibility layer that emits/accepts the same mux TUN frames as Python.
 
+### PacketTunnelProvider Encapsulation Model
+
+The packet tunnel provider is the iOS execution engine. For the current ObstacleBridge target, this means `ios/native/IPServer/PacketTunnelProvider.swift` is not only a packet adapter; it is the root lifecycle owner for WebAdmin, ChannelMux, SecureLink, and the selected lower transport layers.
+
+Startup sequence:
+
+1. iOS launches the extension and calls `PacketTunnelProvider.startTunnel`.
+2. The provider validates the `NETunnelProviderProtocol.providerConfiguration` schema and loads shared configuration from the App Group.
+3. The provider applies `NEPacketTunnelNetworkSettings` with the selected tunnel address, included routes, excluded routes, DNS, and MTU.
+4. The provider boots the embedded ObstacleBridge runtime inside the extension process.
+5. The provider starts WebAdmin on `127.0.0.1:18080` inside the extension, not inside the containing app.
+6. The provider starts ChannelMux, SecureLink, compression, and selected transport sessions.
+7. The provider starts packet-flow and service loops, then calls the `startTunnel` completion handler.
+
+Runtime ownership:
+
+- WebAdmin runs as an extension-owned local admin service. The app only displays it through a WebView or the user opens it in Safari.
+- ChannelMux runs in the extension and owns TUN, TCP, and UDP service channels.
+- SecureLink runs in the extension so handshake state, rekeying, replay defense, and encryption are not tied to foreground-app lifetime.
+- TCP/UDP listeners that must survive app focus loss run in the extension. Foreground-only experiments may exist for development, but they are not the iOS product architecture.
+- `NEPacketTunnelFlow.readPackets` feeds packet data into the ObstacleBridge packet adapter. Packets returned by the remote mux path are written back with `NEPacketTunnelFlow.writePackets`.
+
+Shutdown sequence:
+
+1. iOS calls `PacketTunnelProvider.stopTunnel`.
+2. The provider records the stop reason and writes extension-side diagnostics.
+3. The provider stops accepting new WebAdmin, TCP, and UDP work.
+4. The provider drains or cancels ChannelMux sessions, SecureLink state, packet readers, and transport sessions.
+5. The provider persists final counters/status and calls the stop completion handler.
+
+App-to-extension contract:
+
+- Use `NETunnelProviderManager` for profile creation, profile reuse, enablement, and start/stop.
+- Use `NETunnelProviderSession.sendProviderMessage` for status, health, diagnostics, and controlled commands.
+- Use App Group storage for non-secret shared configuration and extension logs.
+- Use an approved secret boundary for PSK/password/key material. Plaintext secrets must not be written into normal app files.
+- Do not rely on `.git` metadata in the deployed package. Build/version metadata must be generated into package files during build.
+
 ## Background Task Boundary
 
 The iOS app may request Background Tasks capabilities, but those capabilities should be used narrowly.
@@ -377,8 +477,8 @@ Reasoning:
 
 Decision:
 
-- Keep `admin_web`, `ChannelMux`, and active transport sessions in the foreground app path unless or until a platform-specific durable runtime is introduced.
-- Use background tasks only for bounded resume/sync/export work around that foreground runtime.
+- Keep `admin_web`, `ChannelMux`, SecureLink, and active transport sessions in the packet tunnel extension for the iOS VPN product path.
+- Use background tasks only for bounded resume/sync/export work around the app and extension, never as the primary host for the live networking runtime.
 
 ## Reusing Current Python Code
 
@@ -414,7 +514,7 @@ These areas should not be reused as-is:
 - Windows WinTun implementation
 - lifecycle hook scripts
 - shell-oriented route/firewall manipulation
-- WebAdmin as an embedded HTTP server for the mobile UI
+- WebAdmin hosted by the containing app as the mobile UI runtime
 - assumptions that a long-running foreground Python process can own the tunnel
 
 ## Dependency Risk
