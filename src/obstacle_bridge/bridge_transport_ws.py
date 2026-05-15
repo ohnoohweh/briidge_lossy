@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import base64
 import contextlib
+import ctypes
 import hashlib
 import importlib.util
 import inspect
@@ -20,6 +21,7 @@ import urllib.parse
 from collections import deque
 from contextlib import contextmanager
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
+from ctypes import wintypes
 
 from . import bridge as _bridge
 from .bridge_transport_common import (

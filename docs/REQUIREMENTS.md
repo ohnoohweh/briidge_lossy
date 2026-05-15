@@ -44,6 +44,8 @@ Security controls that span multiple requirement areas, including WebAdmin authe
 
 - Functional decomposition note: the requirements in this section are implemented jointly by project-owned websocket bootstrap logic and dependency-owned websocket protocol handling. The ownership boundary is documented in `docs/ARCHITECTURE.md` under `WebSocket proxy tunneling`.
 
+- Implementation note (Windows Negotiate path): the Windows WebSocket proxy `Negotiate`/NTLM auth path depends on `ctypes`/`wintypes` bindings for WinHTTP and SSPI calls inside the transport module; that import-time dependency is part of the delivered behavior for `REQ-WSP-009` and `REQ-WSP-012` failure reporting.
+
 - `REQ-WSP-001`: A WebSocket peer client shall be able to establish its outbound websocket transport through an HTTP proxy when proxy routing is required for the target environment.
 - `REQ-WSP-002`: The WebSocket proxy capability shall be scoped to peer-client mode only; it shall not imply listener-side proxy support.
 - `REQ-WSP-003`: The WebSocket proxy capability shall be scoped to the WebSocket transport only; it shall not imply equivalent support for `myudp`, `tcp`, or `quic`.

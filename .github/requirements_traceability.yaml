@@ -71,6 +71,9 @@ REQ-OVL-007:
 # NOTE: The 2026-05-15 iOS E2E CI follow-up keeps the existing REQ-OVL-004,
 # REQ-AUT-001/002/004, and REQ-LIFE-010 mappings intact while hardening the
 # host-side iOS E2E tests against xdist port-allocation races.
+# NOTE: The 2026-05-15 Windows proxy-negotiation import fix keeps the existing
+# REQ-WSP-009 and REQ-WSP-012 mappings intact while restoring ctypes-backed
+# WinHTTP/SSPI Negotiate behavior in the split WebSocket transport module.
 # The application-vs-library functional decomposition for REQ-WSP-* is documented in
 # docs/ARCHITECTURE.md under "WebSocket proxy tunneling".
 # The broader separation between user use-cases, external assumptions, and
