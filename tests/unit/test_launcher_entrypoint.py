@@ -16,6 +16,15 @@ class _FakeProcess:
         return self._returncode
 
 
+def _assert_default_bridge_cmd_prefix(cmd: list[str]) -> None:
+    assert cmd[:4] == [
+        launcher.sys.executable,
+        "-c",
+        "from obstacle_bridge.bridge import main; main()",
+        "--config",
+    ]
+
+
 def test_launcher_forwards_unknown_args_to_bridge(monkeypatch) -> None:
     calls = []
 
@@ -31,7 +40,7 @@ def test_launcher_forwards_unknown_args_to_bridge(monkeypatch) -> None:
     assert len(calls) == 1
     cmd, kwargs = calls[0]
     assert kwargs == {}
-    assert cmd[:4] == [launcher.sys.executable, "-m", "obstacle_bridge.bridge", "--config"]
+    _assert_default_bridge_cmd_prefix(cmd)
     assert "ObstacleBridge.cfg" in cmd
     assert cmd[-4:] == ["--udp-bind", "0.0.0.0", "--udp-own-port", "17000"]
 
@@ -103,7 +112,7 @@ def test_launcher_offers_dependency_install_before_default_command(monkeypatch) 
     assert rc == 0
     assert calls[0][:4] == [launcher.sys.executable, "-m", "pip", "install"]
     assert calls[0][4] == "-e"
-    assert calls[1][:3] == [launcher.sys.executable, "-m", "obstacle_bridge.bridge"]
+    _assert_default_bridge_cmd_prefix(calls[1])
 
 
 def test_launcher_continues_when_dependency_install_declined(monkeypatch) -> None:
@@ -122,7 +131,7 @@ def test_launcher_continues_when_dependency_install_declined(monkeypatch) -> Non
 
     assert rc == 0
     assert len(calls) == 1
-    assert calls[0][:3] == [launcher.sys.executable, "-m", "obstacle_bridge.bridge"]
+    _assert_default_bridge_cmd_prefix(calls[0])
 
 
 def test_launcher_prints_webadmin_url_from_default_config(monkeypatch, tmp_path, capsys) -> None:

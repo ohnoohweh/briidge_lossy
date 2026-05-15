@@ -63,8 +63,8 @@ def _build_parser() -> argparse.ArgumentParser:
 def _default_bridge_command(forward_args: Sequence[str]) -> List[str]:
     return [
         sys.executable,
-        "-m",
-        "obstacle_bridge.bridge",
+        "-c",
+        "from obstacle_bridge.bridge import main; main()",
         "--config",
         "ObstacleBridge.cfg",
         *list(forward_args),

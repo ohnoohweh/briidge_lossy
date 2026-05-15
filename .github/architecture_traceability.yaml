@@ -2,6 +2,11 @@
 # It is intentionally narrower than the product-requirement traceability file:
 # it captures component-level evidence where the architecture decomposition
 # itself matters, especially for joint-function responsibilities.
+# NOTE: The 2026-05-15 runtime-refactor recovery revalidated the existing
+# ARC-CMP-004 launcher/runtime mappings while switching the default launcher
+# subprocess to `from obstacle_bridge.bridge import main; main()` and restoring
+# the default-entrypoint plus FI-admin debug paths used by the shared overlay
+# integration harness.
 
 ARC-CMP-001:
   unit_tests:

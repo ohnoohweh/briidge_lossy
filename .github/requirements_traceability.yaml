@@ -63,6 +63,11 @@ REQ-OVL-007:
 # runtime-generated localhost TLS fixtures and availability-aware loopback
 # port-block selection. This is a testability/runtime-note update in
 # REQUIREMENTS.md; the underlying requirement-to-test mappings remain unchanged.
+# NOTE: The 2026-05-15 runtime-refactor recovery keeps the existing REQ-LIFE-002,
+# REQ-LIFE-005, REQ-LIFE-008, and REQ-LIFE-009 launcher mappings intact while
+# switching the default launcher subprocess from `-m obstacle_bridge.bridge` to
+# `from obstacle_bridge.bridge import main; main()` and restoring the branch's
+# default-entrypoint / failure-injection coverage.
 # The application-vs-library functional decomposition for REQ-WSP-* is documented in
 # docs/ARCHITECTURE.md under "WebSocket proxy tunneling".
 # The broader separation between user use-cases, external assumptions, and

@@ -120,7 +120,7 @@ def _ios_documents_root() -> Path:
     try:
         root.mkdir(parents=True, exist_ok=True)
         return root
-    except PermissionError:
+    except OSError:
         fallback = Path.cwd() / ".obstaclebridge-ios-documents"
         fallback.mkdir(parents=True, exist_ok=True)
         return fallback

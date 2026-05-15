@@ -398,7 +398,14 @@ class InMemoryDebugLogHandler(logging.Handler):
             pass
 
 
-from .bridge_debug_logging import debug_print, DebugToStderrHandler, InMemoryDebugLogHandler, DebugLoggingConfigurator
+from .bridge_debug_logging import (
+    DEBUG_LOG_RING,
+    DebugLoggingConfigurator,
+    DebugToStderrHandler,
+    InMemoryDebugLogHandler,
+    configure_debug_log_ring,
+    debug_print,
+)
 
 # === ISession abstraction and UDP adapter (Milestone A; no behavior change) ===
 # Keeps everything in this file; UdpSession simply packages the existing Session+PeerProtocol

@@ -22,6 +22,32 @@ ISession = _bridge.ISession
 SessionMetrics = _bridge.SessionMetrics
 _monotonic_age_seconds_from_ns = _bridge._monotonic_age_seconds_from_ns
 
+
+def _load_aioquic_symbols() -> Dict[str, Any]:
+    from aioquic.asyncio import (
+        QuicConnectionProtocol,
+        connect as quic_connect,
+        serve as quic_serve,
+    )
+    from aioquic.quic.configuration import QuicConfiguration
+    from aioquic.quic.events import (
+        ConnectionTerminated,
+        HandshakeCompleted,
+        ProtocolNegotiated,
+        StreamDataReceived,
+    )
+
+    return {
+        "quic_serve": quic_serve,
+        "quic_connect": quic_connect,
+        "QuicConnectionProtocol": QuicConnectionProtocol,
+        "QuicConfiguration": QuicConfiguration,
+        "StreamDataReceived": StreamDataReceived,
+        "HandshakeCompleted": HandshakeCompleted,
+        "ConnectionTerminated": ConnectionTerminated,
+        "ProtocolNegotiated": ProtocolNegotiated,
+    }
+
 class QuicSession(ISession):
     """
     Overlay Session over one QUIC connection + one bidirectional stream.

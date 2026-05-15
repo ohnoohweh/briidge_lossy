@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import struct
+
 from . import bridge as _bridge
 from .bridge_transport_common import (
     _listener_family_for_host,
@@ -13,6 +15,8 @@ globals().update({
     for key, value in _bridge.__dict__.items()
     if key not in {"__builtins__", "__name__", "__package__", "__file__", "__cached__", "__doc__", "__spec__", "__loader__"}
 })
+
+_MUX_HDR = struct.Struct(">HHBBH")
 
 class BaseFrame:
     """
@@ -2231,7 +2235,7 @@ class UdpSession(ISession):
         return chan
 
     def _rewrite_mux_chan_id(self, payload: bytes, new_chan: int) -> bytes:
-        hdr = ChannelMux.MUX_HDR
+        hdr = _MUX_HDR
         if len(payload) < hdr.size:
             return payload
         try:
@@ -2243,7 +2247,7 @@ class UdpSession(ISession):
         return hdr.pack(new_chan, proto, counter, mtype, dlen) + payload[hdr.size:hdr.size + dlen]
 
     def _server_rewrite_inbound_app(self, peer_id: int, payload: bytes) -> bytes:
-        hdr = ChannelMux.MUX_HDR
+        hdr = _MUX_HDR
         if len(payload) < hdr.size:
             return payload
         try:
@@ -2271,7 +2275,7 @@ class UdpSession(ISession):
             self._server_chan_to_peer.pop(mux_chan, None)
 
     def _resolve_server_send_target(self, payload: bytes, peer_id: Optional[int] = None) -> Optional[Tuple[int, bytes]]:
-        hdr = ChannelMux.MUX_HDR
+        hdr = _MUX_HDR
         if len(payload) < hdr.size:
             return None
         try:
