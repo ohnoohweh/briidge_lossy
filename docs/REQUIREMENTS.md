@@ -144,6 +144,7 @@ Current implementation note:
 Current lifecycle implementation note:
 
 - the default launcher subprocess now invokes `from obstacle_bridge.bridge import main; main()` instead of `-m obstacle_bridge.bridge` so repo-root shim imports and split transport modules do not execute the runtime module twice under different names during supervised startup; the same recovery slice also restores the test-only failure-injection runtime wiring used by secure-link replay/fail-closed integration coverage and broadens the iOS Documents-root fallback to tolerate general OS-level write errors at import time
+- the host-side iOS E2E runtime-contract lane now relies on worker-partitioned local TCP/UDP test-port allocation so parallel xdist execution does not lose preselected WebSocket, admin, or UDP service ports before the embeddable runtime actually binds them
 
 ## Listener and multi-peer requirements
 

@@ -7,6 +7,10 @@
 # subprocess to `from obstacle_bridge.bridge import main; main()` and restoring
 # the default-entrypoint plus FI-admin debug paths used by the shared overlay
 # integration harness.
+# NOTE: The 2026-05-15 iOS E2E CI follow-up revalidates the existing ARC-CMP-003,
+# ARC-CMP-004, and ARC-CMP-006 mappings while replacing probe-and-release test
+# ports in the host-side iOS E2E harness with worker-partitioned allocations
+# that stay stable under `pytest -n 16`.
 
 ARC-CMP-001:
   unit_tests:

@@ -68,6 +68,9 @@ REQ-OVL-007:
 # switching the default launcher subprocess from `-m obstacle_bridge.bridge` to
 # `from obstacle_bridge.bridge import main; main()` and restoring the branch's
 # default-entrypoint / failure-injection coverage.
+# NOTE: The 2026-05-15 iOS E2E CI follow-up keeps the existing REQ-OVL-004,
+# REQ-AUT-001/002/004, and REQ-LIFE-010 mappings intact while hardening the
+# host-side iOS E2E tests against xdist port-allocation races.
 # The application-vs-library functional decomposition for REQ-WSP-* is documented in
 # docs/ARCHITECTURE.md under "WebSocket proxy tunneling".
 # The broader separation between user use-cases, external assumptions, and
