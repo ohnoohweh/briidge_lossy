@@ -8,10 +8,13 @@ sys.path.insert(0, str(ROOT / "ios" / "src"))
 
 from obstacle_bridge_ios.m25_ui import M25Config, profile_from_m25_config
 from obstacle_bridge_ios.m3_tunnel import (
+    M3_APP_MESSAGE_SCHEMA,
     M3NetworkSettings,
     m3_tunnel_config_from_profile,
     m3_vpn_profile_from_profile,
+    provider_status_request_message,
     provider_configuration_from_m3_config,
+    tunnel_status_from_provider_payload,
 )
 
 
@@ -64,6 +67,9 @@ def test_provider_configuration_is_native_extension_contract() -> None:
     assert provider_config["schema"] == "obstaclebridge.ios.packet-tunnel.v1"
     assert provider_config["milestone"] == "M3"
     assert provider_config["peer"] == {"host": "bridge.example.net", "port": 4433}
+    assert provider_config["runtime_config"]["overlay_transport"] == "tcp"
+    assert provider_config["runtime_config"]["tcp_peer"] == "bridge.example.net"
+    assert provider_config["runtime_config"]["tcp_peer_port"] == 4433
     assert provider_config["network_settings"]["tunnel_address"] == "10.77.0.2"
     assert provider_config["poc"]["packet_flow"] == "NEPacketTunnelFlow"
     assert provider_config["poc"]["secure_link"] == "deferred-to-M4"
@@ -79,3 +85,58 @@ def test_m3_vpn_profile_describes_netunnel_provider_install() -> None:
     assert vpn_profile["provider_bundle_identifier"] == "com.obstaclebridge.ObstacleBridge.PacketTunnel"
     assert vpn_profile["server_address"] == "bridge.example.net:4433"
     assert vpn_profile["provider_configuration"]["transport"] == "tcp"
+
+
+def test_provider_status_request_message_is_versioned() -> None:
+    payload = provider_status_request_message(request_id="req-123")
+
+    assert payload == {
+        "schema": M3_APP_MESSAGE_SCHEMA,
+        "request_id": "req-123",
+        "action": "status",
+    }
+
+
+def test_tunnel_status_from_provider_payload_accepts_current_native_shape() -> None:
+    status = tunnel_status_from_provider_payload(
+        {
+            "state": "running",
+            "packetsFromSystem": 11,
+            "packetsToSystem": 12,
+            "bytesFromSystem": 101,
+            "bytesToSystem": 202,
+            "lastError": "",
+        }
+    )
+
+    assert status.state == "running"
+    assert status.packets_from_system == 11
+    assert status.packets_to_system == 12
+    assert status.bytes_from_system == 101
+    assert status.bytes_to_system == 202
+    assert status.last_error == ""
+
+
+def test_tunnel_status_from_provider_payload_accepts_versioned_envelope() -> None:
+    status = tunnel_status_from_provider_payload(
+        {
+            "schema": M3_APP_MESSAGE_SCHEMA,
+            "request_id": "req-123",
+            "action": "status",
+            "status": {
+                "state": "failed",
+                "packets_from_system": 1,
+                "packets_to_system": 2,
+                "bytes_from_system": 3,
+                "bytes_to_system": 4,
+                "last_error": "peer disconnected",
+            },
+        }
+    )
+
+    assert status.state == "failed"
+    assert status.packets_from_system == 1
+    assert status.packets_to_system == 2
+    assert status.bytes_from_system == 3
+    assert status.bytes_to_system == 4
+    assert status.last_error == "peer disconnected"

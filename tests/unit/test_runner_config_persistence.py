@@ -2,6 +2,7 @@ import argparse
 import json
 
 import obstacle_bridge.bridge as bridge
+import obstacle_bridge.bridge_runner as bridge_runner
 from obstacle_bridge.bridge import ConfigAwareCLI, Runner
 
 
@@ -57,3 +58,71 @@ def test_runtime_config_encrypts_secret_fields_and_loads_them_back(tmp_path, mon
 
     assert loaded["admin_web"]["admin_web_password"] == "admin-secret"
     assert loaded["secure_link"]["secure_link_psk"] == "bridge-secret"
+
+
+def test_runtime_config_allows_empty_secret_fields_without_crypto_backend(tmp_path, monkeypatch):
+    monkeypatch.setattr(bridge, "hashes", None)
+    monkeypatch.setattr(bridge, "HKDF", None)
+    runner = _make_runner(tmp_path)
+    runner.args.admin_web_password = ""
+    runner.args.secure_link_psk = ""
+    runner.args._config_sections = {
+        "admin_web": ["admin_web_bind", "admin_web_password", "admin_web_port"],
+        "secure_link": ["secure_link_psk"],
+    }
+
+    ok, err = runner.save_runtime_config()
+
+    assert ok is True
+    assert err == ""
+
+    written = json.loads((tmp_path / "ObstacleBridge.cfg").read_text(encoding="utf-8"))
+    assert written["admin_web"]["admin_web_password"] == ""
+    assert written["secure_link"]["secure_link_psk"] == ""
+
+
+def test_update_config_disabling_admin_web_auth_clears_credentials(tmp_path):
+    runner = _make_runner(tmp_path)
+    runner.args.admin_web_auth_disable = False
+    runner.args.admin_web_username = "admin"
+    runner.args._config_sections = {
+        "admin_web": [
+            "admin_web_bind",
+            "admin_web_port",
+            "admin_web_auth_disable",
+            "admin_web_username",
+            "admin_web_password",
+        ]
+    }
+
+    ok, err = runner.update_config({"admin_web_auth_disable": True, "admin_web_password": ""})
+
+    assert ok is True
+    assert err == ""
+    assert runner.args.admin_web_auth_disable is True
+    assert runner.args.admin_web_username == ""
+    assert runner.args.admin_web_password == ""
+
+    written = json.loads((tmp_path / "ObstacleBridge.cfg").read_text(encoding="utf-8"))
+    assert written["admin_web"]["admin_web_auth_disable"] is True
+    assert written["admin_web"]["admin_web_username"] == ""
+    assert written["admin_web"]["admin_web_password"] == ""
+
+
+def test_ios_runtime_config_persists_secret_fields_as_plaintext(tmp_path, monkeypatch):
+    monkeypatch.setattr(bridge_runner, "_admin_ui_platform", lambda: "ios")
+    monkeypatch.setattr(bridge, "ChaCha20Poly1305", None)
+    runner = _make_runner(tmp_path)
+    runner.args._config_sections = {
+        "admin_web": ["admin_web_bind", "admin_web_password", "admin_web_port"],
+        "secure_link": ["secure_link_psk"],
+    }
+
+    ok, err = runner.save_runtime_config()
+
+    assert ok is True
+    assert err == ""
+
+    written = json.loads((tmp_path / "ObstacleBridge.cfg").read_text(encoding="utf-8"))
+    assert written["admin_web"]["admin_web_password"] == "admin-secret"
+    assert written["secure_link"]["secure_link_psk"] == "bridge-secret"

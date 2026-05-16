@@ -15,14 +15,17 @@ author_email = "opensource@example.com"
 formal_name = "ObstacleBridge"
 description = "ObstacleBridge iOS companion app prototype"
 long_description = "Imports and previews ObstacleBridge onboarding artifacts."
+icon = "resources/obstaclebridge-icon"
 sources = [
     "src/obstacle_bridge_ios",
+    "src",
     "../src/obstacle_bridge",
     "../web",
 ]
 requires = [
     "toga>=0.4.8",
     "websockets",
+    "rubicon-objc>=0.5.3",
 ]
 
 [tool.briefcase.app.obstacle_bridge_ios.iOS]
@@ -40,6 +43,7 @@ description = "Standalone iOS E2E probe app for ObstacleBridge integration tests
 long_description = "Runs headless simulator/device probes without embedding test framework code in the ObstacleBridge iOS app."
 sources = [
     "e2e_app/src/obstacle_bridge_ios_e2e",
+    "src/obstacle_bridge_ios",
     "../src/obstacle_bridge",
 ]
 requires = [

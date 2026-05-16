@@ -7,6 +7,7 @@ import json
 import time
 
 from . import bridge as base
+from . import bridge_runner as runtime
 
 
 class SecureLinkPskSessionFI(base.SecureLinkPskSession):
@@ -274,7 +275,10 @@ def main(argv=None) -> None:
     base.SecureLinkPskSession = SecureLinkPskSessionFI
     base.Runner = RunnerFI
     base.AdminWebUI = AdminWebUIFI
-    base.main(argv)
+    runtime.SecureLinkPskSession = SecureLinkPskSessionFI
+    runtime.Runner = RunnerFI
+    runtime.AdminWebUI = AdminWebUIFI
+    runtime.main(argv)
 
 
 if __name__ == "__main__":

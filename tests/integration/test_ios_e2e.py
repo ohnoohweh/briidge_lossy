@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
 import sys
 from pathlib import Path
@@ -47,12 +48,48 @@ async def _write_packet_frame(writer: asyncio.StreamWriter, packet: bytes) -> No
     await asyncio.wait_for(writer.drain(), timeout=2.0)
 
 
-def _unused_port(kind: int) -> int:
-    with socket.socket(socket.AF_INET, kind) as sock:
-        if kind == socket.SOCK_STREAM:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+IOS_E2E_TCP_PORT_BASE = 52000
+IOS_E2E_UDP_PORT_BASE = 56000
+IOS_E2E_PORT_WINDOW = 2000
+
+
+def _xdist_worker_index() -> int:
+    worker_id = str(os.environ.get("PYTEST_XDIST_WORKER", "gw0") or "gw0")
+    digits = "".join(ch for ch in worker_id if ch.isdigit())
+    return int(digits or 0)
+
+
+def _xdist_worker_count() -> int:
+    raw = str(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "1") or "1")
+    try:
+        return max(1, int(raw))
+    except Exception:
+        return 1
+
+
+def _alloc_local_port(kind: int, *, case_index: int, base: int) -> int:
+    worker_index = _xdist_worker_index()
+    worker_count = _xdist_worker_count()
+    upper_bound = min(65535, int(base) + IOS_E2E_PORT_WINDOW)
+    available = upper_bound - int(base)
+    if available <= worker_count:
+        raise RuntimeError(f"iOS E2E port allocation window too small: base={base} workers={worker_count}")
+    per_worker_budget = max(16, available // worker_count)
+    start = int(base) + (worker_index * per_worker_budget)
+    stop = min(upper_bound, start + per_worker_budget)
+    span = max(1, stop - start)
+    first = start + (int(case_index) % span)
+    candidates = list(range(first, stop)) + list(range(start, first))
+    for port in candidates:
+        with socket.socket(socket.AF_INET, kind) as sock:
+            if kind == socket.SOCK_STREAM:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(("127.0.0.1", int(port)))
+            except OSError:
+                continue
+        return int(port)
+    raise RuntimeError(f"failed to allocate local test port kind={kind} case_index={case_index} base={base}")
 
 
 class _UDPBounceProtocol(asyncio.DatagramProtocol):
@@ -177,7 +214,7 @@ def _ws_bridge_server_config(ws_port: int) -> dict:
     }
 
 
-def _ws_secure_link_server_config(ws_port: int) -> dict:
+def _ws_secure_link_server_config(ws_port: int, *, case_index: int) -> dict:
     return {
         "overlay_transport": "ws",
         "ws_bind": "127.0.0.1",
@@ -187,7 +224,11 @@ def _ws_secure_link_server_config(ws_port: int) -> dict:
         "secure_link_psk": "ios-e2e-secure-link-psk",
         "admin_web": True,
         "admin_web_bind": "127.0.0.1",
-        "admin_web_port": _unused_port(socket.SOCK_STREAM),
+        "admin_web_port": _alloc_local_port(
+            socket.SOCK_STREAM,
+            case_index=case_index,
+            base=IOS_E2E_TCP_PORT_BASE + 1000,
+        ),
         "admin_web_auth_disable": True,
         "status": False,
     }
@@ -231,9 +272,9 @@ def test_ios_m3_vpn_profile_descriptor_survives_app_to_extension_serialization()
 @pytest.mark.ios
 def test_ios_e2e_app_ws_overlay_udp_service_reaches_linux_peer_udp_echo() -> None:
     async def scenario() -> None:
-        ws_port = _unused_port(socket.SOCK_STREAM)
-        local_udp_port = _unused_port(socket.SOCK_DGRAM)
-        target_udp_port = _unused_port(socket.SOCK_DGRAM)
+        ws_port = _alloc_local_port(socket.SOCK_STREAM, case_index=0, base=IOS_E2E_TCP_PORT_BASE)
+        local_udp_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=0, base=IOS_E2E_UDP_PORT_BASE)
+        target_udp_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=1, base=IOS_E2E_UDP_PORT_BASE)
 
         udp_transport, udp_bounce = await _start_udp_bounce_server("127.0.0.1", target_udp_port)
         bridge_server = ObstacleBridgeClient(_ws_bridge_server_config(ws_port))
@@ -265,8 +306,8 @@ def test_ios_e2e_app_ws_overlay_udp_service_reaches_linux_peer_udp_echo() -> Non
 @pytest.mark.ios
 def test_ios_e2e_app_ws_secure_link_probe_authenticates_against_host_peer() -> None:
     async def scenario() -> None:
-        ws_port = _unused_port(socket.SOCK_STREAM)
-        bridge_server = ObstacleBridgeClient(_ws_secure_link_server_config(ws_port))
+        ws_port = _alloc_local_port(socket.SOCK_STREAM, case_index=1, base=IOS_E2E_TCP_PORT_BASE)
+        bridge_server = ObstacleBridgeClient(_ws_secure_link_server_config(ws_port, case_index=2))
         try:
             await bridge_server.start()
             report = await run_ws_secure_link_probe(

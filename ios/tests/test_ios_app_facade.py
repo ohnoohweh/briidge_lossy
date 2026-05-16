@@ -1,222 +1,58 @@
 from __future__ import annotations
 
-import types
 import json
 import sys
+import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "ios" / "src"))
 
-from obstacle_bridge.bridge import _encrypt_config_secret
-from obstacle_bridge.onboarding import encode_invite_token
 from obstacle_bridge_ios import app as ios_app_module
-from obstacle_bridge_ios.app import ObstacleBridgeIOSApp, _write_startup_artifacts
-from obstacle_bridge_ios.m25_ui import M25Config
-from obstacle_bridge_ios.profiles import ProfileStore
-from obstacle_bridge_ios.secure_store import InMemorySecretStore
+from obstacle_bridge_ios.app import ObstacleBridgeIOSApp, _load_grouped_runtime_config, _write_startup_artifacts
 
 
-class _FakeClient:
-    def __init__(self) -> None:
-        self.started = False
-        self.last_config = None
-        self.start_calls = 0
-        self.stop_calls = 0
-
-    async def start(self, config=None, packet_io=None) -> None:
-        self.started = True
-        self.last_config = config
-        self.start_calls += 1
-
-    async def stop(self) -> None:
-        self.started = False
-        self.stop_calls += 1
-
-    def snapshot(self) -> dict:
-        return {"started": self.started, "config": dict(self.last_config or {})}
-
-
-def test_app_import_and_store_profile_keeps_plaintext_secrets_out_of_disk(tmp_path: Path) -> None:
-    app = ObstacleBridgeIOSApp()
-    app.profile_store = ProfileStore(tmp_path, secret_store=InMemorySecretStore())
-
-    invite_token = encode_invite_token(
-        {
-            "version": 1,
-            "connection": {
-                "transport": "tcp",
-                "endpoint_host": "bridge.example.net",
-                "endpoint_port": 4433,
-            },
-            "secure_link_mode": "psk",
-            "secure_link_psk": _encrypt_config_secret("ios-m1-psk"),
-        }
-    )
-
-    stored = app.import_and_store_profile(
-        invite_token,
-        profile_id="ios-m1-site-a",
-        display_name="Site A",
-    )
-
-    assert stored["profile_id"] == "ios-m1-site-a"
-    profile_path = tmp_path / "ios-m1-site-a.json"
-    on_disk_text = profile_path.read_text(encoding="utf-8")
-    on_disk = json.loads(on_disk_text)
-
-    assert on_disk["obstacle_bridge"]["secure_link_psk"] == ""
-    assert on_disk["obstacle_bridge"]["secure_link_psk_present"] is True
-    assert "ios-m1-psk" not in on_disk_text
-
-
-def test_app_preview_import_handles_runtime_config_json() -> None:
+def test_app_default_facade_reports_extension_as_runtime_owner() -> None:
     app = ObstacleBridgeIOSApp()
 
-    preview = app.preview_import(
-        json.dumps(
-            {
-                "overlay_transport": "ws",
-                "ws_peer": "bridge.example.net",
-                "ws_peer_port": 443,
-                "secure_link_mode": "psk",
-                "admin_web": False,
-            }
-        )
-    )
-
-    assert preview["kind"] == "config"
-    assert preview["preview"]["overlay_transport"] == "ws"
-
-
-def test_app_exposes_m2_dependency_spike_runner() -> None:
-    app = ObstacleBridgeIOSApp()
-    report = app.run_m2_dependency_spike()
-
-    assert report["milestone"] == "M2"
-    assert isinstance(report["checks"], list)
-
-
-def test_app_builds_profile_from_m25_config() -> None:
-    app = ObstacleBridgeIOSApp()
-    profile = app.build_profile_from_m25_config(
-        M25Config(
-            profile_id="ios-m25-a",
-            display_name="M2.5",
-            transport="tcp",
-            peer_host="bridge.example.net",
-            peer_port=4433,
-            local_tcp_port=18080,
-            local_udp_port=18081,
-            target_host="127.0.0.1",
-            target_tcp_port=8080,
-            target_udp_port=8081,
-        )
-    )
-
-    assert profile["profile_id"] == "ios-m25-a"
-    assert profile["obstacle_bridge"]["overlay_transport"] == "tcp"
-
-
-def test_app_builds_m3_vpn_profile_from_saved_profile_contract() -> None:
-    app = ObstacleBridgeIOSApp()
-    profile = app.build_profile_from_m25_config(
-        M25Config(
-            profile_id="ios-m3-a",
-            display_name="M3",
-            transport="tcp",
-            peer_host="bridge.example.net",
-            peer_port=4433,
-            local_tcp_port=18080,
-            local_udp_port=18081,
-            target_host="127.0.0.1",
-            target_tcp_port=8080,
-            target_udp_port=8081,
-        )
-    )
-
-    vpn_profile = app.build_m3_vpn_profile(
-        profile,
-        provider_bundle_identifier="com.obstaclebridge.ObstacleBridge.PacketTunnel",
-    )
-
-    assert vpn_profile["install_path"] == "NETunnelProviderManager"
-    assert vpn_profile["provider_configuration"]["milestone"] == "M3"
-    assert vpn_profile["provider_configuration"]["peer"]["host"] == "bridge.example.net"
-
-
-def test_app_connect_profile_starts_runtime_with_obstacle_bridge_section(tmp_path: Path) -> None:
-    app = ObstacleBridgeIOSApp()
-    app.profile_store = ProfileStore(tmp_path, secret_store=InMemorySecretStore())
-    app.client = _FakeClient()
-
-    saved = app.save_profile(
-        {
-            "profile_id": "ios-connect-a",
-            "display_name": "Connect A",
-            "obstacle_bridge": {
-                "overlay_transport": "ws",
-                "ws_peer": "127.0.0.1",
-                "ws_peer_port": 8080,
-            },
-        }
-    )
-
-    snapshot = app.connect_profile(profile=saved)
-
-    assert snapshot["started"] is True
-    assert snapshot["active_profile_id"] == "ios-connect-a"
-    assert app.client.start_calls == 1
-    assert app.client.last_config["overlay_transport"] == "ws"
-    assert app.client.last_config["ws_peer_port"] == 8080
-    assert app.client.last_config["admin_web"] is True
-    assert app.client.last_config["admin_web_bind"] == "127.0.0.1"
-    assert app.client.last_config["admin_web_port"] == 18080
-    assert app.client.last_config["admin_web_dir"] == str(ObstacleBridgeIOSApp.ADMIN_WEB_DIR)
-    assert app.client.last_config["ws_static_dir"] == str(ObstacleBridgeIOSApp.WEB_DIR)
-    assert app.client.last_config["log_file"] == str(ObstacleBridgeIOSApp.LOG_FILE)
-    assert snapshot["webadmin_url"] == "http://127.0.0.1:18080/"
-
-
-def test_app_disconnect_profile_stops_runtime_and_clears_active_profile(tmp_path: Path) -> None:
-    app = ObstacleBridgeIOSApp()
-    app.profile_store = ProfileStore(tmp_path, secret_store=InMemorySecretStore())
-    app.client = _FakeClient()
-
-    app.connect_profile(
-        profile={
-            "profile_id": "ios-connect-b",
-            "display_name": "Connect B",
-            "obstacle_bridge": {
-                "overlay_transport": "tcp",
-                "tcp_peer": "127.0.0.1",
-                "tcp_peer_port": 8081,
-            },
-        }
-    )
-    snapshot = app.disconnect_profile()
+    snapshot = app.connection_snapshot()
 
     assert snapshot["started"] is False
+    assert snapshot["runtime_owner"] == "IPServer Network Extension"
     assert snapshot["active_profile_id"] is None
-    assert app.client.stop_calls == 1
+    assert snapshot["config"]["admin_web"]["admin_web"] is True
 
 
-def test_app_start_embedded_webadmin_starts_default_runtime() -> None:
-    app = ObstacleBridgeIOSApp()
-    app.client = _FakeClient()
+def test_load_grouped_runtime_config_preserves_saved_transport_fields(tmp_path: Path) -> None:
+    root = tmp_path / "Documents"
+    (root / "config").mkdir(parents=True, exist_ok=True)
+    (root / "config" / "ObstacleBridge.cfg").write_text(
+        json.dumps(
+            {
+                "tcp_session": {
+                    "overlay_transport": "tcp",
+                    "tcp_peer": "bridge.example.net",
+                    "tcp_peer_port": 4433,
+                },
+                "admin_web": {
+                    "admin_web_bind": "0.0.0.0",
+                    "admin_web_port": 18080,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
 
-    snapshot = app.start_embedded_webadmin()
+    config = _load_grouped_runtime_config(root)
 
-    assert snapshot["started"] is True
-    assert app.client.start_calls == 1
-    assert app.client.last_config["admin_web"] is True
-    assert app.client.last_config["admin_web_bind"] == "127.0.0.1"
-    assert app.client.last_config["admin_web_port"] == 18080
-    assert app.client.last_config["admin_web_dir"] == str(ObstacleBridgeIOSApp.ADMIN_WEB_DIR)
-    assert app.client.last_config["ws_static_dir"] == str(ObstacleBridgeIOSApp.WEB_DIR)
-    assert app.client.last_config["log_file"] == str(ObstacleBridgeIOSApp.LOG_FILE)
-    assert snapshot["webadmin_url"] == "http://127.0.0.1:18080/"
+    assert config["tcp_session"]["overlay_transport"] == "tcp"
+    assert config["tcp_session"]["tcp_peer"] == "bridge.example.net"
+    assert config["tcp_session"]["tcp_peer_port"] == 4433
+    assert config["admin_web"]["admin_web"] is True
+    assert config["admin_web"]["admin_web_bind"] == "0.0.0.0"
+    assert config["admin_web"]["admin_web_port"] == 18080
+    assert "log_file" in config["debug_logging"]
 
 
 def test_startup_artifacts_seed_documents_config_logs_and_web_files(tmp_path: Path) -> None:
@@ -234,6 +70,7 @@ def test_startup_artifacts_seed_documents_config_logs_and_web_files(tmp_path: Pa
     manifest = json.loads((root / "documents-manifest.json").read_text(encoding="utf-8"))
     assert manifest["config_file"] == str(root / "config" / "ObstacleBridge.cfg")
     assert manifest["log_file"] == str(root / "logs" / "obstaclebridge.log")
+    assert manifest["diagnostics_file"] == str(root / "logs" / "ios-diagnostics.jsonl")
     assert manifest["admin_web_files_copied"] is True
     assert manifest["web_files_copied"] is True
 
@@ -261,7 +98,3 @@ def test_webadmin_url_from_config_normalizes_wildcard_bind() -> None:
         )
         == "http://127.0.0.1:19090/admin"
     )
-
-
-def test_webadmin_url_from_config_returns_none_when_disabled() -> None:
-    assert ObstacleBridgeIOSApp.webadmin_url_from_config({"admin_web": False}) is None

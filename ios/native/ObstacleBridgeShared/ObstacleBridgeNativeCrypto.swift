@@ -43,6 +43,15 @@ final class ObstacleBridgeNativeCrypto: NSObject {
         return okm.prefix(outputLength) as NSData
     }
 
+    @objc class func hkdfSHA256Salt(
+        _ salt: NSData,
+        info: NSData,
+        keyMaterial: NSData,
+        lengthValue: Int
+    ) -> NSData? {
+        hkdfSHA256Salt(salt, info: info, keyMaterial: keyMaterial, length: NSNumber(value: lengthValue))
+    }
+
     @objc class func pbkdf2SHA256Password(
         _ password: NSData,
         salt: NSData,
@@ -72,6 +81,20 @@ final class ObstacleBridgeNativeCrypto: NSObject {
             return nil
         }
         return derived as NSData
+    }
+
+    @objc class func pbkdf2SHA256Password(
+        _ password: NSData,
+        salt: NSData,
+        iterationsValue: Int,
+        lengthValue: Int
+    ) -> NSData? {
+        pbkdf2SHA256Password(
+            password,
+            salt: salt,
+            iterations: NSNumber(value: iterationsValue),
+            length: NSNumber(value: lengthValue)
+        )
     }
 
     @objc class func aesGCMEncryptKey(

@@ -56,6 +56,11 @@ briefcase build iOS
 
 The app module is `obstacle_bridge_ios.app:main`.
 
+Custom iOS app artwork lives under `ios/resources/`. The Briefcase app config points
+`icon` at `resources/obstaclebridge-icon`, so rerunning `briefcase create iOS` or
+`briefcase update iOS` will regenerate the Xcode asset catalog from those repo-owned
+PNG sizes instead of using the default BeeWare artwork.
+
 The E2E probe module is a separate Briefcase app target, `obstacle_bridge_ios_e2e`. It is intentionally outside the companion app source tree so test-only probes do not become hidden behavior in the ObstacleBridge iOS application.
 
 The E2E app can now be used in three modes:
@@ -63,6 +68,7 @@ The E2E app can now be used in three modes:
 - `--host-websocket-probe` for basic simulator-to-host reachability
 - `--ws-udp-echo-probe` and `--ws-secure-link-probe` for overlay and SecureLink transport checks
 - `--runtime-config <json>` for booting a packaged runtime from JSON config and keeping it alive for host-side inspection such as WebAdmin checks
+- `--webadmin-http-probe` for device-side HTTP reachability diagnostics against candidate WebAdmin URLs such as `http://10.77.0.2:18080/` and `http://127.0.0.1:18080/`
 
 Build or run the E2E app target explicitly when working on simulator/device integration tests:
 
@@ -98,13 +104,12 @@ Run on a physical iOS device by replacing `-d` with the connected device UDID or
 Source of truth:
 
 - `ios/src/obstacle_bridge_ios/m3_tunnel.py` builds the `NETunnelProviderProtocol.providerConfiguration` payload from an existing iOS profile.
-- `ios/native/ObstacleBridgeTunnel/PacketTunnelProvider.swift` starts/stops the native packet tunnel extension and applies `NEPacketTunnelNetworkSettings`.
-- `ios/native/ObstacleBridgeTunnel/PacketFlowBridge.swift` reads packets from `NEPacketTunnelFlow`, sends them to one TCP peer as length-prefixed packet frames, receives frames, and writes packets back to `NEPacketTunnelFlow`.
-- `ios/native/ObstacleBridgeTunnel/TunnelStatus.swift` defines the app-message status/counter response.
+- `ios/native/IPServer/PacketTunnelProvider.swift` is the packet-tunnel extension entrypoint and applies `NEPacketTunnelNetworkSettings` before booting the shared Python runtime.
+- `ios/native/IPServer/ObstacleBridgePythonBridge.m` bootstraps the packaged Python runtime inside the extension so WebAdmin, ChannelMux, and the lower Python layers can execute in the packet-tunnel process.
 
 The M3 bridge is intentionally a POC transport (`tcp-length-prefixed-packets`) so packet-flow behavior can be validated before M4 secure-link parity. Production secure-link, DNS/route hardening, and App Store entitlement/distribution validation remain M4+ work.
 
-The native files are not generated Briefcase output. Add them to an Xcode packet tunnel extension target with the bundle identifier used when calling `build_m3_vpn_profile(...)`, then install through `NETunnelProviderManager`.
+The native files are not generated Briefcase output. The repo-owned Xcode patcher now injects the `IPServer` packet-tunnel target after `briefcase create iOS`, and the app can then install it through `NETunnelProviderManager`.
 
 ## iOS simulator to macOS host connection test
 
@@ -150,4 +155,10 @@ Equivalent runtime-config command shape:
 
 ```bash
 briefcase run iOS -a obstacle_bridge_ios_e2e -u --no-input -d "iPhone 17 Pro" -- --runtime-config /absolute/path/to/runtime.json --hold-sec 900
+```
+
+Equivalent WebAdmin HTTP probe command shape:
+
+```bash
+briefcase run iOS -a obstacle_bridge_ios_e2e -u --no-input -d "<device-name-or-udid>" -- --webadmin-http-probe --probe-url http://10.77.0.2:18080/ --probe-url http://127.0.0.1:18080/ --attempts 5 --timeout-sec 3
 ```

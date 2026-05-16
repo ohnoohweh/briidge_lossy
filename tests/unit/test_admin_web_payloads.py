@@ -2,9 +2,12 @@ import argparse
 import asyncio
 import base64
 import json
+import os
 import pathlib
+import sys
 import time
 import unittest
+from unittest import mock
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -20,6 +23,7 @@ class _RunnerStub:
             admin_web_password="admin-secret",
             secure_link_psk="bridge-secret",
         )
+        self.restart_requested = False
 
     def get_config_snapshot(self, include_secrets: bool = False):
         blocked = {"config", "dump_config", "save_config", "save_format", "force", "help"}
@@ -137,6 +141,12 @@ class _RunnerStub:
                 }
             ],
         }
+
+    def _restart_requires_delay(self):
+        return True
+
+    def request_restart(self):
+        self.restart_requested = True
 
 
 class _RunnerCertStub(_RunnerStub):
@@ -313,6 +323,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn("admin_ui", payload)
         self.assertEqual(payload["admin_ui"]["first_start_detected"], False)
         self.assertEqual(payload["admin_ui"]["config_file_state"], "unknown")
+        self.assertEqual(payload["admin_ui"]["platform"], sys.platform)
 
     def test_build_status_payload_preserves_connection_failure_fields(self):
         args = argparse.Namespace(
@@ -351,6 +362,80 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["connection_failure_detail"], "unexpected HTTP status 426")
         self.assertEqual(payload["connection_last_event"], "connect_failed")
         self.assertEqual(payload["connection_failure_transport"], "ws")
+
+    def test_build_status_payload_prefers_admin_ui_platform_override(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+        )
+        ui = AdminWebUI(args, _RunnerStub())
+        with mock.patch.dict(os.environ, {"OBSTACLEBRIDGE_ADMIN_UI_PLATFORM": "ios"}, clear=False):
+            payload = ui._build_status_payload()
+        self.assertEqual(payload["admin_ui"]["platform"], "ios")
+        self.assertEqual(payload["admin_ui"]["runtime_dependencies"]["missing"], [])
+        self.assertTrue(payload["admin_ui"]["runtime_dependencies"]["ok"])
+        self.assertEqual(payload["admin_ui"]["runtime_dependencies"]["install_hint"], "")
+
+    def test_meta_payload_suppresses_runtime_dependency_warnings_on_ios(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+        )
+        ui = AdminWebUI(args, _RunnerStub())
+        with mock.patch.dict(os.environ, {"OBSTACLEBRIDGE_ADMIN_UI_PLATFORM": "ios"}, clear=False):
+            payload = ui._build_meta_payload()
+        self.assertEqual(payload["runtime_dependencies"]["missing"], [])
+        self.assertTrue(payload["runtime_dependencies"]["ok"])
+        self.assertEqual(payload["runtime_dependencies"]["install_hint"], "")
+
+    def test_restart_endpoint_uses_immediate_mode_for_embedded_restart(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="myudp",
+            dashboard=False,
+            admin_web_token="",
+        )
+        runner = _RunnerStub()
+        runner._embedded_restart_callback = lambda: None
+        ui = AdminWebUI(args, runner)
+
+        async def run_flow():
+            writer = _WriterStub()
+            await ui._handle_restart(writer, "POST", {})
+            doc = _http_json_body(writer)
+            self.assertTrue(doc["ok"])
+            self.assertTrue(doc["restart_embedded"])
+            self.assertEqual(doc["restart_mode"], "immediate")
+            self.assertEqual(doc["restart_delay_sec"], 0)
+            self.assertTrue(runner.restart_requested)
+
+        asyncio.run(run_flow())
 
     def test_config_save_requires_challenge_bound_to_update_block(self):
         args = argparse.Namespace(

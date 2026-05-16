@@ -5,8 +5,10 @@ import sys
 from pathlib import Path
 
 from .runner import (
+    run_embedded_webadmin_probe_sync,
     run_host_websocket_probe_sync,
     run_runtime_config_sync,
+    run_webadmin_http_probe_sync,
     run_ws_secure_link_probe_sync,
     run_ws_udp_echo_probe_sync,
     write_report,
@@ -27,6 +29,69 @@ def _arg_value(args: list[str], name: str, default: str | None = None) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if "--webadmin-http-probe" in args:
+        try:
+            timeout_sec = float(_arg_value(args, "--timeout-sec", "3"))
+            attempts = int(_arg_value(args, "--attempts", "3"))
+            delay_sec = float(_arg_value(args, "--delay-sec", "0.75"))
+            urls = []
+            index = 0
+            while index < len(args):
+                if args[index] == "--probe-url":
+                    urls.append(_arg_value(args[index:], "--probe-url"))
+                    index += 2
+                    continue
+                index += 1
+        except Exception as exc:
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "app": "obstacle_bridge_ios_e2e",
+                        "probe": "webadmin-http",
+                        "error": f"invalid --webadmin-http-probe arguments: {type(exc).__name__}: {exc}",
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 2
+
+        report = run_webadmin_http_probe_sync(
+            urls=urls or None,
+            timeout_sec=timeout_sec,
+            attempts=attempts,
+            delay_sec=delay_sec,
+        )
+        report_path = write_report(report)
+        print(json.dumps({**report, "report_path": str(report_path)}, indent=2, sort_keys=True))
+        return 0 if bool(report.get("ok")) else 1
+
+    if "--embedded-webadmin-probe" in args:
+        try:
+            timeout_sec = float(_arg_value(args, "--timeout-sec", "20"))
+            restart_timeout_sec = float(_arg_value(args, "--restart-timeout-sec", "10"))
+        except Exception as exc:
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "app": "obstacle_bridge_ios_e2e",
+                        "probe": "embedded-webadmin",
+                        "error": f"invalid --embedded-webadmin-probe arguments: {type(exc).__name__}: {exc}",
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 2
+
+        report = run_embedded_webadmin_probe_sync(
+            timeout_sec=timeout_sec,
+            restart_timeout_sec=restart_timeout_sec,
+        )
+        report_path = write_report(report)
+        print(json.dumps({**report, "report_path": str(report_path)}, indent=2, sort_keys=True))
+        return 0 if bool(report.get("ok")) else 1
+
     if "--runtime-config" in args:
         try:
             config_path = Path(_arg_value(args, "--runtime-config")).expanduser()

@@ -6,8 +6,8 @@ REQ-OVL-001:
 
 REQ-RUN-001:
   unit_tests:
-    - ios/tests/test_ios_app_facade.py::test_app_import_and_store_profile_keeps_plaintext_secrets_out_of_disk
-    - ios/tests/test_ios_app_facade.py::test_app_preview_import_handles_runtime_config_json
+    - ios/tests/test_ios_profile_config.py::test_profile_store_keeps_plaintext_secrets_out_of_profile_files
+    - ios/tests/test_invite_import.py::test_preview_json_config_snippet_uses_runtime_validation
 
 REQ-OVL-002:
   integration_tests:
@@ -63,6 +63,17 @@ REQ-OVL-007:
 # runtime-generated localhost TLS fixtures and availability-aware loopback
 # port-block selection. This is a testability/runtime-note update in
 # REQUIREMENTS.md; the underlying requirement-to-test mappings remain unchanged.
+# NOTE: The 2026-05-15 runtime-refactor recovery keeps the existing REQ-LIFE-002,
+# REQ-LIFE-005, REQ-LIFE-008, and REQ-LIFE-009 launcher mappings intact while
+# switching the default launcher subprocess from `-m obstacle_bridge.bridge` to
+# `from obstacle_bridge.bridge import main; main()` and restoring the branch's
+# default-entrypoint / failure-injection coverage.
+# NOTE: The 2026-05-15 iOS E2E CI follow-up keeps the existing REQ-OVL-004,
+# REQ-AUT-001/002/004, and REQ-LIFE-010 mappings intact while hardening the
+# host-side iOS E2E tests against xdist port-allocation races.
+# NOTE: The 2026-05-15 Windows proxy-negotiation import fix keeps the existing
+# REQ-WSP-009 and REQ-WSP-012 mappings intact while restoring ctypes-backed
+# WinHTTP/SSPI Negotiate behavior in the split WebSocket transport module.
 # The application-vs-library functional decomposition for REQ-WSP-* is documented in
 # docs/ARCHITECTURE.md under "WebSocket proxy tunneling".
 # The broader separation between user use-cases, external assumptions, and
@@ -517,8 +528,8 @@ REQ-LIFE-010:
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_cli_metadata
     - tests/unit/test_embeddable_core.py::test_client_lifecycle_uses_runner_without_process_entrypoint
     - tests/unit/test_embeddable_core.py::test_memory_packet_io_round_trip_boundaries
-    - ios/tests/test_ios_app_facade.py::test_app_connect_profile_starts_runtime_with_obstacle_bridge_section
-    - ios/tests/test_ios_app_facade.py::test_app_disconnect_profile_stops_runtime_and_clears_active_profile
+    - ios/tests/test_ipserver_extension.py::test_handle_message_connects_profile_by_id
+    - ios/tests/test_ipserver_extension.py::test_handle_message_disconnects_profile
     - ios/tests/test_ios_e2e_app_runner.py::test_e2e_runner_runtime_config_reports_webadmin_url_and_started_state
 
 REQ-LST-001:
