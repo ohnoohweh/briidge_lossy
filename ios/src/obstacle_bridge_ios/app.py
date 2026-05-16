@@ -10,38 +10,20 @@ import os
 import shutil
 import sys
 import traceback
-import threading
 import urllib.error
 import urllib.request
-from concurrent.futures import Future
 from pathlib import Path
-from typing import Any, Mapping, Optional, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from obstacle_bridge.core import ObstacleBridgeClient as ObstacleBridgeClientType
-else:
-    ObstacleBridgeClientType = Any
+from typing import Any, Mapping, Optional
 
 ConfigAwareCLI: Any = None
-ObstacleBridgeClient: Any = None
-
-from .dependency_spike import (
-    run_m2_dependency_spike_sync,
-    write_m2_dependency_spike_report,
-)
 from .diagnostics import (
     install_crash_hooks,
     log_event,
     log_provider_event,
     snapshot as diagnostics_snapshot,
-    start_heartbeat,
-    stop_heartbeat,
 )
-from .m25_ui import M25Config, profile_from_m25_config, tcp_status_probe
-from .m3_tunnel import M3NetworkSettings, m3_vpn_profile_from_profile
-from .onboarding import preview_import_text
 from .profiles import ProfileStore
-from .tunnel_control import harvest_shared_logs, ipserver_tunnel_status, prepare_ipserver_tunnel
+from .tunnel_control import harvest_shared_logs, ipserver_tunnel_status, start_ipserver_tunnel
 
 try:
     import toga
@@ -62,15 +44,6 @@ def _config_aware_cli_class() -> Any:
 
         ConfigAwareCLI = _ConfigAwareCLI
     return ConfigAwareCLI
-
-
-def _obstacle_bridge_client_class() -> Any:
-    global ObstacleBridgeClient
-    if ObstacleBridgeClient is None:
-        from obstacle_bridge.core import ObstacleBridgeClient as _ObstacleBridgeClient
-
-        ObstacleBridgeClient = _ObstacleBridgeClient
-    return ObstacleBridgeClient
 
 
 def _resolve_toga_webview_class() -> Any:
@@ -209,16 +182,29 @@ def _load_grouped_runtime_config(root: Path) -> dict[str, Any]:
         return defaults
     try:
         payload = _config_aware_cli_class()(description="ios-app")._load_json_config(str(path))
-    except Exception:
-        return defaults
+    except Exception as exc:
+        try:
+            raw_payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return defaults
+        if not isinstance(raw_payload, dict):
+            return defaults
+        payload = dict(raw_payload)
+        payload.setdefault("debug_logging", {})
+        if isinstance(payload["debug_logging"], Mapping):
+            debug_logging = dict(payload["debug_logging"])
+            debug_logging["config_load_error"] = f"{type(exc).__name__}: {exc}"
+            payload["debug_logging"] = debug_logging
+        else:
+            payload["debug_logging"] = {"config_load_error": f"{type(exc).__name__}: {exc}"}
     if not isinstance(payload, dict):
         return defaults
     merged = dict(payload)
     for section, values in defaults.items():
         existing = merged.get(section)
         if isinstance(existing, Mapping):
-            block = dict(existing)
-            block.update(values)
+            block = dict(values)
+            block.update(dict(existing))
             merged[section] = block
         else:
             merged[section] = dict(values)
@@ -270,7 +256,6 @@ def _write_startup_artifacts(root: Path | None = None) -> Path:
         "config_file": str(root / "config" / "ObstacleBridge.cfg"),
         "log_file": str(root / "logs" / "obstaclebridge.log"),
         "diagnostics_file": str(root / "logs" / "ios-diagnostics.jsonl"),
-        "heartbeat_file": str(root / "logs" / "ios-heartbeat.json"),
         "admin_web_dir": str(root / "admin_web"),
         "admin_web_files_copied": admin_web_copied,
         "web_dir": str(root / "web"),
@@ -312,124 +297,14 @@ class ObstacleBridgeIOSApp:
     ADMIN_WEB_DIR = DOCUMENTS_ROOT / "admin_web"
     WEB_DIR = DOCUMENTS_ROOT / "web"
 
-    def __init__(self, *, owns_runtime: bool = False) -> None:
+    def __init__(self) -> None:
         _write_startup_artifacts(self.DOCUMENTS_ROOT)
         install_crash_hooks(self.DOCUMENTS_ROOT)
-        self.owns_runtime = bool(owns_runtime)
-        log_event(self.DOCUMENTS_ROOT, "ios_app.facade_init", owns_runtime=self.owns_runtime)
-        start_heartbeat(self.DOCUMENTS_ROOT, label="obstaclebridge-ipserver" if self.owns_runtime else "obstaclebridge-ui")
-        self.client: Optional[ObstacleBridgeClientType]
-        if self.owns_runtime:
-            self.client = _obstacle_bridge_client_class()(
-                _load_grouped_runtime_config(self.DOCUMENTS_ROOT),
-                config_path=str(self.CONFIG_FILE),
-                apply_logging=True,
-            )
-        else:
-            self.client = None
+        log_event(self.DOCUMENTS_ROOT, "ios_app.facade_init", runtime_owner="IPServer Network Extension")
         self.profile_store = ProfileStore(self.PROFILES_DIR)
         self._active_profile_id: Optional[str] = None
-        self._runtime_loop: Optional[asyncio.AbstractEventLoop] = None
-        self._runtime_loop_thread: Optional[threading.Thread] = None
-        self._embedded_restart_future: Optional[Future[Any]] = None
-
-    def _require_runtime_owner(self) -> ObstacleBridgeClientType:
-        if self.client is None or not self.owns_runtime:
-            raise RuntimeError("ObstacleBridge runtime is owned by the IPServer Network Extension")
-        return self.client
-
-    def _ensure_runtime_loop(self) -> asyncio.AbstractEventLoop:
-        loop = self._runtime_loop
-        thread = self._runtime_loop_thread
-        if loop is not None and thread is not None and thread.is_alive():
-            return loop
-
-        log_event(self.DOCUMENTS_ROOT, "ios_app.runtime_loop_starting")
-        ready = threading.Event()
-
-        def _runner() -> None:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            self._runtime_loop = loop
-            ready.set()
-            try:
-                log_event(self.DOCUMENTS_ROOT, "ios_app.runtime_loop_started")
-                loop.run_forever()
-            except BaseException as exc:
-                log_event(
-                    self.DOCUMENTS_ROOT,
-                    "ios_app.runtime_loop_exception",
-                    error_type=exc.__class__.__name__,
-                    error=str(exc),
-                    traceback="".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
-                )
-                raise
-            finally:
-                pending = [task for task in asyncio.all_tasks(loop) if not task.done()]
-                for task in pending:
-                    task.cancel()
-                if pending:
-                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                loop.close()
-                log_event(self.DOCUMENTS_ROOT, "ios_app.runtime_loop_stopped", pending_tasks=len(pending))
-
-        thread = threading.Thread(target=_runner, daemon=True)
-        thread.start()
-        ready.wait()
-        self._runtime_loop_thread = thread
-        if self._runtime_loop is None:  # pragma: no cover - defensive guard.
-            raise RuntimeError("failed to initialize embedded runtime loop")
-        return self._runtime_loop
-
-    def _run_async_sync(self, awaitable: Any) -> Any:
-        """Run an awaitable on the persistent embedded runtime loop."""
-        loop = self._ensure_runtime_loop()
-        future = asyncio.run_coroutine_threadsafe(awaitable, loop)
-        return future.result()
-
-    def _attach_embedded_restart_hook(self) -> None:
-        client = self._require_runtime_owner()
-        runner = client.runner
-        if runner is not None:
-            setattr(runner, "_embedded_restart_callback", self._request_embedded_restart)
-
-    def _request_embedded_restart(self) -> Future[Any]:
-        future = self._embedded_restart_future
-        if future is not None and not future.done():
-            return future
-        loop = self._ensure_runtime_loop()
-        future = asyncio.run_coroutine_threadsafe(self._restart_embedded_runtime(), loop)
-        self._embedded_restart_future = future
-        return future
-
-    async def _restart_embedded_runtime(self) -> None:
-        client = self._require_runtime_owner()
-        runner = client.runner
-        if runner is None:
-            return
-        current_config = runner.get_config_snapshot(include_secrets=True)
-        old_client = client
-        new_client = _obstacle_bridge_client_class()(
-            dict(current_config),
-            config_path=str(self.CONFIG_FILE),
-            apply_logging=True,
-        )
-        await asyncio.sleep(0.2)
-        await old_client.stop()
-        self.client = new_client
-        await new_client.start(config=new_client.config)
-        self._attach_embedded_restart_hook()
 
     def close(self) -> None:
-        loop = self._runtime_loop
-        thread = self._runtime_loop_thread
-        if loop is None or thread is None:
-            return
-        loop.call_soon_threadsafe(loop.stop)
-        thread.join(timeout=2.0)
-        self._runtime_loop = None
-        self._runtime_loop_thread = None
-        stop_heartbeat(self.DOCUMENTS_ROOT)
         log_event(self.DOCUMENTS_ROOT, "ios_app.facade_closed")
 
     def __del__(self) -> None:  # pragma: no cover - best-effort cleanup.
@@ -437,60 +312,6 @@ class ObstacleBridgeIOSApp:
             self.close()
         except Exception:
             pass
-
-    @staticmethod
-    def _runtime_config_from_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
-        ob_cfg = profile.get("obstacle_bridge")
-        if isinstance(ob_cfg, Mapping):
-            runtime_cfg = dict(ob_cfg)
-        elif "overlay_transport" in profile:
-            runtime_cfg = dict(profile)
-        else:
-            raise ValueError("profile obstacle_bridge config is required")
-        runtime_cfg.setdefault("admin_web", True)
-        runtime_cfg.setdefault("admin_web_bind", ObstacleBridgeIOSApp.WEBADMIN_DEFAULT_BIND)
-        runtime_cfg.setdefault("admin_web_port", ObstacleBridgeIOSApp.WEBADMIN_DEFAULT_PORT)
-        runtime_cfg.setdefault("admin_web_path", ObstacleBridgeIOSApp.WEBADMIN_DEFAULT_PATH)
-        runtime_cfg.setdefault("admin_web_dir", str(ObstacleBridgeIOSApp.ADMIN_WEB_DIR))
-        runtime_cfg.setdefault("ws_static_dir", str(ObstacleBridgeIOSApp.WEB_DIR))
-        runtime_cfg.setdefault("log", "DEBUG")
-        runtime_cfg.setdefault("file_level", "DEBUG")
-        runtime_cfg.setdefault("console_level", "INFO")
-        runtime_cfg.setdefault("log_file", str(ObstacleBridgeIOSApp.LOG_FILE))
-        runtime_cfg.setdefault("log_file_max_bytes", 1_048_576)
-        runtime_cfg.setdefault("log_file_backup_count", 5)
-        return runtime_cfg
-
-    @staticmethod
-    def _runtime_config_with_ios_defaults(config: Mapping[str, Any]) -> dict[str, Any]:
-        if any(isinstance(value, Mapping) for value in config.values()):
-            merged = dict(config)
-            defaults = _default_ios_grouped_config(ObstacleBridgeIOSApp.DOCUMENTS_ROOT)
-            for section, values in defaults.items():
-                existing = merged.get(section)
-                if isinstance(existing, Mapping):
-                    block = dict(values)
-                    block.update(dict(existing))
-                    merged[section] = block
-                else:
-                    merged.setdefault(section, dict(values))
-            admin_web = dict(merged.get("admin_web") if isinstance(merged.get("admin_web"), Mapping) else {})
-            admin_web["admin_web_dir"] = str(ObstacleBridgeIOSApp.ADMIN_WEB_DIR)
-            merged["admin_web"] = admin_web
-            ws_session = dict(merged.get("ws_session") if isinstance(merged.get("ws_session"), Mapping) else {})
-            ws_session["ws_static_dir"] = str(ObstacleBridgeIOSApp.WEB_DIR)
-            merged["ws_session"] = ws_session
-            debug_logging = dict(
-                merged.get("debug_logging") if isinstance(merged.get("debug_logging"), Mapping) else {}
-            )
-            debug_logging["log_file"] = str(ObstacleBridgeIOSApp.LOG_FILE)
-            merged["debug_logging"] = debug_logging
-            return merged
-        runtime_cfg = ObstacleBridgeIOSApp._runtime_config_from_profile({"obstacle_bridge": dict(config)})
-        runtime_cfg["admin_web_dir"] = str(ObstacleBridgeIOSApp.ADMIN_WEB_DIR)
-        runtime_cfg["ws_static_dir"] = str(ObstacleBridgeIOSApp.WEB_DIR)
-        runtime_cfg["log_file"] = str(ObstacleBridgeIOSApp.LOG_FILE)
-        return runtime_cfg
 
     @staticmethod
     def webadmin_url_from_config(config: Mapping[str, Any]) -> Optional[str]:
@@ -507,123 +328,23 @@ class ObstacleBridgeIOSApp:
             host = bind
         return f"http://{host}:{port}{path}"
 
-    def preview_import(self, text: str) -> dict:
-        return preview_import_text(text)
-
     def save_profile(self, profile: Mapping[str, Any]) -> dict[str, Any]:
         return self.profile_store.save_profile(profile)
 
-    def connect_profile(
-        self,
-        *,
-        profile: Optional[Mapping[str, Any]] = None,
-        profile_id: Optional[str] = None,
-    ) -> dict[str, Any]:
-        selected = profile
-        if selected is None:
-            target_id = str(profile_id or "").strip()
-            if not target_id:
-                raise ValueError("profile or profile_id is required")
-            selected = self.profile_store.load_profile(target_id, include_secrets=True)
-        log_event(self.DOCUMENTS_ROOT, "ios_app.connect_profile_requested", profile_id=profile_id or selected.get("profile_id"))
-        client = self._require_runtime_owner()
-        runtime_cfg = self._runtime_config_from_profile(selected)
-        self._run_async_sync(client.start(config=runtime_cfg))
-        self._attach_embedded_restart_hook()
-        self._active_profile_id = str(selected.get("profile_id", "") or "").strip() or None
-        return self.connection_snapshot()
-
-    def disconnect_profile(self) -> dict[str, Any]:
-        log_event(self.DOCUMENTS_ROOT, "ios_app.disconnect_profile_requested")
-        client = self._require_runtime_owner()
-        self._run_async_sync(client.stop())
-        self._active_profile_id = None
-        return self.connection_snapshot()
-
     def connection_snapshot(self) -> dict[str, Any]:
-        if self.client is None:
-            runtime_cfg = _load_grouped_runtime_config(self.DOCUMENTS_ROOT)
-            return {
-                "started": False,
-                "runtime_owner": "IPServer Network Extension",
-                "active_profile_id": self._active_profile_id,
-                "config": runtime_cfg,
-                "webadmin_url": self.webadmin_url_from_config(_flatten_grouped_runtime_config(runtime_cfg)),
-            }
-        snap = dict(self.client.snapshot())
-        snap["active_profile_id"] = self._active_profile_id
-        runtime_cfg = snap.get("config")
-        snap["webadmin_url"] = self.webadmin_url_from_config(runtime_cfg) if isinstance(runtime_cfg, Mapping) else None
-        return snap
-
-    def start_embedded_webadmin(self, runtime_config: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
-        log_event(self.DOCUMENTS_ROOT, "ios_app.start_embedded_webadmin_requested", owns_runtime=self.owns_runtime)
-        log_provider_event(self.DOCUMENTS_ROOT, "python_runtime_start_requested", owns_runtime=self.owns_runtime)
-        client = self._require_runtime_owner()
-        client.config = (
-            self._runtime_config_with_ios_defaults(runtime_config)
-            if isinstance(runtime_config, Mapping)
-            else _load_grouped_runtime_config(self.DOCUMENTS_ROOT)
-        )
-        log_provider_event(
-            self.DOCUMENTS_ROOT,
-            "python_runtime_config_prepared",
-            config_keys=sorted(client.config.keys()) if isinstance(client.config, Mapping) else [],
-        )
-        client._args = None
-        self._run_async_sync(client.start(config=client.config))
-        self._attach_embedded_restart_hook()
-        log_provider_event(self.DOCUMENTS_ROOT, "python_runtime_start_completed")
-        return self.connection_snapshot()
+        runtime_cfg = _load_grouped_runtime_config(self.DOCUMENTS_ROOT)
+        return {
+            "started": False,
+            "runtime_owner": "IPServer Network Extension",
+            "active_profile_id": self._active_profile_id,
+            "config": runtime_cfg,
+            "webadmin_url": self.webadmin_url_from_config(_flatten_grouped_runtime_config(runtime_cfg)),
+        }
 
     def diagnostics_snapshot(self) -> dict[str, Any]:
         payload = diagnostics_snapshot(self.DOCUMENTS_ROOT)
         payload["connection"] = self.connection_snapshot()
         return payload
-
-    def import_and_store_profile(
-        self,
-        import_text: str,
-        *,
-        profile_id: str,
-        display_name: str,
-    ) -> dict[str, Any]:
-        preview = self.preview_import(import_text)
-        updates = preview.get("suggested_updates")
-        if not isinstance(updates, dict):
-            raise ValueError("import preview did not produce suggested_updates")
-        profile = {
-            "profile_id": str(profile_id),
-            "display_name": str(display_name),
-            "obstacle_bridge": dict(updates),
-        }
-        return self.save_profile(profile)
-
-    def run_m2_dependency_spike(self) -> dict[str, Any]:
-        return run_m2_dependency_spike_sync()
-
-    def run_m2_dependency_spike_and_store_report(self) -> Path:
-        report = self.run_m2_dependency_spike()
-        return write_m2_dependency_spike_report(report)
-
-    def build_profile_from_m25_config(self, cfg: M25Config) -> dict[str, Any]:
-        return profile_from_m25_config(cfg)
-
-    def tcp_status_probe(self, host: str, port: int, timeout_sec: float = 2.0) -> dict[str, Any]:
-        return tcp_status_probe(host, port, timeout_sec=timeout_sec)
-
-    def build_m3_vpn_profile(
-        self,
-        profile: Mapping[str, Any],
-        *,
-        provider_bundle_identifier: str,
-        network: Optional[M3NetworkSettings] = None,
-    ) -> dict[str, Any]:
-        return m3_vpn_profile_from_profile(
-            profile,
-            provider_bundle_identifier=provider_bundle_identifier,
-            network=network,
-        )
 
 
 def main():
@@ -752,10 +473,10 @@ def main():
                         "toga.ipserver_shared_logs_harvested",
                         result=harvested_logs,
                     )
-                    tunnel_start = prepare_ipserver_tunnel()
+                    tunnel_start = start_ipserver_tunnel()
                     log_event(
                         ObstacleBridgeIOSApp.DOCUMENTS_ROOT,
-                        "toga.ipserver_tunnel_prepare_requested",
+                        "toga.ipserver_tunnel_start_requested",
                         result=tunnel_start,
                     )
                     _refresh_webadmin()
@@ -764,7 +485,7 @@ def main():
                         await asyncio.sleep(3.0)
                         log_event(
                             ObstacleBridgeIOSApp.DOCUMENTS_ROOT,
-                            "toga.ipserver_tunnel_status_after_prepare",
+                            "toga.ipserver_tunnel_status_after_start",
                             result=ipserver_tunnel_status(),
                         )
 

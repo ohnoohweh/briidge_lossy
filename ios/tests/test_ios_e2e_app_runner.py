@@ -21,6 +21,7 @@ if str(E2E_SRC) not in sys.path:
 from obstacle_bridge_ios_e2e.__main__ import main
 from obstacle_bridge_ios_e2e.runner import (
     run_runtime_config,
+    run_webadmin_http_probe,
     run_host_websocket_probe,
     run_ws_secure_link_probe,
     run_ws_udp_echo_probe,
@@ -104,6 +105,13 @@ def test_e2e_runner_writes_embedded_webadmin_report_to_dedicated_app_directory(t
     assert json.loads(report_path.read_text(encoding="utf-8")) == {"ok": True, "probe": "embedded-webadmin"}
 
 
+def test_e2e_runner_writes_webadmin_http_report_to_dedicated_app_directory(tmp_path: Path) -> None:
+    report_path = write_report({"ok": True, "probe": "webadmin-http"}, root=tmp_path)
+
+    assert report_path == tmp_path / "webadmin-http-latest.json"
+    assert json.loads(report_path.read_text(encoding="utf-8")) == {"ok": True, "probe": "webadmin-http"}
+
+
 def test_e2e_main_requires_probe_url(capsys) -> None:
     exit_code = main(["--host-websocket-probe"])
 
@@ -161,6 +169,49 @@ def test_e2e_main_accepts_embedded_webadmin_probe(monkeypatch, capsys) -> None:
     assert report["probe"] == "embedded-webadmin"
     assert report["timeout_sec"] == 5.0
     assert report["restart_timeout_sec"] == 3.0
+
+
+def test_e2e_main_accepts_webadmin_http_probe(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        "obstacle_bridge_ios_e2e.__main__.run_webadmin_http_probe_sync",
+        lambda **kwargs: {"ok": True, "app": "obstacle_bridge_ios_e2e", "probe": "webadmin-http", **kwargs},
+    )
+
+    exit_code = main(
+        [
+            "--webadmin-http-probe",
+            "--timeout-sec",
+            "5",
+            "--attempts",
+            "4",
+            "--delay-sec",
+            "0.25",
+            "--probe-url",
+            "http://10.77.0.2:18080/",
+            "--probe-url",
+            "http://127.0.0.1:18080/",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert exit_code == 0
+    assert report["probe"] == "webadmin-http"
+    assert report["timeout_sec"] == 5.0
+    assert report["attempts"] == 4
+    assert report["delay_sec"] == 0.25
+    assert report["urls"] == ["http://10.77.0.2:18080/", "http://127.0.0.1:18080/"]
+
+
+def test_e2e_main_validates_webadmin_http_probe_arguments(capsys) -> None:
+    exit_code = main(["--webadmin-http-probe", "--attempts", "bad"])
+
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert exit_code == 2
+    assert report["app"] == "obstacle_bridge_ios_e2e"
+    assert report["probe"] == "webadmin-http"
+    assert "invalid --webadmin-http-probe arguments" in report["error"]
 
 
 def test_e2e_main_validates_embedded_webadmin_probe_arguments(capsys) -> None:
@@ -231,5 +282,25 @@ def test_e2e_runner_runtime_config_reports_webadmin_url_and_started_state() -> N
         assert report["probe"] == "runtime-config"
         assert report["started"] is True
         assert report["webadmin_url"] == "http://127.0.0.1:18080/"
+
+    asyncio.run(scenario())
+
+
+def test_e2e_runner_webadmin_http_probe_reports_connection_failures() -> None:
+    async def scenario() -> None:
+        report = await run_webadmin_http_probe(
+            urls=["http://127.0.0.1:9/"],
+            timeout_sec=0.25,
+            attempts=1,
+            delay_sec=0.0,
+        )
+
+        assert report["ok"] is False
+        assert report["app"] == "obstacle_bridge_ios_e2e"
+        assert report["probe"] == "webadmin-http"
+        assert report["probe_urls"] == ["http://127.0.0.1:9/"]
+        assert "shared_logs_after" in report
+        assert report["probes"][0]["ok"] is False
+        assert report["probes"][0]["attempts"][0]["meta"]["error_type"] in {"URLError", "ConnectionRefusedError"}
 
     asyncio.run(scenario())

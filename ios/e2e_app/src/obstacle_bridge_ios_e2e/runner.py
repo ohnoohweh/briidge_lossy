@@ -25,6 +25,7 @@ WS_UDP_ECHO_REPORT_NAME = "ws-udp-echo-latest.json"
 WS_SECURE_LINK_REPORT_NAME = "ws-secure-link-latest.json"
 RUNTIME_CONFIG_REPORT_NAME = "runtime-config-latest.json"
 EMBEDDED_WEBADMIN_REPORT_NAME = "embedded-webadmin-latest.json"
+WEBADMIN_HTTP_REPORT_NAME = "webadmin-http-latest.json"
 
 
 def _report_root(root: Path | None = None) -> Path:
@@ -63,6 +64,69 @@ def _webadmin_url_from_config(config: Mapping[str, Any]) -> str | None:
         path = "/" + path
     host = "127.0.0.1" if bind in {"0.0.0.0", "::", "*", "localhost"} else bind
     return f"http://{host}:{port}{path}"
+
+
+def _default_webadmin_probe_urls() -> list[str]:
+    return [
+        "http://10.77.0.2:18080/",
+        "http://127.0.0.1:18080/",
+    ]
+
+
+def _shared_app_group_root() -> str | None:
+    if sys.platform != "ios":
+        return None
+    try:
+        from rubicon.objc import ObjCClass
+    except Exception:
+        return None
+    try:
+        file_manager = ObjCClass("NSFileManager").defaultManager
+        url = file_manager.containerURLForSecurityApplicationGroupIdentifier_("group.com.obstaclebridge.shared")
+    except Exception:
+        return None
+    if url is None:
+        return None
+    try:
+        path = str(url.path)
+    except Exception:
+        return None
+    return path or None
+
+
+def _shared_log_snapshot(max_tail_chars: int = 3000) -> dict[str, Any]:
+    root = _shared_app_group_root()
+    if not root:
+        return {"ok": False, "error": "shared app-group container unavailable"}
+    root_path = Path(root)
+    logs_dir = root_path / "logs"
+    config_path = root_path / "config" / "ObstacleBridge.cfg"
+    snapshot: dict[str, Any] = {
+        "ok": True,
+        "root": str(root_path),
+        "logs_dir": str(logs_dir),
+        "config_path": str(config_path),
+        "config_exists": config_path.is_file(),
+        "files": [],
+    }
+    if not logs_dir.is_dir():
+        snapshot["ok"] = False
+        snapshot["error"] = "shared logs directory missing"
+        return snapshot
+    for path in sorted(logs_dir.iterdir()):
+        if not path.is_file():
+            continue
+        info: dict[str, Any] = {
+            "name": path.name,
+            "size": path.stat().st_size,
+        }
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            info["tail"] = text[-max_tail_chars:]
+        except Exception as exc:
+            info["tail_error"] = f"{type(exc).__name__}: {exc}"
+        snapshot["files"].append(info)
+    return snapshot
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -116,6 +180,65 @@ async def _http_json(
         payload=payload,
         timeout_sec=timeout_sec,
     )
+
+
+def _http_probe_sync(
+    url: str,
+    *,
+    timeout_sec: float = 2.0,
+) -> dict[str, Any]:
+    request = urllib.request.Request(url, method="GET")
+    started = time.perf_counter()
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_sec) as response:
+            body = response.read()
+            text = body.decode("utf-8", errors="replace")
+            payload: Any = None
+            if text:
+                with contextlib.suppress(Exception):
+                    payload = json.loads(text)
+            return {
+                "ok": True,
+                "url": url,
+                "http_status": int(getattr(response, "status", 0) or 0),
+                "content_type": str(response.headers.get("Content-Type") or ""),
+                "body_preview": text[:400],
+                "json": payload if isinstance(payload, (dict, list)) else None,
+                "latency_ms": int((time.perf_counter() - started) * 1000),
+            }
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        payload: Any = None
+        if raw:
+            with contextlib.suppress(Exception):
+                payload = json.loads(raw)
+        return {
+            "ok": False,
+            "url": url,
+            "http_status": int(exc.code),
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "body_preview": raw[:400],
+            "json": payload if isinstance(payload, (dict, list)) else None,
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "url": url,
+            "http_status": None,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+        }
+
+
+async def _http_probe(
+    url: str,
+    *,
+    timeout_sec: float = 2.0,
+) -> dict[str, Any]:
+    return await asyncio.to_thread(_http_probe_sync, url, timeout_sec=timeout_sec)
 
 
 async def _wait_for_json(url: str, *, timeout_sec: float = 10.0) -> dict[str, Any]:
@@ -542,6 +665,94 @@ def run_runtime_config_sync(**kwargs: Any) -> dict[str, Any]:
     return asyncio.run(run_runtime_config(**kwargs))
 
 
+async def run_webadmin_http_probe(
+    *,
+    urls: list[str] | None = None,
+    timeout_sec: float = 3.0,
+    attempts: int = 3,
+    delay_sec: float = 0.75,
+) -> dict[str, Any]:
+    """Probe candidate WebAdmin URLs from the standalone iOS E2E app process."""
+
+    started = time.perf_counter()
+    probe_urls = [str(url).strip() for url in (urls or _default_webadmin_probe_urls()) if str(url).strip()]
+    if not probe_urls:
+        return {
+            "ok": False,
+            "app": "obstacle_bridge_ios_e2e",
+            "probe": "webadmin-http",
+            "detail": "no probe URLs configured",
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+        }
+
+    tunnel_status_before: dict[str, Any] | None = None
+    tunnel_status_after: dict[str, Any] | None = None
+    shared_logs_before = _shared_log_snapshot()
+    with contextlib.suppress(Exception):
+        from obstacle_bridge_ios.tunnel_control import ipserver_tunnel_status
+
+        tunnel_status_before = dict(ipserver_tunnel_status() or {})
+
+    probes: list[dict[str, Any]] = []
+    success_urls: list[str] = []
+    for base_url in probe_urls:
+        root_url = base_url.rstrip("/") + "/"
+        meta_url = root_url.rstrip("/") + "/api/meta"
+        status_url = root_url.rstrip("/") + "/api/status"
+        attempts_doc: list[dict[str, Any]] = []
+        succeeded = False
+        for attempt in range(1, max(1, int(attempts)) + 1):
+            meta_doc = await _http_probe(meta_url, timeout_sec=timeout_sec)
+            status_doc = await _http_probe(status_url, timeout_sec=timeout_sec)
+            root_doc = await _http_probe(root_url, timeout_sec=timeout_sec)
+            attempt_doc = {
+                "attempt": attempt,
+                "meta": meta_doc,
+                "status": status_doc,
+                "root": root_doc,
+            }
+            attempts_doc.append(attempt_doc)
+            if bool(meta_doc.get("ok")) or bool(status_doc.get("ok")) or bool(root_doc.get("ok")):
+                succeeded = True
+                success_urls.append(base_url)
+                break
+            if attempt < max(1, int(attempts)):
+                await asyncio.sleep(max(0.0, float(delay_sec)))
+        probes.append(
+            {
+                "url": base_url,
+                "ok": succeeded,
+                "attempts": attempts_doc,
+            }
+        )
+
+    with contextlib.suppress(Exception):
+        from obstacle_bridge_ios.tunnel_control import ipserver_tunnel_status
+
+        tunnel_status_after = dict(ipserver_tunnel_status() or {})
+
+    return {
+        "ok": bool(success_urls),
+        "app": "obstacle_bridge_ios_e2e",
+        "probe": "webadmin-http",
+        "probe_urls": probe_urls,
+        "success_urls": success_urls,
+        "attempt_count": max(1, int(attempts)),
+        "timeout_sec": float(timeout_sec),
+        "delay_sec": float(delay_sec),
+        "tunnel_status_before": tunnel_status_before,
+        "tunnel_status_after": tunnel_status_after,
+        "shared_logs_before": shared_logs_before,
+        "shared_logs_after": _shared_log_snapshot(),
+        "probes": probes,
+        "latency_ms": int((time.perf_counter() - started) * 1000),
+    }
+
+
+def run_webadmin_http_probe_sync(**kwargs: Any) -> dict[str, Any]:
+    return asyncio.run(run_webadmin_http_probe(**kwargs))
+
+
 async def run_embedded_webadmin_probe(
     *,
     timeout_sec: float = 20.0,
@@ -684,6 +895,8 @@ def write_report(report: dict[str, Any], root: Path | None = None) -> Path:
         report_name = RUNTIME_CONFIG_REPORT_NAME
     elif report.get("probe") == "embedded-webadmin":
         report_name = EMBEDDED_WEBADMIN_REPORT_NAME
+    elif report.get("probe") == "webadmin-http":
+        report_name = WEBADMIN_HTTP_REPORT_NAME
     else:
         report_name = HOST_WEBSOCKET_REPORT_NAME
     target = base / report_name

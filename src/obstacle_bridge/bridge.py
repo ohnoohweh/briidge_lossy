@@ -327,7 +327,10 @@ def _transform_config_secrets(obj: Any, transform: Callable[[Any], Any]) -> Any:
         out = {}
         for key, value in obj.items():
             if key in CONFIG_SECRET_FIELDS:
-                out[key] = transform(value)
+                if isinstance(value, str) and value == "":
+                    out[key] = ""
+                else:
+                    out[key] = transform(value)
             else:
                 out[key] = _transform_config_secrets(value, transform)
         return out

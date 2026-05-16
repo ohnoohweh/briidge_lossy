@@ -56,6 +56,21 @@ Sample-derived implementation recipes:
 - The app must communicate with the extension through `NETunnelProviderSession.sendProviderMessage` and shared App Group storage, not by directly owning the Python runtime that carries traffic.
 - Extension diagnostics must be written from the extension process, because foreground-app logs cannot prove that the packet tunnel provider started or stayed alive.
 
+Persisted packet-tunnel profile rule discovered on device:
+
+- The saved app-side `NETunnelProviderManager` must stay as close as possible to the Apple sample shape if the VPN profile name should remain visible in iOS Settings.
+- A minimal persisted profile containing `localizedDescription`, `providerBundleIdentifier`, and `serverAddress` keeps the visible profile name stable.
+- Persisting the larger ObstacleBridge-specific `providerConfiguration` payload from the containing app caused iOS to reload the profile with blank `localizedDescription` and stripped provider metadata, even though the initial `saveToPreferences` call succeeded.
+- Therefore the containing app should persist only the minimal packet-tunnel profile metadata. ObstacleBridge runtime configuration should be sourced elsewhere, such as App Group files or app-to-extension messaging, instead of being embedded into the saved tunnel profile.
+
+Proven file-access boundary discovered on device:
+
+- The containing `ObstacleBridge` app can read and write its own visible `Documents` folder, including `Documents/config/ObstacleBridge.cfg`.
+- The `IPServer` Network Extension can read and write the shared App Group container.
+- However, the `IPServer` Network Extension cannot directly open the containing app's `Documents/config/ObstacleBridge.cfg` path, even when the containing app publishes that absolute path for diagnostic purposes. The extension-side probe returned `PermissionError: [Errno 1] Operation not permitted`.
+- Therefore the shared App Group container is not just a convenience layer. It is the required file-exchange boundary for configuration, diagnostics, and other non-secret runtime artifacts that must move between the containing app and the Network Extension.
+- The operational rule is: whichever copy of `ObstacleBridge.cfg` is newer must be synchronized into both locations, but the extension runtime itself must load from the App Group copy, not from the containing app `Documents` folder.
+
 ## Apple Account Requirement
 
 Developing and signing the packet-tunnel path requires more than a free Apple account.

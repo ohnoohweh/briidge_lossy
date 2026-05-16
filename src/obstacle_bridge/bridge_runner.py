@@ -153,8 +153,7 @@ class Runner:
             self._restart_requested.set()
 
     async def start(self) -> None:
-
-        
+        ios_admin_ui = str(_admin_ui_platform()).strip().lower() == "ios"
         self.log.debug("[SERVER] Runner start on session id=%x", id(self))
         self.log.info(
             "[SERVER] ObstacleBridge build=%r crypto_extract=%r",
@@ -177,6 +176,10 @@ class Runner:
         self._session_labels = []
         for transport_name, session in transport_sessions:
             session.set_on_state_change(lambda connected, transport_name=transport_name, session=session: self._on_state_change(transport_name, session, connected))
+            # Keep status snapshot callbacks wired on iOS too. We still disable
+            # the terminal dashboard there, but WebAdmin's /api/status needs
+            # the learned peer endpoint and traffic counters to reflect the
+            # active overlay session.
             session.set_on_peer_rx(self.stats.on_peer_rx_bytes)
             session.set_on_peer_tx(self.stats.on_peer_tx_bytes)
             session.set_on_peer_set(self.stats.on_peer_set)
@@ -217,13 +220,15 @@ class Runner:
         except Exception:
             pass
 
-        if isinstance(real, UdpSession):
-            inner = real.inner_session
-        self.stats.set_session_ref(inner)  # now the dashboard can show inflight/ACKed/etc.
-
-        self.stats.set_mux_ref(self.mux)
-        if self.args.status:
-            await self.stats.start()
+        if not ios_admin_ui:
+            if isinstance(real, UdpSession):
+                inner = real.inner_session
+            self.stats.set_session_ref(inner)  # now the dashboard can show inflight/ACKed/etc.
+            self.stats.set_mux_ref(self.mux)
+            if self.args.status:
+                await self.stats.start()
+        else:
+            self.log.info("[SERVER] iOS admin UI detected; stats board disabled")
 
         self._last_connected_monotonic = time.monotonic() if self._session_obj and self._session_obj.is_connected() else None
         self._last_disconnected_monotonic = None if self._session_obj and self._session_obj.is_connected() else time.monotonic()
@@ -1219,9 +1224,12 @@ class Runner:
             return (True, "")
         try:
             path = pathlib.Path(str(cfg_path))
+            config_secret_transform = _encrypt_config_secret
+            if str(_admin_ui_platform()).strip().lower() == "ios":
+                config_secret_transform = lambda value: value
             payload = _transform_config_secrets(
                 self._group_config_snapshot(self.get_config_snapshot(include_secrets=True)),
-                _encrypt_config_secret,
+                config_secret_transform,
             )
             parent = path.parent
             if parent and str(parent) not in ("", "."):
@@ -1247,7 +1255,19 @@ class Runner:
     def update_config(self, updates: dict) -> tuple[bool, str]:
         if not isinstance(updates, dict):
             return (False, "updates must be an object")
-        for key, value in updates.items():
+        normalized_updates = dict(updates)
+        if normalized_updates.get("admin_web_auth_disable") is True:
+            normalized_updates["admin_web_username"] = ""
+            normalized_updates["admin_web_password"] = ""
+        elif (
+            "admin_web_password" in normalized_updates
+            and str(normalized_updates.get("admin_web_password", "") or "") == ""
+            and bool(getattr(self.args, "admin_web_auth_disable", False))
+            and "admin_web_auth_disable" not in normalized_updates
+        ):
+            normalized_updates["admin_web_username"] = ""
+            normalized_updates["admin_web_auth_disable"] = True
+        for key, value in normalized_updates.items():
             if not hasattr(self.args, key):
                 return (False, f"unknown config key: {key}")
             cur = getattr(self.args, key)

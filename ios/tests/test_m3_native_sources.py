@@ -7,6 +7,7 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[2]
 SHARED_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeShared"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
+E2E_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeE2E"
 IPSERVER_DIR = ROOT / "ios" / "build" / "obstacle_bridge_ios" / "ios" / "xcode" / "IPServer"
 IPSERVER_NATIVE_DIR = ROOT / "ios" / "native" / "IPServer"
 
@@ -73,6 +74,13 @@ def test_ios_briefcase_configs_include_rubicon_for_native_crypto_bridge() -> Non
     assert "rubicon-objc>=0.5.3" in requires
 
 
+def test_e2e_shared_app_group_entitlements_exist() -> None:
+    entitlements = (E2E_NATIVE_DIR / "ObstacleBridgeE2E.entitlements").read_text(encoding="utf-8")
+
+    assert "com.apple.security.application-groups" in entitlements
+    assert "group.com.obstaclebridge.shared" in entitlements
+
+
 def test_ipserver_extension_sources_bootstrap_python_runtime() -> None:
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     bridge = (IPSERVER_NATIVE_DIR / "ObstacleBridgePythonBridge.m").read_text(encoding="utf-8")
@@ -104,8 +112,14 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "NETunnelProviderManager.loadAllFromPreferences" in control
     assert "queue.async" in control
     assert "prepareIPServerTunnel" in control
+    assert "startIPServerTunnel" in control
     assert "harvestSharedLogs" in control
     assert "shared_logs_harvested" in control
+    assert "syncConfigurationFileInternal" in control
+    assert "config_sync_completed" in control
+    assert "config_sync_before_prepare" in control
+    assert 'app-documents-root.json' in control
+    assert 'ObstacleBridge.cfg' in control
     assert "profile_prepared" in control
     assert "startVPNTunnel" in control
     assert "sendProviderMessage" in control
@@ -117,17 +131,15 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "selectCanonicalManager" in control
     assert "removeFromPreferences" in control
     assert "preferences_reused" in control
-    assert 'localizedDescription = "AdminWeb"' in control
+    assert "desiredLocalizedDescription()" in control
+    assert "providerBuildTimestampUTC" in control
     assert 'legacyLocalizedDescription = "ObstacleBridge"' in control
-    assert 'connectionDisplayNamePrefix = "ObstacleBridge Local Admin"' in control
-    assert "desiredProtocolUsername()" in control
+    assert 'legacyLocalizedDescriptionAlt = "AdminWeb"' in control
     assert "applyIdentity(" in control
-    assert "providerConfigurationPayload()" in control
     assert "tunnelProtocol.providerBundleIdentifier = providerBundleIdentifier" in control
-    assert '"runtime_config_ref": "app-group:ObstacleBridge.cfg"' in control
-    assert '"provider_configuration_mode": "minimal"' in control
-    assert "needsNameRepair" in control
+    assert '"provider_configuration_mode": "minimal_profile_persistence"' in control
     assert "needsConfigurationRepair" in control
+    assert "desiredManagers" in control
     assert "configuration_version" in control
     assert "provider_configuration_version" in control
     assert "localized_description" in control
@@ -139,8 +151,9 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "provider_message_received" in control
     assert "provider_response" in control
     assert "tunnelProtocol.username" in control
+    assert "tunnelProtocol.username = nil" in control
+    assert "manager.localizedDescription = desiredLocalizedDescription()" in control
     assert 'tunnelProtocol.serverAddress = tunnelAddress' in control
-    assert '"runtime_config": ipserverRuntimeConfiguration()' in control
     assert "ios-native-tunnel-control.jsonl" in control
     assert "DispatchSemaphore" not in control
     assert "timed out loading VPN preferences" not in control

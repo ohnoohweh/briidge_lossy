@@ -18,10 +18,6 @@ from obstacle_bridge.crypto_extract import available_crypto_extract
 
 
 _HOOKS_INSTALLED = False
-_HEARTBEAT_THREAD: threading.Thread | None = None
-_HEARTBEAT_STOP = threading.Event()
-
-
 def diagnostics_root(documents_root: Path) -> Path:
     root = Path(documents_root) / "logs"
     root.mkdir(parents=True, exist_ok=True)
@@ -34,10 +30,6 @@ def event_log_path(documents_root: Path) -> Path:
 
 def provider_log_path(documents_root: Path) -> Path:
     return diagnostics_root(documents_root) / "ipserver-native-provider.jsonl"
-
-
-def heartbeat_path(documents_root: Path) -> Path:
-    return diagnostics_root(documents_root) / "ios-heartbeat.json"
 
 
 def _json_default(value: Any) -> str:
@@ -152,40 +144,6 @@ def install_crash_hooks(documents_root: Path) -> None:
     log_event(root, "python.diagnostics_hooks_installed", crypto_extract=available_crypto_extract())
 
 
-def start_heartbeat(documents_root: Path, *, label: str, interval_sec: float = 5.0) -> None:
-    global _HEARTBEAT_THREAD
-    if _HEARTBEAT_THREAD is not None and _HEARTBEAT_THREAD.is_alive():
-        return
-    root = Path(documents_root)
-    _HEARTBEAT_STOP.clear()
-
-    def _loop() -> None:
-        while not _HEARTBEAT_STOP.wait(interval_sec):
-            payload = {
-                "ts": time.time(),
-                "pid": os.getpid(),
-                "label": label,
-                "build": _detect_build_info(),
-                "crypto_extract": available_crypto_extract(),
-            }
-            try:
-                heartbeat_path(root).write_text(
-                    json.dumps(payload, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8",
-                )
-            except Exception:
-                pass
-
-    _HEARTBEAT_THREAD = threading.Thread(target=_loop, name=f"{label}-diagnostic-heartbeat", daemon=True)
-    _HEARTBEAT_THREAD.start()
-    log_event(root, "python.heartbeat_started", label=label, interval_sec=interval_sec)
-
-
-def stop_heartbeat(documents_root: Path) -> None:
-    _HEARTBEAT_STOP.set()
-    log_event(Path(documents_root), "python.heartbeat_stop_requested")
-
-
 def snapshot(documents_root: Path, *, max_events: int = 40) -> dict[str, Any]:
     root = Path(documents_root)
     events: list[Mapping[str, Any] | str] = []
@@ -200,18 +158,9 @@ def snapshot(documents_root: Path, *, max_events: int = 40) -> dict[str, Any]:
                     events.append(line)
         except Exception as exc:
             events.append({"error": str(exc)})
-    heartbeat: dict[str, Any] = {}
-    hb_path = heartbeat_path(root)
-    if hb_path.exists():
-        try:
-            heartbeat = json.loads(hb_path.read_text(encoding="utf-8"))
-        except Exception:
-            heartbeat = {"error": "failed to parse heartbeat"}
     return {
         "documents_root": str(root),
         "event_log": str(path),
-        "heartbeat_file": str(hb_path),
-        "heartbeat": heartbeat,
         "events": events,
         "build": _detect_build_info(),
         "crypto_extract": available_crypto_extract(),

@@ -5,21 +5,22 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping
 
-from .app import ObstacleBridgeIOSApp, _write_startup_artifacts
+from .app import _write_startup_artifacts
 from .diagnostics import install_crash_hooks, log_event, log_provider_event
+from .ipserver_runtime import IPServerRuntimeController
 
-_CONTROLLER: ObstacleBridgeIOSApp | None = None
+_CONTROLLER: IPServerRuntimeController | None = None
 
 
-def _controller() -> ObstacleBridgeIOSApp:
+def _controller() -> IPServerRuntimeController:
     global _CONTROLLER
     if _CONTROLLER is None:
         root = _write_startup_artifacts()
         install_crash_hooks(root)
         log_event(root, "ipserver_extension.controller_init")
         log_provider_event(root, "python_controller_init")
-        _CONTROLLER = ObstacleBridgeIOSApp(owns_runtime=True)
-        log_provider_event(root, "python_controller_ready", owns_runtime=True)
+        _CONTROLLER = IPServerRuntimeController()
+        log_provider_event(root, "python_controller_ready", runtime_owner="IPServer Network Extension")
     return _CONTROLLER
 
 

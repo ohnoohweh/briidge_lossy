@@ -10,114 +10,60 @@ sys.path.insert(0, str(ROOT / "ios" / "src"))
 from obstacle_bridge_ios.native_crypto import IOSNativeCryptoBackend, load_ios_native_crypto_backend
 
 
-class _FakeNSData:
-    def __init__(self, payload: bytes) -> None:
-        self._payload = bytes(payload)
-        self._buf = ctypes.create_string_buffer(self._payload, len(self._payload))
-        self.bytes = ctypes.addressof(self._buf)
-        self.length = len(self._payload)
-
-
-class _FakeNSDataClass:
-    @staticmethod
-    def dataWithBytes(data: bytes, length: int):
-        return _FakeNSData(bytes(data[:length]))
-
-
 class _FakeBridge:
-    @staticmethod
-    def _payload(data) -> bytes:
-        return bytes(getattr(data, "_payload", b""))
-
-    @staticmethod
-    def availableFeatures():
+    def available_features(self):
         return {"aesgcm": True, "ed25519": True}
 
-    @staticmethod
-    def hkdfSHA256Salt_info_keyMaterial_length_(salt, info, key_material, length):
-        return _FakeNSData(
-            b"hkdf:"
-            + bytes([length])
-            + _FakeBridge._payload(info)[:2]
-            + _FakeBridge._payload(key_material)[:2]
-            + _FakeBridge._payload(salt)[:2]
-        )
+    def wrap(self, value: bytes) -> bytes:
+        return bytes(value)
 
-    @staticmethod
-    def pbkdf2SHA256Password_salt_iterations_length_(password, salt, iterations, length):
-        return _FakeNSData(
-            b"pbkdf2:"
-            + bytes([iterations % 256, length % 256])
-            + _FakeBridge._payload(password)[:1]
-            + _FakeBridge._payload(salt)[:1]
-        )
+    def call_data(self, selector: str, *args, argtypes=None) -> bytes:
+        if selector == "hkdfSHA256Salt:info:keyMaterial:lengthValue:":
+            salt, info, key_material, length = args
+            return b"hkdf:" + bytes([length]) + info[:2] + key_material[:2] + salt[:2]
+        if selector == "pbkdf2SHA256Password:salt:iterationsValue:lengthValue:":
+            password, salt, iterations, length = args
+            return b"pbkdf2:" + bytes([iterations % 256, length % 256]) + password[:1] + salt[:1]
+        if selector == "aesGCMEncryptKey:nonce:plaintext:aad:":
+            key, nonce, plaintext, aad = args
+            return b"aes-enc:" + key[:1] + nonce[:1] + plaintext + aad[:1]
+        if selector == "aesGCMDecryptKey:nonce:ciphertext:aad:":
+            key, nonce, ciphertext, aad = args
+            return b"aes-dec:" + key[:1] + nonce[:1] + ciphertext[:2] + aad[:1]
+        if selector == "chaCha20Poly1305EncryptKey:nonce:plaintext:aad:":
+            _, _, plaintext, _ = args
+            return b"chacha-enc:" + plaintext
+        if selector == "chaCha20Poly1305DecryptKey:nonce:ciphertext:aad:":
+            _, _, ciphertext, _ = args
+            return b"chacha-dec:" + ciphertext[:2]
+        if selector == "generateEd25519PrivateKey":
+            return b"e" * 32
+        if selector == "ed25519PublicKeyFromPrivateRaw:":
+            return b"p" * 32
+        if selector == "ed25519SignPrivateKey:message:":
+            _, message = args
+            return b"sig:" + message
+        if selector == "generateX25519PrivateKey":
+            return b"x" * 32
+        if selector == "x25519PublicKeyFromPrivateRaw:":
+            return b"q" * 32
+        if selector == "x25519SharedSecretPrivateKey:peerPublicKey:":
+            return b"shared"
+        raise AssertionError(f"unexpected selector: {selector}")
 
-    @staticmethod
-    def aesGCMEncryptKey_nonce_plaintext_aad_(key, nonce, plaintext, aad):
-        return _FakeNSData(
-            b"aes-enc:"
-            + _FakeBridge._payload(key)[:1]
-            + _FakeBridge._payload(nonce)[:1]
-            + _FakeBridge._payload(plaintext)
-            + _FakeBridge._payload(aad)[:1]
-        )
-
-    @staticmethod
-    def aesGCMDecryptKey_nonce_ciphertext_aad_(key, nonce, ciphertext, aad):
-        return _FakeNSData(
-            b"aes-dec:"
-            + _FakeBridge._payload(key)[:1]
-            + _FakeBridge._payload(nonce)[:1]
-            + _FakeBridge._payload(ciphertext)[:2]
-            + _FakeBridge._payload(aad)[:1]
-        )
-
-    @staticmethod
-    def chaCha20Poly1305EncryptKey_nonce_plaintext_aad_(key, nonce, plaintext, aad):
-        return _FakeNSData(b"chacha-enc:" + _FakeBridge._payload(plaintext))
-
-    @staticmethod
-    def chaCha20Poly1305DecryptKey_nonce_ciphertext_aad_(key, nonce, ciphertext, aad):
-        return _FakeNSData(b"chacha-dec:" + _FakeBridge._payload(ciphertext)[:2])
-
-    @staticmethod
-    def generateEd25519PrivateKey():
-        return _FakeNSData(b"e" * 32)
-
-    @staticmethod
-    def ed25519PublicKeyFromPrivateRaw_(private_key):
-        return _FakeNSData(b"p" * 32)
-
-    @staticmethod
-    def ed25519SignPrivateKey_message_(private_key, message):
-        return _FakeNSData(b"sig:" + _FakeBridge._payload(message))
-
-    @staticmethod
-    def ed25519VerifyPublicKey_signature_message_(public_key, signature, message):
+    def call_bool(self, selector: str, *args, argtypes=None) -> bool:
+        assert selector == "ed25519VerifyPublicKey:signature:message:"
         return True
-
-    @staticmethod
-    def generateX25519PrivateKey():
-        return _FakeNSData(b"x" * 32)
-
-    @staticmethod
-    def x25519PublicKeyFromPrivateRaw_(private_key):
-        return _FakeNSData(b"q" * 32)
-
-    @staticmethod
-    def x25519SharedSecretPrivateKey_peerPublicKey_(private_key, peer_public_key):
-        return _FakeNSData(b"shared")
 
 
 def _backend() -> IOSNativeCryptoBackend:
     backend = object.__new__(IOSNativeCryptoBackend)
-    backend._nsdata_cls = _FakeNSDataClass
-    backend._bridge = _FakeBridge
+    backend._bridge = _FakeBridge()
     return backend
 
 
 def test_load_ios_native_crypto_backend_returns_none_when_bridge_is_unavailable(monkeypatch) -> None:
-    monkeypatch.setattr("obstacle_bridge.ios_native_crypto._load_rubicon", lambda: (None, None, None))
+    monkeypatch.setattr("obstacle_bridge.ios_native_crypto._DirectObjCBridge", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
     assert load_ios_native_crypto_backend() is None
 
 

@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "ios" / "src"))
 
 from obstacle_bridge_ios import ipserver_extension
+from obstacle_bridge_ios.ipserver_runtime import IPServerRuntimeController
 
 
 class _FakeController:
@@ -109,3 +110,35 @@ def test_handle_message_returns_diagnostics_snapshot(monkeypatch) -> None:
     assert response["ok"] is True
     assert response["result"]["event_log"] == "/tmp/ios-diagnostics.jsonl"
     assert controller.calls == [("diagnostics_snapshot", None)]
+
+
+def test_ios_extension_runtime_disables_admin_web_auth_for_grouped_config() -> None:
+    config = {
+        "admin_web": {
+            "admin_web_auth_disable": False,
+            "admin_web_username": "alice",
+            "admin_web_password": "enc:v1:deadbeef",
+        }
+    }
+
+    normalized = IPServerRuntimeController._normalize_ios_extension_admin_web(config)
+
+    assert normalized["admin_web"]["admin_web_auth_disable"] is True
+    assert normalized["admin_web"]["admin_web_username"] == ""
+    assert normalized["admin_web"]["admin_web_password"] == ""
+    assert normalized["debug_logging"]["ios_admin_web_auth_policy"] == "disabled_in_extension_runtime"
+
+
+def test_ios_extension_runtime_disables_admin_web_auth_for_flat_config() -> None:
+    config = {
+        "admin_web_auth_disable": False,
+        "admin_web_username": "alice",
+        "admin_web_password": "enc:v1:deadbeef",
+    }
+
+    normalized = IPServerRuntimeController._normalize_ios_extension_admin_web(config)
+
+    assert normalized["admin_web_auth_disable"] is True
+    assert normalized["admin_web_username"] == ""
+    assert normalized["admin_web_password"] == ""
+    assert normalized["ios_admin_web_auth_policy"] == "disabled_in_extension_runtime"
