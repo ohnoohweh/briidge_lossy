@@ -90,6 +90,17 @@ def test_handle_message_connects_profile_by_id(monkeypatch) -> None:
     assert controller.calls == [("connect_profile", "ios-profile-a")]
 
 
+def test_handle_message_disconnects_profile(monkeypatch) -> None:
+    controller = _FakeController()
+    monkeypatch.setattr(ipserver_extension, "_controller", lambda: controller)
+
+    response = ipserver_extension.handle_message({"command": "disconnect_profile"})
+
+    assert response["ok"] is True
+    assert response["result"]["started"] is False
+    assert controller.calls == [("disconnect_profile", None)]
+
+
 def test_handle_message_json_returns_error_payload_for_unknown_command(monkeypatch) -> None:
     controller = _FakeController()
     monkeypatch.setattr(ipserver_extension, "_controller", lambda: controller)
