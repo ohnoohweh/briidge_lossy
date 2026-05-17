@@ -9,7 +9,7 @@ These statements are limited to project-owned behavior. They are not a catalog o
 ObstacleBridge is expected to:
 
 - establish overlay connectivity between peers over supported transports
-- carry UDP and TCP application traffic, plus Linux and Windows TUN packet traffic, across that overlay where the required OS capability is available
+- carry UDP and TCP application traffic, plus Linux, Windows, and iOS TUN packet traffic, across that overlay where the required OS capability is available
 - support listener and peer-client deployment modes
 - expose runtime state and configuration through the admin web interface
 - remain testable under reconnect, restart, concurrency, and lossy-path scenarios
@@ -170,6 +170,7 @@ Current lifecycle implementation note:
 - `REQ-MUX-007`: TUN service publication shall use the same peer-scoped catalog and channel-isolation rules as TCP and UDP services, so one peer's TUN interfaces and packet channels do not conflict with another peer's channels or published services. Peer-installed TUN listener startup shall win races with incoming TUN opens for the same target interface so listener hooks still configure the intended service-owned TUN device.
 - `REQ-MUX-008`: When a UDP service datagram or TUN packet does not fit into one effective wrapped-session payload budget, the mux layer shall preserve the logical message boundary by fragmenting it across multiple mux messages and reassembling it before local delivery.
 - `REQ-MUX-009`: The service-definition runtime surface shall accept structured JSON entries for both `own_servers` and `remote_servers`, and a structured service entry may include lifecycle hook commands that execute on listener-side service events (`on_created`, `on_channel_connected`, `on_channel_closed`, `on_stopped`) with placeholder-driven argument/environment rendering. Hook context shall include the configured overlay transport plus the configured and resolved overlay peer endpoint so route-preserving scripts do not need a duplicate peer IP in hook-specific config. The `on_stopped` listener hook shall run before the listener service is closed during overlay disconnect, peer disconnect, catalog replacement, or process shutdown so operator routing/firewall teardown can run while the local service resources still exist. Hook executable paths that include a path separator may be relative to the loaded configuration file directory, while bare command names remain resolved through the process `PATH`.
+- `REQ-MUX-010`: On hosts where an iOS packet-tunnel provider is available, a connected peer shall be able to carry packet traffic between `NEPacketTunnelFlow` and remote TUN services using the same peer-scoped ChannelMux service model as Linux and Windows TUN adapters. The effective iOS tunnel IPv4 and IPv6 identity shall be derived from live ObstacleBridge configuration rather than hardcoded app constants, and the provider-applied route set shall support full-tunnel forwarding with loopback exclusions when so configured.
 
 ## Loss and delay requirements
 

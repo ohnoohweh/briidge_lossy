@@ -68,7 +68,7 @@ The E2E app can now be used in three modes:
 - `--host-websocket-probe` for basic simulator-to-host reachability
 - `--ws-udp-echo-probe` and `--ws-secure-link-probe` for overlay and SecureLink transport checks
 - `--runtime-config <json>` for booting a packaged runtime from JSON config and keeping it alive for host-side inspection such as WebAdmin checks
-- `--webadmin-http-probe` for device-side HTTP reachability diagnostics against candidate WebAdmin URLs such as `http://10.77.0.2:18080/` and `http://127.0.0.1:18080/`
+- `--webadmin-http-probe` for device-side HTTP reachability diagnostics against candidate WebAdmin URLs such as `http://192.168.105.1:18080/` and `http://127.0.0.1:18080/`
 
 Build or run the E2E app target explicitly when working on simulator/device integration tests:
 
@@ -160,5 +160,5 @@ briefcase run iOS -a obstacle_bridge_ios_e2e -u --no-input -d "iPhone 17 Pro" --
 Equivalent WebAdmin HTTP probe command shape:
 
 ```bash
-briefcase run iOS -a obstacle_bridge_ios_e2e -u --no-input -d "<device-name-or-udid>" -- --webadmin-http-probe --probe-url http://10.77.0.2:18080/ --probe-url http://127.0.0.1:18080/ --attempts 5 --timeout-sec 3
+briefcase run iOS -a obstacle_bridge_ios_e2e -u --no-input -d "<device-name-or-udid>" -- --webadmin-http-probe --probe-url http://192.168.105.1:18080/ --probe-url http://127.0.0.1:18080/ --attempts 5 --timeout-sec 3
 ```

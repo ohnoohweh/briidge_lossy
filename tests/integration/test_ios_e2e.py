@@ -185,8 +185,9 @@ def _m3_provider_configuration(peer_port: int) -> dict:
         profile,
         provider_bundle_identifier="com.obstaclebridge.ObstacleBridge.PacketTunnel",
         network=M3NetworkSettings(
-            tunnel_address="10.77.0.2",
-            included_routes=["10.77.0.0/24"],
+            tunnel_address="192.168.105.1",
+            tunnel_prefix=30,
+            included_routes=["192.168.105.0/30"],
             dns_servers=["1.1.1.1"],
             mtu=1280,
         ),
@@ -263,8 +264,9 @@ def test_ios_m3_vpn_profile_descriptor_survives_app_to_extension_serialization()
 
     assert restored["milestone"] == "M3"
     assert restored["peer"] == {"host": "127.0.0.1", "port": 4433}
-    assert restored["network_settings"]["tunnel_address"] == "10.77.0.2"
-    assert restored["network_settings"]["included_routes"] == ["10.77.0.0/24"]
+    assert restored["network_settings"]["tunnel_address"] == "192.168.105.1"
+    assert restored["network_settings"]["tunnel_prefix"] == 30
+    assert restored["network_settings"]["included_routes"] == ["192.168.105.0/30"]
     assert restored["poc"]["secure_link"] == "deferred-to-M4"
 
 

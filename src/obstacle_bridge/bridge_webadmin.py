@@ -131,18 +131,6 @@ class AdminWebUI:
             self.args.admin_web_port,
             self.args.admin_web_path,
         )
-        platform = str(_admin_ui_platform()).strip().lower()
-        if platform == "ios":
-            tunnel_host = str(os.environ.get("OBSTACLEBRIDGE_IOS_TUNNEL_ADDRESS") or "10.77.0.2").strip() or "10.77.0.2"
-            path = str(self.args.admin_web_path or "/").strip() or "/"
-            if not path.startswith("/"):
-                path = "/" + path
-            self.log.info(
-                "Admin web UI iOS reachable URL http://%s:%d%s",
-                tunnel_host,
-                self.args.admin_web_port,
-                path,
-            )
 
     async def stop(self):
         self.log.info("Admin web UI stopping")

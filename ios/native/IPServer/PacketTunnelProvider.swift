@@ -3,6 +3,14 @@ import NetworkExtension
 
 @objc(PacketTunnelProvider)
 class PacketTunnelProvider: NEPacketTunnelProvider {
+    static let defaultTunnelAddress = "192.168.105.1"
+    static let defaultTunnelPrefix = 30
+    static let defaultIncludedRoutes = ["0.0.0.0/0"]
+    static let defaultExcludedRoutes = ["127.0.0.0/8"]
+    static let defaultTunnelAddress6 = ""
+    static let defaultTunnelPrefix6 = 126
+    static let defaultIncludedRoutes6 = ["::/0"]
+    static let defaultExcludedRoutes6 = ["::1/128"]
     private let errorDomain = "ObstacleBridge.IPServer"
     private var packetPumpRunning = false
 
@@ -18,6 +26,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func recordNativeEvent(_ event: String, fields: [String: Any] = [:]) {
         NSLog("ObstacleBridge IPServer event=%@ fields=%@", event, fields)
         writeNativeProviderLog(event, fields: fields)
+    }
+
+    func recordPacketBridgeEvent(_ event: String, fields: [String: Any] = [:]) {
+        recordNativeEvent(event, fields: fields)
     }
 
     private func writeNativeProviderLog(_ event: String, fields: [String: Any] = [:]) {
@@ -112,6 +124,22 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         do {
             let configuration = try TunnelProviderConfiguration(providerConfiguration)
+            recordNativeEvent(
+                "tunnel_network_settings_prepared",
+                fields: [
+                    "peer_host": configuration.peerHost,
+                    "tunnel_address": configuration.tunnelAddress,
+                    "tunnel_subnet_mask": configuration.tunnelSubnetMask,
+                    "included_routes": configuration.includedRoutes.map { ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask] },
+                    "excluded_routes": configuration.excludedRoutes.map { ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask] },
+                    "tunnel_address6": configuration.tunnelAddress6,
+                    "tunnel_prefix6": configuration.tunnelPrefix6,
+                    "included_routes6": configuration.includedRoutes6.map { ["destination": $0.destinationAddress, "network_prefix_length": $0.networkPrefixLength] },
+                    "excluded_routes6": configuration.excludedRoutes6.map { ["destination": $0.destinationAddress, "network_prefix_length": $0.networkPrefixLength] },
+                    "dns_servers": configuration.dnsServers,
+                    "mtu": configuration.mtu,
+                ]
+            )
             let settings = makeNetworkSettings(configuration)
             setTunnelNetworkSettings(settings) { [weak self] error in
                 guard let self else { return }
@@ -123,6 +151,22 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     completionHandler(error)
                     return
                 }
+                self.recordNativeEvent(
+                    "tunnel_network_settings_applied",
+                    fields: [
+                        "peer_host": configuration.peerHost,
+                        "tunnel_address": configuration.tunnelAddress,
+                        "tunnel_subnet_mask": configuration.tunnelSubnetMask,
+                        "included_routes": configuration.includedRoutes.map { ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask] },
+                        "excluded_routes": configuration.excludedRoutes.map { ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask] },
+                        "tunnel_address6": configuration.tunnelAddress6,
+                        "tunnel_prefix6": configuration.tunnelPrefix6,
+                        "included_routes6": configuration.includedRoutes6.map { ["destination": $0.destinationAddress, "network_prefix_length": $0.networkPrefixLength] },
+                        "excluded_routes6": configuration.excludedRoutes6.map { ["destination": $0.destinationAddress, "network_prefix_length": $0.networkPrefixLength] },
+                        "dns_servers": configuration.dnsServers,
+                        "mtu": configuration.mtu,
+                    ]
+                )
                 #if OB_IPSERVER_SWIFT_SMOKE
                 self.recordNativeEvent("startTunnel_completed_swift_smoke")
                 completionHandler(nil)
@@ -130,6 +174,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 self.recordNativeEvent("startTunnel_completed_python_probe")
                 completionHandler(nil)
                 #else
+                ObstacleBridgePacketFlowBridge.activate(
+                    provider: self,
+                    tunnelAddress: configuration.tunnelAddress,
+                    mtu: configuration.mtu
+                )
                 self.startPacketPump()
                 self.startProviderHeartbeat()
                 self.recordNativeEvent("startTunnel_completed_runtime_start_async")
@@ -192,6 +241,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         _ = try? bridgeResponse(for: ["command": "stop", "reason": reason.rawValue])
         #endif
         packetPumpRunning = false
+        ObstacleBridgePacketFlowBridge.deactivate()
         recordNativeEvent("stopTunnel_completed", fields: ["reason": reason.rawValue])
         completionHandler()
     }
@@ -322,6 +372,20 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         settings.ipv4Settings = ipv4
 
+        if !configuration.tunnelAddress6.isEmpty {
+            let ipv6 = NEIPv6Settings(
+                addresses: [configuration.tunnelAddress6],
+                networkPrefixLengths: [NSNumber(value: configuration.tunnelPrefix6)]
+            )
+            ipv6.includedRoutes = configuration.includedRoutes6.map { route in
+                NEIPv6Route(destinationAddress: route.destinationAddress, networkPrefixLength: NSNumber(value: route.networkPrefixLength))
+            }
+            ipv6.excludedRoutes = configuration.excludedRoutes6.map { route in
+                NEIPv6Route(destinationAddress: route.destinationAddress, networkPrefixLength: NSNumber(value: route.networkPrefixLength))
+            }
+            settings.ipv6Settings = ipv6
+        }
+
         if !configuration.dnsServers.isEmpty {
             settings.dnsSettings = NEDNSSettings(servers: configuration.dnsServers)
         }
@@ -347,11 +411,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 return
             }
             if !packets.isEmpty {
+                var totalBytes = 0
+                for (index, packet) in packets.enumerated() {
+                    totalBytes += packet.count
+                    let proto = index < protocols.count ? protocols[index] : NSNumber(value: AF_INET)
+                    ObstacleBridgePacketFlowBridge.enqueueIncomingPacket(packet, protocolFamily: proto)
+                }
                 self.recordNativeEvent(
-                    "packet_pump_dropped_packets",
+                    "packet_pump_forwarded_packets",
                     fields: [
                         "packet_count": packets.count,
                         "protocol_count": protocols.count,
+                        "total_bytes": totalBytes,
                     ]
                 )
             }
@@ -408,12 +479,21 @@ private struct IPv4RouteSpec {
     let subnetMask: String
 }
 
+private struct IPv6RouteSpec {
+    let destinationAddress: String
+    let networkPrefixLength: Int
+}
+
 private struct TunnelProviderConfiguration {
     let peerHost: String
     let tunnelAddress: String
     let tunnelSubnetMask: String
     let includedRoutes: [IPv4RouteSpec]
     let excludedRoutes: [IPv4RouteSpec]
+    let tunnelAddress6: String
+    let tunnelPrefix6: Int
+    let includedRoutes6: [IPv6RouteSpec]
+    let excludedRoutes6: [IPv6RouteSpec]
     let dnsServers: [String]
     let mtu: Int
 
@@ -433,11 +513,15 @@ private struct TunnelProviderConfiguration {
         }
 
         let network = payload["network_settings"] as? [String: Any] ?? [:]
-        tunnelAddress = (network["tunnel_address"] as? String) ?? "10.77.0.2"
-        let prefix = (network["tunnel_prefix"] as? NSNumber)?.intValue ?? 24
+        tunnelAddress = (network["tunnel_address"] as? String) ?? PacketTunnelProvider.defaultTunnelAddress
+        let prefix = (network["tunnel_prefix"] as? NSNumber)?.intValue ?? PacketTunnelProvider.defaultTunnelPrefix
         tunnelSubnetMask = Self.subnetMask(prefix)
-        includedRoutes = try Self.routes(network["included_routes"] as? [String] ?? ["10.77.0.0/24"])
-        excludedRoutes = try Self.routes(network["excluded_routes"] as? [String] ?? [])
+        includedRoutes = try Self.routes(network["included_routes"] as? [String] ?? PacketTunnelProvider.defaultIncludedRoutes)
+        excludedRoutes = try Self.routes(network["excluded_routes"] as? [String] ?? PacketTunnelProvider.defaultExcludedRoutes)
+        tunnelAddress6 = (network["tunnel_address6"] as? String) ?? PacketTunnelProvider.defaultTunnelAddress6
+        tunnelPrefix6 = (network["tunnel_prefix6"] as? NSNumber)?.intValue ?? PacketTunnelProvider.defaultTunnelPrefix6
+        includedRoutes6 = try Self.routes6(network["included_routes6"] as? [String] ?? (tunnelAddress6.isEmpty ? [] : PacketTunnelProvider.defaultIncludedRoutes6))
+        excludedRoutes6 = try Self.routes6(network["excluded_routes6"] as? [String] ?? (tunnelAddress6.isEmpty ? [] : PacketTunnelProvider.defaultExcludedRoutes6))
         dnsServers = network["dns_servers"] as? [String] ?? []
         mtu = (network["mtu"] as? NSNumber)?.intValue ?? 1500
     }
@@ -449,6 +533,16 @@ private struct TunnelProviderConfiguration {
                 throw TunnelError.invalidRoute(cidr)
             }
             return IPv4RouteSpec(destinationAddress: parts[0], subnetMask: subnetMask(prefix))
+        }
+    }
+
+    private static func routes6(_ values: [String]) throws -> [IPv6RouteSpec] {
+        try values.map { cidr in
+            let parts = cidr.split(separator: "/", maxSplits: 1).map(String.init)
+            guard parts.count == 2, let prefix = Int(parts[1]), prefix >= 0, prefix <= 128 else {
+                throw TunnelError.invalidRoute(cidr)
+            }
+            return IPv6RouteSpec(destinationAddress: parts[0], networkPrefixLength: prefix)
         }
     }
 

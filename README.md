@@ -116,6 +116,50 @@ python -m obstacle_bridge --config bridge_server.json
 python -m obstacle_bridge --config bridge_client.json
 ```
 
+### iOS full-tunnel test profile against a Fedora server
+The current iOS packet-tunnel bring-up is intended to pair an iPhone client with a Linux server that can host the remote TUN endpoint and perform internet egress/NAT.
+
+The maintained test profile uses:
+
+- public server endpoint: `38.180.143.5:4433`
+- inner TUN subnet: `192.168.105.0/30`
+- iPhone TUN address: `192.168.105.1/30`
+- Fedora `obtun1` address: `192.168.105.2/30`
+- MTU: `1280`
+
+The canonical sample in [ObstacleBridge.cfg](ObstacleBridge.cfg) already includes:
+
+- an iOS-side TUN service `iOS FullTunnel`
+- a Fedora-side remote TUN service `Fedora FullTunnel`
+- listener lifecycle hooks that call [scripts/server-tun-hook.sh](scripts/server-tun-hook.sh) on the Linux server
+
+Required Fedora-side settings before using that profile:
+
+- replace `WAN_IF=eth0` in the TUN hook environment with the server's real outbound interface name
+- ensure `iptables` is installed, because the hook enables IPv4 forwarding and adds NAT/FORWARD rules
+- run ObstacleBridge with sufficient privilege to create `/dev/net/tun` devices and apply the hook's `ip`/`sysctl`/`iptables` changes
+
+What the server hook does on `obtun1`:
+
+- assigns `192.168.105.2/30`
+- brings the interface up with MTU `1280`
+- enables `net.ipv4.ip_forward=1`
+- installs MASQUERADE/FORWARD rules for `192.168.105.0/30`
+
+What the iPhone side does:
+
+- iOS `NEPacketTunnelNetworkSettings` owns the full-route device traffic capture
+- loopback remains excluded from the tunnel
+- the iOS tunnel address is derived from the local `own_servers` TUN service hook env `lifecycle_hooks.listener.on_created.env.TUN_ADDR` when present
+- for transition compatibility with older profiles, iOS can also infer its tunnel address from the matching remote TUN listener hook `PEER_ADDR`
+- no shell hook is expected on iOS for the local TUN side; the hook env acts as tunnel-profile metadata for the native packet-tunnel configuration
+
+If the public server IP changes, update at least these config fields together:
+
+- `udp_session.udp_peer`
+- `ws_session.ws_peer`
+- any firewall or route-preservation rules that refer to the overlay peer
+
 ### Paste-ready configuration snippets
 The JSON blocks in the setup examples below are intentionally formatted so they can be pasted directly into the Setup Wizard or Configuration import flow in WebAdmin.
 
@@ -612,11 +656,11 @@ What the scripts automate:
 Single peer-client config assumptions:
 
 - Client TUN interface: `obtun0`
-- Client tunnel address: `10.20.0.1/30`
-- Client IPv6 tunnel address: `fd20:20::1/126`
+- Client tunnel address: `192.168.105.1/30`
+- Client IPv6 tunnel address: `fd20:105::1/126`
 - Server TUN interface: `obtun1`
-- Server tunnel address: `10.20.0.2/30`
-- Server IPv6 tunnel address: `fd20:20::2/126`
+- Server tunnel address: `192.168.105.2/30`
+- Server IPv6 tunnel address: `fd20:105::2/126`
 - Server WAN interface: `eth0`
 - Client underlay interface/gateway: `auto`, or explicit values such as `eth0` and `192.168.1.1`
 - DNS servers: `1.1.1.1` and `8.8.8.8`
@@ -645,10 +689,10 @@ Combined peer-client config fragment:
               "linux": ["./scripts/client-tun-hook.sh", "up", "{ifname}"]
             },
               "env": {
-                "TUN_ADDR": "10.20.0.1/30",
-                "TUN_GW": "10.20.0.2",
-                "TUN_ADDR6": "fd20:20::1/126",
-                "TUN_GW6": "fd20:20::2",
+                "TUN_ADDR": "192.168.105.1/30",
+                "TUN_GW": "192.168.105.2",
+                "TUN_ADDR6": "fd20:105::1/126",
+                "TUN_GW6": "fd20:105::2",
                 "UNDERLAY_IF": "auto",
                 "UNDERLAY_GW": "auto",
                 "DNS1": "1.1.1.1",
@@ -661,10 +705,10 @@ Combined peer-client config fragment:
               "linux": ["./scripts/client-tun-hook.sh", "up", "{ifname}"]
             },
               "env": {
-                "TUN_ADDR": "10.20.0.1/30",
-                "TUN_GW": "10.20.0.2",
-                "TUN_ADDR6": "fd20:20::1/126",
-                "TUN_GW6": "fd20:20::2",
+                "TUN_ADDR": "192.168.105.1/30",
+                "TUN_GW": "192.168.105.2",
+                "TUN_ADDR6": "fd20:105::1/126",
+                "TUN_GW6": "fd20:105::2",
                 "UNDERLAY_IF": "auto",
                 "UNDERLAY_GW": "auto",
                 "DNS1": "1.1.1.1",
@@ -677,10 +721,10 @@ Combined peer-client config fragment:
               "linux": ["./scripts/client-tun-hook.sh", "down", "{ifname}"]
             },
               "env": {
-                "TUN_ADDR": "10.20.0.1/30",
-                "TUN_GW": "10.20.0.2",
-                "TUN_ADDR6": "fd20:20::1/126",
-                "TUN_GW6": "fd20:20::2",
+                "TUN_ADDR": "192.168.105.1/30",
+                "TUN_GW": "192.168.105.2",
+                "TUN_ADDR6": "fd20:105::1/126",
+                "TUN_GW6": "fd20:105::2",
                 "UNDERLAY_IF": "auto",
                 "UNDERLAY_GW": "auto",
                 "DNS1": "1.1.1.1",
@@ -712,13 +756,13 @@ Combined peer-client config fragment:
               "linux": ["./scripts/server-tun-hook.sh", "up", "{ifname}"]
             },
             "env": {
-              "TUN_ADDR": "10.20.0.2/30",
-              "PEER_ADDR": "10.20.0.1",
-              "TUN_ADDR6": "fd20:20::2/126",
-              "PEER_ADDR6": "fd20:20::1",
+              "TUN_ADDR": "192.168.105.2/30",
+              "PEER_ADDR": "192.168.105.1",
+              "TUN_ADDR6": "fd20:105::2/126",
+              "PEER_ADDR6": "fd20:105::1",
               "WAN_IF": "eth0",
-              "TUN_SUBNET": "10.20.0.0/30",
-              "TUN_SUBNET6": "fd20:20::/126",
+              "TUN_SUBNET": "192.168.105.0/30",
+              "TUN_SUBNET6": "fd20:105::/126",
               "ENABLE_TCPMSS": "1"
             },
             "timeout_ms": 15000
@@ -728,13 +772,13 @@ Combined peer-client config fragment:
               "linux": ["./scripts/server-tun-hook.sh", "up", "{ifname}"]
             },
             "env": {
-              "TUN_ADDR": "10.20.0.2/30",
-              "PEER_ADDR": "10.20.0.1",
-              "TUN_ADDR6": "fd20:20::2/126",
-              "PEER_ADDR6": "fd20:20::1",
+              "TUN_ADDR": "192.168.105.2/30",
+              "PEER_ADDR": "192.168.105.1",
+              "TUN_ADDR6": "fd20:105::2/126",
+              "PEER_ADDR6": "fd20:105::1",
               "WAN_IF": "eth0",
-              "TUN_SUBNET": "10.20.0.0/30",
-              "TUN_SUBNET6": "fd20:20::/126",
+              "TUN_SUBNET": "192.168.105.0/30",
+              "TUN_SUBNET6": "fd20:105::/126",
               "ENABLE_TCPMSS": "1"
             },
             "timeout_ms": 15000
@@ -744,13 +788,13 @@ Combined peer-client config fragment:
               "linux": ["./scripts/server-tun-hook.sh", "down", "{ifname}"]
             },
             "env": {
-              "TUN_ADDR": "10.20.0.2/30",
-              "PEER_ADDR": "10.20.0.1",
-              "TUN_ADDR6": "fd20:20::2/126",
-              "PEER_ADDR6": "fd20:20::1",
+              "TUN_ADDR": "192.168.105.2/30",
+              "PEER_ADDR": "192.168.105.1",
+              "TUN_ADDR6": "fd20:105::2/126",
+              "PEER_ADDR6": "fd20:105::1",
               "WAN_IF": "eth0",
-              "TUN_SUBNET": "10.20.0.0/30",
-              "TUN_SUBNET6": "fd20:20::/126",
+              "TUN_SUBNET": "192.168.105.0/30",
+              "TUN_SUBNET6": "fd20:105::/126",
               "ENABLE_TCPMSS": "1"
             },
             "timeout_ms": 15000
@@ -770,17 +814,17 @@ A second peer can also use the same peer server as an Internet-exit TUN gateway,
 
 | Link | Client interface | Server interface | IPv4 client | IPv4 server | IPv6 client | IPv6 server |
 |---|---|---|---|---|---|---|
-| Peer client A | `obtun0` | `obtun1` | `10.20.0.1/30` | `10.20.0.2/30` | `fd20:20::1/126` | `fd20:20::2/126` |
-| Peer client B | `obtun0` | `obtun2` | `10.20.0.5/30` | `10.20.0.6/30` | `fd20:20::5/126` | `fd20:20::6/126` |
+| Peer client A | `obtun0` | `obtun1` | `192.168.105.1/30` | `192.168.105.2/30` | `fd20:105::1/126` | `fd20:105::2/126` |
+| Peer client B | `obtun0` | `obtun2` | `192.168.105.5/30` | `192.168.105.6/30` | `fd20:105::5/126` | `fd20:105::6/126` |
 
 For the second peer client, keep the client-side `own_servers` shape the same, but change its hook environment:
 
 ```json
 {
-  "TUN_ADDR": "10.20.0.5/30",
-  "TUN_GW": "10.20.0.6",
-  "TUN_ADDR6": "fd20:20::5/126",
-  "TUN_GW6": "fd20:20::6",
+  "TUN_ADDR": "192.168.105.5/30",
+  "TUN_GW": "192.168.105.6",
+  "TUN_ADDR6": "fd20:105::5/126",
+  "TUN_GW6": "fd20:105::6",
   "UNDERLAY_IF": "auto",
   "UNDERLAY_GW": "auto",
   "DNS1": "1.1.1.1",
@@ -810,13 +854,13 @@ Also change the second peer client's `remote_servers` TUN listener to use a diff
           "linux": ["./scripts/server-tun-hook.sh", "up", "{ifname}"]
         },
         "env": {
-          "TUN_ADDR": "10.20.0.6/30",
-          "PEER_ADDR": "10.20.0.5",
-          "TUN_ADDR6": "fd20:20::6/126",
-          "PEER_ADDR6": "fd20:20::5",
+          "TUN_ADDR": "192.168.105.6/30",
+          "PEER_ADDR": "192.168.105.5",
+          "TUN_ADDR6": "fd20:105::6/126",
+          "PEER_ADDR6": "fd20:105::5",
           "WAN_IF": "eth0",
-          "TUN_SUBNET": "10.20.0.4/30",
-          "TUN_SUBNET6": "fd20:20::4/126",
+          "TUN_SUBNET": "192.168.105.4/30",
+          "TUN_SUBNET6": "fd20:105::4/126",
           "ENABLE_TCPMSS": "1"
         },
         "timeout_ms": 15000
@@ -826,13 +870,13 @@ Also change the second peer client's `remote_servers` TUN listener to use a diff
           "linux": ["./scripts/server-tun-hook.sh", "up", "{ifname}"]
         },
         "env": {
-          "TUN_ADDR": "10.20.0.6/30",
-          "PEER_ADDR": "10.20.0.5",
-          "TUN_ADDR6": "fd20:20::6/126",
-          "PEER_ADDR6": "fd20:20::5",
+          "TUN_ADDR": "192.168.105.6/30",
+          "PEER_ADDR": "192.168.105.5",
+          "TUN_ADDR6": "fd20:105::6/126",
+          "PEER_ADDR6": "fd20:105::5",
           "WAN_IF": "eth0",
-          "TUN_SUBNET": "10.20.0.4/30",
-          "TUN_SUBNET6": "fd20:20::4/126",
+          "TUN_SUBNET": "192.168.105.4/30",
+          "TUN_SUBNET6": "fd20:105::4/126",
           "ENABLE_TCPMSS": "1"
         },
         "timeout_ms": 15000
@@ -842,13 +886,13 @@ Also change the second peer client's `remote_servers` TUN listener to use a diff
           "linux": ["./scripts/server-tun-hook.sh", "down", "{ifname}"]
         },
         "env": {
-          "TUN_ADDR": "10.20.0.6/30",
-          "PEER_ADDR": "10.20.0.5",
-          "TUN_ADDR6": "fd20:20::6/126",
-          "PEER_ADDR6": "fd20:20::5",
+          "TUN_ADDR": "192.168.105.6/30",
+          "PEER_ADDR": "192.168.105.5",
+          "TUN_ADDR6": "fd20:105::6/126",
+          "PEER_ADDR6": "fd20:105::5",
           "WAN_IF": "eth0",
-          "TUN_SUBNET": "10.20.0.4/30",
-          "TUN_SUBNET6": "fd20:20::4/126",
+          "TUN_SUBNET": "192.168.105.4/30",
+          "TUN_SUBNET6": "fd20:105::4/126",
           "ENABLE_TCPMSS": "1"
         },
         "timeout_ms": 15000
@@ -1320,7 +1364,7 @@ Optional operations follow-up:
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 - Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `156` integration tests, `215` unit tests, and `41` iOS-focused tests in `ios/tests/`. Latest focused validation for the canonical WebAdmin packaging path used `pytest -q ios/tests/test_m3_native_sources.py tests/unit/test_admin_web_payloads.py` and completed with `30 passed, 4 subtests passed`; this slice guards the repo-top `admin_web/` source, iOS Briefcase source staging, and bundled WebAdmin fallback resolution. Earlier focused validation includes unit requirement-gap closure for Admin Web authentication gates, multi-listener peer snapshot identity, IPv4/IPv6 UDP peer labeling, and core `myudp` reliability invariants, plus the iOS Documents-backed WebAdmin/config/log slice, compression/admin/lifecycle, SecureLink PSK, WebSocket SecureLink PSK reconnect stale-buffer recovery, WebSocket listener peer traffic statistics, SecureLink authenticated failure reconnect recovery, SecureLink revocation metadata and myudp stale-row guard fixes, config persistence, peer-traffic/concurrent-listener, TUN WebAdmin/hook, WebAdmin service-editor/service-name, WebAdmin PSK reveal, launcher dependency-assistance, and the embedded iOS restart/AdminWeb shutdown slice documented in [docs/README_TESTING.md](docs/README_TESTING.md).
+Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `156` integration tests, `215` unit tests, and `41` iOS-focused tests in `ios/tests/`. Latest focused validation for the canonical WebAdmin packaging path used `pytest -q ios/tests/test_m3_native_sources.py tests/unit/test_admin_web_payloads.py` and completed with `30 passed, 4 subtests passed`; this slice guards the repo-top `admin_web/` source, iOS Briefcase source staging, and bundled WebAdmin fallback resolution. The latest iOS tunnel milestone also revalidated the config-derived dual-stack packet-tunnel path with `python3 scripts/check_requirements_guard.py --base-ref origin/main`, `python3 scripts/check_readme_testing_guard.py --base-ref origin/main`, and `./ios/scripts/build_ios_app.sh` before the physical-device run that reached real Safari IPv4/IPv6 tunnel egress. Earlier focused validation includes unit requirement-gap closure for Admin Web authentication gates, multi-listener peer snapshot identity, IPv4/IPv6 UDP peer labeling, and core `myudp` reliability invariants, plus the iOS Documents-backed WebAdmin/config/log slice, compression/admin/lifecycle, SecureLink PSK, WebSocket SecureLink PSK reconnect stale-buffer recovery, WebSocket listener peer traffic statistics, SecureLink authenticated failure reconnect recovery, SecureLink revocation metadata and myudp stale-row guard fixes, config persistence, peer-traffic/concurrent-listener, TUN WebAdmin/hook, WebAdmin service-editor/service-name, WebAdmin PSK reveal, launcher dependency-assistance, and the embedded iOS restart/AdminWeb shutdown slice documented in [docs/README_TESTING.md](docs/README_TESTING.md).
 
 The latest CI-stability hardening on `ios-packet-tunnel-e2e` also revalidated the host-side iOS E2E lane under xdist with `pytest -q -n 16 tests/integration/test_ios_e2e.py` (`4 passed`) after replacing probe-and-release test ports with worker-partitioned TCP/UDP port allocation.
 The latest Windows CI recovery on `ios-packet-tunnel-e2e` also revalidated the `windows_only` integration lane with `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"` (`2 passed`) after restoring missing `ctypes`/`wintypes` imports in the split WebSocket transport module for WinHTTP/SSPI Negotiate proxy auth.

@@ -245,6 +245,28 @@ def close_tun_device(mux: Any, dev: Any) -> None:
     dev.chan_id = None
 
 
+def write_tun_packet(_mux: Any, dev: Any, data: bytes) -> None:
+    adapter = getattr(dev, "wintun_adapter", None)
+    if adapter is None:
+        raise RuntimeError("No write-capable WinTun adapter is attached")
+    write_names = ["write", "send", "send_packet", "write_packet"]
+    write_fn = None
+    for name in write_names:
+        if hasattr(adapter, name):
+            write_fn = getattr(adapter, name)
+            break
+    if write_fn is None:
+        if callable(adapter):
+            result = adapter(data)
+            if asyncio.iscoroutine(result):
+                raise RuntimeError("Coroutine WinTun adapter call is not supported in synchronous write path")
+            return
+        raise RuntimeError("No write method on WinTun adapter")
+    result = write_fn(data)
+    if asyncio.iscoroutine(result):
+        raise RuntimeError("Coroutine WinTun write is not supported in synchronous write path")
+
+
 async def tun_reader_loop(mux: Any, dev: Any) -> None:
     adapter = getattr(dev, "wintun_adapter", None)
     if adapter is None:
