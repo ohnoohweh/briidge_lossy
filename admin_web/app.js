@@ -110,6 +110,8 @@ const restartState = {
   active: false,
   reloadAtMs: 0,
   intervalId: null,
+  pollTimeoutId: null,
+  phase: 'idle',
 };
 
 const liveState = {
@@ -713,16 +715,67 @@ function updateRestartUi(remainingSec) {
   const restartBtn = document.getElementById('restartBtn');
   if (restartBtn) restartBtn.disabled = active;
   const countdown = document.getElementById('restartCountdown');
-  if (countdown) countdown.textContent = `${Math.max(0, remainingSec)}s`;
+  if (countdown) {
+    countdown.textContent = restartState.phase === 'probing'
+      ? 'recovering...'
+      : `${Math.max(0, remainingSec)}s`;
+  }
 }
 
-function startRestartCountdown(durationSec = 40) {
+function clearRestartTimers() {
   if (restartState.intervalId) {
     window.clearInterval(restartState.intervalId);
     restartState.intervalId = null;
   }
+  if (restartState.pollTimeoutId) {
+    window.clearTimeout(restartState.pollTimeoutId);
+    restartState.pollTimeoutId = null;
+  }
+}
+
+function finishRestartGate() {
+  clearRestartTimers();
+  restartState.active = false;
+  restartState.reloadAtMs = 0;
+  restartState.phase = 'idle';
+  updateRestartUi(0);
+}
+
+function scheduleRestartProbe(maxProbeSeconds = 180) {
+  restartState.phase = 'probing';
+  updateRestartUi(0);
+  const startedAtMs = Date.now();
+
+  const probe = async () => {
+    try {
+      const response = await fetch('/api/meta', {
+        credentials: 'same-origin',
+        cache: 'no-store',
+      });
+      if (response.ok) {
+        window.location.reload();
+        return;
+      }
+    } catch (e) {
+      // Keep probing until WebAdmin becomes reachable again.
+    }
+    if ((Date.now() - startedAtMs) >= (maxProbeSeconds * 1000)) {
+      finishRestartGate();
+      window.location.reload();
+      return;
+    }
+    restartState.pollTimeoutId = window.setTimeout(probe, 1000);
+  };
+
+  restartState.pollTimeoutId = window.setTimeout(probe, 250);
+}
+
+function startRestartCountdown(durationSec = 40, options = {}) {
+  const embedded = Boolean(options.embedded);
+  clearRestartTimers();
   restartState.active = true;
   restartState.reloadAtMs = Date.now() + (durationSec * 1000);
+  restartState.phase = 'countdown';
 
   const tick = () => {
     const remainingMs = restartState.reloadAtMs - Date.now();
@@ -733,7 +786,11 @@ function startRestartCountdown(durationSec = 40) {
         window.clearInterval(restartState.intervalId);
         restartState.intervalId = null;
       }
-      window.location.reload();
+      if (embedded) {
+        scheduleRestartProbe();
+      } else {
+        window.location.reload();
+      }
     }
   };
 
@@ -1180,9 +1237,12 @@ async function restart() {
     if (!r.ok || !j.ok) {
       throw new Error(j.error || `HTTP ${r.status}`);
     }
-    const delaySec = Math.max(0, Number(j.restart_delay_sec || 0));
+    let delaySec = Math.max(0, Number(j.restart_delay_sec || 0));
+    if (delaySec === 0 && j.restart_embedded) {
+      delaySec = 20;
+    }
     if (delaySec > 0) {
-      startRestartCountdown(delaySec);
+      startRestartCountdown(delaySec, { embedded: Boolean(j.restart_embedded) });
     }
   } catch (e) {
     window.alert(`Restart failed: ${e}`);
@@ -2457,7 +2517,7 @@ async function saveConfigUpdates(updates, successMessage, options = {}) {
     const baseMessage = successMessage || `Saved ${Object.keys(updates).length} configuration value(s).`;
     if (j.restart_requested) {
       const delaySec = Math.max(0, Number(j.restart_delay_sec || 0));
-      if (delaySec > 0) startRestartCountdown(delaySec);
+      if (delaySec > 0) startRestartCountdown(delaySec, { embedded: Boolean(j.restart_embedded) });
       setText('configMessage', `${baseMessage} Restart requested.`);
     } else {
       setText('configMessage', baseMessage);
@@ -3148,8 +3208,6 @@ function syncServiceCatalogEditor(key) {
     setServiceCatalogValidationState(key, '');
     return true;
   } catch (error) {
-    root.setAttribute('data-service-catalog-draft', JSON.stringify(specs));
-    sink.value = '"__invalid_service_catalog__"';
     setServiceCatalogValidationState(key, String(error));
     return false;
   }
@@ -3204,7 +3262,7 @@ function resetServiceCatalogEditorValue(key) {
 function closeServiceCatalogModal(root, key, { rerender = true } = {}) {
   const modal = root.querySelector(`[data-service-modal="${CSS.escape(key)}"]`);
   if (!modal) return;
-  syncServiceCatalogEditor(key);
+  if (!syncServiceCatalogEditor(key)) return;
   modal.classList.add('hidden');
   modal.removeAttribute('data-service-active-index');
   modal.innerHTML = '';
@@ -3325,7 +3383,7 @@ function initServiceCatalogEditor(root, key) {
   const prevBtn = root.querySelector(`[data-service-prev="${CSS.escape(key)}"]`);
   if (prevBtn) {
     prevBtn.onclick = () => {
-      syncServiceCatalogEditor(key);
+      if (!syncServiceCatalogEditor(key)) return;
       const current = Number(root.querySelector(`[data-service-modal="${CSS.escape(key)}"]`)?.getAttribute('data-service-active-index') ?? 0);
       renderServiceCatalogModal(root, key, current - 1);
       refreshConfigPreview(key);
@@ -3335,7 +3393,7 @@ function initServiceCatalogEditor(root, key) {
   const nextBtn = root.querySelector(`[data-service-next="${CSS.escape(key)}"]`);
   if (nextBtn) {
     nextBtn.onclick = () => {
-      syncServiceCatalogEditor(key);
+      if (!syncServiceCatalogEditor(key)) return;
       const current = Number(root.querySelector(`[data-service-modal="${CSS.escape(key)}"]`)?.getAttribute('data-service-active-index') ?? 0);
       renderServiceCatalogModal(root, key, current + 1);
       refreshConfigPreview(key);

@@ -280,36 +280,46 @@ class Runner:
 
     async def stop(self):
         self.log.debug("[SERVER] Stop entered")
+
+        async def _run_stop_step(label: str, awaitable, timeout_s: float = 5.0) -> None:
+            started = time.monotonic()
+            try:
+                await asyncio.wait_for(awaitable, timeout=timeout_s)
+                self.log.info(
+                    "[RUNNER] stop step %s completed duration_ms=%.1f",
+                    label,
+                    (time.monotonic() - started) * 1000.0,
+                )
+            except asyncio.TimeoutError:
+                self.log.warning(
+                    "[RUNNER] stop step %s timed out after %.1fs",
+                    label,
+                    timeout_s,
+                )
+            except Exception:
+                self.log.exception("[RUNNER] stop step %s failed", label)
+
         if self._client_restart_watchdog_task is not None:
             self._client_restart_watchdog_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._client_restart_watchdog_task
             self._client_restart_watchdog_task = None
         if self.admin_web is not None:
-            await self.admin_web.stop()
+            await _run_stop_step("admin_web.stop", self.admin_web.stop(), timeout_s=2.0)
             self.admin_web = None        
         if self._stop is not None:
             self._stop.set()
 
         self.log.debug("[RUNNER] stop: entering stats.stop")
-        try:
-            await self.stats.stop()
-        except Exception:
-            pass
+        await _run_stop_step("stats.stop", self.stats.stop(), timeout_s=2.0)
 
         self.log.debug("[RUNNER] stop: entering mux.stop")
-        try:
-            for mux in reversed(self._muxes):
-                await mux.stop()
-        except Exception:
-            pass
+        for idx, mux in enumerate(reversed(self._muxes)):
+            await _run_stop_step(f"mux.stop[{idx}]", mux.stop(), timeout_s=5.0)
 
         self.log.debug("[RUNNER] stop: entering _session_obj")
-        try:
-            for session in reversed(self._sessions):
-                await session.stop()
-        except Exception:
-            pass
+        for idx, session in enumerate(reversed(self._sessions)):
+            await _run_stop_step(f"session.stop[{idx}]", session.stop(), timeout_s=5.0)
         self.log.debug("[RUNNER] stop leaving")
 
 
@@ -683,9 +693,16 @@ class Runner:
 
     def get_debug_logs(self, limit: int = 400) -> list:
         lim = max(1, min(int(limit), 1000))
-        if not DEBUG_LOG_RING:
+        if DEBUG_LOG_RING:
+            return list(DEBUG_LOG_RING)[-lim:]
+        log_file = str(getattr(self.args, "log_file", "") or "").strip()
+        if not log_file:
             return []
-        return list(DEBUG_LOG_RING)[-lim:]
+        try:
+            with open(log_file, "r", encoding="utf-8", errors="replace") as handle:
+                return handle.read().splitlines()[-lim:]
+        except Exception:
+            return []
 
     def _unwrap_snapshot_session(self, session_obj):
         current = session_obj

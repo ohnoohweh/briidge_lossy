@@ -113,6 +113,7 @@ class AdminWebUI:
         self._auth_sessions: Dict[str, float] = {}
         self._config_challenges: Dict[str, dict] = {}
         self._secret_reveal_challenges: Dict[str, dict] = {}
+        self._active_client_writers: Set[Any] = set()
 
     async def start(self):
         if not getattr(self.args, "admin_web", False):
@@ -144,15 +145,57 @@ class AdminWebUI:
             )
 
     async def stop(self):
-        self.log.info(
-            "Admin web UI stopping")
-        if self.server is None:
-            return
-        self.server.close()
-        await self.server.wait_closed()
+        self.log.info("Admin web UI stopping")
+        server = self.server
         self.server = None
+        stop_started = time.monotonic()
+        if server is not None:
+            self.log.info("Admin web UI stop phase=server_close_start")
+            server.close()
+            self.log.info(
+                "Admin web UI stop phase=server_close_done duration_ms=%.1f",
+                (time.monotonic() - stop_started) * 1000.0,
+            )
+
+        writers = list(self._active_client_writers)
+        self._active_client_writers.clear()
+        self.log.info("Admin web UI stop phase=client_close_start active_clients=%d", len(writers))
+        for writer in writers:
+            with contextlib.suppress(Exception):
+                writer.close()
+        if writers:
+            async def _await_writer_closed(writer):
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+            client_wait_started = time.monotonic()
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*[_await_writer_closed(writer) for writer in writers], return_exceptions=True),
+                    timeout=1.0,
+                )
+                self.log.info(
+                    "Admin web UI stop phase=client_close_done active_clients=%d duration_ms=%.1f total_duration_ms=%.1f",
+                    len(writers),
+                    (time.monotonic() - client_wait_started) * 1000.0,
+                    (time.monotonic() - stop_started) * 1000.0,
+                )
+            except asyncio.TimeoutError:
+                self.log.warning(
+                    "Admin web UI stop phase=client_close_timeout active_clients=%d duration_ms=%.1f total_duration_ms=%.1f",
+                    len(writers),
+                    (time.monotonic() - client_wait_started) * 1000.0,
+                    (time.monotonic() - stop_started) * 1000.0,
+                )
+            except Exception:
+                self.log.exception("Admin web UI stop phase=client_close_failed active_clients=%d", len(writers))
+        else:
+            self.log.info(
+                "Admin web UI stop phase=client_close_done active_clients=0 total_duration_ms=%.1f",
+                (time.monotonic() - stop_started) * 1000.0,
+            )
 
     async def _handle_client(self, reader, writer):
+        self._active_client_writers.add(writer)
         self.log.info("Admin web UI incoming connection %s", format_stream_endpoints(writer))
         self.log.debug("Admin web UI handling")
         try:
@@ -313,6 +356,7 @@ class AdminWebUI:
             with contextlib.suppress(Exception):
                 await self._send(writer, 500, b"Internal Server Error", "text/plain; charset=utf-8")
         finally:
+            self._active_client_writers.discard(writer)
             with contextlib.suppress(Exception):
                 writer.close()
                 await writer.wait_closed()
@@ -709,7 +753,6 @@ class AdminWebUI:
             "milestone": "C",
             "build": _detect_build_info(),
             "runtime_dependencies": _runtime_dependency_status_for_platform(platform),
-            "crypto_extract": available_crypto_extract(),
         }
 
     async def _handle_meta(self, writer):
@@ -884,7 +927,10 @@ class AdminWebUI:
                 await self._send(writer, 403, b"Forbidden", "text/plain; charset=utf-8")
                 return
 
-        embedded_restart = callable(getattr(self.runner, "_embedded_restart_callback", None))
+        embedded_restart_callback = getattr(self, "_embedded_restart_callback", None)
+        if not callable(embedded_restart_callback):
+            embedded_restart_callback = getattr(self.runner, "_embedded_restart_callback", None)
+        embedded_restart = callable(embedded_restart_callback)
         delay_restart = False if embedded_restart else bool(self.runner._restart_requires_delay())
         payload = {
             "ok": True,
@@ -901,6 +947,17 @@ class AdminWebUI:
             _detect_build_info(),
         )
         await self._send_json(writer, 200, payload)
+        if embedded_restart and callable(embedded_restart_callback):
+            try:
+                result = embedded_restart_callback()
+            except Exception:
+                logging.getLogger("obstacle_bridge.admin_web").exception(
+                    "embedded restart callback failed during /api/restart dispatch"
+                )
+            else:
+                if inspect.isawaitable(result):
+                    asyncio.create_task(result)
+            return
         self.runner.request_restart()
 
     async def _handle_reconnect(self, writer, method, headers, body: bytes):

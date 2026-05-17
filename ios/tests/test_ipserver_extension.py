@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "ios" / "src"))
 
 from obstacle_bridge_ios import ipserver_extension
+from obstacle_bridge_ios import ipserver_runtime
 from obstacle_bridge_ios.ipserver_runtime import IPServerRuntimeController
 
 
@@ -153,3 +156,129 @@ def test_ios_extension_runtime_disables_admin_web_auth_for_flat_config() -> None
     assert normalized["admin_web_username"] == ""
     assert normalized["admin_web_password"] == ""
     assert normalized["ios_admin_web_auth_policy"] == "disabled_in_extension_runtime"
+
+
+def test_embedded_restart_reload_reads_grouped_config_and_restarts_client(monkeypatch) -> None:
+    events: list[tuple[str, dict[str, object]]] = []
+
+    monkeypatch.setattr(
+        ipserver_runtime,
+        "log_provider_event",
+        lambda _root, event, **fields: events.append((event, fields)),
+    )
+    monkeypatch.setattr(ipserver_runtime, "log_event", lambda *_args, **_kwargs: None)
+
+    class FakeClient:
+        def __init__(self, config, config_path=None, apply_logging=False):
+            self.config = config
+            self.config_path = config_path
+            self.apply_logging = apply_logging
+            self.runner = SimpleNamespace()
+            self.stop_calls = 0
+            self.start_calls: list[dict[str, object]] = []
+
+        async def stop(self) -> None:
+            self.stop_calls += 1
+
+        async def start(self, config=None, packet_io=None) -> None:
+            if config is not None:
+                self.config = config
+            self.start_calls.append(dict(config or {}))
+
+        def snapshot(self) -> dict[str, object]:
+            return {"started": True, "config": self.config}
+
+    monkeypatch.setattr(ipserver_runtime, "ObstacleBridgeClient", FakeClient)
+    monkeypatch.setattr(
+        ipserver_runtime,
+        "_load_grouped_runtime_config",
+        lambda _root: {
+            "runner": {"overlay_transport": "myudp"},
+            "udp_session": {"udp_peer": "bridge.example.net", "udp_peer_port": 4433},
+        },
+    )
+    monkeypatch.setattr(IPServerRuntimeController, "_ensure_runtime_loop", lambda self: asyncio.get_running_loop())
+    
+    async def _fast_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
+
+    controller = IPServerRuntimeController()
+    old_client = controller.client
+
+    async def run() -> None:
+        controller._request_embedded_restart()
+        future = controller._embedded_restart_future
+        assert future is not None
+        await future
+
+    asyncio.run(run())
+
+    assert old_client.stop_calls == 1
+    assert controller.client is not old_client
+    assert controller.client.start_calls
+    assert controller.client.start_calls[-1]["runner"]["overlay_transport"] == "myudp"
+    assert controller.client.start_calls[-1]["udp_session"]["udp_peer"] == "bridge.example.net"
+    assert any(event == "python_runtime_restart_started" for event, _fields in events)
+    assert any(event == "python_runtime_restart_completed" for event, _fields in events)
+
+
+def test_embedded_restart_times_out_old_runtime_stop(monkeypatch) -> None:
+    events: list[tuple[str, dict[str, object]]] = []
+
+    monkeypatch.setattr(
+        ipserver_runtime,
+        "log_provider_event",
+        lambda _root, event, **fields: events.append((event, fields)),
+    )
+    monkeypatch.setattr(ipserver_runtime, "log_event", lambda *_args, **_kwargs: None)
+
+    class FakeOldClient:
+        def __init__(self, config, config_path=None, apply_logging=False):
+            self.config = config
+            self.runner = SimpleNamespace()
+
+        async def stop(self) -> None:
+            await asyncio.sleep(999)
+
+        async def start(self, config=None, packet_io=None) -> None:
+            return None
+
+        def snapshot(self) -> dict[str, object]:
+            return {"started": True, "config": self.config}
+
+    class FakeNewClient(FakeOldClient):
+        pass
+
+    created: list[FakeOldClient] = []
+
+    def _client_factory(config, config_path=None, apply_logging=False):
+        cls = FakeOldClient if not created else FakeNewClient
+        obj = cls(config, config_path=config_path, apply_logging=apply_logging)
+        created.append(obj)
+        return obj
+
+    monkeypatch.setattr(ipserver_runtime, "ObstacleBridgeClient", _client_factory)
+    monkeypatch.setattr(
+        ipserver_runtime,
+        "_load_grouped_runtime_config",
+        lambda _root: {"runner": {"overlay_transport": "myudp"}},
+    )
+    monkeypatch.setattr(IPServerRuntimeController, "_ensure_runtime_loop", lambda self: asyncio.get_running_loop())
+
+    controller = IPServerRuntimeController()
+    controller.EMBEDDED_RESTART_STOP_TIMEOUT_SEC = 0.01
+
+    async def run() -> None:
+        controller._request_embedded_restart()
+        future = controller._embedded_restart_future
+        assert future is not None
+        with pytest.raises(asyncio.TimeoutError):
+            await future
+
+    import pytest
+
+    asyncio.run(run())
+
+    assert any(event == "python_runtime_restart_stop_old_runtime_timed_out" for event, _fields in events)

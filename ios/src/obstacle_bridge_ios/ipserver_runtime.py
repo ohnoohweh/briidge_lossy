@@ -8,6 +8,7 @@ import json
 import os
 import threading
 import traceback
+import time
 from concurrent.futures import Future
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -25,6 +26,8 @@ from .profiles import ProfileStore
 
 
 class IPServerRuntimeController:
+    EMBEDDED_RESTART_STOP_TIMEOUT_SEC = 20.0
+
     def __init__(self) -> None:
         self.documents_root = ObstacleBridgeIOSApp.DOCUMENTS_ROOT
         self.config_file = ObstacleBridgeIOSApp.CONFIG_FILE
@@ -41,7 +44,7 @@ class IPServerRuntimeController:
         self._active_profile_id: Optional[str] = None
         self._runtime_loop: Optional[asyncio.AbstractEventLoop] = None
         self._runtime_loop_thread: Optional[threading.Thread] = None
-        self._embedded_restart_future: Optional[Future[Any]] = None
+        self._embedded_restart_future: Optional[Future[Any] | asyncio.Task[Any]] = None
         log_event(self.documents_root, "ipserver_runtime.controller_init")
         self._log_config_diagnostics("controller_init", self.client.config)
 
@@ -189,32 +192,89 @@ class IPServerRuntimeController:
         runner = self.client.runner
         if runner is not None:
             setattr(runner, "_embedded_restart_callback", self._request_embedded_restart)
+            admin_web = getattr(runner, "admin_web", None)
+            if admin_web is not None:
+                setattr(admin_web, "_embedded_restart_callback", self._request_embedded_restart)
 
-    def _request_embedded_restart(self) -> Future[Any]:
+    def _request_embedded_restart(self) -> None:
         future = self._embedded_restart_future
         if future is not None and not future.done():
-            return future
+            log_provider_event(self.documents_root, "python_runtime_restart_requested", status="already_pending")
+            return
         loop = self._ensure_runtime_loop()
-        future = asyncio.run_coroutine_threadsafe(self._restart_embedded_runtime(), loop)
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        log_provider_event(
+            self.documents_root,
+            "python_runtime_restart_requested",
+            status="scheduled",
+            same_loop=bool(running_loop is loop),
+        )
+        if running_loop is loop:
+            future = loop.create_task(self._restart_embedded_runtime())
+        else:
+            future = asyncio.run_coroutine_threadsafe(self._restart_embedded_runtime(), loop)
         self._embedded_restart_future = future
-        return future
 
     async def _restart_embedded_runtime(self) -> None:
+        log_provider_event(self.documents_root, "python_runtime_restart_started")
         runner = self.client.runner
         if runner is None:
+            log_provider_event(self.documents_root, "python_runtime_restart_skipped", reason="runner_missing")
+            self._embedded_restart_future = None
             return
-        current_config = runner.get_config_snapshot(include_secrets=True)
+        current_config = _load_grouped_runtime_config(self.documents_root)
+        self._log_config_diagnostics("restart_reload", current_config)
         old_client = self.client
         new_client = ObstacleBridgeClient(
             dict(current_config),
             config_path=str(self.config_file),
             apply_logging=True,
         )
-        await asyncio.sleep(0.2)
-        await old_client.stop()
-        self.client = new_client
-        await new_client.start(config=new_client.config)
-        self._attach_embedded_restart_hook()
+        try:
+            await asyncio.sleep(0.2)
+            log_provider_event(
+                self.documents_root,
+                "python_runtime_restart_stopping_old_runtime",
+                timeout_sec=self.EMBEDDED_RESTART_STOP_TIMEOUT_SEC,
+            )
+            stop_started = time.monotonic()
+            try:
+                await asyncio.wait_for(
+                    old_client.stop(),
+                    timeout=self.EMBEDDED_RESTART_STOP_TIMEOUT_SEC,
+                )
+            except asyncio.TimeoutError:
+                log_provider_event(
+                    self.documents_root,
+                    "python_runtime_restart_stop_old_runtime_timed_out",
+                    timeout_sec=self.EMBEDDED_RESTART_STOP_TIMEOUT_SEC,
+                    duration_sec=round(time.monotonic() - stop_started, 3),
+                )
+                raise
+            log_provider_event(
+                self.documents_root,
+                "python_runtime_restart_stopped_old_runtime",
+                duration_sec=round(time.monotonic() - stop_started, 3),
+            )
+            self.client = new_client
+            await new_client.start(config=new_client.config)
+            self._attach_embedded_restart_hook()
+            self._log_config_diagnostics("restart_started", new_client.config)
+            log_provider_event(self.documents_root, "python_runtime_restart_completed")
+        except Exception as exc:
+            log_provider_event(
+                self.documents_root,
+                "python_runtime_restart_failed",
+                error_type=exc.__class__.__name__,
+                error=str(exc),
+                traceback="".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+            )
+            raise
+        finally:
+            self._embedded_restart_future = None
 
     @staticmethod
     def _runtime_config_from_profile(profile: Mapping[str, Any]) -> dict[str, Any]:

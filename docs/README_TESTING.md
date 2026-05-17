@@ -219,6 +219,14 @@ Important distinction:
 - The preferred acceptance direction for iOS is to run the program under test unmodified: install the normal app, provision profiles/configuration through the same app storage or user-facing app path that production uses, start the normal app or Network Extension target through iOS mechanisms, and stimulate it only from outside through host services, simulator APIs, UI automation, or `NETunnelProviderManager`.
 - Test-only iOS modes must be treated like the failure-injection policy below: narrowly scoped, explicitly named, excluded from claims that require the unmodified shipped surface, and replaced by normal-entrypoint tests once the app has enough production control surface to support them.
 
+Current testing gap:
+
+- WebAdmin page logic in `admin_web/app.js` is only partially covered today through source-level and backend-facing tests. We do not yet have an automatic browser-capable frontend harness that exercises real DOM/event behavior for config-editor flows such as `own_servers` and `remote_servers` modal editing.
+
+TODO:
+
+- Add an automatic browser-capable frontend test harness for the WebAdmin page so interactive JavaScript behavior can be validated end-to-end, including modal editing, field validation, save/cancel flows, and regression coverage for service-catalog edits that currently require manual reproduction.
+
 Target iOS E2E shape:
 
 - macOS pytest starts one or more real host-side ObstacleBridge peers plus echo/stimulation services, as the Linux suite does.

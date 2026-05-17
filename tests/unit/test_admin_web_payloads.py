@@ -214,11 +214,53 @@ class _WriterStub:
         return None
 
 
+class _ServerStub:
+    def __init__(self):
+        self.closed = False
+        self.wait_closed_calls = 0
+
+    def close(self):
+        self.closed = True
+
+    async def wait_closed(self):
+        self.wait_closed_calls += 1
+        return None
+
+
 def _http_json_body(writer: _WriterStub) -> dict:
     return json.loads(writer.buffer.decode("utf-8").split("\r\n\r\n", 1)[1])
 
 
 class AdminWebPayloadTests(unittest.TestCase):
+    def test_stop_closes_server_and_active_client_writers(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+        )
+        ui = AdminWebUI(args, _RunnerStub())
+        server = _ServerStub()
+        writer_a = _WriterStub()
+        writer_b = _WriterStub()
+        ui.server = server
+        ui._active_client_writers.update({writer_a, writer_b})
+
+        asyncio.run(ui.stop())
+
+        self.assertTrue(server.closed)
+        self.assertEqual(server.wait_closed_calls, 0)
+        self.assertTrue(writer_a.closed)
+        self.assertTrue(writer_b.closed)
+        self.assertEqual(ui._active_client_writers, set())
+
     def test_resolve_static_base_falls_back_to_packaged_admin_web(self):
         args = argparse.Namespace(
             admin_web=True,
@@ -405,6 +447,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["runtime_dependencies"]["missing"], [])
         self.assertTrue(payload["runtime_dependencies"]["ok"])
         self.assertEqual(payload["runtime_dependencies"]["install_hint"], "")
+        self.assertNotIn("crypto_extract", payload)
 
     def test_restart_endpoint_uses_immediate_mode_for_embedded_restart(self):
         args = argparse.Namespace(
@@ -422,7 +465,8 @@ class AdminWebPayloadTests(unittest.TestCase):
             admin_web_token="",
         )
         runner = _RunnerStub()
-        runner._embedded_restart_callback = lambda: None
+        calls = []
+        runner._embedded_restart_callback = lambda: calls.append("runner")
         ui = AdminWebUI(args, runner)
 
         async def run_flow():
@@ -433,9 +477,57 @@ class AdminWebPayloadTests(unittest.TestCase):
             self.assertTrue(doc["restart_embedded"])
             self.assertEqual(doc["restart_mode"], "immediate")
             self.assertEqual(doc["restart_delay_sec"], 0)
-            self.assertTrue(runner.restart_requested)
+            self.assertEqual(calls, ["runner"])
+            self.assertFalse(runner.restart_requested)
 
         asyncio.run(run_flow())
+
+    def test_restart_endpoint_prefers_admin_web_embedded_restart_callback(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="myudp",
+            dashboard=False,
+            admin_web_token="",
+        )
+        runner = _RunnerStub()
+        calls = []
+        ui = AdminWebUI(args, runner)
+        ui._embedded_restart_callback = lambda: calls.append("ui")
+
+        async def run_flow():
+            writer = _WriterStub()
+            await ui._handle_restart(writer, "POST", {})
+            doc = _http_json_body(writer)
+            self.assertTrue(doc["ok"])
+            self.assertTrue(doc["restart_embedded"])
+            self.assertEqual(calls, ["ui"])
+            self.assertFalse(runner.restart_requested)
+
+        asyncio.run(run_flow())
+
+    def test_embedded_restart_frontend_arms_fallback_countdown(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        app_paths = [
+            repo_root / "admin_web" / "app.js",
+            repo_root / "src" / "obstacle_bridge" / "admin_web" / "app.js",
+        ]
+
+        for app_path in app_paths:
+            with self.subTest(app_path=str(app_path.relative_to(repo_root))):
+                text = app_path.read_text(encoding="utf-8")
+                self.assertIn("if (delaySec === 0 && j.restart_embedded)", text)
+                self.assertIn("delaySec = 20;", text)
+                self.assertIn("startRestartCountdown(delaySec, { embedded: Boolean(j.restart_embedded) });", text)
+                self.assertIn("function scheduleRestartProbe(maxProbeSeconds = 180)", text)
+                self.assertIn("fetch('/api/meta', {", text)
 
     def test_config_save_requires_challenge_bound_to_update_block(self):
         args = argparse.Namespace(
@@ -589,6 +681,19 @@ class AdminWebPayloadTests(unittest.TestCase):
                 self.assertIn("own-server configuration/server role", text)
                 self.assertIn("protected overlay path", text)
                 self.assertIn("Remote plain HTTP can let an active network attacker replace the WebAdmin JavaScript", text)
+
+    def test_service_catalog_modal_preserves_last_valid_draft_on_validation_error(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        app_paths = [
+            repo_root / "admin_web" / "app.js",
+            repo_root / "src" / "obstacle_bridge" / "admin_web" / "app.js",
+        ]
+
+        for app_path in app_paths:
+            with self.subTest(app_path=str(app_path.relative_to(repo_root))):
+                text = app_path.read_text(encoding="utf-8")
+                self.assertIn("if (!syncServiceCatalogEditor(key)) return;", text)
+                self.assertNotIn('sink.value = \'"__invalid_service_catalog__"\'', text)
 
     def test_build_peers_payload_includes_secure_link_rows(self):
         args = argparse.Namespace(
