@@ -182,7 +182,7 @@ Current lifecycle implementation note:
 
 ## Admin web requirements
 
-- `REQ-ADM-001`: The admin web interface shall expose health, status, peer, connection, log, and configuration-related APIs needed for operational visibility. The same operator surface shall remain usable from packaged application builds, including packaged iOS runtimes, so the WebAdmin HTML/JS assets are still served at `/` even when the source-tree-relative `./admin_web` directory is not present at runtime.
+- `REQ-ADM-001`: The admin web interface shall expose health, status, peer, connection, log, and configuration-related APIs needed for operational visibility. The same operator surface shall remain usable from packaged application builds, including packaged iOS runtimes, so the WebAdmin HTML/JS assets are still served at `/` even when the source-tree-relative `./admin_web` directory is not present at runtime. The repository-top `admin_web/` directory remains the canonical asset source for source-tree workflows, and packaged builds shall stage those same assets into the runtime bundle so hosts such as the iOS Briefcase app can seed or serve WebAdmin without a checked-in duplicate mirror under `src/`.
 - `REQ-ADM-002`: When admin authentication is disabled, the admin API shall remain available without login.
 - `REQ-ADM-003`: When admin authentication is enabled, protected admin APIs shall remain unavailable until correct authentication completes.
 - `REQ-ADM-004`: After correct authentication, the admin API shall become available to that authenticated client.
