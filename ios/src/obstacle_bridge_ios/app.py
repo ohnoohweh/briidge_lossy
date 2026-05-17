@@ -15,6 +15,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from .m3_tunnel import network_settings_from_runtime_config
+
 ConfigAwareCLI: Any = None
 from .diagnostics import (
     install_crash_hooks,
@@ -34,7 +36,6 @@ except Exception:  # pragma: no cover - exercised in iOS build/runtime, not unit
 WEBADMIN_DEFAULT_BIND = "0.0.0.0"
 WEBADMIN_DEFAULT_PORT = 18080
 WEBADMIN_DEFAULT_PATH = "/"
-IPSERVER_TUNNEL_ADDRESS = "10.77.0.2"
 
 
 def _config_aware_cli_class() -> Any:
@@ -323,7 +324,11 @@ class ObstacleBridgeIOSApp:
         if not path.startswith("/"):
             path = "/" + path
         if bind in {"0.0.0.0", "::", "*", "localhost"}:
-            host = IPSERVER_TUNNEL_ADDRESS if sys.platform == "ios" else "127.0.0.1"
+            host = (
+                network_settings_from_runtime_config(config).tunnel_address
+                if sys.platform == "ios"
+                else "127.0.0.1"
+            )
         else:
             host = bind
         return f"http://{host}:{port}{path}"

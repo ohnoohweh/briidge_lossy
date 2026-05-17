@@ -144,6 +144,18 @@ def add_ipserver_native_crypto_source(text: str) -> str:
     return text.replace(old, new, 1)
 
 
+def add_ipserver_packet_flow_bridge_source(text: str) -> str:
+    source_phase = "71C200000000000000000080 /* Sources */ = {"
+    if source_phase in text and "71C200000000000000000007 /* ObstacleBridgePacketFlowBridge.swift in Sources */," not in text:
+        text = text.replace(
+            "\t\t\t\t71C200000000000000000001 /* PacketTunnelProvider.swift in Sources */,\n",
+            "\t\t\t\t71C200000000000000000001 /* PacketTunnelProvider.swift in Sources */,\n"
+            "\t\t\t\t71C200000000000000000007 /* ObstacleBridgePacketFlowBridge.swift in Sources */,\n",
+            1,
+        )
+    return text
+
+
 def patch_python_build_script(text: str) -> str:
     script_variants = (
         (
@@ -297,6 +309,7 @@ def patch_ipserver_target(text: str) -> str:
         "/* End PBXBuildFile section */\n",
         "\t\t71C200000000000000000001 /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71C200000000000000000032 /* PacketTunnelProvider.swift */; };\n"
         "\t\t71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = 71C200000000000000000033 /* ObstacleBridgePythonBridge.m */; };\n"
+        "\t\t71C200000000000000000007 /* ObstacleBridgePacketFlowBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71C200000000000000000038 /* ObstacleBridgePacketFlowBridge.swift */; };\n"
         "\t\t71C200000000000000000003 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 610000000000000000000900 /* Foundation.framework */; };\n"
         "\t\t71C200000000000000000004 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 71C200000000000000000030 /* NetworkExtension.framework */; };\n"
         "\t\t71C200000000000000000005 /* Python.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 60813D352B02EBFC00EFB492 /* Python.xcframework */; };\n"
@@ -340,7 +353,8 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t71C200000000000000000034 /* ObstacleBridgePythonBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = ObstacleBridgePythonBridge.h; path = \"../../../../native/IPServer/ObstacleBridgePythonBridge.h\"; sourceTree = SOURCE_ROOT; };\n"
         "\t\t71C200000000000000000035 /* IPServer-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = \"IPServer-Bridging-Header.h\"; path = \"../../../../native/IPServer/IPServer-Bridging-Header.h\"; sourceTree = SOURCE_ROOT; };\n"
         "\t\t71C200000000000000000036 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = \"../../../../native/IPServer/Info.plist\"; sourceTree = SOURCE_ROOT; };\n"
-        "\t\t71C200000000000000000037 /* IPServer.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = IPServer.entitlements; path = \"../../../../native/IPServer/IPServer.entitlements\"; sourceTree = SOURCE_ROOT; };\n",
+        "\t\t71C200000000000000000037 /* IPServer.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = IPServer.entitlements; path = \"../../../../native/IPServer/IPServer.entitlements\"; sourceTree = SOURCE_ROOT; };\n"
+        "\t\t71C200000000000000000038 /* ObstacleBridgePacketFlowBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgePacketFlowBridge.swift; path = \"../../../../native/IPServer/ObstacleBridgePacketFlowBridge.swift\"; sourceTree = SOURCE_ROOT; };\n",
     )
     text = insert_before(
         text,
@@ -381,6 +395,7 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t\tisa = PBXGroup;\n"
         "\t\t\tchildren = (\n"
         "\t\t\t\t71C200000000000000000032 /* PacketTunnelProvider.swift */,\n"
+        "\t\t\t\t71C200000000000000000038 /* ObstacleBridgePacketFlowBridge.swift */,\n"
         "\t\t\t\t71C200000000000000000033 /* ObstacleBridgePythonBridge.m */,\n"
         "\t\t\t\t71C200000000000000000034 /* ObstacleBridgePythonBridge.h */,\n"
         "\t\t\t\t71C200000000000000000035 /* IPServer-Bridging-Header.h */,\n"
@@ -454,6 +469,7 @@ def patch_ipserver_target(text: str) -> str:
     )
     if "71C200000000000000000080 /* Sources */ = {" in text:
         text = add_ipserver_native_crypto_source(text)
+        text = add_ipserver_packet_flow_bridge_source(text)
     else:
         text = insert_before(
             text,
@@ -463,6 +479,7 @@ def patch_ipserver_target(text: str) -> str:
             "\t\t\tbuildActionMask = 2147483647;\n"
             "\t\t\tfiles = (\n"
             "\t\t\t\t71C200000000000000000001 /* PacketTunnelProvider.swift in Sources */,\n"
+            "\t\t\t\t71C200000000000000000007 /* ObstacleBridgePacketFlowBridge.swift in Sources */,\n"
             "\t\t\t\t71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */,\n"
             "\t\t\t\t71C300000000000000000002 /* ObstacleBridgeNativeCrypto.swift in IPServer Sources */,\n"
             "\t\t\t);\n"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import socket
 import struct
@@ -77,6 +78,10 @@ def close_tun_device(mux: Any, dev: Any) -> None:
     dev.chan_id = None
 
 
+def write_tun_packet(_mux: Any, dev: Any, data: bytes) -> None:
+    os.write(dev.fd, data)
+
+
 def on_tun_fd_readable(mux: Any, dev: Any) -> None:
     while True:
         try:
@@ -90,4 +95,18 @@ def on_tun_fd_readable(mux: Any, dev: Any) -> None:
             return
         if not packet:
             return
+        checker = getattr(mux.log, "isEnabledFor", None)
+        if callable(checker):
+            try:
+                if checker(logging.DEBUG):
+                    ip_version = (packet[0] >> 4) if packet else -1
+                    mux.log.debug(
+                        "[TUN/LINUX/PKT] stage=tun_read if=%s len=%s ipver=%s hex=%s",
+                        dev.ifname,
+                        len(packet),
+                        ip_version,
+                        packet.hex(),
+                    )
+            except Exception:
+                pass
         mux._on_local_tun_packet(dev, packet)

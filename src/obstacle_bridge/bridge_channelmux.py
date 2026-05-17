@@ -12,6 +12,8 @@ if sys.platform.startswith("linux"):
     from . import bridge_tun_linux as _bridge_tun_platform
 elif sys.platform.startswith("win"):
     from . import bridge_tun_windows as _bridge_tun_platform
+elif sys.platform == "ios":
+    from . import bridge_tun_ios as _bridge_tun_platform
 else:
     _bridge_tun_platform = None
 
@@ -497,6 +499,37 @@ class ChannelMux:
         if platform.startswith("darwin"):
             return "darwin"
         return platform or "unknown"
+
+    def _tun_packet_debug_enabled(self) -> bool:
+        checker = getattr(self.log, "isEnabledFor", None)
+        if callable(checker):
+            try:
+                return bool(checker(logging.DEBUG))
+            except Exception:
+                return False
+        return False
+
+    def _log_tun_packet_debug(
+        self,
+        *,
+        stage: str,
+        packet: bytes,
+        ifname: str = "",
+        chan: Optional[int] = None,
+    ) -> None:
+        if not self._tun_packet_debug_enabled():
+            return
+        payload = bytes(packet or b"")
+        ip_version = (payload[0] >> 4) if payload else -1
+        self.log.debug(
+            "[TUN/PKT] stage=%s if=%s chan=%s len=%s ipver=%s hex=%s",
+            stage,
+            ifname,
+            "" if chan is None else chan,
+            len(payload),
+            ip_version,
+            payload.hex(),
+        )
 
     @staticmethod
     def _render_hook_value(value: Any, context: Dict[str, Any]) -> str:
@@ -1797,7 +1830,7 @@ class ChannelMux:
     @classmethod
     def _require_tun_support(cls) -> None:
         if _bridge_tun_platform is None:
-            raise RuntimeError("TUN services are supported only on Linux and Windows")
+            raise RuntimeError("TUN services are supported only on Linux, Windows and iOS")
         _bridge_tun_platform.require_tun_support(cls)
 
     def _open_tun_device(self, ifname: str, mtu: int, svc_key: Optional["ChannelMux.ServiceKey"] = None) -> "ChannelMux.TunDevice":
@@ -1819,6 +1852,29 @@ class ChannelMux:
 
     def _close_tun_device(self, dev: "ChannelMux.TunDevice") -> None:
         _bridge_tun_platform.close_tun_device(self, dev)
+
+    def _write_tun_packet(self, dev: "ChannelMux.TunDevice", data: bytes) -> None:
+        if _bridge_tun_platform is not None:
+            writer = getattr(_bridge_tun_platform, "write_tun_packet", None)
+            if callable(writer):
+                writer(self, dev, data)
+                return
+        adapter = getattr(dev, "wintun_adapter", None)
+        if adapter is not None:
+            write_names = ["write", "send", "send_packet", "write_packet"]
+            for name in write_names:
+                if hasattr(adapter, name):
+                    result = getattr(adapter, name)(data)
+                    if asyncio.iscoroutine(result):
+                        self.loop.create_task(result)
+                    return
+            if callable(adapter):
+                result = adapter(data)
+                if asyncio.iscoroutine(result):
+                    self.loop.create_task(result)
+                return
+            raise RuntimeError("No write method on WinTun adapter")
+        os.write(dev.fd, data)
 
     def _find_service_tun_device(self, ifname: str, mtu: int) -> Optional["ChannelMux.TunDevice"]:
         for dev in self._svc_tun_devices.values():
@@ -1937,6 +1993,7 @@ class ChannelMux:
         return self._start_tun_server_for_sync(spec, svc_key)
 
     def _on_local_tun_packet(self, dev: "ChannelMux.TunDevice", packet: bytes) -> None:
+        self._log_tun_packet_debug(stage="from_local_tun", packet=packet, ifname=dev.ifname, chan=dev.chan_id)
         if not (self._overlay_connected and self._accepting_enabled):
             return
         if len(packet) > int(dev.mtu):
@@ -2058,41 +2115,15 @@ class ChannelMux:
         if dev is None:
             self.log.warning("[TUN] chan=%s DATA not routed yet (no device)", chan)
             return
+        self._log_tun_packet_debug(stage="to_local_tun", packet=data, ifname=dev.ifname, chan=chan)
         ctr = self._ctr(ChannelMux.Proto.TUN, chan)
         ctr.msgs_in += 1
         ctr.bytes_in += len(data)
         if len(data) > int(dev.mtu):
             self.log.warning("[TUN] chan=%s drop oversize packet len=%s mtu=%s", chan, len(data), dev.mtu)
             return
-        # If this is a WinTun device, attempt adapter send API
-        adapter = getattr(dev, "wintun_adapter", None)
-        if adapter is not None:
-            write_names = ["write", "send", "send_packet", "write_packet"]
-            write_fn = None
-            for n in write_names:
-                if hasattr(adapter, n):
-                    write_fn = getattr(adapter, n)
-                    break
-            try:
-                if write_fn is None:
-                    # try calling adapter directly
-                    if callable(adapter):
-                        res = adapter(data)
-                    else:
-                        raise RuntimeError("No write method on WinTun adapter")
-                else:
-                    res = write_fn(data)
-                # support coroutine write functions
-                if asyncio.iscoroutine(res):
-                    self.loop.create_task(res)
-                ctr.msgs_out += 1
-                ctr.bytes_out += len(data)
-            except Exception as e:
-                self.log.info("[TUN] chan=%s wintun write failed if=%s: %r", chan, dev.ifname, e)
-            return
-        # Fallback: write to fd (Linux)
         try:
-            os.write(dev.fd, data)
+            self._write_tun_packet(dev, data)
             ctr.msgs_out += 1
             ctr.bytes_out += len(data)
         except Exception as e:

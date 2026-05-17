@@ -68,7 +68,7 @@ def _webadmin_url_from_config(config: Mapping[str, Any]) -> str | None:
 
 def _default_webadmin_probe_urls() -> list[str]:
     return [
-        "http://10.77.0.2:18080/",
+        "http://192.168.105.1:18080/",
         "http://127.0.0.1:18080/",
     ]
 

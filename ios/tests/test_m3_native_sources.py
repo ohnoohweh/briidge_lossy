@@ -17,6 +17,7 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
 
     assert "NEPacketTunnelProvider" in provider
     assert "setTunnelNetworkSettings" in provider
+    assert "ObstacleBridgePacketFlowBridge.activate" in provider
     assert "start_embedded_webadmin" in provider
     assert "OB_IPSERVER_SWIFT_SMOKE" in provider
     assert "startTunnel_completed_swift_smoke" in provider
@@ -28,7 +29,23 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "startTunnel_completed_runtime_start_async" in provider
     assert "embedded_webadmin_started" in provider
     assert "handleAppMessage" in provider
+    assert "packet_pump_forwarded_packets" in provider
+    assert "packet_pump_dropped_packets" not in provider
     assert "obstaclebridge.ios.packet-tunnel.v1" in provider
+    assert "NEIPv6Settings" in provider
+    assert "tunnel_address6" in provider
+    assert "included_routes6" in provider
+    assert "excluded_routes6" in provider
+
+
+def test_native_packet_flow_bridge_source_exists() -> None:
+    bridge = (IPSERVER_NATIVE_DIR / "ObstacleBridgePacketFlowBridge.swift").read_text(encoding="utf-8")
+
+    assert "@objc(ObstacleBridgePacketFlowBridge)" in bridge
+    assert "dequeueIncomingPacket" in bridge
+    assert "writePacket" in bridge
+    assert "bridgeStateJSONData" in bridge
+    assert "packet_bridge_activated" in bridge
 
 
 def test_ipserver_extension_plist_and_entitlements_exist() -> None:
@@ -141,7 +158,7 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert 'legacyLocalizedDescriptionAlt = "AdminWeb"' in control
     assert "applyIdentity(" in control
     assert "tunnelProtocol.providerBundleIdentifier = providerBundleIdentifier" in control
-    assert '"provider_configuration_mode": "minimal_profile_persistence"' in control
+    assert '"provider_configuration_mode": "config_derived_profile_persistence"' in control
     assert "needsConfigurationRepair" in control
     assert "desiredManagers" in control
     assert "configuration_version" in control
@@ -157,7 +174,15 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "tunnelProtocol.username" in control
     assert "tunnelProtocol.username = nil" in control
     assert "manager.localizedDescription = desiredLocalizedDescription()" in control
-    assert 'tunnelProtocol.serverAddress = tunnelAddress' in control
+    assert 'tunnelProtocol.serverAddress = derived.tunnelAddress' in control
+    assert "tunnelProtocol.providerConfiguration = derived.providerConfiguration" in control
+    assert 'defaultTunnelAddress6 = ""' in control
+    assert "TUN_ADDR6" in control
+    assert "PEER_ADDR6" in control
+    assert "TUN_SUBNET6" in control
+    assert "findLocalIOSTunnelService" in control
+    assert "findRemoteTunnelServiceTargetingIOS" in control
+    assert "loadRuntimeConfigJSON" in control
     assert "ios-native-tunnel-control.jsonl" in control
     assert "DispatchSemaphore" not in control
     assert "timed out loading VPN preferences" not in control

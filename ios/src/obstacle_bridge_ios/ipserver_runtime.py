@@ -22,6 +22,7 @@ from .app import (
     _load_grouped_runtime_config,
 )
 from .diagnostics import log_event, log_provider_event, snapshot as diagnostics_snapshot
+from .m3_tunnel import network_settings_from_runtime_config
 from .profiles import ProfileStore
 
 
@@ -396,12 +397,12 @@ class IPServerRuntimeController:
 
     def start_embedded_webadmin(self, runtime_config: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
         log_provider_event(self.documents_root, "python_runtime_start_requested", runtime_owner="IPServer Network Extension")
-        os.environ["OBSTACLEBRIDGE_IOS_TUNNEL_ADDRESS"] = "10.77.0.2"
         self.client.config = (
             self._runtime_config_with_ios_defaults(runtime_config)
             if isinstance(runtime_config, Mapping)
             else self._runtime_config_with_ios_defaults(_load_grouped_runtime_config(self.documents_root))
         )
+        os.environ["OBSTACLEBRIDGE_IOS_TUNNEL_ADDRESS"] = network_settings_from_runtime_config(self.client.config).tunnel_address
         log_provider_event(
             self.documents_root,
             "python_runtime_config_prepared",

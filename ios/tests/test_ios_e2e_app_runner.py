@@ -187,7 +187,7 @@ def test_e2e_main_accepts_webadmin_http_probe(monkeypatch, capsys) -> None:
             "--delay-sec",
             "0.25",
             "--probe-url",
-            "http://10.77.0.2:18080/",
+            "http://192.168.105.1:18080/",
             "--probe-url",
             "http://127.0.0.1:18080/",
         ]
@@ -200,7 +200,7 @@ def test_e2e_main_accepts_webadmin_http_probe(monkeypatch, capsys) -> None:
     assert report["timeout_sec"] == 5.0
     assert report["attempts"] == 4
     assert report["delay_sec"] == 0.25
-    assert report["urls"] == ["http://10.77.0.2:18080/", "http://127.0.0.1:18080/"]
+    assert report["urls"] == ["http://192.168.105.1:18080/", "http://127.0.0.1:18080/"]
 
 
 def test_e2e_main_validates_webadmin_http_probe_arguments(capsys) -> None:

@@ -98,3 +98,34 @@ def test_webadmin_url_from_config_normalizes_wildcard_bind() -> None:
         )
         == "http://127.0.0.1:19090/admin"
     )
+
+
+def test_webadmin_url_from_config_uses_ios_tun_address_when_running_on_ios(monkeypatch) -> None:
+    monkeypatch.setattr(ios_app_module.sys, "platform", "ios")
+
+    assert (
+        ObstacleBridgeIOSApp.webadmin_url_from_config(
+            {
+                "admin_web": True,
+                "admin_web_bind": "0.0.0.0",
+                "admin_web_port": 18090,
+                "channel_mux": {
+                    "own_servers": [
+                        {
+                            "listen": {"protocol": "tun", "ifname": "ios-utun", "mtu": 1280},
+                            "target": {"protocol": "tun", "ifname": "obtun1", "mtu": 1280},
+                            "lifecycle_hooks": {
+                                "listener": {
+                                    "on_created": {
+                                        "argv": {"linux": ["./scripts/client-tun-hook.sh", "up", "{ifname}"]},
+                                        "env": {"TUN_ADDR": "192.168.105.9/30"},
+                                    }
+                                }
+                            },
+                        }
+                    ]
+                },
+            }
+        )
+        == "http://192.168.105.9:18090/"
+    )

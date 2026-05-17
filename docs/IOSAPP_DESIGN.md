@@ -144,128 +144,218 @@ The iOS app should not try to:
 - rely on private Apple APIs
 - assume Apple will approve all Network Extension entitlements without an explicit distribution plan
 
-## Recommended Phasing
+## Implemented Progress And Design Outcomes
 
-### Phase 0: Prepare The Python Runtime For Embedding
+The original design questions around "can BeeWare package the app?", "can Python run inside the extension?", "can the app own the runtime?", and "how should config move between app and extension?" are now largely answered by working code and device validation.
 
-Before building an iOS app, split the runtime so core protocol logic can be reused without dragging in desktop/server assumptions.
+### Outcome 1: BeeWare Is Useful For The Containing App, Not For Replacing Network Extension
 
-Deliverables:
+The BeeWare/Briefcase app path is now proven useful for:
 
-- create a small `obstacle_bridge.core` or equivalent package boundary
-- isolate wire codec, secure-link, compression, transport abstractions, config parsing, and status snapshots
-- keep CLI, WebAdmin HTTP server, filesystem hooks, and desktop TUN adapters outside the embeddable core
-- add a minimal programmatic API for lifecycle control instead of only command-line startup
+- packaging the containing iOS app
+- hosting shared Python UI/business logic where appropriate
+- seeding `Documents/ObstacleBridge` content such as `config/`, `logs/`, `admin_web/`, and `web/`
+- importing configuration, invite material, and diagnostics
 
-Recommended API shape:
+Design impact:
 
-```python
-class ObstacleBridgeClient:
-    async def start(self, config: RuntimeConfig, packet_io: PacketIO | None = None) -> None: ...
-    async def stop(self) -> None: ...
-    async def update_config(self, config: RuntimeConfig) -> None: ...
-    def snapshot(self) -> RuntimeSnapshot: ...
-```
+- BeeWare remains a good fit for the containing app and test harnesses.
+- BeeWare is not the substitute for Apple’s packet tunnel lifecycle.
+- The packet tunnel extension remains the durable runtime host for live networking behavior.
 
-The `packet_io` abstraction is important because iOS packet I/O comes from `NEPacketTunnelFlow`, not from `/dev/net/tun` or WinTun.
+### Outcome 2: Embedded Python In The Packet Tunnel Extension Works
 
-### Phase 1: BeeWare Companion App
+The project no longer needs to treat embedded Python in the extension as only a speculative option. The current `IPServer` extension boots the shared Python runtime, runs WebAdmin, ChannelMux, SecureLink, and lower transport layers, and stays alive independently from the foreground app.
 
-Build a BeeWare app that acts as an ObstacleBridge mobile control surface and configuration manager.
+Design impact:
 
-This phase can validate:
+- The project keeps a single protocol/runtime implementation across desktop and iOS for the current product path.
+- Swift remains the owner of the native extension lifecycle, tunnel settings, and app/provider messaging boundary.
+- Python remains the owner of the reusable ObstacleBridge protocol/runtime logic.
 
-- Briefcase iOS packaging
-- Python dependency compatibility on iOS
-- configuration import/export
-- invite-token parsing
-- secure-link material handling
-- local status rendering
-- communication with a desktop/server ObstacleBridge node's admin API
+### Outcome 3: The Containing App Must Not Own The Traffic Runtime
 
-This phase should not promise system-wide VPN behavior.
+This was previously a design assumption; it is now validated by device behavior and the working extension architecture.
 
-Possible Phase 1 capabilities:
+The containing app is now correctly treated as:
 
-- import invite token from clipboard, file, QR code, or share sheet
-- validate and preview ObstacleBridge config
-- store profile metadata in iOS Keychain/app storage
-- connect to a remote WebAdmin endpoint and show status
-- generate a ready-to-send client configuration for a later native tunnel provider
-- provide troubleshooting guidance and logs from the app side
+- profile installer/manager
+- onboarding and configuration UI host
+- diagnostics/log viewer
+- WebAdmin viewer
 
-Reasoning:
+The containing app is not treated as:
 
-- BeeWare is valuable here because the app UI and business logic can be Python-first.
-- This lowers risk before attempting Network Extension integration.
-- It proves which existing dependencies can actually be packaged for iOS.
+- the durable owner of WebAdmin
+- the durable owner of ChannelMux
+- the durable owner of SecureLink
+- the durable owner of transport sessions
 
-### Phase 2: Native Packet Tunnel Provider Proof Of Concept
+Design impact:
 
-Add an iOS app extension using `NEPacketTunnelProvider`.
+- Foreground-app lifetime and tunnel lifetime are separate concerns.
+- App restart, app suspension, Safari access, and VPN status must all be reasoned about through the extension boundary, not the app process.
 
-The packet tunnel provider must:
+### Outcome 4: Persisted VPN Profile Metadata Must Separate Overlay Identity From Tunnel Identity
 
-- receive start options and provider configuration from the containing app
-- create `NEPacketTunnelNetworkSettings`
-- read IP packets from `packetFlow`
-- hand those packets to ObstacleBridge's TUN packet path
-- receive tunnel packets from ObstacleBridge and write them back to `packetFlow`
-- report status, errors, and counters to the containing app
+Earlier device testing showed that blindly embedding large ObstacleBridge-specific payloads into the saved `NETunnelProviderProtocol.providerConfiguration` was fragile. That observation was useful, but the long-term target is more precise than "keep the profile minimal forever".
 
-At this point, the project must decide between two implementation strategies.
+The desired product model is closer to WireGuard-style behavior:
 
-Strategy A: embed Python in the packet tunnel extension.
+- when the tunnel is idle, the profile should primarily express the transport-facing endpoint identity
+- when the tunnel is active, the runtime should also expose the effective tunnel network identity such as IPv4 and IPv6 addresses plus route ownership
 
-- Reuse the current Python protocol implementation most directly.
-- Requires proving CPython, `cryptography`, `websockets`, and `aioquic` can be packaged and run reliably inside the extension.
-- Requires careful startup-time, memory, and background execution testing.
-- Keeps one protocol implementation for desktop and iOS, but increases packaging complexity.
+For ObstacleBridge, the transport-facing endpoint depends on the selected overlay transport:
 
-Strategy B: port the packet-tunnel critical path to Swift.
+- `myudp` uses `udp_peer` and `udp_peer_port`
+- `ws` uses `ws_peer` and `ws_peer_port`
+- `tcp` uses `tcp_peer` and `tcp_peer_port`
+- `quic` uses `quic_peer` and `quic_peer_port`
 
-- Implement the Network Extension, packet I/O, and possibly transport/event loop in Swift.
-- Keep Python for the companion app, config tooling, tests, and reference implementation.
-- Reuse wire-format test vectors from Python to keep protocol compatibility.
-- Reduces iOS extension runtime risk, but creates a second protocol implementation to maintain.
+That overlay peer identity is not the same thing as the tunnel-side interface identity:
 
-Recommended decision:
+- tunnel IPv4 local address/prefix
+- tunnel IPv6 local address/prefix when configured
+- included and excluded routes
+- DNS and MTU settings
 
-- Prototype Strategy A first for maximum Python reuse.
-- Keep Strategy B as the fallback if extension packaging, dependency, or App Store constraints make embedded Python impractical.
-- Do not block the management app on the tunnel-provider choice.
+The stable design target is:
 
-### Phase 3: Full ObstacleBridge VPN Client
+- keep the visible VPN profile name stable in iOS Settings
+- treat the saved profile's top-level server/peer identity as the selected overlay endpoint, not as the TUN-side IP
+- persist or regenerate derived tunnel network settings from the live ObstacleBridge config so the provider can apply them on tunnel start
+- allow the active runtime state to expose richer tunnel identity than the idle-profile view
 
-Turn the proof of concept into a complete iOS tunnel client.
+Design impact:
 
-Deliverables:
+- VPN-profile persistence and runtime configuration are still separate concerns, but not in a way that requires a permanently empty `providerConfiguration`
+- `NETunnelProviderManager` should represent the selected overlay endpoint clearly
+- tunnel IPv4/IPv6 identity belongs to derived network settings sourced from the service catalog and applied by the provider at tunnel start
+- App Group files and provider messages remain the durable source for ObstacleBridge-specific runtime state
 
-- VPN profile creation and management with `NETunnelProviderManager`
-- connection start/stop from the app
-- app-to-extension messaging for status and control
-- reconnect behavior for network changes
-- DNS settings and route include/exclude controls
-- secure-link PSK and certificate mode support
-- QR/invite onboarding flow
-- exportable diagnostics bundle with secret redaction
-- TestFlight-ready packaging
+### Outcome 5: App Documents And Extension Storage Are Different Security Domains
 
-### Phase 4: Production Hardening
+This is no longer an open question. The extension-side probe proved that the Network Extension cannot directly open the containing app’s `Documents/config/ObstacleBridge.cfg`, even when that path is known.
 
-Production hardening should focus on security, battery, stability, and Apple review readiness.
+The working design is:
 
-Deliverables:
+- app-visible editable copy in `Documents/config/ObstacleBridge.cfg`
+- extension-consumed copy in the shared App Group container
+- synchronization rule: the newer copy wins and is copied into both locations
+- extension runtime always loads from the App Group copy
 
-- entitlement/distribution plan
-- background lifecycle tests
-- memory and CPU profiling on real devices
-- dependency license review
-- keychain storage and migration rules
-- crash reporting strategy
-- privacy policy notes
-- threat-model review for mobile-specific risks
-- compatibility matrix for iOS versions, devices, and transports
+Design impact:
+
+- App Group storage is the required exchange boundary.
+- Config sync and log harvesting are first-class product behavior, not a temporary workaround.
+
+### Outcome 6: iOS Requires Canonical WebAdmin Asset Staging Into Packaged Builds
+
+The repository now treats top-level `admin_web/` as the canonical source-tree location for WebAdmin assets. iOS packaging must explicitly stage those assets into the built app bundle so the containing app can seed `Documents/ObstacleBridge/admin_web` on first launch.
+
+Design impact:
+
+- there must not be platform-specific WebAdmin forks for iOS, Windows, Linux, or macOS
+- packaged builds still need a runtime-accessible bundled copy of the canonical assets
+- the iOS build path must be validated against actual staged bundle contents, not only source-tree assumptions
+
+### Outcome 7: The iOS App Now Delivers Real Tunnel User Value
+
+The project has now crossed the first meaningful product threshold: the iOS app can tunnel real user traffic.
+
+This is no longer limited to:
+
+- profile installation
+- config import
+- WebAdmin access
+- control-plane connection proof
+- local tunnel endpoint pings
+
+It now includes live routed traffic with device validation:
+
+- Safari traffic on iPhone was routed through the tunnel
+- public-IP verification reported the Fedora server address `38.180.143.5`
+- Fedora-side `pcap` capture showed real internet-bound flows sourced from the iPhone tunnel address
+- dual-stack progression reached the point where iPhone-side browsing also surfaced the expected Austrian IPv6 egress
+
+Design impact:
+
+- ObstacleBridge on iOS is no longer just a packaging or extension-hosting experiment
+- the product has reached the first user-visible value-add milestone: tunneled traffic works
+- future work should treat packet forwarding and routed browsing as the baseline to preserve, not as speculative scope
+
+### Outcome 8: Dual-Stack Tunnel Identity Is Now Config-Derived
+
+The iOS tunnel is no longer tied to a baked-in local address. The app/provider path now derives effective tunnel settings from live ObstacleBridge config, following the same operational intent used by the Linux/Fedora side.
+
+The current dual-stack model is:
+
+- IPv4 local/peer identity is derived from `TUN_ADDR`, `PEER_ADDR`, and `TUN_SUBNET`
+- IPv6 local/peer identity is derived from `TUN_ADDR6`, `PEER_ADDR6`, and `TUN_SUBNET6`
+- included routes are full-tunnel by default:
+  - IPv4 `0.0.0.0/0`
+  - IPv6 `::/0`
+- excluded routes preserve loopback ownership:
+  - IPv4 `127.0.0.0/8`
+  - IPv6 `::1/128`
+
+The intended source of truth is the service definition itself, especially:
+
+- `channel_mux.own_servers[].lifecycle_hooks.listener.on_created.env`
+
+with compatible fallback to matching remote-side peer data when needed for transition compatibility.
+
+Design impact:
+
+- the iOS tunnel profile/runtime is now aligned with the service-catalog model instead of hidden app constants
+- tunnel identity can evolve with config updates instead of requiring code edits
+- dual-stack support should be treated as part of the main design, not as a future appendix
+
+### Outcome 9: Current Risk Has Shifted From Reachability To Extension Hardening
+
+The most recent failure mode no longer questions whether the tunnel can carry traffic. That part is proven. The remaining risk has moved to robustness under sustained traffic.
+
+Observed behavior:
+
+- the Network Extension carried substantial IPv4 and IPv6 traffic successfully
+- logs ended abruptly during active packet forwarding
+- there was no normal Python traceback and no graceful shutdown path
+- the peer side only later observed overlay disconnect and TUN teardown
+
+Current interpretation:
+
+- this points more strongly to abrupt extension termination or native-boundary instability under load than to routing or configuration defects
+
+Design impact:
+
+- the primary engineering goal has changed from "make iOS tunneling work at all" to "make the working tunnel resilient under sustained traffic"
+- observability and rate-aware diagnostics in the packet bridge are now important hardening tools
+- reducing hot-path logging pressure is part of the runtime-stability design, not just a cosmetic cleanup
+
+### Outcome 7: iOS Crypto Parity Is Achieved Through A Native Backend Boundary
+
+The project previously treated missing Python `cryptography` support on iOS as a release-blocking gap. That gap is now addressed by the current native iOS crypto path used by the extension runtime for the required subset of primitives.
+
+Design impact:
+
+- the design should not describe iOS crypto as fundamentally unavailable anymore
+- the correct long-term pattern is a narrow internal crypto boundary with platform-appropriate implementations
+- the project should continue to avoid broad platform-specific protocol forks and instead keep compatibility at the runtime-contract level
+
+### Outcome 8: WebAdmin Restart Behavior Is Solved As A Runtime Concern
+
+The WebAdmin restart path on iOS has now been exercised and hardened:
+
+- restart requests reach the extension runtime
+- the Python stack restarts inside the extension
+- the VPN stays active during restart
+- WebAdmin shutdown no longer causes multi-minute stalls
+
+Design impact:
+
+- restart is an extension-runtime lifecycle event, not an app restart
+- WebAdmin shutdown and recovery behavior must be reasoned about as extension-owned service behavior
+- frontend behavior should remain platform-agnostic and reflect backend/runtime truth
 
 ## Target iOS Architecture
 
@@ -337,28 +427,54 @@ Containing app
 
 ### Current Packet-Tunnel Routing Concept
 
-The current iOS target should use a minimal split packet tunnel, not a full-device VPN route.
+The iOS target is now aligned with a normal VPN client: full routed IPv4 forwarding through the packet tunnel, using `0.0.0.0/0` as the included route and excluding loopback traffic with `127.0.0.0/8`.
 
-Reasoning:
+Design implications:
 
-- The immediate goal is to make iOS launch and keep alive the `IPServer` Network Extension so WebAdmin, ChannelMux, SecureLink, and lower runtime layers can run independently from the foreground app.
-- A private tunnel address such as `10.77.0.2` gives the packet tunnel provider a real iOS-managed virtual interface and a stable diagnostic address.
-- The extension-hosted WebAdmin service remains a local admin endpoint, initially `http://127.0.0.1:18080`.
-- If loopback access from Safari or the containing app is unreliable, the same WebAdmin service may also bind to the tunnel address, for example `http://10.77.0.2:18080`, but that does not require a full-device VPN route.
+- The extension is no longer only a host for WebAdmin, diagnostics, or local service listeners.
+- `NEPacketTunnelFlow` must be treated as the live packet boundary for general device traffic.
+- The iOS runtime must preserve the same conceptual TUN role already used on Linux (`/dev/net/tun`) and Windows (WinTun), with iOS providing the third platform implementation.
+- The tunnel-side interface identity must come from the live service definition, not from a baked app constant.
+- The selected overlay peer endpoint and the tunnel-side interface address are different pieces of information and must be modeled separately.
+- IPv6 tunnel identity should follow the same rule once enabled.
+
+Packet-path review outcome:
+
+- The native provider already applied `NEPacketTunnelNetworkSettings`, owned the extension lifecycle, and hosted the embedded runtime.
+- The missing link was the hop between `NEPacketTunnelFlow` and ChannelMux TUN channels.
+- Linux and Windows already had platform adapters that opened a local TUN device, read packets from it, and injected return packets back into it.
+- iOS needed the equivalent third adapter plus a native packet-flow bridge:
+  - `NEPacketTunnelFlow.readPackets`
+  - native packet-flow bridge
+  - `bridge_tun_ios.py`
+  - ChannelMux TUN service
+  - remote peer over SecureLink and selected transport
+  - returning TUN payloads back through the same bridge to `NEPacketTunnelFlow.writePackets`
 
 Current route policy:
 
-- Use a narrow included route such as `10.77.0.0/24`.
-- Avoid `0.0.0.0/0` and `::/0` while the provider is only hosting local services and diagnostics.
-- Keep DNS settings conservative and only add them when required for the selected tunnel behavior.
-- Treat `10.77.0.2` as the extension/tunnel address and `127.0.0.1:18080` as the local AdminWeb entrypoint.
+- Default included route: `0.0.0.0/0`
+- Default excluded route: `127.0.0.0/8`
+- Keep DNS settings explicit and conservative for the selected tunnel behavior.
+- Derive the local iOS tunnel IPv4 identity from the local TUN service definition, ideally `own_servers[].lifecycle_hooks.listener.on_created.env.TUN_ADDR`.
+- If that local metadata is temporarily absent, compatibility fallback may infer the local iOS address from the matching remote TUN listener metadata such as `PEER_ADDR`.
+- Derive the transport-facing peer endpoint from `udp_peer`, `ws_peer`, `tcp_peer`, or `quic_peer` according to `overlay_transport`.
 
-Full-tunnel policy:
+Target profile/runtime behavior:
 
-- A full route such as `0.0.0.0/0` means iOS will send general device traffic into `NEPacketTunnelFlow`.
-- Full-tunnel mode must not be enabled until the provider continuously reads packets from `packetFlow`, forwards them through ChannelMux/SecureLink/transport, receives return packets, and writes them back to `packetFlow`.
-- Without that transparent packet forwarding loop, a full-tunnel profile can break Safari, DNS, and unrelated app networking.
-- Full-tunnel mode is therefore a later M3/M4 capability, not the current AdminWeb bring-up target.
+- Idle profile:
+  - show the selected overlay endpoint for the active transport
+  - keep the visible VPN profile name stable in iOS Settings
+- Active tunnel:
+  - show effective tunnel IPv4 local/peer identity
+  - show effective tunnel IPv6 local/peer identity when configured
+  - show included and excluded route ownership
+  - show DNS and MTU as part of the applied tunnel settings
+
+Operational consequence:
+
+- A broken packet bridge is now a full-traffic outage risk, not just a missing local admin feature.
+- Therefore packet-path tracing at the provider boundary, bridge boundary, and ChannelMux TUN boundary is a required part of the design, not optional diagnostics.
 
 Critical boundary:
 
@@ -532,64 +648,45 @@ These areas should not be reused as-is:
 - WebAdmin hosted by the containing app as the mobile UI runtime
 - assumptions that a long-running foreground Python process can own the tunnel
 
-## Dependency Risk
+## Dependency And Crypto Outcome
 
-Current runtime dependencies are:
+Current important runtime dependencies are still:
 
 - `aioquic`
 - `cryptography`
 - `websockets`
 
-iOS risk:
+The project’s iOS experience now splits these into two categories:
 
-- `websockets` is pure Python in many usage paths, but it still depends on asyncio behavior and socket support inside the target runtime.
-- `cryptography` includes compiled/native components and must be validated for iOS builds.
-- `aioquic` uses Python protocol logic plus crypto/TLS dependencies and must be tested on-device.
+- reusable Python/runtime dependencies that work acceptably in the current embedded-extension path
+- capabilities that must be satisfied through a native iOS implementation boundary
 
-Mitigation:
+### Current Design Outcome
 
-- create a mobile dependency spike before promising embedded runtime support
-- build a minimal Briefcase app that imports each dependency
-- run basic crypto, WebSocket, UDP, TCP, and QUIC smoke tests on simulator and real device
-- keep a native Swift fallback plan for packet-tunnel-critical networking
+The earlier uncertainty around `cryptography` on iOS is resolved in design terms:
 
-### Explicit Impact When `cryptography` Is Unavailable On iOS
+- the project does not need to package the full desktop/server `cryptography` story unchanged into every iOS runtime path
+- the project does need the specific security primitives ObstacleBridge relies on
+- those primitives are now satisfied through the current native iOS crypto boundary rather than by pretending the problem does not exist
 
-The absence of `cryptography` is a high-impact security and feature constraint for this project.
+The relevant crypto surface remains intentionally narrow:
 
-Analysis of the currently used crypto surface:
-
-- The project does not use the full `cryptography` package. The active surface is limited to:
 - config-secret encryption/decryption: `HKDF(SHA-256)` plus `ChaCha20Poly1305`
 - WebAdmin secret-reveal envelope: `PBKDF2-HMAC-SHA256` plus `AESGCM`
-- secure-link certificate mode: `Ed25519`, `X25519`, and PEM/DER public/private key loading via `serialization`
-- Test fixtures also use broader certificate helpers, but those are not part of the iOS runtime requirement.
+- secure-link certificate mode: `Ed25519`, `X25519`, and PEM/DER key-loading support
 
-Meaning for the current iOS milestones:
+### Design Impact
 
-- M1/M2/M2.5 do not need the entire desktop/server crypto stack.
-- The main runtime gap for the current iOS app path is not "all cryptography", but a smaller set of authenticated-encryption and secure-link identity primitives.
-- Even with that smaller scope, the remaining primitives are still security-critical and include native/compiled functionality that is not reasonable to reimplement as an ad hoc Python-only fork for production.
+- The correct architecture is not "copy less of `cryptography` into iOS"; it is "preserve a narrow internal crypto contract and implement it appropriately per platform."
+- iOS secret storage and iOS runtime crypto should continue to be treated as related but separate concerns.
+- Keychain remains the right storage boundary for secrets at rest.
+- The native crypto backend remains the right execution boundary for the security-critical primitives required by the iOS runtime.
 
-Direct implications:
+### Remaining Dependency Risk
 
-- SecureLink cannot be considered production-capable on the affected iOS runtime path. This includes PSK/certificate protected-session expectations that depend on the project crypto boundary.
-- Config-secret handling that depends on project crypto primitives must not be treated as equivalent to the desktop/server security path.
-- Password/challenge and secret-envelope workflows that rely on authenticated encryption primitives must be treated as unavailable or reduced on that runtime path.
-- Security parity between desktop/server and iOS cannot be claimed while this dependency gap exists.
-
-Required guardrails while this gap exists:
-
-- Do not market the iOS path as full secure-link parity.
-- Treat this as a release gate for security-sensitive milestones (M3+), not as a cosmetic warning.
-- Keep sensitive values in Keychain and avoid writing plaintext secrets to normal app files, but do not treat storage hygiene alone as a replacement for missing cryptographic feature parity.
-- Maintain an explicit fallback plan (native iOS crypto path and/or extension-side native implementation) before enabling production secure tunnel claims.
-
-Decision:
-
-- Do not attempt to ship a hand-trimmed or partially copied Python fork of `cryptography` for iOS.
-- Instead, keep an internal "crypto extract" boundary that names the exact primitives ObstacleBridge needs, and treat that as the contract for a future iOS-native backend.
-- For current iOS milestones, continue using Keychain-backed secret storage for local profile persistence and keep secure-link runtime cryptography out of scope until a native implementation is approved.
+- `websockets` and asyncio-driven transports still need continued real-device validation under iOS lifecycle constraints.
+- `aioquic` remains a higher-risk path than `ws`/`tcp` because it combines transport, TLS, and mobile platform behavior.
+- The project should continue to treat transport enablement order as a product decision informed by real-device stability rather than by source-level portability alone.
 
 ## Configuration Model
 
@@ -1027,271 +1124,147 @@ export OB_IOS_DEVICE_ID="<YOUR_LOCAL_DEVICE_UDID>"
 export OB_IOS_DEVICE_NAME="<YOUR_LOCAL_IPHONE_NAME>"
 ```
 
-## Open Design Questions
+## Current iOS Runtime Status
 
-- Can the required Apple Network Extension entitlement be obtained for the intended distribution model?
-- Should the first full VPN tunnel prototype embed Python in the extension or port the critical path to Swift?
-- Which transport should be the first supported production transport on iOS?
-- Can `cryptography` and `aioquic` be packaged reliably for iOS devices?
-- Should certificate private key generation happen on iOS, or should keys be provisioned externally?
-- How much of WebAdmin should be reimplemented as native UI versus exposed through a local embedded page for development only?
-- What is the minimum supported iOS version?
-- Should Android be considered in parallel once the core packet I/O abstraction exists?
+The current design should be understood from implemented outcomes rather than from the original milestone guesses.
 
-## Background Runtime Transition Plan
+### Implemented Baseline
 
-Problem statement:
+The following are now part of the working iOS design baseline:
 
-- The current BeeWare iOS app can host WebAdmin and embedded runtime experiments while the app is in the foreground.
-- That execution model is not sufficient for VPN-style behavior on iOS.
-- When the containing app loses focus or is suspended, the app process cannot be treated as a durable host for `admin_web`, `ChannelMux`, overlay transports, or secure tunnel processing.
-- The long-running path must move into an Apple Network Extension, with the containing app reduced to management, onboarding, configuration, and diagnostics.
+- a containing `ObstacleBridge` app and an `IPServer` packet-tunnel extension target
+- `NETunnelProviderManager` profile install/reuse/start flows from the app
+- a stable app-to-extension control path using provider messages and App Group files
+- embedded Python runtime startup inside the extension
+- extension-owned WebAdmin, ChannelMux, SecureLink, and transport runtime ownership
+- config synchronization between app-visible `Documents` storage and the shared App Group boundary
+- extension log harvesting back into the app-visible `Documents/logs`
+- iOS-native crypto support for the required ObstacleBridge security primitives
+- working SecureLink over `myudp` on device
+- working WebAdmin restart behavior inside the extension
 
-Important constraint:
+### Design Consequence
 
-- Adding Background Tasks capability does not change this architecture.
-- `BGProcessingTask` is not a substitute for a packet tunnel provider or any other durable always-on networking runtime.
-- Therefore, do not plan to move `admin_web` or `ChannelMux` into a background processing task as the primary iOS runtime shape.
+This means the remaining work is no longer "prove whether the extension architecture is viable." That viability is already demonstrated.
 
-Guiding decisions:
+The remaining work is primarily:
 
-- Treat the packet tunnel provider as the durable runtime host for all traffic-carrying layers below the management UI.
-- Do not depend on an embedded localhost WebAdmin server for background-safe control on iOS.
-- Keep the app/extension boundary explicit: profile install, tunnel start/stop, status snapshots, error reporting, and log retrieval should all flow through a defined message/config contract.
-- Preserve reusable Python logic where safe, but allow native Swift ownership of packet-flow and lifecycle-critical paths when that is the lower-risk iOS shape.
-- If VPN scope is reduced in a future product decision, the fallback is a foreground-only app-scoped TCP/UDP runtime, not a `BGProcessingTask`-hosted server.
-
-### Step 1: Entitlement + Extension Target Baseline
-
-Goal:
-
-- Create and sign a real packet tunnel extension target that can be installed on a device and launched through `NETunnelProviderManager`.
-
-Definition of done:
-
-- The Xcode project contains a packet tunnel extension target wired to the existing native sources under `ios/native/ObstacleBridgeTunnel/`.
-- The app ID and extension ID have the required Network Extension entitlement enabled for packet tunnel use.
-- A development-signed build installs on a physical iPhone.
-- The containing app can save a `NETunnelProviderManager` profile and request tunnel start/stop without crashing.
-- A device-side validation note captures the exact entitlement, bundle IDs, and Xcode signing settings that were used.
-
-### Step 2: App <-> Extension Control Plane Contract
-
-Goal:
-
-- Formalize the message/config contract between the containing app and the packet tunnel extension.
-
-Definition of done:
-
-- Provider configuration schema is versioned and documented as the source of truth for extension startup input.
-- App-message request and response payloads are versioned and documented for status, health, and error reporting.
-- Python-side tests cover serialization and validation for the shared control-plane contract.
-- Native source uses the same named schema/version identifiers as the Python-side contract.
-- The containing app can request at least a status snapshot from the extension and decode the response into a stable app-facing structure.
-
-### Step 3: Background-Safe Tunnel Lifecycle POC
-
-Goal:
-
-- Prove that the tunnel runtime keeps running after the containing app loses focus.
-
-Definition of done:
-
-- With the tunnel started, the user can background the containing app and the packet tunnel provider remains alive.
-- Extension-side counters continue changing while traffic is flowing.
-- Re-opening the containing app shows the latest extension status instead of requiring the app-hosted WebAdmin loop to still be active.
-- A device validation run records at least one case where foreground loss does not interrupt traffic processing.
-- Any remaining lifecycle gaps are documented as extension-side issues, not foreground-app issues.
-
-### Step 4: Shared Profile, Secret, and Diagnostics Boundary
-
-Goal:
-
-- Move app/extension shared state onto an iOS-safe storage boundary.
-
-Definition of done:
-
-- Profiles needed by the extension are stored in an App Group-accessible location or equivalent approved iOS sharing mechanism.
-- Secrets required by the extension are available through an approved boundary without writing plaintext copies into normal files.
-- Extension logs/status snapshots can be surfaced in the containing app without relying on the containing app process staying alive.
-- The repo documents which values are app-owned, extension-owned, and shared.
-
-### Step 5: Move ChannelMux + Transport Runtime Below The App
-
-Goal:
-
-- Make the containing app optional for active traffic processing once the tunnel is running.
-
-Definition of done:
-
-- `ChannelMux`, packet adapter logic, and the selected overlay transport path run in the extension or an explicitly defined extension-owned runtime boundary.
-- Tunnel traffic continues while the containing app is backgrounded or fully not visible.
-- Config save/status UI in the app no longer depend on the foreground app hosting `admin_web`.
-- The repo documents which runtime layers remain Python and which are now native Swift.
-
-### Step 6: Replace Embedded WebAdmin As Primary iOS Control Surface
-
-Goal:
-
-- Make native app UI the primary operational surface on iOS.
-
-Definition of done:
-
-- Start/stop tunnel, profile selection, tunnel status, and key diagnostics are available from native app UI flows.
-- Critical operations no longer require an embedded localhost browser UI.
-- Any retained WebAdmin path is explicitly marked as development-only or foreground-only.
-- The user-facing iOS behavior is documented in terms of app + extension lifecycle rather than desktop WebAdmin assumptions.
-
-### Step 7: Production Hardening For Background Operation
-
-Goal:
-
-- Convert the background-capable architecture into a release candidate path.
-
-Definition of done:
-
-- Route handling, DNS handling, reconnect behavior, and low-memory behavior are tested on physical devices.
-- Wi-Fi to cellular and cellular to Wi-Fi transitions are exercised with recorded outcomes.
-- Crash/error telemetry is sufficient to distinguish app-layer failures from extension-layer failures.
-- Entitlement/distribution constraints are documented for internal, TestFlight, and any broader release paths.
-- Remaining unsupported behaviors are explicitly called out in docs and UI.
-
-## Milestone Checklist
-
-### M0: Core Refactor Ready
-
-- Embeddable runtime API exists.
-- Packet I/O abstraction exists.
-- Config parsing is decoupled from CLI startup.
-- Secure-link and mux wire tests are available as reusable vectors.
-
-Current implementation slice:
-
-- `src/obstacle_bridge/core.py` exposes `ObstacleBridgeClient` with `start`, `stop`, `update_config`, and `snapshot`.
-- `src/obstacle_bridge/packet_io.py` exposes the `PacketIO` protocol and `MemoryPacketIO` test/spike implementation.
-- `src/obstacle_bridge/bridge.py` exposes `parse_runtime_args`, `build_runtime_args_from_config`, and `default_runtime_registrars` so embedders can create runtime arguments without invoking the CLI process entrypoint.
-- The current M0 slice reserves packet-I/O handoff on the runner for the upcoming platform TUN adapter refactor; desktop Linux/WinTun behavior remains unchanged.
-
-### M1: BeeWare App Prototype
-
-- Briefcase iOS project builds.
-- App imports shared ObstacleBridge modules.
-- App imports and previews invite/config snippets.
-- App stores a profile without plaintext secrets in normal app files.
-
-Current implementation slice:
-
-- `ios/pyproject.toml` and `ios/src/obstacle_bridge_ios/app.py` provide a minimal BeeWare companion-app scaffold for iOS packaging spikes.
-- `src/obstacle_bridge/onboarding.py` exposes shared invite/config import preview helpers so non-WebAdmin hosts can reuse onboarding token logic.
-- `ios/src/obstacle_bridge_ios/onboarding.py` imports the shared onboarding helper and exposes invite/config preview behavior for the iOS prototype path.
-- `ios/src/obstacle_bridge_ios/profiles.py` and `ios/src/obstacle_bridge_ios/secure_store.py` implement profile persistence that keeps `secure_link_psk` and `admin_web_password` out of normal profile JSON files by storing them in a secret-store abstraction.
-- `ios/src/obstacle_bridge_ios/app.py` now includes a small facade path that previews invite/config imports and stores resulting profile material through the secret-aware profile store.
-- `ios/tests/test_invite_import.py`, `ios/tests/test_ios_profile_config.py`, and `ios/tests/test_ios_app_facade.py` cover invite/config preview, app-level import/store flow, and no-plaintext-secret profile persistence behavior.
-- `briefcase create iOS`, `briefcase build iOS`, and `briefcase run iOS -u --no-input -d "iPhone 17 Pro"` have been validated on macOS with Xcode installed, and the simulator launch renders the M1 prototype screen.
-
-M1 status:
-
-- Complete.
-
-### M2: Dependency Spike
-
-- `websockets` smoke test runs on device.
-- `cryptography` smoke test runs on device or fallback is selected.
-- `aioquic` smoke test result is documented.
-- asyncio TCP/UDP behavior is validated on simulator and device.
-
-Current implementation slice:
-
-- `ios/src/obstacle_bridge_ios/dependency_spike.py` provides an executable M2 harness that runs websocket loopback, cryptography-or-fallback, aioquic result-documentation, and asyncio TCP/UDP loopback checks.
-- `ios/src/obstacle_bridge_ios/__main__.py` supports a headless run mode (`--m2-dependency-spike`) that writes a JSON report to `.obstaclebridge-ios/m2-dependency-spike-latest.json` inside the app data container.
-- `ios/src/obstacle_bridge_ios/app.py` exposes M2 facade helpers so the app path can trigger and persist dependency-spike reports.
-- `ios/tests/test_dependency_spike.py` and `ios/tests/test_ios_app_facade.py` cover the harness contract and app-facade entrypoints.
-- Simulator validation result (iPhone 17 Pro, iOS 26.4.1): websocket smoke passed (`websockets 16.0`), asyncio TCP/UDP loopback passed, cryptography fallback selected because iOS package import is unavailable, and aioquic unavailability is explicitly documented in the generated report.
-
-Security decision record for M2:
-
-- `cryptography` is currently unavailable in this iOS package path.
-- This is not a minor dependency warning; it is a security-parity gap that blocks secure-link production claims on this path until a native or otherwise approved crypto path is in place.
-- Code analysis confirms the project only needs a narrow subset of `cryptography` APIs on the iOS path:
-- `HKDF(SHA-256)` and `ChaCha20Poly1305` for config-secret handling
-- `PBKDF2-HMAC-SHA256` and `AESGCM` for WebAdmin secret reveal
-- `Ed25519`, `X25519`, and PEM/DER key loading for secure-link certificate mode
-- Decision for M2: do not pursue an extracted Python-side mini-fork of `cryptography` for iOS packaging.
-- Decision for M2: preserve a narrow internal crypto boundary, rely on Keychain for iOS secret storage in current milestones, and plan any future secure-link-capable iOS path around a native backend that implements only the required primitives.
-
-M2 status:
-
-- Implemented and simulator-validated.
-- Physical-device execution command is ready (`briefcase run iOS -u -r --no-input -d "<device>" -- --m2-dependency-spike`) and should be run when a real device is attached.
-
-### M2.5: Minimal Config + Status UI
-
-- App has a minimal configuration UI for profile setup (transport, peer host/port, localhost TCP/UDP exposure intents).
-- App has a status tab that can report successful connection reachability checks.
-- Profile persistence stores M2.5 config through the secret-aware profile store.
-- Platform constraints for localhost exposure are documented in-app and in docs.
-
-Current implementation slice:
-
-- `ios/src/obstacle_bridge_ios/m25_ui.py` defines the M2.5 config model, profile-builder logic, and TCP reachability status probe helpers.
-- `ios/src/obstacle_bridge_ios/app.py` now renders two tabs (`Configuration`, `Status`) and wires save/check actions to app-facade methods.
-- `ios/tests/test_m25_ui.py` and `ios/tests/test_ios_app_facade.py` cover M2.5 config/profile generation and status-probe behavior.
-
-Important platform note:
-
-- The M2.5 localhost TCP/UDP settings are an intent/configuration step.
-- System-wide traffic use by other apps (for example Safari) requires Network Extension packet-tunnel behavior in M3; a normal containing app alone cannot deliver full WireGuard/OpenVPN-style system routing.
-- Background Tasks capability does not change that limitation and should not be used to promise an always-on localhost service on iPhone.
-
-### M3: Packet Tunnel POC
-
-- iOS VPN profile installs.
-- Packet tunnel extension starts and stops.
-- Extension reads and writes packets through `NEPacketTunnelFlow`.
-- One ObstacleBridge transport connects to a Linux/server peer.
-- TUN packets cross the overlay.
-
-Current implementation slice:
-
-- `ios/src/obstacle_bridge_ios/m3_tunnel.py` defines the M3 provider-configuration schema and builds an install descriptor for `NETunnelProviderManager` from existing iOS profiles.
-- `ios/src/obstacle_bridge_ios/m3_tunnel.py` also defines the first version of the app-message status contract so the containing app and packet tunnel extension can converge on a stable control-plane boundary.
-- `ios/src/obstacle_bridge_ios/app.py` exposes `build_m3_vpn_profile(...)` so the companion app/facade can hand native tunnel installation code a validated provider payload.
-- `ios/native/IPServer/PacketTunnelProvider.swift` is now the single native `NEPacketTunnelProvider` entrypoint. It applies tunnel settings, boots the shared Python bridge, and keeps provider messaging aligned with the app-side control contract.
-- `ios/native/IPServer/ObstacleBridgePythonBridge.m` and `.h` bootstrap the packaged Python runtime inside the packet-tunnel extension so WebAdmin, ChannelMux, and the lower Python layers can run in the extension process.
-- Step 1 background-runtime wiring now standardizes on a two-target Xcode project: the containing `ObstacleBridge` app plus the `IPServer` packet-tunnel extension target, backed by `ios/native/IPServer/Info.plist` and Network Extension entitlement files for both the containing app and extension.
-- `ios/tests/test_m3_tunnel.py`, `ios/tests/test_m3_native_sources.py`, and `ios/tests/test_ios_app_facade.py` cover the M3 app/native configuration contract.
-- `tests/integration/test_ios_e2e.py` adds a non-entitled iOS packet-flow integration slice that round-trips packet bytes through the M3 length-prefixed TCP contract.
-- `ios/e2e_app/src/obstacle_bridge_ios_e2e/runner.py` defines the standalone iOS E2E probe harness used by simulator/device integration tests, including host WebSocket reachability and WS-overlay UDP service probes.
-- `ios/pyproject.toml` defines `obstacle_bridge_ios_e2e` as a separate Briefcase iOS app target so test-only probes stay outside the ObstacleBridge iOS application.
-- `tests/integration/test_ios_e2e.py` validates that the iOS E2E harness can bind a local UDP service, connect by WS to a host-side ObstacleBridge peer, reach a host UDP echo target, and evaluate the returned UDP frame.
-- `tests/integration/test_ios_simulator_e2e.py` adds opt-in simulator-to-macOS-host tests using the E2E app's headless `--host-websocket-probe` and `--ws-udp-echo-probe` modes.
-
-M3 status:
-
-- Implemented as source-of-truth app contract plus native packet tunnel POC sources.
-- Implemented an opt-in simulator connection test for host WebSocket reachability from a standalone iOS E2E app process.
-- Step 1 target baseline is now wired into the current generated Xcode project with:
-  - containing app bundle ID: `com.obstaclebridge.obstacle-bridge-ios`
-  - packet tunnel extension bundle ID: `com.obstaclebridge.obstacle-bridge-ios.IPServer`
-  - app entitlement file: `ios/native/ObstacleBridgeApp/ObstacleBridge.entitlements`
-  - extension entitlement file: `ios/native/IPServer/IPServer.entitlements`
-  - generated Xcode target/scheme: `IPServer`
-  - current project team setting: `99WZ498FCV`
-- Local no-sign validation showed `xcodebuild -list` exposing the new target and scheme, and the generated project patch automation now emits `IPServer.appex` directly instead of carrying a separate `ObstacleBridgeTunnel` target.
-- Pending device/Xcode validation: add the native files to a packet tunnel extension target, enable the required Network Extension entitlement, install via `NETunnelProviderManager`, and run against a matching TCP packet-frame peer.
-
-### M4: Secure Tunnel Beta
-
-- Secure-link PSK works.
-- Route and DNS settings work.
-- Basic status and logs are visible in the containing app.
-- Wi-Fi/cellular transition is tested.
-- TestFlight/internal distribution package is produced.
-
-### M5: Production Candidate
-
-- Certificate mode works or is explicitly deferred.
-- App review/entitlement plan is complete.
-- Secrets and diagnostics have passed review.
-- Battery/memory profile is acceptable.
-- User documentation is written.
+- completing packet/TUN carriage through `NEPacketTunnelFlow`
+- broadening route behavior safely
+- hardening transport behavior under more real-world iOS lifecycle and network transitions
+- continuing to replace desktop/server assumptions with explicit iOS runtime contracts where necessary
+
+## Remaining Questions That Still Matter
+
+The old question set is no longer the right one. The questions that still matter now are narrower:
+
+- Which route scope should be the first supported iOS TUN scope: one diagnostic subnet, selected private subnets, or full tunnel?
+- Which transport should be treated as first-class on iOS production paths: `ws`, `tcp`, `myudp`, and later `quic`?
+- Should certificate private key generation happen on iOS, or should keys be provisioned/imported externally for the first product release?
+- What is the minimum supported iOS version for the maintained packet-tunnel product path?
+- How much of the current WebAdmin operational surface should later move into native iOS UI once the packet/runtime side is complete?
+
+## Current Forward Plan: TUN Enablement
+
+The next document-worthy plan should focus on TUN functionality itself, because earlier architectural unknowns are no longer the critical blocker.
+
+### 1. Define The Exact iOS TUN Target
+
+- Decide whether the next slice is packet capture only, packet injection/inspection, or full routed forwarding.
+- Recommended first scope: `NEPacketTunnelProvider` reads IPv4 packets, passes them into the ObstacleBridge runtime, and can emit packets back to `packetFlow`.
+- Keep the current synthetic tunnel address model and document the first intercepted route scope explicitly.
+
+### 2. Trace And Complete The Packet Path
+
+- Review and document the live packet path across:
+  - `ios/native/IPServer/PacketTunnelProvider.swift`
+  - `ios/native/ObstacleBridgeTunnel/PacketFlowBridge.swift`
+  - `ios/src/obstacle_bridge_ios/ipserver_extension.py`
+  - `src/obstacle_bridge/packet_io.py`
+- Produce one short packet-flow diagram from `NEPacketTunnelFlow` to Python packet handler and back.
+- Identify the exact missing links between packet read, packet framing, mux carriage, and packet write-back.
+
+### 3. Build A Minimal Native TUN Smoke Path
+
+- Add the smallest possible provider-level packet smoke path:
+  - read one packet from `packetFlow`
+  - log packet metadata
+  - optionally perform deterministic echo/drop behavior
+- Goal: prove native packet I/O independently from ChannelMux and transport concerns.
+
+### 4. Define A Stable Swift <-> Python Packet Bridge Contract
+
+- Keep packet framing between Swift and Python explicit:
+  - packet bytes
+  - address family
+  - optional diagnostic metadata
+- Keep this separate from higher-level ChannelMux framing.
+- Add backpressure rules so the native side cannot flood Python packet handling.
+
+### 5. Implement The iOS `PacketIO` Runtime Adapter
+
+- Finalize an iOS `PacketIO` adapter that can:
+  - read raw IP packets from the provider bridge
+  - write raw IP packets back to the provider bridge
+- Keep it transport-agnostic and reusable by the existing runtime APIs.
+
+### 6. Connect TUN To ChannelMux Deliberately
+
+- Decide the first tunnel carriage model:
+  - one logical TUN service over ChannelMux
+  - packet payloads carried as dedicated mux messages
+- Start with one peer and one tunnel session before broadening to multi-peer/multi-route complexity.
+
+### 7. Start Narrow: IPv4 And Limited Routes
+
+- Begin with a restricted route scope rather than full-device routing.
+- Recommended first route scope:
+  - a controlled test subnet or one selected destination range
+- Only expand to wider route coverage after steady packet read/write behavior is proven.
+
+### 8. Add TUN-Specific Observability
+
+- Add explicit packet-runtime logs for:
+  - `packetFlow` read started/stopped
+  - packets read/written counts
+  - drop reasons
+  - bridge queue depth/backpressure
+  - TUN session open/close
+- Add WebAdmin or app-visible status fields for:
+  - TUN enabled
+  - packet rx/tx counts
+  - last packet timestamp
+  - active peer/session carrying TUN traffic
+
+### 9. Validate In Layers
+
+- Unit tests:
+  - packet framing
+  - Python `PacketIO` adapter
+  - mux carriage for TUN payloads
+- Host integration tests:
+  - replay and frame tests without real iOS APIs
+- iOS-specific tests:
+  - provider bootstrap
+  - native bridge smoke
+  - packet read/write contract
+- Physical-device E2E:
+  - VPN up
+  - routed test traffic enters provider
+  - packet reaches peer or controlled sink
+  - response packet returns to the iOS stack
+
+### 10. Deliver In Concrete Milestones
+
+- Milestone A: provider reads packets and logs them
+- Milestone B: provider can write packets back through the same bridge
+- Milestone C: Python runtime owns live TUN `PacketIO`
+- Milestone D: TUN packets traverse ChannelMux to the peer
+- Milestone E: routed app traffic works on device
+- Milestone F: routes broaden and lifecycle/reconnect behavior is hardened
+
+Recommended immediate next milestone:
+
+- start with Milestone A and B only
+- prove native packet read/write on device with strong logs
+- then treat the next steps as overlay integration work rather than as unresolved iOS architecture work
