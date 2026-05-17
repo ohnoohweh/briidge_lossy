@@ -472,6 +472,8 @@ REQ-LIFE-004:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_server_restart_closes_tcp_preserves_udp
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_sender_reset_clears_stale_reconnect_state
+    - ios/tests/test_ipserver_extension.py::test_embedded_restart_reload_reads_grouped_config_and_restarts_client
+    - ios/tests/test_ipserver_extension.py::test_embedded_restart_times_out_old_runtime_stop
 
 REQ-LIFE-005:
   integration_tests:
@@ -530,6 +532,8 @@ REQ-LIFE-010:
     - tests/unit/test_embeddable_core.py::test_memory_packet_io_round_trip_boundaries
     - ios/tests/test_ipserver_extension.py::test_handle_message_connects_profile_by_id
     - ios/tests/test_ipserver_extension.py::test_handle_message_disconnects_profile
+    - ios/tests/test_ipserver_extension.py::test_embedded_restart_reload_reads_grouped_config_and_restarts_client
+    - ios/tests/test_ipserver_extension.py::test_embedded_restart_times_out_old_runtime_stop
     - ios/tests/test_ios_e2e_app_runner.py::test_e2e_runner_runtime_config_reports_webadmin_url_and_started_state
 
 REQ-LST-001:
@@ -700,6 +704,7 @@ REQ-ADM-001:
     - tests/unit/test_admin_web_payloads.py::test_resolve_static_base_falls_back_to_packaged_admin_web
     - tests/unit/test_admin_web_payloads.py::test_onboarding_connection_profiles_expose_configured_transports
     - tests/unit/test_admin_web_payloads.py::test_onboarding_blueprints_group_active_peer_connections
+    - tests/unit/test_runner_events.py::test_get_debug_logs_falls_back_to_log_file_when_ring_is_empty
 
 
 REQ-ADM-009:
@@ -764,6 +769,7 @@ REQ-ADM-006:
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
     - tests/unit/test_ws_multi_peer.py::test_server_peer_snapshot_includes_last_incoming_age_seconds
     - tests/unit/test_ws_multi_peer.py::test_client_peer_snapshot_includes_last_incoming_age_seconds
+    - tests/unit/test_admin_web_payloads.py::test_meta_payload_suppresses_runtime_dependency_warnings_on_ios
 
 REQ-ADM-007:
   integration_tests:
@@ -790,6 +796,7 @@ REQ-ADM-010:
 REQ-ADM-011:
   unit_tests:
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_roundtrip_and_suggested_updates
+    - tests/unit/test_admin_web_payloads.py::test_service_catalog_modal_preserves_last_valid_draft_on_validation_error
 
 REQ-ADM-012:
   unit_tests:
