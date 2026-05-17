@@ -1,0 +1,1 @@
+recursive-include admin_web *.js *.html *.css

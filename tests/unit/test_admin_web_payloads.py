@@ -232,6 +232,20 @@ def _http_json_body(writer: _WriterStub) -> dict:
 
 
 class AdminWebPayloadTests(unittest.TestCase):
+    @staticmethod
+    def _canonical_webadmin_paths() -> list[pathlib.Path]:
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        return [repo_root / "admin_web" / "app.js"]
+
+    def test_setup_build_stages_admin_web_assets_from_repo_root(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        setup_py = (repo_root / "setup.py").read_text(encoding="utf-8")
+        manifest = (repo_root / "MANIFEST.in").read_text(encoding="utf-8")
+        self.assertIn('CANONICAL_ADMIN_WEB_DIR = ROOT / "admin_web"', setup_py)
+        self.assertIn('PACKAGE_ADMIN_WEB_REL = Path("obstacle_bridge") / "admin_web"', setup_py)
+        self.assertIn("def _stage_admin_web_assets(self):", setup_py)
+        self.assertIn("recursive-include admin_web *.js *.html *.css", manifest)
+
     def test_stop_closes_server_and_active_client_writers(self):
         args = argparse.Namespace(
             admin_web=True,
@@ -284,6 +298,8 @@ class AdminWebPayloadTests(unittest.TestCase):
 
         base = ui._resolve_static_base()
 
+        self.assertTrue(base.is_dir())
+        self.assertTrue((base / "index.html").is_file())
         self.assertTrue(base.is_dir())
         self.assertTrue((base / "index.html").is_file())
         self.assertEqual(base.name, "admin_web")
@@ -449,6 +465,14 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["runtime_dependencies"]["install_hint"], "")
         self.assertNotIn("crypto_extract", payload)
 
+    def test_runtime_dependency_warning_text_is_backend_driven(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        for app_path in self._canonical_webadmin_paths():
+            with self.subTest(app_path=str(app_path.relative_to(repo_root))):
+                text = app_path.read_text(encoding="utf-8")
+                self.assertIn("const missing = Array.isArray(deps?.missing) ? deps.missing : [];", text)
+                self.assertNotIn("platform === 'ios'", text)
+
     def test_restart_endpoint_uses_immediate_mode_for_embedded_restart(self):
         args = argparse.Namespace(
             admin_web=True,
@@ -515,12 +539,7 @@ class AdminWebPayloadTests(unittest.TestCase):
 
     def test_embedded_restart_frontend_arms_fallback_countdown(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]
-        app_paths = [
-            repo_root / "admin_web" / "app.js",
-            repo_root / "src" / "obstacle_bridge" / "admin_web" / "app.js",
-        ]
-
-        for app_path in app_paths:
+        for app_path in self._canonical_webadmin_paths():
             with self.subTest(app_path=str(app_path.relative_to(repo_root))):
                 text = app_path.read_text(encoding="utf-8")
                 self.assertIn("if (delaySec === 0 && j.restart_embedded)", text)
@@ -669,12 +688,7 @@ class AdminWebPayloadTests(unittest.TestCase):
 
     def test_secure_link_psk_reveal_insecure_context_notice_prefers_own_server_path(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]
-        app_paths = [
-            repo_root / "admin_web" / "app.js",
-            repo_root / "src" / "obstacle_bridge" / "admin_web" / "app.js",
-        ]
-
-        for app_path in app_paths:
+        for app_path in self._canonical_webadmin_paths():
             with self.subTest(app_path=str(app_path.relative_to(repo_root))):
                 text = app_path.read_text(encoding="utf-8")
                 self.assertIn("openConfigNoticeGate('Cannot Reveal secure_link_psk'", text)
@@ -684,12 +698,7 @@ class AdminWebPayloadTests(unittest.TestCase):
 
     def test_service_catalog_modal_preserves_last_valid_draft_on_validation_error(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]
-        app_paths = [
-            repo_root / "admin_web" / "app.js",
-            repo_root / "src" / "obstacle_bridge" / "admin_web" / "app.js",
-        ]
-
-        for app_path in app_paths:
+        for app_path in self._canonical_webadmin_paths():
             with self.subTest(app_path=str(app_path.relative_to(repo_root))):
                 text = app_path.read_text(encoding="utf-8")
                 self.assertIn("if (!syncServiceCatalogEditor(key)) return;", text)

@@ -137,6 +137,7 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_secure_link_rows
     - tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_cert_identity_and_trust_fields
     - tests/unit/test_admin_web_payloads.py::test_resolve_static_base_falls_back_to_packaged_admin_web
+    - tests/unit/test_admin_web_payloads.py::test_setup_build_stages_admin_web_assets_from_repo_root
     - tests/unit/test_admin_web_payloads.py::test_stop_closes_server_and_active_client_writers
     - tests/unit/test_admin_web_payloads.py::test_restart_endpoint_uses_immediate_mode_for_embedded_restart
     - tests/unit/test_admin_web_payloads.py::test_restart_endpoint_prefers_admin_web_embedded_restart_callback

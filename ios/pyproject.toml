@@ -20,6 +20,7 @@ sources = [
     "src/obstacle_bridge_ios",
     "src",
     "../src/obstacle_bridge",
+    "../admin_web",
     "../web",
 ]
 requires = [
@@ -45,6 +46,7 @@ sources = [
     "e2e_app/src/obstacle_bridge_ios_e2e",
     "src/obstacle_bridge_ios",
     "../src/obstacle_bridge",
+    "../admin_web",
 ]
 requires = [
     "websockets",

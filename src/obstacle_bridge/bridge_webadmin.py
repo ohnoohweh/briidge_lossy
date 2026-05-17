@@ -1482,13 +1482,17 @@ class AdminWebUI:
         configured = pathlib.Path(str(getattr(self.args, "admin_web_dir", "") or "./admin_web")).expanduser()
         candidates = [configured]
 
-        package_static = pathlib.Path(__file__).resolve().parent / "admin_web"
-        if package_static not in candidates:
-            candidates.append(package_static)
+        bundled_app_static = pathlib.Path(__file__).resolve().parents[1] / "admin_web"
+        if bundled_app_static not in candidates:
+            candidates.append(bundled_app_static)
 
         repo_static = pathlib.Path(__file__).resolve().parents[2] / "admin_web"
         if repo_static not in candidates:
             candidates.append(repo_static)
+
+        package_static = pathlib.Path(__file__).resolve().parent / "admin_web"
+        if package_static not in candidates:
+            candidates.append(package_static)
 
         for candidate in candidates:
             resolved = candidate.resolve()
