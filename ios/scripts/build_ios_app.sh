@@ -27,6 +27,7 @@ fi
 PROJECT_PBXPROJ="${IOS_DIR}/build/obstacle_bridge_ios/ios/xcode/ObstacleBridge.xcodeproj/project.pbxproj"
 PROJECT_FILE="${IOS_DIR}/build/obstacle_bridge_ios/ios/xcode/ObstacleBridge.xcodeproj"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-/tmp/obstaclebridge-ios-build}"
+SIM_APP_PACKAGES_DIR="${IOS_DIR}/build/obstacle_bridge_ios/ios/xcode/ObstacleBridge/app_packages.iphonesimulator"
 
 echo "[build_ios_app] refreshing embedded build metadata and VPN profile timestamp"
 "${PYTHON_CMD}" "${REPO_ROOT}/scripts/write_build_info.py"
@@ -42,6 +43,11 @@ else
   )
   echo "[build_ios_app] reapplying repo-owned Xcode project patches"
   "${PYTHON_CMD}" "${IOS_DIR}/scripts/patch_briefcase_xcode_project.py" "${PROJECT_PBXPROJ}"
+fi
+
+if [ -d "${SIM_APP_PACKAGES_DIR}" ]; then
+  echo "[build_ios_app] removing simulator app payload staging (${SIM_APP_PACKAGES_DIR})"
+  rm -rf "${SIM_APP_PACKAGES_DIR}"
 fi
 
 if [ -z "${OB_APPLE_TEAM_ID:-}" ]; then

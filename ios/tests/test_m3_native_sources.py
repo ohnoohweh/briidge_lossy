@@ -30,6 +30,16 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "embedded_webadmin_started" in provider
     assert "handleAppMessage" in provider
     assert "packet_pump_forwarded_packets" in provider
+    assert "ipserver-native-provider-state.json" in provider
+    assert "updateProviderState(" in provider
+    assert "bridge_state" in provider
+    assert "processMemorySnapshot()" in provider
+    assert "resident_size" in provider
+    assert "phys_footprint" in provider
+    assert "task_vm_info_kern_return" in provider
+    assert "SwiftSimpleUDPPeerBridge" in provider
+    assert "swift_simple_udp_peer" in provider
+    assert "loadSharedRuntimeConfigJSON" in provider
     assert "packet_pump_dropped_packets" not in provider
     assert "obstaclebridge.ios.packet-tunnel.v1" in provider
     assert "NEIPv6Settings" in provider
@@ -42,10 +52,20 @@ def test_native_packet_flow_bridge_source_exists() -> None:
     bridge = (IPSERVER_NATIVE_DIR / "ObstacleBridgePacketFlowBridge.swift").read_text(encoding="utf-8")
 
     assert "@objc(ObstacleBridgePacketFlowBridge)" in bridge
+    assert "PacketFlowPCAPWriter" in bridge
     assert "dequeueIncomingPacket" in bridge
     assert "writePacket" in bridge
+    assert "registerWakeupFD" in bridge
+    assert "resetWakeupFD" in bridge
     assert "bridgeStateJSONData" in bridge
+    assert "bridgeStateSnapshot" in bridge
     assert "packet_bridge_activated" in bridge
+    assert "packet_bridge_outgoing_write_completed" in bridge
+    assert "packet_bridge_outgoing_write_slow" in bridge
+    assert "incoming_pcap_path" in bridge
+    assert "outgoing_pcap_path" in bridge
+    assert "ipserver-nepacketflow-in-" in bridge
+    assert "ipserver-nepacketflow-out-" in bridge
 
 
 def test_ipserver_extension_plist_and_entitlements_exist() -> None:

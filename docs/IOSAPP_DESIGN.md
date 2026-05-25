@@ -331,6 +331,7 @@ Design impact:
 - the primary engineering goal has changed from "make iOS tunneling work at all" to "make the working tunnel resilient under sustained traffic"
 - observability and rate-aware diagnostics in the packet bridge are now important hardening tools
 - reducing hot-path logging pressure is part of the runtime-stability design, not just a cosmetic cleanup
+- for the localhost-UDP connector experiment, observability must exist on both sides of the seam: native `NEPacketTunnelFlow` PCAPs at the provider boundary and Python-side raw-IP PCAPs plus JSONL session manifests at the connector-to-ChannelMux boundary
 
 ### Outcome 7: iOS Crypto Parity Is Achieved Through A Native Backend Boundary
 
@@ -475,6 +476,7 @@ Operational consequence:
 
 - A broken packet bridge is now a full-traffic outage risk, not just a missing local admin feature.
 - Therefore packet-path tracing at the provider boundary, bridge boundary, and ChannelMux TUN boundary is a required part of the design, not optional diagnostics.
+- For the UDP connector experiment specifically, the environment should preserve enough raw traffic at the connector seam that a `ChannelMux` or lower-layer crash can be replayed later without the iOS PacketTunnel provider being present.
 
 Critical boundary:
 
@@ -582,6 +584,37 @@ App-to-extension contract:
 - Use App Group storage for non-secret shared configuration and extension logs.
 - Use an approved secret boundary for PSK/password/key material. Plaintext secrets must not be written into normal app files.
 - Do not rely on `.git` metadata in the deployed package. Build/version metadata must be generated into package files during build.
+
+### Swift-Only UDP Repro Baseline
+
+The repository should preserve one intentionally small iOS packet-tunnel mode whose job is only to prove packet-flow stability independent of the larger ObstacleBridge runtime.
+
+Design rules for this baseline:
+
+- The provider applies the normal `NEPacketTunnelNetworkSettings`, including dual-stack addresses, DNS, routes, and MTU.
+- After settings are active, the extension runs a Swift-owned packet ferry selected by `ios_experiment.packetflow_connector = "swift_simple_udp_peer"`.
+- In this mode the extension must bypass Python, ChannelMux, WebAdmin, and SecureLink entirely.
+- The packet path is:
+  - `NEPacketTunnelFlow.readPackets`
+  - Swift UDP sender to the Fedora peer
+  - Swift UDP receiver from the Fedora peer
+  - `NEPacketTunnelFlow.writePackets`
+- The Fedora peer is a host-side raw-IP UDP/TUN ferry configured by `run_test_setup.sh` and `run_test.sh`.
+
+Operational expectations for this baseline:
+
+- It is the reference environment for answering whether iOS `NEPacketTunnelFlow` remains stable under routed IPv4 and IPv6 traffic when the extension logic is kept minimal.
+- Stability of this mode is more important than feature coverage. If this mode is unstable, higher-layer experiments are not trustworthy.
+- The provider must emit compact native state and heartbeat records during the run and must record an explicit `userInitiated` stop when the tunnel is stopped manually.
+- The Fedora bridge may add routing, NAT, and policy-routing mechanics, but it must not alter packet payloads beyond what normal Linux forwarding requires.
+
+Current known-good baseline:
+
+- iOS runtime mode: `swift_simple_udp_peer`
+- Tunnel MTU: `1600`
+- Fedora peer transport: UDP port `5555`
+- Fedora TUN interface: `obexp0`
+- Stable repro scope: dual-stack browsing with clean manual stop and no self-inflicted extension shutdown
 
 ## Background Task Boundary
 
@@ -1183,6 +1216,9 @@ The next document-worthy plan should focus on TUN functionality itself, because 
   - `src/obstacle_bridge/packet_io.py`
 - Produce one short packet-flow diagram from `NEPacketTunnelFlow` to Python packet handler and back.
 - Identify the exact missing links between packet read, packet framing, mux carriage, and packet write-back.
+- Keep crash-boundary artifacts explicit:
+  - provider-side raw-IP PCAPs prove whether the iOS packet provider itself survived long enough to enqueue and write packets
+  - connector-side `to-mux` and `from-mux` PCAPs plus JSONL session manifests prove whether the localhost UDP seam stayed alive and provide direct replay input for host-side synthetic crash reproduction
 
 ### 3. Build A Minimal Native TUN Smoke Path
 

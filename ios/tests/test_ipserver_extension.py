@@ -158,6 +158,107 @@ def test_ios_extension_runtime_disables_admin_web_auth_for_flat_config() -> None
     assert normalized["ios_admin_web_auth_policy"] == "disabled_in_extension_runtime"
 
 
+def test_simple_udp_peer_settings_can_be_loaded_from_grouped_config(monkeypatch) -> None:
+    monkeypatch.delenv("OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR", raising=False)
+    monkeypatch.delenv("OBSTACLEBRIDGE_IOS_PACKETFLOW_PEER_HOST", raising=False)
+    monkeypatch.delenv("OBSTACLEBRIDGE_IOS_PACKETFLOW_PEER_PORT", raising=False)
+
+    settings = ipserver_runtime._simple_udp_peer_settings(
+        {
+            "ios_experiment": {
+                "packetflow_connector": "simple_udp_peer",
+                "peer_host": "10.10.1.6",
+                "peer_port": 5555,
+                "bind_host": "0.0.0.0",
+                "bind_port": 5555,
+            }
+        }
+    )
+
+    assert settings == {
+        "connector_mode": "simple_udp_peer",
+        "peer_host": "10.10.1.6",
+        "peer_port": 5555,
+        "bind_host": "0.0.0.0",
+        "bind_port": 5555,
+        "ifname": "ios-utun",
+        "mtu": 1280,
+    }
+
+
+def test_start_embedded_webadmin_can_boot_simple_udp_peer_runtime(monkeypatch) -> None:
+    events: list[tuple[str, dict[str, object]]] = []
+
+    monkeypatch.setattr(
+        ipserver_runtime,
+        "log_provider_event",
+        lambda _root, event, **fields: events.append((event, fields)),
+    )
+    monkeypatch.setattr(ipserver_runtime, "log_event", lambda *_args, **_kwargs: None)
+
+    class FakeClient:
+        def __init__(self, config, config_path=None, apply_logging=False):
+            self.config = config
+            self.runner = None
+            self.start_calls: list[dict[str, object]] = []
+            self.stop_calls = 0
+            self._args = None
+
+        async def start(self, config=None, packet_io=None) -> None:
+            self.start_calls.append(dict(config or {}))
+
+        async def stop(self) -> None:
+            self.stop_calls += 1
+
+        def snapshot(self) -> dict[str, object]:
+            return {"started": False, "config": self.config}
+
+    class FakeSimpleRuntime:
+        def __init__(self, documents_root, loop):
+            self.documents_root = documents_root
+            self.loop = loop
+            self.start_calls: list[tuple[dict[str, object], str]] = []
+            self.stop_calls = 0
+            self.config: dict[str, object] = {}
+
+        async def start(self, config, *, tunnel_address: str) -> None:
+            self.config = dict(config)
+            self.start_calls.append((dict(config), tunnel_address))
+
+        async def stop(self) -> None:
+            self.stop_calls += 1
+
+        def snapshot(self) -> dict[str, object]:
+            return {"started": True, "status": {"runtime_mode": "simple_udp_peer"}, "config": self.config}
+
+    monkeypatch.setattr(ipserver_runtime, "ObstacleBridgeClient", FakeClient)
+    monkeypatch.setattr(ipserver_runtime, "_SimpleUDPPeerRuntime", FakeSimpleRuntime)
+
+    def _run_async_sync(self, awaitable):
+        return asyncio.run(awaitable)
+
+    monkeypatch.setattr(IPServerRuntimeController, "_run_async_sync", _run_async_sync)
+    monkeypatch.setattr(IPServerRuntimeController, "_ensure_runtime_loop", lambda self: SimpleNamespace())
+
+    controller = IPServerRuntimeController()
+    snapshot = controller.start_embedded_webadmin(
+        {
+            "ios_experiment": {
+                "packetflow_connector": "simple_udp_peer",
+                "peer_host": "10.10.1.6",
+                "peer_port": 5555,
+            }
+        }
+    )
+
+    assert snapshot["started"] is True
+    assert snapshot["status"]["runtime_mode"] == "simple_udp_peer"
+    assert isinstance(controller._simple_udp_peer_runtime, FakeSimpleRuntime)
+    assert controller._simple_udp_peer_runtime.start_calls
+    assert controller.client.start_calls == []
+    assert any(event == "python_runtime_start_completed" and fields.get("runtime_mode") == "simple_udp_peer" for event, fields in events)
+
+
 def test_embedded_restart_reload_reads_grouped_config_and_restarts_client(monkeypatch) -> None:
     events: list[tuple[str, dict[str, object]]] = []
 

@@ -7,7 +7,7 @@ if [ -f "${SCRIPT_DIR}/.local-device-env" ]; then
   . "${SCRIPT_DIR}/.local-device-env"
 fi
 
-export LOG_DIR="${SCRIPT_DIR}/../.logs/obstaclebridge-logs"
+export LOG_DIR="${SCRIPT_DIR}/../.logs/fedora"
 
 rm -Rf "${LOG_DIR}"
 mkdir -p "${LOG_DIR}"

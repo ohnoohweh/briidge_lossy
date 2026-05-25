@@ -32,6 +32,17 @@ def provider_log_path(documents_root: Path) -> Path:
     return diagnostics_root(documents_root) / "ipserver-native-provider.jsonl"
 
 
+def udp_connector_log_path(documents_root: Path) -> Path:
+    return diagnostics_root(documents_root) / "ipserver-udp-connector.jsonl"
+
+
+def component_state_path(documents_root: Path, component: str) -> Path:
+    slug = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in str(component).strip().lower()).strip("-")
+    if not slug:
+        slug = "component"
+    return diagnostics_root(documents_root) / f"{slug}-state.json"
+
+
 def _json_default(value: Any) -> str:
     return repr(value)
 
@@ -59,6 +70,25 @@ def append_jsonl(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(dict(payload), sort_keys=True, default=_json_default) + "\n")
+
+
+def write_state(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(dict(payload), indent=2, sort_keys=True, default=_json_default) + "\n", encoding="utf-8")
+
+
+def update_component_state(documents_root: Path, component: str, **fields: Any) -> None:
+    payload = {
+        "ts": time.time(),
+        "pid": os.getpid(),
+        "component": str(component),
+        "build": _detect_build_info(),
+        **fields,
+    }
+    try:
+        write_state(component_state_path(documents_root, component), payload)
+    except Exception:
+        pass
 
 
 def log_provider_event(documents_root: Path, event: str, **fields: Any) -> None:
@@ -141,6 +171,8 @@ def install_crash_hooks(documents_root: Path) -> None:
         sys.unraisablehook = _unraisable_hook
 
     atexit.register(lambda: log_event(root, "python.atexit"))
+    atexit.register(lambda: update_component_state(root, "python-runtime", state="atexit"))
+    update_component_state(root, "python-runtime", state="hooks_installed")
     log_event(root, "python.diagnostics_hooks_installed", crypto_extract=available_crypto_extract())
 
 
@@ -161,6 +193,13 @@ def snapshot(documents_root: Path, *, max_events: int = 40) -> dict[str, Any]:
     return {
         "documents_root": str(root),
         "event_log": str(path),
+        "provider_log": str(provider_log_path(root)),
+        "udp_connector_log": str(udp_connector_log_path(root)),
+        "component_state_files": {
+            "python_runtime": str(component_state_path(root, "python-runtime")),
+            "native_provider": str(diagnostics_root(root) / "ipserver-native-provider-state.json"),
+            "udp_connector": str(diagnostics_root(root) / "ipserver-udp-connector-state.json"),
+        },
         "events": events,
         "build": _detect_build_info(),
         "crypto_extract": available_crypto_extract(),
