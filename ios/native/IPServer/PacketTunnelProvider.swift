@@ -230,6 +230,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         "mtu": configuration.mtu,
                     ]
                 )
+                if let connectorMode = self.packetflowConnectorMode(providerConfiguration: providerConfiguration) {
+                    self.runtimeMode = connectorMode == "simple_udp_peer" ? "simple_udp_peer" : "python_runtime"
+                    self.recordNativeEvent(
+                        "packetflow_connector_mode_selected",
+                        fields: ["mode": connectorMode]
+                    )
+                    self.updateProviderState(
+                        "packetflow_connector_mode_selected",
+                        extraFields: ["mode": connectorMode]
+                    )
+                }
                 if let swiftSettings = self.swiftSimpleUDPPeerSettings(
                     providerConfiguration: providerConfiguration,
                     defaultMTU: configuration.mtu
@@ -684,6 +695,31 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return settings
         }
         return nil
+    }
+
+    private func packetflowConnectorMode(providerConfiguration: [String: Any]?) -> String? {
+        if let payload = loadSharedRuntimeConfigJSON(),
+           let mode = Self.packetflowConnectorMode(from: payload) {
+            return mode
+        }
+        if let runtimeConfig = providerConfiguration?["runtime_config"] as? [String: Any],
+           let mode = Self.packetflowConnectorMode(from: runtimeConfig) {
+            return mode
+        }
+        return nil
+    }
+
+    private static func packetflowConnectorMode(from payload: [String: Any]) -> String? {
+        guard let experiment = payload["ios_experiment"] as? [String: Any] else {
+            return nil
+        }
+        let connectorMode = (experiment["packetflow_connector"] as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !connectorMode.isEmpty else {
+            return nil
+        }
+        return connectorMode
     }
 
     private static func swiftSimpleUDPPeerSettings(

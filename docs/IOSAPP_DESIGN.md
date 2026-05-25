@@ -585,32 +585,35 @@ App-to-extension contract:
 - Use an approved secret boundary for PSK/password/key material. Plaintext secrets must not be written into normal app files.
 - Do not rely on `.git` metadata in the deployed package. Build/version metadata must be generated into package files during build.
 
-### Swift-Only UDP Repro Baseline
+### UDP Repro Baseline
 
-The repository should preserve one intentionally small iOS packet-tunnel mode whose job is only to prove packet-flow stability independent of the larger ObstacleBridge runtime.
+The repository should preserve one intentionally small iOS packet-tunnel ladder whose job is to prove packet-flow stability before higher-layer runtime features are brought back into the path.
 
 Design rules for this baseline:
 
 - The provider applies the normal `NEPacketTunnelNetworkSettings`, including dual-stack addresses, DNS, routes, and MTU.
-- After settings are active, the extension runs a Swift-owned packet ferry selected by `ios_experiment.packetflow_connector = "swift_simple_udp_peer"`.
-- In this mode the extension must bypass Python, ChannelMux, WebAdmin, and SecureLink entirely.
-- The packet path is:
+- Two connector modes define the repro ladder:
+  - `swift_simple_udp_peer` is the control mode that bypasses Python, ChannelMux, WebAdmin, and SecureLink entirely.
+  - `simple_udp_peer` restores Python while still keeping ChannelMux, SecureLink, and overlay sessions out of the packet path.
+- The packet path for both modes is:
   - `NEPacketTunnelFlow.readPackets`
-  - Swift UDP sender to the Fedora peer
-  - Swift UDP receiver from the Fedora peer
+  - UDP sender to the Fedora peer
+  - UDP receiver from the Fedora peer
   - `NEPacketTunnelFlow.writePackets`
 - The Fedora peer is a host-side raw-IP UDP/TUN ferry configured by `run_test_setup.sh` and `run_test.sh`.
 
 Operational expectations for this baseline:
 
-- It is the reference environment for answering whether iOS `NEPacketTunnelFlow` remains stable under routed IPv4 and IPv6 traffic when the extension logic is kept minimal.
-- Stability of this mode is more important than feature coverage. If this mode is unstable, higher-layer experiments are not trustworthy.
+- It is the reference environment for answering whether iOS `NEPacketTunnelFlow` remains stable under routed IPv4 and IPv6 traffic while the packet path is kept minimal.
+- `swift_simple_udp_peer` is the lowest-level control. `simple_udp_peer` is the promoted baseline once the same traffic pattern remains stable with Python reintroduced.
+- Stability of these modes is more important than feature coverage. If either mode is unstable, higher-layer experiments are not trustworthy.
 - The provider must emit compact native state and heartbeat records during the run and must record an explicit `userInitiated` stop when the tunnel is stopped manually.
 - The Fedora bridge may add routing, NAT, and policy-routing mechanics, but it must not alter packet payloads beyond what normal Linux forwarding requires.
 
 Current known-good baseline:
 
-- iOS runtime mode: `swift_simple_udp_peer`
+- iOS runtime mode: `simple_udp_peer`
+- Control mode retained for comparison: `swift_simple_udp_peer`
 - Tunnel MTU: `1600`
 - Fedora peer transport: UDP port `5555`
 - Fedora TUN interface: `obexp0`
