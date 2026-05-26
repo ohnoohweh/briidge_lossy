@@ -311,9 +311,46 @@ class MyUdpReliabilityRequirementUnitTests(unittest.TestCase):
         session.reset_sender()
 
         self.assertEqual(session.next_ctr, 1)
-        self.assertEqual(session.expected, 1)
         self.assertEqual(session.in_flight(), 0)
         self.assertEqual(session.waiting_count(), 0)
+        self.assertEqual(session.send_buf, {})
+        self.assertEqual(session.send_meta, {})
+        self.assertEqual(session.send_txns, {})
+        self.assertEqual(session.last_retx_ns, {})
+        self.assertEqual(session.send_attempts, {})
+        self.assertEqual(session.data_pkt_flags, {})
+        self.assertEqual(session.expected, 1)
+        self.assertEqual(set(session.pending), {2})
+        self.assertEqual(session.missing, {1})
+
+    def test_myudp_sender_reset_preserves_receiver_gap_state_and_allows_recovery(self):
+        session, transport = self._session_and_transport(max_in_flight=1)
+        session.send_application_payload(b"before", transport)
+        session.send_application_payload(b"queued", transport)
+
+        pkt2 = DataPacket.build_full(2, FRAME_CONT, 3, b"def")
+        pkt3 = DataPacket.build_full(3, FRAME_CONT, 6, b"ghi")
+        _advanced, completed = session.process_data(pkt2)
+        self.assertEqual(completed, [])
+        _advanced, completed = session.process_data(pkt3)
+        self.assertEqual(completed, [])
+        self.assertEqual(session.expected, 1)
+        self.assertEqual(set(session.pending), {2, 3})
+        self.assertEqual(session.missing, {1})
+
+        session.reset_sender()
+
+        self.assertEqual(session.next_ctr, 1)
+        self.assertEqual(session.in_flight(), 0)
+        self.assertEqual(session.waiting_count(), 0)
+        self.assertEqual(session.expected, 1)
+        self.assertEqual(set(session.pending), {2, 3})
+        self.assertEqual(session.missing, {1})
+
+        pkt1 = DataPacket.build_full(1, FRAME_FIRST, 9, b"abc")
+        _advanced, completed = session.process_data(pkt1)
+        self.assertEqual(completed, [b"abcdefghi"])
+        self.assertEqual(session.expected, 4)
         self.assertEqual(session.pending, {})
         self.assertEqual(session.missing, set())
 

@@ -601,12 +601,20 @@ Design rules for this baseline:
   - UDP receiver from the Fedora peer
   - `NEPacketTunnelFlow.writePackets`
 - The Fedora peer is a host-side raw-IP UDP/TUN ferry configured by `run_test_setup.sh` and `run_test.sh`.
+- Packet handling on the iOS side should favor fairness over burst throughput. Hot-path queue draining should process one packet or one meaningful unit of work, then cooperatively yield back to the event loop before continuing. In async code this means `await asyncio.sleep(0)`; in callback-driven code it means rescheduling the continuation with `loop.call_soon(...)` instead of draining a whole queue in one turn.
+- Yield behavior should be observable. For callback-driven continuations, record the time between `loop.call_soon(...)` and the continuation actually running. This "yield gap" is the callback-side equivalent of measuring how quickly `await asyncio.sleep(0)` returns, and it helps show whether heavy load is stretching event-loop turn granularity.
+- This fairness rule applies at every high-volume ingress boundary that can fan out work toward `NEPacketTunnelFlow`, including:
+  - native packetflow bridge reads
+  - local packetflow-to-ChannelMux UDP seam delivery
+  - overlay UDP (`myudp`) datagram ingestion
+  - ChannelMux app-payload dispatch from the overlay session into protocol/service handlers
 
 Operational expectations for this baseline:
 
 - It is the reference environment for answering whether iOS `NEPacketTunnelFlow` remains stable under routed IPv4 and IPv6 traffic while the packet path is kept minimal.
 - `swift_simple_udp_peer` is the lowest-level control. `simple_udp_peer` is the promoted baseline once the same traffic pattern remains stable with Python reintroduced.
 - Stability of these modes is more important than feature coverage. If either mode is unstable, higher-layer experiments are not trustworthy.
+- Added latency under burst is acceptable if it prevents long uninterrupted execution slices inside the Network Extension. The design preference is "slow down before you monopolize the loop."
 - The provider must emit compact native state and heartbeat records during the run and must record an explicit `userInitiated` stop when the tunnel is stopped manually.
 - The Fedora bridge may add routing, NAT, and policy-routing mechanics, but it must not alter packet payloads beyond what normal Linux forwarding requires.
 

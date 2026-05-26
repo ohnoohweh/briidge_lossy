@@ -112,6 +112,27 @@ def _parse_interface_address(value: Any, *, version: Optional[int] = None) -> tu
     return str(net.ip), int(net.network.prefixlen)
 
 
+def _override_network_settings(
+    config: Mapping[str, Any],
+    base: M3NetworkSettings,
+) -> M3NetworkSettings:
+    group = config.get("ios_tunnel_network")
+    if not isinstance(group, Mapping):
+        return base
+    return M3NetworkSettings(
+        tunnel_address=str(group.get("tunnel_address") or base.tunnel_address).strip() or base.tunnel_address,
+        tunnel_prefix=int(group.get("tunnel_prefix") or base.tunnel_prefix),
+        included_routes=list(group.get("included_routes") or list(base.included_routes)),
+        excluded_routes=list(group.get("excluded_routes") or list(base.excluded_routes)),
+        tunnel_address6=str(group.get("tunnel_address6") or base.tunnel_address6).strip(),
+        tunnel_prefix6=int(group.get("tunnel_prefix6") or base.tunnel_prefix6),
+        included_routes6=list(group.get("included_routes6") or list(base.included_routes6)),
+        excluded_routes6=list(group.get("excluded_routes6") or list(base.excluded_routes6)),
+        dns_servers=list(group.get("dns_servers") or list(base.dns_servers)),
+        mtu=int(group.get("mtu") or base.mtu),
+    )
+
+
 def _prefix_from_subnet(value: Any, *, version: Optional[int] = None) -> int | None:
     text = str(value or "").strip()
     if not text:
@@ -171,7 +192,9 @@ def network_settings_from_runtime_config(
                 chosen_address, chosen_prefix = parsed4
             if parsed6 is not None:
                 chosen_address6, chosen_prefix6 = parsed6
-            return M3NetworkSettings(
+            return _override_network_settings(
+                config,
+                M3NetworkSettings(
                 tunnel_address=chosen_address,
                 tunnel_prefix=chosen_prefix,
                 included_routes=list(DEFAULT_IOS_INCLUDED_ROUTES),
@@ -182,6 +205,7 @@ def network_settings_from_runtime_config(
                 excluded_routes6=list(DEFAULT_IOS_EXCLUDED_ROUTES6) if chosen_address6 else [],
                 dns_servers=list(dns_servers or ["1.1.1.1"]),
                 mtu=int(service.get("listen", {}).get("mtu") or mtu),
+                ),
             )
 
     remote_tun_services = [
@@ -227,7 +251,9 @@ def network_settings_from_runtime_config(
                     chosen_prefix6 = int(prefix6)
             if not peer_addr and not peer_addr6:
                 continue
-            return M3NetworkSettings(
+            return _override_network_settings(
+                config,
+                M3NetworkSettings(
                 tunnel_address=chosen_address,
                 tunnel_prefix=chosen_prefix,
                 included_routes=list(DEFAULT_IOS_INCLUDED_ROUTES),
@@ -238,9 +264,12 @@ def network_settings_from_runtime_config(
                 excluded_routes6=list(DEFAULT_IOS_EXCLUDED_ROUTES6) if chosen_address6 else [],
                 dns_servers=list(dns_servers or ["1.1.1.1"]),
                 mtu=int(service.get("target", {}).get("mtu") or service.get("listen", {}).get("mtu") or mtu),
+                ),
             )
 
-    return M3NetworkSettings(
+    return _override_network_settings(
+        config,
+        M3NetworkSettings(
         tunnel_address=chosen_address,
         tunnel_prefix=chosen_prefix,
         included_routes=list(DEFAULT_IOS_INCLUDED_ROUTES),
@@ -251,6 +280,7 @@ def network_settings_from_runtime_config(
         excluded_routes6=list(DEFAULT_IOS_EXCLUDED_ROUTES6) if chosen_address6 else [],
         dns_servers=list(dns_servers or ["1.1.1.1"]),
         mtu=int(mtu),
+        ),
     )
 
 

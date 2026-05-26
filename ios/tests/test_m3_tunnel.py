@@ -168,6 +168,47 @@ def test_network_settings_from_runtime_config_can_fallback_to_remote_peer_addr()
     assert settings.excluded_routes6 == ["::1/128"]
 
 
+def test_network_settings_from_runtime_config_applies_ios_tunnel_network_override() -> None:
+    settings = network_settings_from_runtime_config(
+        {
+            "ios_tunnel_network": {
+                "included_routes": ["198.18.0.254/32"],
+                "excluded_routes": ["0.0.0.0/0"],
+                "included_routes6": ["2001:db8:ffff::254/128"],
+                "excluded_routes6": ["::/0"],
+                "dns_servers": ["9.9.9.9"],
+                "mtu": 1600,
+            },
+            "channel_mux": {
+                "own_servers": [
+                    {
+                        "listen": {"protocol": "tun", "ifname": "ios-utun", "mtu": 1400},
+                        "target": {"protocol": "tun", "ifname": "obtun1", "mtu": 1400},
+                        "lifecycle_hooks": {
+                            "listener": {
+                                "on_created": {
+                                    "env": {"TUN_ADDR": "192.168.105.1/30", "TUN_ADDR6": "fd20:105::1/126"}
+                                }
+                            }
+                        },
+                    }
+                ]
+            },
+        }
+    )
+
+    assert settings.tunnel_address == "192.168.105.1"
+    assert settings.tunnel_prefix == 30
+    assert settings.included_routes == ["198.18.0.254/32"]
+    assert settings.excluded_routes == ["0.0.0.0/0"]
+    assert settings.tunnel_address6 == "fd20:105::1"
+    assert settings.tunnel_prefix6 == 126
+    assert settings.included_routes6 == ["2001:db8:ffff::254/128"]
+    assert settings.excluded_routes6 == ["::/0"]
+    assert settings.dns_servers == ["9.9.9.9"]
+    assert settings.mtu == 1600
+
+
 def test_provider_status_request_message_is_versioned() -> None:
     payload = provider_status_request_message(request_id="req-123")
 

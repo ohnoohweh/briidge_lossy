@@ -115,14 +115,50 @@ class AdminWebUI:
         self._secret_reveal_challenges: Dict[str, dict] = {}
         self._active_client_writers: Set[Any] = set()
 
+    @staticmethod
+    def _make_listener_socket(host: str, port: int) -> socket.socket:
+        infos = socket.getaddrinfo(
+            host,
+            port,
+            family=socket.AF_UNSPEC,
+            type=socket.SOCK_STREAM,
+            proto=socket.IPPROTO_TCP,
+            flags=socket.AI_PASSIVE,
+        )
+        if not infos:
+            raise OSError(f"getaddrinfo() returned no results for {host}:{port}")
+        last_error = None
+        for family, socktype, proto, _canonname, sockaddr in infos:
+            sock = None
+            try:
+                sock = socket.socket(family, socktype, proto)
+                sock.setblocking(False)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if hasattr(socket, "SO_NOSIGPIPE"):
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_NOSIGPIPE, 1)
+                sock.bind(sockaddr)
+                sock.listen(socket.SOMAXCONN)
+                return sock
+            except Exception as exc:
+                last_error = exc
+                if sock is not None:
+                    with contextlib.suppress(Exception):
+                        sock.close()
+        if last_error is not None:
+            raise last_error
+        raise OSError(f"Could not create admin web listener for {host}:{port}")
+
     async def start(self):
         if not getattr(self.args, "admin_web", False):
             return
 
+        listener_sock = self._make_listener_socket(
+            str(self.args.admin_web_bind),
+            int(self.args.admin_web_port),
+        )
         self.server = await asyncio.start_server(
             self._handle_client,
-            host=self.args.admin_web_bind,
-            port=self.args.admin_web_port,
+            sock=listener_sock,
         )
 
         self.log.info(

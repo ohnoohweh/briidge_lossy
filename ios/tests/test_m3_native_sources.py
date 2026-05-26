@@ -204,6 +204,8 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "TUN_SUBNET6" in control
     assert "findLocalIOSTunnelService" in control
     assert "findRemoteTunnelServiceTargetingIOS" in control
+    assert 'payload["ios_tunnel_network"]' in control
+    assert "applyNetworkOverride(" in control
     assert "loadRuntimeConfigJSON" in control
     assert "ios-native-tunnel-control.jsonl" in control
     assert "DispatchSemaphore" not in control

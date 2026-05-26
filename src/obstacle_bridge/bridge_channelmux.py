@@ -412,6 +412,9 @@ class ChannelMux:
         self._udp_client_pending_cap: int = 1024  # max queued datagrams per channel (tweak as needed)
         self._udp_frag_next_datagram_id: int = 1
         self._udp_frag_rx: dict[tuple[int, int], dict[str, Any]] = {}
+        self._peer_app_payload_yield_count: int = 0
+        self._peer_app_payload_last_yield_gap_ms: float = 0.0
+        self._peer_app_payload_max_yield_gap_ms: float = 0.0
 
         # TCP maps
         # chan -> (svc_id, writer)
@@ -476,6 +479,8 @@ class ChannelMux:
         self._udp_client_svc_id: Dict[int, int] = {}
         self._tcp_role_by_chan: Dict[int, str] = {}
         self._warn_dumped_channel_config: bool = False
+        self._peer_app_payload_pending: Deque[Tuple[bytes, Optional[int]]] = deque()
+        self._peer_app_payload_scheduled: bool = False
 
         # Session payload hook
         try:
@@ -2252,7 +2257,45 @@ class ChannelMux:
         return True
 
     # ---------- MUX RX demux ----------
+    def _schedule_peer_app_payload_dispatch(self) -> None:
+        if self._peer_app_payload_scheduled:
+            return
+        self._peer_app_payload_scheduled = True
+        scheduled_at = time.perf_counter()
+
+        def _run() -> None:
+            self._peer_app_payload_scheduled = False
+            self._record_yield_gap("peer_app_payload", scheduled_at, "channelmux_peer_app_payload")
+            self._dispatch_one_peer_app_payload()
+
+        self.loop.call_soon(_run)
+
+    def _record_yield_gap(self, prefix: str, scheduled_at: float, stage: str) -> None:
+        gap_ms = max(0.0, (time.perf_counter() - float(scheduled_at)) * 1000.0)
+        count_attr = f"_{prefix}_yield_count"
+        last_attr = f"_{prefix}_last_yield_gap_ms"
+        max_attr = f"_{prefix}_max_yield_gap_ms"
+        count = int(getattr(self, count_attr, 0) or 0) + 1
+        setattr(self, count_attr, count)
+        setattr(self, last_attr, gap_ms)
+        setattr(self, max_attr, max(float(getattr(self, max_attr, 0.0) or 0.0), gap_ms))
+        if gap_ms >= 20.0 or count <= 3 or (count % 256) == 0:
+            self.log.info("[MUX/YIELD] stage=%s count=%s gap_ms=%.3f", stage, count, gap_ms)
+
+    def _dispatch_one_peer_app_payload(self) -> None:
+        if not self._peer_app_payload_pending:
+            return
+        buf, peer_id = self._peer_app_payload_pending.popleft()
+        self._handle_app_payload_from_peer(buf, peer_id=peer_id)
+        if self._peer_app_payload_pending:
+            self._schedule_peer_app_payload_dispatch()
+
     def on_app_payload_from_peer(self, buf: bytes, peer_id: Optional[int] = None) -> bool:
+        self._peer_app_payload_pending.append((bytes(buf), peer_id))
+        self._schedule_peer_app_payload_dispatch()
+        return True
+
+    def _handle_app_payload_from_peer(self, buf: bytes, peer_id: Optional[int] = None) -> bool:
         self.log.debug(f"[MUX] APP data receiving on session id=%x", id(self))
         try:
             self._log_app_msg("<-",buf)
