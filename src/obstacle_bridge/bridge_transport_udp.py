@@ -100,6 +100,7 @@ CONTROL_FIXED_BASE = 2 + 2 + 2 # last(2) + highest(2) + num_missed(2)
 RETRANSMIT_UNCONFIRMED_MS = 25
 RTT_EWMA_ALPHA = 0.125
 RETRANS_MULTIPLIER = 1.5
+PERSISTENT_MISSING_RETRANS_MULTIPLIER = 1.0
 IDLE_AFTER_MS = 2000
 IDLE_CHECK_MS = 200
 class Protocol:
@@ -621,6 +622,7 @@ class Session:
         self.last_retx_ns: Dict[int, int] = {}
         self.send_attempts: Dict[int, int] = {}
         self.data_pkt_flags: Dict[int, bool] = {}
+        self.peer_reported_missing: Set[int] = set()
         self.stats_hist = {
             "once": 0, "twice": 0, "thrice": 0, "gt3": 0,
             "confirmed_total": 0, "created_total": 0,
@@ -759,9 +761,9 @@ class Session:
         if last_in_order == 0 and highest == 0 and len(missed) == 0:
             return
         missed_set = set(missed)
-        full_list = len(missed) >= CONTROL_MAX_MISSED
+        list_at_capacity = len(missed) >= CONTROL_MAX_MISSED
         if self.log.isEnabledFor(logging.DEBUG):
-            self.log.debug(f"[CTL<-] LIO={last_in_order} HI={highest} missed_count={len(missed)} full_list={full_list}")
+            self.log.debug(f"[CTL<-] LIO={last_in_order} HI={highest} missed_count={len(missed)} full_list={list_at_capacity}")
         # delete <= last_in_order
         to_del = [cnt for cnt in list(self.send_buf.keys())
                   if ring_cmp(last_in_order, cnt) >= 0]
@@ -771,10 +773,11 @@ class Session:
             self.send_txns.pop(cnt, None)
             self.last_retx_ns.pop(cnt, None)
             self.send_meta.pop(cnt, None)
+            self.peer_reported_missing.discard(cnt)
         if self.log.isEnabledFor(logging.DEBUG) and to_del:
             self.log.debug(f"[ACK] drop <= LIO: {to_del[:20]}{'…' if len(to_del)>20 else ''}")
         ref = last_in_order if last_in_order != 0 else 1
-        if full_list and missed:
+        if list_at_capacity and missed:
             max_missed = highest_ring(missed, ref)
             upper_bound = max_missed if max_missed is not None else last_in_order
         else:
@@ -784,15 +787,18 @@ class Session:
             d = ahead_distance(x, ref)
             return 0 < d <= max_span
         to_del2 = [cnt for cnt in list(self.send_buf.keys())
-                   if in_range(cnt) and cnt not in missed_set]
+                   if in_range(cnt) and cnt not in missed_set and cnt not in self.peer_reported_missing]
         for cnt in to_del2:
             self._finalize_stats_for(cnt)
             self.send_buf.pop(cnt, None)
             self.send_txns.pop(cnt, None)
             self.last_retx_ns.pop(cnt, None)
             self.send_meta.pop(cnt, None)
+            self.peer_reported_missing.discard(cnt)
         if self.log.isEnabledFor(logging.DEBUG) and to_del2:
             self.log.debug(f"[ACK] drop within span(non-missed): {to_del2[:20]}{'…' if len(to_del2)>20 else ''}")
+        self.peer_reported_missing.intersection_update(self.send_buf.keys())
+        self.peer_reported_missing.update(cnt for cnt in missed_set if cnt in self.send_buf and cnt != 0)
         self.last_ack_peer = last_in_order
     # ------------- RTT mirrors -------------
     @property
@@ -932,6 +938,7 @@ class Session:
         self.send_meta.clear()
         self.send_txns.clear()
         self.last_retx_ns.clear()
+        self.peer_reported_missing.clear()
         self.wait_queue.clear()
         self.send_attempts.clear()
         self.data_pkt_flags.clear()
@@ -1242,72 +1249,87 @@ class PeerProtocol(asyncio.DatagramProtocol):
             if elapsed:
                 self._emit_control(now_t, reason="timer_paced_with_missing")
     # ---- loss mitigation (owner: PeerProtocol) ----
+    def _retrans_window_ns(self, multiplier: float) -> int:
+        return max(1, int(self.session.rtt_est_ms * 1e6 * float(multiplier)))
+
+    def _retransmit_counters(self, counters: List[int], *, reason: str, window_ns: int, use_first_tx_when_no_retx: bool) -> List[int]:
+        if self.send_port is None or not counters:
+            return []
+        s = self.session
+        now = now_ns()
+        retx_list: List[int] = []
+        seen: Set[int] = set()
+        for cnt in counters:
+            if cnt == 0 or cnt in seen:
+                continue
+            seen.add(cnt)
+            meta = s.send_meta.get(cnt)
+            if meta is None:
+                if self.session.log.isEnabledFor(logging.DEBUG):
+                    self.session.log.debug("[RTX] skip cnt=%d reason=no_send_meta", cnt)
+                continue
+            last_retx = s.last_retx_ns.get(cnt, 0)
+            first_tx = s.send_txns.get(cnt, 0) if use_first_tx_when_no_retx else 0
+            anchor = last_retx or first_tx
+            if anchor and (now - anchor) < window_ns:
+                continue
+            frame = s._rebuild_data_frame(cnt, meta, now)
+            try:
+                self.send_port.sendto(frame)
+            except Exception:
+                continue
+            s.send_buf[cnt] = frame
+            s.last_retx_ns[cnt] = now
+            s.last_send_ns = now
+            s._bump_attempt(cnt)
+            retx_list.append(cnt)
+        if self.session.log.isEnabledFor(logging.DEBUG) and retx_list:
+            self.session.log.debug(
+                f"[RTX] {reason} cnts={sorted(retx_list)[:32]}{'…' if len(retx_list)>32 else ''} "
+                f"window_ms={window_ns / 1e6:.2f}"
+            )
+        return retx_list
+
     def _schedule_retrans(self, missed: List[int]) -> None:
         if self.send_port is None or not missed:
             self.session.peer_missed_count = len(missed)
             return
         s = self.session
         s.peer_missed_count = len(missed)
-        now = now_ns()
-        window = int(s.rtt_est_ms * 1e6 * RETRANS_MULTIPLIER)
-        retx_list: List[int] = []
-        for cnt in missed:
-            if cnt == 0:
-                continue
-            meta = s.send_meta.get(cnt)
-            if meta is None:
-                if self.session.log.isEnabledFor(logging.DEBUG):
-                    self.session.log.debug("[RTX] skip cnt=%d reason=no_send_meta", cnt)
-                continue
-            last = s.last_retx_ns.get(cnt, 0)
-            if last and (now - last) < window:
-                continue
-            frame = s._rebuild_data_frame(cnt, meta, now)
-            try:
-                self.send_port.sendto(frame)
-            except Exception:
-                continue
-            s.send_buf[cnt] = frame
-            s.last_retx_ns[cnt] = now
-            s.last_send_ns = now
-            s._bump_attempt(cnt)
-            retx_list.append(cnt)
-        if self.session.log.isEnabledFor(logging.DEBUG) and retx_list:
-            self.session.log.debug(f"[RTX] due_to_control cnts={sorted(retx_list)[:32]}{'…' if len(retx_list)>32 else ''} window_ms={s.rtt_est_ms*RETRANS_MULTIPLIER:.2f}")
+        self._retransmit_counters(
+            missed,
+            reason="due_to_control",
+            window_ns=self._retrans_window_ns(PERSISTENT_MISSING_RETRANS_MULTIPLIER),
+            use_first_tx_when_no_retx=False,
+        )
+
+    def _retx_sweep_reported_missing(self) -> None:
+        if self.send_port is None:
+            return
+        s = self.session
+        if not s.peer_reported_missing:
+            return
+        missing_counters = sorted(cnt for cnt in s.peer_reported_missing if cnt in s.send_buf and cnt != 0)
+        s.peer_reported_missing.intersection_update(missing_counters)
+        self._retransmit_counters(
+            missing_counters,
+            reason="persistent_missing",
+            window_ns=self._retrans_window_ns(PERSISTENT_MISSING_RETRANS_MULTIPLIER),
+            use_first_tx_when_no_retx=True,
+        )
+
     def _retx_sweep_unconfirmed(self) -> None:
         if self.send_port is None:
             return
         s = self.session
         if not s.send_buf:
             return
-        now = now_ns()
-        window = int(s.rtt_est_ms * 1e6 * RETRANS_MULTIPLIER)
-        retx_list: List[int] = []
-        for cnt, raw in list(s.send_buf.items()):
-            if cnt == 0:
-                continue
-            last_retx = s.last_retx_ns.get(cnt, 0)
-            first_tx = s.send_txns.get(cnt, 0)
-            last_any = max(last_retx, first_tx)
-            if window and (now - last_any) < window:
-                continue
-            meta = s.send_meta.get(cnt)
-            if meta is None:
-                if self.session.log.isEnabledFor(logging.DEBUG):
-                    self.session.log.debug("[RTX] skip cnt=%d reason=no_send_meta", cnt)
-                continue
-            frame = s._rebuild_data_frame(cnt, meta, now)
-            try:
-                self.send_port.sendto(frame)
-            except Exception:
-                continue
-            s.send_buf[cnt] = frame
-            s.last_retx_ns[cnt] = now
-            s.last_send_ns = now
-            s._bump_attempt(cnt)
-            retx_list.append(cnt)
-        if self.session.log.isEnabledFor(logging.DEBUG) and retx_list:
-            self.session.log.debug(f"[RTX] timeout_sweep cnts={sorted(retx_list)[:32]}{'…' if len(retx_list)>32 else ''} window_ms={s.rtt_est_ms*RETRANS_MULTIPLIER:.2f}")
+        self._retransmit_counters(
+            list(s.send_buf.keys()),
+            reason="timeout_sweep",
+            window_ns=self._retrans_window_ns(RETRANS_MULTIPLIER),
+            use_first_tx_when_no_retx=True,
+        )
     # ---- asyncio protocol ----
     def _schedule_rx_pending(self) -> None:
         if self._rx_pending_scheduled:
@@ -1559,6 +1581,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
         try:
             while True:
                 await asyncio.sleep(RETRANSMIT_UNCONFIRMED_MS / 1000.0)
+                self._retx_sweep_reported_missing()
                 self._retx_sweep_unconfirmed()
         except asyncio.CancelledError:
             return

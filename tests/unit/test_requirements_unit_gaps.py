@@ -3,6 +3,7 @@ import asyncio
 import json
 import time
 import unittest
+from unittest import mock
 
 from obstacle_bridge.bridge import (
     AdminWebUI,
@@ -332,6 +333,74 @@ class MyUdpReliabilityRequirementUnitTests(unittest.TestCase):
 
         self.assertEqual(len(transport.frames), 2)
         self.assertEqual(session.send_attempts, original_attempts)
+
+    def test_myudp_reported_missing_frame_retries_every_rtt_until_cumulative_ack(self):
+        session, transport = self._session_and_transport()
+        session.send_application_payload(b"one", transport)
+        session.send_application_payload(b"two", transport)
+        session.send_application_payload(b"three", transport)
+
+        proto = PeerProtocol(session, lambda: None, lambda _data: None, proto=session.proto)
+        proto.send_port = transport
+        session.proto.rtt_est_ms = 100.0
+
+        session.confirm_with_feedback(last_in_order=0, highest=3, missed=[2])
+        self.assertEqual(session.peer_reported_missing, {2})
+
+        with mock.patch("obstacle_bridge.bridge_transport_udp.now_ns", return_value=session.send_txns[2] + 150_000_000):
+            proto._schedule_retrans([2])
+        self.assertEqual(session.send_attempts[2], 2)
+
+        session.confirm_with_feedback(last_in_order=0, highest=3, missed=[])
+        self.assertEqual(session.peer_reported_missing, {2})
+        self.assertIn(2, session.send_buf)
+
+        with mock.patch(
+            "obstacle_bridge.bridge_transport_udp.now_ns",
+            return_value=session.last_retx_ns[2] + 110_000_000,
+        ):
+            proto._retx_sweep_reported_missing()
+        self.assertEqual(session.send_attempts[2], 3)
+
+        session.confirm_with_feedback(last_in_order=3, highest=3, missed=[])
+        self.assertNotIn(2, session.peer_reported_missing)
+        self.assertNotIn(2, session.send_buf)
+
+    def test_myudp_persistent_missing_retries_survive_flight_window_pressure(self):
+        session, transport = self._session_and_transport(max_in_flight=200)
+        for idx in range(205):
+            session.send_application_payload(f"pkt-{idx:03d}".encode("ascii"), transport)
+
+        self.assertEqual(session.in_flight(), 200)
+        self.assertEqual(session.waiting_count(), 5)
+
+        proto = PeerProtocol(session, lambda: None, lambda _data: None, proto=session.proto)
+        proto.send_port = transport
+        session.proto.rtt_est_ms = 80.0
+
+        session.confirm_with_feedback(last_in_order=0, highest=200, missed=[1])
+        self.assertEqual(session.peer_reported_missing, {1})
+
+        before_flush = len(transport.frames)
+        session.try_flush_send_queue(transport)
+        self.assertEqual(session.waiting_count(), 0)
+        self.assertGreater(len(transport.frames), before_flush)
+
+        with mock.patch("obstacle_bridge.bridge_transport_udp.now_ns", return_value=session.send_txns[1] + 100_000_000):
+            proto._schedule_retrans([1])
+        attempts_after_control = session.send_attempts[1]
+
+        session.confirm_with_feedback(last_in_order=0, highest=205, missed=[])
+        self.assertIn(1, session.peer_reported_missing)
+        self.assertIn(1, session.send_buf)
+
+        with mock.patch(
+            "obstacle_bridge.bridge_transport_udp.now_ns",
+            return_value=session.last_retx_ns[1] + 90_000_000,
+        ):
+            proto._retx_sweep_reported_missing()
+        self.assertGreater(session.send_attempts[1], attempts_after_control)
+        self.assertIn(1, session.send_buf)
 
     def test_myudp_bidirectional_sessions_deliver_independent_payloads(self):
         left, left_tx = self._session_and_transport()

@@ -45,6 +45,8 @@ ARC-CMP-002:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_sender_reset_clears_stale_reconnect_state
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_retransmit_rebuilds_fresh_transport_timestamps
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_retransmit_skips_stale_raw_frame_when_send_meta_is_missing
+    - tests/unit/test_requirements_unit_gaps.py::test_myudp_reported_missing_frame_retries_every_rtt_until_cumulative_ack
+    - tests/unit/test_requirements_unit_gaps.py::test_myudp_persistent_missing_retries_survive_flight_window_pressure
     - tests/unit/test_myudp_processing_repro.py::test_channelmux_to_network_tx_emits_myudp_frames
     - tests/unit/test_myudp_processing_repro.py::test_network_rx_to_channelmux_edge_reassembles_large_payload
     - tests/unit/test_myudp_processing_repro.py::test_network_rx_gap_state_reproduces_stall_shape_until_missing_frame_arrives
@@ -134,6 +136,8 @@ ARC-CMP-004:
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_cli_metadata
     - tests/unit/test_embeddable_core.py::test_client_lifecycle_uses_runner_without_process_entrypoint
     - tests/unit/test_embeddable_core.py::test_memory_packet_io_round_trip_boundaries
+    - tests/unit/test_runner_events.py::test_install_process_signal_handlers_requests_shutdown
+    - tests/unit/test_runner_events.py::test_main_logs_system_exit_code
     - ios/tests/test_ipserver_extension.py::test_handle_message_connects_profile_by_id
     - ios/tests/test_ipserver_extension.py::test_handle_message_disconnects_profile
     - ios/tests/test_ipserver_extension.py::test_embedded_restart_reload_reads_grouped_config_and_restarts_client
@@ -168,6 +172,7 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_payloads.py::test_secure_link_psk_reveal_requires_password_proof_and_returns_encrypted_envelope
     - tests/unit/test_admin_web_payloads.py::test_secure_link_psk_reveal_insecure_context_notice_prefers_own_server_path
     - tests/unit/test_runner_events.py::test_get_debug_logs_falls_back_to_log_file_when_ring_is_empty
+    - tests/unit/test_debug_logging_aliases.py::test_log_file_moves_previous_session_to_lastsession_on_start
     - tests/unit/test_connection_snapshots.py::test_closed_channel_stats_are_archived_by_owner_peer
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_archived_closed_channel_payload_totals
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates

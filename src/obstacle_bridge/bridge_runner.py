@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from . import bridge as _bridge
+import contextlib as _process_contextlib
+import signal as _process_signal
 
 globals().update({
     key: value
@@ -137,6 +139,8 @@ class Runner:
         self._restart_requested_flag = False
         self._restart_exit_code: int = RESTART_EXIT_CODE_IMMEDIATE
         self._shutdown_exit_code: Optional[int] = None
+        self._shutdown_reason: str = ""
+        self._restart_reason: str = ""
         self._last_connected_monotonic: Optional[float] = None
         self._last_disconnected_monotonic: Optional[float] = None
         self._client_restart_watchdog_task: Optional[asyncio.Task] = None        
@@ -263,7 +267,7 @@ class Runner:
         finally:
             try:
                 self.log.debug("[RUNNER] wait for stop with 2.0 timeout")
-                await asyncio.wait_for(self.stop(), timeout=2.0)
+                await asyncio.wait_for(self.stop(reason="run-finally"), timeout=2.0)
             except Exception:
                 self.log.debug("[RUNNER] stop timed out during restart")
 
@@ -278,8 +282,16 @@ class Runner:
         self.log.debug("[RUNNER] Leaving stop")
 
 
-    async def stop(self):
-        self.log.debug("[SERVER] Stop entered")
+    async def stop(self, reason: str = ""):
+        stop_reason = str(reason or self._shutdown_reason or self._restart_reason or "unspecified")
+        self.log.info(
+            "[SERVER] Stop entered reason=%s shutdown_rc=%r shutdown_reason=%r restart_requested=%s restart_reason=%r",
+            stop_reason,
+            self._shutdown_exit_code,
+            self._shutdown_reason,
+            self._restart_requested_flag,
+            self._restart_reason,
+        )
 
         async def _run_stop_step(label: str, awaitable, timeout_s: float = 5.0) -> None:
             started = time.monotonic()
@@ -315,12 +327,12 @@ class Runner:
 
         self.log.debug("[RUNNER] stop: entering mux.stop")
         for idx, mux in enumerate(reversed(self._muxes)):
-            await _run_stop_step(f"mux.stop[{idx}]", mux.stop(), timeout_s=5.0)
+            await _run_stop_step(f"mux.stop[{idx}]", mux.stop(reason=stop_reason), timeout_s=5.0)
 
         self.log.debug("[RUNNER] stop: entering _session_obj")
         for idx, session in enumerate(reversed(self._sessions)):
             await _run_stop_step(f"session.stop[{idx}]", session.stop(), timeout_s=5.0)
-        self.log.debug("[RUNNER] stop leaving")
+        self.log.info("[RUNNER] stop leaving reason=%s", stop_reason)
 
 
     # ---- overlay state propagation (unchanged behavior) -----------------------
@@ -373,11 +385,12 @@ class Runner:
         parts = [item.strip().lower() for item in raw.split(",") if item.strip()]
         return "myudp" in parts
 
-    def request_restart(self) -> None:
-        self.log.debug("[SERVER] Runner restart requested")
+    def request_restart(self, reason: str = "") -> None:
+        self._restart_reason = str(reason or self._restart_reason or "unspecified")
+        self.log.info("[SERVER] Runner restart requested reason=%s", self._restart_reason)
         callback = getattr(self, "_embedded_restart_callback", None)
         if callable(callback):
-            self.log.debug("[SERVER] dispatching embedded restart callback")
+            self.log.debug("[SERVER] dispatching embedded restart callback reason=%s", self._restart_reason)
             try:
                 result = callback()
             except Exception:
@@ -1317,12 +1330,13 @@ class Runner:
             setattr(self.args, key, value)
         return self.save_runtime_config()
 
-    def request_shutdown(self, exit_code: Optional[int] = None) -> None:
+    def request_shutdown(self, exit_code: Optional[int] = None, reason: str = "") -> None:
+        self._shutdown_reason = str(reason or self._shutdown_reason or "unspecified")
         if exit_code is not None:
             self._shutdown_exit_code = int(exit_code)
-            self.log.debug("[SERVER] Runner shutdown requested rc=%d", self._shutdown_exit_code)
+            self.log.info("[SERVER] Runner shutdown requested rc=%d reason=%s", self._shutdown_exit_code, self._shutdown_reason)
         else:
-            self.log.debug("[SERVER] Runner shutdown requested")
+            self.log.info("[SERVER] Runner shutdown requested reason=%s", self._shutdown_reason)
         self._stop_requested = True
         if self._stop is not None:
             self._stop.set()
@@ -1370,7 +1384,7 @@ class Runner:
                     down_for,
                     timeout_s,
                 )
-                self.request_restart()
+                self.request_restart(reason=f"client_restart_watchdog down_for={down_for:.3f}s timeout={timeout_s:.3f}s")
                 return
 
         except asyncio.CancelledError:
@@ -2079,14 +2093,90 @@ def build_runtime_args_from_config(
     return args
 
 
+def _signal_name(signum: int) -> str:
+    with _process_contextlib.suppress(Exception):
+        return _process_signal.Signals(int(signum)).name
+    return str(signum)
+
+
+def _install_process_signal_handlers(runner: Runner, log: logging.Logger) -> list[tuple[int, object]]:
+    installed: list[tuple[int, object]] = []
+
+    def _handle_signal(signum: int, _frame: object) -> None:
+        exit_code = 128 + int(signum)
+        reason = f"signal:{_signal_name(int(signum))}"
+        log.warning(
+            "[RUNNER] process signal received signum=%d signame=%s exit_code=%d",
+            int(signum),
+            _signal_name(int(signum)),
+            exit_code,
+        )
+        runner.request_shutdown(exit_code, reason=reason)
+
+    for signum in (_process_signal.SIGINT, _process_signal.SIGTERM):
+        with _process_contextlib.suppress(Exception):
+            previous = _process_signal.getsignal(signum)
+            _process_signal.signal(signum, _handle_signal)
+            installed.append((int(signum), previous))
+    return installed
+
+
+def _restore_process_signal_handlers(installed: list[tuple[int, object]]) -> None:
+    for signum, previous in installed:
+        with _process_contextlib.suppress(Exception):
+            _process_signal.signal(signum, previous)
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     args = parse_runtime_args(argv, apply_logging=True)
-
+    log = logging.getLogger("runner")
     r = Runner(args)
+    installed_signal_handlers = _install_process_signal_handlers(r, log)
+    log.info("[RUNNER] process start pid=%s argv=%r", os.getpid(), list(argv) if argv is not None else sys.argv[1:])
     try:
         asyncio.run(r.run())
+    except SystemExit as exc:
+        log.warning(
+            "[RUNNER] process exit via SystemExit code=%r stop_requested=%s shutdown_rc=%r shutdown_reason=%r restart_requested=%s restart_rc=%r restart_reason=%r",
+            exc.code,
+            r._stop_requested,
+            r._shutdown_exit_code,
+            r._shutdown_reason,
+            r._restart_requested_flag,
+            r._restart_exit_code,
+            r._restart_reason,
+        )
+        raise
     except KeyboardInterrupt:
-        pass
+        log.warning(
+            "[RUNNER] process exit via KeyboardInterrupt stop_requested=%s shutdown_rc=%r shutdown_reason=%r restart_requested=%s restart_reason=%r",
+            r._stop_requested,
+            r._shutdown_exit_code,
+            r._shutdown_reason,
+            r._restart_requested_flag,
+            r._restart_reason,
+        )
+    except BaseException:
+        log.exception(
+            "[RUNNER] fatal exception escaped main stop_requested=%s shutdown_rc=%r shutdown_reason=%r restart_requested=%s restart_reason=%r",
+            r._stop_requested,
+            r._shutdown_exit_code,
+            r._shutdown_reason,
+            r._restart_requested_flag,
+            r._restart_reason,
+        )
+        raise
+    finally:
+        _restore_process_signal_handlers(installed_signal_handlers)
+        log.info(
+            "[RUNNER] process leaving stop_requested=%s shutdown_rc=%r shutdown_reason=%r restart_requested=%s restart_rc=%r restart_reason=%r",
+            r._stop_requested,
+            r._shutdown_exit_code,
+            r._shutdown_reason,
+            r._restart_requested_flag,
+            r._restart_exit_code,
+            r._restart_reason,
+        )
 
 if __name__ == '__main__':
     main()
