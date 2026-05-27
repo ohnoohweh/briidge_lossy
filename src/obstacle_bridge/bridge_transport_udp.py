@@ -697,14 +697,17 @@ class Session:
         if ctr == 0:
             return
         self.send_attempts[ctr] = self.send_attempts.get(ctr, 0) + 1
+    def _rebuild_data_frame(self, ctr: int, meta: OutgoingSegment, tx_ns: int) -> bytes:
+        frame_type, off_or_len, chunk = meta
+        payload = DataPacket.build_payload(ctr, frame_type, off_or_len, chunk, tx_ns)
+        return self.proto.build_frame(PTYPE_DATA, payload)
     def _emit_now(self, seg: OutgoingSegment, transport: Any) -> None:
         frame_type, off_or_len, chunk = seg
         ctr = self.reserve_ctr()
         tx = now_ns()
         self._record_created_if_appdata(ctr, chunk)
         try:
-            payload = DataPacket.build_payload(ctr, frame_type, off_or_len, chunk, tx)
-            frame = self.proto.build_frame(PTYPE_DATA, payload)
+            frame = self._rebuild_data_frame(ctr, seg, tx)
             transport.sendto(frame)
         except Exception:
             self.wait_queue.appendleft(seg)
@@ -933,10 +936,6 @@ class Session:
         self.send_attempts.clear()
         self.data_pkt_flags.clear()
         self.next_ctr = 1
-        self.expected = 1
-        self.pending.clear()
-        self.missing.clear()
-        self.reass = None
         self.last_sent_ctr = 0
         self.last_ack_peer = 0
         self.peer_missed_count = 0
@@ -990,6 +989,16 @@ class PeerProtocol(asyncio.DatagramProtocol):
         self._ctl_task = None
         self._retx_task = None
         self._move_grace_ns = int(3 * 1e9)  # 3 seconds
+        self._rx_pending: Deque[Tuple[bytes, Any]] = deque()
+        self._rx_pending_scheduled = False
+        self._completed_pending: Deque[bytes] = deque()
+        self._completed_pending_scheduled = False
+        self._rx_yield_count = 0
+        self._rx_last_yield_gap_ms = 0.0
+        self._rx_max_yield_gap_ms = 0.0
+        self._completed_yield_count = 0
+        self._completed_last_yield_gap_ms = 0.0
+        self._completed_max_yield_gap_ms = 0.0
 
     @property
     def unidentified_frames(self) -> int:
@@ -1246,28 +1255,14 @@ class PeerProtocol(asyncio.DatagramProtocol):
             if cnt == 0:
                 continue
             meta = s.send_meta.get(cnt)
-            if not meta:
-                raw = s.send_buf.get(cnt)
-                if not raw:
-                    continue
-                last = s.last_retx_ns.get(cnt, 0)
-                if last and (now - last) < window:
-                    continue
-                try:
-                    self.send_port.sendto(raw)
-                except Exception:
-                    continue
-                s.last_retx_ns[cnt] = now
-                s.last_send_ns = now
-                s._bump_attempt(cnt)
-                retx_list.append(cnt)
+            if meta is None:
+                if self.session.log.isEnabledFor(logging.DEBUG):
+                    self.session.log.debug("[RTX] skip cnt=%d reason=no_send_meta", cnt)
                 continue
             last = s.last_retx_ns.get(cnt, 0)
             if last and (now - last) < window:
                 continue
-            frame_type, off_or_len, chunk = meta
-            payload = DataPacket.build_payload(cnt, frame_type, off_or_len, chunk, now)
-            frame = self.proto.build_frame(PTYPE_DATA, payload)
+            frame = s._rebuild_data_frame(cnt, meta, now)
             try:
                 self.send_port.sendto(frame)
             except Exception:
@@ -1298,18 +1293,10 @@ class PeerProtocol(asyncio.DatagramProtocol):
                 continue
             meta = s.send_meta.get(cnt)
             if meta is None:
-                try:
-                    self.send_port.sendto(raw)
-                except Exception:
-                    continue
-                s.last_retx_ns[cnt] = now
-                s.last_send_ns = now
-                s._bump_attempt(cnt)
-                retx_list.append(cnt)
+                if self.session.log.isEnabledFor(logging.DEBUG):
+                    self.session.log.debug("[RTX] skip cnt=%d reason=no_send_meta", cnt)
                 continue
-            frame_type, off_or_len, chunk = meta
-            payload = DataPacket.build_payload(cnt, frame_type, off_or_len, chunk, now)
-            frame = self.proto.build_frame(PTYPE_DATA, payload)
+            frame = s._rebuild_data_frame(cnt, meta, now)
             try:
                 self.send_port.sendto(frame)
             except Exception:
@@ -1322,7 +1309,56 @@ class PeerProtocol(asyncio.DatagramProtocol):
         if self.session.log.isEnabledFor(logging.DEBUG) and retx_list:
             self.session.log.debug(f"[RTX] timeout_sweep cnts={sorted(retx_list)[:32]}{'…' if len(retx_list)>32 else ''} window_ms={s.rtt_est_ms*RETRANS_MULTIPLIER:.2f}")
     # ---- asyncio protocol ----
-    def datagram_received(self, data: bytes, addr):
+    def _schedule_rx_pending(self) -> None:
+        if self._rx_pending_scheduled:
+            return
+        self._rx_pending_scheduled = True
+        scheduled_at = time.perf_counter()
+
+        def _run() -> None:
+            self._rx_pending_scheduled = False
+            self._record_yield_gap("_rx", scheduled_at, "myudp_rx_datagram")
+            self._process_one_rx_datagram()
+
+        asyncio.get_running_loop().call_soon(_run)
+
+    def _schedule_completed_pending(self) -> None:
+        if self._completed_pending_scheduled:
+            return
+        self._completed_pending_scheduled = True
+        scheduled_at = time.perf_counter()
+
+        def _run() -> None:
+            self._completed_pending_scheduled = False
+            self._record_yield_gap("_completed", scheduled_at, "myudp_completed_payload")
+            self._process_one_completed_payload()
+
+        asyncio.get_running_loop().call_soon(_run)
+
+    def _record_yield_gap(self, prefix: str, scheduled_at: float, stage: str) -> None:
+        gap_ms = max(0.0, (time.perf_counter() - float(scheduled_at)) * 1000.0)
+        count_attr = f"{prefix}_yield_count"
+        last_attr = f"{prefix}_last_yield_gap_ms"
+        max_attr = f"{prefix}_max_yield_gap_ms"
+        count = int(getattr(self, count_attr, 0) or 0) + 1
+        setattr(self, count_attr, count)
+        setattr(self, last_attr, gap_ms)
+        setattr(self, max_attr, max(float(getattr(self, max_attr, 0.0) or 0.0), gap_ms))
+        if gap_ms >= 20.0 or count <= 3 or (count % 256) == 0:
+            self.session.log.info("[UDP/YIELD] stage=%s count=%s gap_ms=%.3f", stage, count, gap_ms)
+
+    def _process_one_completed_payload(self) -> None:
+        if not self._completed_pending:
+            return
+        payload = self._completed_pending.popleft()
+        self.on_complete(payload)
+        if self._completed_pending:
+            self._schedule_completed_pending()
+
+    def _process_one_rx_datagram(self) -> None:
+        if not self._rx_pending:
+            return
+        data, addr = self._rx_pending.popleft()
         self.session.log.debug(
             "[PEER/RX/RAW-SOCKET] len=%d from=%r transport_sock=%r transport_peer=%r",
             len(data),
@@ -1453,6 +1489,8 @@ class PeerProtocol(asyncio.DatagramProtocol):
                 "[IDLE/DECISION] from=%r echo_ns=%d will_reflect=%s",
                 addr, echo_ns, echo_ns == 0
             )                    
+            if self._rx_pending:
+                self._schedule_rx_pending()
             return
         if kind == "data" and pkt:
             prev_missing = set(self.session.missing)
@@ -1463,7 +1501,11 @@ class PeerProtocol(asyncio.DatagramProtocol):
             self._evaluate_control_policy_inbound(grew_missing)
             for c in completed:
                 self.session.log.debug(f"[PeerProtocol] On Complete  on session id=%x", id(self))
-                self.on_complete(c)
+                self._completed_pending.append(c)
+            if self._completed_pending:
+                self._schedule_completed_pending()
+            if self._rx_pending:
+                self._schedule_rx_pending()
             return
         if kind == "control" and pkt:
             cp: ControlPacket = pkt
@@ -1472,6 +1514,12 @@ class PeerProtocol(asyncio.DatagramProtocol):
             if self.send_port:
                 self.session.try_flush_send_queue(self.send_port)
             self._evaluate_control_policy_inbound(False)
+        if self._rx_pending:
+            self._schedule_rx_pending()
+
+    def datagram_received(self, data: bytes, addr):
+        self._rx_pending.append((bytes(data), addr))
+        self._schedule_rx_pending()
 
     # ---- timers (PeerProtocol ownership) ----
     def controltimerstart(self):
@@ -1863,16 +1911,40 @@ class UdpSession(ISession):
                     sock=sock,
                 )
             else:
-                self._log.debug(
-                    "[UDP/SESSION] Initiate unconnected Data Endpoint local=%r initial_peer=%r",
-                    listen,
-                    peer,
-                )
-                transport, protocol = await self._loop.create_datagram_endpoint(
-                    _factory,
-                    local_addr=listen,
-                    family=family,
-                )
+                use_prebuilt_socket = hasattr(socket, "SO_NOSIGPIPE")
+                if use_prebuilt_socket:
+                    sock_family = family if family != socket.AF_UNSPEC else (
+                        socket.AF_INET6 if ":" in listen_host else socket.AF_INET
+                    )
+                    sock = socket.socket(sock_family, socket.SOCK_DGRAM)
+                    sock.setblocking(False)
+                    try:
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_NOSIGPIPE, 1)
+                    except Exception as e:
+                        self._log.warning("Could not enable SO_NOSIGPIPE: %r", e)
+                    sock.bind(listen)
+                    self._log.debug(
+                        "[UDP/SESSION] Initiate unconnected Data Endpoint via prebuilt socket "
+                        "local=%r initial_peer=%r so_nosigpipe=%s",
+                        listen,
+                        peer,
+                        True,
+                    )
+                    transport, protocol = await self._loop.create_datagram_endpoint(
+                        _factory,
+                        sock=sock,
+                    )
+                else:
+                    self._log.debug(
+                        "[UDP/SESSION] Initiate unconnected Data Endpoint local=%r initial_peer=%r",
+                        listen,
+                        peer,
+                    )
+                    transport, protocol = await self._loop.create_datagram_endpoint(
+                        _factory,
+                        local_addr=listen,
+                        family=family,
+                    )
         except Exception as e:
             self._log.error(
                 "[UdpSession] Create Data Endpoint %r family=%r failed: %r",

@@ -172,6 +172,8 @@ Current lifecycle implementation note:
 - `REQ-MUX-009`: The service-definition runtime surface shall accept structured JSON entries for both `own_servers` and `remote_servers`, and a structured service entry may include lifecycle hook commands that execute on listener-side service events (`on_created`, `on_channel_connected`, `on_channel_closed`, `on_stopped`) with placeholder-driven argument/environment rendering. Hook context shall include the configured overlay transport plus the configured and resolved overlay peer endpoint so route-preserving scripts do not need a duplicate peer IP in hook-specific config. The `on_stopped` listener hook shall run before the listener service is closed during overlay disconnect, peer disconnect, catalog replacement, or process shutdown so operator routing/firewall teardown can run while the local service resources still exist. Hook executable paths that include a path separator may be relative to the loaded configuration file directory, while bare command names remain resolved through the process `PATH`.
 - `REQ-MUX-010`: On hosts where an iOS packet-tunnel provider is available, a connected peer shall be able to carry packet traffic between `NEPacketTunnelFlow` and remote TUN services using the same peer-scoped ChannelMux service model as Linux and Windows TUN adapters. The effective iOS tunnel IPv4 and IPv6 identity shall be derived from live ObstacleBridge configuration rather than hardcoded app constants, and the provider-applied route set shall support full-tunnel forwarding with loopback exclusions when so configured.
 
+Implementation note: the live-config derivation for `REQ-MUX-010` now also includes a dedicated `ios_tunnel_network` override block so packet-tunnel route sets, DNS servers, MTU, and dual-stack tunnel identities can be overridden from runtime config without forking app-side constants.
+
 ## Loss and delay requirements
 
 - `REQ-MYU-001`: The myudp transport shall continue to function under added propagation delay.
@@ -180,6 +182,9 @@ Current lifecycle implementation note:
 - `REQ-MYU-004`: The myudp transport shall correctly transfer large payloads under delayed and lossy conditions.
 - `REQ-MYU-005`: Bidirectional myudp traffic shall remain functional when both directions are active concurrently.
 - `REQ-MYU-006`: The myudp transport shall tolerate heavy early loss patterns without silently corrupting delivered payloads.
+
+Implementation note: the transport-envelope RTT and retransmission details for the delivered `myudp` runtime are documented in [MYUDP_DESIGN.md](/home/ohnoohweh/quicbr_test/docs/MYUDP_DESIGN.md). In particular, retransmission must rebuild a fresh protocol envelope for each actual wire send so `tx_ns` and `echo_ns` reflect the resend attempt rather than a stale raw datagram image.
+Implementation note: current focused regression coverage for the `REQ-MYU-*` slice also includes semantic log-replay and transport-edge checks that preserve fresh retransmit frame rebuilding, protect receiver gap state across sender reset, and keep log-based repro analysis aligned to the same observed session epoch.
 
 ## Admin web requirements
 

@@ -388,6 +388,23 @@ def _write_connector_state(dev: Any, *, component_state: str = "running") -> Non
         "bridge_queue_last_drain_unix_ts": getattr(dev, "udp_connector_last_bridge_drain_ts", None),
         "bridge_queue_last_drain_packets": int(getattr(dev, "udp_connector_last_bridge_drain_packets", 0) or 0),
         "bridge_queue_max_drain_packets": int(getattr(dev, "udp_connector_max_bridge_drain_packets", 0) or 0),
+        "yield_gaps": {
+            "bridge_queue": {
+                "count": int(getattr(dev, "udp_connector_bridge_yield_count", 0) or 0),
+                "last_gap_ms": float(getattr(dev, "udp_connector_bridge_last_yield_gap_ms", 0.0) or 0.0),
+                "max_gap_ms": float(getattr(dev, "udp_connector_bridge_max_yield_gap_ms", 0.0) or 0.0),
+            },
+            "from_mux_flush": {
+                "count": int(getattr(dev, "udp_connector_from_mux_yield_count", 0) or 0),
+                "last_gap_ms": float(getattr(dev, "udp_connector_from_mux_last_yield_gap_ms", 0.0) or 0.0),
+                "max_gap_ms": float(getattr(dev, "udp_connector_from_mux_max_yield_gap_ms", 0.0) or 0.0),
+            },
+            "connector_pending_flush": {
+                "count": int(getattr(dev, "udp_connector_pending_yield_count", 0) or 0),
+                "last_gap_ms": float(getattr(dev, "udp_connector_pending_last_yield_gap_ms", 0.0) or 0.0),
+                "max_gap_ms": float(getattr(dev, "udp_connector_pending_max_yield_gap_ms", 0.0) or 0.0),
+            },
+        },
         "counters": {
             "to_mux_packets": int(getattr(connector, "tx_packets", 0) or 0),
             "from_mux_packets": int(getattr(connector, "rx_packets", 0) or 0),
@@ -436,6 +453,47 @@ def _remember_connector_packet(dev: Any, direction: str, packet: bytes, *, addr:
     ring.append(item)
 
 
+def _record_yield_gap(log: Any, owner: Any, *, prefix: str, scheduled_at: float, stage: str) -> None:
+    gap_ms = max(0.0, (time.perf_counter() - float(scheduled_at)) * 1000.0)
+    count_attr = f"{prefix}_yield_count"
+    last_attr = f"{prefix}_last_yield_gap_ms"
+    max_attr = f"{prefix}_max_yield_gap_ms"
+    count = int(getattr(owner, count_attr, 0) or 0) + 1
+    setattr(owner, count_attr, count)
+    setattr(owner, last_attr, gap_ms)
+    setattr(owner, max_attr, max(float(getattr(owner, max_attr, 0.0) or 0.0), gap_ms))
+    if gap_ms >= 20.0 or count <= 3 or (count % 256) == 0:
+        log.info("[IOS/YIELD] stage=%s count=%s gap_ms=%.3f", stage, count, gap_ms)
+
+
+def _schedule_bridge_queue_drain(mux: Any, dev: Any) -> None:
+    if getattr(dev, "udp_connector_bridge_drain_scheduled", False):
+        return
+    setattr(dev, "udp_connector_bridge_drain_scheduled", True)
+    scheduled_at = time.perf_counter()
+
+    def _run() -> None:
+        setattr(dev, "udp_connector_bridge_drain_scheduled", False)
+        _record_yield_gap(mux.log, dev, prefix="udp_connector_bridge", scheduled_at=scheduled_at, stage="packetflow_bridge_queue")
+        _drain_bridge_queue(mux, dev)
+
+    mux.loop.call_soon(_run)
+
+
+def _schedule_pending_from_mux_flush(mux: Any, dev: Any) -> None:
+    if getattr(dev, "udp_connector_pending_from_mux_scheduled", False):
+        return
+    setattr(dev, "udp_connector_pending_from_mux_scheduled", True)
+    scheduled_at = time.perf_counter()
+
+    def _run() -> None:
+        setattr(dev, "udp_connector_pending_from_mux_scheduled", False)
+        _record_yield_gap(mux.log, dev, prefix="udp_connector_from_mux", scheduled_at=scheduled_at, stage="packetflow_from_mux_flush")
+        _flush_pending_from_mux(mux, dev)
+
+    mux.loop.call_soon(_run)
+
+
 class _PacketFlowUDPConnector(asyncio.DatagramProtocol):
     def __init__(self, mux: Any, dev: Any) -> None:
         self.mux = mux
@@ -450,6 +508,7 @@ class _PacketFlowUDPConnector(asyncio.DatagramProtocol):
         self.rx_packets = 0
         self.tx_packets = 0
         self.expected_peer_addr: Optional[Tuple[str, int]] = None
+        self.pending_flush_scheduled = False
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
         self.transport = transport  # type: ignore[assignment]
@@ -556,8 +615,9 @@ class _PacketFlowUDPConnector(asyncio.DatagramProtocol):
         _write_connector_state(self.dev)
         pending = self.pending
         self.pending = []
-        for packet in pending:
-            self.send_packet(packet)
+        if pending:
+            self.pending.extend(pending)
+            self._schedule_pending_flush()
 
     def set_expected_peer_addr(self, addr: Optional[tuple[str, int]]) -> None:
         self.expected_peer_addr = None if addr is None else (str(addr[0]), int(addr[1]))
@@ -602,6 +662,27 @@ class _PacketFlowUDPConnector(asyncio.DatagramProtocol):
             )
             _write_connector_manifest(self.dev)
             _write_connector_state(self.dev)
+
+    def _schedule_pending_flush(self) -> None:
+        if self.pending_flush_scheduled:
+            return
+        self.pending_flush_scheduled = True
+        scheduled_at = time.perf_counter()
+
+        def _run() -> None:
+            self.pending_flush_scheduled = False
+            _record_yield_gap(self.mux.log, self.dev, prefix="udp_connector_pending", scheduled_at=scheduled_at, stage="packetflow_connector_pending_flush")
+            self._flush_one_pending_packet()
+
+        self.mux.loop.call_soon(_run)
+
+    def _flush_one_pending_packet(self) -> None:
+        if self.closed or self.transport is None or self.mux_addr is None or not self.ready or not self.pending:
+            return
+        packet = self.pending.pop(0)
+        self.send_packet(packet)
+        if self.pending:
+            self._schedule_pending_flush()
 
     def close(self) -> None:
         self.closed = True
@@ -655,16 +736,19 @@ async def _udp_connector_heartbeat(mux: Any, dev: Any) -> None:
         _write_connector_state(dev)
 
 
-def _flush_pending_from_mux(dev: Any) -> None:
+def _flush_pending_from_mux(mux: Any, dev: Any) -> None:
     transport = getattr(dev, "udp_connector_mux_transport", None)
     bind_addr = getattr(dev, "udp_connector_bind_addr", None)
     if transport is None or not (isinstance(bind_addr, tuple) and len(bind_addr) >= 2):
         return
     pending = list(getattr(dev, "udp_connector_pending_from_mux", []) or [])
-    setattr(dev, "udp_connector_pending_from_mux", [])
-    for packet in pending:
-        transport.sendto(bytes(packet), bind_addr)
+    if not pending:
+        return
+    packet = pending.pop(0)
+    setattr(dev, "udp_connector_pending_from_mux", pending)
+    transport.sendto(bytes(packet), bind_addr)
     if pending:
+        _schedule_pending_from_mux_flush(mux, dev)
         _write_connector_state(dev)
 
 
@@ -737,10 +821,17 @@ async def _start_udp_connector(mux: Any, dev: Any) -> None:
         relay_sockname: tuple[str, int] | None = None
         expected_peer_addr: tuple[str, int] | None = None
         if mode == "udp":
+            relay_sock = socket.socket(
+                socket.AF_INET6 if ":" in mux_host else socket.AF_INET,
+                socket.SOCK_DGRAM,
+            )
+            relay_sock.setblocking(False)
+            if hasattr(socket, "SO_NOSIGPIPE"):
+                relay_sock.setsockopt(socket.SOL_SOCKET, socket.SO_NOSIGPIPE, 1)
+            relay_sock.bind((mux_host, mux_port))
             relay_transport, relay_protocol = await mux.loop.create_datagram_endpoint(
                 lambda: _PacketFlowMuxUDPRelay(mux, dev),
-                local_addr=(mux_host, mux_port),
-                family=socket.AF_INET6 if ":" in mux_host else socket.AF_INET,
+                sock=relay_sock,
             )
             relay_sockname = relay_transport.get_extra_info("sockname")
             if not (isinstance(relay_sockname, tuple) and len(relay_sockname) >= 2):
@@ -756,10 +847,14 @@ async def _start_udp_connector(mux: Any, dev: Any) -> None:
             raise RuntimeError(f"unsupported iOS packet-flow connector mode: {mode}")
 
         protocol = _PacketFlowUDPConnector(mux, dev)
+        connector_sock = socket.socket(family, socket.SOCK_DGRAM)
+        connector_sock.setblocking(False)
+        if hasattr(socket, "SO_NOSIGPIPE"):
+            connector_sock.setsockopt(socket.SOL_SOCKET, socket.SO_NOSIGPIPE, 1)
+        connector_sock.bind((host, connector_port))
         connector_transport, _ = await mux.loop.create_datagram_endpoint(
             lambda: protocol,
-            local_addr=(host, connector_port),
-            family=family,
+            sock=connector_sock,
         )
         setattr(dev, "udp_connector", protocol)
         setattr(dev, "udp_connector_transport", connector_transport)
@@ -774,7 +869,7 @@ async def _start_udp_connector(mux: Any, dev: Any) -> None:
         protocol.set_mux_addr((str(relay_sockname[0]), int(relay_sockname[1])))
         protocol.set_expected_peer_addr(expected_peer_addr)
         if mode == "udp":
-            _flush_pending_from_mux(dev)
+            _schedule_pending_from_mux_flush(mux, dev)
         heartbeat_task = mux.loop.create_task(_udp_connector_heartbeat(mux, dev))
         setattr(dev, "udp_connector_heartbeat_task", heartbeat_task)
         mux.log.info(
@@ -824,13 +919,10 @@ async def _start_udp_connector(mux: Any, dev: Any) -> None:
 
 
 def _drain_bridge_queue(mux: Any, dev: Any) -> int:
-    burst_limit = 16
     delivered = 0
     packets_seen = int(getattr(dev, "packets_seen", 0))
-    for _ in range(burst_limit):
-        packet = _backend().dequeue_packet()
-        if packet is None:
-            break
+    packet = _backend().dequeue_packet()
+    if packet is not None:
         delivered += 1
         packets_seen += 1
         _log_packet_debug(mux.log, stage="packet_flow_read", ifname=dev.ifname, packet=packet)
@@ -856,9 +948,8 @@ def _drain_bridge_queue(mux: Any, dev: Any) -> int:
     )
     if getattr(dev, "udp_connector", None) is not None and delivered:
         _write_connector_state(dev)
-    if delivered >= burst_limit:
-        with contextlib.suppress(Exception):
-            mux.loop.call_soon(_on_wakeup_fd_readable, mux, dev)
+    if delivered:
+        _schedule_bridge_queue_drain(mux, dev)
     return delivered
 
 
@@ -982,6 +1073,8 @@ def close_tun_device(mux: Any, dev: Any) -> None:
     setattr(dev, "udp_connector_peer_addr", None)
     setattr(dev, "udp_connector_trace", None)
     setattr(dev, "udp_connector_pending_from_mux", [])
+    setattr(dev, "udp_connector_bridge_drain_scheduled", False)
+    setattr(dev, "udp_connector_pending_from_mux_scheduled", False)
     setattr(dev, "reader_registered", False)
     mux.log.info("[TUN/IOS] close if=%s bridge_state=%s", dev.ifname, _bridge_state())
 

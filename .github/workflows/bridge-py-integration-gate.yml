@@ -16,7 +16,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Detect bridge.py changes
+      - name: Detect Python changes
         id: changed
         shell: bash
         run: |
@@ -43,7 +43,7 @@ jobs:
             exit 0
           fi
 
-          if git diff --name-only "$base" "$head" | grep -Fxq "src/obstacle_bridge/bridge.py"; then
+          if git diff --name-only "$base" "$head" | grep -Eq '\.py$'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -98,10 +98,10 @@ jobs:
         run: pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"
 
   bridge-py-integration-not-required:
-    name: Integration Gate (No bridge.py changes)
+    name: Integration Gate (No Python changes)
     needs: detect-bridge-change
     if: needs.detect-bridge-change.outputs.changed != 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: No bridge.py changes
-        run: echo "src/obstacle_bridge/bridge.py unchanged; integration gate not required."
+      - name: No Python changes
+        run: echo "No Python changes; integration gate not required."
