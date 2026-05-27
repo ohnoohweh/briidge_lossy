@@ -148,6 +148,7 @@ Current lifecycle implementation note:
 - the default launcher subprocess now invokes `from obstacle_bridge.bridge import main; main()` instead of `-m obstacle_bridge.bridge` so repo-root shim imports and split transport modules do not execute the runtime module twice under different names during supervised startup; the same recovery slice also restores the test-only failure-injection runtime wiring used by secure-link replay/fail-closed integration coverage and broadens the iOS Documents-root fallback to tolerate general OS-level write errors at import time
 - the host-side iOS E2E runtime-contract lane now relies on worker-partitioned local TCP/UDP test-port allocation so parallel xdist execution does not lose preselected WebSocket, admin, or UDP service ports before the embeddable runtime actually binds them
 - the iOS embedded-runtime restart path now restarts the Python stack from the host-owned event loop, rereads the grouped configuration file before starting the replacement runtime, and bounds shutdown so a slow AdminWeb listener close or lingering client sockets cannot stall restart for minutes; the packaged WebAdmin frontend correspondingly treats embedded restart as a recovery flow rather than assuming a separate process exit/relaunch cycle
+- the default runtime entrypoint now logs process-start, signal, shutdown-request, restart-request, runner-stop, mux-stop, and process-exit breadcrumbs with explicit `reason=` attribution so externally triggered termination, WebAdmin-driven shutdown/restart, watchdog-driven restart, and normal stop finalization can be distinguished from an abruptly truncated log. When `log_file_truncate_on_start` is enabled, startup also preserves the prior active log as `<log>.lastsession` before opening a fresh active file so operators can inspect the previous run while a new session is already writing.
 
 ## Listener and multi-peer requirements
 
@@ -184,7 +185,7 @@ Implementation note: the live-config derivation for `REQ-MUX-010` now also inclu
 - `REQ-MYU-006`: The myudp transport shall tolerate heavy early loss patterns without silently corrupting delivered payloads.
 
 Implementation note: the transport-envelope RTT and retransmission details for the delivered `myudp` runtime are documented in [MYUDP_DESIGN.md](/home/ohnoohweh/quicbr_test/docs/MYUDP_DESIGN.md). In particular, retransmission must rebuild a fresh protocol envelope for each actual wire send so `tx_ns` and `echo_ns` reflect the resend attempt rather than a stale raw datagram image.
-Implementation note: current focused regression coverage for the `REQ-MYU-*` slice also includes semantic log-replay and transport-edge checks that preserve fresh retransmit frame rebuilding, protect receiver gap state across sender reset, and keep log-based repro analysis aligned to the same observed session epoch.
+Implementation note: current focused regression coverage for the `REQ-MYU-*` slice also includes semantic log-replay and transport-edge checks that preserve fresh retransmit frame rebuilding, protect receiver gap state across sender reset, keep log-based repro analysis aligned to the same observed session epoch, and keep a frame that was reported missing on a persistent RTT-paced retry path until cumulative ACK progress actually clears that gap.
 
 ## Admin web requirements
 

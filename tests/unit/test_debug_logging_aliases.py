@@ -1,5 +1,7 @@
 import argparse
 import logging
+import tempfile
+from pathlib import Path
 
 from obstacle_bridge.bridge import ConfigAwareCLI, DebugLoggingConfigurator, SecureLinkPskSession
 
@@ -46,3 +48,29 @@ def test_log_secure_link_override_can_raise_verbosity():
     cfg._apply_per_section_overrides(args)
 
     assert logging.getLogger("secure_link").level == logging.INFO
+
+
+def test_log_file_moves_previous_session_to_lastsession_on_start():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        log_path = Path(tmpdir) / "bridge.log"
+        lastsession_path = Path(tmpdir) / "bridge.log.lastsession"
+        log_path.write_text("old-line\n", encoding="utf-8")
+        lastsession_path.write_text("older-line\n", encoding="utf-8")
+
+        debug_cfg = DebugLoggingConfigurator(
+            level_name="INFO",
+            console_level_name="CRITICAL",
+            file_level_name="INFO",
+            file_path=str(log_path),
+            truncate_on_start=True,
+        )
+        debug_cfg.apply()
+        logging.getLogger("truncate-test").info("new-line")
+
+        contents = log_path.read_text(encoding="utf-8")
+        assert "new-line" in contents
+        assert "old-line" not in contents
+
+        lastsession_contents = lastsession_path.read_text(encoding="utf-8")
+        assert "old-line" in lastsession_contents
+        assert "older-line" not in lastsession_contents

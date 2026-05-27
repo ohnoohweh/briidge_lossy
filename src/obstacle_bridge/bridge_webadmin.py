@@ -862,7 +862,7 @@ class AdminWebUI:
         )
         await self._send_json(writer, 200, payload)
         if restart_after_save:
-            self.runner.request_restart()
+            self.runner.request_restart(reason="admin_web:/api/config restart_after_save")
 
     async def _handle_logs(self, writer, raw_path: str):
         limit = 400
@@ -982,7 +982,7 @@ class AdminWebUI:
                 if inspect.isawaitable(result):
                     asyncio.create_task(result)
             return
-        self.runner.request_restart()
+        self.runner.request_restart(reason="admin_web:/api/restart")
 
     async def _handle_reconnect(self, writer, method, headers, body: bytes):
         if method != "POST":
@@ -1037,7 +1037,7 @@ class AdminWebUI:
         await self._send_json(writer, 200, payload)
 
         # let response flush before stopping (non-restart exit code)
-        asyncio.get_running_loop().call_soon(self.runner.request_shutdown, 76)
+        asyncio.get_running_loop().call_soon(self.runner.request_shutdown, 76, "admin_web:/api/shutdown")
 
     @staticmethod
     def _secret_config_keys() -> Set[str]:

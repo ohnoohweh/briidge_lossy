@@ -530,6 +530,8 @@ REQ-LIFE-010:
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_cli_metadata
     - tests/unit/test_embeddable_core.py::test_client_lifecycle_uses_runner_without_process_entrypoint
     - tests/unit/test_embeddable_core.py::test_memory_packet_io_round_trip_boundaries
+    - tests/unit/test_runner_events.py::test_install_process_signal_handlers_requests_shutdown
+    - tests/unit/test_runner_events.py::test_main_logs_system_exit_code
     - ios/tests/test_ipserver_extension.py::test_handle_message_connects_profile_by_id
     - ios/tests/test_ipserver_extension.py::test_handle_message_disconnects_profile
     - ios/tests/test_ipserver_extension.py::test_embedded_restart_reload_reads_grouped_config_and_restarts_client
@@ -685,6 +687,8 @@ REQ-MYU-002:
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_control_feedback_retransmits_only_reported_missing_frames
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_retransmit_rebuilds_fresh_transport_timestamps
+    - tests/unit/test_requirements_unit_gaps.py::test_myudp_reported_missing_frame_retries_every_rtt_until_cumulative_ack
+    - tests/unit/test_requirements_unit_gaps.py::test_myudp_persistent_missing_retries_survive_flight_window_pressure
 
 REQ-MYU-003:
   integration_tests:
@@ -692,6 +696,7 @@ REQ-MYU-003:
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_control_feedback_retransmits_only_reported_missing_frames
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_retransmit_skips_stale_raw_frame_when_send_meta_is_missing
+    - tests/unit/test_requirements_unit_gaps.py::test_myudp_reported_missing_frame_retries_every_rtt_until_cumulative_ack
 
 REQ-MYU-004:
   integration_tests:
@@ -726,6 +731,7 @@ REQ-ADM-001:
     - tests/unit/test_admin_web_payloads.py::test_onboarding_connection_profiles_expose_configured_transports
     - tests/unit/test_admin_web_payloads.py::test_onboarding_blueprints_group_active_peer_connections
     - tests/unit/test_runner_events.py::test_get_debug_logs_falls_back_to_log_file_when_ring_is_empty
+    - tests/unit/test_debug_logging_aliases.py::test_log_file_moves_previous_session_to_lastsession_on_start
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
 
 

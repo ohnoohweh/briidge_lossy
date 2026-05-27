@@ -1145,8 +1145,8 @@ class ChannelMux:
         self._sweeper_task = self.loop.create_task(self._udp_idle_sweeper())
         self._ensure_task = self.loop.create_task(self._ensure_servers_task())
 
-    async def stop(self) -> None:
-        self.log.info("[MUX] stopping")
+    async def stop(self, reason: str = "") -> None:
+        self.log.info("[MUX] stopping reason=%s", str(reason or "unspecified"))
         for t in (self._ensure_task, self._sweeper_task):
             if t:
                 try: t.cancel()
