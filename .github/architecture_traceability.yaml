@@ -43,6 +43,8 @@ ARC-CMP-002:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_control_feedback_retransmits_only_reported_missing_frames
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_bidirectional_sessions_deliver_independent_payloads
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_sender_reset_clears_stale_reconnect_state
+    - tests/unit/test_requirements_unit_gaps.py::test_myudp_retransmit_rebuilds_fresh_transport_timestamps
+    - tests/unit/test_requirements_unit_gaps.py::test_myudp_retransmit_skips_stale_raw_frame_when_send_meta_is_missing
     - tests/unit/test_myudp_processing_repro.py::test_channelmux_to_network_tx_emits_myudp_frames
     - tests/unit/test_myudp_processing_repro.py::test_network_rx_to_channelmux_edge_reassembles_large_payload
     - tests/unit/test_myudp_processing_repro.py::test_network_rx_gap_state_reproduces_stall_shape_until_missing_frame_arrives

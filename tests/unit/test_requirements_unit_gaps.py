@@ -284,6 +284,55 @@ class MyUdpReliabilityRequirementUnitTests(unittest.TestCase):
         self.assertEqual(session.send_attempts[1], 1)
         self.assertEqual(session.send_attempts[2], 2)
 
+    def test_myudp_retransmit_rebuilds_fresh_transport_timestamps(self):
+        session, transport = self._session_and_transport()
+        session.send_application_payload(b"one", transport)
+        session.send_application_payload(b"two", transport)
+        original_second = transport.frames[1]
+        parsed_original = session.proto.parse_frame_with_times(original_second)
+
+        self.assertIsNotNone(parsed_original)
+        _ptype, _payload, original_tx_ns, original_echo_ns = parsed_original
+        self.assertEqual(original_echo_ns, 0)
+
+        session.proto.on_frame_received(10_000_000_000, time.monotonic_ns() - 1_000_000)
+
+        proto = PeerProtocol(session, lambda: None, lambda _data: None, proto=session.proto)
+        proto.send_port = transport
+
+        feedback = ControlPacket.build_full(0, 2, [2])
+        session.confirm_with_feedback(feedback.last_in_order_rx, feedback.highest_rx, feedback.missed)
+        proto._schedule_retrans(feedback.missed)
+
+        self.assertEqual(len(transport.frames), 3)
+        parsed_retx = session.proto.parse_frame_with_times(transport.frames[-1])
+        self.assertIsNotNone(parsed_retx)
+        _ptype, _payload, retrans_tx_ns, retrans_echo_ns = parsed_retx
+        retransmitted = DataPacket.parse_full(transport.frames[-1])
+        self.assertIsNotNone(retransmitted)
+        self.assertEqual(retransmitted.pkt_counter, 2)
+        self.assertGreater(retrans_tx_ns, original_tx_ns)
+        self.assertGreater(retrans_echo_ns, 0)
+        self.assertNotEqual(transport.frames[-1], original_second)
+
+    def test_myudp_retransmit_skips_stale_raw_frame_when_send_meta_is_missing(self):
+        session, transport = self._session_and_transport()
+        session.send_application_payload(b"one", transport)
+        session.send_application_payload(b"two", transport)
+
+        proto = PeerProtocol(session, lambda: None, lambda _data: None, proto=session.proto)
+        proto.send_port = transport
+
+        session.send_meta.pop(2, None)
+        original_attempts = dict(session.send_attempts)
+
+        feedback = ControlPacket.build_full(0, 2, [2])
+        session.confirm_with_feedback(feedback.last_in_order_rx, feedback.highest_rx, feedback.missed)
+        proto._schedule_retrans(feedback.missed)
+
+        self.assertEqual(len(transport.frames), 2)
+        self.assertEqual(session.send_attempts, original_attempts)
+
     def test_myudp_bidirectional_sessions_deliver_independent_payloads(self):
         left, left_tx = self._session_and_transport()
         right, right_tx = self._session_and_transport()

@@ -684,12 +684,14 @@ REQ-MYU-002:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_control_feedback_retransmits_only_reported_missing_frames
+    - tests/unit/test_requirements_unit_gaps.py::test_myudp_retransmit_rebuilds_fresh_transport_timestamps
 
 REQ-MYU-003:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_control_feedback_retransmits_only_reported_missing_frames
+    - tests/unit/test_requirements_unit_gaps.py::test_myudp_retransmit_skips_stale_raw_frame_when_send_meta_is_missing
 
 REQ-MYU-004:
   integration_tests:

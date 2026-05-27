@@ -183,6 +183,7 @@ Implementation note: the live-config derivation for `REQ-MUX-010` now also inclu
 - `REQ-MYU-005`: Bidirectional myudp traffic shall remain functional when both directions are active concurrently.
 - `REQ-MYU-006`: The myudp transport shall tolerate heavy early loss patterns without silently corrupting delivered payloads.
 
+Implementation note: the transport-envelope RTT and retransmission details for the delivered `myudp` runtime are documented in [MYUDP_DESIGN.md](/home/ohnoohweh/quicbr_test/docs/MYUDP_DESIGN.md). In particular, retransmission must rebuild a fresh protocol envelope for each actual wire send so `tx_ns` and `echo_ns` reflect the resend attempt rather than a stale raw datagram image.
 Implementation note: current focused regression coverage for the `REQ-MYU-*` slice also includes semantic log-replay and transport-edge checks that preserve fresh retransmit frame rebuilding, protect receiver gap state across sender reset, and keep log-based repro analysis aligned to the same observed session epoch.
 
 ## Admin web requirements
