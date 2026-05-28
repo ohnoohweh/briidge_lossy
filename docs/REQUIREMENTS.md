@@ -188,6 +188,7 @@ Implementation note: the live-config derivation for `REQ-MUX-010` now also inclu
 
 Implementation note: the transport-envelope RTT and retransmission details for the delivered `myudp` runtime are documented in [MYUDP_DESIGN.md](/home/ohnoohweh/quicbr_test/docs/MYUDP_DESIGN.md). In particular, retransmission must rebuild a fresh protocol envelope for each actual wire send so `tx_ns` and `echo_ns` reflect the resend attempt rather than a stale raw datagram image.
 Implementation note: current focused regression coverage for the `REQ-MYU-*` slice also includes semantic log-replay and transport-edge checks that preserve fresh retransmit frame rebuilding, protect receiver gap state across sender reset, clear stale receiver/control state across full transport-epoch reset, keep log-based repro analysis aligned to the same observed session epoch, keep a frame that was reported missing on a persistent RTT-paced retry path until cumulative ACK progress actually clears that gap, and verify that acknowledged `DATA` frames publish an EWMA transmit-delay estimate through the runtime status/dashboard path.
+Implementation note: [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md) now also defines the overload/freshness policy that future transport work is expected to follow: bounded queues, admission-side shedding for freshness-sensitive datagram traffic, ingress-side backpressure for TCP streams, and observability of queue pressure/drop state rather than unbounded stale backlog growth.
 
 ## Admin web requirements
 

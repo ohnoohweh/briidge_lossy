@@ -15,6 +15,12 @@
 # coverage with the dedicated iOS packet-flow bridge adapter and dual-stack
 # tunnel-setting derivation path while keeping the existing host-side iOS E2E
 # mappings as the simulator-free integration proof for that runtime slice.
+# NOTE: The 2026-05-28 overload/freshness architecture follow-up documents
+# bounded real-time overlay behavior, safe admission-time shedding points, and
+# component ownership for overload policy across ARC-CMP-002/003/004/005 without
+# changing the underlying defending test mappings yet; implementation work for
+# those bounded-queue and backpressure behaviors is expected to extend the same
+# component families rather than redefining them.
 
 ARC-CMP-001:
   unit_tests:
