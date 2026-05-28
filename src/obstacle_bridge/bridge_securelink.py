@@ -1614,6 +1614,21 @@ class SecureLinkPskSession(ISession):
     def set_on_app_from_peer_bytes(self, cb): self._outer_on_app_from_peer_bytes = cb
     def set_on_transport_epoch_change(self, cb): self._outer_on_transport_epoch_change = cb
 
+    def reset_sender(self) -> None:
+        resetter = getattr(self._inner, "reset_sender", None)
+        if callable(resetter):
+            resetter()
+
+    def reset_transport_epoch(self) -> None:
+        self._cancel_client_retry_task(clear_schedule=False)
+        self._cancel_client_rekey_task(clear_schedule=False)
+        self._clear_all_states()
+        resetter = getattr(self._inner, "reset_transport_epoch", None)
+        if not callable(resetter):
+            resetter = getattr(self._inner, "reset_sender", None)
+        if callable(resetter):
+            resetter()
+
     def get_connection_failure_snapshot(self) -> dict:
         getter = getattr(self._inner, "get_connection_failure_snapshot", None)
         if callable(getter):

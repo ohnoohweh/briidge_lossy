@@ -947,6 +947,14 @@ class Session:
         self.last_ack_peer = 0
         self.peer_missed_count = 0
         self.last_send_ns = 0
+
+    def reset_transport_epoch(self) -> None:
+        self.reset_sender()
+        self.expected = 1
+        self.pending.clear()
+        self.missing.clear()
+        self.reass = None
+        self._reass_ctrs.clear()
 # -------------------- PeerProtocol --------------------
 FRAME_FIRST = 0x01
 FRAME_CONT = 0x02
@@ -1066,6 +1074,15 @@ class PeerProtocol(asyncio.DatagramProtocol):
             pass
         self.controltimerstop()
         self.retxtimerstop()
+
+    def reset_transport_epoch_runtime(self) -> None:
+        self._last_control_sent_ns = 0
+        self._last_sent_last_in_order = 0
+        self._established_ns = 0
+        self._rx_pending.clear()
+        self._rx_pending_scheduled = False
+        self._completed_pending.clear()
+        self._completed_pending_scheduled = False
 
     def error_received(self, exc):
         self.session.log.debug("[UDP/PROTO] error_received exc=%r", exc)
@@ -2463,6 +2480,28 @@ class UdpSession(ISession):
                 continue
             with contextlib.suppress(Exception):
                 sess.reset_sender()
+
+    def reset_transport_epoch(self) -> None:
+        # Transport reconnects must start with a fresh reliability epoch in both
+        # directions so stale missing/pending feedback cannot leak into the new session.
+        with contextlib.suppress(Exception):
+            self.inner_session.reset_transport_epoch()
+        with contextlib.suppress(Exception):
+            if self._proto is not None:
+                self._proto.reset_transport_epoch_runtime()
+        for ctx in self._server_peers.values():
+            if not isinstance(ctx, dict):
+                continue
+            sess = ctx.get("session")
+            if sess is None:
+                continue
+            with contextlib.suppress(Exception):
+                sess.reset_transport_epoch()
+            pp = ctx.get("peer_proto")
+            if pp is None:
+                continue
+            with contextlib.suppress(Exception):
+                pp.reset_transport_epoch_runtime()
 
 # -----------------------------------------------------------------------------
 

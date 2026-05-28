@@ -96,6 +96,7 @@ Current implementation note:
 - both delivered modes run on `overlay_transport=myudp`, `tcp`, `ws`, and `quic`
 - the current runtime keeps mux payload budgeting aligned with the wrapped transport session budget for `myudp`, `tcp`, and `quic`, so SecureLink wrapping does not reduce healthy forwarded application traffic to the mux-header size alone
 - when a protected client observes a transport-epoch change during reconnect or restart recovery, it now restarts the secure-link client handshake against that fresh transport epoch instead of continuing on stale client-side handshake state
+- when a `myudp` transport epoch changes during reconnect or outage recovery, the runtime now clears stale sender state, receiver gap/missing state, queued datagrams, and control pacing state before the fresh SecureLink handshake begins, so old-epoch recovery feedback cannot leak into the new authenticated session
 - when a WebSocket protected client reconnects after a previous transport epoch, it drops early-buffered protected frames from the old transport/session before accepting the fresh socket so stale old-session ciphertext is not flushed into the new SecureLink handshake
 - broader multi-peer listener validation now exists on `ws`, `myudp`, `tcp`, and `quic`, with the deepest concurrent channel-routing slice still exercised on the TCP transport
 - the runtime now exposes aggregate runtime metadata and secure-link reload/apply summaries through `/api/status`, while peer-scoped traffic, connection, compression, and secure-link observability live in `/api/peers` and `/api/connections`
@@ -185,7 +186,7 @@ Implementation note: the live-config derivation for `REQ-MUX-010` now also inclu
 - `REQ-MYU-006`: The myudp transport shall tolerate heavy early loss patterns without silently corrupting delivered payloads.
 
 Implementation note: the transport-envelope RTT and retransmission details for the delivered `myudp` runtime are documented in [MYUDP_DESIGN.md](/home/ohnoohweh/quicbr_test/docs/MYUDP_DESIGN.md). In particular, retransmission must rebuild a fresh protocol envelope for each actual wire send so `tx_ns` and `echo_ns` reflect the resend attempt rather than a stale raw datagram image.
-Implementation note: current focused regression coverage for the `REQ-MYU-*` slice also includes semantic log-replay and transport-edge checks that preserve fresh retransmit frame rebuilding, protect receiver gap state across sender reset, keep log-based repro analysis aligned to the same observed session epoch, and keep a frame that was reported missing on a persistent RTT-paced retry path until cumulative ACK progress actually clears that gap.
+Implementation note: current focused regression coverage for the `REQ-MYU-*` slice also includes semantic log-replay and transport-edge checks that preserve fresh retransmit frame rebuilding, protect receiver gap state across sender reset, clear stale receiver/control state across full transport-epoch reset, keep log-based repro analysis aligned to the same observed session epoch, and keep a frame that was reported missing on a persistent RTT-paced retry path until cumulative ACK progress actually clears that gap.
 
 ## Admin web requirements
 

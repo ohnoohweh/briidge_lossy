@@ -1222,6 +1222,8 @@ class UdpDelayLossProxy:
         self.thread: Optional[threading.Thread] = None
         self.ready_event = threading.Event()
         self.stop_event = threading.Event()
+        self.pause_event = threading.Event()
+        self._paused_directions: set[str] = set()
         self.client_addr: Optional[tuple[str, int]] = None
         self._pending: list[tuple[float, int, socket.socket, tuple[str, int], bytes]] = []
         self._pending_seq = 0
@@ -1266,6 +1268,22 @@ class UdpDelayLossProxy:
                 pass
         if self.thread is not None:
             self.thread.join(timeout=2.0)
+
+    def pause(self) -> None:
+        self.pause_event.set()
+        self._log('proxy paused')
+
+    def resume(self) -> None:
+        self.pause_event.clear()
+        self._log('proxy resumed')
+
+    def pause_direction(self, direction: str) -> None:
+        self._paused_directions.add(str(direction))
+        self._log(f'proxy paused direction={direction}')
+
+    def resume_direction(self, direction: str) -> None:
+        self._paused_directions.discard(str(direction))
+        self._log(f'proxy resumed direction={direction}')
 
     def _classify(self, data: bytes) -> Optional[str]:
         parsed = PROTO.parse_frame_with_times(data)
@@ -1356,6 +1374,14 @@ class UdpDelayLossProxy:
                 except BlockingIOError:
                     continue
                 except OSError:
+                    continue
+                direction = 'client_to_server' if sock is self.listen_sock else 'server_to_client'
+                if self.pause_event.is_set() or direction in self._paused_directions:
+                    if sock is self.listen_sock:
+                        self.client_addr = (str(addr[0]), int(addr[1]))
+                        self._log(f'pause drop c2s from={addr!r} len={len(data)}')
+                    else:
+                        self._log(f'pause drop s2c from={addr!r} len={len(data)}')
                     continue
                 if sock is self.listen_sock:
                     self.client_addr = (str(addr[0]), int(addr[1]))
@@ -8606,6 +8632,308 @@ def test_overlay_e2e_ws_secure_link_psk_reconnect_drops_stale_buffered_old_sessi
         finally:
             if bounce is not None:
                 bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly(
+    tmp_path: Path,
+) -> None:
+    with secure_link_test_lock():
+        case_index = 393
+        base_port = _myudp_delay_loss_base_port(case_index)
+        loopback_v4, _loopback_v6 = _loopback_hosts_for_case(case_index)
+        server_overlay_port = base_port
+        proxy_listen_port = base_port + 1
+        proxy_forward_port = base_port + 2
+        client_probe_port = base_port + 10
+        server_target_port = base_port + 12
+        server_admin, client_admin = alloc_admin_ports(case_index, base=SECURE_LINK_ADMIN_BASE)
+        missing_cfg = str(tmp_path / 'myudp_secure_link_transport_outage_missing.cfg')
+        py = sys.executable
+        server_app_log = tmp_path / 'myudp_secure_link_transport_outage_server.txt'
+        client_app_log = tmp_path / 'myudp_secure_link_transport_outage_client.txt'
+
+        bulk_stop = threading.Event()
+        bulk_ready = threading.Event()
+        bulk_stats: dict[str, int] = {'accepted': 0, 'sent_chunks': 0, 'sent_bytes': 0}
+        bulk_errors: list[Exception] = []
+        bulk_thread: Optional[threading.Thread] = None
+
+        def _bulk_server_worker() -> None:
+            family = socket.AF_INET6 if ':' in loopback_v4 else socket.AF_INET
+            payload = b'B' * 4096
+            try:
+                with socket.socket(family, socket.SOCK_STREAM) as srv:
+                    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    srv.bind((loopback_v4, server_target_port))
+                    srv.listen(8)
+                    srv.settimeout(0.5)
+                    bulk_ready.set()
+                    while not bulk_stop.is_set():
+                        try:
+                            conn, _addr = srv.accept()
+                        except socket.timeout:
+                            continue
+                        except OSError:
+                            break
+                        bulk_stats['accepted'] += 1
+                        with conn:
+                            conn.settimeout(0.5)
+                            with contextlib.suppress(Exception):
+                                conn.recv(4096)
+                            while not bulk_stop.is_set():
+                                try:
+                                    conn.sendall(payload)
+                                    bulk_stats['sent_chunks'] += 1
+                                    bulk_stats['sent_bytes'] += len(payload)
+                                    time.sleep(0.002)
+                                except (socket.timeout, TimeoutError):
+                                    continue
+                                except Exception as exc:
+                                    if not bulk_stop.is_set():
+                                        bulk_errors.append(exc)
+                                    break
+            except Exception as exc:
+                if not bulk_stop.is_set():
+                    bulk_errors.append(exc)
+            finally:
+                bulk_ready.set()
+
+        def build_proxy() -> UdpDelayLossProxy:
+            return UdpDelayLossProxy(
+                name='myudp_secure_link_transport_outage',
+                listen_host=loopback_v4,
+                listen_port=proxy_listen_port,
+                upstream_host=loopback_v4,
+                upstream_port=server_overlay_port,
+                forward_bind_host=loopback_v4,
+                forward_bind_port=proxy_forward_port,
+                delay_ms=0,
+                log_path=tmp_path / 'myudp_secure_link_transport_outage_proxy.log',
+            )
+
+        server_cmd = [
+            py, str(BRIDGE),
+            '--overlay-transport', 'myudp',
+            '--udp-bind', loopback_v4, '--udp-own-port', str(server_overlay_port),
+            '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
+            '--log-file', str(server_app_log),
+            '--config', missing_cfg, '--admin-web-port', '0',
+        ] + admin_args(server_admin) + [
+            '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+        ]
+        client_cmd = [
+            py, str(BRIDGE),
+            '--overlay-transport', 'myudp',
+            '--udp-peer', loopback_v4, '--udp-peer-port', str(proxy_listen_port),
+            '--udp-bind', loopback_v4, '--udp-own-port', '0',
+            '--own-servers', f'tcp,{client_probe_port},{loopback_v4},tcp,{loopback_v4},{server_target_port}',
+            '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
+            '--log-file', str(client_app_log),
+            '--config', missing_cfg, '--admin-web-port', '0',
+        ] + admin_args(client_admin) + [
+            '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+        ]
+
+        server_proc: Optional[Proc] = None
+        client_proc: Optional[Proc] = None
+        proxy: Optional[UdpDelayLossProxy] = None
+        flood_stop = threading.Event()
+        flood_ready = threading.Event()
+        flood_stats: dict[str, int] = {'recv_chunks': 0, 'recv_bytes': 0}
+        flood_errors: list[Exception] = []
+        flood_thread: Optional[threading.Thread] = None
+
+        def _wait_log_occurrences(path: Path, needle: str, minimum_count: int, timeout: float) -> None:
+            end = time.time() + timeout
+            last_text = ''
+            while time.time() < end:
+                text = path.read_text(encoding='utf-8', errors='replace') if path.exists() else ''
+                if text.count(needle) >= minimum_count:
+                    return
+                last_text = text[-4000:]
+                time.sleep(0.25)
+            raise RuntimeError(
+                f'Log {path.name} did not contain {needle!r} at least {minimum_count} times.\n--- tail ---\n{last_text}'
+            )
+
+        def _tcp_flood_worker() -> None:
+            family = socket.AF_INET6 if ':' in loopback_v4 else socket.AF_INET
+            try:
+                with socket.socket(family, socket.SOCK_STREAM) as sock:
+                    sock.bind((loopback_v4, 0))
+                    sock.settimeout(0.5)
+                    sock.connect((loopback_v4, client_probe_port))
+                    sock.sendall(b'GET /movie01.mkv HTTP/1.1\r\nHost: local\r\n\r\n')
+                    flood_ready.set()
+                    while not flood_stop.is_set():
+                        try:
+                            data = sock.recv(32768)
+                        except (socket.timeout, TimeoutError):
+                            continue
+                        if not data:
+                            break
+                        flood_stats['recv_chunks'] += 1
+                        flood_stats['recv_bytes'] += len(data)
+            except Exception as exc:
+                if not flood_stop.is_set():
+                    flood_errors.append(exc)
+            finally:
+                flood_ready.set()
+
+        try:
+            bulk_thread = threading.Thread(target=_bulk_server_worker, daemon=True)
+            bulk_thread.start()
+            if not bulk_ready.wait(5.0):
+                raise RuntimeError('Timed out waiting for bulk TCP server to start')
+            proxy = build_proxy()
+            proxy.start()
+
+            server_proc = start_proc('myudp_secure_link_transport_outage_server', server_cmd, tmp_path, admin_port=server_admin)
+            client_proc = start_proc('myudp_secure_link_transport_outage_client', client_cmd, tmp_path, admin_port=client_admin)
+            wait_admin_up(server_admin, timeout=10.0)
+            wait_admin_up(client_admin, timeout=10.0)
+
+            server_proc, client_proc = wait_both_connected(server_proc, client_proc, tmp_path, timeout=30.0)
+            wait_peer_endpoint_visible(server_admin, timeout=12.0, label='server', transport='myudp')
+            wait_peer_endpoint_visible(client_admin, timeout=12.0, label='client', transport='myudp')
+
+            first_doc = wait_peer_secure_link_state(
+                client_admin,
+                expected_state='authenticated',
+                timeout=12.0,
+                label='client',
+                transport='myudp',
+                authenticated=True,
+            )
+            first_secure = dict((first_active_secure_link_row(first_doc, transport='myudp').get('secure_link') or {}))
+            first_session_id = int(first_secure.get('session_id') or 0)
+            if first_session_id <= 0:
+                raise RuntimeError(f'Could not determine initial myudp secure-link session id from peers doc: {first_doc!r}')
+
+            with socket.socket(socket.AF_INET6 if ':' in loopback_v4 else socket.AF_INET, socket.SOCK_STREAM) as prime_sock:
+                prime_sock.bind((loopback_v4, 0))
+                prime_sock.settimeout(4.0)
+                prime_sock.connect((loopback_v4, client_probe_port))
+                prime_sock.sendall(b'GET /prime HTTP/1.1\r\nHost: local\r\n\r\n')
+                prime_reply = prime_sock.recv(4096)
+            assert prime_reply, 'expected initial bulk TCP response before outage'
+
+            flood_thread = threading.Thread(target=_tcp_flood_worker, daemon=True)
+            flood_thread.start()
+            if not flood_ready.wait(5.0):
+                raise RuntimeError('Timed out waiting for TCP download worker to connect through the myudp overlay')
+
+            flood_deadline = time.time() + 6.0
+            while time.time() < flood_deadline and flood_stats['recv_chunks'] < 32 and not flood_errors:
+                time.sleep(0.1)
+            assert flood_stats['recv_chunks'] >= 1, (
+                f'expected TCP download worker to receive traffic before outage; '
+                f'client_stats={flood_stats!r} server_stats={bulk_stats!r} errors={flood_errors!r}/{bulk_errors!r}'
+            )
+
+            proxy.pause()
+
+            wait_status_not_connected(client_admin, timeout=30.0, label='client')
+            wait_status_not_connected(server_admin, timeout=30.0, label='server')
+
+            assert bulk_stats['sent_chunks'] >= 8, (
+                f'expected meaningful server-side TCP push before recovery; '
+                f'client_stats={flood_stats!r} server_stats={bulk_stats!r} '
+                f'errors={flood_errors!r}/{bulk_errors!r}'
+            )
+
+            proxy.resume()
+
+            _wait_log_occurrences(client_app_log, '[STATE] CONNECTED', 2, timeout=20.0)
+            _wait_log_occurrences(server_app_log, '[STATE] CONNECTED', 2, timeout=20.0)
+            client_proc = ensure_proc_up(client_proc, tmp_path, admin_timeout=10.0)
+            server_proc = ensure_proc_up(server_proc, tmp_path, admin_timeout=10.0)
+
+            recovered_doc = None
+            recovery_deadline = time.time() + 20.0
+            last_recovery_exc: Optional[Exception] = None
+            while time.time() < recovery_deadline:
+                client_proc = ensure_proc_up(client_proc, tmp_path, admin_timeout=10.0)
+                with contextlib.suppress(Exception):
+                    wait_admin_up(client_proc.admin_port or 0, timeout=2.0)
+                try:
+                    recovered_doc = wait_peer_secure_link_session_change(
+                        client_proc.admin_port or 0,
+                        previous_session_id=first_session_id,
+                        timeout=min(3.0, max(0.5, recovery_deadline - time.time())),
+                        label='client',
+                        transport='myudp',
+                    )
+                    break
+                except Exception as exc:
+                    last_recovery_exc = exc
+                    time.sleep(0.25)
+            if recovered_doc is None:
+                raise RuntimeError(
+                    'myudp secure-link did not publish a fresh authenticated session after transport recovery; '
+                    f'last_error={last_recovery_exc!r}'
+                )
+            recovered_secure = dict((first_active_secure_link_row(recovered_doc, transport='myudp').get('secure_link') or {}))
+            recovered_session_id = int(recovered_secure.get('session_id') or 0)
+            if recovered_session_id <= 0:
+                raise RuntimeError(f'Could not determine recovered myudp secure-link session id from peers doc: {recovered_doc!r}')
+            assert recovered_session_id != first_session_id
+
+            client_doc = wait_peer_secure_link_state(
+                client_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=8.0,
+                label='client',
+                transport='myudp',
+                authenticated=True,
+            )
+            client_secure = dict((first_active_secure_link_row(client_doc, transport='myudp').get('secure_link') or {}))
+            client_session_id = int(client_secure.get('session_id') or 0)
+            assert client_session_id == recovered_session_id
+            assert client_session_id != first_session_id
+            assert client_secure.get('last_event') == 'authenticated'
+            assert not client_secure.get('failure_code'), client_secure
+
+            server_doc = wait_peer_secure_link_state(
+                server_proc.admin_port or 0,
+                expected_state='authenticated',
+                timeout=8.0,
+                label='server',
+                transport='myudp',
+                authenticated=True,
+            )
+            server_secure = dict((first_active_secure_link_row(server_doc, transport='myudp').get('secure_link') or {}))
+            server_session_id = int(server_secure.get('session_id') or 0)
+            assert server_session_id > 0
+            assert server_session_id == recovered_session_id
+            assert not server_secure.get('failure_code'), server_secure
+
+            flood_stop.set()
+            if flood_thread is not None:
+                flood_thread.join(timeout=5.0)
+
+            with socket.socket(socket.AF_INET6 if ':' in loopback_v4 else socket.AF_INET, socket.SOCK_STREAM) as after_sock:
+                after_sock.bind((loopback_v4, 0))
+                after_sock.settimeout(8.0)
+                after_sock.connect((loopback_v4, client_probe_port))
+                after_sock.sendall(b'GET /after HTTP/1.1\r\nHost: local\r\n\r\n')
+                after_reply = after_sock.recv(4096)
+            assert after_reply, 'expected post-recovery bulk TCP response'
+        finally:
+            flood_stop.set()
+            if flood_thread is not None:
+                flood_thread.join(timeout=5.0)
+            if proxy is not None:
+                proxy.stop()
+            bulk_stop.set()
+            if bulk_thread is not None:
+                bulk_thread.join(timeout=5.0)
             if client_proc is not None:
                 stop_proc(client_proc)
             if server_proc is not None:

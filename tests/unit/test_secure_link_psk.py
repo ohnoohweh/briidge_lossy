@@ -21,6 +21,8 @@ class FakeInnerSession:
         self.sent = []
         self.reconnect_requests = 0
         self._passthrough_enabled = False
+        self.reset_sender_calls = 0
+        self.reset_transport_epoch_calls = 0
 
     def connect_peer(self, peer):
         self._peer = peer
@@ -68,6 +70,10 @@ class FakeInnerSession:
     def set_on_app_from_peer_bytes(self, cb): self._on_app_from_peer_bytes = cb
     def set_on_transport_epoch_change(self, cb): self._on_transport_epoch_change = cb
     def set_app_payload_passthrough(self, enabled: bool): self._passthrough_enabled = bool(enabled)
+    def reset_sender(self): self.reset_sender_calls += 1
+    def reset_transport_epoch(self):
+        self.reset_transport_epoch_calls += 1
+        self.reset_sender_calls += 1
 
     def get_metrics(self):
         from obstacle_bridge.bridge import SessionMetrics
@@ -517,6 +523,26 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
         new_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
         self.assertNotEqual(old_session_id, new_session_id)
+
+    async def test_explicit_transport_epoch_reset_forwards_to_inner_and_clears_client_state(self):
+        client_inner = FakeInnerSession(connected=True)
+        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
+
+        await client.start()
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+
+        status_before = client.get_secure_link_status_snapshot()
+        self.assertEqual(status_before["state"], "handshaking")
+        self.assertEqual(status_before["handshake_attempts_total"], 1)
+
+        client.reset_transport_epoch()
+
+        self.assertEqual(client_inner.reset_transport_epoch_calls, 1)
+        self.assertEqual(client_inner.reset_sender_calls, 1)
+        status_after = client.get_secure_link_status_snapshot()
+        self.assertEqual(status_after["state"], "waiting_hello")
+        self.assertFalse(status_after["authenticated"])
 
     async def test_server_rewrites_mux_channels_per_peer_for_multiple_connections(self):
         server_inner = FakeInnerSession(connected=True)

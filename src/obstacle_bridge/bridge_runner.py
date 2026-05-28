@@ -361,9 +361,11 @@ class Runner:
                 asyncio.get_running_loop().create_task(mux.on_overlay_state(connected))
             except RuntimeError:
                 pass
-        # Reset reliability sender state on disconnect so reconnect starts clean.
+        # Reset overlay epoch state on disconnect so reconnect starts clean.
         if not aggregate_connected:
-            resetter = getattr(session, "reset_sender", None)
+            resetter = getattr(session, "reset_transport_epoch", None)
+            if not callable(resetter):
+                resetter = getattr(session, "reset_sender", None)
             if callable(resetter):
                 with contextlib.suppress(Exception):
                     resetter()
@@ -375,6 +377,12 @@ class Runner:
             id(session),
             epoch,
         )
+        resetter = getattr(session, "reset_transport_epoch", None)
+        if not callable(resetter):
+            resetter = getattr(session, "reset_sender", None)
+        if callable(resetter):
+            with contextlib.suppress(Exception):
+                resetter()
         try:
             asyncio.get_running_loop().create_task(mux.on_transport_epoch_change(epoch))
         except RuntimeError:

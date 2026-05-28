@@ -189,6 +189,7 @@ REQ-AUT-006:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_reconnects_with_fresh_session
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_reconnect_drops_stale_buffered_old_session_data
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_replay_after_reconnect_is_rejected
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_replay_after_rekey_is_rejected
@@ -196,6 +197,7 @@ REQ-AUT-006:
     - tests/unit/test_secure_link_psk.py::test_psk_rekey_rotates_session_id_and_keeps_data_flowing
     - tests/unit/test_secure_link_psk.py::test_data_counter_zero_is_rejected_as_lifecycle_violation
     - tests/unit/test_secure_link_psk.py::test_counter_exhaustion_fails_closed_before_nonce_wrap
+    - tests/unit/test_secure_link_psk.py::test_explicit_transport_epoch_reset_forwards_to_inner_and_clears_client_state
 
 REQ-AUT-007:
   integration_tests:
@@ -231,6 +233,7 @@ REQ-AUT-009:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_operator_forced_rekey
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_reconnects_with_fresh_session
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_authenticated_failure_recovers_with_reconnect
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_reconnect_drops_stale_buffered_old_session_data
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_listener_two_clients_peer_traffic_stats_are_scoped
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_recovery_after_prior_time_threshold_rekey_reports_fresh_authentication
@@ -452,10 +455,13 @@ REQ-LIFE-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_sender_reset_clears_stale_reconnect_state
+    - tests/unit/test_requirements_unit_gaps.py::test_myudp_transport_epoch_reset_clears_receiver_gap_state
+    - tests/unit/test_requirements_unit_gaps.py::test_myudp_peer_protocol_epoch_reset_drops_queued_datagrams_and_control_state
 
 REQ-LIFE-002:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly
     - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
   unit_tests:
     - tests/unit/test_ws_payload_mode.py::test_quick_reconnect_cancels_pending_disconnect
@@ -464,6 +470,7 @@ REQ-LIFE-002:
 REQ-LIFE-003:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_bidirectional_sessions_deliver_independent_payloads
 

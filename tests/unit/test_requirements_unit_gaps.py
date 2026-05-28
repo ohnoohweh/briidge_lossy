@@ -472,6 +472,53 @@ class MyUdpReliabilityRequirementUnitTests(unittest.TestCase):
         self.assertEqual(session.pending, {})
         self.assertEqual(session.missing, set())
 
+    def test_myudp_transport_epoch_reset_clears_receiver_gap_state(self):
+        session, transport = self._session_and_transport(max_in_flight=1)
+        session.send_application_payload(b"before", transport)
+        session.send_application_payload(b"queued", transport)
+
+        pkt2 = DataPacket.build_full(2, FRAME_CONT, 3, b"def")
+        pkt3 = DataPacket.build_full(3, FRAME_CONT, 6, b"ghi")
+        _advanced, completed = session.process_data(pkt2)
+        self.assertEqual(completed, [])
+        _advanced, completed = session.process_data(pkt3)
+        self.assertEqual(completed, [])
+        self.assertEqual(session.expected, 1)
+        self.assertEqual(set(session.pending), {2, 3})
+        self.assertEqual(session.missing, {1})
+
+        session.reset_transport_epoch()
+
+        self.assertEqual(session.next_ctr, 1)
+        self.assertEqual(session.in_flight(), 0)
+        self.assertEqual(session.waiting_count(), 0)
+        self.assertEqual(session.expected, 1)
+        self.assertEqual(session.pending, {})
+        self.assertEqual(session.missing, set())
+        self.assertIsNone(session.reass)
+
+    def test_myudp_peer_protocol_epoch_reset_drops_queued_datagrams_and_control_state(self):
+        session, _transport = self._session_and_transport()
+        proto = PeerProtocol(session, lambda: None, lambda _data: None, proto=session.proto)
+
+        proto._last_control_sent_ns = 123
+        proto._last_sent_last_in_order = 77
+        proto._established_ns = 456
+        proto._rx_pending.append((b"stale", ("127.0.0.1", 9999)))
+        proto._rx_pending_scheduled = True
+        proto._completed_pending.append(b"payload")
+        proto._completed_pending_scheduled = True
+
+        proto.reset_transport_epoch_runtime()
+
+        self.assertEqual(proto._last_control_sent_ns, 0)
+        self.assertEqual(proto._last_sent_last_in_order, 0)
+        self.assertEqual(proto._established_ns, 0)
+        self.assertEqual(list(proto._rx_pending), [])
+        self.assertFalse(proto._rx_pending_scheduled)
+        self.assertEqual(list(proto._completed_pending), [])
+        self.assertFalse(proto._completed_pending_scheduled)
+
 
 if __name__ == "__main__":
     unittest.main()
