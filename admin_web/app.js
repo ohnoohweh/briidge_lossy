@@ -2228,6 +2228,7 @@ function renderPeerTable(rows) {
         renderMetric('Connection Uptime', fmtUptimeFromUnixTs(secureLink.connected_since_unix_ts)),
         renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds)),
         renderMetric('RTT Est (ms)', fmtNumber(row.rtt_est_ms)),
+        renderMetric('Transmit Delay Est (ms)', fmtNumber(row.transmit_delay_est_ms)),
         renderMetric('RX Bytes', fmtBytes(row.traffic?.rx_bytes ?? 0)),
         renderMetric('TX Bytes', fmtBytes(row.traffic?.tx_bytes ?? 0)),
       ]);

@@ -291,6 +291,12 @@ class StatsBoard:
             f"cur={_fmt(m.rtt_sample_ms, 1)} "
             f"est={_fmt(m.rtt_est_ms, 1)} "
         )
+        if m.transmit_delay_sample_ms is not None or m.transmit_delay_est_ms is not None:
+            rtt_and_flow += (
+                f"TXDLY(ms): "
+                f"cur={_fmt(m.transmit_delay_sample_ms, 1)} "
+                f"est={_fmt(m.transmit_delay_est_ms, 1)} "
+            )
         if s:
            rtt_and_flow += ( 
                 f"inflight={_fmt(m.inflight)}/{_fmt(m.max_inflight)} "
@@ -452,6 +458,8 @@ class StatsBoard:
                 "last_rtt_ok_age_sec": last_rtt_ok_age_sec,
                 "rtt_sample_ms": _num(m.rtt_sample_ms),
                 "rtt_est_ms": _num(m.rtt_est_ms),
+                "transmit_delay_sample_ms": _num(m.transmit_delay_sample_ms),
+                "transmit_delay_est_ms": _num(m.transmit_delay_est_ms),
                 "inflight": _num(m.inflight),
                 "max_inflight": _num(m.max_inflight),
                 "waiting_count": _num(m.waiting_count),

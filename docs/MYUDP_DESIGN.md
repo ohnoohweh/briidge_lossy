@@ -136,6 +136,60 @@ The correct resend invariant is:
 
 The application payload bytes may be identical across attempts, but the transport envelope must not be identical.
 
+## Transmit delay measurement
+
+`myudp` now tracks a second transport-quality metric in addition to RTT:
+
+- `transmit_delay_ms`
+
+This metric is intentionally not the same as raw one-way propagation latency.
+It is an estimate of the effective one-way delivery delay that a `DATA` frame experienced before it became acknowledged.
+
+Current design rule:
+
+- the first-send timestamp for a `DATA` frame is stored when that counter is created
+- retransmission does not overwrite that first-send timestamp
+- when feedback cumulatively acknowledges the frame and it leaves the send buffer, the sender computes:
+
+```text
+transmit_delay_sample_ms = ack_elapsed_ms - 0.5 * current_rtt_est_ms
+```
+
+where:
+
+- `ack_elapsed_ms` is the local monotonic time since the frame's first send
+- `current_rtt_est_ms` is the sender's current RTT EWMA at ACK time
+
+The sample is clamped at `>= 0` and then fed into its own EWMA:
+
+- `transmit_delay_sample_ms`
+- `transmit_delay_est_ms`
+
+This definition intentionally includes queueing and loss-recovery cost from the sender's point of view:
+
+- if a frame is delivered on the first attempt, transmit delay tends to stay close to one-way path plus queueing delay
+- if a frame requires retransmission, the metric grows because the first-send timestamp is preserved
+
+That behavior is deliberate. The metric answers:
+
+- "how long did this payload effectively take to get through the tunnel and become acknowledged?"
+
+not:
+
+- "what was the propagation delay of the last successful wire attempt?"
+
+For operator observability that is usually the more useful number, because it rises under:
+
+- congestion
+- scheduler delay
+- retransmission pressure
+- ACK/recovery inefficiency
+
+RTT and transmit delay should therefore be read together:
+
+- RTT: transport round-trip responsiveness
+- transmit delay: effective one-way payload delivery delay as experienced by acknowledged `DATA`
+
 ## Missing metadata and stale raw frames
 
 The sender keeps two different representations of an in-flight `DATA` frame:
@@ -242,6 +296,8 @@ The most important unit-level transport invariants are:
 - if semantic resend metadata is missing, the runtime should skip stale raw-frame replay
 - once a counter has been reported missing, later omission from feedback must not silently clear the resend obligation
 - a peer-reported missing counter should continue to be retransmitted on an RTT cadence until cumulative ACK state confirms it
+- acknowledged `DATA` frames should produce a transmit-delay sample from first-send time minus half the current RTT
+- the averaged transmit-delay metric should become observable through the runtime status/dashboard path
 - tests should cover operation near the in-flight window limit so head-of-line recovery is validated under pressure, not only in tiny toy sequences
 
 Those checks are stronger than an end-to-end “payload still arrived” integration result, because payload delivery can succeed even while the RTT signal is already corrupted.

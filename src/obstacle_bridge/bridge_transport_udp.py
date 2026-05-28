@@ -99,6 +99,7 @@ CONTROL_FIXED_BASE = 2 + 2 + 2 # last(2) + highest(2) + num_missed(2)
 # -------------------- Timers / RTT / Keepalive --------------------
 RETRANSMIT_UNCONFIRMED_MS = 25
 RTT_EWMA_ALPHA = 0.125
+TRANSMIT_DELAY_EWMA_ALPHA = RTT_EWMA_ALPHA
 RETRANS_MULTIPLIER = 1.5
 PERSISTENT_MISSING_RETRANS_MULTIPLIER = 1.0
 IDLE_AFTER_MS = 2000
@@ -634,6 +635,8 @@ class Session:
         self.missing: Set[int] = set()
         self.reass: Optional[Reassembly] = None
         # RTT mirrors read from Protocol (source of truth)
+        self.transmit_delay_sample_ms: float = 0.0
+        self.transmit_delay_est_ms: float = 0.0
         self.last_sent_ctr = 0
         self.last_ack_peer = 0
         self.peer_missed_count = 0
@@ -756,10 +759,38 @@ class Session:
             self.stats_hist["gt3"] += 1
         if self.log.isEnabledFor(logging.DEBUG):
             self.log.debug(f"[ACK] confirmed ctr={cnt} attempts={attempts}")
+
+    def _record_transmit_delay_sample_for(self, cnt: int, ack_now_ns: int) -> None:
+        first_tx_ns = int(self.send_txns.get(cnt, 0) or 0)
+        if first_tx_ns <= 0 or ack_now_ns <= first_tx_ns:
+            return
+        elapsed_ms = (ack_now_ns - first_tx_ns) / 1e6
+        rtt_est_ms = float(getattr(self.proto, "rtt_est_ms", 0.0) or 0.0)
+        sample_ms = max(0.0, elapsed_ms - (0.5 * rtt_est_ms if rtt_est_ms > 0.0 else 0.0))
+        self.transmit_delay_sample_ms = sample_ms
+        if self.transmit_delay_est_ms <= 0.0:
+            self.transmit_delay_est_ms = sample_ms
+        elif self.transmit_delay_est_ms < sample_ms:
+            self.transmit_delay_est_ms = sample_ms
+        else:
+            self.transmit_delay_est_ms = (
+                (1 - TRANSMIT_DELAY_EWMA_ALPHA) * self.transmit_delay_est_ms
+                + TRANSMIT_DELAY_EWMA_ALPHA * sample_ms
+            )
+        if self.log.isEnabledFor(logging.DEBUG):
+            self.log.debug(
+                "[TXDLY] ctr=%d sample_ms=%.3f est_ms=%.3f elapsed_ms=%.3f rtt_est_ms=%.3f",
+                cnt,
+                self.transmit_delay_sample_ms,
+                self.transmit_delay_est_ms,
+                elapsed_ms,
+                rtt_est_ms,
+            )
     # ------------- ACK/feedback (no timers/retrans scheduling here) -------------
     def confirm_with_feedback(self, last_in_order: int, highest: int, missed: List[int]) -> None:
         if last_in_order == 0 and highest == 0 and len(missed) == 0:
             return
+        ack_now_ns = now_ns()
         missed_set = set(missed)
         list_at_capacity = len(missed) >= CONTROL_MAX_MISSED
         if self.log.isEnabledFor(logging.DEBUG):
@@ -768,6 +799,7 @@ class Session:
         to_del = [cnt for cnt in list(self.send_buf.keys())
                   if ring_cmp(last_in_order, cnt) >= 0]
         for cnt in to_del:
+            self._record_transmit_delay_sample_for(cnt, ack_now_ns)
             self._finalize_stats_for(cnt)
             self.send_buf.pop(cnt, None)
             self.send_txns.pop(cnt, None)
@@ -789,6 +821,7 @@ class Session:
         to_del2 = [cnt for cnt in list(self.send_buf.keys())
                    if in_range(cnt) and cnt not in missed_set and cnt not in self.peer_reported_missing]
         for cnt in to_del2:
+            self._record_transmit_delay_sample_for(cnt, ack_now_ns)
             self._finalize_stats_for(cnt)
             self.send_buf.pop(cnt, None)
             self.send_txns.pop(cnt, None)
@@ -947,6 +980,8 @@ class Session:
         self.last_ack_peer = 0
         self.peer_missed_count = 0
         self.last_send_ns = 0
+        self.transmit_delay_sample_ms = 0.0
+        self.transmit_delay_est_ms = 0.0
 
     def reset_transport_epoch(self) -> None:
         self.reset_sender()
@@ -1743,9 +1778,13 @@ class UdpSession(ISession):
             try:
                 sessions = [ctx["session"] for ctx in self._server_peers.values() if isinstance(ctx, dict) and ctx.get("session") is not None]
                 rtt_candidates = [float(getattr(s, "rtt_est_ms", 0.0) or 0.0) for s in sessions if getattr(s, "last_rtt_ok_ns", 0)]
+                transmit_delay_sample_candidates = [float(getattr(s, "transmit_delay_sample_ms", 0.0) or 0.0) for s in sessions if float(getattr(s, "transmit_delay_sample_ms", 0.0) or 0.0) > 0.0]
+                transmit_delay_est_candidates = [float(getattr(s, "transmit_delay_est_ms", 0.0) or 0.0) for s in sessions if float(getattr(s, "transmit_delay_est_ms", 0.0) or 0.0) > 0.0]
                 last_rtt_ok = max((int(getattr(s, "last_rtt_ok_ns", 0) or 0) for s in sessions), default=0)
                 return SessionMetrics(
                     rtt_est_ms=max(rtt_candidates) if rtt_candidates else None,
+                    transmit_delay_sample_ms=max(transmit_delay_sample_candidates) if transmit_delay_sample_candidates else None,
+                    transmit_delay_est_ms=max(transmit_delay_est_candidates) if transmit_delay_est_candidates else None,
                     last_rtt_ok_ns=last_rtt_ok or None,
                     inflight=sum(int(s.in_flight()) for s in sessions if hasattr(s, "in_flight")),
                     max_inflight=sum(int(getattr(s, "max_in_flight", 0) or 0) for s in sessions),
@@ -1760,6 +1799,8 @@ class UdpSession(ISession):
             return SessionMetrics(
                 rtt_sample_ms     = getattr(s, "rtt_sample_ms", None),
                 rtt_est_ms        = getattr(s, "rtt_est_ms", None),
+                transmit_delay_sample_ms = (getattr(s, "transmit_delay_sample_ms", None) or None),
+                transmit_delay_est_ms = (getattr(s, "transmit_delay_est_ms", None) or None),
                 last_rtt_ok_ns    = getattr(s, "last_rtt_ok_ns", None),
                 inflight          = int(s.in_flight()) if hasattr(s, "in_flight") else None,
                 max_inflight      = getattr(s, "max_in_flight", None),

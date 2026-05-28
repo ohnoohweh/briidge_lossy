@@ -101,6 +101,9 @@ class _RunnerStub:
                     "state": "connected",
                     "connected": True,
                     "peer": "127.0.0.1:1234",
+                    "rtt_est_ms": 42.0,
+                    "transmit_delay_sample_ms": 101.0,
+                    "transmit_delay_est_ms": 123.0,
                     "secure_link": {
                         "enabled": True,
                         "mode": "psk",
@@ -473,6 +476,14 @@ class AdminWebPayloadTests(unittest.TestCase):
                 self.assertIn("const missing = Array.isArray(deps?.missing) ? deps.missing : [];", text)
                 self.assertNotIn("platform === 'ios'", text)
 
+    def test_status_frontend_renders_transmit_delay_next_to_rtt(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        for app_path in self._canonical_webadmin_paths():
+            with self.subTest(app_path=str(app_path.relative_to(repo_root))):
+                text = app_path.read_text(encoding="utf-8")
+                self.assertIn("renderMetric('RTT Est (ms)', fmtNumber(row.rtt_est_ms))", text)
+                self.assertIn("renderMetric('Transmit Delay Est (ms)', fmtNumber(row.transmit_delay_est_ms))", text)
+
     def test_restart_endpoint_uses_immediate_mode_for_embedded_restart(self):
         args = argparse.Namespace(
             admin_web=True,
@@ -733,6 +744,9 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(peer["secure_link"]["handshake_attempts_total"], 1)
         self.assertEqual(peer["secure_link"]["authenticated_sessions_total"], 1)
         self.assertEqual(peer["secure_link"]["connected_since_unix_ts"], 1699999900.0)
+        self.assertEqual(peer["rtt_est_ms"], 42.0)
+        self.assertEqual(peer["transmit_delay_sample_ms"], 101.0)
+        self.assertEqual(peer["transmit_delay_est_ms"], 123.0)
         self.assertTrue(peer["compress_layer"]["enabled"])
         self.assertEqual(peer["compress_layer"]["algorithm"], "zlib")
         self.assertEqual(peer["compress_layer"]["compress_applied_total"], 7)

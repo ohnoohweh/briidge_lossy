@@ -420,6 +420,8 @@ class SessionMetrics:
     # RTT (if known)
     rtt_sample_ms: Optional[float] = None
     rtt_est_ms:    Optional[float] = None
+    transmit_delay_sample_ms: Optional[float] = None
+    transmit_delay_est_ms: Optional[float] = None
     last_rtt_ok_ns: Optional[int]  = None
     # Congestion / flow stats (if known)
     inflight: Optional[int]        = None

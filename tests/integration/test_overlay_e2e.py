@@ -3360,9 +3360,37 @@ def fmt_state_doc(doc: Optional[dict]) -> str:
     peer = overlay.get('peer')
     bind = overlay.get('bind')
     rtt = (doc.get('transport') or {}).get('rtt_est_ms')
+    txdly = (doc.get('transport') or {}).get('transmit_delay_est_ms')
+    if isinstance(rtt, (int, float)) and isinstance(txdly, (int, float)):
+        return f'{state} peer={peer} bind={bind} rtt_est_ms={rtt:.1f} tx_delay_est_ms={txdly:.1f}'
     if isinstance(rtt, (int, float)):
         return f'{state} peer={peer} bind={bind} rtt_est_ms={rtt:.1f}'
     return f'{state} peer={peer} bind={bind}'
+
+
+def wait_status_transport_metric_at_least(
+    admin_port: int,
+    *,
+    metric: str,
+    minimum_value: float,
+    timeout: float = 12.0,
+    label: str = '',
+) -> dict:
+    end = time.time() + timeout
+    last_doc = None
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.5)
+        last_doc = doc
+        transport = doc.get('transport') or {}
+        value = transport.get(metric)
+        if isinstance(value, (int, float)) and float(value) >= float(minimum_value):
+            who = f' {label}' if label else ''
+            log.info(f'[STATUS]{who} port={admin_port} transport.{metric}={float(value):.3f}')
+            return doc
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'/api/status did not expose transport.{metric}>={minimum_value} on port {admin_port}; last={last_doc!r}'
+    )
 
 
 def wait_status_connected(admin_port: int, timeout: float = 30.0, label: str = '') -> dict:
@@ -3780,6 +3808,15 @@ def run_case_myudp_delay_loss(loss_case: MyudpDelayLossCase, log_dir: Path, case
         expected = response_payload(loss_case.payload)
         if got != expected:
             raise RuntimeError(f'myudp delay/loss probe mismatch: got={got!r} expected={expected!r}')
+        sender_admin_port = client_admin if loss_case.direction == 'client_to_server' else server_admin
+        sender_label = 'client sender' if loss_case.direction == 'client_to_server' else 'server sender'
+        wait_status_transport_metric_at_least(
+            sender_admin_port,
+            metric='transmit_delay_est_ms',
+            minimum_value=1.0,
+            timeout=12.0,
+            label=sender_label,
+        )
     finally:
         if client_proc is not None:
             stop_proc(client_proc)
