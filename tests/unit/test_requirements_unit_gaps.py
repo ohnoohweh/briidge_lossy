@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import json
 import time
+import types
 import unittest
 from unittest import mock
 
@@ -20,6 +21,9 @@ from obstacle_bridge.bridge import (
     SessionMetrics,
     UdpSession,
 )
+from obstacle_bridge.bridge_transport_quic import QuicSession
+from obstacle_bridge.bridge_transport_tcp import TcpStreamSession
+from obstacle_bridge.bridge_transport_ws import WebSocketSession
 
 
 class _WriterStub:
@@ -330,6 +334,36 @@ class MyUdpReliabilityRequirementUnitTests(unittest.TestCase):
 
         self.assertAlmostEqual(session.transmit_delay_sample_ms, 300.0, places=3)
         self.assertAlmostEqual(session.transmit_delay_est_ms, 300.0, places=3)
+
+    def test_myudp_rtt_refresh_rebases_transmit_delay_est_to_half_rtt(self):
+        session, _transport = self._session_and_transport()
+        session.transmit_delay_est_ms = 9000.0
+
+        with mock.patch(
+            "obstacle_bridge.bridge_transport_udp.now_ns",
+            return_value=1_000_000_000,
+        ):
+            session.update_rtt(880_000_000)
+
+        self.assertAlmostEqual(session.rtt_sample_ms, 120.0, places=3)
+        self.assertAlmostEqual(session.rtt_est_ms, 120.0, places=3)
+        self.assertAlmostEqual(session.transmit_delay_est_ms, 60.0, places=3)
+
+    def test_stream_transports_publish_transmit_delay_as_half_rtt(self):
+        for session_cls in (TcpStreamSession, QuicSession, WebSocketSession):
+            session = session_cls.__new__(session_cls)
+            session._rtt = types.SimpleNamespace(
+                rtt_sample_ms=40.0,
+                rtt_est_ms=84.0,
+                last_rtt_ok_ns=123456789,
+            )
+
+            metrics = session.get_metrics()
+
+            self.assertEqual(metrics.rtt_sample_ms, 40.0)
+            self.assertEqual(metrics.rtt_est_ms, 84.0)
+            self.assertEqual(metrics.transmit_delay_est_ms, 42.0)
+            self.assertEqual(metrics.last_rtt_ok_ns, 123456789)
 
     def test_myudp_retransmit_skips_stale_raw_frame_when_send_meta_is_missing(self):
         session, transport = self._session_and_transport()

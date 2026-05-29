@@ -285,9 +285,11 @@ class TcpStreamSession(ISession):
         """
         try:
             r = self._rtt
+            rtt_est_ms = getattr(r, "rtt_est_ms", None)
             return SessionMetrics(
                 rtt_sample_ms=getattr(r, "rtt_sample_ms", None),
-                rtt_est_ms=getattr(r, "rtt_est_ms", None),
+                rtt_est_ms=rtt_est_ms,
+                transmit_delay_est_ms=(0.5 * float(rtt_est_ms)) if rtt_est_ms is not None else None,
                 last_rtt_ok_ns=getattr(r, "last_rtt_ok_ns", None),
             )
         except Exception:

@@ -3,10 +3,22 @@
 This repository currently collects:
 
 - `158` integration tests across [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), [tests/integration/test_ios_e2e.py](../tests/integration/test_ios_e2e.py), [tests/integration/test_ios_simulator_e2e.py](../tests/integration/test_ios_simulator_e2e.py), [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py), [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py), and [tests/integration/test_reconnect_regression.py](../tests/integration/test_reconnect_regression.py)
-- `263` unit tests in `tests/unit/`
+- `265` unit tests in `tests/unit/`
 - `67` iOS-focused Python tests in `ios/tests/` when collected with `PYTHONPATH=src:ios/src`
 
 Recent test/content updates:
+
+- 2026-05-29: `tcp`, `quic`, and `ws` transport session metrics now publish
+  `transmit_delay_est_ms` continuously as `rtt_est_ms / 2`, giving ChannelMux
+  and operator dashboards one consistent delay field on transports that do not
+  maintain the `myudp` ACK-derived delay estimator. Focused regression coverage
+  added in [tests/unit/test_requirements_unit_gaps.py](../tests/unit/test_requirements_unit_gaps.py).
+
+- 2026-05-29: `myudp` idle RTT refresh now rebases `transmit_delay_est_ms` to
+  `rtt_est_ms / 2` when a keepalive/idle echo updates RTT without a fresh
+  acknowledged `DATA` frame, preventing stale high transmit-delay readings from
+  lingering indefinitely during idle periods. Focused regression coverage added
+  in [tests/unit/test_requirements_unit_gaps.py](../tests/unit/test_requirements_unit_gaps.py).
 
 - 2026-05-29: ChannelMux now gates local TUN injection when the active session's
   `transmit_delay_est_ms` is high (>= 3000ms) to avoid injecting packets into

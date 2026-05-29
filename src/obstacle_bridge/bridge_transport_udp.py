@@ -860,6 +860,9 @@ class Session:
     def update_rtt(self, echo_tx_ns: int) -> None:
         before = (self.proto.rtt_sample_ms, self.proto.rtt_est_ms)
         self.proto.on_control_echo(echo_tx_ns)
+        rtt_est_ms = float(getattr(self.proto, "rtt_est_ms", 0.0) or 0.0)
+        if rtt_est_ms > 0.0:
+            self.transmit_delay_est_ms = 0.5 * rtt_est_ms
         if self.log.isEnabledFor(logging.DEBUG):
             self.log.debug(f"[RTT] sample_ms={self.proto.rtt_sample_ms:.3f} est_ms={self.proto.rtt_est_ms:.3f} (prev {before[0]:.3f}/{before[1]:.3f})")
     # ------------- RX side (DATA) -------------

@@ -737,6 +737,8 @@ REQ-MYU-007:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_ack_samples_transmit_delay_from_first_send_minus_half_rtt
+    - tests/unit/test_requirements_unit_gaps.py::test_myudp_rtt_refresh_rebases_transmit_delay_est_to_half_rtt
+    - tests/unit/test_requirements_unit_gaps.py::test_stream_transports_publish_transmit_delay_as_half_rtt
 
 # NOTE: The 2026-05-28 overload/freshness architecture follow-up extends the
 # design intent behind the `REQ-MYU-*` slice with bounded-queue, admission-side
