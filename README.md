@@ -1442,3 +1442,4 @@ Debugging in a project like this can be difficult because the behavior emerges f
 - `docs/WHITEPAPER.html` — full whitepaper requested for this repository update. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/WHITEPAPER.html`
 - `docs/README_TESTING.md` — consolidated testing catalog, execution commands, and regression coverage notes.
 - `wireshark/` — Wireshark dissectors grouped by framing/version.
+

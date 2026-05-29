@@ -4,16 +4,17 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from obstacle_bridge.bridge import ChannelMux
+from obstacle_bridge.bridge import ChannelMux, SessionMetrics
 
 
 class _FakeSession:
-    def __init__(self, *, connected=False, max_app_payload_size=65535):
+    def __init__(self, *, connected=False, max_app_payload_size=65535, transmit_delay_est_ms=None):
         self.app_cb = None
         self.peer_disconnect_cb = None
         self.sent = []
         self.connected = connected
         self.max_app_payload_size = max_app_payload_size
+        self._metrics = SessionMetrics(transmit_delay_est_ms=transmit_delay_est_ms)
 
     def is_connected(self):
         return self.connected
@@ -30,6 +31,9 @@ class _FakeSession:
 
     def get_max_app_payload_size(self):
         return self.max_app_payload_size
+
+    def get_metrics(self):
+        return self._metrics
 
 
 class ChannelMuxListenerModeTests(unittest.TestCase):
@@ -699,6 +703,25 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
             self.assertEqual(second[3], ChannelMux.MType.DATA)
             self.assertEqual(bytes(second[4]), b'\x45hello')
             self.assertIsNotNone(dev.chan_id)
+        finally:
+            mux.loop.close()
+
+    def test_local_tun_packet_drops_when_transmit_delay_est_too_high(self):
+        session = _FakeSession(connected=True, transmit_delay_est_ms=3000.0)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._overlay_connected = True
+            mux._accepting_enabled = True
+            spec = ChannelMux.ServiceSpec(5, 'tun', 'obtun0', 1500, 'tun', 'obtun1', 1500)
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+
+            mux._on_local_tun_packet(dev, b'\x45hello')
+
+            self.assertEqual(session.sent, [])
+            self.assertIsNone(dev.chan_id)
         finally:
             mux.loop.close()
 

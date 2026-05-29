@@ -116,6 +116,7 @@ class ChannelMux:
     CTRL_CHUNK_MAGIC = b"CKV1"
     CTRL_CHUNK_REASSEMBLY_TTL_S = 20.0
     CTRL_CHUNK_MAX_INFLIGHT = 512
+    TUN_TRANSMIT_DELAY_EST_MAX_MS = 3000.0
 
     @staticmethod
     def _proto_name_to_code(name: "ChannelMux.ProtoName") -> int:
@@ -481,6 +482,7 @@ class ChannelMux:
         self._warn_dumped_channel_config: bool = False
         self._peer_app_payload_pending: Deque[Tuple[bytes, Optional[int]]] = deque()
         self._peer_app_payload_scheduled: bool = False
+        self._peer_app_payload_dispatching: bool = False
 
         # Session payload hook
         try:
@@ -1997,9 +1999,33 @@ class ChannelMux:
             return dev
         return self._start_tun_server_for_sync(spec, svc_key)
 
+    def _local_tun_send_allowed(self) -> bool:
+        getter = getattr(self.session, "get_metrics", None)
+        if not callable(getter):
+            return True
+        try:
+            metrics = getter()
+        except Exception:
+            return True
+        est_ms = getattr(metrics, "transmit_delay_est_ms", None)
+        try:
+            est_val = float(est_ms)
+        except (TypeError, ValueError):
+            return True
+        if est_val <= 0.0:
+            return True
+        return est_val < self.TUN_TRANSMIT_DELAY_EST_MAX_MS
+
     def _on_local_tun_packet(self, dev: "ChannelMux.TunDevice", packet: bytes) -> None:
         self._log_tun_packet_debug(stage="from_local_tun", packet=packet, ifname=dev.ifname, chan=dev.chan_id)
         if not (self._overlay_connected and self._accepting_enabled):
+            return
+        if not self._local_tun_send_allowed():
+            self.log.debug(
+                "[TUN] if=%s drop local packet: active transport transmit_delay_est_ms >= %.1f",
+                dev.ifname,
+                self.TUN_TRANSMIT_DELAY_EST_MAX_MS,
+            )
             return
         if len(packet) > int(dev.mtu):
             self.log.warning("[TUN] if=%s drop oversize local packet len=%s mtu=%s", dev.ifname, len(packet), dev.mtu)
@@ -2283,16 +2309,29 @@ class ChannelMux:
             self.log.info("[MUX/YIELD] stage=%s count=%s gap_ms=%.3f", stage, count, gap_ms)
 
     def _dispatch_one_peer_app_payload(self) -> None:
-        if not self._peer_app_payload_pending:
+        if self._peer_app_payload_dispatching:
             return
-        buf, peer_id = self._peer_app_payload_pending.popleft()
-        self._handle_app_payload_from_peer(buf, peer_id=peer_id)
+        self._peer_app_payload_dispatching = True
+        try:
+            if not self._peer_app_payload_pending:
+                return
+            buf, peer_id = self._peer_app_payload_pending.popleft()
+            self._handle_app_payload_from_peer(buf, peer_id=peer_id)
+        finally:
+            self._peer_app_payload_dispatching = False
         if self._peer_app_payload_pending:
             self._schedule_peer_app_payload_dispatch()
 
     def on_app_payload_from_peer(self, buf: bytes, peer_id: Optional[int] = None) -> bool:
         self._peer_app_payload_pending.append((bytes(buf), peer_id))
-        self._schedule_peer_app_payload_dispatch()
+        if self._peer_app_payload_dispatching:
+            self._schedule_peer_app_payload_dispatch()
+            return True
+        if not self.loop.is_running():
+            while self._peer_app_payload_pending:
+                self._dispatch_one_peer_app_payload()
+            return True
+        self._dispatch_one_peer_app_payload()
         return True
 
     def _handle_app_payload_from_peer(self, buf: bytes, peer_id: Optional[int] = None) -> bool:

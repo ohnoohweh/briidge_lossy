@@ -87,6 +87,7 @@ ARC-CMP-003:
     - tests/unit/test_bridge_tun_ios.py::test_write_tun_packet_uses_bridge_backend
     - tests/unit/test_bridge_tun_ios.py::test_register_tun_reader_drains_bridge_queue
     - tests/unit/test_check_ios_fedora_log_fit.py::test_check_ios_fedora_log_fit_selects_shared_epoch
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_drops_when_transmit_delay_est_too_high
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_applies_ios_tunnel_network_override
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
   integration_tests:
