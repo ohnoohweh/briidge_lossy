@@ -450,6 +450,12 @@ class SecureLinkPskSession(ISession):
         self._last_auth_fail_detail: str = ""
         self._last_auth_fail_unix_ts: Optional[float] = None
         self._last_auth_fail_session_id: Optional[int] = None
+        self._last_terminal_failure_code: int = 0
+        self._last_terminal_failure_reason: str = ""
+        self._last_terminal_failure_detail: str = ""
+        self._last_terminal_failure_unix_ts: Optional[float] = None
+        self._last_terminal_failure_session_id: Optional[int] = None
+        self._last_transport_epoch_change_unix_ts: Optional[float] = None
         self._last_disconnect_reason: str = ""
         self._last_disconnect_detail: str = ""
         self._last_secure_link_event: str = ""
@@ -918,6 +924,16 @@ class SecureLinkPskSession(ISession):
     def _mark_auth_fail(self, peer_id: Optional[int], session_id: int, code: int) -> None:
         key = self._peer_key(peer_id)
         state = self._peer_states.get(key)
+        if (
+            self._client_mode
+            and int(session_id or 0) <= 0
+            and self._client_recovery_not_before_mono > 0.0
+            and (
+                (state is not None and int(state.auth_fail_code or 0) > 0)
+                or int(self._last_auth_fail_code or 0) > 0
+            )
+        ):
+            return
         if state is None:
             state = _SecureLinkPeerState(
                 session_id=int(session_id or 0),
@@ -926,7 +942,11 @@ class SecureLinkPskSession(ISession):
             self._peer_states[key] = state
         elif int(session_id or 0) > 0:
             state.session_id = int(session_id)
-        was_authenticated = bool(state.authenticated or int(state.authenticated_sessions_total or 0) > 0)
+        was_authenticated = bool(
+            state.authenticated
+            or int(state.authenticated_sessions_total or 0) > 0
+            or (self._client_mode and int(self._authenticated_sessions_total or 0) > 0)
+        )
         state.authenticated = False
         state.client_handshake_proof_sent = False
         state.client_nonce = b""
@@ -938,8 +958,6 @@ class SecureLinkPskSession(ISession):
         state.local_ephemeral_private = None
         self._clear_pending_rekey(state)
         self._clear_client_rekey_app_queue()
-        if not self._client_mode and peer_id is not None:
-            self._server_unregister_peer_channels(int(peer_id))
         state.auth_fail_code = int(code or 0)
         state.auth_fail_reason = str(self._auth_fail_reason(code) or "")
         state.auth_fail_detail = str(self._auth_fail_detail(code) or "")
@@ -960,6 +978,8 @@ class SecureLinkPskSession(ISession):
         self._last_auth_fail_detail = state.auth_fail_detail
         self._last_auth_fail_unix_ts = state.auth_fail_unix_ts
         self._last_auth_fail_session_id = int(state.session_id or 0) or None
+        if not self._client_mode and peer_id is not None:
+            self._server_unregister_peer_channels(int(peer_id))
         self._record_secure_link_event("auth_failed", state.auth_fail_unix_ts)
         self._log.warning(
             "[SECURE-LINK] auth failure transport=%s side=%s peer_id=%s session_id=%s reason=%s detail=%s failures=%s retry_backoff_sec=%.3f",
@@ -972,10 +992,33 @@ class SecureLinkPskSession(ISession):
             int(state.consecutive_failures or 0),
             max(0.0, self._client_retry_not_before_mono - time.monotonic()) if self._client_mode else 0.0,
         )
-        if self._client_mode and self._started and was_authenticated:
+        inner_connected = bool(getattr(self._inner, "is_connected", lambda: False)())
+        recent_transport_epoch_change = bool(
+            self._client_mode
+            and self._last_transport_epoch_change_unix_ts is not None
+            and (time.time() - float(self._last_transport_epoch_change_unix_ts)) <= 2.0
+        )
+        if self._client_mode and self._started and int(code or 0) == self._SL_AUTH_FAIL_REVOKED_SERIAL:
             self._cancel_client_retry_task(clear_schedule=True)
-            self._schedule_client_recovery()
-        elif self._client_mode and self._started and bool(getattr(self._inner, "is_connected", lambda: False)()):
+            self._cancel_client_recovery_task(clear_schedule=True)
+        elif (
+            self._client_mode
+            and self._started
+            and int(code or 0) == self._SL_AUTH_FAIL_DECODE
+            and recent_transport_epoch_change
+            and inner_connected
+        ):
+            self._cancel_client_recovery_task(clear_schedule=True)
+            if self._client_retry_not_before_mono <= time.monotonic():
+                self._client_retry_consecutive_failures = 0
+                self._schedule_client_retry()
+        elif self._client_mode and self._started and was_authenticated:
+            self._cancel_client_retry_task(clear_schedule=True)
+            if inner_connected:
+                self._schedule_client_recovery()
+            else:
+                self._cancel_client_recovery_task(clear_schedule=True)
+        elif self._client_mode and self._started and inner_connected:
             self._schedule_client_retry()
         self._refresh_connected_state()
 
@@ -1090,6 +1133,11 @@ class SecureLinkPskSession(ISession):
         self._last_auth_fail_detail = ""
         self._last_auth_fail_unix_ts = None
         self._last_auth_fail_session_id = None
+        self._last_terminal_failure_code = 0
+        self._last_terminal_failure_reason = ""
+        self._last_terminal_failure_detail = ""
+        self._last_terminal_failure_unix_ts = None
+        self._last_terminal_failure_session_id = None
         self._record_secure_link_event(event, now)
         if self._client_mode:
             self._schedule_client_rekey_timer(state)
@@ -1255,6 +1303,8 @@ class SecureLinkPskSession(ISession):
     def _schedule_client_retry(self) -> None:
         if not self._client_mode or not self._started or self._retry_backoff_max_s <= 0.0:
             return
+        if self._client_recovery_not_before_mono > time.monotonic():
+            return
         self._client_retry_consecutive_failures += 1
         exponent = max(0, self._client_retry_consecutive_failures - 1)
         delay_s = min(self._retry_backoff_max_s, self._retry_backoff_initial_s * (2 ** exponent))
@@ -1330,7 +1380,19 @@ class SecureLinkPskSession(ISession):
     def _maybe_begin_client_handshake(self) -> None:
         if not self._client_mode or not self._started:
             return
+        if any(int(state.auth_fail_code or 0) == self._SL_AUTH_FAIL_REVOKED_SERIAL for state in self._peer_states.values()):
+            return
+        if int(self._last_terminal_failure_code or 0) == self._SL_AUTH_FAIL_REVOKED_SERIAL:
+            return
         if self._peer_states and any(state.authenticated for state in self._peer_states.values()):
+            return
+        if self._peer_states and any(
+            int(state.session_id or 0) > 0
+            and not int(state.auth_fail_code or 0)
+            and not str(state.disconnect_reason or "")
+            and not str(state.disconnect_detail or "")
+            for state in self._peer_states.values()
+        ):
             return
         if self._client_retry_not_before_mono > time.monotonic():
             if self._client_retry_task is None or self._client_retry_task.done():
@@ -1491,6 +1553,12 @@ class SecureLinkPskSession(ISession):
                 state.trust_failure_reason = str(trust_reason or "")
             if trust_detail is not None:
                 state.trust_failure_detail = str(trust_detail or "")
+        if int(auth_fail_code or 0) == self._SL_AUTH_FAIL_REVOKED_SERIAL:
+            self._last_terminal_failure_code = int(auth_fail_code or 0)
+            self._last_terminal_failure_reason = state.auth_fail_reason or self._auth_fail_reason(auth_fail_code)
+            self._last_terminal_failure_detail = state.auth_fail_detail or self._auth_fail_detail(auth_fail_code)
+            self._last_terminal_failure_unix_ts = state.auth_fail_unix_ts or now
+            self._last_terminal_failure_session_id = int(state.last_failure_session_id or session_id or 0) or None
         self._trust_enforced_unix_ts = now
         self._secure_link_peers_dropped_total += 1
         self._record_secure_link_event("trust_enforced_disconnect", now)
@@ -1541,6 +1609,11 @@ class SecureLinkPskSession(ISession):
         self._revoked_serials = set(reloaded_revoked or set())
         self._active_material_generation = max(1, int(self._active_material_generation or 0) + 1)
         now = time.time()
+        self._last_terminal_failure_code = 0
+        self._last_terminal_failure_reason = ""
+        self._last_terminal_failure_detail = ""
+        self._last_terminal_failure_unix_ts = None
+        self._last_terminal_failure_session_id = None
         changed_detail = []
         if normalized_scope in {"revocation", "all"}:
             changed_detail.append(f"revoked_serials={len(self._revoked_serials)}")
@@ -1551,6 +1624,7 @@ class SecureLinkPskSession(ISession):
         self._last_material_reload_scope = normalized_scope
         self._last_material_reload_result = "applied"
         self._last_material_reload_detail = detail
+        dropped_total_before = int(self._secure_link_peers_dropped_total or 0)
         dropped = 0
         for key, state in list(self._peer_states.items()):
             self._apply_material_reload_metadata_to_state(
@@ -1583,6 +1657,17 @@ class SecureLinkPskSession(ISession):
                     trust_detail=state.trust_failure_detail or "",
                 )
                 dropped += 1
+                if self._client_mode:
+                    self._cancel_client_retry_task(clear_schedule=True)
+                    self._cancel_client_recovery_task(clear_schedule=True)
+                    state.last_event = "recovery_reconnect_started"
+                    state.last_event_unix_ts = time.time()
+                    self._record_secure_link_event("recovery_reconnect_started", state.last_event_unix_ts)
+                    if not self.request_reconnect() and bool(getattr(self._inner, "is_connected", lambda: False)()):
+                        self._maybe_begin_client_handshake()
+        expected_dropped_total = dropped_total_before + int(dropped or 0)
+        if int(self._secure_link_peers_dropped_total or 0) < expected_dropped_total:
+            self._secure_link_peers_dropped_total = expected_dropped_total
         return {
             "ok": True,
             "reason": "reload_applied",
@@ -1772,6 +1857,10 @@ class SecureLinkPskSession(ISession):
             peer_id = int(r.get("peer_id", 0) or 0)
             key = self._peer_key(None if self._client_mode else peer_id)
             state = self._peer_states.get(key)
+            terminal_revoked = (
+                self._client_mode
+                and int(self._last_terminal_failure_code or 0) == self._SL_AUTH_FAIL_REVOKED_SERIAL
+            )
             authenticated = False
             failure_code = None
             failure_reason = None
@@ -1780,12 +1869,47 @@ class SecureLinkPskSession(ISession):
             session_id = None
             if listening:
                 secure_state = "listening"
+            elif (
+                self._client_mode
+                and not state.authenticated
+                and not int(state.auth_fail_code or 0)
+                and int(self._last_auth_fail_code or 0) > 0
+                and int(state.handshake_attempts_total or 0) <= 0
+                and int(state.session_id or 0) <= 0
+            ):
+                secure_state = "failed"
+                failure_code = int(self._last_auth_fail_code or 0) or None
+                failure_reason = self._last_auth_fail_reason or self._auth_fail_reason(self._last_auth_fail_code)
+                failure_detail = self._last_auth_fail_detail or self._auth_fail_detail(self._last_auth_fail_code)
+                failure_unix_ts = self._last_auth_fail_unix_ts
+                session_id = int(self._last_auth_fail_session_id or 0) or None
+            elif state is None and terminal_revoked:
+                secure_state = "failed"
+                failure_code = int(self._last_terminal_failure_code or 0) or None
+                failure_reason = self._last_terminal_failure_reason or self._auth_fail_reason(self._last_terminal_failure_code)
+                failure_detail = self._last_terminal_failure_detail or self._auth_fail_detail(self._last_terminal_failure_code)
+                failure_unix_ts = self._last_terminal_failure_unix_ts
+                session_id = int(self._last_terminal_failure_session_id or 0) or None
+            elif state is None and self._last_auth_fail_code:
+                secure_state = "failed"
+                failure_code = int(self._last_auth_fail_code or 0) or None
+                failure_reason = self._last_auth_fail_reason or self._auth_fail_reason(self._last_auth_fail_code)
+                failure_detail = self._last_auth_fail_detail or self._auth_fail_detail(self._last_auth_fail_code)
+                failure_unix_ts = self._last_auth_fail_unix_ts
+                session_id = int(self._last_auth_fail_session_id or 0) or None
             elif state is None:
                 secure_state = "handshaking" if inner_is_connected else "waiting_transport"
             elif state.authenticated:
                 secure_state = "authenticated"
                 authenticated = True
                 session_id = int(state.session_id or 0) or None
+            elif terminal_revoked:
+                secure_state = "failed"
+                failure_code = int(self._last_terminal_failure_code or 0) or None
+                failure_reason = self._last_terminal_failure_reason or self._auth_fail_reason(self._last_terminal_failure_code)
+                failure_detail = self._last_terminal_failure_detail or self._auth_fail_detail(self._last_terminal_failure_code)
+                failure_unix_ts = self._last_terminal_failure_unix_ts
+                session_id = int(self._last_terminal_failure_session_id or 0) or None
             elif state.auth_fail_code:
                 secure_state = "failed"
                 failure_code = int(state.auth_fail_code or 0) or None
@@ -1793,6 +1917,13 @@ class SecureLinkPskSession(ISession):
                 failure_detail = state.auth_fail_detail or self._auth_fail_detail(state.auth_fail_code)
                 failure_unix_ts = state.auth_fail_unix_ts
                 session_id = int(state.session_id or 0) or None
+            elif self._last_auth_fail_code:
+                secure_state = "failed"
+                failure_code = int(self._last_auth_fail_code or 0) or None
+                failure_reason = self._last_auth_fail_reason or self._auth_fail_reason(self._last_auth_fail_code)
+                failure_detail = self._last_auth_fail_detail or self._auth_fail_detail(self._last_auth_fail_code)
+                failure_unix_ts = self._last_auth_fail_unix_ts
+                session_id = int(self._last_auth_fail_session_id or 0) or None
             else:
                 secure_state = "handshaking" if inner_is_connected else "waiting_transport"
                 session_id = int(state.session_id or 0) or None
@@ -1841,8 +1972,26 @@ class SecureLinkPskSession(ISession):
                 "last_material_reload_result": str(state.last_material_reload_result or "") if state is not None else str(self._last_material_reload_result or ""),
                 "last_material_reload_detail": str(state.last_material_reload_detail or "") if state is not None else str(self._last_material_reload_detail or ""),
                 "trust_enforced_unix_ts": state.trust_enforced_unix_ts if state is not None else self._trust_enforced_unix_ts,
-                "disconnect_reason": str(state.disconnect_reason or "") if state is not None else "",
-                "disconnect_detail": str(state.disconnect_detail or "") if state is not None else "",
+                "disconnect_reason": (
+                    str(state.disconnect_reason or "")
+                    if state is not None and str(state.disconnect_reason or "")
+                    else (
+                        str(self._last_disconnect_reason or "")
+                        or ("revocation_applied" if failure_reason == "revoked_serial" else "")
+                    )
+                ),
+                "disconnect_detail": (
+                    str(state.disconnect_detail or "")
+                    if state is not None and str(state.disconnect_detail or "")
+                    else (
+                        str(self._last_disconnect_detail or "")
+                        or (
+                            "peer certificate serial is revoked by the reloaded denylist"
+                            if failure_reason == "revoked_serial"
+                            else ""
+                        )
+                    )
+                ),
             }
             out.append(r)
         out = self._filter_superseded_myudp_listener_rows(out)
@@ -1856,6 +2005,95 @@ class SecureLinkPskSession(ISession):
                         mux_chans.add(int(chan))
                 mux_chans.update(secure_mux_by_peer.get(int(row.get("peer_id", 0) or 0), set()))
                 row["mux_chans"] = sorted(mux_chans)
+        if (
+            not self._client_mode
+            and self._last_auth_fail_code
+            and not any(
+                str((row.get("secure_link") or {}).get("state") or "").strip().lower() == "failed"
+                for row in out
+            )
+        ):
+            out.append(
+                {
+                    "id": "secure-link:last-failure",
+                    "transport": self._transport_name,
+                    "state": "disconnected",
+                    "connected": False,
+                    "listen": None,
+                    "peer": None,
+                    "rtt_est_ms": None,
+                    "transmit_delay_sample_ms": None,
+                    "transmit_delay_est_ms": None,
+                    "last_incoming_age_seconds": None,
+                    "inflight": None,
+                    "decode_errors": 0,
+                    "open_connections": {"udp": 0, "tcp": 0, "tun": 0},
+                    "traffic": {"rx_bytes": 0, "tx_bytes": 0, "rx_bytes_per_sec": 0.0, "tx_bytes_per_sec": 0.0},
+                    "myudp": {"buffered_frames": 0, "first_pass": 0, "repeated_once": 0, "repeated_multiple": 0, "confirmed_total": 0},
+                    "secure_link": {
+                        "enabled": True,
+                        "mode": self._mode,
+                        "state": "failed",
+                        "authenticated": False,
+                        "session_id": int(self._last_auth_fail_session_id or 0) or None,
+                        "rekey_in_progress": False,
+                        "last_rekey_trigger": self._last_rekey_trigger,
+                        "rekey_due_unix_ts": None,
+                        "failure_code": int(self._last_auth_fail_code or 0) or None,
+                        "failure_reason": self._last_auth_fail_reason or self._auth_fail_reason(self._last_auth_fail_code),
+                        "failure_detail": self._last_auth_fail_detail or self._auth_fail_detail(self._last_auth_fail_code),
+                        "failure_unix_ts": self._last_auth_fail_unix_ts,
+                        "failure_session_id": self._last_auth_fail_session_id,
+                        "consecutive_failures": 0,
+                        "retry_backoff_sec": 0.0,
+                        "next_retry_unix_ts": None,
+                        "recovery_enabled": False,
+                        "recovery_delay_sec": 0.0,
+                        "recovery_reconnect_sec": 0.0,
+                        "next_recovery_reconnect_unix_ts": None,
+                        "handshake_attempts_total": int(self._handshake_attempts_total or 0),
+                        "last_event": self._last_secure_link_event,
+                        "last_event_unix_ts": self._last_secure_link_event_unix_ts,
+                        "last_authenticated_unix_ts": self._last_authenticated_unix_ts,
+                        "connected_since_unix_ts": None,
+                        "authenticated_sessions_total": int(self._authenticated_sessions_total or 0),
+                        "rekeys_completed_total": int(self._rekeys_completed_total or 0),
+                        "transport": self._transport_name,
+                        "peer_subject_id": "",
+                        "peer_subject_name": "",
+                        "peer_roles": [],
+                        "peer_deployment_id": "",
+                        "peer_serial": "",
+                        "issuer_id": "",
+                        "trust_anchor_id": self._local_identity.trust_anchor_id if self._local_identity is not None else "",
+                        "trust_validation_state": "",
+                        "trust_failure_reason": "",
+                        "trust_failure_detail": "",
+                        "active_material_generation": int(self._active_material_generation or 0),
+                        "last_material_reload_unix_ts": self._last_material_reload_unix_ts,
+                        "last_material_reload_scope": str(self._last_material_reload_scope or ""),
+                        "last_material_reload_result": str(self._last_material_reload_result or ""),
+                        "last_material_reload_detail": str(self._last_material_reload_detail or ""),
+                        "trust_enforced_unix_ts": self._trust_enforced_unix_ts,
+                        "disconnect_reason": self._last_disconnect_reason,
+                        "disconnect_detail": self._last_disconnect_detail,
+                    },
+                    "compress_layer": {
+                        "enabled": False,
+                        "algorithm": "zlib",
+                        "transport": self._transport_name,
+                        "level": 3,
+                        "min_bytes": 64,
+                        "compress_attempts_total": 0,
+                        "compress_applied_total": 0,
+                        "compress_skipped_no_gain_total": 0,
+                        "compress_input_bytes_total": 0,
+                        "compress_output_bytes_total": 0,
+                        "decompress_ok_total": 0,
+                        "decompress_fail_total": 0,
+                    },
+                }
+            )
         return out
 
     def get_secure_link_status_snapshot(self) -> dict:
@@ -1884,6 +2122,12 @@ class SecureLinkPskSession(ISession):
             overall_state = "authenticated"
         elif any_failed:
             overall_state = "failed"
+        elif int(self._last_terminal_failure_code or 0) > 0:
+            overall_state = "failed"
+            failure_code = failure_code or int(self._last_terminal_failure_code or 0) or None
+            failure_reason = self._last_terminal_failure_reason or self._auth_fail_reason(self._last_terminal_failure_code)
+            failure_detail = self._last_terminal_failure_detail or self._auth_fail_detail(self._last_terminal_failure_code)
+            failure_unix_ts = self._last_terminal_failure_unix_ts
         elif self._last_auth_fail_code:
             overall_state = "failed"
             failure_code = failure_code or int(self._last_auth_fail_code or 0) or None
@@ -1910,7 +2154,11 @@ class SecureLinkPskSession(ISession):
             "failure_reason": failure_reason,
             "failure_detail": failure_detail,
             "failure_unix_ts": failure_unix_ts,
-            "failure_session_id": self._last_auth_fail_session_id,
+            "failure_session_id": (
+                self._last_terminal_failure_session_id
+                if int(self._last_terminal_failure_code or 0) > 0
+                else self._last_auth_fail_session_id
+            ),
             "consecutive_failures": int(self._client_retry_consecutive_failures or 0) if self._client_mode else 0,
             "retry_backoff_sec": max(0.0, self._client_retry_not_before_mono - time.monotonic()) if self._client_mode and self._client_retry_not_before_mono > 0.0 else 0.0,
             "next_retry_unix_ts": self._client_retry_not_before_unix_ts if self._client_mode else None,
@@ -1942,8 +2190,16 @@ class SecureLinkPskSession(ISession):
             "last_material_reload_result": self._last_material_reload_result,
             "last_material_reload_detail": self._last_material_reload_detail,
             "trust_enforced_unix_ts": self._trust_enforced_unix_ts,
-            "disconnect_reason": (str(primary_state.disconnect_reason or "") if primary_state is not None else "") or self._last_disconnect_reason,
-            "disconnect_detail": (str(primary_state.disconnect_detail or "") if primary_state is not None else "") or self._last_disconnect_detail,
+            "disconnect_reason": (
+                (str(primary_state.disconnect_reason or "") if primary_state is not None else "")
+                or self._last_disconnect_reason
+                or ("revocation_applied" if failure_reason == "revoked_serial" else "")
+            ),
+            "disconnect_detail": (
+                (str(primary_state.disconnect_detail or "") if primary_state is not None else "")
+                or self._last_disconnect_detail
+                or ("peer certificate serial is revoked by the reloaded denylist" if failure_reason == "revoked_serial" else "")
+            ),
             "peers_dropped_total": int(self._secure_link_peers_dropped_total or 0),
         }
 
@@ -1961,6 +2217,13 @@ class SecureLinkPskSession(ISession):
         }
 
     def _send_auth_fail(self, peer_id: Optional[int], session_id: int, code: int) -> None:
+        if (
+            self._client_mode
+            and int(code or 0) == self._SL_AUTH_FAIL_DECODE
+            and self._last_transport_epoch_change_unix_ts is not None
+            and (time.time() - float(self._last_transport_epoch_change_unix_ts)) <= 2.0
+        ):
+            return
         self._mark_auth_fail(peer_id, session_id, code)
         try:
             self._inner.send_app(self._build_frame(self._SL_TYPE_AUTH_FAIL, session_id, 0, bytes([int(code) & 0xFF])), peer_id=peer_id)
@@ -1997,16 +2260,47 @@ class SecureLinkPskSession(ISession):
         if not connected:
             self._cancel_client_retry_task(clear_schedule=False)
             self._cancel_client_rekey_task(clear_schedule=False)
+            if self._client_mode:
+                preserving_failure_state = bool(
+                    self._client_recovery_not_before_mono > 0.0
+                    or self._client_recovery_not_before_unix_ts is not None
+                    or any(
+                        int(state.auth_fail_code or 0) > 0
+                        or str(state.disconnect_reason or "")
+                        or str(state.disconnect_detail or "")
+                        for state in self._peer_states.values()
+                    )
+                )
+                if preserving_failure_state:
+                    self._refresh_connected_state()
+                    return
             self._clear_all_states()
             return
-        if self._client_mode and self._started and not self._peer_states:
+        if self._client_mode and self._started:
             self._maybe_begin_client_handshake()
 
     def _on_inner_transport_epoch_change(self, epoch: int) -> None:
         self._cancel_client_retry_task(clear_schedule=False)
         self._cancel_client_rekey_task(clear_schedule=False)
-        self._clear_all_states()
-        if self._client_mode and self._started and bool(getattr(self._inner, "is_connected", lambda: False)()):
+        self._last_transport_epoch_change_unix_ts = time.time()
+        preserve_client_handshake = (
+            self._client_mode
+            and any(
+                not state.authenticated
+                and int(state.session_id or 0) > 0
+                and int(state.handshake_attempts_total or 0) > 0
+                and not int(state.auth_fail_code or 0)
+                for state in self._peer_states.values()
+            )
+        )
+        if not preserve_client_handshake:
+            self._clear_all_states()
+        if (
+            self._client_mode
+            and self._started
+            and bool(getattr(self._inner, "is_connected", lambda: False)())
+            and not preserve_client_handshake
+        ):
             self._maybe_begin_client_handshake()
         if callable(self._outer_on_transport_epoch_change):
             try:
@@ -2015,7 +2309,12 @@ class SecureLinkPskSession(ISession):
                 pass
 
     def _on_inner_peer_disconnect(self, peer_id: int) -> None:
-        self._peer_states.pop(self._peer_key(peer_id), None)
+        state = self._peer_states.get(self._peer_key(peer_id))
+        if state is None or (not state.auth_fail_code and not state.disconnect_reason and not state.disconnect_detail):
+            self._peer_states.pop(self._peer_key(peer_id), None)
+        else:
+            state.authenticated = False
+            state.connected_since_unix_ts = None
         self._server_unregister_peer_channels(peer_id)
         self._refresh_connected_state()
         if callable(self._outer_on_peer_disconnect):
@@ -2156,6 +2455,7 @@ class SecureLinkPskSession(ISession):
                 transcript_hash,
             )
             key = self._peer_key(peer_id)
+            previous_state = self._peer_states.get(key)
             self._handshake_attempts_total += 1
             state = _SecureLinkPeerState(
                 session_id=session_id,
@@ -2167,8 +2467,17 @@ class SecureLinkPskSession(ISession):
             )
             state.local_ephemeral_private = server_eph_private
             self._apply_peer_identity(state, remote_identity)
-            state.last_event = "handshake_started"
-            state.last_event_unix_ts = time.time()
+            if previous_state is not None and int(previous_state.auth_fail_code or 0) > 0 and not previous_state.authenticated:
+                state.auth_fail_code = int(previous_state.auth_fail_code or 0)
+                state.auth_fail_reason = str(previous_state.auth_fail_reason or "")
+                state.auth_fail_detail = str(previous_state.auth_fail_detail or "")
+                state.auth_fail_unix_ts = previous_state.auth_fail_unix_ts
+                state.last_failure_session_id = previous_state.last_failure_session_id
+                state.last_event = str(previous_state.last_event or "")
+                state.last_event_unix_ts = previous_state.last_event_unix_ts
+            else:
+                state.last_event = "handshake_started"
+                state.last_event_unix_ts = time.time()
             self._peer_states[key] = state
             self._record_secure_link_event("server_hello_sent", state.last_event_unix_ts)
             self._inner.send_app(self._build_frame(self._SL_TYPE_SERVER_HELLO, session_id, 0, payload), peer_id=peer_id)
@@ -2184,8 +2493,9 @@ class SecureLinkPskSession(ISession):
         server_nonce = secrets.token_bytes(32)
         c2s_key, s2c_key = self._derive_keys(session_id, client_nonce, server_nonce)
         key = self._peer_key(peer_id)
+        previous_state = self._peer_states.get(key)
         self._handshake_attempts_total += 1
-        self._peer_states[key] = _SecureLinkPeerState(
+        state = _SecureLinkPeerState(
             session_id=session_id,
             client_nonce=client_nonce,
             server_nonce=server_nonce,
@@ -2193,9 +2503,19 @@ class SecureLinkPskSession(ISession):
             s2c_key=s2c_key,
             handshake_attempts_total=int(self._handshake_attempts_total or 0),
         )
-        self._peer_states[key].last_event = "handshake_started"
-        self._peer_states[key].last_event_unix_ts = time.time()
-        self._record_secure_link_event("server_hello_sent", self._peer_states[key].last_event_unix_ts)
+        if previous_state is not None and int(previous_state.auth_fail_code or 0) > 0 and not previous_state.authenticated:
+            state.auth_fail_code = int(previous_state.auth_fail_code or 0)
+            state.auth_fail_reason = str(previous_state.auth_fail_reason or "")
+            state.auth_fail_detail = str(previous_state.auth_fail_detail or "")
+            state.auth_fail_unix_ts = previous_state.auth_fail_unix_ts
+            state.last_failure_session_id = previous_state.last_failure_session_id
+            state.last_event = str(previous_state.last_event or "")
+            state.last_event_unix_ts = previous_state.last_event_unix_ts
+        else:
+            state.last_event = "handshake_started"
+            state.last_event_unix_ts = time.time()
+        self._peer_states[key] = state
+        self._record_secure_link_event("server_hello_sent", state.last_event_unix_ts)
         proof = self._server_proof(session_id, client_nonce, server_nonce)
         payload = server_nonce + bytes([self._SL_CAP_PSK_V1]) + proof
         self._inner.send_app(self._build_frame(self._SL_TYPE_SERVER_HELLO, session_id, 0, payload), peer_id=peer_id)
@@ -2210,6 +2530,13 @@ class SecureLinkPskSession(ISession):
             return
         state = self._peer_states.get(0)
         if state is None or int(state.session_id) != int(session_id):
+            recent_transport_epoch_change = bool(
+                self._client_mode
+                and self._last_transport_epoch_change_unix_ts is not None
+                and (time.time() - float(self._last_transport_epoch_change_unix_ts)) <= 2.0
+            )
+            if recent_transport_epoch_change:
+                return
             self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
             return
         if self._is_cert_mode():
@@ -2596,6 +2923,23 @@ class SecureLinkPskSession(ISession):
             self._handle_server_hello(session_id, body)
             return
         if sl_type == self._SL_TYPE_AUTH_FAIL:
+            if self._client_mode and int(session_id or 0) > 0:
+                recent_transport_epoch_change = bool(
+                    self._last_transport_epoch_change_unix_ts is not None
+                    and (time.time() - float(self._last_transport_epoch_change_unix_ts)) <= 2.0
+                )
+                if state is None:
+                    if recent_transport_epoch_change:
+                        return
+                else:
+                    current_session_id = int(state.session_id or 0)
+                    pending_session_id = int(state.pending_session_id or 0)
+                    if (
+                        current_session_id > 0
+                        and int(session_id or 0) != current_session_id
+                        and int(session_id or 0) != pending_session_id
+                    ):
+                        return
             code = int(body[0]) if body else self._SL_AUTH_FAIL_DECODE
             self._mark_auth_fail(peer_id, session_id, code)
             return

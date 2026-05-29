@@ -394,7 +394,7 @@ class Runner:
         return "myudp" in parts
 
     def request_restart(self, reason: str = "") -> None:
-        self._restart_reason = str(reason or self._restart_reason or "unspecified")
+        self._restart_reason = str(reason or getattr(self, "_restart_reason", "") or "unspecified")
         self.log.info("[SERVER] Runner restart requested reason=%s", self._restart_reason)
         callback = getattr(self, "_embedded_restart_callback", None)
         if callable(callback):
@@ -1384,6 +1384,17 @@ class Runner:
 
                 # If connected, watchdog is idle
                 if sess.is_connected():
+                    continue
+
+                secure_link_status = {}
+                get_secure_link_status = getattr(sess, "get_secure_link_status_snapshot", None)
+                if callable(get_secure_link_status):
+                    with contextlib.suppress(Exception):
+                        secure_link_status = dict(get_secure_link_status() or {})
+                if (
+                    str(secure_link_status.get("state") or "").strip().lower() == "failed"
+                    and str(secure_link_status.get("failure_reason") or "").strip().lower() == "revoked_serial"
+                ):
                     continue
 
                 # No disconnect timestamp yet -> initialize defensively

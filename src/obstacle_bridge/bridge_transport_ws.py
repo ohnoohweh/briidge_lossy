@@ -2173,14 +2173,25 @@ class WebSocketSession(ISession):
             self._clear_connection_failure()
             self._log.info(f"[WS-SESSION] ({self._probe_id}) connected in {dt:.1f} ms local={local} peer={remote}")
             if had_previous_connection:
-                if self._early_buf:
+                stale_frames = len(self._early_buf)
+                stale_bytes = int(self._early_buf_bytes or 0)
+                while True:
+                    try:
+                        wire, _on_sent = self._tx_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    stale_frames += 1
+                    stale_bytes += len(wire)
+                    with contextlib.suppress(Exception):
+                        self._tx_queue.task_done()
+                if stale_frames > 0 or stale_bytes > 0:
                     self._log.info(
                         f"[WS/TX] ({self._probe_id}) dropping stale early-buf on transport epoch change "
-                        f"frames={len(self._early_buf)} bytes={self._early_buf_bytes}"
+                        f"frames={stale_frames} bytes={stale_bytes}"
                     )
-                    self._early_buf.clear()
-                    self._early_buf_bytes = 0
-                    self._early_deadline = 0.0
+                self._early_buf.clear()
+                self._early_buf_bytes = 0
+                self._early_deadline = 0.0
             await self._on_accept(ws)
             if self._ws is ws:
                 self.connection_epoch += 1

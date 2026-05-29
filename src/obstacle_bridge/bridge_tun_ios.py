@@ -921,8 +921,10 @@ async def _start_udp_connector(mux: Any, dev: Any) -> None:
 def _drain_bridge_queue(mux: Any, dev: Any) -> int:
     delivered = 0
     packets_seen = int(getattr(dev, "packets_seen", 0))
-    packet = _backend().dequeue_packet()
-    if packet is not None:
+    while True:
+        packet = _backend().dequeue_packet()
+        if packet is None:
+            break
         delivered += 1
         packets_seen += 1
         _log_packet_debug(mux.log, stage="packet_flow_read", ifname=dev.ifname, packet=packet)
