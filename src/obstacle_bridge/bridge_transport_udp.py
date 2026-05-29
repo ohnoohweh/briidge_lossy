@@ -130,6 +130,7 @@ class Protocol:
         self.rtt_sample_ms: float = 0.0
         self.last_rtt_ok_ns: int = 0
         self.last_send_ns: int = 0
+        self._last_built_tx_ns: int = 0
         self._last_rx_tx_ns: int = 0
         self._last_rx_wall_ns: int = 0
         self.idle_after_ns: int = int(IDLE_AFTER_MS * 1e6)
@@ -163,6 +164,7 @@ class Protocol:
             payload
         )
         frame = self.frame.build_envelope(inner)
+        self._last_built_tx_ns = tx_ns
         self.on_data_sent(tx_ns)
         return frame
     def parse_frame_with_times(
@@ -613,12 +615,16 @@ class SendPort:
             raise            
 # -------------------- Session --------------------
 OutgoingSegment = Tuple[int, int, bytes]
+QueuedSegment = Tuple[OutgoingSegment, int]
 class Session:
     def __init__(self, max_in_flight: int = 32767, proto: Optional[Protocol] = None):
         self.proto = proto or PROTO
         self.next_ctr = 1
         self.send_buf: Dict[int, bytes] = {}
         self.send_meta: Dict[int, OutgoingSegment] = {}
+        # Start of the local send path, including queue wait before first emission.
+        self.send_path_start_ns: Dict[int, int] = {}
+        # First on-wire tx_time_ns stamped into the protocol header on initial emission.
         self.send_txns: Dict[int, int] = {}
         self.last_retx_ns: Dict[int, int] = {}
         self.send_attempts: Dict[int, int] = {}
@@ -629,7 +635,7 @@ class Session:
             "confirmed_total": 0, "created_total": 0,
         }
         self.max_in_flight = max(1, min(32767, int(max_in_flight)))
-        self.wait_queue: Deque[OutgoingSegment] = deque()
+        self.wait_queue: Deque[QueuedSegment] = deque()
         self.expected = 1
         self.pending: Dict[int, DataPacket] = {}
         self.missing: Set[int] = set()
@@ -702,22 +708,25 @@ class Session:
         if ctr == 0:
             return
         self.send_attempts[ctr] = self.send_attempts.get(ctr, 0) + 1
-    def _rebuild_data_frame(self, ctr: int, meta: OutgoingSegment, tx_ns: int) -> bytes:
+    def _rebuild_data_frame(self, ctr: int, meta: OutgoingSegment) -> bytes:
         frame_type, off_or_len, chunk = meta
-        payload = DataPacket.build_payload(ctr, frame_type, off_or_len, chunk, tx_ns)
+        payload = DataPacket.build_payload(ctr, frame_type, off_or_len, chunk)
         return self.proto.build_frame(PTYPE_DATA, payload)
-    def _emit_now(self, seg: OutgoingSegment, transport: Any) -> None:
+
+    def _emit_now(self, seg: OutgoingSegment, transport: Any, queued_at_ns: Optional[int] = None) -> None:
         frame_type, off_or_len, chunk = seg
+        path_start_ns = int(queued_at_ns or 0)
         ctr = self.reserve_ctr()
-        tx = now_ns()
         self._record_created_if_appdata(ctr, chunk)
         try:
-            frame = self._rebuild_data_frame(ctr, seg, tx)
+            frame = self._rebuild_data_frame(ctr, seg)
+            tx = int(getattr(self.proto, "_last_built_tx_ns", 0) or 0) or now_ns()
             transport.sendto(frame)
         except Exception:
-            self.wait_queue.appendleft(seg)
+            self.wait_queue.appendleft((seg, path_start_ns or now_ns()))
             return
         self.send_meta[ctr] = (frame_type, off_or_len, chunk)
+        self.send_path_start_ns[ctr] = min(path_start_ns, tx) if path_start_ns > 0 else tx
         self.send_buf[ctr] = frame
         self.send_txns[ctr] = tx
         self.last_sent_ctr = ctr
@@ -729,9 +738,9 @@ class Session:
     def try_flush_send_queue(self, transport: Any) -> int:
         emitted = 0
         while self.in_flight() < self.max_in_flight and self.wait_queue:
-            seg = self.wait_queue.popleft()
+            seg, queued_at_ns = self.wait_queue.popleft()
             self._last_emit_trigger = "flush_queue"
-            self._emit_now(seg, transport)
+            self._emit_now(seg, transport, queued_at_ns=queued_at_ns)
             emitted += 1
         self._last_emit_trigger = "app_send"
         return emitted
@@ -740,7 +749,8 @@ class Session:
             self._last_emit_trigger = "app_send"
             self._emit_now(seg, transport)
         else:
-            self.wait_queue.append(seg)
+            queued_at_ns = now_ns()
+            self.wait_queue.append((seg, queued_at_ns))
             if self.log.isEnabledFor(logging.DEBUG):
                 self.log.debug(f"[TX] QUEUE type={seg[0]} off/len={seg[1]} chunk_len={len(seg[2])} inflight={len(self.send_buf)} queued={len(self.wait_queue)}")
     def _finalize_stats_for(self, cnt: int) -> None:
@@ -761,10 +771,12 @@ class Session:
             self.log.debug(f"[ACK] confirmed ctr={cnt} attempts={attempts}")
 
     def _record_transmit_delay_sample_for(self, cnt: int, ack_now_ns: int) -> None:
-        first_tx_ns = int(self.send_txns.get(cnt, 0) or 0)
-        if first_tx_ns <= 0 or ack_now_ns <= first_tx_ns:
+        path_start_ns = int(self.send_path_start_ns.get(cnt, 0) or 0)
+        if path_start_ns <= 0:
+            path_start_ns = int(self.send_txns.get(cnt, 0) or 0)
+        if path_start_ns <= 0 or ack_now_ns <= path_start_ns:
             return
-        elapsed_ms = (ack_now_ns - first_tx_ns) / 1e6
+        elapsed_ms = (ack_now_ns - path_start_ns) / 1e6
         rtt_est_ms = float(getattr(self.proto, "rtt_est_ms", 0.0) or 0.0)
         sample_ms = max(0.0, elapsed_ms - (0.5 * rtt_est_ms if rtt_est_ms > 0.0 else 0.0))
         self.transmit_delay_sample_ms = sample_ms
@@ -802,6 +814,7 @@ class Session:
             self._record_transmit_delay_sample_for(cnt, ack_now_ns)
             self._finalize_stats_for(cnt)
             self.send_buf.pop(cnt, None)
+            self.send_path_start_ns.pop(cnt, None)
             self.send_txns.pop(cnt, None)
             self.last_retx_ns.pop(cnt, None)
             self.send_meta.pop(cnt, None)
@@ -824,6 +837,7 @@ class Session:
             self._record_transmit_delay_sample_for(cnt, ack_now_ns)
             self._finalize_stats_for(cnt)
             self.send_buf.pop(cnt, None)
+            self.send_path_start_ns.pop(cnt, None)
             self.send_txns.pop(cnt, None)
             self.last_retx_ns.pop(cnt, None)
             self.send_meta.pop(cnt, None)
@@ -969,6 +983,7 @@ class Session:
     def reset_sender(self) -> None:
         self.send_buf.clear()
         self.send_meta.clear()
+        self.send_path_start_ns.clear()
         self.send_txns.clear()
         self.last_retx_ns.clear()
         self.peer_reported_missing.clear()
@@ -1325,7 +1340,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
             anchor = last_retx or first_tx
             if anchor and (now - anchor) < window_ns:
                 continue
-            frame = s._rebuild_data_frame(cnt, meta, now)
+            frame = s._rebuild_data_frame(cnt, meta)
             try:
                 self.send_port.sendto(frame)
             except Exception:
@@ -1394,7 +1409,10 @@ class PeerProtocol(asyncio.DatagramProtocol):
             self._record_yield_gap("_rx", scheduled_at, "myudp_rx_datagram")
             self._process_one_rx_datagram()
 
-        asyncio.get_running_loop().call_soon(_run)
+        try:
+            asyncio.get_running_loop().call_soon(_run)
+        except RuntimeError:
+            _run()
 
     def _schedule_completed_pending(self) -> None:
         if self._completed_pending_scheduled:
@@ -1407,7 +1425,10 @@ class PeerProtocol(asyncio.DatagramProtocol):
             self._record_yield_gap("_completed", scheduled_at, "myudp_completed_payload")
             self._process_one_completed_payload()
 
-        asyncio.get_running_loop().call_soon(_run)
+        try:
+            asyncio.get_running_loop().call_soon(_run)
+        except RuntimeError:
+            _run()
 
     def _record_yield_gap(self, prefix: str, scheduled_at: float, stage: str) -> None:
         gap_ms = max(0.0, (time.perf_counter() - float(scheduled_at)) * 1000.0)

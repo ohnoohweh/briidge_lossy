@@ -32,14 +32,14 @@ It does not redefine:
 
 ## Layer split
 
-`myudp` has two timestamp-bearing layers:
+`myudp` currently has one timestamp-bearing layer:
 
 1. The protocol envelope header.
-2. The payload carried inside a `DATA` frame.
 
-The important current rule is:
+The important current rules are:
 
 - RTT-relevant transport timestamps live in the outer protocol envelope, not in the `DataPacket` payload.
+- `DataPacket` payloads are intentionally semantic-only and do not carry transport timestamps.
 
 `DataPacket.build_payload(...)` is intentionally payload-only. It encodes:
 
@@ -79,6 +79,9 @@ One recovery rule is especially important under loss:
 - once a counter has been reported missing by the peer, omission from later feedback is not treated as a positive ACK by itself
 
 That rule exists because `CONTROL` frames are lossy too. A sender must not assume that a previously missing counter is repaired merely because one later feedback sample did not mention it.
+
+The missing list is also intentionally bounded by `CONTROL_MAX_MISSED`.
+When feedback reaches that cap, omission from the list is even less trustworthy as evidence of repair, because the receiver may be truncating loss feedback rather than signaling successful delivery.
 
 ## RTT measurement
 
@@ -145,10 +148,11 @@ The application payload bytes may be identical across attempts, but the transpor
 This metric is intentionally not the same as raw one-way propagation latency.
 It is an estimate of the effective one-way delivery delay that a `DATA` frame experienced before it became acknowledged.
 
-Current design rule:
+Current design rules:
 
-- the first-send timestamp for a `DATA` frame is stored when that counter is created
-- retransmission does not overwrite that first-send timestamp
+- the first on-wire `tx_ns` for a `DATA` frame is stored when that counter is first emitted
+- if the frame had to wait because `max_in_flight` was saturated, the sender also keeps the earlier local queue-entry timestamp
+- retransmission does not overwrite those first-attempt timing references
 - when feedback cumulatively acknowledges the frame and it leaves the send buffer, the sender computes:
 
 ```text
@@ -157,8 +161,13 @@ transmit_delay_sample_ms = ack_elapsed_ms - 0.5 * current_rtt_est_ms
 
 where:
 
-- `ack_elapsed_ms` is the local monotonic time since the frame's first send
+- `ack_elapsed_ms` is the local monotonic time since the start of the frame's effective send path
 - `current_rtt_est_ms` is the sender's current RTT EWMA at ACK time
+
+The effective send-path start is defined as:
+
+- immediate send with no pre-buffering: the first emitted frame's stamped `tx_ns`
+- queued send after in-flight saturation: the time when the segment first entered the local wait queue
 
 The sample is clamped at `>= 0` and then fed into its own EWMA:
 
@@ -167,8 +176,9 @@ The sample is clamped at `>= 0` and then fed into its own EWMA:
 
 This definition intentionally includes queueing and loss-recovery cost from the sender's point of view:
 
-- if a frame is delivered on the first attempt, transmit delay tends to stay close to one-way path plus queueing delay
-- if a frame requires retransmission, the metric grows because the first-send timestamp is preserved
+- if a frame is delivered on the first attempt with no local queue wait, transmit delay tends to stay close to one-way path plus normal sender/receiver scheduling cost
+- if the sender had to pre-buffer because the in-flight window was full, that local queue wait is included
+- if a frame requires retransmission, the metric grows because the first-attempt timing reference is preserved
 
 That behavior is deliberate. The metric answers:
 
@@ -187,8 +197,13 @@ For operator observability that is usually the more useful number, because it ri
 
 RTT and transmit delay should therefore be read together:
 
-- RTT: transport round-trip responsiveness
-- transmit delay: effective one-way payload delivery delay as experienced by acknowledged `DATA`
+- RTT: transport round-trip responsiveness based on the frame that actually went onto the wire
+- transmit delay: effective one-way payload delivery delay as experienced by acknowledged `DATA`, including sender-side pre-buffering and retransmission cost
+
+The key consistency rule between the two metrics is:
+
+- `tx_ns` in the protocol envelope must always reflect the actual emission time of that specific wire image, both for the first send and for every retransmission
+- transmit-delay bookkeeping may preserve older first-attempt or queue-entry timing locally, but that local bookkeeping must never replace the on-wire `tx_ns` used for RTT
 
 ## Missing metadata and stale raw frames
 
