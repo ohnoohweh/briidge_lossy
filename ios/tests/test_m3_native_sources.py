@@ -39,6 +39,7 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "task_vm_info_kern_return" in provider
     assert "SwiftSimpleUDPPeerBridge" in provider
     assert "swift_simple_udp_peer" in provider
+    assert "swift_udp" in provider
     assert "simple_udp_peer" in provider
     assert "packetflow_connector_mode_selected" in provider
     assert "loadSharedRuntimeConfigJSON" in provider

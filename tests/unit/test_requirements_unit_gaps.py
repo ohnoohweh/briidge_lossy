@@ -343,11 +343,25 @@ class MyUdpReliabilityRequirementUnitTests(unittest.TestCase):
             "obstacle_bridge.bridge_transport_udp.now_ns",
             return_value=1_000_000_000,
         ):
-            session.update_rtt(880_000_000)
+            session.update_rtt(880_000_000, from_idle=True)
 
         self.assertAlmostEqual(session.rtt_sample_ms, 120.0, places=3)
         self.assertAlmostEqual(session.rtt_est_ms, 120.0, places=3)
         self.assertAlmostEqual(session.transmit_delay_est_ms, 60.0, places=3)
+
+    def test_myudp_non_idle_rtt_refresh_does_not_rebase_transmit_delay_est(self):
+        session, _transport = self._session_and_transport()
+        session.transmit_delay_est_ms = 9000.0
+
+        with mock.patch(
+            "obstacle_bridge.bridge_transport_udp.now_ns",
+            return_value=1_000_000_000,
+        ):
+            session.update_rtt(880_000_000, from_idle=False)
+
+        self.assertAlmostEqual(session.rtt_sample_ms, 120.0, places=3)
+        self.assertAlmostEqual(session.rtt_est_ms, 120.0, places=3)
+        self.assertAlmostEqual(session.transmit_delay_est_ms, 9000.0, places=3)
 
     def test_stream_transports_publish_transmit_delay_as_half_rtt(self):
         for session_cls in (TcpStreamSession, QuicSession, WebSocketSession):

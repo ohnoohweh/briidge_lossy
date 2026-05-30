@@ -209,6 +209,34 @@ def test_network_settings_from_runtime_config_applies_ios_tunnel_network_overrid
     assert settings.mtu == 1600
 
 
+def test_m3_network_settings_can_derive_client_and_server_hook_env() -> None:
+    settings = M3NetworkSettings(
+        tunnel_address="192.168.107.1",
+        tunnel_prefix=30,
+        tunnel_gateway="192.168.107.2",
+        tunnel_address6="fd20:107::1",
+        tunnel_prefix6=126,
+        tunnel_gateway6="fd20:107::2",
+        dns_servers=["9.9.9.9", "1.1.1.1"],
+    )
+
+    local_env = settings.local_hook_env()
+    remote_env = settings.remote_hook_env()
+
+    assert local_env["TUN_ADDR"] == "192.168.107.1/30"
+    assert local_env["TUN_GW"] == "192.168.107.2"
+    assert local_env["TUN_ADDR6"] == "fd20:107::1/126"
+    assert local_env["TUN_GW6"] == "fd20:107::2"
+    assert local_env["DNS1"] == "9.9.9.9"
+    assert local_env["DNS2"] == "1.1.1.1"
+    assert remote_env["TUN_ADDR"] == "192.168.107.2/30"
+    assert remote_env["PEER_ADDR"] == "192.168.107.1"
+    assert remote_env["TUN_SUBNET"] == "192.168.107.0/30"
+    assert remote_env["TUN_ADDR6"] == "fd20:107::2/126"
+    assert remote_env["PEER_ADDR6"] == "fd20:107::1"
+    assert remote_env["TUN_SUBNET6"] == "fd20:107::/126"
+
+
 def test_provider_status_request_message_is_versioned() -> None:
     payload = provider_status_request_message(request_id="req-123")
 

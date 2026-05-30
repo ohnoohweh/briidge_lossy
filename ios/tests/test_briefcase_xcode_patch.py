@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+import shutil
 
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "ios" / "scripts"))
 
-from patch_briefcase_xcode_project import patch_pbxproj_text
+import patch_briefcase_xcode_project as patcher
+from patch_briefcase_xcode_project import patch_pbxproj_file, patch_pbxproj_text
 
 
 BASELINE_PROJECT = """// !$*UTF8*$!
@@ -203,7 +205,7 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert 'PBXNativeTarget "IPServer"' in patched
     assert "NetworkExtension.framework" in patched
     assert "Embed App Extensions" in patched
-    assert "native/IPServer/PacketTunnelProvider.swift" in patched
+    assert "GeneratedSources/IPServer/PacketTunnelProvider.swift" in patched
     assert "native/IPServer/IPServer.entitlements" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeNativeCrypto.swift" in patched
     assert "ObstacleBridgeNativeCrypto.swift in Sources" in patched
@@ -220,3 +222,24 @@ def test_patch_pbxproj_text_is_idempotent() -> None:
     twice = patch_pbxproj_text(once)
 
     assert once == twice
+
+
+def test_patch_pbxproj_file_generates_packet_tunnel_provider_copy(tmp_path, monkeypatch) -> None:
+    project_root = tmp_path / "build" / "obstacle_bridge_ios" / "ios" / "xcode"
+    xcodeproj = project_root / "ObstacleBridge.xcodeproj"
+    xcodeproj.mkdir(parents=True)
+    pbxproj = xcodeproj / "project.pbxproj"
+    pbxproj.write_text(BASELINE_PROJECT, encoding="utf-8")
+
+    source_provider = tmp_path / "repo" / "ios" / "native" / "IPServer" / "PacketTunnelProvider.swift"
+    source_provider.parent.mkdir(parents=True)
+    source_provider.write_text("// generated source fixture\n", encoding="utf-8")
+    monkeypatch.setattr(patcher, "REPO_PACKET_TUNNEL_PROVIDER", source_provider)
+
+    changed = patch_pbxproj_file(pbxproj)
+
+    generated_provider = project_root / patcher.GENERATED_PACKET_TUNNEL_PROVIDER_RELATIVE
+    assert changed is True
+    assert generated_provider.read_text(encoding="utf-8") == source_provider.read_text(encoding="utf-8")
+    patched = pbxproj.read_text(encoding="utf-8")
+    assert "GeneratedSources/IPServer/PacketTunnelProvider.swift" in patched

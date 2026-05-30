@@ -186,6 +186,34 @@ def test_simple_udp_peer_settings_can_be_loaded_from_grouped_config(monkeypatch)
     }
 
 
+def test_packetflow_connector_mode_prefers_grouped_ios_experiment(monkeypatch) -> None:
+    monkeypatch.delenv("OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR", raising=False)
+
+    mode = ipserver_runtime._packetflow_connector_mode(
+        {
+            "ios_experiment": {
+                "packetflow_connector": "swift_udp",
+            }
+        }
+    )
+
+    assert mode == "swift_udp"
+
+
+def test_packetflow_connector_mode_normalizes_swift_udp_peer(monkeypatch) -> None:
+    monkeypatch.delenv("OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR", raising=False)
+
+    mode = ipserver_runtime._packetflow_connector_mode(
+        {
+            "ios_experiment": {
+                "packetflow_connector": "swift_udp_peer",
+            }
+        }
+    )
+
+    assert mode == "swift_udp"
+
+
 def test_start_embedded_webadmin_can_boot_simple_udp_peer_runtime(monkeypatch) -> None:
     events: list[tuple[str, dict[str, object]]] = []
 
@@ -257,6 +285,75 @@ def test_start_embedded_webadmin_can_boot_simple_udp_peer_runtime(monkeypatch) -
     assert controller._simple_udp_peer_runtime.start_calls
     assert controller.client.start_calls == []
     assert any(event == "python_runtime_start_completed" and fields.get("runtime_mode") == "simple_udp_peer" for event, fields in events)
+
+
+def test_start_embedded_webadmin_can_boot_client_with_swift_udp(monkeypatch) -> None:
+    events: list[tuple[str, dict[str, object]]] = []
+
+    monkeypatch.setattr(
+        ipserver_runtime,
+        "log_provider_event",
+        lambda _root, event, **fields: events.append((event, fields)),
+    )
+    monkeypatch.setattr(ipserver_runtime, "log_event", lambda *_args, **_kwargs: None)
+
+    class FakeClient:
+        def __init__(self, config, config_path=None, apply_logging=False):
+            self.config = config
+            self.runner = SimpleNamespace()
+            self.start_calls: list[dict[str, object]] = []
+            self.stop_calls = 0
+            self._args = None
+
+        async def start(self, config=None, packet_io=None) -> None:
+            self.start_calls.append(dict(config or {}))
+
+        async def stop(self) -> None:
+            self.stop_calls += 1
+
+        def snapshot(self) -> dict[str, object]:
+            return {"started": True, "config": self.config}
+
+    monkeypatch.setattr(ipserver_runtime, "ObstacleBridgeClient", FakeClient)
+
+    def _run_async_sync(self, awaitable):
+        return asyncio.run(awaitable)
+
+    monkeypatch.setattr(IPServerRuntimeController, "_run_async_sync", _run_async_sync)
+
+    controller = IPServerRuntimeController()
+    snapshot = controller.start_embedded_webadmin(
+        {
+            "ios_experiment": {
+                "packetflow_connector": "swift_udp",
+                "peer_host": "10.10.1.6",
+                "peer_port": 5555,
+            },
+            "channel_mux": {
+                "own_servers": [
+                    {
+                        "name": "http",
+                        "listen": {"bind": "127.0.0.1", "port": 18010, "protocol": "tcp"},
+                        "target": {"host": "127.0.0.1", "port": 8010, "protocol": "tcp"},
+                    },
+                    {
+                        "name": "tun",
+                        "listen": {"ifname": "ios-utun", "mtu": 1600, "protocol": "tun"},
+                        "target": {"ifname": "obtun2", "mtu": 1600, "protocol": "tun"},
+                    },
+                ]
+            },
+        }
+    )
+
+    assert snapshot["started"] is True
+    assert controller._simple_udp_peer_runtime is None
+    assert len(controller.client.start_calls) == 1
+    started_config = controller.client.start_calls[0]
+    own_servers = started_config["channel_mux"]["own_servers"]
+    assert len(own_servers) == 2
+    assert [entry["listen"]["protocol"] for entry in own_servers] == ["tcp", "tun"]
+    assert any(event == "python_runtime_start_completed" and fields.get("runtime_mode") == "obstaclebridge" for event, fields in events)
 
 
 def test_embedded_restart_reload_reads_grouped_config_and_restarts_client(monkeypatch) -> None:

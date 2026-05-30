@@ -6,6 +6,18 @@ import ipaddress
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Optional
 
+from obstacle_bridge.bridge_ios_tunnel_network import (
+    DEFAULT_IOS_EXCLUDED_ROUTES,
+    DEFAULT_IOS_EXCLUDED_ROUTES6,
+    DEFAULT_IOS_INCLUDED_ROUTES,
+    DEFAULT_IOS_INCLUDED_ROUTES6,
+    DEFAULT_IOS_TUNNEL_ADDRESS,
+    DEFAULT_IOS_TUNNEL_ADDRESS6,
+    DEFAULT_IOS_TUNNEL_PREFIX,
+    DEFAULT_IOS_TUNNEL_PREFIX6,
+    IOSTunnelNetworkSettings as M3NetworkSettings,
+)
+
 
 _TRANSPORT_PEER_KEYS = {
     "tcp": ("tcp_peer", "tcp_peer_port"),
@@ -16,31 +28,7 @@ _TRANSPORT_PEER_KEYS = {
 M3_TUNNEL_SCHEMA = "obstaclebridge.ios.packet-tunnel.v1"
 M3_APP_MESSAGE_SCHEMA = "obstaclebridge.ios.packet-tunnel.app-message.v1"
 M3_TUNNEL_STATUS_STATES = {"idle", "starting", "running", "stopping", "stopped", "failed"}
-DEFAULT_IOS_TUNNEL_ADDRESS = "192.168.105.1"
-DEFAULT_IOS_TUNNEL_PREFIX = 30
-DEFAULT_IOS_INCLUDED_ROUTES = ["0.0.0.0/0"]
-DEFAULT_IOS_EXCLUDED_ROUTES = ["127.0.0.0/8"]
-DEFAULT_IOS_TUNNEL_ADDRESS6 = ""
-DEFAULT_IOS_TUNNEL_PREFIX6 = 126
-DEFAULT_IOS_INCLUDED_ROUTES6 = ["::/0"]
-DEFAULT_IOS_EXCLUDED_ROUTES6 = ["::1/128"]
 DEFAULT_IOS_TUN_IFNAME = "ios-utun"
-
-
-@dataclass
-class M3NetworkSettings:
-    """Network settings the native Packet Tunnel Provider applies on start."""
-
-    tunnel_address: str = DEFAULT_IOS_TUNNEL_ADDRESS
-    tunnel_prefix: int = DEFAULT_IOS_TUNNEL_PREFIX
-    included_routes: list[str] = field(default_factory=lambda: list(DEFAULT_IOS_INCLUDED_ROUTES))
-    excluded_routes: list[str] = field(default_factory=lambda: list(DEFAULT_IOS_EXCLUDED_ROUTES))
-    tunnel_address6: str = DEFAULT_IOS_TUNNEL_ADDRESS6
-    tunnel_prefix6: int = DEFAULT_IOS_TUNNEL_PREFIX6
-    included_routes6: list[str] = field(default_factory=list)
-    excluded_routes6: list[str] = field(default_factory=list)
-    dns_servers: list[str] = field(default_factory=lambda: ["1.1.1.1"])
-    mtu: int = 1280
 
 
 @dataclass
@@ -116,21 +104,7 @@ def _override_network_settings(
     config: Mapping[str, Any],
     base: M3NetworkSettings,
 ) -> M3NetworkSettings:
-    group = config.get("ios_tunnel_network")
-    if not isinstance(group, Mapping):
-        return base
-    return M3NetworkSettings(
-        tunnel_address=str(group.get("tunnel_address") or base.tunnel_address).strip() or base.tunnel_address,
-        tunnel_prefix=int(group.get("tunnel_prefix") or base.tunnel_prefix),
-        included_routes=list(group.get("included_routes") or list(base.included_routes)),
-        excluded_routes=list(group.get("excluded_routes") or list(base.excluded_routes)),
-        tunnel_address6=str(group.get("tunnel_address6") or base.tunnel_address6).strip(),
-        tunnel_prefix6=int(group.get("tunnel_prefix6") or base.tunnel_prefix6),
-        included_routes6=list(group.get("included_routes6") or list(base.included_routes6)),
-        excluded_routes6=list(group.get("excluded_routes6") or list(base.excluded_routes6)),
-        dns_servers=list(group.get("dns_servers") or list(base.dns_servers)),
-        mtu=int(group.get("mtu") or base.mtu),
-    )
+    return M3NetworkSettings.from_mapping(config, base=base)
 
 
 def _prefix_from_subnet(value: Any, *, version: Optional[int] = None) -> int | None:

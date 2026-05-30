@@ -96,6 +96,18 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
             udp_bind="0.0.0.0",
             udp_peer="127.0.0.1",
             udp_peer_port=4433,
+            tunnel_address="192.168.107.1",
+            tunnel_prefix=30,
+            tunnel_gateway="192.168.107.2",
+            included_routes=["0.0.0.0/0"],
+            excluded_routes=["127.0.0.0/8"],
+            tunnel_address6="fd20:107::1",
+            tunnel_prefix6=126,
+            tunnel_gateway6="fd20:107::2",
+            included_routes6=["::/0"],
+            excluded_routes6=["::1/128"],
+            dns_servers=["1.1.1.1", "8.8.8.8"],
+            mtu=1600,
             mux_tcp_bp_threshold=1,
             mux_tcp_bp_latency_ms=300,
             mux_tcp_bp_poll_interval_ms=50,
@@ -114,6 +126,47 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
                 ChannelMux._render_hook_value("{overlay_peer_host}:{overlay_peer_port}", context),
                 "127.0.0.1:4433",
             )
+        finally:
+            mux.loop.close()
+
+    def test_tunnel_hook_env_defaults_follow_ios_tunnel_network_config(self):
+        args = argparse.Namespace(
+            own_servers=None,
+            remote_servers=None,
+            overlay_transport="myudp",
+            udp_bind="0.0.0.0",
+            udp_peer="127.0.0.1",
+            udp_peer_port=4433,
+            tunnel_address="192.168.107.1",
+            tunnel_prefix=30,
+            tunnel_gateway="192.168.107.2",
+            included_routes=["0.0.0.0/0"],
+            excluded_routes=["127.0.0.0/8"],
+            tunnel_address6="fd20:107::1",
+            tunnel_prefix6=126,
+            tunnel_gateway6="fd20:107::2",
+            included_routes6=["::/0"],
+            excluded_routes6=["::1/128"],
+            dns_servers=["9.9.9.9", "1.1.1.1"],
+            mtu=1600,
+            mux_tcp_bp_threshold=1,
+            mux_tcp_bp_latency_ms=300,
+            mux_tcp_bp_poll_interval_ms=50,
+        )
+        mux = ChannelMux.from_args(_FakeSession(), asyncio.new_event_loop(), args)
+        try:
+            local_spec = ChannelMux.ServiceSpec(3, "tun", "ios-utun", 1600, "tun", "obtun2", 1600)
+            remote_spec = ChannelMux.ServiceSpec(4, "tun", "obtun2", 1600, "tun", "ios-utun", 1600)
+
+            local_env = mux._tunnel_hook_env_defaults(local_spec, ("local", 0, 3))
+            remote_env = mux._tunnel_hook_env_defaults(remote_spec, ("peer", 9, 4))
+
+            self.assertEqual(local_env["TUN_ADDR"], "192.168.107.1/30")
+            self.assertEqual(local_env["TUN_GW"], "192.168.107.2")
+            self.assertEqual(local_env["DNS1"], "9.9.9.9")
+            self.assertEqual(remote_env["TUN_ADDR"], "192.168.107.2/30")
+            self.assertEqual(remote_env["PEER_ADDR"], "192.168.107.1")
+            self.assertEqual(remote_env["TUN_SUBNET"], "192.168.107.0/30")
         finally:
             mux.loop.close()
 

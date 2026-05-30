@@ -192,14 +192,22 @@ def _packetflow_connector_mode(dev: Optional[Any] = None) -> str:
                 return "udp" if chosen else "direct"
         mode = str(options.get("ios_packetflow_connector", "") or "").strip().lower()
         if mode:
-            if mode in {"udp", "direct", "simple_udp_peer"}:
+            if mode == "swift_udp_peer":
+                return "swift_udp"
+            if mode in {"udp", "direct", "simple_udp_peer", "swift_udp"}:
                 return mode
     mode = os.environ.get("OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR", "")
     if mode.strip():
         selected = mode.strip().lower()
-        if selected in {"udp", "direct", "simple_udp_peer"}:
+        if selected == "swift_udp_peer":
+            return "swift_udp"
+        if selected in {"udp", "direct", "simple_udp_peer", "swift_udp"}:
             return selected
     return "udp" if _option_bool(os.environ.get("OBSTACLEBRIDGE_IOS_PACKETFLOW_UDP")) is True else "direct"
+
+
+def _swift_native_packetflow_owned(dev: Optional[Any] = None) -> bool:
+    return _packetflow_connector_mode(dev) == "swift_udp"
 
 
 def _udp_option(options: dict[str, Any], key: str, env_key: str, default: Any) -> Any:
@@ -765,6 +773,8 @@ def _write_packet_to_bridge_backend(mux: Any, dev: Any, data: bytes) -> None:
 def require_tun_support(_mux: Any) -> None:
     if sys.platform != "ios":
         raise RuntimeError("iOS TUN support requested on a non-iOS platform")
+    if _swift_native_packetflow_owned():
+        raise RuntimeError("iOS packet flow bridge is owned by the native swift_udp connector")
     state = _bridge_state()
     if not state.get("active"):
         raise RuntimeError("iOS packet flow bridge is not active inside the packet tunnel provider")

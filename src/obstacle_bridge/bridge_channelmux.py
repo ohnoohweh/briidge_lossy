@@ -17,6 +17,8 @@ elif sys.platform == "ios":
 else:
     _bridge_tun_platform = None
 
+from .bridge_ios_tunnel_network import IOSTunnelNetworkSettings
+
 class _ChanCtr:
     msgs_in: int = 0
     msgs_out: int = 0
@@ -180,6 +182,7 @@ class ChannelMux:
                   on_local_rx_bytes: Optional[Callable[[int], None]] = None,
                   on_local_tx_bytes: Optional[Callable[[int], None]] = None) -> "ChannelMux":
         mux = ChannelMux(session, loop, on_local_rx_bytes, on_local_tx_bytes)
+        mux.args = args
         # Parse catalog
         services = ChannelMux._parse_own_servers(getattr(args, 'own_servers', None))
         remote_services = ChannelMux._parse_remote_servers(getattr(args, 'remote_servers', None))
@@ -372,6 +375,7 @@ class ChannelMux:
         self.loop = loop
         self._on_local_rx = on_local_rx_bytes  # local->peer (overlay direction) counters hook
         self._on_local_tx = on_local_tx_bytes  # peer->local counters hook
+        self.args = None
         self._hook_base_dir = os.getcwd()
         self._overlay_transport = ""
         self._overlay_peer_name = ""
@@ -628,6 +632,24 @@ class ChannelMux:
             "role": str(role),
         }
 
+    def _tunnel_hook_env_defaults(
+        self,
+        spec: "ChannelMux.ServiceSpec",
+        svc_key: Optional["ChannelMux.ServiceKey"],
+    ) -> Dict[str, str]:
+        if str(spec.l_proto) != "tun" or self.args is None:
+            return {}
+        try:
+            config = IOSTunnelNetworkSettings.from_mapping(vars(self.args))
+        except Exception:
+            return {}
+        origin = "" if svc_key is None else str(svc_key[0])
+        if origin == "local":
+            return config.local_hook_env()
+        if origin == "peer":
+            return config.remote_hook_env()
+        return {}
+
     async def _run_service_hook(
         self,
         spec: "ChannelMux.ServiceSpec",
@@ -654,6 +676,7 @@ class ChannelMux:
             env["OB_OVERLAY_PEER_NAME"] = str(context.get("overlay_peer_name") or "")
             env["OB_OVERLAY_PEER_HOST"] = str(context.get("overlay_peer_host") or "")
             env["OB_OVERLAY_PEER_PORT"] = str(context.get("overlay_peer_port") or "")
+            env.update(self._tunnel_hook_env_defaults(spec, svc_key))
             env_extra = command_spec.get("env")
             if isinstance(env_extra, dict):
                 for k, v in env_extra.items():

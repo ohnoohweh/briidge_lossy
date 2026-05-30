@@ -162,3 +162,291 @@ Equivalent WebAdmin HTTP probe command shape:
 ```bash
 briefcase run iOS -a obstacle_bridge_ios_e2e -u --no-input -d "<device-name-or-udid>" -- --webadmin-http-probe --probe-url http://192.168.105.1:18080/ --probe-url http://127.0.0.1:18080/ --attempts 5 --timeout-sec 3
 ```
+
+Example config route all traffic through tunnel
+```json
+{
+  "admin_web": {
+    "admin_web": true,
+    "admin_web_auth_disable": true,
+    "admin_web_bind": "127.0.0.1",
+    "admin_web_first_tab": "status",
+    "admin_web_landing_page_disable": false,
+    "admin_web_name": "iOS",
+    "admin_web_password": "",
+    "admin_web_path": "/",
+    "admin_web_port": 18090,
+    "admin_web_security_advisor_disable": false,
+    "admin_web_security_advisor_startup_disable": true,
+    "admin_web_token": "",
+    "admin_web_username": "",
+    "log_admin_web": "INFO"
+  },
+  "channel_mux": {
+    "log_channel_mux": "INFO",
+    "mux_tcp_bp_latency_ms": 300,
+    "mux_tcp_bp_poll_interval_ms": 50,
+    "mux_tcp_bp_threshold": 1,
+    "own_servers": [
+      {
+        "lifecycle_hooks": null,
+        "listen": {
+          "bind": "127.0.0.1",
+          "port": 18010,
+          "protocol": "tcp"
+        },
+        "name": "HTTP direct test",
+        "options": null,
+        "target": {
+          "host": "127.0.0.1",
+          "port": 8010,
+          "protocol": "tcp"
+        }
+      },
+      {
+        "lifecycle_hooks": null,
+        "listen": {
+          "ifname": "ios-utun",
+          "mtu": 1600,
+          "protocol": "tun"
+        },
+        "name": "iOS FullTunnel",
+        "options": null,
+        "target": {
+          "ifname": "obtun2",
+          "mtu": 1600,
+          "protocol": "tun"
+        }
+      }
+    ],
+    "remote_servers": [
+      {
+        "lifecycle_hooks": {
+          "listener": {
+            "on_created": {
+              "argv": [
+                "./scripts/server-tun-hook.sh",
+                "up",
+                "{ifname}"
+              ],
+              "env": {
+                "ENABLE_TCPMSS": "1",
+                "ENABLE_TUN_TCPDUMP": "1",
+                "PEER_ADDR": "192.168.106.1",
+                "PEER_ADDR6": "fd20:106::1",
+                "TCPDUMP_PCAP_PATH": "/tmp/ObstacleBridge.pcap",
+                "TCPDUMP_PIDFILE": "/tmp/ObstacleBridge.tcpdump.pid",
+                "TCPDUMP_STDERR_LOG": "/tmp/ObstacleBridge.tcpdump.log",
+                "TUN_ADDR": "192.168.106.2/30",
+                "TUN_ADDR6": "fd20:106::2/126",
+                "TUN_SUBNET": "192.168.106.0/30",
+                "TUN_SUBNET6": "fd20:106::/126",
+                "WAN_IF": "eth0"
+              }
+            },
+            "on_stopped": {
+              "argv": [
+                "./scripts/server-tun-hook.sh",
+                "down",
+                "{ifname}"
+              ],
+              "env": {
+                "ENABLE_TCPMSS": "1",
+                "ENABLE_TUN_TCPDUMP": "1",
+                "PEER_ADDR": "192.168.106.1",
+                "PEER_ADDR6": "fd20:106::1",
+                "TCPDUMP_PCAP_PATH": "/tmp/ObstacleBridge_ios.pcap",
+                "TCPDUMP_PIDFILE": "/tmp/ObstacleBridge_ios.tcpdump.pid",
+                "TCPDUMP_STDERR_LOG": "/tmp/ObstacleBridge_ios.tcpdump.log",
+                "TUN_ADDR": "192.168.106.2/30",
+                "TUN_ADDR6": "fd20:106::2/126",
+                "TUN_SUBNET": "192.168.106.0/30",
+                "TUN_SUBNET6": "fd20:106::/126",
+                "WAN_IF": "eth0"
+              }
+            }
+          }
+        },
+        "listen": {
+          "ifname": "obtun2",
+          "mtu": 1600,
+          "protocol": "tun"
+        },
+        "name": "Fedora FullTunnel",
+        "options": null,
+        "target": {
+          "ifname": "ios-utun",
+          "mtu": 1600,
+          "protocol": "tun"
+        }
+      }
+    ]
+  },
+  "compress_layer": {
+    "compress_layer": true,
+    "compress_layer_algo": "zlib",
+    "compress_layer_level": 3,
+    "compress_layer_min_bytes": 64,
+    "compress_layer_types": "data,data_frag",
+    "log_compress_layer": "CRITICAL"
+  },
+  "debug_logging": {
+    "admin_web_log_max_lines": 1200,
+    "console_level": "DEBUG",
+    "debug_stderr": false,
+    "file_level": "DEBUG",
+    "log": "WARNING",
+    "log_debug_logging": "CRITICAL",
+    "log_file_backup_count": 5,
+    "log_file_max_bytes": 0
+  },
+  "ios_experiment": {
+    "bind_host": "0.0.0.0",
+    "bind_port": 5555,
+    "ifname": "ios-utun",
+    "mtu": 1600,
+    "packetflow_connector": "udp",
+    "peer_host": "10.10.1.12",
+    "peer_port": 5555
+  },
+  "ios_tunnel_network": {
+    "included_routes": [
+      "0.0.0.0/0"
+    ],
+    "excluded_routes": [
+      "127.0.0.0/8"
+    ],
+    "included_routes6": [
+      "::/0"
+    ],
+    "excluded_routes6": [
+      "::1/128"
+    ],
+    "mtu": 1600
+  },
+  "quic_session": {
+    "log_quic_session": "INFO",
+    "quic_alpn": "hq-29",
+    "quic_bind": "::",
+    "quic_cert": null,
+    "quic_insecure": false,
+    "quic_key": null,
+    "quic_max_size": 65535,
+    "quic_own_port": 443,
+    "quic_peer": null,
+    "quic_peer_port": 443
+  },
+  "runner": {
+    "client_restart_if_disconnected": 0.0,
+    "log_runner": "DEBUG",
+    "overlay_reconnect_retry_delay_ms": 30000,
+    "overlay_transport": "myudp"
+  },
+  "secure_link": {
+    "log_secure_link": "INFO",
+    "secure_link": true,
+    "secure_link_cert_body": "",
+    "secure_link_cert_reload_on_restart": true,
+    "secure_link_cert_sig": "",
+    "secure_link_mode": "psk",
+    "secure_link_private_key": "",
+    "secure_link_recover_after_failure": true,
+    "secure_link_recover_delay_seconds": 30.0,
+    "secure_link_rekey_after_frames": 0,
+    "secure_link_rekey_after_seconds": 60.0,
+    "secure_link_require": false,
+    "secure_link_retry_backoff_initial_ms": 1000,
+    "secure_link_retry_backoff_max_ms": 5000,
+    "secure_link_revoked_serials": "",
+    "secure_link_root_pub": ""
+  },
+  "stats_board": {
+    "log_stats_board": "CRITICAL",
+    "no_dashboard": true,
+    "status": false
+  },
+  "tcp_session": {
+    "log_tcp_session": "INFO",
+    "tcp_bind": "::",
+    "tcp_bp_latency_ms": 300,
+    "tcp_bp_poll_interval_ms": 50,
+    "tcp_bp_wbuf_threshold": 131072,
+    "tcp_own_port": 8081,
+    "tcp_peer": null,
+    "tcp_peer_port": 443
+  },
+  "udp_session": {
+    "log_udp_session": "INFO",
+    "max_inflight": 200,
+    "peer_resolve_family": "prefer-ipv6",
+    "udp_bind": "0.0.0.0",
+    "udp_own_port": 0,
+    "udp_peer_port": 4433
+  },
+  "ws_session": {
+    "log_ws_session": "INFO",
+    "ws_bind": "::",
+    "ws_max_size": 65535,
+    "ws_own_port": 0,
+    "ws_path": "/",
+    "ws_payload_mode": "binary",
+    "ws_peer_port": 8080,
+    "ws_proxy_auth": "none",
+    "ws_proxy_host": "",
+    "ws_proxy_mode": "off",
+    "ws_proxy_port": 8080,
+    "ws_reconnect_grace": 3.0,
+    "ws_send_timeout": 3.0,
+    "ws_subprotocol": null,
+    "ws_tcp_user_timeout_ms": 10000,
+    "ws_tls": false
+  }
+}
+```
+
+Route effectively no VPN traffic through tunnel, still have TCP and UDP tunnels
+```json
+  "ios_tunnel_network": {
+    "included_routes": [
+      "198.18.0.254/32"
+    ],
+    "excluded_routes": [
+      "127.0.0.0/8"
+    ],
+    "included_routes6": [
+      "2001:db8:ffff::254/128"
+    ],
+    "excluded_routes6": [
+      "::1/128"
+    ],
+    "mtu": 1600
+  },
+```  
+
+Use NEPacketProvider to UDP interface
+
+Assumes Linux machine is in same WLAN as iPhone
+Linux machine has IP 10.10.1.6 assigned
+
+```json  
+"ios_experiment": {
+  "packetflow_connector": "simple_udp_peer",
+  "peer_host": "10.10.1.6",
+  "peer_port": 5555,
+  "bind_host": "0.0.0.0",
+  "bind_port": 5555,
+  "ifname": "ios-utun",
+  "mtu": 1280
+}
+```  
+
+On Linux machine
+```bash  
+./run_test.sh
+```
+
+as soon it is running open 2nd shell
+```bash  
+./run_test_setup.sh
+```
+

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
 from pathlib import Path
 
 
@@ -17,6 +18,9 @@ DEFAULT_PROJECT = (
     / "ObstacleBridge.xcodeproj"
     / "project.pbxproj"
 )
+
+GENERATED_PACKET_TUNNEL_PROVIDER_RELATIVE = Path("GeneratedSources") / "IPServer" / "PacketTunnelProvider.swift"
+REPO_PACKET_TUNNEL_PROVIDER = Path(__file__).resolve().parents[1] / "native" / "IPServer" / "PacketTunnelProvider.swift"
 
 
 def insert_before(text: str, marker: str, addition: str) -> str:
@@ -348,7 +352,7 @@ def patch_ipserver_target(text: str) -> str:
         "/* End PBXFileReference section */\n",
         "\t\t71C200000000000000000030 /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };\n"
         "\t\t71C200000000000000000031 /* IPServer.appex */ = {isa = PBXFileReference; explicitFileType = \"wrapper.app-extension\"; includeInIndex = 0; path = IPServer.appex; sourceTree = BUILT_PRODUCTS_DIR; };\n"
-        "\t\t71C200000000000000000032 /* PacketTunnelProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PacketTunnelProvider.swift; path = \"../../../../native/IPServer/PacketTunnelProvider.swift\"; sourceTree = SOURCE_ROOT; };\n"
+        "\t\t71C200000000000000000032 /* PacketTunnelProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PacketTunnelProvider.swift; path = \"GeneratedSources/IPServer/PacketTunnelProvider.swift\"; sourceTree = SOURCE_ROOT; };\n"
         "\t\t71C200000000000000000033 /* ObstacleBridgePythonBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = ObstacleBridgePythonBridge.m; path = \"../../../../native/IPServer/ObstacleBridgePythonBridge.m\"; sourceTree = SOURCE_ROOT; };\n"
         "\t\t71C200000000000000000034 /* ObstacleBridgePythonBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = ObstacleBridgePythonBridge.h; path = \"../../../../native/IPServer/ObstacleBridgePythonBridge.h\"; sourceTree = SOURCE_ROOT; };\n"
         "\t\t71C200000000000000000035 /* IPServer-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = \"IPServer-Bridging-Header.h\"; path = \"../../../../native/IPServer/IPServer-Bridging-Header.h\"; sourceTree = SOURCE_ROOT; };\n"
@@ -586,7 +590,16 @@ def patch_pbxproj_text(text: str) -> str:
     return text
 
 
+def ensure_generated_packet_tunnel_provider(pbxproj_path: Path) -> Path:
+    xcode_root = pbxproj_path.resolve().parent.parent
+    generated_path = xcode_root / GENERATED_PACKET_TUNNEL_PROVIDER_RELATIVE
+    generated_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(REPO_PACKET_TUNNEL_PROVIDER, generated_path)
+    return generated_path
+
+
 def patch_pbxproj_file(path: Path) -> bool:
+    ensure_generated_packet_tunnel_provider(path)
     original = path.read_text(encoding="utf-8")
     patched = patch_pbxproj_text(original)
     if patched == original:

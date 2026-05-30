@@ -1551,6 +1551,7 @@ class Runner:
 
 # ------------ Admin Webinterface ------------
 
+from .bridge_ios_tunnel_network import IOSTunnelNetworkSettings
 from .bridge_webadmin import AdminWebUI
 
 class ConfigAwareCLI:
@@ -2047,6 +2048,7 @@ def default_runtime_registrars() -> List[Tuple[str, Callable[[argparse.ArgumentP
         ("stats_board",        StatsBoard.register_cli),
         ("secure_link",       SecureLinkPskSession.register_cli),
         ("compress_layer",    CompressLayerSession.register_cli),
+        ("ios_tunnel_network", IOSTunnelNetworkSettings.register_cli),
         ("udp_session",        UdpSession.register_cli),
         ("ws_session",         WebSocketSession.register_cli),
         ("tcp_session",        TcpStreamSession.register_cli),

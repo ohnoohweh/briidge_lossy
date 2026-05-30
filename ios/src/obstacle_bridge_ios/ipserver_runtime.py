@@ -107,6 +107,18 @@ def _simple_udp_peer_settings(config: Mapping[str, Any] | None) -> dict[str, Any
     }
 
 
+def _packetflow_connector_mode(config: Mapping[str, Any] | None) -> str:
+    raw = str(os.environ.get("OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR", "") or "").strip().lower()
+    if raw:
+        return "swift_udp" if raw == "swift_udp_peer" else raw
+    grouped = dict(config) if isinstance(config, Mapping) else {}
+    experiment = grouped.get("ios_experiment")
+    if isinstance(experiment, Mapping):
+        mode = str(experiment.get("packetflow_connector", "") or "").strip().lower()
+        return "swift_udp" if mode == "swift_udp_peer" else mode
+    return ""
+
+
 class _PacketFlowOnlyMux:
     class TunDevice:
         def __init__(self, fd: int, ifname: str, mtu: int, service_key: object | None = None) -> None:
@@ -429,6 +441,41 @@ class IPServerRuntimeController:
             }
         return runtime_cfg
 
+    @staticmethod
+    def _swift_udp_runtime_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
+        runtime_cfg = dict(config) if isinstance(config, Mapping) else {}
+        channel_mux = runtime_cfg.get("channel_mux")
+        if not isinstance(channel_mux, Mapping):
+            return runtime_cfg
+        own_servers = channel_mux.get("own_servers")
+        if not isinstance(own_servers, list):
+            return runtime_cfg
+        filtered_own_servers: list[Any] = []
+        removed_tun_services = 0
+        for entry in own_servers:
+            if not isinstance(entry, Mapping):
+                filtered_own_servers.append(entry)
+                continue
+            listen = entry.get("listen")
+            protocol = ""
+            if isinstance(listen, Mapping):
+                protocol = str(listen.get("protocol", "") or "").strip().lower()
+            if protocol == "tun":
+                removed_tun_services += 1
+                continue
+            filtered_own_servers.append(dict(entry))
+        if removed_tun_services == 0:
+            return runtime_cfg
+        merged_channel_mux = dict(channel_mux)
+        merged_channel_mux["own_servers"] = filtered_own_servers
+        runtime_cfg["channel_mux"] = merged_channel_mux
+        debug_logging = dict(
+            runtime_cfg.get("debug_logging") if isinstance(runtime_cfg.get("debug_logging"), Mapping) else {}
+        )
+        debug_logging["ios_swift_udp_tun_services_removed"] = removed_tun_services
+        runtime_cfg["debug_logging"] = debug_logging
+        return runtime_cfg
+
     def _request_embedded_restart(self) -> None:
         future = self._embedded_restart_future
         if future is not None and not future.done():
@@ -639,11 +686,11 @@ class IPServerRuntimeController:
             if isinstance(runtime_config, Mapping)
             else self._runtime_config_with_ios_defaults(_load_grouped_runtime_config(self.documents_root))
         )
+        connector_mode = _packetflow_connector_mode(normalized_config)
         simple_runtime_config = self._simple_udp_peer_runtime_config(normalized_config)
         self.client.config = normalized_config
         tunnel_address = network_settings_from_runtime_config(self.client.config).tunnel_address
         os.environ["OBSTACLEBRIDGE_IOS_TUNNEL_ADDRESS"] = tunnel_address
-        connector_mode = str(os.environ.get("OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR", "") or "").strip().lower()
         if simple_runtime_config is None:
             if not connector_mode:
                 peer_host = str(os.environ.get("OBSTACLEBRIDGE_IOS_PACKETFLOW_PEER_HOST", "") or "").strip()
@@ -652,11 +699,14 @@ class IPServerRuntimeController:
                     os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR"] = "simple_udp_peer"
                 else:
                     os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR"] = "udp"
+            elif connector_mode == "swift_udp":
+                os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR"] = "swift_udp"
         os.environ["OBSTACLEBRIDGE_IOS_DIAGNOSTICS_ROOT"] = str(self.documents_root / "logs")
         log_provider_event(
             self.documents_root,
             "python_runtime_config_prepared",
             config_keys=sorted(self.client.config.keys()) if isinstance(self.client.config, Mapping) else [],
+            packetflow_connector=connector_mode,
         )
         self._log_config_diagnostics("prepared", self.client.config)
         self._run_async_sync(self._stop_active_runtime())

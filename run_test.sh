@@ -25,7 +25,7 @@ exec python3 -m obstacle_bridge.tools.fedora_udp_tun_bridge \
   --mtu "${TUN_MTU}" \
   --bind-host "${BIND_HOST:-0.0.0.0}" \
   --bind-port "${BIND_PORT:-5555}" \
-  --peer-host "${PEER_HOST:-10.10.0.176}" \
+  --peer-host "${PEER_HOST:-10.10.1.4}" \
   --peer-port "${PEER_PORT:-5555}" \
   "${DROP_IPV6_ARGS[@]}" \
   --log-jsonl "${LOG_JSONL:-${LOG_DIR}/fedora-udp-tun.jsonl}" \

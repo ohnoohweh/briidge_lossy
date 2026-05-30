@@ -2,15 +2,15 @@
 set -euo pipefail
 
 TUN_IF="${TUN_IF:-obexp0}"
-WG_IF="${WG_IF:-wg0}"
+WG_IF="${WG_IF:-obtun0}"
 UPLINK_IF="${UPLINK_IF:-wlp0s20f3}"
 LOG_DIR="${LOG_DIR:-ios/.logs/fedora}"
 STAMP="${STAMP:-$(date -u +%Y%m%d-%H%M%S)}"
 
 IPV4_TEST_DST="${IPV4_TEST_DST:-1.1.1.1}"
-IPV4_TEST_SRC="${IPV4_TEST_SRC:-192.168.105.1}"
+IPV4_TEST_SRC="${IPV4_TEST_SRC:-192.168.106.1}"
 IPV6_TEST_DST="${IPV6_TEST_DST:-2606:4700:4700::1111}"
-IPV6_TEST_SRC="${IPV6_TEST_SRC:-fd20:105::1}"
+IPV6_TEST_SRC="${IPV6_TEST_SRC:-fd20:106::1}"
 
 mkdir -p "${LOG_DIR}"
 

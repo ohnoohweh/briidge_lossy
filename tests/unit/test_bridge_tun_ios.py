@@ -107,6 +107,7 @@ def test_open_tun_device_uses_active_bridge(monkeypatch):
     backend = _FakeBackend(active=True)
     monkeypatch.setattr(bridge_tun_ios, "_BACKEND", backend)
     monkeypatch.setattr(bridge_tun_ios.sys, "platform", "ios")
+    monkeypatch.delenv("OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR", raising=False)
 
     mux = _FakeMux()
     try:
@@ -122,6 +123,7 @@ def test_write_tun_packet_uses_bridge_backend(monkeypatch):
     backend = _FakeBackend(active=True)
     monkeypatch.setattr(bridge_tun_ios, "_BACKEND", backend)
     monkeypatch.setattr(bridge_tun_ios.sys, "platform", "ios")
+    monkeypatch.delenv("OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR", raising=False)
 
     mux = _FakeMux()
     try:
@@ -133,10 +135,29 @@ def test_write_tun_packet_uses_bridge_backend(monkeypatch):
         mux.loop.close()
 
 
+def test_open_tun_device_rejects_swift_udp_native_ownership(monkeypatch):
+    backend = _FakeBackend(active=True)
+    monkeypatch.setattr(bridge_tun_ios, "_BACKEND", backend)
+    monkeypatch.setattr(bridge_tun_ios.sys, "platform", "ios")
+    monkeypatch.setenv("OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR", "swift_udp_peer")
+
+    mux = _FakeMux()
+    try:
+        try:
+            bridge_tun_ios.open_tun_device(mux, "obtun-ios", 1400)
+        except RuntimeError as exc:
+            assert "native swift_udp connector" in str(exc)
+        else:
+            raise AssertionError("swift_udp should prevent Python from opening the iOS packet-flow bridge")
+    finally:
+        mux.loop.close()
+
+
 def test_register_tun_reader_drains_bridge_queue(monkeypatch):
     backend = _FakeBackend([b"\x45one", b"\x45two"], active=True)
     monkeypatch.setattr(bridge_tun_ios, "_BACKEND", backend)
     monkeypatch.setattr(bridge_tun_ios.sys, "platform", "ios")
+    monkeypatch.delenv("OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR", raising=False)
 
     mux = _FakeMux()
     try:
