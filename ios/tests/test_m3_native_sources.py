@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SHARED_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeShared"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
 E2E_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeE2E"
+MAC_RUNNER_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeMacRunner"
 IPSERVER_DIR = ROOT / "ios" / "build" / "obstacle_bridge_ios" / "ios" / "xcode" / "IPServer"
 IPSERVER_NATIVE_DIR = ROOT / "ios" / "native" / "IPServer"
 
@@ -38,10 +39,26 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "phys_footprint" in provider
     assert "task_vm_info_kern_return" in provider
     assert "SwiftSimpleUDPPeerBridge" in provider
+    assert "ObstacleBridgeUdpOverlayPeerRuntime" in provider
     assert "swift_simple_udp_peer" in provider
     assert "swift_udp" in provider
     assert "simple_udp_peer" in provider
     assert "packetflow_connector_mode_selected" in provider
+    assert "swift_udp_payload_send_failed" in provider
+    assert "swift_udp_inbound_control_failed" in provider
+    assert "swift_udp_inbound_idle_failed" in provider
+    assert "swift_udp_retransmit_timer_failed" in provider
+    assert "ObstacleBridgeChannelMuxTunRuntime" in provider
+    assert "ObstacleBridgeChannelMuxTcpRuntime" in provider
+    assert "ControlChunkReassembler" in provider
+    assert "startTCPServices()" in provider
+    assert "handleInboundTCPMuxFrame" in provider
+    assert "localTCPServiceSpecs(providerConfiguration:" in provider
+    assert "swift_udp_channelmux_tun_open_rejected" in provider
+    assert "swift_udp_channelmux_tun_open_chunk_rejected" in provider
+    assert "swift_udp_tcp_listener_ready" in provider
+    assert "swift_udp_tcp_mux_send_failed" in provider
+    assert "routeOverlayPayloadsToSystem" in provider
     assert "loadSharedRuntimeConfigJSON" in provider
     assert "packet_pump_dropped_packets" not in provider
     assert "obstaclebridge.ios.packet-tunnel.v1" in provider
@@ -106,6 +123,242 @@ def test_native_crypto_bridge_source_exists() -> None:
     assert "sealed.ciphertext + sealed.tag" in bridge
 
 
+def test_channel_mux_codec_source_exists() -> None:
+    codec = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift").read_text(encoding="utf-8")
+
+    assert "struct ObstacleBridgeChannelMuxCodec" in codec
+    assert "enum Proto: Int" in codec
+    assert "enum MType: Int" in codec
+    assert "packMux(" in codec
+    assert "unpackMux(" in codec
+    assert "buildOpenPayload(" in codec
+    assert "parseOpenPayload(" in codec
+    assert "encodeRemoteServicesSetV2(" in codec
+    assert "decodeRemoteServicesSetV2(" in codec
+    assert "chunkControlPayload(" in codec
+    assert "ControlChunkReassembler" in codec
+
+
+def test_channel_mux_tun_runtime_source_exists() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
+
+    assert "final class ObstacleBridgeChannelMuxTunRuntime" in runtime
+    assert "struct LocalTunSendSnapshot" in runtime
+    assert "struct InboundTunOpenSnapshot" in runtime
+    assert "struct InboundTunOpenChunkSnapshot" in runtime
+    assert "struct InboundTunDataSnapshot" in runtime
+    assert "struct InboundTunFragmentSnapshot" in runtime
+    assert "struct CloseSnapshot" in runtime
+    assert "handleLocalTunPacket(" in runtime
+    assert "handleInboundTunOpen(" in runtime
+    assert "handleInboundTunOpenChunk(" in runtime
+    assert "handleInboundTunData(" in runtime
+    assert "handleInboundTunFragment(" in runtime
+    assert "handleInboundTunClose(" in runtime
+
+
+def test_channel_mux_udp_runtime_source_exists() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxUdpRuntime.swift").read_text(encoding="utf-8")
+
+    assert "final class ObstacleBridgeChannelMuxUdpRuntime" in runtime
+    assert "struct LocalServerDatagramSnapshot" in runtime
+    assert "struct InboundServerDatagramSnapshot" in runtime
+    assert "struct InboundServerFragmentSnapshot" in runtime
+    assert "struct InboundClientOpenSnapshot" in runtime
+    assert "struct InboundClientDataSnapshot" in runtime
+    assert "struct InboundClientFragmentSnapshot" in runtime
+    assert "struct ClientConnectSnapshot" in runtime
+    assert "struct LocalClientDatagramSnapshot" in runtime
+    assert "struct CloseSnapshot" in runtime
+    assert "struct ClientCloseSnapshot" in runtime
+    assert "handleLocalServerDatagram(" in runtime
+    assert "handleInboundServerData(" in runtime
+    assert "handleInboundServerFragment(" in runtime
+    assert "handleInboundClientOpen(" in runtime
+    assert "handleInboundClientData(" in runtime
+    assert "handleInboundClientFragment(" in runtime
+    assert "handleClientConnected(" in runtime
+    assert "handleLocalClientDatagram(" in runtime
+    assert "handleInboundClientClose(" in runtime
+    assert "handleInboundClose(" in runtime
+
+
+def test_channel_mux_tcp_runtime_source_exists() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTcpRuntime.swift").read_text(encoding="utf-8")
+
+    assert "final class ObstacleBridgeChannelMuxTcpRuntime" in runtime
+    assert "struct LocalServerAcceptSnapshot" in runtime
+    assert "struct LocalServerDataSnapshot" in runtime
+    assert "struct InboundServerDataSnapshot" in runtime
+    assert "struct InboundClientOpenSnapshot" in runtime
+    assert "struct InboundClientDataSnapshot" in runtime
+    assert "struct ClientConnectSnapshot" in runtime
+    assert "struct LocalClientDataSnapshot" in runtime
+    assert "struct LocalClientCloseSnapshot" in runtime
+    assert "struct ClientCloseSnapshot" in runtime
+    assert "struct ServerCloseSnapshot" in runtime
+    assert "localConnectionClosed" in runtime
+    assert "handleAcceptedServerConnection(" in runtime
+    assert "handleLocalServerData(" in runtime
+    assert "handleInboundServerData(" in runtime
+    assert "handleLocalServerEOF(" in runtime
+    assert "handleInboundServerClose(" in runtime
+    assert "handleInboundClientOpen(" in runtime
+    assert "handleInboundClientData(" in runtime
+    assert "handleClientConnected(" in runtime
+    assert "handleLocalClientData(" in runtime
+    assert "handleLocalClientEOF(" in runtime
+    assert "handleInboundClientClose(" in runtime
+
+
+def test_compress_layer_runtime_source_exists() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeCompressLayerRuntime.swift").read_text(encoding="utf-8")
+
+    assert "final class ObstacleBridgeCompressLayerRuntime" in runtime
+    assert "struct StatusSnapshot" in runtime
+    assert "struct SendSnapshot" in runtime
+    assert "struct ReceiveSnapshot" in runtime
+    assert "parseAllowedMTypes(" in runtime
+    assert "handleInboundPayload(" in runtime
+    assert "handleSendPayload(" in runtime
+    assert "statusSnapshot(peerID:" in runtime
+    assert "safeCompress(" in runtime
+    assert "safeDecompress(" in runtime
+    assert "compress2" in runtime
+    assert "inflateInit_" in runtime
+
+
+def test_overlay_stack_planner_source_exists() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayStackPlanner.swift").read_text(encoding="utf-8")
+
+    assert "enum ObstacleBridgeOverlayStackPlannerError" in runtime
+    assert "final class ObstacleBridgeOverlayStackPlanner" in runtime
+    assert "struct TransportPlan" in runtime
+    assert "parseOverlayTransports(" in runtime
+    assert "planTransport(" in runtime
+    assert "unsupportedSecureLinkMode" in runtime
+    assert "unsupportedCompressAlgo" in runtime
+
+
+def test_macos_swift_host_runner_source_exists() -> None:
+    runtime = (MAC_RUNNER_NATIVE_DIR / "ObstacleBridgeMacHostRunner.swift").read_text(encoding="utf-8")
+
+    assert "@main" in runtime
+    assert "ObstacleBridgeMacHostRunner" in runtime
+    assert "ObstacleBridgeHTTPControlServer" in runtime
+    assert "ObstacleBridgeOverlayStackPlanner.parseOverlayTransports" in runtime
+    assert "ObstacleBridgeOverlayStackPlanner.planTransport" in runtime
+    assert "ObstacleBridgeCompressLayerRuntime" in runtime
+    assert "ObstacleBridgeWebSocketOverlayRuntime" in runtime
+    assert "ObstacleBridgeTcpOverlayRuntime" in runtime
+    assert '"/api/status"' in runtime
+    assert '"swift_host_runner"' in runtime
+
+
+def test_websocket_payload_codec_source_exists() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketPayloadCodec.swift").read_text(encoding="utf-8")
+
+    assert "protocol ObstacleBridgeWebSocketPayloadCodec" in runtime
+    assert "enum ObstacleBridgeWebSocketPayloadCodecFactory" in runtime
+    assert "struct ObstacleBridgeWebSocketBinaryPayloadCodec" in runtime
+    assert "struct ObstacleBridgeWebSocketBase64PayloadCodec" in runtime
+    assert "struct ObstacleBridgeWebSocketJsonBase64PayloadCodec" in runtime
+    assert "struct ObstacleBridgeWebSocketSemiTextShapePayloadCodec" in runtime
+    assert "maxEncodedSize(" in runtime
+    assert "invalidSemiTextShapeTrailingPadding" in runtime
+
+
+def test_websocket_overlay_runtime_source_exists() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift").read_text(encoding="utf-8")
+
+    assert "final class ObstacleBridgeWebSocketOverlayRuntime" in runtime
+    assert "struct ConnectPlan" in runtime
+    assert "struct SendSnapshot" in runtime
+    assert "struct SocketConfigSnapshot" in runtime
+    assert "struct DisconnectSnapshot" in runtime
+    assert "struct HTTPPreflightSnapshot" in runtime
+    assert "listenerPeerSnapshot(" in runtime
+    assert "buildConnectPlan(" in runtime
+    assert "validateHTTPPreflight(" in runtime
+    assert "parseProxySpec(" in runtime
+    assert "buildProxyConnectRequest(" in runtime
+
+
+def test_tcp_overlay_runtime_source_exists() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayRuntime.swift").read_text(encoding="utf-8")
+
+    assert "final class ObstacleBridgeTcpOverlayRuntime" in runtime
+    assert "struct SendSnapshot" in runtime
+    assert "struct ConnectSnapshot" in runtime
+    assert "struct SocketConfigSnapshot" in runtime
+    assert "struct ReconnectSnapshot" in runtime
+    assert "struct AcceptSnapshot" in runtime
+    assert "struct ServerOverlaySnapshot" in runtime
+    assert "struct BackpressureSnapshot" in runtime
+    assert "sendApp(payload:" in runtime
+    assert "connect(host:" in runtime
+    assert "socketConfigSnapshot(" in runtime
+    assert "requestReconnect(" in runtime
+    assert "acceptServerPeer(" in runtime
+    assert "closeServerPeer(" in runtime
+    assert "backpressureSnapshot(" in runtime
+
+
+def test_secure_link_psk_codec_source_exists() -> None:
+    codec = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift").read_text(encoding="utf-8")
+
+    assert "struct ObstacleBridgeSecureLinkPskCodec" in codec
+    assert "buildFrame(" in codec
+    assert "parseFrame(" in codec
+    assert "deriveKeys(" in codec
+    assert "nonce(counter:" in codec
+    assert "buildJSONPayload(" in codec
+    assert "parseJSONPayload(" in codec
+
+
+def test_udp_overlay_codec_source_exists() -> None:
+    codec = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayCodec.swift").read_text(encoding="utf-8")
+
+    assert "struct ObstacleBridgeUdpOverlayCodec" in codec
+    assert "buildProtocolFrame(" in codec
+    assert "parseProtocolFrame(" in codec
+    assert "buildDataFrame(" in codec
+    assert "parseDataFrame(" in codec
+    assert "buildControlFrame(" in codec
+    assert "parseControlFrame(" in codec
+
+
+def test_udp_overlay_session_codec_source_exists() -> None:
+    codec = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlaySessionCodec.swift").read_text(encoding="utf-8")
+
+    assert "struct ObstacleBridgeUdpOverlaySessionCodec" in codec
+    assert "segmentApplicationPayload(" in codec
+    assert "final class ReceiveState" in codec
+    assert "struct Reassembly" in codec
+
+
+def test_udp_overlay_peer_runtime_source_exists() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift").read_text(encoding="utf-8")
+
+    assert "final class ObstacleBridgeUdpOverlayPeerRuntime" in runtime
+    assert "struct InboundControlSnapshot" in runtime
+    assert "struct InboundIdleSnapshot" in runtime
+    assert "struct InboundDataSnapshot" in runtime
+    assert "struct ControlTimerSnapshot" in runtime
+    assert "struct RetransmitTimerSnapshot" in runtime
+    assert "struct OutboundDataSnapshot" in runtime
+    assert "struct OutboundControlSnapshot" in runtime
+    assert "handleInboundControlPacket(" in runtime
+    assert "handleControlTimerTick(" in runtime
+    assert "handleRetransmitTimerTick(" in runtime
+    assert "handleInboundIdleFrame(" in runtime
+    assert "handleInboundDataFrame(" in runtime
+    assert "sendApplicationPayload(" in runtime
+    assert "buildOutboundControl(" in runtime
+    assert "updateControlTracking(" in runtime
+    assert "noteControlSent(" in runtime
+
+
 def test_ios_briefcase_configs_include_rubicon_for_native_crypto_bridge() -> None:
     pyproject = tomllib.loads((ROOT / "ios" / "pyproject.toml").read_text(encoding="utf-8"))
 
@@ -141,6 +394,13 @@ def test_ipserver_extension_sources_bootstrap_python_runtime() -> None:
     assert "handleAppMessage" in provider
     assert "recordNativeEvent" in provider
     assert "stopTunnel_entered" in provider
+    assert "ObstacleBridgeOverlayStackPlanner.parseOverlayTransports" in provider
+    assert "ObstacleBridgeOverlayStackPlanner.planTransport" in provider
+    assert "ObstacleBridgeCompressLayerRuntime" in provider
+    assert "ObstacleBridgeWebSocketOverlayRuntime" in provider
+    assert "ObstacleBridgeTcpOverlayRuntime" in provider
+    assert "shared_overlay_runtime_prepared" in provider
+    assert "shared_overlay_bootstrap_state" in provider
     assert "obstacle_bridge_ios.ipserver_extension" in bridge
     assert "ObstacleBridgePythonBridge sendMessage" in bridge
     assert "probePythonRuntimeWithError" in bridge

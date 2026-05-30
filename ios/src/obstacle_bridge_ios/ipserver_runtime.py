@@ -39,16 +39,28 @@ def _packetflow_connector_mode(config: Mapping[str, Any] | None) -> str:
 _SimpleUDPPeerRuntime = bridge_tun_ios.SimpleUDPPeerRuntime
 
 
-def _quiet_extension_console_logging(config: Mapping[str, Any]) -> dict[str, Any]:
+def _disable_extension_python_logging() -> None:
+    logging.disable(logging.CRITICAL)
+    root = logging.getLogger()
+    root.handlers.clear()
+
+
+def _disable_extension_logging_config(config: Mapping[str, Any]) -> dict[str, Any]:
     normalized = dict(config)
     if any(isinstance(value, Mapping) for value in normalized.values()):
         debug_logging = dict(
             normalized.get("debug_logging") if isinstance(normalized.get("debug_logging"), Mapping) else {}
         )
+        debug_logging["log"] = "CRITICAL"
+        debug_logging["file_level"] = "CRITICAL"
         debug_logging["console_level"] = "CRITICAL"
+        debug_logging["log_file"] = ""
         normalized["debug_logging"] = debug_logging
         return normalized
+    normalized["log"] = "CRITICAL"
+    normalized["file_level"] = "CRITICAL"
     normalized["console_level"] = "CRITICAL"
+    normalized["log_file"] = ""
     return normalized
 
 
@@ -62,10 +74,11 @@ class IPServerRuntimeController:
         self.log_file = ObstacleBridgeIOSApp.LOG_FILE
         self.admin_web_dir = ObstacleBridgeIOSApp.ADMIN_WEB_DIR
         self.web_dir = ObstacleBridgeIOSApp.WEB_DIR
+        _disable_extension_python_logging()
         self.client = ObstacleBridgeClient(
             _load_grouped_runtime_config(self.documents_root),
             config_path=str(self.config_file),
-            apply_logging=True,
+            apply_logging=False,
         )
         self.profile_store = ProfileStore(self.profiles_dir)
         self._active_profile_id: Optional[str] = None
@@ -272,7 +285,7 @@ class IPServerRuntimeController:
         new_client = ObstacleBridgeClient(
             dict(current_config),
             config_path=str(self.config_file),
-            apply_logging=True,
+            apply_logging=False,
         )
         try:
             await asyncio.sleep(0.2)
@@ -321,9 +334,9 @@ class IPServerRuntimeController:
     def _runtime_config_from_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
         ob_cfg = profile.get("obstacle_bridge")
         if isinstance(ob_cfg, Mapping):
-            runtime_cfg = _quiet_extension_console_logging(ob_cfg)
+            runtime_cfg = _disable_extension_logging_config(ob_cfg)
         elif "overlay_transport" in profile:
-            runtime_cfg = _quiet_extension_console_logging(profile)
+            runtime_cfg = _disable_extension_logging_config(profile)
         else:
             raise ValueError("profile obstacle_bridge config is required")
         runtime_cfg.setdefault("admin_web", True)
@@ -332,10 +345,10 @@ class IPServerRuntimeController:
         runtime_cfg.setdefault("admin_web_path", ObstacleBridgeIOSApp.WEBADMIN_DEFAULT_PATH)
         runtime_cfg.setdefault("admin_web_dir", str(ObstacleBridgeIOSApp.ADMIN_WEB_DIR))
         runtime_cfg.setdefault("ws_static_dir", str(ObstacleBridgeIOSApp.WEB_DIR))
-        runtime_cfg.setdefault("log", "DEBUG")
-        runtime_cfg.setdefault("file_level", "DEBUG")
-        runtime_cfg.setdefault("console_level", "INFO")
-        runtime_cfg.setdefault("log_file", str(ObstacleBridgeIOSApp.LOG_FILE))
+        runtime_cfg.setdefault("log", "CRITICAL")
+        runtime_cfg.setdefault("file_level", "CRITICAL")
+        runtime_cfg.setdefault("console_level", "CRITICAL")
+        runtime_cfg.setdefault("log_file", "")
         runtime_cfg.setdefault("log_file_max_bytes", 1_048_576)
         runtime_cfg.setdefault("log_file_backup_count", 5)
         return runtime_cfg
@@ -385,8 +398,10 @@ class IPServerRuntimeController:
             debug_logging = dict(
                 merged.get("debug_logging") if isinstance(merged.get("debug_logging"), Mapping) else {}
             )
-            debug_logging["log_file"] = str(ObstacleBridgeIOSApp.LOG_FILE)
+            debug_logging["log"] = "CRITICAL"
+            debug_logging["file_level"] = "CRITICAL"
             debug_logging["console_level"] = "CRITICAL"
+            debug_logging["log_file"] = ""
             merged["debug_logging"] = debug_logging
             return merged
         runtime_cfg = IPServerRuntimeController._runtime_config_from_profile(
@@ -394,8 +409,10 @@ class IPServerRuntimeController:
         )
         runtime_cfg["admin_web_dir"] = str(ObstacleBridgeIOSApp.ADMIN_WEB_DIR)
         runtime_cfg["ws_static_dir"] = str(ObstacleBridgeIOSApp.WEB_DIR)
-        runtime_cfg["log_file"] = str(ObstacleBridgeIOSApp.LOG_FILE)
+        runtime_cfg["log"] = "CRITICAL"
+        runtime_cfg["file_level"] = "CRITICAL"
         runtime_cfg["console_level"] = "CRITICAL"
+        runtime_cfg["log_file"] = ""
         return runtime_cfg
 
     def connect_profile(

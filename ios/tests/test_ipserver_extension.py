@@ -158,29 +158,62 @@ def test_ios_extension_runtime_disables_admin_web_auth_for_flat_config() -> None
     assert normalized["ios_admin_web_auth_policy"] == "disabled_in_extension_runtime"
 
 
-def test_runtime_config_from_profile_quiets_extension_console_logging() -> None:
+def test_disable_extension_python_logging_disables_root_logger(monkeypatch) -> None:
+    calls: list[int] = []
+    sentinel = object()
+
+    def _fake_disable(level: int) -> None:
+        calls.append(level)
+
+    monkeypatch.setattr(ipserver_runtime.logging, "disable", _fake_disable)
+
+    root = ipserver_runtime.logging.getLogger()
+    original_handlers = list(root.handlers)
+    root.handlers = [sentinel]  # type: ignore[list-item]
+    try:
+        ipserver_runtime._disable_extension_python_logging()
+    finally:
+        root.handlers = original_handlers
+
+    assert calls == [ipserver_runtime.logging.CRITICAL]
+    assert sentinel not in root.handlers
+
+
+def test_runtime_config_from_profile_disables_extension_logging() -> None:
     runtime_cfg = IPServerRuntimeController._runtime_config_from_profile(
         {
             "obstacle_bridge": {
                 "overlay_transport": "myudp",
+                "log": "DEBUG",
+                "file_level": "DEBUG",
                 "console_level": "INFO",
+                "log_file": "/tmp/obstaclebridge.log",
             }
         }
     )
 
+    assert runtime_cfg["log"] == "CRITICAL"
+    assert runtime_cfg["file_level"] == "CRITICAL"
     assert runtime_cfg["console_level"] == "CRITICAL"
+    assert runtime_cfg["log_file"] == ""
 
 
-def test_runtime_config_with_ios_defaults_quiets_grouped_extension_console_logging() -> None:
+def test_runtime_config_with_ios_defaults_disables_grouped_extension_logging() -> None:
     runtime_cfg = IPServerRuntimeController._runtime_config_with_ios_defaults(
         {
             "debug_logging": {
+                "log": "DEBUG",
+                "file_level": "DEBUG",
                 "console_level": "INFO",
+                "log_file": "/tmp/obstaclebridge.log",
             }
         }
     )
 
+    assert runtime_cfg["debug_logging"]["log"] == "CRITICAL"
+    assert runtime_cfg["debug_logging"]["file_level"] == "CRITICAL"
     assert runtime_cfg["debug_logging"]["console_level"] == "CRITICAL"
+    assert runtime_cfg["debug_logging"]["log_file"] == ""
 
 
 def test_simple_udp_peer_settings_can_be_loaded_from_grouped_config(monkeypatch) -> None:
@@ -386,6 +419,83 @@ def test_start_embedded_webadmin_can_boot_client_with_swift_udp(monkeypatch) -> 
     assert ios_tun_connector["bind_port"] == 5555
     assert ios_tun_connector["peer_port"] == 5556
     assert any(event == "python_runtime_start_completed" and fields.get("runtime_mode") == "obstaclebridge" for event, fields in events)
+
+
+def test_start_embedded_webadmin_preserves_ws_and_compress_runtime_config(monkeypatch) -> None:
+    events: list[tuple[str, dict[str, object]]] = []
+
+    monkeypatch.setattr(
+        ipserver_runtime,
+        "log_provider_event",
+        lambda _root, event, **fields: events.append((event, fields)),
+    )
+    monkeypatch.setattr(ipserver_runtime, "log_event", lambda *_args, **_kwargs: None)
+
+    class FakeClient:
+        def __init__(self, config, config_path=None, apply_logging=False):
+            self.config = config
+            self.runner = SimpleNamespace()
+            self.start_calls: list[dict[str, object]] = []
+            self.stop_calls = 0
+            self._args = None
+
+        async def start(self, config=None, packet_io=None) -> None:
+            self.start_calls.append(dict(config or {}))
+
+        async def stop(self) -> None:
+            self.stop_calls += 1
+
+        def snapshot(self) -> dict[str, object]:
+            return {"started": True, "config": self.config}
+
+    monkeypatch.setattr(ipserver_runtime, "ObstacleBridgeClient", FakeClient)
+
+    def _run_async_sync(self, awaitable):
+        return asyncio.run(awaitable)
+
+    monkeypatch.setattr(IPServerRuntimeController, "_run_async_sync", _run_async_sync)
+
+    controller = IPServerRuntimeController()
+    snapshot = controller.start_embedded_webadmin(
+        {
+            "overlay_transport": "ws",
+            "ws_peer": "bridge.example.net",
+            "ws_peer_port": 8443,
+            "ws_payload_mode": "base64",
+            "ws_send_timeout": 7.5,
+            "compress_layer": True,
+            "compress_layer_algo": "zlib",
+            "compress_layer_level": 5,
+            "compress_layer_min_bytes": 96,
+            "compress_layer_types": "data,data_ack",
+            "iOS_TUN_connector": {
+                "bind_host": "127.0.0.1",
+                "bind_port": 5555,
+                "packetflow_connector": "swift_udp",
+                "peer_host": "127.0.0.1",
+                "peer_port": 5556,
+            },
+        }
+    )
+
+    assert snapshot["started"] is True
+    assert controller._simple_udp_peer_runtime is None
+    assert len(controller.client.start_calls) == 1
+    started_config = controller.client.start_calls[0]
+    assert started_config["overlay_transport"] == "ws"
+    assert started_config["ws_peer"] == "bridge.example.net"
+    assert started_config["ws_peer_port"] == 8443
+    assert started_config["ws_payload_mode"] == "base64"
+    assert started_config["compress_layer"] is True
+    assert started_config["compress_layer_algo"] == "zlib"
+    assert started_config["compress_layer_level"] == 5
+    assert started_config["compress_layer_min_bytes"] == 96
+    assert started_config["compress_layer_types"] == "data,data_ack"
+    assert started_config["iOS_TUN_connector"]["packetflow_connector"] == "swift_udp"
+    assert any(
+        event == "python_runtime_config_prepared" and fields.get("packetflow_connector") == "swift_udp"
+        for event, fields in events
+    )
 
 
 def test_embedded_restart_reload_reads_grouped_config_and_restarts_client(monkeypatch) -> None:
