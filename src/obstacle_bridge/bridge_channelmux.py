@@ -17,7 +17,7 @@ elif sys.platform == "ios":
 else:
     _bridge_tun_platform = None
 
-from .bridge_ios_tunnel_network import IOSTunnelNetworkSettings
+from .bridge_tun_routing import TunRoutingSettings
 
 class _ChanCtr:
     msgs_in: int = 0
@@ -640,7 +640,7 @@ class ChannelMux:
         if str(spec.l_proto) != "tun" or self.args is None:
             return {}
         try:
-            config = IOSTunnelNetworkSettings.from_mapping(vars(self.args))
+            config = TunRoutingSettings.from_mapping(vars(self.args))
         except Exception:
             return {}
         origin = "" if svc_key is None else str(svc_key[0])

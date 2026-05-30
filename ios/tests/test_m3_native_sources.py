@@ -49,6 +49,9 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "tunnel_address6" in provider
     assert "included_routes6" in provider
     assert "excluded_routes6" in provider
+    assert "fallbackRuntimeConfig: loadSharedRuntimeConfigJSON()" in provider
+    assert "runtimeNetworkFallback(from: runtimeConfig)" in provider
+    assert 'payload["TUN_routing"] as? [String: Any]' in provider
 
 
 def test_native_packet_flow_bridge_source_exists() -> None:
@@ -194,18 +197,22 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "provider_snapshot_received" in control
     assert "provider_message_received" in control
     assert "provider_response" in control
+    assert 'let runtimeConfig = ObstacleBridgeTunnelControl.loadRuntimeConfigJSON()' in control
+    assert 'payload["runtime_config"] = runtimeConfig' in control
+    assert "runtimeConfigForProviderConfiguration(" not in control
+    assert "swiftUDPRuntimeConfig(payload: payload)" not in control
     assert "tunnelProtocol.username" in control
     assert "tunnelProtocol.username = nil" in control
     assert "manager.localizedDescription = desiredLocalizedDescription()" in control
     assert 'tunnelProtocol.serverAddress = derived.tunnelAddress' in control
     assert "tunnelProtocol.providerConfiguration = derived.providerConfiguration" in control
-    assert 'defaultTunnelAddress6 = ""' in control
+    assert 'defaultTunnelAddress6 = "fd20:106::1"' in control
     assert "TUN_ADDR6" in control
     assert "PEER_ADDR6" in control
     assert "TUN_SUBNET6" in control
     assert "findLocalIOSTunnelService" in control
     assert "findRemoteTunnelServiceTargetingIOS" in control
-    assert 'payload["ios_tunnel_network"]' in control
+    assert 'payload["TUN_routing"]' in control
     assert "applyNetworkOverride(" in control
     assert "loadRuntimeConfigJSON" in control
     assert "ios-native-tunnel-control.jsonl" in control

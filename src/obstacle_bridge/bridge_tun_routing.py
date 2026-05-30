@@ -6,14 +6,19 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
 
-DEFAULT_IOS_TUNNEL_ADDRESS = "192.168.105.1"
-DEFAULT_IOS_TUNNEL_PREFIX = 30
-DEFAULT_IOS_INCLUDED_ROUTES = ["0.0.0.0/0"]
-DEFAULT_IOS_EXCLUDED_ROUTES = ["127.0.0.0/8"]
-DEFAULT_IOS_TUNNEL_ADDRESS6 = ""
-DEFAULT_IOS_TUNNEL_PREFIX6 = 126
-DEFAULT_IOS_INCLUDED_ROUTES6 = ["::/0"]
-DEFAULT_IOS_EXCLUDED_ROUTES6 = ["::1/128"]
+TUN_ROUTING_SECTION = "TUN_routing"
+DEFAULT_TUNNEL_ADDRESS = "192.168.106.1"
+DEFAULT_TUNNEL_PREFIX = 30
+DEFAULT_TUNNEL_GATEWAY = "192.168.106.2"
+DEFAULT_INCLUDED_ROUTES = ["0.0.0.0/0"]
+DEFAULT_EXCLUDED_ROUTES = ["127.0.0.0/8"]
+DEFAULT_TUNNEL_ADDRESS6 = "fd20:106::1"
+DEFAULT_TUNNEL_PREFIX6 = 126
+DEFAULT_TUNNEL_GATEWAY6 = "fd20:106::2"
+DEFAULT_INCLUDED_ROUTES6 = ["::/0"]
+DEFAULT_EXCLUDED_ROUTES6 = ["::1/128"]
+DEFAULT_DNS_SERVERS = ["1.1.1.1"]
+DEFAULT_TUNNEL_MTU = 1600
 
 
 def _clean_list(value: Any, *, default: list[str]) -> list[str]:
@@ -45,56 +50,56 @@ def _other_host(address: str, prefix: int) -> str:
 
 
 @dataclass
-class IOSTunnelNetworkSettings:
-    tunnel_address: str = DEFAULT_IOS_TUNNEL_ADDRESS
-    tunnel_prefix: int = DEFAULT_IOS_TUNNEL_PREFIX
-    tunnel_gateway: str = ""
-    included_routes: list[str] = field(default_factory=lambda: list(DEFAULT_IOS_INCLUDED_ROUTES))
-    excluded_routes: list[str] = field(default_factory=lambda: list(DEFAULT_IOS_EXCLUDED_ROUTES))
-    tunnel_address6: str = DEFAULT_IOS_TUNNEL_ADDRESS6
-    tunnel_prefix6: int = DEFAULT_IOS_TUNNEL_PREFIX6
-    tunnel_gateway6: str = ""
-    included_routes6: list[str] = field(default_factory=list)
-    excluded_routes6: list[str] = field(default_factory=list)
-    dns_servers: list[str] = field(default_factory=lambda: ["1.1.1.1"])
-    mtu: int = 1280
+class TunRoutingSettings:
+    tunnel_address: str = DEFAULT_TUNNEL_ADDRESS
+    tunnel_prefix: int = DEFAULT_TUNNEL_PREFIX
+    tunnel_gateway: str = DEFAULT_TUNNEL_GATEWAY
+    included_routes: list[str] = field(default_factory=lambda: list(DEFAULT_INCLUDED_ROUTES))
+    excluded_routes: list[str] = field(default_factory=lambda: list(DEFAULT_EXCLUDED_ROUTES))
+    tunnel_address6: str = DEFAULT_TUNNEL_ADDRESS6
+    tunnel_prefix6: int = DEFAULT_TUNNEL_PREFIX6
+    tunnel_gateway6: str = DEFAULT_TUNNEL_GATEWAY6
+    included_routes6: list[str] = field(default_factory=lambda: list(DEFAULT_INCLUDED_ROUTES6))
+    excluded_routes6: list[str] = field(default_factory=lambda: list(DEFAULT_EXCLUDED_ROUTES6))
+    dns_servers: list[str] = field(default_factory=lambda: list(DEFAULT_DNS_SERVERS))
+    mtu: int = DEFAULT_TUNNEL_MTU
 
     @staticmethod
     def register_cli(p: argparse.ArgumentParser) -> None:
-        g = p.add_argument_group("ios_tunnel_network")
-        g.add_argument("--tunnel-address", default=DEFAULT_IOS_TUNNEL_ADDRESS, help="iOS-side tunnel IPv4 address")
-        g.add_argument("--tunnel-prefix", type=int, default=DEFAULT_IOS_TUNNEL_PREFIX, help="iOS-side tunnel IPv4 prefix length")
-        g.add_argument("--tunnel-gateway", default="", help="peer/server tunnel IPv4 address used as TUN_GW")
-        g.add_argument("--included-routes", nargs="*", default=list(DEFAULT_IOS_INCLUDED_ROUTES), help="IPv4 routes included in the packet tunnel")
-        g.add_argument("--excluded-routes", nargs="*", default=list(DEFAULT_IOS_EXCLUDED_ROUTES), help="IPv4 routes excluded from the packet tunnel")
-        g.add_argument("--tunnel-address6", default=DEFAULT_IOS_TUNNEL_ADDRESS6, help="iOS-side tunnel IPv6 address")
-        g.add_argument("--tunnel-prefix6", type=int, default=DEFAULT_IOS_TUNNEL_PREFIX6, help="iOS-side tunnel IPv6 prefix length")
-        g.add_argument("--tunnel-gateway6", default="", help="peer/server tunnel IPv6 address used as TUN_GW6")
-        g.add_argument("--included-routes6", nargs="*", default=list(DEFAULT_IOS_INCLUDED_ROUTES6), help="IPv6 routes included in the packet tunnel")
-        g.add_argument("--excluded-routes6", nargs="*", default=list(DEFAULT_IOS_EXCLUDED_ROUTES6), help="IPv6 routes excluded from the packet tunnel")
-        g.add_argument("--dns-servers", nargs="*", default=["1.1.1.1"], help="DNS servers pushed to the packet tunnel")
-        g.add_argument("--mtu", type=int, default=1280, help="Packet tunnel MTU")
+        g = p.add_argument_group(TUN_ROUTING_SECTION)
+        g.add_argument("--tunnel-address", default=DEFAULT_TUNNEL_ADDRESS, help="Local tunnel IPv4 address")
+        g.add_argument("--tunnel-prefix", type=int, default=DEFAULT_TUNNEL_PREFIX, help="Local tunnel IPv4 prefix length")
+        g.add_argument("--tunnel-gateway", default=DEFAULT_TUNNEL_GATEWAY, help="Peer tunnel IPv4 gateway address used as TUN_GW")
+        g.add_argument("--included-routes", nargs="*", default=list(DEFAULT_INCLUDED_ROUTES), help="IPv4 routes included in tunnel routing")
+        g.add_argument("--excluded-routes", nargs="*", default=list(DEFAULT_EXCLUDED_ROUTES), help="IPv4 routes excluded from tunnel routing")
+        g.add_argument("--tunnel-address6", default=DEFAULT_TUNNEL_ADDRESS6, help="Local tunnel IPv6 address")
+        g.add_argument("--tunnel-prefix6", type=int, default=DEFAULT_TUNNEL_PREFIX6, help="Local tunnel IPv6 prefix length")
+        g.add_argument("--tunnel-gateway6", default=DEFAULT_TUNNEL_GATEWAY6, help="Peer tunnel IPv6 gateway address used as TUN_GW6")
+        g.add_argument("--included-routes6", nargs="*", default=list(DEFAULT_INCLUDED_ROUTES6), help="IPv6 routes included in tunnel routing")
+        g.add_argument("--excluded-routes6", nargs="*", default=list(DEFAULT_EXCLUDED_ROUTES6), help="IPv6 routes excluded from tunnel routing")
+        g.add_argument("--dns-servers", nargs="*", default=list(DEFAULT_DNS_SERVERS), help="DNS servers applied to tunnel routing")
+        g.add_argument("--mtu", type=int, default=DEFAULT_TUNNEL_MTU, help="Tunnel MTU")
 
     @classmethod
     def from_mapping(
         cls,
         config: Mapping[str, Any] | None,
         *,
-        base: Optional["IOSTunnelNetworkSettings"] = None,
-    ) -> "IOSTunnelNetworkSettings":
+        base: Optional["TunRoutingSettings"] = None,
+    ) -> "TunRoutingSettings":
         current = base if base is not None else cls()
         source: Mapping[str, Any] = config or {}
-        group = source.get("ios_tunnel_network") if isinstance(source, Mapping) else None
+        group = source.get(TUN_ROUTING_SECTION) if isinstance(source, Mapping) else None
         values = group if isinstance(group, Mapping) else source
         return cls(
             tunnel_address=str(values.get("tunnel_address") or current.tunnel_address).strip() or current.tunnel_address,
             tunnel_prefix=int(values.get("tunnel_prefix") or current.tunnel_prefix),
-            tunnel_gateway=str(values.get("tunnel_gateway") or current.tunnel_gateway).strip(),
+            tunnel_gateway=str(values.get("tunnel_gateway") or current.tunnel_gateway).strip() or current.tunnel_gateway,
             included_routes=_clean_list(values.get("included_routes"), default=list(current.included_routes)),
             excluded_routes=_clean_list(values.get("excluded_routes"), default=list(current.excluded_routes)),
-            tunnel_address6=str(values.get("tunnel_address6") or current.tunnel_address6).strip(),
+            tunnel_address6=str(values.get("tunnel_address6") or current.tunnel_address6).strip() or current.tunnel_address6,
             tunnel_prefix6=int(values.get("tunnel_prefix6") or current.tunnel_prefix6),
-            tunnel_gateway6=str(values.get("tunnel_gateway6") or current.tunnel_gateway6).strip(),
+            tunnel_gateway6=str(values.get("tunnel_gateway6") or current.tunnel_gateway6).strip() or current.tunnel_gateway6,
             included_routes6=_clean_list(values.get("included_routes6"), default=list(current.included_routes6)),
             excluded_routes6=_clean_list(values.get("excluded_routes6"), default=list(current.excluded_routes6)),
             dns_servers=_clean_list(values.get("dns_servers"), default=list(current.dns_servers)),

@@ -4,17 +4,18 @@ import Darwin
 
 @objc(PacketTunnelProvider)
 class PacketTunnelProvider: NEPacketTunnelProvider {
-    static let defaultTunnelAddress = "192.168.105.1"
+    static let defaultTunnelAddress = "192.168.106.1"
     static let defaultTunnelPrefix = 30
     static let defaultIncludedRoutes = ["0.0.0.0/0"]
     static let defaultExcludedRoutes = ["127.0.0.0/8"]
-    static let defaultTunnelAddress6 = ""
+    static let defaultTunnelAddress6 = "fd20:106::1"
     static let defaultTunnelPrefix6 = 126
     static let defaultIncludedRoutes6 = ["::/0"]
     static let defaultExcludedRoutes6 = ["::1/128"]
     private let errorDomain = "ObstacleBridge.IPServer"
     private var packetPumpRunning = false
     private var providerStateUpdateCount = 0
+    private var heartbeatTickCount = 0
     private var runtimeMode = "python_runtime"
     private var swiftSimpleUDPPeerBridge: SwiftSimpleUDPPeerBridge?
 
@@ -140,12 +141,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func startProviderHeartbeat() {
         heartbeatTimer?.cancel()
+        heartbeatTickCount = 0
 
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
         timer.schedule(deadline: .now(), repeating: 1.0)
 
         timer.setEventHandler { [weak self] in
             guard let self else { return }
+            self.heartbeatTickCount += 1
             let processMemory = Self.processMemorySnapshot()
             var fields: [String: Any] = [
                 "uptime": ProcessInfo.processInfo.systemUptime,
@@ -160,11 +163,24 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             for (key, value) in processMemory {
                 fields[key] = value
             }
-            self.recordNativeEvent(
-                "provider_heartbeat",
-                fields: fields
-            )
-            self.updateProviderState("heartbeat")
+            let shouldRecordHeartbeat: Bool
+            let shouldUpdateState: Bool
+            if self.swiftUDPRuntimeActive {
+                shouldRecordHeartbeat = self.heartbeatTickCount <= 3 || (self.heartbeatTickCount % 5) == 0
+                shouldUpdateState = self.heartbeatTickCount <= 3 || (self.heartbeatTickCount % 15) == 0
+            } else {
+                shouldRecordHeartbeat = true
+                shouldUpdateState = true
+            }
+            if shouldRecordHeartbeat {
+                self.recordNativeEvent(
+                    "provider_heartbeat",
+                    fields: fields
+                )
+            }
+            if shouldUpdateState {
+                self.updateProviderState("heartbeat")
+            }
         }
 
         heartbeatTimer = timer
@@ -189,7 +205,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let providerConfiguration = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
 
         do {
-            let configuration = try TunnelProviderConfiguration(providerConfiguration)
+            let configuration = try TunnelProviderConfiguration(
+                providerConfiguration,
+                fallbackRuntimeConfig: loadSharedRuntimeConfigJSON()
+            )
             recordNativeEvent(
                 "tunnel_network_settings_prepared",
                 fields: [
@@ -717,31 +736,31 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         providerConfiguration: [String: Any]?,
         defaultMTU: Int
     ) -> SwiftSimpleUDPPeerSettings? {
-        if let payload = loadSharedRuntimeConfigJSON(),
-           let settings = Self.swiftSimpleUDPPeerSettings(from: payload, defaultMTU: defaultMTU) {
-            return settings
-        }
         if let runtimeConfig = providerConfiguration?["runtime_config"] as? [String: Any],
            let settings = Self.swiftSimpleUDPPeerSettings(from: runtimeConfig, defaultMTU: defaultMTU) {
+            return settings
+        }
+        if let payload = loadSharedRuntimeConfigJSON(),
+           let settings = Self.swiftSimpleUDPPeerSettings(from: payload, defaultMTU: defaultMTU) {
             return settings
         }
         return nil
     }
 
     private func packetflowConnectorMode(providerConfiguration: [String: Any]?) -> String? {
-        if let payload = loadSharedRuntimeConfigJSON(),
-           let mode = Self.packetflowConnectorMode(from: payload) {
-            return mode
-        }
         if let runtimeConfig = providerConfiguration?["runtime_config"] as? [String: Any],
            let mode = Self.packetflowConnectorMode(from: runtimeConfig) {
+            return mode
+        }
+        if let payload = loadSharedRuntimeConfigJSON(),
+           let mode = Self.packetflowConnectorMode(from: payload) {
             return mode
         }
         return nil
     }
 
     private static func packetflowConnectorMode(from payload: [String: Any]) -> String? {
-        guard let experiment = payload["ios_experiment"] as? [String: Any] else {
+        guard let experiment = packetflowConnectorSection(from: payload) else {
             return nil
         }
         let connectorMode = (experiment["packetflow_connector"] as? String ?? "")
@@ -757,7 +776,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         from payload: [String: Any],
         defaultMTU: Int
     ) -> SwiftSimpleUDPPeerSettings? {
-        guard let experiment = payload["ios_experiment"] as? [String: Any] else {
+        guard let experiment = packetflowConnectorSection(from: payload) else {
             return nil
         }
         let connectorMode = (experiment["packetflow_connector"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -785,6 +804,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             mtu: mtu
         )
     }
+
+    private static func packetflowConnectorSection(from payload: [String: Any]) -> [String: Any]? {
+        return payload["iOS_TUN_connector"] as? [String: Any]
+    }
 }
 
 private struct IPv4RouteSpec {
@@ -810,12 +833,18 @@ private struct TunnelProviderConfiguration {
     let dnsServers: [String]
     let mtu: Int
 
-    init(_ providerConfiguration: [String: Any]?) throws {
+    init(
+        _ providerConfiguration: [String: Any]?,
+        fallbackRuntimeConfig: [String: Any]? = nil
+    ) throws {
         let payload = providerConfiguration ?? [:]
         if let schema = payload["schema"] as? String, !schema.isEmpty,
            schema != "obstaclebridge.ios.packet-tunnel.v1" {
             throw TunnelError.unsupportedSchema
         }
+
+        let runtimeConfig = (payload["runtime_config"] as? [String: Any]) ?? fallbackRuntimeConfig ?? [:]
+        let runtimeNetworkFallback = Self.runtimeNetworkFallback(from: runtimeConfig)
 
         if let peer = payload["peer"] as? [String: Any],
            let host = peer["host"] as? String,
@@ -835,8 +864,27 @@ private struct TunnelProviderConfiguration {
         tunnelPrefix6 = (network["tunnel_prefix6"] as? NSNumber)?.intValue ?? PacketTunnelProvider.defaultTunnelPrefix6
         includedRoutes6 = try Self.routes6(network["included_routes6"] as? [String] ?? (tunnelAddress6.isEmpty ? [] : PacketTunnelProvider.defaultIncludedRoutes6))
         excludedRoutes6 = try Self.routes6(network["excluded_routes6"] as? [String] ?? (tunnelAddress6.isEmpty ? [] : PacketTunnelProvider.defaultExcludedRoutes6))
-        dnsServers = network["dns_servers"] as? [String] ?? []
-        mtu = (network["mtu"] as? NSNumber)?.intValue ?? 1500
+        dnsServers = (network["dns_servers"] as? [String]) ?? runtimeNetworkFallback.dnsServers
+        mtu = ((network["mtu"] as? NSNumber)?.intValue ?? (network["mtu"] as? Int))
+            ?? runtimeNetworkFallback.mtu
+            ?? 1500
+    }
+
+    private struct RuntimeNetworkFallback {
+        let dnsServers: [String]
+        let mtu: Int?
+    }
+
+    private static func runtimeNetworkFallback(from payload: [String: Any]) -> RuntimeNetworkFallback {
+        let override = payload["TUN_routing"] as? [String: Any]
+        let dnsServers = (override?["dns_servers"] as? [String])
+            ?? (payload["dns_servers"] as? [String])
+            ?? []
+        let mtu = (override?["mtu"] as? NSNumber)?.intValue
+            ?? (override?["mtu"] as? Int)
+            ?? (payload["mtu"] as? NSNumber)?.intValue
+            ?? (payload["mtu"] as? Int)
+        return RuntimeNetworkFallback(dnsServers: dnsServers, mtu: mtu)
     }
 
     private static func routes(_ values: [String]) throws -> [IPv4RouteSpec] {
@@ -1004,14 +1052,16 @@ private final class SwiftSimpleUDPPeerBridge {
                 guard let self, self.started else { return }
                 self.packetFlowCallbacks += 1
                 self.handlePacketFlowRead(packets: packets, protocols: protocols)
-                self.provider?.recordPacketBridgeEvent(
-                    "swift_simple_udp_peer_packetflow_batch",
-                    fields: [
-                        "callback_index": self.packetFlowCallbacks,
-                        "packet_count": packets.count,
-                        "protocol_count": protocols.count,
-                    ]
-                )
+                if self.packetFlowCallbacks <= 3 || (self.packetFlowCallbacks % 128) == 0 {
+                    self.provider?.recordPacketBridgeEvent(
+                        "swift_simple_udp_peer_packetflow_batch",
+                        fields: [
+                            "callback_index": self.packetFlowCallbacks,
+                            "packet_count": packets.count,
+                            "protocol_count": protocols.count,
+                        ]
+                    )
+                }
                 self.beginPacketFlowReadLoop()
             }
         }

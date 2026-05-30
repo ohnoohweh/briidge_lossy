@@ -6,16 +6,18 @@ import ipaddress
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Optional
 
-from obstacle_bridge.bridge_ios_tunnel_network import (
-    DEFAULT_IOS_EXCLUDED_ROUTES,
-    DEFAULT_IOS_EXCLUDED_ROUTES6,
-    DEFAULT_IOS_INCLUDED_ROUTES,
-    DEFAULT_IOS_INCLUDED_ROUTES6,
-    DEFAULT_IOS_TUNNEL_ADDRESS,
-    DEFAULT_IOS_TUNNEL_ADDRESS6,
-    DEFAULT_IOS_TUNNEL_PREFIX,
-    DEFAULT_IOS_TUNNEL_PREFIX6,
-    IOSTunnelNetworkSettings as M3NetworkSettings,
+from obstacle_bridge import bridge_tun_ios
+from obstacle_bridge.bridge_tun_routing import (
+    DEFAULT_EXCLUDED_ROUTES,
+    DEFAULT_EXCLUDED_ROUTES6,
+    DEFAULT_INCLUDED_ROUTES,
+    DEFAULT_INCLUDED_ROUTES6,
+    DEFAULT_TUNNEL_ADDRESS,
+    DEFAULT_TUNNEL_ADDRESS6,
+    DEFAULT_TUNNEL_MTU,
+    DEFAULT_TUNNEL_PREFIX,
+    DEFAULT_TUNNEL_PREFIX6,
+    TunRoutingSettings as M3NetworkSettings,
 )
 
 
@@ -125,7 +127,7 @@ def network_settings_from_runtime_config(
     *,
     ios_ifname: str = DEFAULT_IOS_TUN_IFNAME,
     dns_servers: Optional[list[str]] = None,
-    mtu: int = 1280,
+    mtu: int = DEFAULT_TUNNEL_MTU,
 ) -> M3NetworkSettings:
     """Derive iOS packet-tunnel network settings from live ChannelMux TUN config.
 
@@ -137,10 +139,10 @@ def network_settings_from_runtime_config(
     from `TUN_ADDR` or `TUN_SUBNET`.
     """
 
-    chosen_address = DEFAULT_IOS_TUNNEL_ADDRESS
-    chosen_prefix = DEFAULT_IOS_TUNNEL_PREFIX
-    chosen_address6 = DEFAULT_IOS_TUNNEL_ADDRESS6
-    chosen_prefix6 = DEFAULT_IOS_TUNNEL_PREFIX6
+    chosen_address = DEFAULT_TUNNEL_ADDRESS
+    chosen_prefix = DEFAULT_TUNNEL_PREFIX
+    chosen_address6 = DEFAULT_TUNNEL_ADDRESS6
+    chosen_prefix6 = DEFAULT_TUNNEL_PREFIX6
 
     own_services = _service_catalog(config, "own_servers")
     remote_services = _service_catalog(config, "remote_servers")
@@ -171,12 +173,12 @@ def network_settings_from_runtime_config(
                 M3NetworkSettings(
                 tunnel_address=chosen_address,
                 tunnel_prefix=chosen_prefix,
-                included_routes=list(DEFAULT_IOS_INCLUDED_ROUTES),
-                excluded_routes=list(DEFAULT_IOS_EXCLUDED_ROUTES),
+                included_routes=list(DEFAULT_INCLUDED_ROUTES),
+                excluded_routes=list(DEFAULT_EXCLUDED_ROUTES),
                 tunnel_address6=chosen_address6,
                 tunnel_prefix6=chosen_prefix6,
-                included_routes6=list(DEFAULT_IOS_INCLUDED_ROUTES6) if chosen_address6 else [],
-                excluded_routes6=list(DEFAULT_IOS_EXCLUDED_ROUTES6) if chosen_address6 else [],
+                included_routes6=list(DEFAULT_INCLUDED_ROUTES6) if chosen_address6 else [],
+                excluded_routes6=list(DEFAULT_EXCLUDED_ROUTES6) if chosen_address6 else [],
                 dns_servers=list(dns_servers or ["1.1.1.1"]),
                 mtu=int(service.get("listen", {}).get("mtu") or mtu),
                 ),
@@ -206,7 +208,7 @@ def network_settings_from_runtime_config(
                     prefix = (
                         (_parse_interface_address(env.get("TUN_ADDR"), version=4) or ("", None))[1]
                         or _prefix_from_subnet(env.get("TUN_SUBNET"), version=4)
-                        or DEFAULT_IOS_TUNNEL_PREFIX
+                        or DEFAULT_TUNNEL_PREFIX
                     )
                     chosen_address = str(ip)
                     chosen_prefix = int(prefix)
@@ -219,7 +221,7 @@ def network_settings_from_runtime_config(
                     prefix6 = (
                         (_parse_interface_address(env.get("TUN_ADDR6"), version=6) or ("", None))[1]
                         or _prefix_from_subnet(env.get("TUN_SUBNET6"), version=6)
-                        or DEFAULT_IOS_TUNNEL_PREFIX6
+                        or DEFAULT_TUNNEL_PREFIX6
                     )
                     chosen_address6 = str(ip6)
                     chosen_prefix6 = int(prefix6)
@@ -230,12 +232,12 @@ def network_settings_from_runtime_config(
                 M3NetworkSettings(
                 tunnel_address=chosen_address,
                 tunnel_prefix=chosen_prefix,
-                included_routes=list(DEFAULT_IOS_INCLUDED_ROUTES),
-                excluded_routes=list(DEFAULT_IOS_EXCLUDED_ROUTES),
+                included_routes=list(DEFAULT_INCLUDED_ROUTES),
+                excluded_routes=list(DEFAULT_EXCLUDED_ROUTES),
                 tunnel_address6=chosen_address6,
                 tunnel_prefix6=chosen_prefix6,
-                included_routes6=list(DEFAULT_IOS_INCLUDED_ROUTES6) if chosen_address6 else [],
-                excluded_routes6=list(DEFAULT_IOS_EXCLUDED_ROUTES6) if chosen_address6 else [],
+                included_routes6=list(DEFAULT_INCLUDED_ROUTES6) if chosen_address6 else [],
+                excluded_routes6=list(DEFAULT_EXCLUDED_ROUTES6) if chosen_address6 else [],
                 dns_servers=list(dns_servers or ["1.1.1.1"]),
                 mtu=int(service.get("target", {}).get("mtu") or service.get("listen", {}).get("mtu") or mtu),
                 ),
@@ -246,12 +248,12 @@ def network_settings_from_runtime_config(
         M3NetworkSettings(
         tunnel_address=chosen_address,
         tunnel_prefix=chosen_prefix,
-        included_routes=list(DEFAULT_IOS_INCLUDED_ROUTES),
-        excluded_routes=list(DEFAULT_IOS_EXCLUDED_ROUTES),
+        included_routes=list(DEFAULT_INCLUDED_ROUTES),
+        excluded_routes=list(DEFAULT_EXCLUDED_ROUTES),
         tunnel_address6=chosen_address6,
         tunnel_prefix6=chosen_prefix6,
-        included_routes6=list(DEFAULT_IOS_INCLUDED_ROUTES6) if chosen_address6 else [],
-        excluded_routes6=list(DEFAULT_IOS_EXCLUDED_ROUTES6) if chosen_address6 else [],
+        included_routes6=list(DEFAULT_INCLUDED_ROUTES6) if chosen_address6 else [],
+        excluded_routes6=list(DEFAULT_EXCLUDED_ROUTES6) if chosen_address6 else [],
         dns_servers=list(dns_servers or ["1.1.1.1"]),
         mtu=int(mtu),
         ),

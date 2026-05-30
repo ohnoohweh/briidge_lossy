@@ -300,7 +300,7 @@ Example config route all traffic through tunnel
     "log_file_backup_count": 5,
     "log_file_max_bytes": 0
   },
-  "ios_experiment": {
+  "iOS_TUN_connector": {
     "bind_host": "0.0.0.0",
     "bind_port": 5555,
     "ifname": "ios-utun",
@@ -309,7 +309,7 @@ Example config route all traffic through tunnel
     "peer_host": "10.10.1.12",
     "peer_port": 5555
   },
-  "ios_tunnel_network": {
+  "TUN_routing": {
     "included_routes": [
       "0.0.0.0/0"
     ],
@@ -406,7 +406,7 @@ Example config route all traffic through tunnel
 
 Route effectively no VPN traffic through tunnel, still have TCP and UDP tunnels
 ```json
-  "ios_tunnel_network": {
+  "TUN_routing": {
     "included_routes": [
       "198.18.0.254/32"
     ],
@@ -429,7 +429,7 @@ Assumes Linux machine is in same WLAN as iPhone
 Linux machine has IP 10.10.1.6 assigned
 
 ```json  
-"ios_experiment": {
+"iOS_TUN_connector": {
   "packetflow_connector": "simple_udp_peer",
   "peer_host": "10.10.1.6",
   "peer_port": 5555,

@@ -63,7 +63,19 @@ def test_m3_tunnel_config_uses_profile_peer_and_network_settings() -> None:
 
 def test_provider_configuration_is_native_extension_contract() -> None:
     cfg = m3_tunnel_config_from_profile(
-        _m25_profile(),
+        {
+            **_m25_profile(),
+            "obstacle_bridge": {
+                **_m25_profile()["obstacle_bridge"],
+                "iOS_TUN_connector": {
+                    "packetflow_connector": "swift_udp",
+                    "bind_host": "127.0.0.1",
+                    "bind_port": 5555,
+                    "peer_host": "127.0.0.1",
+                    "peer_port": 5556,
+                },
+            },
+        },
         provider_bundle_identifier="com.obstaclebridge.ObstacleBridge.PacketTunnel",
     )
 
@@ -75,13 +87,16 @@ def test_provider_configuration_is_native_extension_contract() -> None:
     assert provider_config["runtime_config"]["overlay_transport"] == "tcp"
     assert provider_config["runtime_config"]["tcp_peer"] == "bridge.example.net"
     assert provider_config["runtime_config"]["tcp_peer_port"] == 4433
-    assert provider_config["network_settings"]["tunnel_address"] == "192.168.105.1"
+    assert provider_config["runtime_config"]["iOS_TUN_connector"]["bind_host"] == "127.0.0.1"
+    assert provider_config["runtime_config"]["iOS_TUN_connector"]["peer_host"] == "127.0.0.1"
+    assert provider_config["runtime_config"]["iOS_TUN_connector"]["peer_port"] == 5556
+    assert provider_config["network_settings"]["tunnel_address"] == "192.168.106.1"
     assert provider_config["network_settings"]["tunnel_prefix"] == 30
     assert provider_config["network_settings"]["included_routes"] == ["0.0.0.0/0"]
     assert provider_config["network_settings"]["excluded_routes"] == ["127.0.0.0/8"]
-    assert provider_config["network_settings"]["tunnel_address6"] == ""
-    assert provider_config["network_settings"]["included_routes6"] == []
-    assert provider_config["network_settings"]["excluded_routes6"] == []
+    assert provider_config["network_settings"]["tunnel_address6"] == "fd20:106::1"
+    assert provider_config["network_settings"]["included_routes6"] == ["::/0"]
+    assert provider_config["network_settings"]["excluded_routes6"] == ["::1/128"]
     assert provider_config["poc"]["packet_flow"] == "NEPacketTunnelFlow"
     assert provider_config["poc"]["secure_link"] == "deferred-to-M4"
 
@@ -168,10 +183,10 @@ def test_network_settings_from_runtime_config_can_fallback_to_remote_peer_addr()
     assert settings.excluded_routes6 == ["::1/128"]
 
 
-def test_network_settings_from_runtime_config_applies_ios_tunnel_network_override() -> None:
+def test_network_settings_from_runtime_config_applies_tun_routing_override() -> None:
     settings = network_settings_from_runtime_config(
         {
-            "ios_tunnel_network": {
+            "TUN_routing": {
                 "included_routes": ["198.18.0.254/32"],
                 "excluded_routes": ["0.0.0.0/0"],
                 "included_routes6": ["2001:db8:ffff::254/128"],

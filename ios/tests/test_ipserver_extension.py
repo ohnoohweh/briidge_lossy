@@ -158,6 +158,31 @@ def test_ios_extension_runtime_disables_admin_web_auth_for_flat_config() -> None
     assert normalized["ios_admin_web_auth_policy"] == "disabled_in_extension_runtime"
 
 
+def test_runtime_config_from_profile_quiets_extension_console_logging() -> None:
+    runtime_cfg = IPServerRuntimeController._runtime_config_from_profile(
+        {
+            "obstacle_bridge": {
+                "overlay_transport": "myudp",
+                "console_level": "INFO",
+            }
+        }
+    )
+
+    assert runtime_cfg["console_level"] == "CRITICAL"
+
+
+def test_runtime_config_with_ios_defaults_quiets_grouped_extension_console_logging() -> None:
+    runtime_cfg = IPServerRuntimeController._runtime_config_with_ios_defaults(
+        {
+            "debug_logging": {
+                "console_level": "INFO",
+            }
+        }
+    )
+
+    assert runtime_cfg["debug_logging"]["console_level"] == "CRITICAL"
+
+
 def test_simple_udp_peer_settings_can_be_loaded_from_grouped_config(monkeypatch) -> None:
     monkeypatch.delenv("OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR", raising=False)
     monkeypatch.delenv("OBSTACLEBRIDGE_IOS_PACKETFLOW_PEER_HOST", raising=False)
@@ -165,7 +190,7 @@ def test_simple_udp_peer_settings_can_be_loaded_from_grouped_config(monkeypatch)
 
     settings = ipserver_runtime._simple_udp_peer_settings(
         {
-            "ios_experiment": {
+            "iOS_TUN_connector": {
                 "packetflow_connector": "simple_udp_peer",
                 "peer_host": "10.10.1.6",
                 "peer_port": 5555,
@@ -186,12 +211,12 @@ def test_simple_udp_peer_settings_can_be_loaded_from_grouped_config(monkeypatch)
     }
 
 
-def test_packetflow_connector_mode_prefers_grouped_ios_experiment(monkeypatch) -> None:
+def test_packetflow_connector_mode_prefers_grouped_ios_tun_connector(monkeypatch) -> None:
     monkeypatch.delenv("OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR", raising=False)
 
     mode = ipserver_runtime._packetflow_connector_mode(
         {
-            "ios_experiment": {
+            "iOS_TUN_connector": {
                 "packetflow_connector": "swift_udp",
             }
         }
@@ -205,7 +230,7 @@ def test_packetflow_connector_mode_normalizes_swift_udp_peer(monkeypatch) -> Non
 
     mode = ipserver_runtime._packetflow_connector_mode(
         {
-            "ios_experiment": {
+            "iOS_TUN_connector": {
                 "packetflow_connector": "swift_udp_peer",
             }
         }
@@ -271,7 +296,7 @@ def test_start_embedded_webadmin_can_boot_simple_udp_peer_runtime(monkeypatch) -
     controller = IPServerRuntimeController()
     snapshot = controller.start_embedded_webadmin(
         {
-            "ios_experiment": {
+            "iOS_TUN_connector": {
                 "packetflow_connector": "simple_udp_peer",
                 "peer_host": "10.10.1.6",
                 "peer_port": 5555,
@@ -324,10 +349,12 @@ def test_start_embedded_webadmin_can_boot_client_with_swift_udp(monkeypatch) -> 
     controller = IPServerRuntimeController()
     snapshot = controller.start_embedded_webadmin(
         {
-            "ios_experiment": {
+            "iOS_TUN_connector": {
+                "bind_host": "127.0.0.1",
+                "bind_port": 5555,
                 "packetflow_connector": "swift_udp",
-                "peer_host": "10.10.1.6",
-                "peer_port": 5555,
+                "peer_host": "127.0.0.1",
+                "peer_port": 5556,
             },
             "channel_mux": {
                 "own_servers": [
@@ -353,6 +380,11 @@ def test_start_embedded_webadmin_can_boot_client_with_swift_udp(monkeypatch) -> 
     own_servers = started_config["channel_mux"]["own_servers"]
     assert len(own_servers) == 2
     assert [entry["listen"]["protocol"] for entry in own_servers] == ["tcp", "tun"]
+    ios_tun_connector = started_config["iOS_TUN_connector"]
+    assert ios_tun_connector["bind_host"] == "127.0.0.1"
+    assert ios_tun_connector["peer_host"] == "127.0.0.1"
+    assert ios_tun_connector["bind_port"] == 5555
+    assert ios_tun_connector["peer_port"] == 5556
     assert any(event == "python_runtime_start_completed" and fields.get("runtime_mode") == "obstaclebridge" for event, fields in events)
 
 

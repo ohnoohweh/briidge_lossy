@@ -135,21 +135,38 @@ def test_write_tun_packet_uses_bridge_backend(monkeypatch):
         mux.loop.close()
 
 
-def test_open_tun_device_rejects_swift_udp_native_ownership(monkeypatch):
+def test_swift_udp_shim_routes_packets_between_channelmux_and_swift_bridge(monkeypatch):
     backend = _FakeBackend(active=True)
     monkeypatch.setattr(bridge_tun_ios, "_BACKEND", backend)
     monkeypatch.setattr(bridge_tun_ios.sys, "platform", "ios")
     monkeypatch.setenv("OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR", "swift_udp_peer")
+    monkeypatch.setenv("OBSTACLEBRIDGE_IOS_PACKETFLOW_UDP_HOST", "127.0.0.1")
+    monkeypatch.setenv("OBSTACLEBRIDGE_IOS_PACKETFLOW_UDP_PORT", "35555")
+    monkeypatch.setenv("OBSTACLEBRIDGE_IOS_PACKETFLOW_PEER_HOST", "127.0.0.1")
+    monkeypatch.setenv("OBSTACLEBRIDGE_IOS_PACKETFLOW_PEER_PORT", "35556")
+
+    swift_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    swift_sock.bind(("127.0.0.1", 35555))
+    swift_sock.settimeout(0.5)
 
     mux = _FakeMux()
     try:
-        try:
-            bridge_tun_ios.open_tun_device(mux, "obtun-ios", 1400)
-        except RuntimeError as exc:
-            assert "native swift_udp connector" in str(exc)
-        else:
-            raise AssertionError("swift_udp should prevent Python from opening the iOS packet-flow bridge")
+        dev = bridge_tun_ios.open_tun_device(mux, "obtun-ios", 1400)
+        bridge_tun_ios.register_tun_reader(mux, dev)
+        mux.loop.run_until_complete(asyncio.sleep(0.05))
+
+        swift_sock.sendto(b"\x45one", ("127.0.0.1", 35556))
+        mux.loop.run_until_complete(asyncio.sleep(0.05))
+        assert mux.packets == [("obtun-ios", b"\x45one")]
+
+        bridge_tun_ios.write_tun_packet(mux, dev, b"reply:\x45one")
+        mux.loop.run_until_complete(asyncio.sleep(0.05))
+        payload, _source = swift_sock.recvfrom(4096)
+        assert payload == b"reply:\x45one"
+
+        bridge_tun_ios.close_tun_device(mux, dev)
     finally:
+        swift_sock.close()
         mux.loop.close()
 
 

@@ -29,202 +29,27 @@ from .profiles import ProfileStore
 
 
 def _simple_udp_peer_settings(config: Mapping[str, Any] | None) -> dict[str, Any] | None:
-    grouped = dict(config) if isinstance(config, Mapping) else {}
-    section = grouped.get("ios_experiment")
-    experiment = dict(section) if isinstance(section, Mapping) else {}
-    flat = dict(grouped)
-
-    def _pick(*keys: str, default: Any = "") -> Any:
-        for key in keys:
-            if key in os.environ and str(os.environ[key]).strip():
-                return os.environ[key]
-        for key in keys:
-            if key in experiment and experiment.get(key) not in (None, ""):
-                return experiment.get(key)
-        for key in keys:
-            if key in flat and flat.get(key) not in (None, ""):
-                return flat.get(key)
-        return default
-
-    connector_mode = str(
-        _pick(
-            "OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR",
-            "packetflow_connector",
-            "ios_packetflow_connector",
-            default="",
-        )
-        or ""
-    ).strip().lower()
-    if connector_mode != "simple_udp_peer":
-        return None
-
-    peer_host = str(
-        _pick(
-            "OBSTACLEBRIDGE_IOS_PACKETFLOW_PEER_HOST",
-            "peer_host",
-            "ios_packetflow_peer_host",
-            default="",
-        )
-        or ""
-    ).strip()
-    peer_port_raw = _pick(
-        "OBSTACLEBRIDGE_IOS_PACKETFLOW_PEER_PORT",
-        "peer_port",
-        "ios_packetflow_peer_port",
-        default=0,
-    )
-    bind_host = str(
-        _pick(
-            "OBSTACLEBRIDGE_IOS_PACKETFLOW_UDP_HOST",
-            "bind_host",
-            "ios_packetflow_udp_host",
-            default="0.0.0.0",
-        )
-        or "0.0.0.0"
-    ).strip()
-    bind_port_raw = _pick(
-        "OBSTACLEBRIDGE_IOS_PACKETFLOW_UDP_PORT",
-        "bind_port",
-        "ios_packetflow_udp_port",
-        default=5555,
-    )
-    ifname = str(_pick("ifname", "ios_packetflow_ifname", default="ios-utun") or "ios-utun").strip()
-    mtu_raw = _pick("mtu", "ios_packetflow_mtu", default=1280)
-
-    peer_port = int(peer_port_raw) if str(peer_port_raw).strip() else 0
-    bind_port = int(bind_port_raw) if str(bind_port_raw).strip() else 5555
-    mtu = int(mtu_raw) if str(mtu_raw).strip() else 1280
-    if not peer_host or peer_port <= 0:
-        raise ValueError("simple_udp_peer mode requires peer_host and peer_port")
-    return {
-        "connector_mode": "simple_udp_peer",
-        "peer_host": peer_host,
-        "peer_port": peer_port,
-        "bind_host": bind_host,
-        "bind_port": bind_port,
-        "ifname": ifname or "ios-utun",
-        "mtu": max(68, int(mtu)),
-    }
+    return bridge_tun_ios.simple_udp_peer_settings(config)
 
 
 def _packetflow_connector_mode(config: Mapping[str, Any] | None) -> str:
-    raw = str(os.environ.get("OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR", "") or "").strip().lower()
-    if raw:
-        return "swift_udp" if raw == "swift_udp_peer" else raw
-    grouped = dict(config) if isinstance(config, Mapping) else {}
-    experiment = grouped.get("ios_experiment")
-    if isinstance(experiment, Mapping):
-        mode = str(experiment.get("packetflow_connector", "") or "").strip().lower()
-        return "swift_udp" if mode == "swift_udp_peer" else mode
-    return ""
+    return bridge_tun_ios.packetflow_connector_mode_from_config(config)
 
 
-class _PacketFlowOnlyMux:
-    class TunDevice:
-        def __init__(self, fd: int, ifname: str, mtu: int, service_key: object | None = None) -> None:
-            self.fd = fd
-            self.ifname = ifname
-            self.mtu = mtu
-            self.service_key = service_key
-            self.reader_registered = False
-            self.chan_id = None
+_SimpleUDPPeerRuntime = bridge_tun_ios.SimpleUDPPeerRuntime
 
-    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
-        self.loop = loop
-        self.log = logging.getLogger("runner")
 
-    def _effective_services_by_id(self) -> dict[object, object]:
-        return {}
-
-    def _on_local_tun_packet(self, dev: Any, packet: bytes) -> None:
-        self.log.info(
-            "[TUN/IOS/EXPERIMENT] unexpected local packet callback if=%s len=%s",
-            getattr(dev, "ifname", ""),
-            len(packet),
+def _quiet_extension_console_logging(config: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(config)
+    if any(isinstance(value, Mapping) for value in normalized.values()):
+        debug_logging = dict(
+            normalized.get("debug_logging") if isinstance(normalized.get("debug_logging"), Mapping) else {}
         )
-
-
-class _SimpleUDPPeerRuntime:
-    def __init__(self, documents_root: Path, loop: asyncio.AbstractEventLoop) -> None:
-        self.documents_root = Path(documents_root)
-        self.loop = loop
-        self.mux = _PacketFlowOnlyMux(loop)
-        self.dev: Any | None = None
-        self.config: dict[str, Any] = {}
-        self.settings: dict[str, Any] = {}
-        self.started = False
-        self.started_unix_ts: float | None = None
-
-    @staticmethod
-    def _apply_environment(settings: Mapping[str, Any], documents_root: Path, tunnel_address: str) -> None:
-        os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR"] = "simple_udp_peer"
-        os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_UDP_HOST"] = str(settings.get("bind_host") or "0.0.0.0")
-        os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_UDP_PORT"] = str(int(settings.get("bind_port") or 5555))
-        os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_PEER_HOST"] = str(settings.get("peer_host") or "")
-        os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_PEER_PORT"] = str(int(settings.get("peer_port") or 0))
-        os.environ["OBSTACLEBRIDGE_IOS_TUNNEL_ADDRESS"] = str(tunnel_address)
-        os.environ["OBSTACLEBRIDGE_IOS_DIAGNOSTICS_ROOT"] = str(Path(documents_root) / "logs")
-
-    async def start(self, config: Mapping[str, Any], *, tunnel_address: str) -> None:
-        if self.started:
-            return
-        settings = _simple_udp_peer_settings(config)
-        if settings is None:
-            raise ValueError("simple_udp_peer runtime requested without matching settings")
-        self.config = dict(config)
-        self.settings = dict(settings)
-        self._apply_environment(settings, self.documents_root, tunnel_address)
-        log_provider_event(
-            self.documents_root,
-            "python_runtime_simple_udp_peer_starting",
-            peer_host=settings["peer_host"],
-            peer_port=settings["peer_port"],
-            bind_host=settings["bind_host"],
-            bind_port=settings["bind_port"],
-            ifname=settings["ifname"],
-            mtu=settings["mtu"],
-        )
-        self.dev = bridge_tun_ios.open_tun_device(self.mux, str(settings["ifname"]), int(settings["mtu"]))
-        bridge_tun_ios.register_tun_reader(self.mux, self.dev)
-        task = getattr(self.dev, "udp_connector_task", None)
-        if task is not None:
-            await task
-        self.started = True
-        self.started_unix_ts = time.time()
-        log_provider_event(
-            self.documents_root,
-            "python_runtime_simple_udp_peer_started",
-            connector_bind=getattr(self.dev, "udp_connector_bind_addr", None),
-            peer_addr=getattr(self.dev, "udp_connector_peer_addr", None),
-        )
-
-    async def stop(self) -> None:
-        if self.dev is not None:
-            bridge_tun_ios.close_tun_device(self.mux, self.dev)
-            await asyncio.sleep(0)
-        self.dev = None
-        self.started = False
-        log_provider_event(self.documents_root, "python_runtime_simple_udp_peer_stopped")
-
-    def snapshot(self) -> dict[str, Any]:
-        status = {
-            "runtime_mode": "simple_udp_peer",
-            "peer_addr": [self.settings.get("peer_host"), self.settings.get("peer_port")] if self.settings else None,
-            "bind_addr": getattr(self.dev, "udp_connector_bind_addr", None) if self.dev is not None else None,
-            "started_unix_ts": self.started_unix_ts,
-        }
-        if self.dev is not None:
-            connector = getattr(self.dev, "udp_connector", None)
-            status["counters"] = {
-                "to_peer_packets": int(getattr(connector, "tx_packets", 0) or 0),
-                "from_peer_packets": int(getattr(connector, "rx_packets", 0) or 0),
-            }
-        return {
-            "started": self.started,
-            "status": status,
-            "connections": {"tcp": [], "udp": [], "tun": []},
-            "config": dict(self.config),
-        }
+        debug_logging["console_level"] = "CRITICAL"
+        normalized["debug_logging"] = debug_logging
+        return normalized
+    normalized["console_level"] = "CRITICAL"
+    return normalized
 
 
 class IPServerRuntimeController:
@@ -413,75 +238,11 @@ class IPServerRuntimeController:
         settings = _simple_udp_peer_settings(config)
         if settings is None:
             return None
-        runtime_cfg = dict(config) if isinstance(config, Mapping) else {}
-        runtime_cfg.setdefault("ios_experiment", {})
-        if isinstance(runtime_cfg.get("ios_experiment"), Mapping):
-            merged = dict(runtime_cfg["ios_experiment"])
-            merged.update(
-                {
-                    "packetflow_connector": "simple_udp_peer",
-                    "peer_host": settings["peer_host"],
-                    "peer_port": settings["peer_port"],
-                    "bind_host": settings["bind_host"],
-                    "bind_port": settings["bind_port"],
-                    "ifname": settings["ifname"],
-                    "mtu": settings["mtu"],
-                }
-            )
-            runtime_cfg["ios_experiment"] = merged
-        else:
-            runtime_cfg["ios_experiment"] = {
-                "packetflow_connector": "simple_udp_peer",
-                "peer_host": settings["peer_host"],
-                "peer_port": settings["peer_port"],
-                "bind_host": settings["bind_host"],
-                "bind_port": settings["bind_port"],
-                "ifname": settings["ifname"],
-                "mtu": settings["mtu"],
-            }
-        return runtime_cfg
-
-    @staticmethod
-    def _swift_udp_runtime_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
-        runtime_cfg = dict(config) if isinstance(config, Mapping) else {}
-        channel_mux = runtime_cfg.get("channel_mux")
-        if not isinstance(channel_mux, Mapping):
-            return runtime_cfg
-        own_servers = channel_mux.get("own_servers")
-        if not isinstance(own_servers, list):
-            return runtime_cfg
-        filtered_own_servers: list[Any] = []
-        removed_tun_services = 0
-        for entry in own_servers:
-            if not isinstance(entry, Mapping):
-                filtered_own_servers.append(entry)
-                continue
-            listen = entry.get("listen")
-            protocol = ""
-            if isinstance(listen, Mapping):
-                protocol = str(listen.get("protocol", "") or "").strip().lower()
-            if protocol == "tun":
-                removed_tun_services += 1
-                continue
-            filtered_own_servers.append(dict(entry))
-        if removed_tun_services == 0:
-            return runtime_cfg
-        merged_channel_mux = dict(channel_mux)
-        merged_channel_mux["own_servers"] = filtered_own_servers
-        runtime_cfg["channel_mux"] = merged_channel_mux
-        debug_logging = dict(
-            runtime_cfg.get("debug_logging") if isinstance(runtime_cfg.get("debug_logging"), Mapping) else {}
-        )
-        debug_logging["ios_swift_udp_tun_services_removed"] = removed_tun_services
-        runtime_cfg["debug_logging"] = debug_logging
-        return runtime_cfg
+        return bridge_tun_ios.simple_udp_peer_runtime_config(config)
 
     def _request_embedded_restart(self) -> None:
-        future = self._embedded_restart_future
-        if future is not None and not future.done():
-            log_provider_event(self.documents_root, "python_runtime_restart_requested", status="already_pending")
-            return
         loop = self._ensure_runtime_loop()
+        running_loop: Optional[asyncio.AbstractEventLoop] = None
         try:
             running_loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -560,9 +321,9 @@ class IPServerRuntimeController:
     def _runtime_config_from_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
         ob_cfg = profile.get("obstacle_bridge")
         if isinstance(ob_cfg, Mapping):
-            runtime_cfg = dict(ob_cfg)
+            runtime_cfg = _quiet_extension_console_logging(ob_cfg)
         elif "overlay_transport" in profile:
-            runtime_cfg = dict(profile)
+            runtime_cfg = _quiet_extension_console_logging(profile)
         else:
             raise ValueError("profile obstacle_bridge config is required")
         runtime_cfg.setdefault("admin_web", True)
@@ -625,6 +386,7 @@ class IPServerRuntimeController:
                 merged.get("debug_logging") if isinstance(merged.get("debug_logging"), Mapping) else {}
             )
             debug_logging["log_file"] = str(ObstacleBridgeIOSApp.LOG_FILE)
+            debug_logging["console_level"] = "CRITICAL"
             merged["debug_logging"] = debug_logging
             return merged
         runtime_cfg = IPServerRuntimeController._runtime_config_from_profile(
@@ -633,6 +395,7 @@ class IPServerRuntimeController:
         runtime_cfg["admin_web_dir"] = str(ObstacleBridgeIOSApp.ADMIN_WEB_DIR)
         runtime_cfg["ws_static_dir"] = str(ObstacleBridgeIOSApp.WEB_DIR)
         runtime_cfg["log_file"] = str(ObstacleBridgeIOSApp.LOG_FILE)
+        runtime_cfg["console_level"] = "CRITICAL"
         return runtime_cfg
 
     def connect_profile(
@@ -700,6 +463,12 @@ class IPServerRuntimeController:
                 else:
                     os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR"] = "udp"
             elif connector_mode == "swift_udp":
+                ios_tun_connector = normalized_config.get("iOS_TUN_connector") if isinstance(normalized_config, Mapping) else None
+                if isinstance(ios_tun_connector, Mapping):
+                    os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_UDP_HOST"] = str(ios_tun_connector.get("bind_host") or "127.0.0.1")
+                    os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_UDP_PORT"] = str(int(ios_tun_connector.get("bind_port") or 5555))
+                    os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_PEER_HOST"] = str(ios_tun_connector.get("peer_host") or "127.0.0.1")
+                    os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_PEER_PORT"] = str(int(ios_tun_connector.get("peer_port") or 5556))
                 os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR"] = "swift_udp"
         os.environ["OBSTACLEBRIDGE_IOS_DIAGNOSTICS_ROOT"] = str(self.documents_root / "logs")
         log_provider_event(

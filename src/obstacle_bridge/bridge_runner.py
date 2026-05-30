@@ -1551,7 +1551,8 @@ class Runner:
 
 # ------------ Admin Webinterface ------------
 
-from .bridge_ios_tunnel_network import IOSTunnelNetworkSettings
+from .bridge_tun_ios import IOSTUNConnectorSettings, IOS_TUN_CONNECTOR_SECTION
+from .bridge_tun_routing import TUN_ROUTING_SECTION, TunRoutingSettings
 from .bridge_webadmin import AdminWebUI
 
 class ConfigAwareCLI:
@@ -1927,11 +1928,22 @@ class ConfigAwareCLI:
     def _group_effective(self, eff: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         grouped: Dict[str, Dict[str, Any]] = {}
         assigned: Set[str] = set()
+        raw_grouped = self._raw_config if isinstance(self._raw_config, dict) else {}
         for sec, dests in self._sections.items():
             block = {k: eff[k] for k in dests if k in eff}
+            raw_block = raw_grouped.get(sec) if isinstance(raw_grouped.get(sec), dict) else None
+            if raw_block:
+                for key, value in raw_block.items():
+                    if key not in block:
+                        block[key] = value
             if block:
                 grouped[sec] = block
                 assigned |= set(block.keys())
+        for sec, raw_block in raw_grouped.items():
+            if sec in grouped or not isinstance(raw_block, dict):
+                continue
+            grouped[sec] = dict(raw_block)
+            assigned |= set(raw_block.keys())
         misc = {k: v for k, v in eff.items() if k not in assigned}
         if misc:
             grouped["misc"] = misc
@@ -2045,18 +2057,19 @@ RUNTIME_CLI_DESCRIPTION = (
 
 def default_runtime_registrars() -> List[Tuple[str, Callable[[argparse.ArgumentParser], None]]]:
     return [
-        ("stats_board",        StatsBoard.register_cli),
-        ("secure_link",       SecureLinkPskSession.register_cli),
-        ("compress_layer",    CompressLayerSession.register_cli),
-        ("ios_tunnel_network", IOSTunnelNetworkSettings.register_cli),
+        ("admin_web",          AdminWebUI.register_cli),
+        ("channel_mux",        ChannelMux.register_cli),
+        (IOS_TUN_CONNECTOR_SECTION, IOSTUNConnectorSettings.register_cli),
+        (TUN_ROUTING_SECTION,   TunRoutingSettings.register_cli),
+        ("runner",             Runner.register_overlay_cli),
         ("udp_session",        UdpSession.register_cli),
         ("ws_session",         WebSocketSession.register_cli),
-        ("tcp_session",        TcpStreamSession.register_cli),
         ("quic_session",       QuicSession.register_cli),
-        ("channel_mux",        ChannelMux.register_cli),
-        ("admin_web",          AdminWebUI.register_cli),
+        ("tcp_session",        TcpStreamSession.register_cli),
+        ("secure_link",        SecureLinkPskSession.register_cli),
+        ("compress_layer",     CompressLayerSession.register_cli),
         ("debug_logging",      DebugLoggingConfigurator.register_cli),
-        ("runner",             Runner.register_overlay_cli),
+        ("stats_board",        StatsBoard.register_cli),
     ]
 
 

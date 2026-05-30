@@ -129,7 +129,7 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         finally:
             mux.loop.close()
 
-    def test_tunnel_hook_env_defaults_follow_ios_tunnel_network_config(self):
+    def test_tunnel_hook_env_defaults_follow_tun_routing_config(self):
         args = argparse.Namespace(
             own_servers=None,
             remote_servers=None,

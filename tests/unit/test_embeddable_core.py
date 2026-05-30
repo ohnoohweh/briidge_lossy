@@ -2,13 +2,21 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 from pathlib import Path
 import unittest
 from unittest import mock
 
 from obstacle_bridge import MemoryPacketIO, ObstacleBridgeClient, PacketIO
-from obstacle_bridge.bridge import Runner, build_runtime_args_from_config, parse_runtime_args
+from obstacle_bridge.bridge import (
+    ConfigAwareCLI,
+    RUNTIME_CLI_DESCRIPTION,
+    Runner,
+    build_runtime_args_from_config,
+    default_runtime_registrars,
+    parse_runtime_args,
+)
 
 
 class EmbeddableRuntimeArgsTests(unittest.TestCase):
@@ -40,6 +48,78 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         self.assertEqual(args.overlay_transport, "tcp")
         self.assertEqual(args.tcp_peer, "peer.example")
         self.assertEqual(args.tcp_peer_port, 8443)
+
+    def test_build_runtime_args_preserves_ios_tun_connector_section(self) -> None:
+        args = build_runtime_args_from_config(
+            {
+                "iOS_TUN_connector": {
+                    "packetflow_connector": "swift_udp",
+                    "peer_host": "10.10.1.12",
+                    "peer_port": 5555,
+                    "bind_host": "0.0.0.0",
+                    "bind_port": 5555,
+                    "ifname": "ios-utun",
+                    "mtu": 1600,
+                }
+            }
+        )
+
+        self.assertEqual(args.packetflow_connector, "swift_udp")
+        self.assertEqual(args.peer_host, "10.10.1.12")
+        self.assertEqual(args.peer_port, 5555)
+        self.assertIn("iOS_TUN_connector", args._config_sections)
+
+    def test_dump_effective_config_preserves_unedited_ios_tun_connector_fields(self) -> None:
+        config = {
+            "iOS_TUN_connector": {
+                "packetflow_connector": "swift_udp",
+                "peer_host": "10.10.1.12",
+                "peer_port": 5555,
+                "bind_host": "0.0.0.0",
+                "bind_port": 5555,
+                "ifname": "ios-utun",
+                "mtu": 1600,
+            }
+        }
+        cli = ConfigAwareCLI(description=RUNTIME_CLI_DESCRIPTION)
+        parser = cli._build_full_parser(default_runtime_registrars())
+        cli._raw_config = dict(config)
+        cli._apply_config_defaults_from_json(parser, dict(config))
+        args = parser.parse_args([])
+
+        grouped = json.loads(cli.dump_effective_config_json(args))
+
+        self.assertEqual(grouped["iOS_TUN_connector"]["packetflow_connector"], "swift_udp")
+        self.assertEqual(grouped["iOS_TUN_connector"]["peer_host"], "10.10.1.12")
+        self.assertEqual(grouped["iOS_TUN_connector"]["peer_port"], 5555)
+        self.assertEqual(grouped["iOS_TUN_connector"]["bind_host"], "0.0.0.0")
+        self.assertEqual(grouped["iOS_TUN_connector"]["bind_port"], 5555)
+        self.assertEqual(grouped["iOS_TUN_connector"]["ifname"], "ios-utun")
+        self.assertEqual(grouped["iOS_TUN_connector"]["mtu"], 1600)
+
+    def test_runner_schema_snapshot_includes_ios_tun_connector_fields(self) -> None:
+        args = build_runtime_args_from_config(
+            {
+                "iOS_TUN_connector": {
+                    "packetflow_connector": "swift_udp",
+                    "peer_host": "10.10.1.12",
+                    "peer_port": 5555,
+                }
+            }
+        )
+        runner = Runner.__new__(Runner)
+        runner.args = args
+
+        schema = runner.get_config_schema_snapshot()
+        ios_tun_connector_rows = {row["key"]: row for row in schema["iOS_TUN_connector"]}
+
+        self.assertIn("packetflow_connector", ios_tun_connector_rows)
+        self.assertIn("peer_host", ios_tun_connector_rows)
+        self.assertIn("peer_port", ios_tun_connector_rows)
+        self.assertEqual(
+            ios_tun_connector_rows["packetflow_connector"]["choices"],
+            ["", "udp", "direct", "simple_udp_peer", "swift_udp", "swift_udp_peer"],
+        )
 
     def test_build_runtime_args_preserves_explicit_config_path_for_embedders(self) -> None:
         args = build_runtime_args_from_config(
