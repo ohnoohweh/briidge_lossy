@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import struct
+import ipaddress
 
 from . import bridge as _bridge
 from .bridge_transport_common import (
+    _bind_family_constraint,
+    _family_preference_rank,
     _listener_family_for_host,
+    _peer_resolve_mode,
+    _resolve_peer_candidates,
     _resolve_cli_peer,
+    _split_configured_peer_hosts,
     _strip_brackets,
     _wildcard_host_for_family,
 )
@@ -586,21 +592,32 @@ class SendPort:
 
         src = self.udp_transport.get_extra_info("sockname") if self.udp_transport else None
         dst = self.peer_addr
+        send_dst = dst
+        if isinstance(dst, tuple) and len(dst) >= 2:
+            try:
+                sock = self.udp_transport.get_extra_info("socket") if self.udp_transport else None
+                family = sock.family if sock is not None else None
+                host, port = str(dst[0]), int(dst[1])
+                if family == socket.AF_INET6 and ":" not in host:
+                    ipaddress.IPv4Address(host)
+                    send_dst = (f"::ffff:{host}", port, 0, 0)
+            except Exception:
+                send_dst = dst
 
         if self.log.isEnabledFor(logging.DEBUG):
             self.log.debug(
                 "[SENDPORT] send peer_addr=%r len=%d",
-                dst,
+                send_dst,
                 len(data),
             )
 
-        if dst is None:
+        if send_dst is None:
             if self.log.isEnabledFor(logging.DEBUG):
                 self.log.debug("[PEER/TX] drop %dB: no learned peer yet", len(data))
             return
 
         try:
-            self.udp_transport.sendto(data, dst)
+            self.udp_transport.sendto(data, send_dst)
             if self._on_bytes_sent:
                 self._on_bytes_sent(len(data))
             if self.log.isEnabledFor(logging.DEBUG):
@@ -608,7 +625,7 @@ class SendPort:
                     "[PEER/TX] %dB -> %s -> %s",
                     len(data),
                     SendPort._pretty(src),
-                    SendPort._pretty(dst),
+                    SendPort._pretty(send_dst),
                 )
         except Exception as e:
             self.log.error("[PEER/TX] send failed: %r", e)
@@ -1702,6 +1719,9 @@ class UdpSession(ISession):
         self._server_next_mux_chan: int = 1
         self._app_payload_passthrough: bool = False
         self._listener_peer_cleanup_task: Optional[asyncio.Task] = None
+        self._peer_candidates: List[Tuple[str, int, int]] = []
+        self._peer_candidate_index: int = 0
+        self._peer_candidate_fallback_task: Optional[asyncio.Task] = None
 
         # Inner reliability/session engine remains the same one from base module.
         self.inner_session = Session(max_in_flight=args.max_inflight, proto=self._proto_state)
@@ -1957,6 +1977,8 @@ class UdpSession(ISession):
         self._loop = asyncio.get_running_loop()
         listen_host = _strip_brackets(getattr(self._args, "udp_bind", "::"))
         listen_port = int(getattr(self._args, "udp_own_port", 4433))
+        self._peer_candidates = self._resolve_configured_peer_candidates(listen_host)
+        self._peer_candidate_index = 0
         peer_info = _resolve_cli_peer(
             self._args,
             peer_attr="udp_peer",
@@ -1970,6 +1992,11 @@ class UdpSession(ISession):
         if peer_info is not None:
             peer_host, peer_port, peer_family = peer_info
             peer = (peer_host, peer_port)
+            if self._peer_candidates:
+                for idx, candidate in enumerate(self._peer_candidates):
+                    if candidate == peer_info:
+                        self._peer_candidate_index = idx
+                        break
         self._listener_mode = peer is None
 
         if (
@@ -2099,9 +2126,16 @@ class UdpSession(ISession):
                     sp.set_peer((host, port))
             except Exception as e:
                 self._log.debug("[UdpSession] start failed on set_peer %r", e)
+            if len(self._peer_candidates) > 1 and self._peer_candidate_fallback_task is None:
+                self._peer_candidate_fallback_task = self._loop.create_task(self._peer_candidate_fallback_loop())
 
     async def stop(self) -> None:
         try:
+            if self._peer_candidate_fallback_task is not None:
+                self._peer_candidate_fallback_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._peer_candidate_fallback_task
+                self._peer_candidate_fallback_task = None
             if self._listener_peer_cleanup_task is not None:
                 self._listener_peer_cleanup_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -2281,6 +2315,93 @@ class UdpSession(ISession):
                 self._on_state(connected)
             except Exception as e:
                 self._log.debug("[UDP/SESSION/STATE] _on_state_change failed on _on_state %r", e)
+
+    def _resolve_configured_peer_candidates(self, bind_host: str) -> List[Tuple[str, int, int]]:
+        raw_peer = getattr(self._args, "udp_peer", None)
+        if not raw_peer:
+            return []
+        configured_hosts = _split_configured_peer_hosts(str(raw_peer))
+        if len(configured_hosts) <= 1:
+            peer_info = _resolve_cli_peer(
+                self._args,
+                peer_attr="udp_peer",
+                peer_port_attr="udp_peer_port",
+                resolve_attr="udp_peer_resolve_family",
+                bind_host=bind_host,
+                socktype=socket.SOCK_DGRAM,
+            )
+            return [peer_info] if peer_info is not None else []
+        resolve_mode = _peer_resolve_mode(self._args, "udp_peer_resolve_family")
+        peer_port = int(getattr(self._args, "udp_peer_port", 4433) or 4433)
+        candidates: List[Tuple[str, int, int]] = []
+        for candidate_host in configured_hosts:
+            try:
+                candidates.extend(
+                    _resolve_peer_candidates(
+                        candidate_host,
+                        peer_port,
+                        resolve_mode=resolve_mode,
+                        socktype=socket.SOCK_DGRAM,
+                        strict_family=False,
+                    )
+                )
+            except RuntimeError:
+                continue
+        deduped: List[Tuple[str, int, int]] = []
+        for candidate in candidates:
+            if candidate not in deduped:
+                deduped.append(candidate)
+        deduped.sort(key=lambda item: _family_preference_rank(item[2], resolve_mode))
+        bind_family = _bind_family_constraint(bind_host)
+        if bind_family is not None:
+            matching = [item for item in deduped if item[2] == bind_family]
+            if matching:
+                deduped = matching
+        return deduped
+
+    def _rotate_to_next_peer_candidate(self) -> bool:
+        if self._listener_mode or self._proto is None or self._proto.send_port is None:
+            return False
+        next_index = self._peer_candidate_index + 1
+        if next_index >= len(self._peer_candidates):
+            return False
+        old_peer = self._peer_candidates[self._peer_candidate_index]
+        new_peer = self._peer_candidates[next_index]
+        self._peer_candidate_index = next_index
+        self._log.warning(
+            "[UDP/SESSION] no liveness on preferred peer %r, falling back to %r",
+            old_peer[:2],
+            new_peer[:2],
+        )
+        self.inner_session.reset_transport_epoch()
+        with contextlib.suppress(Exception):
+            self._proto_state.rtt_est_ms = 0.0
+            self._proto_state.rtt_sample_ms = 0.0
+            self._proto_state.last_rtt_ok_ns = 0
+            self._proto_state._last_rx_tx_ns = 0
+            self._proto_state._last_rx_wall_ns = 0
+        host, port, _family = new_peer
+        self._on_peer_set(host, port)
+        self._proto.send_port.set_peer((host, port))
+        with contextlib.suppress(Exception):
+            self._proto._proto_rt._conn_evt.clear()
+            self._proto._proto_rt._conn_state = False
+            self._proto._proto_rt._next_probe_due_ns = 0
+            self._proto._proto_rt._send_idle_probe(initial=True)
+        return True
+
+    async def _peer_candidate_fallback_loop(self) -> None:
+        try:
+            while not self._listener_mode and self._peer_candidate_index < (len(self._peer_candidates) - 1):
+                await asyncio.sleep(3.0)
+                if self.is_connected():
+                    return
+                if getattr(self._proto_state, "last_rtt_ok_ns", 0):
+                    return
+                if not self._rotate_to_next_peer_candidate():
+                    return
+        except asyncio.CancelledError:
+            return
 
     def _on_state_change_for_peer(self, peer_id: int, connected: bool) -> None:
         ctx = self._server_peers.get(peer_id)

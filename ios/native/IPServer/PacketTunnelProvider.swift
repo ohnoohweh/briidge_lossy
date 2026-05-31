@@ -1504,13 +1504,17 @@ private final class SwiftSimpleUDPPeerBridge {
     }
 
     private static let queueKey = DispatchSpecificKey<UInt8>()
+    private static let peerFallbackIdleNS: UInt64 = 3_000_000_000
     private weak var provider: PacketTunnelProvider?
     private let settings: SwiftSimpleUDPPeerSettings
     private let tunnelAddress: String
     private let tcpServiceSpecs: [ObstacleBridgeChannelMuxCodec.ServiceSpec]
     private let queue = DispatchQueue(label: "com.obstaclebridge.ipserver.swift-simple-udp-peer")
     private var socketFD: Int32 = -1
-    private let peerAddress: ResolvedAddress
+    private let socketFamily: Int32
+    private let peerCandidates: [ResolvedAddress]
+    private var peerCandidateIndex = 0
+    private var peerAddress: ResolvedAddress
     private var overlayRuntime: ObstacleBridgeUdpOverlayPeerRuntime?
     private var channelMuxTunRuntime: ObstacleBridgeChannelMuxTunRuntime?
     private var channelMuxTcpTransportOwner: ObstacleBridgeChannelMuxTCPTransportOwner?
@@ -1519,8 +1523,11 @@ private final class SwiftSimpleUDPPeerBridge {
     private var readSource: DispatchSourceRead?
     private var controlTimer: DispatchSourceTimer?
     private var retransmitTimer: DispatchSourceTimer?
+    private var peerFallbackTimer: DispatchSourceTimer?
     private var started = false
     private var startedAt = Date().timeIntervalSince1970
+    private var currentPeerSelectedAtNS: UInt64 = 0
+    private var lastInboundDatagramNS: UInt64 = 0
     private var packetsFromSystem = 0
     private var packetsToSystem = 0
     private var bytesFromSystem = 0
@@ -1560,6 +1567,8 @@ private final class SwiftSimpleUDPPeerBridge {
             peerResolveFamily: settings.peerResolveFamily
         )
         self.socketFD = boundSocket.socketFD
+        self.socketFamily = boundSocket.socketFamily
+        self.peerCandidates = boundSocket.peerCandidates
         self.peerAddress = boundSocket.peerAddress
         if settings.runtimeMode == "swift_udp" {
             self.overlayRuntime = ObstacleBridgeUdpOverlayPeerRuntime()
@@ -1607,6 +1616,8 @@ private final class SwiftSimpleUDPPeerBridge {
         guard !started, let provider else { return }
         started = true
         startedAt = Date().timeIntervalSince1970
+        currentPeerSelectedAtNS = monotonicNowNS()
+        lastInboundDatagramNS = 0
 
         let source = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: queue)
         source.setEventHandler { [weak self] in
@@ -1614,6 +1625,7 @@ private final class SwiftSimpleUDPPeerBridge {
         }
         readSource = source
         source.resume()
+        startPeerFallbackTimer()
         if settings.runtimeMode == "swift_udp" {
             startOverlayTimers()
             startTCPServices()
@@ -1639,6 +1651,8 @@ private final class SwiftSimpleUDPPeerBridge {
         guard !started else { return }
         started = true
         startedAt = Date().timeIntervalSince1970
+        currentPeerSelectedAtNS = monotonicNowNS()
+        lastInboundDatagramNS = 0
 
         let source = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: queue)
         source.setEventHandler { [weak self] in
@@ -1646,6 +1660,7 @@ private final class SwiftSimpleUDPPeerBridge {
         }
         readSource = source
         source.resume()
+        startPeerFallbackTimer()
         if settings.runtimeMode == "swift_udp" {
             startOverlayTimers()
             startTCPServices()
@@ -1660,6 +1675,8 @@ private final class SwiftSimpleUDPPeerBridge {
         controlTimer = nil
         retransmitTimer?.cancel()
         retransmitTimer = nil
+        peerFallbackTimer?.cancel()
+        peerFallbackTimer = nil
         readSource?.cancel()
         readSource = nil
         stopTCPServices()
@@ -1686,9 +1703,13 @@ private final class SwiftSimpleUDPPeerBridge {
                 "resolved_peer_host": peerAddress.host,
                 "resolved_peer_port": peerAddress.port,
                 "resolved_peer_family": Self.familyName(peerAddress.family),
+                "resolved_peer_index": peerCandidateIndex,
+                "resolved_peer_candidate_count": peerCandidates.count,
+                "resolved_peer_candidates": peerCandidates.map { "\($0.host):\($0.port)/\(Self.familyName($0.family))" },
                 "mtu": settings.mtu,
                 "tunnel_address": tunnelAddress,
                 "socket_fd": socketFD,
+                "socket_family": Self.familyName(socketFamily),
                 "packets_from_system": packetsFromSystem,
                 "packets_to_system": packetsToSystem,
                 "bytes_from_system": bytesFromSystem,
@@ -1810,6 +1831,7 @@ private final class SwiftSimpleUDPPeerBridge {
                 }
             }
             if received > 0 {
+                lastInboundDatagramNS = monotonicNowNS()
                 let packet = Data(buffer[0..<received])
                 if settings.runtimeMode == "swift_udp" {
                     let completed = handleOverlayDatagram(packet)
@@ -1878,6 +1900,57 @@ private final class SwiftSimpleUDPPeerBridge {
         }
         retransmit.resume()
         retransmitTimer = retransmit
+    }
+
+    private func startPeerFallbackTimer() {
+        guard peerCandidates.count > 1 else {
+            return
+        }
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(1))
+        timer.setEventHandler { [weak self] in
+            self?.handlePeerFallbackTimer()
+        }
+        timer.resume()
+        peerFallbackTimer = timer
+    }
+
+    private func handlePeerFallbackTimer() {
+        guard started, peerCandidateIndex + 1 < peerCandidates.count else {
+            return
+        }
+        let nowNS = monotonicNowNS()
+        guard lastInboundDatagramNS == 0 || lastInboundDatagramNS < currentPeerSelectedAtNS else {
+            return
+        }
+        guard nowNS >= currentPeerSelectedAtNS,
+              nowNS - currentPeerSelectedAtNS >= Self.peerFallbackIdleNS
+        else {
+            return
+        }
+        rotateToNextPeerCandidate(nowNS: nowNS)
+    }
+
+    private func rotateToNextPeerCandidate(nowNS: UInt64) {
+        guard peerCandidateIndex + 1 < peerCandidates.count else {
+            return
+        }
+        peerCandidateIndex += 1
+        peerAddress = peerCandidates[peerCandidateIndex]
+        currentPeerSelectedAtNS = nowNS
+        lastInboundDatagramNS = 0
+        provider?.recordPacketBridgeEvent(
+            "swift_simple_udp_peer_fallback_rotate",
+            fields: [
+                "candidate_index": peerCandidateIndex,
+                "resolved_peer_host": peerAddress.host,
+                "resolved_peer_port": peerAddress.port,
+                "resolved_peer_family": Self.familyName(peerAddress.family),
+            ]
+        )
+        if settings.runtimeMode == "swift_udp" {
+            sendInitialIdleProbe()
+        }
     }
 
     private func startTCPServices() {
@@ -2679,12 +2752,34 @@ private final class SwiftSimpleUDPPeerBridge {
         }
     }
 
-    private static func resolvePeerAddress(
+    private static func normalizePeerCandidate(
+        _ candidate: ResolvedAddress,
+        socketFamily: Int32
+    ) throws -> ResolvedAddress {
+        guard candidate.family != socketFamily else {
+            return candidate
+        }
+        if socketFamily == AF_INET6, candidate.family == AF_INET {
+            return try resolveAddress(
+                host: ipv4MappedIPv6(candidate.host),
+                port: candidate.port,
+                passive: false,
+                family: AF_INET6
+            )
+        }
+        throw NSError(
+            domain: "ObstacleBridge.IPServer",
+            code: 41,
+            userInfo: [NSLocalizedDescriptionKey: "overlay peer '\(candidate.host)' is not compatible with socket family \(familyName(socketFamily))"]
+        )
+    }
+
+    private static func resolvePeerAddresses(
         host: String,
         port: Int,
         resolveFamily: String,
         bindHost: String
-    ) throws -> ResolvedAddress {
+    ) throws -> [ResolvedAddress] {
         let configuredHosts = splitConfiguredPeerHosts(host)
         guard !configuredHosts.isEmpty else {
             throw NSError(
@@ -2729,8 +2824,9 @@ private final class SwiftSimpleUDPPeerBridge {
         }
 
         if let bindFamily = bindFamilyConstraint(bindHost) {
-            if let matching = candidates.first(where: { $0.family == bindFamily }) {
-                return matching
+            let compatible = candidates.filter { $0.family == bindFamily }
+            if !compatible.isEmpty {
+                return compatible
             }
             let famName = bindFamily == AF_INET6 ? "IPv6" : "IPv4"
             throw NSError(
@@ -2747,7 +2843,8 @@ private final class SwiftSimpleUDPPeerBridge {
                 userInfo: [NSLocalizedDescriptionKey: "Could not resolve overlay peer '\(host)'"]
             )
         }
-        return first
+        _ = first
+        return candidates
     }
 
     private static func makeBoundSocket(
@@ -2756,28 +2853,64 @@ private final class SwiftSimpleUDPPeerBridge {
         peerHost: String,
         peerPort: Int,
         peerResolveFamily: String
-    ) throws -> (socketFD: Int32, peerAddress: ResolvedAddress) {
-        let peer = try resolvePeerAddress(host: peerHost, port: peerPort, resolveFamily: peerResolveFamily, bindHost: bindHost)
-        let sock = socket(peer.family, SOCK_DGRAM, IPPROTO_UDP)
+    ) throws -> (socketFD: Int32, socketFamily: Int32, peerCandidates: [ResolvedAddress], peerAddress: ResolvedAddress) {
+        let resolvedCandidates = try resolvePeerAddresses(
+            host: peerHost,
+            port: peerPort,
+            resolveFamily: peerResolveFamily,
+            bindHost: bindHost
+        )
+        let socketFamily: Int32
+        if let bindFamily = bindFamilyConstraint(bindHost) {
+            socketFamily = bindFamily
+        } else if resolvedCandidates.contains(where: { $0.family == AF_INET6 }) {
+            socketFamily = AF_INET6
+        } else {
+            socketFamily = resolvedCandidates[0].family
+        }
+
+        var peerCandidates: [ResolvedAddress] = []
+        for candidate in resolvedCandidates {
+            let normalized = try normalizePeerCandidate(candidate, socketFamily: socketFamily)
+            if !peerCandidates.contains(where: {
+                $0.family == normalized.family && $0.host == normalized.host && $0.port == normalized.port
+            }) {
+                peerCandidates.append(normalized)
+            }
+        }
+        guard let peer = peerCandidates.first else {
+            throw NSError(
+                domain: "ObstacleBridge.IPServer",
+                code: 36,
+                userInfo: [NSLocalizedDescriptionKey: "Could not resolve overlay peer '\(peerHost)'"]
+            )
+        }
+
+        let sock = socket(socketFamily, SOCK_DGRAM, IPPROTO_UDP)
         guard sock >= 0 else {
             throw NSError(domain: "ObstacleBridge.IPServer", code: 31, userInfo: [NSLocalizedDescriptionKey: "socket() failed"])
         }
         let flags = fcntl(sock, F_GETFL, 0)
         _ = fcntl(sock, F_SETFL, flags | O_NONBLOCK)
+        if socketFamily == AF_INET6 {
+            var dualStackOff: Int32 = 0
+            _ = withUnsafePointer(to: &dualStackOff) { ptr in
+                setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, ptr, socklen_t(MemoryLayout<Int32>.size))
+            }
+        }
         var noSigPipe: Int32 = 1
         _ = withUnsafePointer(to: &noSigPipe) { ptr in
             setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, ptr, socklen_t(MemoryLayout<Int32>.size))
         }
 
         do {
-            let bindFamily = peer.family
             let resolvedBindHost: String
-            if bindFamily == AF_INET6 && bindHost == "0.0.0.0" {
+            if socketFamily == AF_INET6 && bindHost == "0.0.0.0" {
                 resolvedBindHost = "::"
             } else {
                 resolvedBindHost = bindHost
             }
-            let bindAddr = try resolveAddress(host: resolvedBindHost, port: bindPort, passive: true, family: bindFamily)
+            let bindAddr = try resolveAddress(host: resolvedBindHost, port: bindPort, passive: true, family: socketFamily)
             let bindResult = bindAddr.storage.withUnsafeBytes { rawBuffer -> Int32 in
                 let sockaddrPtr = rawBuffer.baseAddress!.assumingMemoryBound(to: sockaddr.self)
                 return Darwin.bind(sock, sockaddrPtr, bindAddr.length)
@@ -2785,7 +2918,7 @@ private final class SwiftSimpleUDPPeerBridge {
             guard bindResult == 0 else {
                 throw NSError(domain: "ObstacleBridge.IPServer", code: 32, userInfo: [NSLocalizedDescriptionKey: "bind() failed errno=\(errno)"])
             }
-            return (sock, peer)
+            return (sock, socketFamily, peerCandidates, peer)
         } catch {
             Darwin.close(sock)
             throw error
