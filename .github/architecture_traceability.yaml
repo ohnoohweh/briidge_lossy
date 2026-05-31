@@ -80,6 +80,7 @@ ARC-CMP-003:
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_opens_channel_and_sends_data
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
+    - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_brings_interface_up_before_underlay_route_is_known
     - tests/unit/test_channel_mux_listener_mode.py::test_peer_installed_tun_stop_runs_listener_on_stopped_before_close
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_open_uses_pending_peer_listener_before_async_catalog_start
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_device_keeps_symmetric_channel_aliases_routable
@@ -135,6 +136,7 @@ ARC-CMP-004:
     - tests/unit/test_connection_snapshots.py::test_snapshot_collapses_tun_channel_aliases_into_one_logical_connection
     - tests/unit/test_channel_mux_listener_mode.py::test_resolve_hook_argv_resolves_relative_executable_against_base_dir
     - tests/unit/test_channel_mux_listener_mode.py::test_hook_context_exposes_resolved_overlay_peer
+    - tests/unit/test_channel_mux_listener_mode.py::test_hook_context_prefers_live_overlay_peer_over_initial_candidate
     - tests/unit/test_channel_mux_listener_mode.py::test_peer_installed_tun_stop_runs_listener_on_stopped_before_close
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_open_uses_pending_peer_listener_before_async_catalog_start
     - tests/unit/test_launcher_entrypoint.py::test_launcher_forwards_unknown_args_to_bridge

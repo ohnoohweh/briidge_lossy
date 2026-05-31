@@ -101,6 +101,28 @@ def test_provider_configuration_is_native_extension_contract() -> None:
     assert provider_config["poc"]["secure_link"] == "deferred-to-M4"
 
 
+def test_m3_tunnel_config_normalizes_multi_host_peer_for_native_provider_contract() -> None:
+    cfg = m3_tunnel_config_from_profile(
+        {
+            **_m25_profile(),
+            "obstacle_bridge": {
+                **_m25_profile()["obstacle_bridge"],
+                "overlay_transport": "myudp",
+                "udp_peer": "[2001:db8::10],198.51.100.10",
+                "udp_peer_port": 4443,
+            },
+        },
+        provider_bundle_identifier="com.obstaclebridge.ObstacleBridge.PacketTunnel",
+    )
+
+    provider_config = provider_configuration_from_m3_config(cfg)
+
+    assert cfg.peer_host == "[2001:db8::10]"
+    assert cfg.server_address == "[2001:db8::10]:4443"
+    assert provider_config["peer"] == {"host": "[2001:db8::10]", "port": 4443}
+    assert provider_config["runtime_config"]["udp_peer"] == "[2001:db8::10],198.51.100.10"
+
+
 def test_m3_vpn_profile_describes_netunnel_provider_install() -> None:
     vpn_profile = m3_vpn_profile_from_profile(
         _m25_profile(),

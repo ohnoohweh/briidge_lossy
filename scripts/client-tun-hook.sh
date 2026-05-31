@@ -9,7 +9,6 @@ IFNAME="${2:?missing ifname}"
 TUN_ADDR6="${TUN_ADDR6:-}"
 TUN_GW6="${TUN_GW6:-}"
 OVERLAY_PEER_IP="${OVERLAY_PEER_IP:-${OB_OVERLAY_PEER_HOST:-}}"
-: "${OVERLAY_PEER_IP:?missing OVERLAY_PEER_IP or OB_OVERLAY_PEER_HOST}"
 UNDERLAY_IF="${UNDERLAY_IF:-auto}"
 UNDERLAY_GW="${UNDERLAY_GW:-auto}"
 DNS1="${DNS1:-}"
@@ -30,11 +29,15 @@ overlay_route_prefix() {
 }
 
 detect_underlay() {
+  if [[ -z "$OVERLAY_PEER_IP" ]]; then
+    echo "overlay peer IP not known yet; skipping underlay route detection" >&2
+    return 1
+  fi
   local route_line
   route_line="$(ip route get "$OVERLAY_PEER_IP" 2>/dev/null | head -n1 || true)"
   if [[ -z "$route_line" ]]; then
     echo "unable to detect route to overlay peer ${OVERLAY_PEER_IP}" >&2
-    exit 1
+    return 1
   fi
   if [[ "$UNDERLAY_IF" == "auto" || -z "$UNDERLAY_IF" ]]; then
     UNDERLAY_IF="$(awk '{for (i=1; i<NF; i++) if ($i == "dev") {print $(i+1); exit}}' <<<"$route_line")"
@@ -44,8 +47,9 @@ detect_underlay() {
   fi
   if [[ -z "$UNDERLAY_IF" ]]; then
     echo "unable to detect underlay interface from: ${route_line}" >&2
-    exit 1
+    return 1
   fi
+  return 0
 }
 
 save_default_route() {
@@ -86,12 +90,16 @@ clear_dns() {
 
 case "$ACTION" in
   up)
-    detect_underlay
     ip addr replace "$TUN_ADDR" dev "$IFNAME"
     if [[ -n "$TUN_ADDR6" ]]; then
       ip -6 addr replace "$TUN_ADDR6" dev "$IFNAME"
     fi
     ip link set dev "$IFNAME" up
+
+    if ! detect_underlay; then
+      echo "underlay route not ready; leaving ${IFNAME} addressed but skipping default-route changes for now" >&2
+      exit 0
+    fi
 
     save_default_route
 
@@ -108,16 +116,17 @@ case "$ACTION" in
     set_dns
     ;;
   down)
-    detect_underlay
-    ip route del default via "$TUN_GW" dev "$IFNAME" 2>/dev/null || true
-    if [[ -n "$TUN_GW6" ]]; then
-      ip -6 route del default via "$TUN_GW6" dev "$IFNAME" 2>/dev/null || true
-    fi
-    restore_default_route
-    if [[ -n "$UNDERLAY_GW" ]]; then
-      ip route del "$(overlay_route_prefix)" via "$UNDERLAY_GW" dev "$UNDERLAY_IF" 2>/dev/null || true
-    else
-      ip route del "$(overlay_route_prefix)" dev "$UNDERLAY_IF" 2>/dev/null || true
+    if detect_underlay; then
+      ip route del default via "$TUN_GW" dev "$IFNAME" 2>/dev/null || true
+      if [[ -n "$TUN_GW6" ]]; then
+        ip -6 route del default via "$TUN_GW6" dev "$IFNAME" 2>/dev/null || true
+      fi
+      restore_default_route
+      if [[ -n "$UNDERLAY_GW" ]]; then
+        ip route del "$(overlay_route_prefix)" via "$UNDERLAY_GW" dev "$UNDERLAY_IF" 2>/dev/null || true
+      else
+        ip route del "$(overlay_route_prefix)" dev "$UNDERLAY_IF" 2>/dev/null || true
+      fi
     fi
 
     clear_dns

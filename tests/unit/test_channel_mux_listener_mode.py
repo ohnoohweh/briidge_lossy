@@ -129,6 +129,45 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         finally:
             mux.loop.close()
 
+    def test_hook_context_prefers_live_overlay_peer_over_initial_candidate(self):
+        session = _FakeSession()
+        session._peer_host = "198.51.100.10"
+        session._peer_port = 4433
+        args = argparse.Namespace(
+            own_servers=None,
+            remote_servers=None,
+            overlay_transport="myudp",
+            udp_bind="::",
+            udp_peer="[2001:db8::10],198.51.100.10",
+            udp_peer_port=4433,
+            tunnel_address="192.168.107.1",
+            tunnel_prefix=30,
+            tunnel_gateway="192.168.107.2",
+            included_routes=["0.0.0.0/0"],
+            excluded_routes=["127.0.0.0/8"],
+            tunnel_address6="fd20:107::1",
+            tunnel_prefix6=126,
+            tunnel_gateway6="fd20:107::2",
+            included_routes6=["::/0"],
+            excluded_routes6=["::1/128"],
+            dns_servers=["1.1.1.1", "8.8.8.8"],
+            mtu=1600,
+            mux_tcp_bp_threshold=1,
+            mux_tcp_bp_latency_ms=300,
+            mux_tcp_bp_poll_interval_ms=50,
+        )
+        loop = asyncio.new_event_loop()
+        mux = ChannelMux.from_args(session, loop, args)
+        try:
+            spec = ChannelMux.ServiceSpec(3, "tun", "obtun0", 1400, "tun", "obtun1", 1400)
+            context = mux._hook_context(spec, ("local", 0, 3), "on_channel_connected", "listener")
+
+            self.assertEqual(context["overlay_peer_name"], "[2001:db8::10],198.51.100.10")
+            self.assertEqual(context["overlay_peer_host"], "198.51.100.10")
+            self.assertEqual(context["overlay_peer_port"], 4433)
+        finally:
+            mux.loop.close()
+
     def test_tunnel_hook_env_defaults_follow_tun_routing_config(self):
         args = argparse.Namespace(
             own_servers=None,

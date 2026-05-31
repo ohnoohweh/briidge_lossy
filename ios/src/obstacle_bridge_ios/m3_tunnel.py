@@ -102,6 +102,19 @@ def _parse_interface_address(value: Any, *, version: Optional[int] = None) -> tu
     return str(net.ip), int(net.network.prefixlen)
 
 
+def _normalize_bootstrap_peer_host(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if "," not in raw and ";" not in raw:
+        return raw
+    for part in raw.replace(";", ",").split(","):
+        candidate = part.strip()
+        if candidate:
+            return candidate
+    return raw
+
+
 def _override_network_settings(
     config: Mapping[str, Any],
     base: M3NetworkSettings,
@@ -335,7 +348,7 @@ def m3_tunnel_config_from_profile(
     if transport not in _TRANSPORT_PEER_KEYS:
         raise ValueError(f"unsupported M3 transport: {transport}")
     host_key, port_key = _TRANSPORT_PEER_KEYS[transport]
-    peer_host = _required_string(ob_cfg.get(host_key), host_key)
+    peer_host = _required_string(_normalize_bootstrap_peer_host(ob_cfg.get(host_key)), host_key)
     peer_port = _validate_port(ob_cfg.get(port_key), port_key)
 
     settings = network or M3NetworkSettings()

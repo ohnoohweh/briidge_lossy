@@ -1371,6 +1371,27 @@ private struct TunnelProviderConfiguration {
     let dnsServers: [String]
     let mtu: Int
 
+    private static func normalizePeerHost(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return ""
+        }
+        let token: String
+        if trimmed.contains(",") || trimmed.contains(";") {
+            token = trimmed
+                .replacingOccurrences(of: ";", with: ",")
+                .split(separator: ",")
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first(where: { !$0.isEmpty }) ?? trimmed
+        } else {
+            token = trimmed
+        }
+        if token.hasPrefix("[") && token.hasSuffix("]") {
+            return String(token.dropFirst().dropLast())
+        }
+        return token
+    }
+
     init(
         _ providerConfiguration: [String: Any]?,
         fallbackRuntimeConfig: [String: Any]? = nil
@@ -1385,9 +1406,9 @@ private struct TunnelProviderConfiguration {
         let runtimeNetworkFallback = Self.runtimeNetworkFallback(from: runtimeConfig)
 
         if let peer = payload["peer"] as? [String: Any],
-           let host = peer["host"] as? String,
-           !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            peerHost = host
+           let host = peer["host"] as? String {
+            let normalizedHost = Self.normalizePeerHost(host)
+            peerHost = normalizedHost.isEmpty ? "127.0.0.1" : normalizedHost
         } else {
             peerHost = "127.0.0.1"
         }

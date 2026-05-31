@@ -600,6 +600,23 @@ class ChannelMux:
             return None
         return command_spec
 
+    def _current_overlay_peer_endpoint(self) -> tuple[str, int]:
+        host = str(self._overlay_peer_host or "")
+        port = int(self._overlay_peer_port or 0)
+
+        session = getattr(self, "session", None)
+        live_host = str(getattr(session, "_peer_host", "") or "") if session is not None else ""
+        live_port = getattr(session, "_peer_port", 0) if session is not None else 0
+        if live_host:
+            host = live_host
+        try:
+            live_port_i = int(live_port or 0)
+        except Exception:
+            live_port_i = 0
+        if live_port_i > 0:
+            port = live_port_i
+        return host, port
+
     def _hook_context(
         self,
         spec: "ChannelMux.ServiceSpec",
@@ -612,6 +629,7 @@ class ChannelMux:
         catalog = ""
         if svc_key is not None:
             catalog = "own_servers" if str(svc_key[0]) == "local" else "remote_servers"
+        overlay_peer_host, overlay_peer_port = self._current_overlay_peer_endpoint()
         return {
             "service_id": int(spec.svc_id),
             "service_name": str(spec.name or f"svc-{spec.svc_id}"),
@@ -628,8 +646,8 @@ class ChannelMux:
             "peer_endpoint": "",
             "overlay_transport": str(self._overlay_transport or ""),
             "overlay_peer_name": str(self._overlay_peer_name or ""),
-            "overlay_peer_host": str(self._overlay_peer_host or ""),
-            "overlay_peer_port": "" if not self._overlay_peer_port else int(self._overlay_peer_port),
+            "overlay_peer_host": overlay_peer_host,
+            "overlay_peer_port": "" if not overlay_peer_port else overlay_peer_port,
             "role": str(role),
         }
 

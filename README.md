@@ -6,19 +6,6 @@ ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for ba
 - User: start with `Why this project was developed` and `Quick start (Setup Wizard)`
 - Contributor: start with `Contributor guidance`
 
-Contributor note: 2026-05-29 transport-metrics docs synced for non-UDP
-`transmit_delay_est_ms` reporting.
-
-Contributor note: 2026-05-31 Linux shared overlay CI lane repaired for WS
-SecureLink reconnect epoch handling and xdist IPv6 listener readiness.
-
-Contributor note: 2026-05-31 overlay peer resolution is now transport-scoped
-(`udp_peer_resolve_family`, `tcp_peer_resolve_family`, `ws_peer_resolve_family`,
-`quic_peer_resolve_family`), and UDP peer fields may now carry comma-separated
-IPv4/IPv6 alternatives with preferred-family selection plus fallback in both the
-Python runtime and the Swift UDP peer path, with focused native Swift probe
-coverage for candidate selection and idle-time fallback rotation.
-
 ## For Users
 
 ### Whitepaper
