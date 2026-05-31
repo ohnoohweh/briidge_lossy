@@ -721,7 +721,7 @@ private final class ObstacleBridgeMacHostRunner {
     private var runtimeConfigRaw: [String: Any]
     private var runtimeConfig: [String: Any]
     private let configStore: ObstacleBridgeConfigStore
-    private let ownServerSpecs: [ObstacleBridgeNativeServiceSpec]
+    private var ownServerSpecs: [ObstacleBridgeNativeServiceSpec]
     private let bindHost: String
     private let statusPort: Int
     private let startedAt = Date()
@@ -755,6 +755,17 @@ private final class ObstacleBridgeMacHostRunner {
 
     init(runtimeConfigPath: String, bindHostOverride: String?, statusPortOverride: Int?) throws {
         self.runtimeConfigPath = runtimeConfigPath
+        let decoded = try Self.loadRuntimeConfigFromDisk(runtimeConfigPath: runtimeConfigPath)
+        self.runtimeConfigRaw = decoded
+        self.runtimeConfig = ObstacleBridgeRuntimeConfig.flatten(decoded)
+        self.configStore = ObstacleBridgeConfigStore(configPath: runtimeConfigPath, groupedConfig: decoded, runtimeConfig: runtimeConfig)
+        self.ownServerSpecs = ObstacleBridgeRuntimeConfig.ownServerSpecs(from: runtimeConfig).map(ObstacleBridgeNativeServiceSpec.init)
+        self.bindHost = bindHostOverride ?? (ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_bind"]) ?? "127.0.0.1")
+        let configuredPort = ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["admin_web_port"])
+        self.statusPort = statusPortOverride ?? configuredPort ?? 18080
+    }
+
+    private static func loadRuntimeConfigFromDisk(runtimeConfigPath: String) throws -> [String: Any] {
         let url = URL(fileURLWithPath: runtimeConfigPath)
         guard let data = try? Data(contentsOf: url) else {
             throw ObstacleBridgeMacHostRunnerError.unreadableRuntimeConfig(runtimeConfigPath)
@@ -763,21 +774,30 @@ private final class ObstacleBridgeMacHostRunner {
               let rawDecoded = object as? [String: Any] else {
             throw ObstacleBridgeMacHostRunnerError.invalidRuntimeConfigRoot
         }
-        let decoded: [String: Any]
         do {
-            decoded = try ObstacleBridgeConfigSecretCodec.decryptPayload(rawDecoded)
+            return try ObstacleBridgeConfigSecretCodec.decryptPayload(rawDecoded)
         } catch let error as ObstacleBridgeMacHostRunnerError {
             throw error
         } catch {
             throw ObstacleBridgeMacHostRunnerError.invalidEncryptedConfigSecret("runtime_config")
         }
-        self.runtimeConfigRaw = decoded
-        self.runtimeConfig = ObstacleBridgeRuntimeConfig.flatten(decoded)
-        self.configStore = ObstacleBridgeConfigStore(configPath: runtimeConfigPath, groupedConfig: decoded, runtimeConfig: runtimeConfig)
-        self.ownServerSpecs = ObstacleBridgeRuntimeConfig.ownServerSpecs(from: runtimeConfig).map(ObstacleBridgeNativeServiceSpec.init)
-        self.bindHost = bindHostOverride ?? (ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_bind"]) ?? "127.0.0.1")
-        let configuredPort = ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["admin_web_port"])
-        self.statusPort = statusPortOverride ?? configuredPort ?? 18080
+    }
+
+    private func reloadRuntimeConfigFromDisk() throws {
+        let decoded = try Self.loadRuntimeConfigFromDisk(runtimeConfigPath: runtimeConfigPath)
+        runtimeConfigRaw = decoded
+        runtimeConfig = ObstacleBridgeRuntimeConfig.flatten(decoded)
+        configStore.updateConfigs(groupedConfig: decoded, runtimeConfig: runtimeConfig)
+        ownServerSpecs = ObstacleBridgeRuntimeConfig.ownServerSpecs(from: runtimeConfig).map(ObstacleBridgeNativeServiceSpec.init)
+    }
+
+    private func reloadRuntimeStateForControlAction() throws {
+        try reloadRuntimeConfigFromDisk()
+        stopOwnServers()
+        prepareSharedOverlayBootstrap()
+        try startOwnServers()
+        startSharedTCPOverlayTransportOwnerIfNeeded()
+        try startSharedUDPOverlayTransportOwnerIfNeeded()
     }
 
     func start() throws {
@@ -1542,6 +1562,9 @@ private final class ObstacleBridgeMacHostRunner {
 
     private func controlActionSnapshot() -> [String: Any] {
         [
+            "restart_supported": true,
+            "reconnect_supported": true,
+            "shutdown_supported": true,
             "restart_count": restartCount,
             "reconnect_count": reconnectCount,
             "shutdown_requested": shutdownRequestedAt != nil,
@@ -1937,10 +1960,17 @@ private final class ObstacleBridgeMacHostRunner {
     }
 
     private func requestRestart() -> [String: Any] {
+        do {
+            try reloadRuntimeStateForControlAction()
+        } catch {
+            return [
+                "ok": false,
+                "error": error.localizedDescription,
+                "restart_requested": false,
+                "control_actions": controlActionSnapshot(),
+            ]
+        }
         restartCount += 1
-        prepareSharedOverlayBootstrap()
-        startSharedTCPOverlayTransportOwnerIfNeeded()
-        try? startSharedUDPOverlayTransportOwnerIfNeeded()
         return [
             "ok": true,
             "restart_requested": true,
@@ -1952,10 +1982,17 @@ private final class ObstacleBridgeMacHostRunner {
     }
 
     private func requestReconnect() -> [String: Any] {
+        do {
+            try reloadRuntimeStateForControlAction()
+        } catch {
+            return [
+                "ok": false,
+                "error": error.localizedDescription,
+                "reconnect_requested": false,
+                "control_actions": controlActionSnapshot(),
+            ]
+        }
         reconnectCount += 1
-        prepareSharedOverlayBootstrap()
-        startSharedTCPOverlayTransportOwnerIfNeeded()
-        try? startSharedUDPOverlayTransportOwnerIfNeeded()
         return [
             "ok": true,
             "reconnect_requested": true,

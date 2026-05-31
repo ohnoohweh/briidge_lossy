@@ -63,6 +63,7 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTCPTransportOwner.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeCompressLayerRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayStackPlanner.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgePacketTunnelConfiguration.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketPayloadCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayRuntime.swift"),
@@ -417,6 +418,101 @@ def test_ios_packet_tunnel_provider_probe_resolves_multi_host_peer_with_family_p
     assert payload["fallback"]["resolved_peer_family"] == "ipv4"
     assert payload["fallback"]["resolved_peer_host"] == "127.0.0.1"
     assert payload["fallback"]["resolved_peer_port"] == peer_port_v4
+
+
+def test_ios_packet_tunnel_provider_probe_uses_tun_routing_for_full_route_and_address_setup(tmp_path: Path) -> None:
+    source_path = tmp_path / "PacketTunnelProviderTunRoutingProbe.swift"
+    binary_path = tmp_path / "packet-tunnel-provider-tun-routing-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            @main
+            struct PacketTunnelProviderTunRoutingProbeMain {
+                static func main() throws {
+                    let configuration = try ObstacleBridgePacketTunnelConfiguration(
+                        [
+                            "peer": ["host": "127.0.0.1"],
+                            "runtime_config": [
+                                "TUN_routing": [
+                                    "tunnel_address": ["192.168.205.1"],
+                                    "tunnel_prefix": 29,
+                                    "included_routes": ["198.18.0.0/15"],
+                                    "excluded_routes": ["127.0.0.0/8"],
+                                    "tunnel_address6": ["fd20:205::1"],
+                                    "tunnel_prefix6": 124,
+                                    "included_routes6": ["2001:db8:205::/64"],
+                                    "excluded_routes6": ["::1/128"],
+                                    "dns_servers": ["9.9.9.9"],
+                                    "mtu": 1600,
+                                ],
+                            ],
+                        ],
+                        defaults: ObstacleBridgePacketTunnelDefaults(
+                            tunnelAddress: "192.168.106.1",
+                            tunnelPrefix: 30,
+                            includedRoutes: ["0.0.0.0/0"],
+                            excludedRoutes: [],
+                            tunnelAddress6: "fd20:106::1",
+                            tunnelPrefix6: 126,
+                            includedRoutes6: ["::/0"],
+                            excludedRoutes6: []
+                        )
+                    )
+
+                    let payload: [String: Any] = [
+                        "tunnel_address": configuration.tunnelAddress,
+                        "tunnel_subnet_mask": configuration.tunnelSubnetMask,
+                        "included_routes": configuration.includedRoutes.map {
+                            ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask]
+                        },
+                        "excluded_routes": configuration.excludedRoutes.map {
+                            ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask]
+                        },
+                        "tunnel_address6": configuration.tunnelAddress6,
+                        "tunnel_prefix6": configuration.tunnelPrefix6,
+                        "included_routes6": configuration.includedRoutes6.map {
+                            ["destination": $0.destinationAddress, "prefix": $0.networkPrefixLength]
+                        },
+                        "excluded_routes6": configuration.excludedRoutes6.map {
+                            ["destination": $0.destinationAddress, "prefix": $0.networkPrefixLength]
+                        },
+                        "dns_servers": configuration.dnsServers,
+                        "mtu": configuration.mtu,
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_packet_tunnel_provider_probe(source_path, binary_path)
+    completed = subprocess.run(
+        [str(binary_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout)
+    assert payload["tunnel_address"] == "192.168.205.1"
+    assert payload["tunnel_subnet_mask"] == "255.255.255.248"
+    assert payload["included_routes"] == [{"destination": "198.18.0.0", "subnet_mask": "255.254.0.0"}]
+    assert payload["excluded_routes"] == [{"destination": "127.0.0.0", "subnet_mask": "255.0.0.0"}]
+    assert payload["tunnel_address6"] == "fd20:205::1"
+    assert payload["tunnel_prefix6"] == 124
+    assert payload["included_routes6"] == [{"destination": "2001:db8:205::", "prefix": 64}]
+    assert payload["excluded_routes6"] == [{"destination": "::1", "prefix": 128}]
+    assert payload["dns_servers"] == ["9.9.9.9"]
+    assert payload["mtu"] == 1600
 
 
 def test_ios_packet_tunnel_provider_probe_rotates_to_next_peer_candidate_after_idle_timeout(tmp_path: Path) -> None:

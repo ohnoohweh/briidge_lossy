@@ -1050,6 +1050,89 @@ def test_macos_swift_host_runner_bootstraps_ws_stack_and_serves_status(tmp_path:
             )
 
 
+def test_macos_swift_host_runner_restart_reloads_runtime_config_from_disk(tmp_path: Path) -> None:
+    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
+    _compile_mac_host_runner(binary_path)
+    _write_mac_host_runner_build_info(binary_path)
+
+    status_port = _unused_tcp_port()
+    runtime_config_path = tmp_path / "runtime.json"
+    runtime_config_path.write_text(
+        json.dumps(
+            {
+                "overlay_transport": "tcp",
+                "tcp_peer": "127.0.0.1",
+                "tcp_peer_port": 9,
+                "admin_web": True,
+                "admin_web_auth_disable": True,
+                "admin_web_bind": "127.0.0.1",
+                "admin_web_port": status_port,
+                "status": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    process = subprocess.Popen(
+        [
+            str(binary_path),
+            "--runtime-config",
+            str(runtime_config_path),
+            "--status-port",
+            str(status_port),
+            "--hold-sec",
+            "20",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        initial = _wait_http_json(f"http://127.0.0.1:{status_port}/api/status")
+        assert initial["transport_runtime"]["kind"] == "tcp"
+
+        runtime_config_path.write_text(
+            json.dumps(
+                {
+                    "overlay_transport": "ws",
+                    "ws_peer": "bridge.example.net",
+                    "ws_peer_port": 8443,
+                    "admin_web": True,
+                    "admin_web_auth_disable": True,
+                    "admin_web_bind": "127.0.0.1",
+                    "admin_web_port": status_port,
+                    "status": False,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        restart = _http_request_json(f"http://127.0.0.1:{status_port}/api/restart", method="POST")
+        assert restart["ok"] is True
+        assert restart["restart_requested"] is True
+
+        reloaded = _wait_http_condition(
+            f"http://127.0.0.1:{status_port}/api/status",
+            lambda doc: doc["transport_runtime"].get("kind") == "ws",
+            timeout_sec=5.0,
+        )
+        assert reloaded["transport_runtime"]["kind"] == "ws"
+        assert reloaded["transport_runtime"]["websocket"]["uri"] == "ws://bridge.example.net:8443/"
+        assert reloaded["control_actions"]["restart_count"] >= 1
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5.0)
+        if process.returncode not in (0, -15):
+            raise AssertionError(
+                f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            )
+
+
 def test_macos_swift_host_runner_requires_admin_auth_when_credentials_configured(tmp_path: Path) -> None:
     binary_path = tmp_path / "obstaclebridge-mac-host-runner"
     _compile_mac_host_runner(binary_path)

@@ -22,6 +22,36 @@ DEFAULT_PROJECT = (
 GENERATED_PACKET_TUNNEL_PROVIDER_RELATIVE = Path("GeneratedSources") / "IPServer" / "PacketTunnelProvider.swift"
 REPO_PACKET_TUNNEL_PROVIDER = Path(__file__).resolve().parents[1] / "native" / "IPServer" / "PacketTunnelProvider.swift"
 
+IPSERVER_SHARED_SWIFT_SOURCES = [
+    ("71C500000000000000000001", "71C500000000000000000101", "ObstacleBridgeAdminAPI.swift"),
+    ("71C500000000000000000002", "71C500000000000000000102", "ObstacleBridgeChannelMuxCodec.swift"),
+    ("71C500000000000000000003", "71C500000000000000000103", "ObstacleBridgeSecureLinkPskCodec.swift"),
+    ("71C500000000000000000004", "71C500000000000000000104", "ObstacleBridgeSecureLinkPskRuntime.swift"),
+    ("71C500000000000000000005", "71C500000000000000000105", "ObstacleBridgeSecureLinkPskTransportAdapter.swift"),
+    ("71C500000000000000000006", "71C500000000000000000106", "ObstacleBridgeOverlayLayerTransportAdapter.swift"),
+    ("71C500000000000000000007", "71C500000000000000000107", "ObstacleBridgeRuntimeConfig.swift"),
+    ("71C500000000000000000008", "71C500000000000000000108", "ObstacleBridgeChannelMuxTunRuntime.swift"),
+    ("71C500000000000000000009", "71C500000000000000000109", "ObstacleBridgeUdpOverlayCodec.swift"),
+    ("71C50000000000000000000A", "71C50000000000000000010A", "ObstacleBridgeUdpOverlaySessionCodec.swift"),
+    ("71C50000000000000000000B", "71C50000000000000000010B", "ObstacleBridgeUdpOverlayPeerRuntime.swift"),
+    ("71C50000000000000000000C", "71C50000000000000000010C", "ObstacleBridgeChannelMuxTcpRuntime.swift"),
+    ("71C50000000000000000000D", "71C50000000000000000010D", "ObstacleBridgeChannelMuxTCPTransportOwner.swift"),
+    ("71C50000000000000000000E", "71C50000000000000000010E", "ObstacleBridgeCompressLayerRuntime.swift"),
+    ("71C50000000000000000000F", "71C50000000000000000010F", "ObstacleBridgeOverlayStackPlanner.swift"),
+    ("71C500000000000000000010", "71C500000000000000000110", "ObstacleBridgePacketTunnelConfiguration.swift"),
+    ("71C500000000000000000011", "71C500000000000000000111", "ObstacleBridgeWebSocketPayloadCodec.swift"),
+    ("71C500000000000000000012", "71C500000000000000000112", "ObstacleBridgeWebSocketOverlayRuntime.swift"),
+    ("71C500000000000000000013", "71C500000000000000000113", "ObstacleBridgeTcpOverlayRuntime.swift"),
+]
+
+APP_SHARED_SWIFT_SOURCES = [
+    ("71C600000000000000000001", "71C600000000000000000101", "ObstacleBridgeAdminAPI.swift"),
+    ("71C600000000000000000002", "71C600000000000000000102", "ObstacleBridgeChannelMuxCodec.swift"),
+    ("71C600000000000000000003", "71C600000000000000000103", "ObstacleBridgeRuntimeConfig.swift"),
+    ("71C600000000000000000004", "71C600000000000000000104", "ObstacleBridgeWebAdminServer.swift"),
+    ("71C600000000000000000005", "71C600000000000000000105", "ObstacleBridgeOverlayStackPlanner.swift"),
+]
+
 
 def insert_before(text: str, marker: str, addition: str) -> str:
     if addition in text:
@@ -98,6 +128,43 @@ def add_app_native_crypto_source(text: str) -> str:
         + text[phase_match.end():]
     )
 
+
+def add_app_shared_swift_sources(text: str) -> str:
+    for build_id, file_id, name in APP_SHARED_SWIFT_SOURCES:
+        text = insert_before(
+            text,
+            "/* End PBXBuildFile section */\n",
+            f"\t\t{build_id} /* {name} in Sources */ = {{isa = PBXBuildFile; fileRef = {file_id} /* {name} */; }};\n",
+        )
+        text = insert_before(
+            text,
+            "/* End PBXFileReference section */\n",
+            f"\t\t{file_id} /* {name} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = {name}; path = \"../../../../native/ObstacleBridgeShared/{name}\"; sourceTree = SOURCE_ROOT; }};\n",
+        )
+
+    match = re.search(
+        r"(?P<head>\t\t60796EDE19190F4100A9926B /\* Sources \*/ = \{\n"
+        r"\t\t\tisa = PBXSourcesBuildPhase;\n"
+        r"\t\t\tbuildActionMask = 2147483647;\n"
+        r"\t\t\tfiles = \(\n)"
+        r"(?P<body>.*?)"
+        r"(?P<tail>\t\t\t\);\n"
+        r"\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
+        r"\t\t\};)",
+        text,
+        flags=re.DOTALL,
+    )
+    if not match:
+        raise ValueError("ObstacleBridge Sources build phase block not found")
+
+    body = match.group("body")
+    for build_id, _, name in APP_SHARED_SWIFT_SOURCES:
+        entry = f"\t\t\t\t{build_id} /* {name} in Sources */,\n"
+        if entry not in body:
+            body += entry
+
+    return text[:match.start()] + match.group("head") + body + match.group("tail") + text[match.end():]
+
 def add_ipserver_native_crypto_source(text: str) -> str:
     source_phase = "71C200000000000000000080 /* Sources */ = {"
     if source_phase in text:
@@ -160,23 +227,62 @@ def add_ipserver_packet_flow_bridge_source(text: str) -> str:
     return text
 
 
+def add_ipserver_shared_swift_sources(text: str) -> str:
+    for build_id, file_id, name in IPSERVER_SHARED_SWIFT_SOURCES:
+        text = insert_before(
+            text,
+            "/* End PBXBuildFile section */\n",
+            f"\t\t{build_id} /* {name} in Sources */ = {{isa = PBXBuildFile; fileRef = {file_id} /* {name} */; }};\n",
+        )
+        text = insert_before(
+            text,
+            "/* End PBXFileReference section */\n",
+            f"\t\t{file_id} /* {name} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = {name}; path = \"../../../../native/ObstacleBridgeShared/{name}\"; sourceTree = SOURCE_ROOT; }};\n",
+        )
+
+    match = re.search(
+        r"(?P<head>\t\t71C200000000000000000080 /\* Sources \*/ = \{\n"
+        r"\t\t\tisa = PBXSourcesBuildPhase;\n"
+        r"\t\t\tbuildActionMask = 2147483647;\n"
+        r"\t\t\tfiles = \(\n)"
+        r"(?P<body>.*?)"
+        r"(?P<tail>\t\t\t\);\n"
+        r"\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
+        r"\t\t\};)",
+        text,
+        flags=re.DOTALL,
+    )
+    if not match:
+        raise ValueError("IPServer Sources build phase block not found")
+
+    body = match.group("body")
+    for build_id, _, name in IPSERVER_SHARED_SWIFT_SOURCES:
+        entry = f"\t\t\t\t{build_id} /* {name} in Sources */,\n"
+        if entry not in body:
+            body += entry
+
+    return text[:match.start()] + match.group("head") + body + match.group("tail") + text[match.end():]
+
+
 def patch_python_build_script(text: str) -> str:
     script_variants = (
         (
-            'PACKAGES_PATH=\\"app_packages.iphonesimulator\\"\\n',
-            'PACKAGES_PATH=\\"app_packages.iphonesimulator\\"\\n'
-            '    if [ -z \\"${EXPANDED_CODE_SIGN_IDENTITY:-}\\" ]; then\\n'
-            '        export EXPANDED_CODE_SIGN_IDENTITY=-\\n'
-            '        export EXPANDED_CODE_SIGN_IDENTITY_NAME=\\"Ad Hoc\\"\\n'
-            '    fi\\n',
+            'if [ \\"$EFFECTIVE_PLATFORM_NAME\\" = \\"-iphonesimulator\\" ]; then\\n',
+            'source $PROJECT_DIR/Support/Python.xcframework/build/utils.sh\\n\\n'
+            'if [ -z \\"${EXPANDED_CODE_SIGN_IDENTITY:-}\\" ]; then\\n'
+            '    export EXPANDED_CODE_SIGN_IDENTITY=-\\n'
+            '    export EXPANDED_CODE_SIGN_IDENTITY_NAME=\\"Ad Hoc\\"\\n'
+            'fi\\n\\n'
+            'if [ \\"$EFFECTIVE_PLATFORM_NAME\\" = \\"-iphonesimulator\\" ]; then\\n',
         ),
         (
-            'PACKAGES_PATH="app_packages.iphonesimulator"\n',
-            'PACKAGES_PATH="app_packages.iphonesimulator"\n'
-            '    if [ -z "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then\n'
-            '        export EXPANDED_CODE_SIGN_IDENTITY=-\n'
-            '        export EXPANDED_CODE_SIGN_IDENTITY_NAME="Ad Hoc"\n'
-            '    fi\n',
+            'if [ "$EFFECTIVE_PLATFORM_NAME" = "-iphonesimulator" ]; then\n',
+            'source $PROJECT_DIR/Support/Python.xcframework/build/utils.sh\n\n'
+            'if [ -z "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then\n'
+            '    export EXPANDED_CODE_SIGN_IDENTITY=-\n'
+            '    export EXPANDED_CODE_SIGN_IDENTITY_NAME="Ad Hoc"\n'
+            'fi\n\n'
+            'if [ "$EFFECTIVE_PLATFORM_NAME" = "-iphonesimulator" ]; then\n',
         ),
     )
 
@@ -284,6 +390,7 @@ def patch_app_target(text: str) -> str:
         "\t\t60796F1019190F4100A9926B /* Release */ = {\n\t\t\tisa = XCBuildConfiguration;\n\t\t\tbuildSettings = {\n\t\t\t\tASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;\n\t\t\t\tCODE_SIGN_ENTITLEMENTS = \"../../../../native/ObstacleBridgeApp/ObstacleBridge.entitlements\";\n\t\t\t\tCLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = NO;\n\t\t\t\tSWIFT_VERSION = 5.0;\n",
     )
     text = add_app_native_crypto_source(text)
+    text = add_app_shared_swift_sources(text)
     text = insert_before(
         text,
         "/* End PBXGroup section */\n",
@@ -468,12 +575,13 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t\t);\n"
         "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
         "\t\t\tshellPath = /bin/sh;\n"
-        "\t\t\tshellScript = \"set -e\\nsource $PROJECT_DIR/Support/Python.xcframework/build/utils.sh\\n\\nif [ \\\"$EFFECTIVE_PLATFORM_NAME\\\" = \\\"-iphonesimulator\\\" ]; then\\n    PACKAGES_PATH=\\\"app_packages.iphonesimulator\\\"\\n    if [ -z \\\"${EXPANDED_CODE_SIGN_IDENTITY:-}\\\" ]; then\\n        export EXPANDED_CODE_SIGN_IDENTITY=-\\n        export EXPANDED_CODE_SIGN_IDENTITY_NAME=\\\"Ad Hoc\\\"\\n    fi\\nelse\\n    PACKAGES_PATH=\\\"app_packages.iphoneos\\\"\\nfi\\nrsync -au --delete \\\"$PROJECT_DIR/ObstacleBridge/$PACKAGES_PATH/\\\" \\\"$CODESIGNING_FOLDER_PATH/app_packages\\\"\\ninstall_python Support/Python.xcframework app_packages\\n\";\n"
+        "\t\t\tshellScript = \"set -e\\nsource $PROJECT_DIR/Support/Python.xcframework/build/utils.sh\\n\\nif [ -z \\\"${EXPANDED_CODE_SIGN_IDENTITY:-}\\\" ]; then\\n    export EXPANDED_CODE_SIGN_IDENTITY=-\\n    export EXPANDED_CODE_SIGN_IDENTITY_NAME=\\\"Ad Hoc\\\"\\nfi\\n\\nif [ \\\"$EFFECTIVE_PLATFORM_NAME\\\" = \\\"-iphonesimulator\\\" ]; then\\n    PACKAGES_PATH=\\\"app_packages.iphonesimulator\\\"\\nelse\\n    PACKAGES_PATH=\\\"app_packages.iphoneos\\\"\\nfi\\nrsync -au --delete \\\"$PROJECT_DIR/ObstacleBridge/$PACKAGES_PATH/\\\" \\\"$CODESIGNING_FOLDER_PATH/app_packages\\\"\\ninstall_python Support/Python.xcframework app_packages\\n\";\n"
         "\t\t};\n",
     )
     if "71C200000000000000000080 /* Sources */ = {" in text:
         text = add_ipserver_native_crypto_source(text)
         text = add_ipserver_packet_flow_bridge_source(text)
+        text = add_ipserver_shared_swift_sources(text)
     else:
         text = insert_before(
             text,
@@ -486,6 +594,25 @@ def patch_ipserver_target(text: str) -> str:
             "\t\t\t\t71C200000000000000000007 /* ObstacleBridgePacketFlowBridge.swift in Sources */,\n"
             "\t\t\t\t71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */,\n"
             "\t\t\t\t71C300000000000000000002 /* ObstacleBridgeNativeCrypto.swift in IPServer Sources */,\n"
+            "\t\t\t\t71C500000000000000000001 /* ObstacleBridgeAdminAPI.swift in Sources */,\n"
+            "\t\t\t\t71C500000000000000000002 /* ObstacleBridgeChannelMuxCodec.swift in Sources */,\n"
+            "\t\t\t\t71C500000000000000000003 /* ObstacleBridgeSecureLinkPskCodec.swift in Sources */,\n"
+            "\t\t\t\t71C500000000000000000004 /* ObstacleBridgeSecureLinkPskRuntime.swift in Sources */,\n"
+            "\t\t\t\t71C500000000000000000005 /* ObstacleBridgeSecureLinkPskTransportAdapter.swift in Sources */,\n"
+            "\t\t\t\t71C500000000000000000006 /* ObstacleBridgeOverlayLayerTransportAdapter.swift in Sources */,\n"
+            "\t\t\t\t71C500000000000000000007 /* ObstacleBridgeRuntimeConfig.swift in Sources */,\n"
+            "\t\t\t\t71C500000000000000000008 /* ObstacleBridgeChannelMuxTunRuntime.swift in Sources */,\n"
+            "\t\t\t\t71C500000000000000000009 /* ObstacleBridgeUdpOverlayCodec.swift in Sources */,\n"
+            "\t\t\t\t71C50000000000000000000A /* ObstacleBridgeUdpOverlaySessionCodec.swift in Sources */,\n"
+            "\t\t\t\t71C50000000000000000000B /* ObstacleBridgeUdpOverlayPeerRuntime.swift in Sources */,\n"
+            "\t\t\t\t71C50000000000000000000C /* ObstacleBridgeChannelMuxTcpRuntime.swift in Sources */,\n"
+            "\t\t\t\t71C50000000000000000000D /* ObstacleBridgeChannelMuxTCPTransportOwner.swift in Sources */,\n"
+            "\t\t\t\t71C50000000000000000000E /* ObstacleBridgeCompressLayerRuntime.swift in Sources */,\n"
+            "\t\t\t\t71C50000000000000000000F /* ObstacleBridgeOverlayStackPlanner.swift in Sources */,\n"
+            "\t\t\t\t71C500000000000000000010 /* ObstacleBridgePacketTunnelConfiguration.swift in Sources */,\n"
+            "\t\t\t\t71C500000000000000000011 /* ObstacleBridgeWebSocketPayloadCodec.swift in Sources */,\n"
+            "\t\t\t\t71C500000000000000000012 /* ObstacleBridgeWebSocketOverlayRuntime.swift in Sources */,\n"
+            "\t\t\t\t71C500000000000000000013 /* ObstacleBridgeTcpOverlayRuntime.swift in Sources */,\n"
             "\t\t\t);\n"
             "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
             "\t\t};\n",

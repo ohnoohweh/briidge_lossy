@@ -7,10 +7,22 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[2]
 SHARED_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeShared"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
-E2E_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeE2E"
 MAC_RUNNER_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeMacRunner"
 IPSERVER_DIR = ROOT / "ios" / "build" / "obstacle_bridge_ios" / "ios" / "xcode" / "IPServer"
 IPSERVER_NATIVE_DIR = ROOT / "ios" / "native" / "IPServer"
+
+
+def test_shared_packet_tunnel_configuration_source_exists() -> None:
+    shared = (SHARED_NATIVE_DIR / "ObstacleBridgePacketTunnelConfiguration.swift").read_text(encoding="utf-8")
+
+    assert "struct ObstacleBridgePacketTunnelDefaults" in shared
+    assert "struct ObstacleBridgePacketTunnelConfiguration" in shared
+    assert "func makeNetworkSettings() -> NEPacketTunnelNetworkSettings" in shared
+    assert "NEIPv6Settings" in shared
+    assert "includedRoutes6" in shared
+    assert "excludedRoutes6" in shared
+    assert "ObstacleBridgeRuntimeConfig.tunnelRoutingOverride" in shared
+    assert 'schema: String = "obstaclebridge.ios.packet-tunnel.v1"' in shared
 
 
 def test_ipserver_packet_tunnel_provider_source_exists() -> None:
@@ -68,13 +80,13 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "loadSharedRuntimeConfigJSON" in provider
     assert "packet_pump_dropped_packets" not in provider
     assert "obstaclebridge.ios.packet-tunnel.v1" in provider
-    assert "NEIPv6Settings" in provider
     assert "tunnel_address6" in provider
     assert "included_routes6" in provider
     assert "excluded_routes6" in provider
     assert "fallbackRuntimeConfig: loadSharedRuntimeConfigJSON()" in provider
-    assert "runtimeNetworkFallback(from: runtimeConfig)" in provider
-    assert "ObstacleBridgeRuntimeConfig.tunnelRoutingOverride" in provider
+    assert "ObstacleBridgePacketTunnelConfiguration(" in provider
+    assert '"effective_tunnel_network_settings"' in provider
+    assert "configuration.makeNetworkSettings()" in provider
     assert "ObstacleBridgeRuntimeConfig.localTunServiceSpec" in provider
     assert "private var nativeRuntimeActive: Bool" in provider
     assert 'runtimeMode == "swift_simple_udp_peer" || runtimeMode == "swift_udp"' in provider
@@ -484,22 +496,10 @@ def test_ios_briefcase_configs_include_rubicon_for_native_crypto_bridge() -> Non
     pyproject = tomllib.loads((ROOT / "ios" / "pyproject.toml").read_text(encoding="utf-8"))
 
     app_sources = pyproject["tool"]["briefcase"]["app"]["obstacle_bridge_ios"]["sources"]
-    e2e_sources = pyproject["tool"]["briefcase"]["app"]["obstacle_bridge_ios_e2e"]["sources"]
     app_requires = pyproject["tool"]["briefcase"]["app"]["obstacle_bridge_ios"]["requires"]
-    requires = pyproject["tool"]["briefcase"]["app"]["obstacle_bridge_ios_e2e"]["requires"]
 
     assert "../admin_web" in app_sources
-    assert "../admin_web" in e2e_sources
     assert "rubicon-objc>=0.5.3" in app_requires
-    assert "websockets" in requires
-    assert "rubicon-objc>=0.5.3" in requires
-
-
-def test_e2e_shared_app_group_entitlements_exist() -> None:
-    entitlements = (E2E_NATIVE_DIR / "ObstacleBridgeE2E.entitlements").read_text(encoding="utf-8")
-
-    assert "com.apple.security.application-groups" in entitlements
-    assert "group.com.obstaclebridge.shared" in entitlements
 
 
 def test_ipserver_extension_sources_bootstrap_python_runtime() -> None:
@@ -560,6 +560,9 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "native_python_probe" in control
     assert "probe_module:obstacle_bridge" in control
     assert "probe_module:obstacle_bridge_ios.ipserver_extension" in control
+    assert "stopVPNTunnel" in control
+    assert "scheduleAdminTunnelReload" in control
+    assert "restart_after_save" in control
     assert "selectCanonicalManager" in control
     assert "removeFromPreferences" in control
     assert "preferences_reused" in control

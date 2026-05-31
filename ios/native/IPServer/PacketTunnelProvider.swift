@@ -13,6 +13,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     static let defaultTunnelPrefix6 = 126
     static let defaultIncludedRoutes6 = ["::/0"]
     static let defaultExcludedRoutes6 = ["::1/128"]
+
+    private static let packetTunnelDefaults = ObstacleBridgePacketTunnelDefaults(
+        tunnelAddress: defaultTunnelAddress,
+        tunnelPrefix: defaultTunnelPrefix,
+        includedRoutes: defaultIncludedRoutes,
+        excludedRoutes: defaultExcludedRoutes,
+        tunnelAddress6: defaultTunnelAddress6,
+        tunnelPrefix6: defaultTunnelPrefix6,
+        includedRoutes6: defaultIncludedRoutes6,
+        excludedRoutes6: defaultExcludedRoutes6,
+    )
     private let errorDomain = "ObstacleBridge.IPServer"
     private var packetPumpRunning = false
     private var providerStateUpdateCount = 0
@@ -20,11 +31,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var runtimeMode = "python_runtime"
     private var swiftSimpleUDPPeerBridge: SwiftSimpleUDPPeerBridge?
     private var sharedOverlayBootstrapState: [String: Any] = [:]
+    private var effectivePacketTunnelSettingsState: [String: Any] = [:]
     private var sharedCompressLayerRuntime: ObstacleBridgeCompressLayerRuntime?
     private var sharedSecureLinkPskTransportAdapter: ObstacleBridgeSecureLinkPskTransportAdapter?
     private var sharedOverlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
     private var sharedWebSocketOverlayRuntime: ObstacleBridgeWebSocketOverlayRuntime?
     private var sharedTcpOverlayRuntime: ObstacleBridgeTcpOverlayRuntime?
+    private var providerStartedAt = Date().timeIntervalSince1970
 
     override init() {
         super.init()
@@ -72,6 +85,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         if !sharedOverlayBootstrapState.isEmpty {
             payload["shared_overlay_bootstrap_state"] = sharedOverlayBootstrapState
+        }
+        if !effectivePacketTunnelSettingsState.isEmpty {
+            payload["effective_tunnel_network_settings"] = effectivePacketTunnelSettingsState
         }
         for (key, value) in Self.processMemorySnapshot() {
             payload[key] = value
@@ -236,6 +252,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     public override func startTunnel(options: [String : NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         runtimeMode = "python_runtime"
         swiftSimpleUDPPeerBridge = nil
+        effectivePacketTunnelSettingsState = [:]
+        providerStartedAt = Date().timeIntervalSince1970
         recordNativeEvent(
             "startTunnel_entered",
             fields: [
@@ -250,27 +268,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let providerConfiguration = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
 
         do {
-            let configuration = try TunnelProviderConfiguration(
+            let configuration = try ObstacleBridgePacketTunnelConfiguration(
                 providerConfiguration,
-                fallbackRuntimeConfig: loadSharedRuntimeConfigJSON()
+                fallbackRuntimeConfig: loadSharedRuntimeConfigJSON(),
+                defaults: Self.packetTunnelDefaults
             )
+            let settingsPayload = Self.packetTunnelSettingsSnapshot(configuration)
+            effectivePacketTunnelSettingsState = settingsPayload
             recordNativeEvent(
                 "tunnel_network_settings_prepared",
-                fields: [
-                    "peer_host": configuration.peerHost,
-                    "tunnel_address": configuration.tunnelAddress,
-                    "tunnel_subnet_mask": configuration.tunnelSubnetMask,
-                    "included_routes": configuration.includedRoutes.map { ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask] },
-                    "excluded_routes": configuration.excludedRoutes.map { ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask] },
-                    "tunnel_address6": configuration.tunnelAddress6,
-                    "tunnel_prefix6": configuration.tunnelPrefix6,
-                    "included_routes6": configuration.includedRoutes6.map { ["destination": $0.destinationAddress, "network_prefix_length": $0.networkPrefixLength] },
-                    "excluded_routes6": configuration.excludedRoutes6.map { ["destination": $0.destinationAddress, "network_prefix_length": $0.networkPrefixLength] },
-                    "dns_servers": configuration.dnsServers,
-                    "mtu": configuration.mtu,
-                ]
+                fields: settingsPayload
             )
-            let settings = makeNetworkSettings(configuration)
+            let settings = configuration.makeNetworkSettings()
             setTunnelNetworkSettings(settings) { [weak self] error in
                 guard let self else { return }
                 if let error {
@@ -284,19 +293,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 }
                 self.recordNativeEvent(
                     "tunnel_network_settings_applied",
-                    fields: [
-                        "peer_host": configuration.peerHost,
-                        "tunnel_address": configuration.tunnelAddress,
-                        "tunnel_subnet_mask": configuration.tunnelSubnetMask,
-                        "included_routes": configuration.includedRoutes.map { ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask] },
-                        "excluded_routes": configuration.excludedRoutes.map { ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask] },
-                        "tunnel_address6": configuration.tunnelAddress6,
-                        "tunnel_prefix6": configuration.tunnelPrefix6,
-                        "included_routes6": configuration.includedRoutes6.map { ["destination": $0.destinationAddress, "network_prefix_length": $0.networkPrefixLength] },
-                        "excluded_routes6": configuration.excludedRoutes6.map { ["destination": $0.destinationAddress, "network_prefix_length": $0.networkPrefixLength] },
-                        "dns_servers": configuration.dnsServers,
-                        "mtu": configuration.mtu,
-                    ]
+                    fields: settingsPayload
                 )
                 self.prepareSharedOverlayBootstrap(providerConfiguration: providerConfiguration)
                 if let connectorMode = self.packetflowConnectorMode(providerConfiguration: providerConfiguration) {
@@ -608,43 +605,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let data = try? JSONSerialization.data(withJSONObject: errorPayload)
             completionHandler?(data)
         }
-    }
-
-    private func makeNetworkSettings(_ configuration: TunnelProviderConfiguration) -> NEPacketTunnelNetworkSettings {
-        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: configuration.peerHost)
-        settings.mtu = NSNumber(value: configuration.mtu)
-
-        let ipv4 = NEIPv4Settings(
-            addresses: [configuration.tunnelAddress],
-            subnetMasks: [configuration.tunnelSubnetMask]
-        )
-        ipv4.includedRoutes = configuration.includedRoutes.map { route in
-            NEIPv4Route(destinationAddress: route.destinationAddress, subnetMask: route.subnetMask)
-        }
-        ipv4.excludedRoutes = configuration.excludedRoutes.map { route in
-            NEIPv4Route(destinationAddress: route.destinationAddress, subnetMask: route.subnetMask)
-        }
-        settings.ipv4Settings = ipv4
-
-        if !configuration.tunnelAddress6.isEmpty {
-            let ipv6 = NEIPv6Settings(
-                addresses: [configuration.tunnelAddress6],
-                networkPrefixLengths: [NSNumber(value: configuration.tunnelPrefix6)]
-            )
-            ipv6.includedRoutes = configuration.includedRoutes6.map { route in
-                NEIPv6Route(destinationAddress: route.destinationAddress, networkPrefixLength: NSNumber(value: route.networkPrefixLength))
-            }
-            ipv6.excludedRoutes = configuration.excludedRoutes6.map { route in
-                NEIPv6Route(destinationAddress: route.destinationAddress, networkPrefixLength: NSNumber(value: route.networkPrefixLength))
-            }
-            settings.ipv6Settings = ipv6
-        }
-
-        if !configuration.dnsServers.isEmpty {
-            settings.dnsSettings = NEDNSSettings(servers: configuration.dnsServers)
-        }
-
-        return settings
     }
 
     private func startPacketPump() {
@@ -978,9 +938,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
     func adminStatusSnapshot() -> [String: Any] {
         let bridgeSnapshot = adminBridgeSnapshot()
+        let startedAt = adminStartedAt(bridgeSnapshot: bridgeSnapshot)
         var payload: [String: Any] = [
             "runtime_owner": "IPServer Network Extension",
             "runtime_mode": runtimeMode,
+            "started_at": startedAt,
+            "uptime_sec": adminUptimeSeconds(startedAt: startedAt),
             "packet_pump_running": packetPumpRunning,
             "provider_state_update_count": providerStateUpdateCount,
             "heartbeat_tick_count": heartbeatTickCount,
@@ -991,6 +954,9 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         ]
         if !bridgeSnapshot.isEmpty {
             payload["swift_udp_bridge_state"] = bridgeSnapshot
+        }
+        if !effectivePacketTunnelSettingsState.isEmpty {
+            payload["effective_tunnel_network_settings"] = effectivePacketTunnelSettingsState
         }
         for (key, value) in Self.processMemorySnapshot() {
             payload[key] = value
@@ -1034,13 +1000,17 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
 
     func adminMetaSnapshot() -> [String: Any] {
         let bridgeSnapshot = adminBridgeSnapshot()
+        let startedAt = adminStartedAt(bridgeSnapshot: bridgeSnapshot)
         return [
             "runtime_owner": "IPServer Network Extension",
             "runtime_mode": runtimeMode,
+            "started_at": startedAt,
+            "uptime_sec": adminUptimeSeconds(startedAt: startedAt),
             "bootstrap_state": sharedOverlayBootstrapState,
+            "effective_tunnel_network_settings": effectivePacketTunnelSettingsState,
             "control_actions": [
-                "restart_supported": false,
-                "reconnect_supported": false,
+                "restart_supported": true,
+                "reconnect_supported": true,
                 "shutdown_supported": false,
             ],
             "transport_runtime": adminTransportRuntimeSnapshot(bridgeSnapshot: bridgeSnapshot),
@@ -1051,9 +1021,47 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
 
     func adminConfigSnapshot() -> [String: Any] {
         [
-            "config": adminRuntimeConfigPayload() ?? [:],
-            "schema": [:],
+            "config": ObstacleBridgeRuntimeConfig.maskedConfigSnapshot(adminRuntimeConfigPayload() ?? [:]),
+            "schema": ObstacleBridgeRuntimeConfig.configSchemaSnapshot(),
         ]
+    }
+
+    func adminUpdateConfig(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        guard request.method.uppercased() == "POST" else {
+            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
+        }
+        guard let body = request.body,
+              let object = try? JSONSerialization.jsonObject(with: body),
+              let payload = object as? [String: Any] else {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": "invalid JSON body",
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+        guard let updates = payload["updates"] as? [String: Any] else {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": "updates must be an object",
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+
+        do {
+            try persistAdminConfigUpdates(updates)
+        } catch {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": error.localizedDescription,
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+
+        return ObstacleBridgeAdminAPI.jsonResponse([
+            "ok": true,
+            "config": ObstacleBridgeRuntimeConfig.maskedConfigSnapshot(adminRuntimeConfigPayload() ?? [:]),
+            "restart_requested": false,
+            "restart_supported": true,
+            "restart_delay_sec": 0,
+            "restart_embedded": false,
+        ])
     }
 
     func adminLogLines(limit: Int) -> [String] {
@@ -1065,13 +1073,133 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         return Array(lines.suffix(max(1, min(limit, 1000))))
     }
 
+    func adminRequestRestart() -> [String: Any] {
+        [
+            "ok": true,
+            "restart_requested": true,
+            "restart_supported": true,
+            "restart_delay_sec": 0,
+            "restart_embedded": false,
+        ]
+    }
+
+    func adminRequestReconnect() -> [String: Any] {
+        [
+            "ok": true,
+            "reconnect_requested": true,
+            "reconnect_supported": true,
+        ]
+    }
+
     private func adminRuntimeConfigPayload() -> [String: Any]? {
+        if let payload = loadSharedRuntimeConfigJSON() {
+            return ObstacleBridgeRuntimeConfig.flatten(payload)
+        }
         let providerConfiguration = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
-        return runtimeConfigPayload(providerConfiguration: providerConfiguration)
+        if let runtimeConfig = providerConfiguration?["runtime_config"] as? [String: Any] {
+            return ObstacleBridgeRuntimeConfig.flatten(runtimeConfig)
+        }
+        return nil
+    }
+
+    private func adminRuntimeConfigRawPayload() -> [String: Any] {
+        if let payload = loadSharedRuntimeConfigJSON() {
+            return payload
+        }
+        let providerConfiguration = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
+        if let runtimeConfig = providerConfiguration?["runtime_config"] as? [String: Any] {
+            return runtimeConfig
+        }
+        return [:]
+    }
+
+    private func persistAdminConfigUpdates(_ updates: [String: Any]) throws {
+        let currentRawConfig = adminRuntimeConfigRawPayload()
+        let currentRuntimeConfig = ObstacleBridgeRuntimeConfig.flatten(currentRawConfig)
+        let normalized = ObstacleBridgeRuntimeConfig.normalizedConfigUpdates(updates, currentRuntimeConfig: currentRuntimeConfig)
+        let grouped = ObstacleBridgeRuntimeConfig.looksGrouped(currentRawConfig)
+        var nextRawConfig = currentRawConfig
+
+        for (key, rawValue) in normalized {
+            guard let schemaRow = ObstacleBridgeRuntimeConfig.schemaRow(forKey: key) else {
+                throw NSError(domain: errorDomain, code: 20, userInfo: [NSLocalizedDescriptionKey: "unknown config key: \(key)"])
+            }
+            let value = try validatedAdminConfigValue(key: key, rawValue: rawValue, schemaRow: schemaRow)
+            if grouped, let section = ObstacleBridgeRuntimeConfig.sectionName(forKey: key) {
+                var block = (nextRawConfig[section] as? [String: Any]) ?? [:]
+                block[key] = value
+                nextRawConfig[section] = block
+            } else {
+                nextRawConfig[key] = value
+            }
+        }
+
+        try persistSharedRuntimeConfigJSON(nextRawConfig)
+        recordNativeEvent("admin_config_updated", fields: ["keys": Array(normalized.keys).sorted()])
+    }
+
+    private func validatedAdminConfigValue(key: String, rawValue: Any, schemaRow: [String: Any]) throws -> Any {
+        let defaultValue = schemaRow["default"]
+        switch defaultValue {
+        case is Bool:
+            guard let boolValue = rawValue as? Bool else {
+                throw NSError(domain: errorDomain, code: 21, userInfo: [NSLocalizedDescriptionKey: "\(key) expects boolean"])
+            }
+            return boolValue
+        case is Int:
+            guard let intValue = rawValue as? Int else {
+                throw NSError(domain: errorDomain, code: 22, userInfo: [NSLocalizedDescriptionKey: "\(key) expects integer"])
+            }
+            return intValue
+        case is Double:
+            if let doubleValue = rawValue as? Double {
+                return doubleValue
+            }
+            if let intValue = rawValue as? Int {
+                return Double(intValue)
+            }
+            throw NSError(domain: errorDomain, code: 23, userInfo: [NSLocalizedDescriptionKey: "\(key) expects number"])
+        case is String:
+            guard let stringValue = rawValue as? String else {
+                throw NSError(domain: errorDomain, code: 24, userInfo: [NSLocalizedDescriptionKey: "\(key) expects string"])
+            }
+            return stringValue
+        case is [Any]:
+            guard let listValue = rawValue as? [Any] else {
+                throw NSError(domain: errorDomain, code: 25, userInfo: [NSLocalizedDescriptionKey: "\(key) expects list"])
+            }
+            return listValue
+        default:
+            return rawValue
+        }
+    }
+
+    private func persistSharedRuntimeConfigJSON(_ payload: [String: Any]) throws {
+        guard let url = runtimeConfigURL() else {
+            throw NSError(domain: errorDomain, code: 26, userInfo: [NSLocalizedDescriptionKey: "shared config location unavailable"])
+        }
+        let directoryURL = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: url, options: [.atomic])
     }
 
     private func adminBridgeSnapshot() -> [String: Any] {
         swiftSimpleUDPPeerBridge?.snapshot() ?? [:]
+    }
+
+    private func adminStartedAt(bridgeSnapshot: [String: Any]) -> TimeInterval {
+        if let startedAt = bridgeSnapshot["started_at"] as? TimeInterval {
+            return startedAt
+        }
+        if let startedAt = bridgeSnapshot["started_at"] as? NSNumber {
+            return startedAt.doubleValue
+        }
+        return providerStartedAt
+    }
+
+    private func adminUptimeSeconds(startedAt: TimeInterval) -> Int {
+        max(0, Int(Date().timeIntervalSince1970 - startedAt))
     }
 
     private func adminTransportRuntimeSnapshot(bridgeSnapshot: [String: Any]) -> [String: Any] {
@@ -1169,6 +1297,23 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             return NSNull()
         }
         return ["host": host, "port": port]
+    }
+
+    private static func packetTunnelSettingsSnapshot(_ configuration: ObstacleBridgePacketTunnelConfiguration) -> [String: Any] {
+        [
+            "peer_host": configuration.peerHost,
+            "peer_port": configuration.peerPort.map { Int($0) } ?? NSNull(),
+            "tunnel_address": configuration.tunnelAddress,
+            "tunnel_subnet_mask": configuration.tunnelSubnetMask,
+            "included_routes": configuration.includedRoutes.map { ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask] },
+            "excluded_routes": configuration.excludedRoutes.map { ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask] },
+            "tunnel_address6": configuration.tunnelAddress6,
+            "tunnel_prefix6": configuration.tunnelPrefix6,
+            "included_routes6": configuration.includedRoutes6.map { ["destination": $0.destinationAddress, "network_prefix_length": $0.networkPrefixLength] },
+            "excluded_routes6": configuration.excludedRoutes6.map { ["destination": $0.destinationAddress, "network_prefix_length": $0.networkPrefixLength] },
+            "dns_servers": configuration.dnsServers,
+            "mtu": configuration.mtu,
+        ]
     }
 
     private func adminCompressLayerSnapshot() -> [String: Any]? {

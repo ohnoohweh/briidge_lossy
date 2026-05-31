@@ -129,3 +129,20 @@ def test_webadmin_url_from_config_uses_ios_tun_address_when_running_on_ios(monke
         )
         == "http://192.168.105.9:18090/"
     )
+
+
+def test_main_dispatches_probe_mode_without_starting_toga(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(ios_app_module, "toga", None)
+
+    def fake_run_probe_mode(argv: list[str]) -> int | None:
+        calls.append(list(argv))
+        return 0
+
+    monkeypatch.setattr(ios_app_module, "_run_probe_mode", fake_run_probe_mode)
+
+    result = ios_app_module.main(["--host-websocket-probe", "ws://127.0.0.1:18080/test"])
+
+    assert result == 0
+    assert calls == [["--host-websocket-probe", "ws://127.0.0.1:18080/test"]]

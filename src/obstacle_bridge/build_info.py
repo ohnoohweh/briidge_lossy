@@ -1,7 +1,7 @@
 """Build metadata embedded into packaged ObstacleBridge applications."""
 
-BUILD_COMMIT = "91164f4a3679"
+BUILD_COMMIT = "ff25b706911b"
 BUILD_SOURCE = "embedded-build-info"
 BUILD_DIRTY = True
-BUILD_DIFF_SHA = "c241a85e42ba"
-BUILD_TIMESTAMP_UTC = "2026-05-31T14:01:07Z"
+BUILD_DIFF_SHA = "b0be838cfec8"
+BUILD_TIMESTAMP_UTC = "2026-05-31T21:10:28Z"

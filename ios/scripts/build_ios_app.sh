@@ -50,9 +50,20 @@ if [ -d "${SIM_APP_PACKAGES_DIR}" ]; then
   rm -rf "${SIM_APP_PACKAGES_DIR}"
 fi
 
-if [ -z "${OB_APPLE_TEAM_ID:-}" ]; then
+RESOLVED_APPLE_TEAM_ID="${OB_APPLE_TEAM_ID:-}"
+if [ -z "${RESOLVED_APPLE_TEAM_ID}" ] && [ -f "${PROJECT_PBXPROJ}" ]; then
+  RESOLVED_APPLE_TEAM_ID="$({
+    grep -E '^[[:space:]]*DEVELOPMENT_TEAM = [A-Z0-9]+;' "${PROJECT_PBXPROJ}" || true
+  } | head -n 1 | sed -E 's/.*DEVELOPMENT_TEAM = ([A-Z0-9]+);/\1/')"
+fi
+
+if [ -z "${RESOLVED_APPLE_TEAM_ID}" ]; then
   echo "[build_ios_app] OB_APPLE_TEAM_ID is required for xcodebuild signing" >&2
   exit 1
+fi
+
+if [ -z "${OB_APPLE_TEAM_ID:-}" ]; then
+  echo "[build_ios_app] using DEVELOPMENT_TEAM=${RESOLVED_APPLE_TEAM_ID} from project settings"
 fi
 
 if [ -n "${OB_IOS_DEVICE_ID:-}" ]; then
@@ -65,16 +76,22 @@ else
   echo "[build_ios_app] building for generic iOS device target"
 fi
 
-xcodebuild \
-  -project "${PROJECT_FILE}" \
-  -scheme ObstacleBridge \
-  -configuration Debug \
-  -destination "${DESTINATION[0]}" \
-  "${PROVISIONING_ARGS[@]}" \
-  DEVELOPMENT_TEAM="${OB_APPLE_TEAM_ID}" \
-  CODE_SIGN_STYLE=Automatic \
-  -derivedDataPath "${DERIVED_DATA_PATH}" \
+XCODEBUILD_ARGS=(
+  -project "${PROJECT_FILE}"
+  -scheme ObstacleBridge
+  -configuration Debug
+  -destination "${DESTINATION[0]}"
+  DEVELOPMENT_TEAM="${RESOLVED_APPLE_TEAM_ID}"
+  CODE_SIGN_STYLE=Automatic
+  -derivedDataPath "${DERIVED_DATA_PATH}"
   build
+)
+
+if [ "${#PROVISIONING_ARGS[@]}" -gt 0 ]; then
+  XCODEBUILD_ARGS=("${XCODEBUILD_ARGS[@]:0:8}" "${PROVISIONING_ARGS[@]}" "${XCODEBUILD_ARGS[@]:8}")
+fi
+
+xcodebuild "${XCODEBUILD_ARGS[@]}"
 
 echo "[build_ios_app] build completed"
 echo "[build_ios_app] app bundle: ${DERIVED_DATA_PATH}/Build/Products/Debug-iphoneos/ObstacleBridge.app"

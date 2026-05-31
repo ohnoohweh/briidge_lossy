@@ -352,7 +352,28 @@ class ObstacleBridgeIOSApp:
         return payload
 
 
-def main():
+def _run_probe_mode(argv: list[str]) -> int | None:
+    probe_flags = {
+        "--host-websocket-probe",
+        "--ws-udp-echo-probe",
+        "--ws-secure-link-probe",
+        "--runtime-config",
+        "--embedded-webadmin-probe",
+        "--webadmin-http-probe",
+    }
+    if not any(flag in argv for flag in probe_flags):
+        return None
+
+    from obstacle_bridge_ios_e2e.__main__ import main as e2e_main
+
+    return int(e2e_main(argv))
+
+
+def main(argv: list[str] | None = None):
+    args = list(sys.argv[1:] if argv is None else argv)
+    probe_exit_code = _run_probe_mode(args)
+    if probe_exit_code is not None:
+        return probe_exit_code
     try:
         if toga is None:
             raise RuntimeError("Toga is required to run the iOS app UI")

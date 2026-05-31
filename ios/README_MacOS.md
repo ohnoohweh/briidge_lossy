@@ -205,3 +205,104 @@ On the current macOS host runner, the following are Swift-owned in the hot path:
 - live connection and peer statistics exposed to Admin Web
 
 That makes macOS the current repo surface for validating the Swift runtime end to end with Safari and focused integration tests.
+
+## macOS Packet Tunnel extension architecture
+
+This repo now has the shared packet-tunnel configuration building blocks needed for a native macOS packet-tunnel target, but it does not yet ship a dedicated macOS `NEPacketTunnelProvider` app-extension target in the checked-in Xcode surfaces.
+
+Current status:
+
+- available today: the macOS host runner in [ios/native/ObstacleBridgeMacRunner/ObstacleBridgeMacHostRunner.swift](/Users/ohnoohweh/briidge_lossy/ios/native/ObstacleBridgeMacRunner/ObstacleBridgeMacHostRunner.swift)
+- available today: the shared packet-tunnel network-settings helper in [ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift](/Users/ohnoohweh/briidge_lossy/ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift)
+- available today: reference packet-tunnel providers in [ios/native/IPServer/PacketTunnelProvider.swift](/Users/ohnoohweh/briidge_lossy/ios/native/IPServer/PacketTunnelProvider.swift) and [ios/native/ObstacleBridgeTunnel/PacketTunnelProvider.swift](/Users/ohnoohweh/briidge_lossy/ios/native/ObstacleBridgeTunnel/PacketTunnelProvider.swift)
+- not checked in yet: a macOS containing app plus macOS packet-tunnel extension bundle wired for signing, installation, and `NETunnelProviderManager` lifecycle on macOS
+
+The practical consequence is that macOS packet-tunnel work should currently be understood as an architecture and integration path, not as a finished one-command installer like the host runner.
+
+## What gets installed
+
+The target macOS packet-tunnel product should be split into two signed components:
+
+- a containing macOS app that owns onboarding, config import, profile installation, start and stop controls, and diagnostics
+- a packet-tunnel app extension that owns `NEPacketTunnelProvider.startTunnel`, `NEPacketTunnelNetworkSettings`, packet I/O, and the long-lived traffic runtime
+
+The containing app should install and control the tunnel through `NETunnelProviderManager`, matching the same architectural separation already used on iOS.
+
+Shared runtime responsibilities are already factored so the macOS packet-tunnel target can reuse them:
+
+- grouped and flat `ObstacleBridge.cfg` parsing from [ios/native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift](/Users/ohnoohweh/briidge_lossy/ios/native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift)
+- packet-tunnel route, address, DNS, and MTU derivation from [ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift](/Users/ohnoohweh/briidge_lossy/ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift)
+- overlay bootstrap planning, SecureLink, compression, and transport helpers from the `ios/native/ObstacleBridgeShared/` sources
+
+## Install requirements
+
+To install a real macOS packet-tunnel build, you will need all of the following locally:
+
+- macOS with Xcode and command line tools installed
+- an Apple Developer account and signing team that can sign Network Extension packet-tunnel targets
+- a containing macOS app target and a packet-tunnel extension target signed with the same team
+- matching App Group entitlements so the app and extension can share `ObstacleBridge.cfg`, logs, and runtime snapshots
+- the `com.apple.developer.networking.networkextension` entitlement for packet-tunnel use
+
+The repo already contains the extension-side Swift reference code, but the signed macOS app-extension packaging layer still needs to be created in Xcode.
+
+## Install flow
+
+When the macOS packet-tunnel target is packaged, the install flow should look like this:
+
+1. Build the containing macOS app and packet-tunnel extension with the same signing team and App Group.
+2. Copy or archive the app into `/Applications` like a normal signed macOS app.
+3. Launch the containing app once so it can create or refresh the shared App Group config and register the `NETunnelProviderManager` profile.
+4. Approve the VPN or Network Extension prompt from macOS when the app saves the tunnel profile.
+5. Start the tunnel from the containing app or from System Settings after the profile is registered.
+
+The repo does not yet automate those steps for macOS, so today the closest executable surface is still the standalone host runner documented above.
+
+## Use flow
+
+The intended runtime flow for the macOS packet-tunnel architecture is:
+
+1. The containing app writes or syncs `ObstacleBridge.cfg` into the shared App Group container.
+2. The containing app creates a minimal `NETunnelProviderProtocol` profile and starts the tunnel through `NETunnelProviderManager`.
+3. The macOS packet-tunnel extension reads `providerConfiguration` plus the shared App Group config.
+4. The extension resolves effective tunnel settings through [ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift](/Users/ohnoohweh/briidge_lossy/ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift) with this precedence:
+  `providerConfiguration.network_settings` -> `runtime_config.TUN_routing` -> built-in defaults.
+5. The extension applies `NEPacketTunnelNetworkSettings`, starts the packet I/O bridge, and boots the shared ObstacleBridge runtime layers.
+6. The containing app reads status, peer, connection, and resolved tunnel-setting snapshots back through app-to-extension messaging and App Group files.
+
+That resolved network payload now includes the effective tunnel addresses, routes, DNS servers, and MTU under `effective_tunnel_network_settings` in the richer packet-tunnel provider snapshot path.
+
+## Config behavior
+
+For the packet-tunnel architecture, route and address setup should come from the same config model already used by the shared helper:
+
+- `providerConfiguration.network_settings` is the highest-priority explicit tunnel configuration
+- `runtime_config.TUN_routing` is the fallback source for tunnel addresses, prefixes, included routes, excluded routes, DNS servers, and MTU
+- built-in defaults are used only when neither of the above supplies a value
+
+This means a macOS packet-tunnel target can use the same `ObstacleBridge.cfg` shape already used by iOS and the host-runner tests, including grouped JSON with `TUN_routing` and `iOS_TUN_connector` style sections.
+
+## What to use today
+
+Until the dedicated macOS packet-tunnel app-extension target is added, use the repo in two stages:
+
+1. Use the host runner for end-to-end runtime validation, Admin Web inspection, and overlay behavior checks.
+2. Use the shared packet-tunnel helper and the existing packet-tunnel providers as the source of truth for how the future macOS extension should derive and publish tunnel network settings.
+
+In practice that means:
+
+- compile and run the host runner with `./ios/scripts/build_macos_app.sh` and `./ios/scripts/run_macos_app.sh`
+- keep `ObstacleBridge.cfg` authoritative for grouped runtime settings
+- treat the packet-tunnel providers and shared helper as the install and lifecycle blueprint for the future macOS extension bundle
+
+## Validation while the macOS extension target is not yet packaged
+
+Use these checks while iterating on the architecture:
+
+```bash
+./.venv/bin/pytest ios/tests/test_ios_packet_tunnel_provider_probe.py -q
+./.venv/bin/pytest ios/tests/test_m3_native_sources.py -q -k 'packet_tunnel or shared_packet_tunnel_configuration'
+./.venv/bin/pytest ios/tests/test_macos_swift_host_runner.py -q
+```
+
+These do not install a macOS packet-tunnel extension, but they validate the shared route and address derivation, the packet-tunnel provider compile surface, and the current macOS Swift runtime owner that the future extension will reuse.

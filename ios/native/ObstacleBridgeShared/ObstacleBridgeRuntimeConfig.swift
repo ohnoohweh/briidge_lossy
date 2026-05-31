@@ -318,6 +318,189 @@ enum ObstacleBridgeRuntimeConfig {
         "debug_logging",
     ]
 
+    static func configSchemaSnapshot() -> [String: Any] {
+        [
+            "admin_web": [
+                schemaItem(key: "admin_web", description: "Enable admin web interface", defaultValue: true),
+                schemaItem(key: "admin_web_auth_disable", description: "Disable username/password challenge for admin web access", defaultValue: false),
+                schemaItem(key: "admin_web_bind", description: "Bind address for admin web interface", defaultValue: "127.0.0.1"),
+                schemaItem(key: "admin_web_port", description: "Port for admin web interface", defaultValue: 18080),
+                schemaItem(key: "admin_web_path", description: "Base path for admin web interface", defaultValue: "/"),
+                schemaItem(key: "admin_web_dir", description: "Directory containing admin web files", defaultValue: "./admin_web"),
+                schemaItem(key: "admin_web_name", description: "Optional instance name shown in the admin web title and headline", defaultValue: ""),
+                schemaItem(key: "admin_web_landing_page_disable", description: "Disable the Admin Web landing/quick-start panel for advanced users.", defaultValue: false),
+                schemaItem(key: "admin_web_security_advisor_disable", description: "Disable the Admin Web startup security advisor panel for advanced users.", defaultValue: false),
+                schemaItem(key: "admin_web_security_advisor_startup_disable", description: "Do not auto-open the security advisor on first page load.", defaultValue: false),
+                schemaItem(key: "admin_web_first_tab", description: "Initial Admin Web tab. Use status for an advanced/operator-focused default.", defaultValue: "home", choices: ["home", "status", "secure-link", "configuration", "logs", "misc"]),
+                schemaItem(key: "admin_web_token", description: "Optional bearer token for admin restart endpoint", defaultValue: ""),
+                schemaItem(key: "admin_web_username", description: "Username for admin web access when challenge-based authentication is enabled", defaultValue: ""),
+                schemaItem(key: "admin_web_password", description: "Password for admin web access when challenge-based authentication is enabled", defaultValue: "", secret: true),
+            ],
+            "debug_logging": [
+                schemaItem(key: "log", description: "Global log level", defaultValue: "DEBUG", choices: ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"]),
+                schemaItem(key: "file_level", description: "File log level", defaultValue: "DEBUG", choices: ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"]),
+                schemaItem(key: "console_level", description: "Console log level", defaultValue: "INFO", choices: ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"]),
+                schemaItem(key: "log_file", description: "Debug log file path", defaultValue: ""),
+                schemaItem(key: "log_file_max_bytes", description: "Maximum size of each log file before rotation", defaultValue: 1_048_576),
+                schemaItem(key: "log_file_backup_count", description: "Number of rotated log files to keep", defaultValue: 5),
+            ],
+            "runner": [
+                schemaItem(key: "overlay_transport", description: "Overlay transport between peers: comma-separated list from myudp,tcp,quic,ws. Multiple transports are supported simultaneously for listening instances.", defaultValue: "myudp"),
+                schemaItem(key: "client_restart_if_disconnected", description: "If configured as a peer client and the overlay stays disconnected for this many seconds, request runner restart. 0 disables.", defaultValue: 0.0),
+                schemaItem(key: "overlay_reconnect_retry_delay_ms", description: "Delay in milliseconds between failed reconnect attempts for reconnect-capable client overlays.", defaultValue: 30000),
+            ],
+            "udp_session": [
+                schemaItem(key: "udp_bind", description: "overlay bind address (IPv4 '0.0.0.0' or IPv6 '::')", defaultValue: "::"),
+                schemaItem(key: "udp_own_port", description: "overlay own port", defaultValue: 4433),
+                schemaItem(key: "udp_peer", description: "peer IP/FQDN, or comma-separated IPv4/IPv6 alternatives (IPv6 may be in [brackets])", defaultValue: NSNull()),
+                schemaItem(key: "udp_peer_port", description: "peer overlay port", defaultValue: 4433),
+                schemaItem(key: "udp_peer_resolve_family", description: "Peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.", defaultValue: "prefer-ipv6", choices: ["prefer-ipv6", "ipv4", "ipv6"]),
+            ],
+            "tcp_session": [
+                schemaItem(key: "tcp_bind", description: "TCP overlay bind address", defaultValue: "::"),
+                schemaItem(key: "tcp_own_port", description: "TCP overlay own port", defaultValue: 8081),
+                schemaItem(key: "tcp_peer", description: "TCP peer IP/FQDN", defaultValue: NSNull()),
+                schemaItem(key: "tcp_peer_port", description: "TCP peer overlay port", defaultValue: 8081),
+                schemaItem(key: "tcp_peer_resolve_family", description: "TCP peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.", defaultValue: "prefer-ipv6", choices: ["prefer-ipv6", "ipv4", "ipv6"]),
+                schemaItem(key: "tcp_bp_wbuf_threshold", description: "TCP backpressure write-buffer threshold", defaultValue: 128 * 1024),
+            ],
+            "ws_session": [
+                schemaItem(key: "ws_peer", description: "Remote WebSocket peer host", defaultValue: "bridge.example.com"),
+                schemaItem(key: "ws_peer_port", description: "Remote WebSocket peer port", defaultValue: 443),
+                schemaItem(key: "ws_payload_mode", description: "WebSocket payload framing mode", defaultValue: "binary", choices: ["binary", "base64", "json-base64", "semi-text-shape"]),
+                schemaItem(key: "ws_static_dir", description: "Directory containing static web assets", defaultValue: "./web"),
+            ],
+            "secure_link": [
+                schemaItem(key: "secure_link", description: "Enable SecureLink", defaultValue: false),
+                schemaItem(key: "secure_link_mode", description: "SecureLink mode", defaultValue: "off", choices: ["off", "psk", "cert"]),
+                schemaItem(key: "secure_link_psk", description: "SecureLink PSK secret", defaultValue: "", secret: true),
+            ],
+            "compress_layer": [
+                schemaItem(key: "compress_layer", description: "Enable transport compression", defaultValue: false),
+                schemaItem(key: "compress_layer_algo", description: "Compression algorithm", defaultValue: "zlib"),
+                schemaItem(key: "compress_layer_level", description: "Compression level", defaultValue: 3),
+                schemaItem(key: "compress_layer_min_bytes", description: "Minimum payload size before compression", defaultValue: 64),
+                schemaItem(key: "compress_layer_types", description: "Comma-separated message types eligible for compression", defaultValue: "data,data_frag"),
+            ],
+            "channel_mux": [
+                schemaItem(key: "own_servers", description: "Service catalog for local listeners in client mode. Use structured service objects with listen/target fields.", defaultValue: []),
+                schemaItem(key: "remote_servers", description: "Service catalog pushed to the connected peer in client mode. Use structured service objects with listen/target fields.", defaultValue: []),
+            ],
+        ]
+    }
+
+    static func schemaRow(forKey key: String) -> [String: Any]? {
+        for rows in configSchemaSnapshot().values {
+            guard let items = rows as? [[String: Any]] else {
+                continue
+            }
+            for row in items where String(describing: row["key"] ?? "") == key {
+                return row
+            }
+        }
+        return nil
+    }
+
+    static func sectionName(forKey key: String) -> String? {
+        for (section, rows) in configSchemaSnapshot() {
+            guard let items = rows as? [[String: Any]] else {
+                continue
+            }
+            if items.contains(where: { String(describing: $0["key"] ?? "") == key }) {
+                return section
+            }
+        }
+        return nil
+    }
+
+    static func normalizedConfigUpdates(_ updates: [String: Any], currentRuntimeConfig: [String: Any]) -> [String: Any] {
+        var normalized = updates
+        if (normalized["admin_web_auth_disable"] as? Bool) == true {
+            normalized["admin_web_username"] = ""
+            normalized["admin_web_password"] = ""
+        } else if
+            let password = normalized["admin_web_password"] as? String,
+            password.isEmpty,
+            (boolValue(from: currentRuntimeConfig["admin_web_auth_disable"]) ?? false),
+            normalized["admin_web_auth_disable"] == nil
+        {
+            normalized["admin_web_username"] = ""
+            normalized["admin_web_auth_disable"] = true
+        }
+        return normalized
+    }
+
+    static func maskedConfigSnapshot(_ runtimeConfig: [String: Any]) -> [String: Any] {
+        var payload = runtimeConfig
+        if payload["overlay_transport"] == nil {
+            payload["overlay_transport"] = "myudp"
+        }
+        if payload["client_restart_if_disconnected"] == nil {
+            payload["client_restart_if_disconnected"] = 0.0
+        }
+        if payload["overlay_reconnect_retry_delay_ms"] == nil {
+            payload["overlay_reconnect_retry_delay_ms"] = 30000
+        }
+        if payload["udp_bind"] == nil {
+            payload["udp_bind"] = "::"
+        }
+        if payload["udp_own_port"] == nil {
+            payload["udp_own_port"] = 4433
+        }
+        if payload["udp_peer"] == nil {
+            payload["udp_peer"] = NSNull()
+        }
+        if payload["udp_peer_port"] == nil {
+            payload["udp_peer_port"] = 4433
+        }
+        if payload["udp_peer_resolve_family"] == nil {
+            payload["udp_peer_resolve_family"] = "prefer-ipv6"
+        }
+        if payload["tcp_bind"] == nil {
+            payload["tcp_bind"] = "::"
+        }
+        if payload["tcp_own_port"] == nil {
+            payload["tcp_own_port"] = 8081
+        }
+        if payload["tcp_peer"] == nil {
+            payload["tcp_peer"] = NSNull()
+        }
+        if payload["tcp_peer_port"] == nil {
+            payload["tcp_peer_port"] = 8081
+        }
+        if payload["tcp_peer_resolve_family"] == nil {
+            payload["tcp_peer_resolve_family"] = "prefer-ipv6"
+        }
+        if payload["tcp_bp_wbuf_threshold"] == nil {
+            payload["tcp_bp_wbuf_threshold"] = 128 * 1024
+        }
+        if payload["own_servers"] == nil {
+            payload["own_servers"] = []
+        }
+        if payload["remote_servers"] == nil {
+            payload["remote_servers"] = []
+        }
+        for key in ["admin_web_password", "secure_link_psk"] where payload[key] != nil {
+            payload[key] = ""
+        }
+        return payload
+    }
+
+    private static func schemaItem(key: String, description: String, defaultValue: Any, choices: [Any]? = nil, secret: Bool = false) -> [String: Any] {
+        var row: [String: Any] = [
+            "key": key,
+            "description": description,
+            "default": defaultValue,
+        ]
+        if let choices {
+            row["choices"] = choices
+        }
+        if secret {
+            row["secret"] = true
+        }
+        return row
+    }
+
     static func flatten(_ payload: [String: Any]) -> [String: Any] {
         var merged: [String: Any] = [:]
         for section in knownGroupedSections {
@@ -351,11 +534,11 @@ enum ObstacleBridgeRuntimeConfig {
             return nil
         }
         return ObstacleBridgeTunnelRoutingOverride(
-            tunnelAddress: stringValue(from: override["tunnel_address"]),
+            tunnelAddress: firstStringValue(from: override["tunnel_address"]),
             tunnelPrefix: intValue(from: override["tunnel_prefix"]),
             includedRoutes: override["included_routes"] as? [String],
             excludedRoutes: override["excluded_routes"] as? [String],
-            tunnelAddress6: stringValue(from: override["tunnel_address6"]),
+            tunnelAddress6: firstStringValue(from: override["tunnel_address6"]),
             tunnelPrefix6: intValue(from: override["tunnel_prefix6"]),
             includedRoutes6: override["included_routes6"] as? [String],
             excludedRoutes6: override["excluded_routes6"] as? [String],
@@ -438,6 +621,19 @@ enum ObstacleBridgeRuntimeConfig {
         }
         if let number = value as? NSNumber {
             return number.stringValue
+        }
+        return nil
+    }
+
+    private static func firstStringValue(from value: Any?) -> String? {
+        if let string = stringValue(from: value) {
+            return string
+        }
+        if let values = value as? [String] {
+            return values.compactMap { stringValue(from: $0) }.first
+        }
+        if let values = value as? [Any] {
+            return values.compactMap { stringValue(from: $0) }.first
         }
         return nil
     }

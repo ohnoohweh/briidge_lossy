@@ -13,7 +13,7 @@ Current scope:
 - M3 packet tunnel provider configuration helpers and native `NEPacketTunnelProvider` POC source
 - native iOS crypto bridging for the subset of `cryptography` primitives ObstacleBridge actually uses
 - packaged WebAdmin assets plus in-app and simulator-hosted WebAdmin validation paths
-- standalone iOS E2E probe application used by simulator/device integration tests, kept outside the ObstacleBridge app bundle
+- reusable iOS probe helpers under `ios/e2e_app/src/obstacle_bridge_ios_e2e` used by host-side integration tests without a separate app target
 
 Current iOS testing statistics:
 
@@ -37,11 +37,11 @@ From repository root:
 ```
 
 ```bash
-./ios/scripts/run_ios_pytest.sh -q ios/tests/test_native_crypto.py ios/tests/test_ios_e2e_app_runner.py
+./ios/scripts/run_ios_pytest.sh -q tests/integration/test_ios_e2e.py
 ```
 
 ```bash
-./ios/scripts/run_ios_pytest.sh -q tests/integration/test_ios_e2e.py
+./ios/scripts/run_ios_pytest.sh -q ios/tests/test_native_crypto.py ios/tests/test_ios_e2e_app_runner.py
 ```
 
 `run_ios_pytest.sh` stages `OBSTACLEBRIDGE_IOS_DOCUMENTS_ROOT` under `/tmp` by default and removes it on exit, so repo-local temp folders such as `.tmp-ios-docs` do not accumulate while iterating.
@@ -68,20 +68,7 @@ Custom iOS app artwork lives under `ios/resources/`. The Briefcase app config po
 `briefcase update iOS` will regenerate the Xcode asset catalog from those repo-owned
 PNG sizes instead of using the default BeeWare artwork.
 
-The E2E probe module is a separate Briefcase app target, `obstacle_bridge_ios_e2e`. It is intentionally outside the companion app source tree so test-only probes do not become hidden behavior in the ObstacleBridge iOS application.
-
-The E2E app can now be used in three modes:
-
-- `--host-websocket-probe` for basic simulator-to-host reachability
-- `--ws-udp-echo-probe` and `--ws-secure-link-probe` for overlay and SecureLink transport checks
-- `--runtime-config <json>` for booting a packaged runtime from JSON config and keeping it alive for host-side inspection such as WebAdmin checks
-- `--webadmin-http-probe` for device-side HTTP reachability diagnostics against candidate WebAdmin URLs such as `http://192.168.105.1:18080/` and `http://127.0.0.1:18080/`
-
-Build or run the E2E app target explicitly when working on simulator/device integration tests:
-
-```bash
-briefcase run iOS -a obstacle_bridge_ios_e2e -u --no-input -d "iPhone 17 Pro" -- --host-websocket-probe ws://127.0.0.1:<port>/obstaclebridge-ios-e2e
-```
+The reusable probe helpers remain under `ios/e2e_app/src/obstacle_bridge_ios_e2e` for host-side/unit integration coverage, but there is no separate Briefcase-managed iOS E2E application target anymore.
 
 ## M2 dependency spike run
 
@@ -120,7 +107,7 @@ The native files are not generated Briefcase output. The repo-owned Xcode patche
 
 ## iOS simulator to macOS host connection test
 
-The opt-in simulator integration test starts a WebSocket echo server on the macOS host, launches the standalone iOS E2E app in the simulator, and runs the headless app probe:
+The opt-in simulator integration test documentation below describes the legacy standalone E2E app lane. That app target has been removed; the remaining host-side probe helpers still live under `ios/e2e_app/src/obstacle_bridge_ios_e2e` until those simulator flows are migrated into the main iOS app lifecycle.
 
 ```bash
 OBSTACLEBRIDGE_RUN_IOS_SIMULATOR=1 pytest -q tests/integration/test_ios_simulator_e2e.py -m ios_simulator
@@ -132,13 +119,7 @@ Useful overrides:
 - `OBSTACLEBRIDGE_IOS_SIMULATOR_TIMEOUT=600` controls the Briefcase launch timeout.
 - `BRIEFCASE=/path/to/briefcase` chooses the Briefcase executable when it is not on `PATH`.
 
-The E2E app entrypoint used by this test is:
-
-```bash
-briefcase run iOS -a obstacle_bridge_ios_e2e -u --no-input -d "iPhone 17 Pro" -- --host-websocket-probe ws://127.0.0.1:<port>/obstaclebridge-ios-e2e
-```
-
-The simulator lane also includes a WS overlay plus UDP service probe. Pytest starts a host-side ObstacleBridge WS listener and UDP echo target, then launches the standalone E2E app so it can bind a local UDP port, stimulate that port, and verify the UDP response that crossed the WS overlay:
+The simulator lane also includes a WS overlay plus UDP service probe. Pytest starts a host-side ObstacleBridge WS listener and UDP echo target, then uses the legacy probe harness to bind a local UDP port, stimulate that port, and verify the UDP response that crossed the WS overlay:
 
 ```bash
 OBSTACLEBRIDGE_RUN_IOS_SIMULATOR=1 pytest -q tests/integration/test_ios_simulator_e2e.py -m ios_simulator
@@ -146,29 +127,6 @@ OBSTACLEBRIDGE_RUN_IOS_SIMULATOR=1 pytest -q tests/integration/test_ios_simulato
 
 The same simulator lane now also includes a WS SecureLink probe plus a packaged-runtime path that lets the iOS runtime expose WebAdmin locally and publish it back to the macOS host through `remote_servers`.
 
-Equivalent E2E app command shape:
-
-```bash
-briefcase run iOS -a obstacle_bridge_ios_e2e -u --no-input -d "iPhone 17 Pro" -- --ws-udp-echo-probe ws://127.0.0.1:<ws-port>/obstaclebridge-ios-e2e --local-udp-port 18081 --target-udp-host 127.0.0.1 --target-udp-port <udp-echo-port> --payload-hex 01696f732d73696d756c61746f722d77732d756470 --expected-hex 02696f732d73696d756c61746f722d77732d756470
-```
-
-Equivalent SecureLink E2E app command shape:
-
-```bash
-briefcase run iOS -a obstacle_bridge_ios_e2e -u --no-input -d "iPhone 17 Pro" -- --ws-secure-link-probe ws://127.0.0.1:<ws-port>/obstaclebridge-ios-e2e --secure-link-psk <shared-psk>
-```
-
-Equivalent runtime-config command shape:
-
-```bash
-briefcase run iOS -a obstacle_bridge_ios_e2e -u --no-input -d "iPhone 17 Pro" -- --runtime-config /absolute/path/to/runtime.json --hold-sec 900
-```
-
-Equivalent WebAdmin HTTP probe command shape:
-
-```bash
-briefcase run iOS -a obstacle_bridge_ios_e2e -u --no-input -d "<device-name-or-udid>" -- --webadmin-http-probe --probe-url http://192.168.105.1:18080/ --probe-url http://127.0.0.1:18080/ --attempts 5 --timeout-sec 3
-```
 
 Example config route all traffic through tunnel
 ```json
