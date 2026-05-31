@@ -7,6 +7,10 @@ import unittest
 from obstacle_bridge.bridge import ChannelMux, Runner, SessionMetrics, StatsBoard, TcpStreamSession, QuicSession, UdpSession
 
 
+def _peer_endpoint(host: str, port: int) -> dict:
+    return {"host": host, "port": port}
+
+
 class _FakeSession:
     def is_connected(self):
         return False
@@ -482,7 +486,7 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(len(overlay_rows), 2)
         peer_row = next(row for row in overlay_rows if row["peer_id"] != -1)
         self.assertFalse(peer_row["connected"])
-        self.assertEqual(peer_row["peer"], "38.180.143.5:50227")
+        self.assertEqual(peer_row["peer"], _peer_endpoint("38.180.143.5", 50227))
         self.assertIsNotNone(peer_row["last_incoming_age_seconds"])
         self.assertGreaterEqual(peer_row["last_incoming_age_seconds"], 0)
 
@@ -501,7 +505,7 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(peer["id"], f"0:{peer_row['peer_id']}")
         self.assertFalse(peer["connected"])
         self.assertEqual(peer["state"], "connecting")
-        self.assertEqual(peer["peer"], "38.180.143.5:50227")
+        self.assertEqual(peer["peer"], _peer_endpoint("38.180.143.5", 50227))
         self.assertIsNotNone(peer["last_incoming_age_seconds"])
         self.assertGreaterEqual(peer["last_incoming_age_seconds"], 0)
         self.assertEqual(peer["decode_errors"], 1)
@@ -676,6 +680,7 @@ class TransportPeerSnapshotLastIncomingTests(unittest.TestCase):
         rows = session.get_overlay_peers_snapshot()
 
         self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["peer"], _peer_endpoint("127.0.0.1", 8081))
         self.assertIsNotNone(rows[0]["last_incoming_age_seconds"])
         self.assertGreaterEqual(rows[0]["last_incoming_age_seconds"], 0.0)
 
@@ -694,6 +699,7 @@ class TransportPeerSnapshotLastIncomingTests(unittest.TestCase):
         rows = session.get_overlay_peers_snapshot()
 
         peer_row = next(row for row in rows if row["peer_id"] == 1)
+        self.assertEqual(peer_row["peer"], _peer_endpoint("198.51.100.10", 5000))
         self.assertIsNotNone(peer_row["last_incoming_age_seconds"])
         self.assertGreaterEqual(peer_row["last_incoming_age_seconds"], 0.0)
 
@@ -708,6 +714,7 @@ class TransportPeerSnapshotLastIncomingTests(unittest.TestCase):
         rows = session.get_overlay_peers_snapshot()
 
         self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["peer"], _peer_endpoint("127.0.0.1", 443))
         self.assertIsNotNone(rows[0]["last_incoming_age_seconds"])
         self.assertGreaterEqual(rows[0]["last_incoming_age_seconds"], 0.0)
 
@@ -726,6 +733,7 @@ class TransportPeerSnapshotLastIncomingTests(unittest.TestCase):
         rows = session.get_overlay_peers_snapshot()
 
         peer_row = next(row for row in rows if row["peer_id"] == 2)
+        self.assertEqual(peer_row["peer"], _peer_endpoint("203.0.113.20", 8443))
         self.assertIsNotNone(peer_row["last_incoming_age_seconds"])
         self.assertGreaterEqual(peer_row["last_incoming_age_seconds"], 0.0)
 

@@ -31,6 +31,26 @@ function fmtPeerCompositeId(transport, id) {
 
 function fmtText(value) {
   if (value == null || value === '') return 'n/a';
+  if (Array.isArray(value)) {
+    return value.length ? value.map((item) => fmtText(item)).join(', ') : 'n/a';
+  }
+  if (typeof value === 'object') {
+    const host = typeof value.host === 'string' ? value.host.trim() : '';
+    const bind = typeof value.bind === 'string' ? value.bind.trim() : '';
+    const ifname = typeof value.ifname === 'string' ? value.ifname.trim() : '';
+    const port = value.port == null || value.port === '' ? '' : String(value.port).trim();
+    if (host || bind) {
+      return port ? `${host || bind}:${port}` : (host || bind);
+    }
+    if (ifname) {
+      return port ? `${ifname}:${port}` : ifname;
+    }
+    try {
+      return JSON.stringify(value);
+    } catch (error) {
+      return 'n/a';
+    }
+  }
   return String(value);
 }
 

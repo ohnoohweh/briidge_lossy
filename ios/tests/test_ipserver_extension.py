@@ -410,6 +410,7 @@ def test_start_embedded_webadmin_can_boot_client_with_swift_udp(monkeypatch) -> 
     assert controller._simple_udp_peer_runtime is None
     assert len(controller.client.start_calls) == 1
     started_config = controller.client.start_calls[0]
+    assert started_config["admin_web"]["admin_web"] is False
     own_servers = started_config["channel_mux"]["own_servers"]
     assert len(own_servers) == 2
     assert [entry["listen"]["protocol"] for entry in own_servers] == ["tcp", "tun"]
@@ -482,6 +483,7 @@ def test_start_embedded_webadmin_preserves_ws_and_compress_runtime_config(monkey
     assert controller._simple_udp_peer_runtime is None
     assert len(controller.client.start_calls) == 1
     started_config = controller.client.start_calls[0]
+    assert started_config["admin_web"]["admin_web"] is False
     assert started_config["overlay_transport"] == "ws"
     assert started_config["ws_peer"] == "bridge.example.net"
     assert started_config["ws_peer_port"] == 8443

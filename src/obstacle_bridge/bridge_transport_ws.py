@@ -727,6 +727,19 @@ class WebSocketSession(ISession):
         except Exception:
             return None
 
+    @staticmethod
+    def _format_peer_endpoint(host: Optional[object], port: Optional[object]) -> Optional[dict]:
+        try:
+            if host is None or port is None:
+                return None
+            host_s = str(host)
+            port_i = int(port)
+            if not host_s:
+                return None
+            return {"host": host_s, "port": port_i}
+        except Exception:
+            return None
+
     def get_overlay_peers_snapshot(self) -> list[dict]:
         """
         Return per-overlay-peer rows for admin diagnostics.
@@ -737,13 +750,13 @@ class WebSocketSession(ISession):
         """
         rows: list[dict] = []
         if self._peer_tuple:
-            peer_label = self._format_peer_label(self._peer_host, self._peer_port)
+            peer_endpoint = self._format_peer_endpoint(self._peer_host, self._peer_port)
             rows.append(
                 {
                     "peer_id": 0,
                     "connected": bool(self.is_connected()),
                     "state": "connected" if self.is_connected() else "connecting",
-                    "peer": peer_label,
+                    "peer": peer_endpoint,
                     "mux_chans": [],
                     "rtt_est_ms": getattr(self._rtt, "rtt_est_ms", None),
                     "last_incoming_age_seconds": _monotonic_age_seconds_from_ns(
@@ -783,7 +796,7 @@ class WebSocketSession(ISession):
             remote = getattr(ws, "remote_address", None) if ws is not None else None
             host = remote[0] if isinstance(remote, tuple) and len(remote) >= 2 else None
             port = remote[1] if isinstance(remote, tuple) and len(remote) >= 2 else None
-            peer_label = self._format_peer_label(host, port)
+            peer_endpoint = self._format_peer_endpoint(host, port)
             rtt = ctx.get("rtt") if isinstance(ctx, dict) else None
             last_incoming_age_seconds = None
             if isinstance(ctx, dict):
@@ -799,7 +812,7 @@ class WebSocketSession(ISession):
                     "peer_id": peer_id,
                     "connected": bool(peer_id in self._server_peers),
                     "state": "connected" if peer_id in self._server_peers else "connecting",
-                    "peer": peer_label,
+                    "peer": peer_endpoint,
                     "mux_chans": sorted(mux_by_peer.get(peer_id, [])),
                     "rtt_est_ms": getattr(rtt, "rtt_est_ms", None),
                     "last_incoming_age_seconds": last_incoming_age_seconds,

@@ -323,6 +323,19 @@ class QuicSession(ISession):
             return None
 
     @staticmethod
+    def _format_peer_endpoint(host: Optional[object], port: Optional[object]) -> Optional[dict]:
+        try:
+            if host is None or port is None:
+                return None
+            host_s = str(host)
+            port_i = int(port)
+            if not host_s:
+                return None
+            return {"host": host_s, "port": port_i}
+        except Exception:
+            return None
+
+    @staticmethod
     def _extract_quic_peer_addr(proto: Any) -> Tuple[Optional[str], Optional[int]]:
         try:
             quic = getattr(proto, "_quic", None)
@@ -348,7 +361,7 @@ class QuicSession(ISession):
                 "peer_id": 0,
                 "connected": bool(self.is_connected()),
                 "state": "connected" if self.is_connected() else "connecting",
-                "peer": self._format_peer_label(self._peer_host, self._peer_port),
+                "peer": self._format_peer_endpoint(self._peer_host, self._peer_port),
                 "mux_chans": [],
                 "rtt_est_ms": getattr(self._rtt, "rtt_est_ms", None),
                 "last_incoming_age_seconds": _monotonic_age_seconds_from_ns(
@@ -385,7 +398,7 @@ class QuicSession(ISession):
                 host, port = self._extract_quic_peer_addr(proto)
                 if host is not None and port is not None:
                     ctx["peer_host"], ctx["peer_port"] = host, port
-            peer_label = self._format_peer_label(host, port)
+            peer_endpoint = self._format_peer_endpoint(host, port)
             rtt = ctx.get("rtt") if isinstance(ctx, dict) else None
             last_incoming_age_seconds = None
             if isinstance(ctx, dict):
@@ -400,7 +413,7 @@ class QuicSession(ISession):
                 "peer_id": peer_id,
                 "connected": bool(peer_id in self._server_peers),
                 "state": "connected" if peer_id in self._server_peers else "connecting",
-                "peer": peer_label,
+                "peer": peer_endpoint,
                 "mux_chans": sorted(mux_by_peer.get(peer_id, [])),
                 "rtt_est_ms": getattr(rtt, "rtt_est_ms", None),
                 "last_incoming_age_seconds": last_incoming_age_seconds,
@@ -726,10 +739,6 @@ class QuicSession(ISession):
             )
         finally:
             self._connecting_task = None
-            
-        """
-    Client role: establish QUIC connection to (host, port).
-       """
  
     # ---- accept / on-connection ----
     def _on_accept(self, proto: Any) -> None:

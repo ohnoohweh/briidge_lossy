@@ -43,6 +43,19 @@ from tests.fixtures.secure_link_cert import materialize_secure_link_cert_fixture
 from tests.fixtures.localhost_tls import materialize_localhost_tls_fixture_set
 
 _SECURE_LINK_CERT_FIXTURE_TMPDIR = tempfile.TemporaryDirectory()
+
+
+def peer_endpoint_text(value: Any) -> str:
+    if isinstance(value, dict):
+        host = str(value.get('host') or value.get('bind') or value.get('ifname') or '').strip()
+        port = value.get('port')
+        if host and port not in (None, ''):
+            port_s = str(port).strip()
+            return f'[{host}]:{port_s}' if ':' in host and not host.startswith('[') else f'{host}:{port_s}'
+        if host:
+            return host
+        return ''
+    return str(value or '').strip()
 atexit.register(_SECURE_LINK_CERT_FIXTURE_TMPDIR.cleanup)
 SECURE_LINK_CERT_FIXTURES = materialize_secure_link_cert_fixture_set(Path(_SECURE_LINK_CERT_FIXTURE_TMPDIR.name))
 
@@ -2875,7 +2888,7 @@ def wait_peer_endpoint_visible(admin_port: int, timeout: float = 12.0, label: st
         for row in rows:
             if str(row.get('transport', '')).strip().lower() != normalized_transport:
                 continue
-            peer = str(row.get('peer') or '').strip()
+            peer = peer_endpoint_text(row.get('peer'))
             if peer and peer.lower() != 'n/a':
                 who = f' {label}' if label else ''
                 log.info(f'[PEERS]{who} port={admin_port} transport={normalized_transport} peer={peer}')
@@ -2907,7 +2920,7 @@ def wait_peer_row_visible(
         for row in list(doc.get('peers') or []):
             if str(row.get('transport', '')).strip().lower() != normalized_transport:
                 continue
-            if expected_peer and str(row.get('peer') or '').strip() != expected_peer:
+            if expected_peer and peer_endpoint_text(row.get('peer')) != expected_peer:
                 continue
             if expected_state and str(row.get('state', '')).strip().lower() != expected_state:
                 continue
@@ -2943,7 +2956,7 @@ def wait_peer_row_absent(
         for row in list(doc.get('peers') or []):
             if str(row.get('transport', '')).strip().lower() != normalized_transport:
                 continue
-            if expected_peer and str(row.get('peer') or '').strip() != expected_peer:
+            if expected_peer and peer_endpoint_text(row.get('peer')) != expected_peer:
                 continue
             if expected_state and str(row.get('state', '')).strip().lower() != expected_state:
                 continue
@@ -2983,7 +2996,7 @@ def wait_distinct_peer_endpoints(
         for row in list(doc.get('peers') or []):
             if str(row.get('transport', '')).strip().lower() != normalized_transport:
                 continue
-            peer = str(row.get('peer') or '').strip()
+            peer = peer_endpoint_text(row.get('peer'))
             if peer and peer.lower() != 'n/a':
                 peers.add(peer)
         if len(peers) >= minimum_count:

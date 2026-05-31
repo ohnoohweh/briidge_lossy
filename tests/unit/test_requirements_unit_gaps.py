@@ -26,6 +26,10 @@ from obstacle_bridge.bridge_transport_tcp import TcpStreamSession
 from obstacle_bridge.bridge_transport_ws import WebSocketSession
 
 
+def _peer_endpoint(host: str, port: int) -> dict:
+    return {"host": host, "port": port}
+
+
 class _WriterStub:
     def __init__(self):
         self.buffer = bytearray()
@@ -191,20 +195,20 @@ class ListenerPeerRequirementUnitTests(unittest.TestCase):
             _FakeSession(
                 [
                     {"peer_id": -1, "connected": False, "peer": None, "mux_chans": [], "listening": True},
-                    {"peer_id": 1, "connected": True, "peer": "198.51.100.1:4433", "mux_chans": []},
-                    {"peer_id": 2, "connected": True, "peer": "198.51.100.2:4433", "mux_chans": []},
+                    {"peer_id": 1, "connected": True, "peer": _peer_endpoint("198.51.100.1", 4433), "mux_chans": []},
+                    {"peer_id": 2, "connected": True, "peer": _peer_endpoint("198.51.100.2", 4433), "mux_chans": []},
                 ]
             ),
             _FakeSession(
                 [
                     {"peer_id": -1, "connected": False, "peer": None, "mux_chans": [], "listening": True},
-                    {"peer_id": 1, "connected": True, "peer": "198.51.100.3:8081", "mux_chans": []},
+                    {"peer_id": 1, "connected": True, "peer": _peer_endpoint("198.51.100.3", 8081), "mux_chans": []},
                 ]
             ),
             _FakeSession(
                 [
                     {"peer_id": -1, "connected": False, "peer": None, "mux_chans": [], "listening": True},
-                    {"peer_id": 1, "connected": True, "peer": "198.51.100.4:8443", "mux_chans": []},
+                    {"peer_id": 1, "connected": True, "peer": _peer_endpoint("198.51.100.4", 8443), "mux_chans": []},
                 ]
             ),
         ]
@@ -216,8 +220,13 @@ class ListenerPeerRequirementUnitTests(unittest.TestCase):
 
         self.assertEqual({peer["transport"] for peer in connected}, {"myudp", "tcp", "quic"})
         self.assertEqual(
-            {peer["peer"] for peer in connected},
-            {"198.51.100.1:4433", "198.51.100.2:4433", "198.51.100.3:8081", "198.51.100.4:8443"},
+            {(peer["peer"]["host"], peer["peer"]["port"]) for peer in connected},
+            {
+                ("198.51.100.1", 4433),
+                ("198.51.100.2", 4433),
+                ("198.51.100.3", 8081),
+                ("198.51.100.4", 8443),
+            },
         )
         self.assertEqual(len({peer["id"] for peer in peers}), len(peers))
 

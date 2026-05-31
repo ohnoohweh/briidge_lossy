@@ -64,6 +64,19 @@ def _disable_extension_logging_config(config: Mapping[str, Any]) -> dict[str, An
     return normalized
 
 
+def _disable_extension_admin_web_listener(config: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(config)
+    if any(isinstance(value, Mapping) for value in normalized.values()):
+        admin_web = dict(
+            normalized.get("admin_web") if isinstance(normalized.get("admin_web"), Mapping) else {}
+        )
+        admin_web["admin_web"] = False
+        normalized["admin_web"] = admin_web
+        return normalized
+    normalized["admin_web"] = False
+    return normalized
+
+
 class IPServerRuntimeController:
     EMBEDDED_RESTART_STOP_TIMEOUT_SEC = 20.0
 
@@ -466,6 +479,7 @@ class IPServerRuntimeController:
             if isinstance(runtime_config, Mapping)
             else self._runtime_config_with_ios_defaults(_load_grouped_runtime_config(self.documents_root))
         )
+        normalized_config = _disable_extension_admin_web_listener(normalized_config)
         connector_mode = _packetflow_connector_mode(normalized_config)
         simple_runtime_config = self._simple_udp_peer_runtime_config(normalized_config)
         self.client.config = normalized_config

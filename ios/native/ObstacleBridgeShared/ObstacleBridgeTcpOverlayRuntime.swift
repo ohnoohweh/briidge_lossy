@@ -5,6 +5,7 @@ final class ObstacleBridgeTcpOverlayRuntime {
         var txBytes: Int
         var peerTxNotifications: [Int]
         var writtenHex: [String]
+        var writtenBuffers: [Data]
         var earlyBufBytes: Int
         var earlyBufHex: String?
         var connectRequested: Bool
@@ -18,7 +19,15 @@ final class ObstacleBridgeTcpOverlayRuntime {
         var overlayConnected: Bool
         var bpTaskStarted: Bool
         var flushedHex: [String]
+        var flushedBuffers: [Data]
         var earlyBufBytes: Int
+    }
+
+    struct ReceiveSnapshot {
+        var completedPayloads: [Data]
+        var consumedBytes: Int
+        var remainingBytes: Int
+        var overlayConnected: Bool
     }
 
     struct SocketConfigSnapshot {
@@ -82,6 +91,7 @@ final class ObstacleBridgeTcpOverlayRuntime {
                 txBytes: txBytes,
                 peerTxNotifications: [],
                 writtenHex: [],
+                writtenBuffers: [],
                 earlyBufBytes: earlyBuf.count,
                 earlyBufHex: earlyBuf.isEmpty ? nil : hexFromData(earlyBuf),
                 connectRequested: false
@@ -95,6 +105,7 @@ final class ObstacleBridgeTcpOverlayRuntime {
                 txBytes: txBytes,
                 peerTxNotifications: [],
                 writtenHex: [],
+                writtenBuffers: [],
                 earlyBufBytes: earlyBuf.count,
                 earlyBufHex: hexFromData(earlyBuf),
                 connectRequested: peerConfigured
@@ -106,6 +117,7 @@ final class ObstacleBridgeTcpOverlayRuntime {
             txBytes: txBytes,
             peerTxNotifications: [wire.count],
             writtenHex: [hexFromData(wire)],
+            writtenBuffers: [wire],
             earlyBufBytes: earlyBuf.count,
             earlyBufHex: earlyBuf.isEmpty ? nil : hexFromData(earlyBuf),
             connectRequested: false
@@ -124,7 +136,35 @@ final class ObstacleBridgeTcpOverlayRuntime {
             overlayConnected: overlayConnected,
             bpTaskStarted: true,
             flushedHex: flushedHex,
+            flushedBuffers: flushedHex.compactMap(Self.dataFromHex),
             earlyBufBytes: earlyBuf.count
+        )
+    }
+
+    func handleInboundBytes(_ buffer: Data) -> ReceiveSnapshot {
+        var completedPayloads: [Data] = []
+        var cursor = 0
+        while (buffer.count - cursor) >= 5 {
+            let length = Self.readUInt32(buffer, offset: cursor)
+            guard length > 0 else {
+                break
+            }
+            let totalLength = 4 + Int(length)
+            guard (buffer.count - cursor) >= totalLength else {
+                break
+            }
+            let marker = buffer[cursor + 4]
+            if marker == 0x00 {
+                completedPayloads.append(buffer.subdata(in: (cursor + 5)..<(cursor + totalLength)))
+            }
+            cursor += totalLength
+        }
+        overlayConnected = overlayConnected || !completedPayloads.isEmpty
+        return ReceiveSnapshot(
+            completedPayloads: completedPayloads,
+            consumedBytes: cursor,
+            remainingBytes: max(0, buffer.count - cursor),
+            overlayConnected: overlayConnected
         )
     }
 
@@ -230,5 +270,30 @@ final class ObstacleBridgeTcpOverlayRuntime {
 
     private func hexFromData(_ data: Data) -> String {
         return data.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func dataFromHex(_ text: String) -> Data? {
+        guard (text.count % 2) == 0 else {
+            return nil
+        }
+        var data = Data(capacity: text.count / 2)
+        var index = text.startIndex
+        while index < text.endIndex {
+            let next = text.index(index, offsetBy: 2)
+            guard let value = UInt8(text[index..<next], radix: 16) else {
+                return nil
+            }
+            data.append(value)
+            index = next
+        }
+        return data
+    }
+
+    private static func readUInt32(_ data: Data, offset: Int) -> UInt32 {
+        let start = data.startIndex + offset
+        let end = start + 4
+        return data[start..<end].reduce(UInt32(0)) { (partial, byte) in
+            (partial << 8) | UInt32(byte)
+        }
     }
 }

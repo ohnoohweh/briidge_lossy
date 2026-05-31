@@ -17,6 +17,8 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
 
     assert "NEPacketTunnelProvider" in provider
+    assert "ObstacleBridgeAdminAPI" in provider
+    assert '"admin_api_request"' in provider
     assert "setTunnelNetworkSettings" in provider
     assert "ObstacleBridgePacketFlowBridge.activate" in provider
     assert "start_embedded_webadmin" in provider
@@ -50,7 +52,11 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "swift_udp_retransmit_timer_failed" in provider
     assert "ObstacleBridgeChannelMuxTunRuntime" in provider
     assert "ObstacleBridgeChannelMuxTcpRuntime" in provider
-    assert "ControlChunkReassembler" in provider
+    assert "ObstacleBridgeChannelMuxTCPTransportOwner" in provider
+    assert "ObstacleBridgeOverlayLayerTransportAdapter" in provider
+    assert "connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]])" in provider
+    assert "handleTCPTransportEvent(_ event: ObstacleBridgeChannelMuxTCPTransportOwner.TransportEvent)" in provider
+    assert "tcpConnectionStates" in provider
     assert "startTCPServices()" in provider
     assert "handleInboundTCPMuxFrame" in provider
     assert "localTCPServiceSpecs(providerConfiguration:" in provider
@@ -68,7 +74,8 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "excluded_routes6" in provider
     assert "fallbackRuntimeConfig: loadSharedRuntimeConfigJSON()" in provider
     assert "runtimeNetworkFallback(from: runtimeConfig)" in provider
-    assert 'payload["TUN_routing"] as? [String: Any]' in provider
+    assert "ObstacleBridgeRuntimeConfig.tunnelRoutingOverride" in provider
+    assert "ObstacleBridgeRuntimeConfig.localTunServiceSpec" in provider
 
 
 def test_native_packet_flow_bridge_source_exists() -> None:
@@ -240,18 +247,66 @@ def test_overlay_stack_planner_source_exists() -> None:
     assert "unsupportedCompressAlgo" in runtime
 
 
+def test_runtime_config_source_exists() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
+
+    assert "enum ObstacleBridgeRuntimeConfig" in runtime
+    assert "struct ObstacleBridgeRuntimeServiceSpec" in runtime
+    assert "struct ObstacleBridgeDerivedTunnelSettings" in runtime
+    assert "struct ObstacleBridgeTunnelRoutingOverride" in runtime
+    assert "struct ObstacleBridgeOverlayBootstrapSettings" in runtime
+    assert "static func flatten(" in runtime
+    assert "static func ownServerSpecs(" in runtime
+    assert "static func remoteServerSpecs(" in runtime
+    assert "static func tunnelRoutingOverride(" in runtime
+    assert "static func localTunServiceSpec(" in runtime
+    assert "static func swiftUDPPeerConfig(" in runtime
+    assert "listenerHookEnvBlocks()" in runtime
+    assert "derivedLocalTunnelSettings(" in runtime
+    assert "derivedRemoteTunnelSettings(" in runtime
+
+
+def test_webadmin_server_source_exists() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebAdminServer.swift").read_text(encoding="utf-8")
+
+    assert "final class ObstacleBridgeWebAdminServer" in runtime
+    assert '"/api/status"' in runtime
+    assert '"/api/live"' in runtime
+    assert "101 Switching Protocols" in runtime
+    assert "Sec-WebSocket-Accept" in runtime
+    assert "broadcastLiveTopic(" in runtime
+    assert "liveTopicInterval(" in runtime
+    assert "type\": \"hello\"" in runtime
+
+
+def test_admin_api_source_exists() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeAdminAPI.swift").read_text(encoding="utf-8")
+
+    assert "protocol ObstacleBridgeAdminAPIStateProvider" in runtime
+    assert "struct ObstacleBridgeAdminAPIRequest" in runtime
+    assert "struct ObstacleBridgeAdminAPIResponse" in runtime
+    assert "enum ObstacleBridgeAdminAPI" in runtime
+    assert '"/api/meta"' in runtime
+    assert '"/api/connections"' in runtime
+    assert '"/api/peers"' in runtime
+    assert '"admin_api_request"' in runtime
+
+
 def test_macos_swift_host_runner_source_exists() -> None:
     runtime = (MAC_RUNNER_NATIVE_DIR / "ObstacleBridgeMacHostRunner.swift").read_text(encoding="utf-8")
 
     assert "@main" in runtime
     assert "ObstacleBridgeMacHostRunner" in runtime
-    assert "ObstacleBridgeHTTPControlServer" in runtime
-    assert "ObstacleBridgeOverlayStackPlanner.parseOverlayTransports" in runtime
-    assert "ObstacleBridgeOverlayStackPlanner.planTransport" in runtime
+    assert "ObstacleBridgeAdminAPI" in runtime
+    assert "ObstacleBridgeWebAdminServer" in runtime
+    assert "ObstacleBridgeRuntimeConfig.flatten" in runtime
+    assert "ObstacleBridgeOverlayBootstrapSettings" in runtime
     assert "ObstacleBridgeCompressLayerRuntime" in runtime
+    assert "ObstacleBridgeSecureLinkPskRuntime" in runtime
     assert "ObstacleBridgeWebSocketOverlayRuntime" in runtime
     assert "ObstacleBridgeTcpOverlayRuntime" in runtime
-    assert '"/api/status"' in runtime
+    assert "ObstacleBridgeTcpOverlayTransportOwner" in runtime
+    assert "ObstacleBridgeSecureLinkPskTransportAdapter" in runtime
     assert '"swift_host_runner"' in runtime
 
 
@@ -295,13 +350,39 @@ def test_tcp_overlay_runtime_source_exists() -> None:
     assert "struct AcceptSnapshot" in runtime
     assert "struct ServerOverlaySnapshot" in runtime
     assert "struct BackpressureSnapshot" in runtime
+    assert "struct ReceiveSnapshot" in runtime
     assert "sendApp(payload:" in runtime
     assert "connect(host:" in runtime
+    assert "handleInboundBytes(" in runtime
     assert "socketConfigSnapshot(" in runtime
     assert "requestReconnect(" in runtime
     assert "acceptServerPeer(" in runtime
     assert "closeServerPeer(" in runtime
     assert "backpressureSnapshot(" in runtime
+
+
+def test_tcp_overlay_transport_owner_source_exists() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "final class ObstacleBridgeTcpOverlayTransportOwner" in runtime
+    assert "handleInboundTCPMuxFrame(" in runtime
+    assert "handleInboundUDPMuxFrame(" in runtime
+    assert "ObstacleBridgeChannelMuxTCPTransportOwner" in runtime
+    assert "ObstacleBridgeChannelMuxUdpRuntime" in runtime
+    assert "ObstacleBridgeOverlayLayerTransportAdapter" in runtime
+    assert "handleInboundBytes(" in runtime
+    assert "sendMuxFrames(" in runtime
+
+
+def test_channel_mux_tcp_transport_owner_source_exists() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTCPTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "final class ObstacleBridgeChannelMuxTCPTransportOwner" in runtime
+    assert "ControlChunkReassembler" in runtime
+    assert "acceptLocalConnection(" in runtime
+    assert "handleInboundMuxFrame(" in runtime
+    assert "ObstacleBridgeChannelMuxTcpRuntime" in runtime
+    assert "TransportEvent" in runtime
 
 
 def test_secure_link_psk_codec_source_exists() -> None:
@@ -314,6 +395,41 @@ def test_secure_link_psk_codec_source_exists() -> None:
     assert "nonce(counter:" in codec
     assert "buildJSONPayload(" in codec
     assert "parseJSONPayload(" in codec
+
+
+def test_secure_link_psk_runtime_source_exists() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift").read_text(encoding="utf-8")
+
+    assert "final class ObstacleBridgeSecureLinkPskRuntime" in runtime
+    assert "beginClientHandshake(" in runtime
+    assert "handleInboundFrame(" in runtime
+    assert "sendApp(" in runtime
+    assert "serverProof(" in runtime
+    assert "ChaChaPoly" in runtime
+    assert "typeClientHello" in runtime
+    assert "typeServerHello" in runtime
+    assert "typeAuthFail" in runtime
+    assert "typeData" in runtime
+
+
+def test_secure_link_psk_transport_adapter_source_exists() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskTransportAdapter.swift").read_text(encoding="utf-8")
+
+    assert "final class ObstacleBridgeSecureLinkPskTransportAdapter" in runtime
+    assert "handleOutboundPayload(" in runtime
+    assert "handleInboundFrame(" in runtime
+    assert "flushPendingPayloads(" in runtime
+    assert "beginClientHandshake(" in runtime
+
+
+def test_overlay_layer_transport_adapter_source_exists() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
+
+    assert "final class ObstacleBridgeOverlayLayerTransportAdapter" in runtime
+    assert "handleOutboundPayload(" in runtime
+    assert "handleInboundFrame(" in runtime
+    assert "ObstacleBridgeCompressLayerRuntime" in runtime
+    assert "ObstacleBridgeSecureLinkPskTransportAdapter" in runtime
 
 
 def test_udp_overlay_codec_source_exists() -> None:
@@ -394,9 +510,10 @@ def test_ipserver_extension_sources_bootstrap_python_runtime() -> None:
     assert "handleAppMessage" in provider
     assert "recordNativeEvent" in provider
     assert "stopTunnel_entered" in provider
-    assert "ObstacleBridgeOverlayStackPlanner.parseOverlayTransports" in provider
-    assert "ObstacleBridgeOverlayStackPlanner.planTransport" in provider
+    assert "ObstacleBridgeRuntimeConfig.flatten" in provider
+    assert "ObstacleBridgeOverlayBootstrapSettings" in provider
     assert "ObstacleBridgeCompressLayerRuntime" in provider
+    assert "ObstacleBridgeSecureLinkPskRuntime" in provider
     assert "ObstacleBridgeWebSocketOverlayRuntime" in provider
     assert "ObstacleBridgeTcpOverlayRuntime" in provider
     assert "shared_overlay_runtime_prepared" in provider
@@ -416,6 +533,9 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
 
     assert "ObstacleBridgeTunnelControl" in control
+    assert "ObstacleBridgeWebAdminServer" in control
+    assert "admin_api_request" in control
+    assert "ObstacleBridgeIOSAppAdminWebProxy" in control
     assert "NETunnelProviderManager.loadAllFromPreferences" in control
     assert "queue.async" in control
     assert "prepareIPServerTunnel" in control
@@ -447,6 +567,10 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert '"provider_configuration_mode": "config_derived_profile_persistence"' in control
     assert "needsConfigurationRepair" in control
     assert "desiredManagers" in control
+    assert "ObstacleBridgeRuntimeConfig.ownServerSpecs" in control
+    assert "ObstacleBridgeRuntimeConfig.remoteServerSpecs" in control
+    assert "derivedLocalTunnelSettings(" in control
+    assert "derivedRemoteTunnelSettings(" in control
     assert "configuration_version" in control
     assert "provider_configuration_version" in control
     assert "localized_description" in control
@@ -467,14 +591,14 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert 'tunnelProtocol.serverAddress = derived.tunnelAddress' in control
     assert "tunnelProtocol.providerConfiguration = derived.providerConfiguration" in control
     assert 'defaultTunnelAddress6 = "fd20:106::1"' in control
-    assert "TUN_ADDR6" in control
-    assert "PEER_ADDR6" in control
-    assert "TUN_SUBNET6" in control
+    assert "TUN_ADDR6" not in control
+    assert "PEER_ADDR6" not in control
+    assert "TUN_SUBNET6" not in control
     assert "findLocalIOSTunnelService" in control
     assert "findRemoteTunnelServiceTargetingIOS" in control
-    assert 'payload["TUN_routing"]' in control
-    assert "applyNetworkOverride(" in control
+    assert "ObstacleBridgeRuntimeConfig.tunnelRoutingOverride" in control
+    assert "applyNetworkOverride(" not in control
     assert "loadRuntimeConfigJSON" in control
     assert "ios-native-tunnel-control.jsonl" in control
-    assert "DispatchSemaphore" not in control
+    assert "DispatchSemaphore" in control
     assert "timed out loading VPN preferences" not in control

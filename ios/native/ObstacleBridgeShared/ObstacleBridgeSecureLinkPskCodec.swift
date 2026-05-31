@@ -63,7 +63,7 @@ struct ObstacleBridgeSecureLinkPskCodec {
             slType: Int(slType),
             sessionID: sessionID,
             counter: counter,
-            payload: payload.dropFirst(headerSize)
+            payload: Data(payload.dropFirst(headerSize))
         )
     }
 

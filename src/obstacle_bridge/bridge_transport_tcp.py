@@ -312,6 +312,19 @@ class TcpStreamSession(ISession):
             return None
 
     @staticmethod
+    def _format_peer_endpoint(host: Optional[object], port: Optional[object]) -> Optional[dict]:
+        try:
+            if host is None or port is None:
+                return None
+            host_s = str(host)
+            port_i = int(port)
+            if not host_s:
+                return None
+            return {"host": host_s, "port": port_i}
+        except Exception:
+            return None
+
+    @staticmethod
     def _extract_quic_peer_addr(proto: Any) -> Tuple[Optional[str], Optional[int]]:
         try:
             quic = getattr(proto, "_quic", None)
@@ -337,7 +350,7 @@ class TcpStreamSession(ISession):
                 "peer_id": 0,
                 "connected": bool(self.is_connected()),
                 "state": "connected" if self.is_connected() else "connecting",
-                "peer": self._format_peer_label(self._peer_host, self._peer_port),
+                "peer": self._format_peer_endpoint(self._peer_host, self._peer_port),
                 "mux_chans": [],
                 "rtt_est_ms": getattr(self._rtt, "rtt_est_ms", None),
                 "last_incoming_age_seconds": _monotonic_age_seconds_from_ns(
@@ -372,7 +385,7 @@ class TcpStreamSession(ISession):
                 "peer_id": peer_id,
                 "connected": bool(ctx.get("connected")) if isinstance(ctx, dict) else False,
                 "state": "connected" if bool(ctx.get("connected")) else "connecting",
-                "peer": self._format_peer_label(host, port),
+                "peer": self._format_peer_endpoint(host, port),
                 "mux_chans": sorted(mux_by_peer.get(peer_id, [])),
                 "rtt_est_ms": getattr(rtt, "rtt_est_ms", None),
                 "last_incoming_age_seconds": _monotonic_age_seconds_from_ns(
