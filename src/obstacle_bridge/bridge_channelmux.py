@@ -1215,6 +1215,7 @@ class ChannelMux:
             self._mux_connection_seq = (self._mux_connection_seq + 1) & 0xFFFFFFFF
         self._accepting_enabled = True
         await self._start_all_services()
+        self._replay_tun_listener_created_hooks()
         self._send_remote_services_catalog_if_any()
 
     async def on_transport_epoch_change(self, epoch: int) -> None:
@@ -1223,7 +1224,27 @@ class ChannelMux:
         await self._close_all_channels()
         if self._overlay_connected and self._accepting_enabled:
             await self._start_all_services()
+            self._replay_tun_listener_created_hooks()
         self._send_remote_services_catalog_if_any()
+
+    def _replay_tun_listener_created_hooks(self) -> None:
+        for svc_key, spec in self._effective_services_by_id().items():
+            if str(spec.l_proto) != "tun":
+                continue
+            if svc_key not in self._svc_tun_devices:
+                continue
+            if self._hook_command_spec_for(spec, "listener", "on_created") is None:
+                continue
+            self._schedule_service_hook(spec, svc_key, "listener", "on_created")
+
+    def on_overlay_peer_set(self, host: str, port: int) -> None:
+        self._overlay_peer_host = str(host or self._overlay_peer_host or "")
+        try:
+            self._overlay_peer_port = int(port or self._overlay_peer_port or 0)
+        except Exception:
+            self._overlay_peer_port = int(self._overlay_peer_port or 0)
+        if self._overlay_connected and self._accepting_enabled:
+            self._replay_tun_listener_created_hooks()
 
     # ---------- service lifecycle ----------
     async def _start_all_services(self):

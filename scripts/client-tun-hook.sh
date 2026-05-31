@@ -20,23 +20,36 @@ STATE_FILE6="${STATE_DIR}/${IFNAME}.default-route6"
 
 mkdir -p "$STATE_DIR"
 
+normalize_overlay_peer_ip() {
+  local candidate="$1"
+  if [[ "$candidate" =~ ^::ffff:([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+    return
+  fi
+  printf '%s' "$candidate"
+}
+
 overlay_route_prefix() {
-  if [[ "$OVERLAY_PEER_IP" == *:* ]]; then
-    printf '%s/128' "$OVERLAY_PEER_IP"
+  local normalized_ip
+  normalized_ip="$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")"
+  if [[ "$normalized_ip" == *:* ]]; then
+    printf '%s/128' "$normalized_ip"
   else
-    printf '%s/32' "$OVERLAY_PEER_IP"
+    printf '%s/32' "$normalized_ip"
   fi
 }
 
 detect_underlay() {
+  local normalized_ip
+  normalized_ip="$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")"
   if [[ -z "$OVERLAY_PEER_IP" ]]; then
     echo "overlay peer IP not known yet; skipping underlay route detection" >&2
     return 1
   fi
   local route_line
-  route_line="$(ip route get "$OVERLAY_PEER_IP" 2>/dev/null | head -n1 || true)"
+  route_line="$(ip route get "$normalized_ip" 2>/dev/null | head -n1 || true)"
   if [[ -z "$route_line" ]]; then
-    echo "unable to detect route to overlay peer ${OVERLAY_PEER_IP}" >&2
+    echo "unable to detect route to overlay peer ${normalized_ip}" >&2
     return 1
   fi
   if [[ "$UNDERLAY_IF" == "auto" || -z "$UNDERLAY_IF" ]]; then
@@ -53,8 +66,17 @@ detect_underlay() {
 }
 
 save_default_route() {
-  ip route show default | head -n1 > "$STATE_FILE" || true
-  ip -6 route show default | head -n1 > "$STATE_FILE6" || true
+  local current_default
+  current_default="$(ip route show default | head -n1 || true)"
+  if [[ -n "$current_default" && "$current_default" != *" dev ${IFNAME}"* ]]; then
+    printf '%s\n' "$current_default" > "$STATE_FILE"
+  fi
+
+  local current_default6
+  current_default6="$(ip -6 route show default | head -n1 || true)"
+  if [[ -n "$current_default6" && "$current_default6" != *" dev ${IFNAME}"* ]]; then
+    printf '%s\n' "$current_default6" > "$STATE_FILE6"
+  fi
 }
 
 restore_default_route() {

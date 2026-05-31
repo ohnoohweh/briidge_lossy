@@ -6,6 +6,8 @@ ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for ba
 - User: start with `Why this project was developed` and `Quick start (Setup Wizard)`
 - Contributor: start with `Contributor guidance`
 
+Contributor note: the latest 2026-05-31 routing follow-up hardens Linux full-tunnel startup after `obtun0` creation. The delivered fix now replays TUN listener `on_created` hooks after late overlay peer discovery, forwards learned peer endpoints from the runner into ChannelMux, and normalizes IPv4-mapped IPv6 peer addresses such as `::ffff:a.b.c.d` in `scripts/client-tun-hook.sh` before underlay route lookup so full-tunnel default-route installation works reliably on dual-stack `myudp` sessions. Focused regression coverage now includes [tests/unit/test_tun_hook_scripts.py](tests/unit/test_tun_hook_scripts.py), [tests/unit/test_runner_ios_status_callbacks.py](tests/unit/test_runner_ios_status_callbacks.py), and the TUN hook replay slice in [tests/unit/test_channel_mux_listener_mode.py](tests/unit/test_channel_mux_listener_mode.py).
+
 ## For Users
 
 ### Whitepaper

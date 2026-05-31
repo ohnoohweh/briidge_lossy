@@ -186,13 +186,18 @@ class Runner:
             # active overlay session.
             session.set_on_peer_rx(self.stats.on_peer_rx_bytes)
             session.set_on_peer_tx(self.stats.on_peer_tx_bytes)
-            session.set_on_peer_set(self.stats.on_peer_set)
             mux = ChannelMux.from_args(
                 session,
                 loop,
                 self.args,
                 on_local_rx_bytes=self.stats.on_app_rx_bytes,
                 on_local_tx_bytes=self.stats.on_app_tx_bytes
+            )
+            session.set_on_peer_set(
+                lambda host, port, mux=mux: (
+                    self.stats.on_peer_set(host, port),
+                    mux.on_overlay_peer_set(host, port),
+                )
             )
             self._sessions.append(session)
             self._muxes.append(mux)

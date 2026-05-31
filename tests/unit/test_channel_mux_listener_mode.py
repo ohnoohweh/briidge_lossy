@@ -545,6 +545,32 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mtype, ChannelMux.MType.REMOTE_SERVICES_SET_V2)
         self.assertEqual(self.mux._decode_remote_services_set_v2(payload)[2], [spec])
 
+    async def test_overlay_connect_replays_tun_on_created_hook_for_active_tun_service(self):
+        spec = ChannelMux.ServiceSpec(
+            svc_id=3,
+            l_proto='tun',
+            l_bind='obtun0',
+            l_port=1500,
+            r_proto='tun',
+            r_host='obtun1',
+            r_port=1500,
+            lifecycle_hooks={'listener': {'on_created': {'argv': ['hook', 'up']}}},
+        )
+        svc_key = ('local', 0, 3)
+        self.mux._local_services[svc_key] = spec
+        self.mux._svc_tun_devices[svc_key] = ChannelMux.TunDevice(fd=44, ifname='obtun0', mtu=1500, service_key=svc_key)
+        self.mux._overlay_connected = False
+        self.mux._accepting_enabled = False
+
+        with patch.object(self.mux, '_start_all_services', new=AsyncMock()) as start_all, \
+             patch.object(self.mux, '_send_remote_services_catalog_if_any') as send_catalog, \
+             patch.object(self.mux, '_schedule_service_hook') as schedule_hook:
+            await self.mux.on_overlay_state(True)
+
+        start_all.assert_awaited_once()
+        send_catalog.assert_called_once()
+        schedule_hook.assert_any_call(spec, svc_key, 'listener', 'on_created')
+
     async def test_receiver_starts_udp_and_tcp_listeners_from_remote_catalog(self):
         udp_spec = ChannelMux.ServiceSpec(1, 'udp', '127.0.0.1', 10001, 'udp', '127.0.0.1', 20001)
         tcp_spec = ChannelMux.ServiceSpec(2, 'tcp', '127.0.0.1', 10002, 'tcp', '127.0.0.1', 20002)
