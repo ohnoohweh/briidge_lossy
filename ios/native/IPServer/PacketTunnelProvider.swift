@@ -935,6 +935,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             bindPort: config.bindPort,
             peerHost: config.peerHost,
             peerPort: config.peerPort,
+            peerResolveFamily: config.peerResolveFamily,
             mtu: config.mtu,
             tunIfname: config.tunIfname
         )
@@ -1459,6 +1460,7 @@ private struct SwiftSimpleUDPPeerSettings {
     let bindPort: Int
     let peerHost: String
     let peerPort: Int
+    let peerResolveFamily: String
     let mtu: Int
     let tunIfname: String
 }
@@ -1554,7 +1556,8 @@ private final class SwiftSimpleUDPPeerBridge {
             bindHost: settings.bindHost,
             bindPort: settings.bindPort,
             peerHost: settings.peerHost,
-            peerPort: settings.peerPort
+            peerPort: settings.peerPort,
+            peerResolveFamily: settings.peerResolveFamily
         )
         self.socketFD = boundSocket.socketFD
         self.peerAddress = boundSocket.peerAddress
@@ -1624,6 +1627,7 @@ private final class SwiftSimpleUDPPeerBridge {
                 "bind_port": settings.bindPort,
                 "peer_host": settings.peerHost,
                 "peer_port": settings.peerPort,
+                "peer_resolve_family": settings.peerResolveFamily,
                 "mtu": settings.mtu,
                 "tunnel_address": tunnelAddress,
             ]
@@ -1678,6 +1682,10 @@ private final class SwiftSimpleUDPPeerBridge {
                 "bind_port": settings.bindPort,
                 "peer_host": settings.peerHost,
                 "peer_port": settings.peerPort,
+                "peer_resolve_family": settings.peerResolveFamily,
+                "resolved_peer_host": peerAddress.host,
+                "resolved_peer_port": peerAddress.port,
+                "resolved_peer_family": Self.familyName(peerAddress.family),
                 "mtu": settings.mtu,
                 "tunnel_address": tunnelAddress,
                 "socket_fd": socketFD,
@@ -2417,13 +2425,339 @@ private final class SwiftSimpleUDPPeerBridge {
         return version == 6 ? AF_INET6 : AF_INET
     }
 
+    private enum PeerResolveMode {
+        case preferIPv6
+        case ipv4
+        case ipv6
+
+        init(rawValue: String) {
+            switch rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "ipv4":
+                self = .ipv4
+            case "ipv6":
+                self = .ipv6
+            default:
+                self = .preferIPv6
+            }
+        }
+
+        func rank(for family: Int32) -> Int {
+            switch self {
+            case .preferIPv6, .ipv6:
+                return family == AF_INET6 ? 0 : 1
+            case .ipv4:
+                return family == AF_INET ? 0 : 1
+            }
+        }
+
+        var localhostFallback: (host: String, family: Int32)? {
+            switch self {
+            case .ipv4:
+                return ("127.0.0.1", AF_INET)
+            case .ipv6:
+                return ("::1", AF_INET6)
+            case .preferIPv6:
+                return nil
+            }
+        }
+
+        var preferredFamily: Int32? {
+            switch self {
+            case .ipv4:
+                return AF_INET
+            case .ipv6:
+                return AF_INET6
+            case .preferIPv6:
+                return nil
+            }
+        }
+    }
+
+    private static func familyName(_ family: Int32) -> String {
+        switch family {
+        case AF_INET:
+            return "ipv4"
+        case AF_INET6:
+            return "ipv6"
+        default:
+            return "unspecified"
+        }
+    }
+
+    private static func stripBrackets(_ host: String) -> String {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+            return String(trimmed.dropFirst().dropLast())
+        }
+        return trimmed
+    }
+
+    private static func splitConfiguredPeerHosts(_ host: String) -> [String] {
+        let rendered = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rendered.isEmpty else {
+            return []
+        }
+        guard rendered.contains(",") || rendered.contains(";") else {
+            return [rendered]
+        }
+        return rendered
+            .replacingOccurrences(of: ";", with: ",")
+            .split(separator: ",")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private static func hostIPFamily(_ host: String) -> Int32? {
+        let rendered = stripBrackets(host)
+        guard !rendered.isEmpty else {
+            return nil
+        }
+        var ipv4 = in_addr()
+        if rendered.withCString({ inet_pton(AF_INET, $0, &ipv4) }) == 1 {
+            return AF_INET
+        }
+        var ipv6 = in6_addr()
+        if rendered.withCString({ inet_pton(AF_INET6, $0, &ipv6) }) == 1 {
+            return AF_INET6
+        }
+        return nil
+    }
+
+    private static func bindFamilyConstraint(_ bindHost: String) -> Int32? {
+        let rendered = stripBrackets(bindHost)
+        if rendered.isEmpty || rendered == "::" {
+            return nil
+        }
+        return hostIPFamily(rendered)
+    }
+
+    private static func ipv4MappedIPv6(_ host: String) -> String {
+        return "::ffff:\(host)"
+    }
+
+    private static func numericHostPort(from storage: Data, length: socklen_t) throws -> (String, Int) {
+        var hostBuffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        var serviceBuffer = [CChar](repeating: 0, count: Int(NI_MAXSERV))
+        let status: Int32 = storage.withUnsafeBytes { rawBuffer in
+            guard let base = rawBuffer.baseAddress else {
+                return EAI_FAIL
+            }
+            let sockaddrPtr = base.assumingMemoryBound(to: sockaddr.self)
+            return getnameinfo(
+                sockaddrPtr,
+                length,
+                &hostBuffer,
+                socklen_t(hostBuffer.count),
+                &serviceBuffer,
+                socklen_t(serviceBuffer.count),
+                NI_NUMERICHOST | NI_NUMERICSERV
+            )
+        }
+        guard status == 0 else {
+            throw NSError(
+                domain: "ObstacleBridge.IPServer",
+                code: 35,
+                userInfo: [NSLocalizedDescriptionKey: "getnameinfo() failed status=\(status)"]
+            )
+        }
+        return (String(cString: hostBuffer), Int(String(cString: serviceBuffer)) ?? 0)
+    }
+
+    private static func resolveAddressCandidates(host: String, port: Int, passive: Bool, family: Int32) throws -> [ResolvedAddress] {
+        var hints = addrinfo(
+            ai_flags: passive ? AI_PASSIVE : 0,
+            ai_family: family,
+            ai_socktype: SOCK_DGRAM,
+            ai_protocol: IPPROTO_UDP,
+            ai_addrlen: 0,
+            ai_canonname: nil,
+            ai_addr: nil,
+            ai_next: nil
+        )
+        var results: UnsafeMutablePointer<addrinfo>?
+        let status = getaddrinfo(host, String(port), &hints, &results)
+        guard status == 0, let info = results else {
+            throw NSError(
+                domain: "ObstacleBridge.IPServer",
+                code: 34,
+                userInfo: [NSLocalizedDescriptionKey: "getaddrinfo() failed for \(host):\(port) status=\(status)"]
+            )
+        }
+        defer { freeaddrinfo(results) }
+        var candidates: [ResolvedAddress] = []
+        var cursor: UnsafeMutablePointer<addrinfo>? = info
+        while let current = cursor {
+            let family = current.pointee.ai_family
+            if (family == AF_INET || family == AF_INET6), let addr = current.pointee.ai_addr {
+                let data = Data(bytes: addr, count: Int(current.pointee.ai_addrlen))
+                let numeric = try numericHostPort(from: data, length: current.pointee.ai_addrlen)
+                let resolved = ResolvedAddress(
+                    family: family,
+                    host: numeric.0,
+                    port: numeric.1,
+                    storage: data,
+                    length: current.pointee.ai_addrlen
+                )
+                if !candidates.contains(where: { $0.family == resolved.family && $0.host == resolved.host && $0.port == resolved.port }) {
+                    candidates.append(resolved)
+                }
+            }
+            cursor = current.pointee.ai_next
+        }
+        guard !candidates.isEmpty else {
+            throw NSError(
+                domain: "ObstacleBridge.IPServer",
+                code: 36,
+                userInfo: [NSLocalizedDescriptionKey: "Could not resolve overlay peer \(host)"]
+            )
+        }
+        return candidates
+    }
+
+    private static func resolveAddress(host: String, port: Int, passive: Bool, family: Int32) throws -> ResolvedAddress {
+        guard let first = try resolveAddressCandidates(host: host, port: port, passive: passive, family: family).first else {
+            throw NSError(
+                domain: "ObstacleBridge.IPServer",
+                code: 36,
+                userInfo: [NSLocalizedDescriptionKey: "Could not resolve overlay peer \(host)"]
+            )
+        }
+        return first
+    }
+
+    private static func resolvePeerCandidates(
+        host: String,
+        port: Int,
+        mode: PeerResolveMode,
+        strictFamily: Bool
+    ) throws -> [ResolvedAddress] {
+        let rendered = stripBrackets(host)
+        guard !rendered.isEmpty else {
+            throw NSError(
+                domain: "ObstacleBridge.IPServer",
+                code: 37,
+                userInfo: [NSLocalizedDescriptionKey: "overlay peer requires a non-empty host name"]
+            )
+        }
+        if let family = hostIPFamily(rendered) {
+            var resolvedHost = rendered
+            var resolvedFamily = family
+            if strictFamily {
+                switch mode {
+                case .ipv4 where family != AF_INET:
+                    throw NSError(
+                        domain: "ObstacleBridge.IPServer",
+                        code: 38,
+                        userInfo: [NSLocalizedDescriptionKey: "overlay peer '\(rendered)' is not an IPv4 address"]
+                    )
+                case .ipv6 where family != AF_INET6:
+                    if family == AF_INET {
+                        resolvedHost = ipv4MappedIPv6(rendered)
+                        resolvedFamily = AF_INET6
+                    } else {
+                        throw NSError(
+                            domain: "ObstacleBridge.IPServer",
+                            code: 39,
+                            userInfo: [NSLocalizedDescriptionKey: "overlay peer '\(rendered)' is not an IPv6 address"]
+                        )
+                    }
+                default:
+                    break
+                }
+            }
+            return [try resolveAddress(host: resolvedHost, port: port, passive: false, family: resolvedFamily)]
+        }
+
+        let lookupFamily = strictFamily ? (mode.preferredFamily ?? AF_UNSPEC) : AF_UNSPEC
+        do {
+            return try resolveAddressCandidates(host: rendered, port: port, passive: false, family: lookupFamily)
+        } catch {
+            if rendered.lowercased() == "localhost", let fallback = mode.localhostFallback {
+                return [try resolveAddress(host: fallback.host, port: port, passive: false, family: fallback.family)]
+            }
+            throw error
+        }
+    }
+
+    private static func resolvePeerAddress(
+        host: String,
+        port: Int,
+        resolveFamily: String,
+        bindHost: String
+    ) throws -> ResolvedAddress {
+        let configuredHosts = splitConfiguredPeerHosts(host)
+        guard !configuredHosts.isEmpty else {
+            throw NSError(
+                domain: "ObstacleBridge.IPServer",
+                code: 37,
+                userInfo: [NSLocalizedDescriptionKey: "overlay peer requires a non-empty host name"]
+            )
+        }
+        let mode = PeerResolveMode(rawValue: resolveFamily)
+        let strictFamily = configuredHosts.count == 1
+        var candidates: [ResolvedAddress] = []
+        if strictFamily {
+            candidates = try resolvePeerCandidates(host: configuredHosts[0], port: port, mode: mode, strictFamily: true)
+        } else {
+            for configuredHost in configuredHosts {
+                if let resolved = try? resolvePeerCandidates(host: configuredHost, port: port, mode: mode, strictFamily: false) {
+                    candidates.append(contentsOf: resolved)
+                }
+            }
+            if candidates.isEmpty {
+                throw NSError(
+                    domain: "ObstacleBridge.IPServer",
+                    code: 36,
+                    userInfo: [NSLocalizedDescriptionKey: "Could not resolve overlay peer '\(host)'"]
+                )
+            }
+        }
+
+        candidates.sort { lhs, rhs in
+            let lhsRank = mode.rank(for: lhs.family)
+            let rhsRank = mode.rank(for: rhs.family)
+            if lhsRank != rhsRank {
+                return lhsRank < rhsRank
+            }
+            if lhs.family != rhs.family {
+                return lhs.family < rhs.family
+            }
+            if lhs.host != rhs.host {
+                return lhs.host < rhs.host
+            }
+            return lhs.port < rhs.port
+        }
+
+        if let bindFamily = bindFamilyConstraint(bindHost) {
+            if let matching = candidates.first(where: { $0.family == bindFamily }) {
+                return matching
+            }
+            let famName = bindFamily == AF_INET6 ? "IPv6" : "IPv4"
+            throw NSError(
+                domain: "ObstacleBridge.IPServer",
+                code: 40,
+                userInfo: [NSLocalizedDescriptionKey: "overlay peer '\(host)' resolved, but no \(famName) address is compatible with bind '\(bindHost)'"]
+            )
+        }
+
+        guard let first = candidates.first else {
+            throw NSError(
+                domain: "ObstacleBridge.IPServer",
+                code: 36,
+                userInfo: [NSLocalizedDescriptionKey: "Could not resolve overlay peer '\(host)'"]
+            )
+        }
+        return first
+    }
+
     private static func makeBoundSocket(
         bindHost: String,
         bindPort: Int,
         peerHost: String,
-        peerPort: Int
+        peerPort: Int,
+        peerResolveFamily: String
     ) throws -> (socketFD: Int32, peerAddress: ResolvedAddress) {
-        let peer = try resolveAddress(host: peerHost, port: peerPort, passive: false, family: AF_UNSPEC)
+        let peer = try resolvePeerAddress(host: peerHost, port: peerPort, resolveFamily: peerResolveFamily, bindHost: bindHost)
         let sock = socket(peer.family, SOCK_DGRAM, IPPROTO_UDP)
         guard sock >= 0 else {
             throw NSError(domain: "ObstacleBridge.IPServer", code: 31, userInfo: [NSLocalizedDescriptionKey: "socket() failed"])
@@ -2460,33 +2794,10 @@ private final class SwiftSimpleUDPPeerBridge {
 
     private struct ResolvedAddress {
         let family: Int32
+        let host: String
+        let port: Int
         let storage: Data
         let length: socklen_t
-    }
-
-    private static func resolveAddress(host: String, port: Int, passive: Bool, family: Int32) throws -> ResolvedAddress {
-        var hints = addrinfo(
-            ai_flags: passive ? AI_PASSIVE : 0,
-            ai_family: family,
-            ai_socktype: SOCK_DGRAM,
-            ai_protocol: IPPROTO_UDP,
-            ai_addrlen: 0,
-            ai_canonname: nil,
-            ai_addr: nil,
-            ai_next: nil
-        )
-        var results: UnsafeMutablePointer<addrinfo>?
-        let status = getaddrinfo(host, String(port), &hints, &results)
-        guard status == 0, let info = results else {
-            throw NSError(
-                domain: "ObstacleBridge.IPServer",
-                code: 34,
-                userInfo: [NSLocalizedDescriptionKey: "getaddrinfo() failed for \(host):\(port) status=\(status)"]
-            )
-        }
-        defer { freeaddrinfo(results) }
-        let addrData = Data(bytes: info.pointee.ai_addr, count: Int(info.pointee.ai_addrlen))
-        return ResolvedAddress(family: info.pointee.ai_family, storage: addrData, length: info.pointee.ai_addrlen)
     }
 }
 
@@ -2498,6 +2809,7 @@ extension PacketTunnelProvider {
         bindPort: Int,
         peerHost: String,
         peerPort: Int,
+        peerResolveFamily: String = "prefer-ipv6",
         mtu: Int,
         tunIfname: String,
         tunnelAddress: String,
@@ -2510,6 +2822,7 @@ extension PacketTunnelProvider {
             bindPort: bindPort,
             peerHost: peerHost,
             peerPort: peerPort,
+            peerResolveFamily: peerResolveFamily,
             mtu: mtu,
             tunIfname: tunIfname
         )
@@ -2533,6 +2846,7 @@ final class PacketTunnelProviderSwiftUDPBridgeProbe {
         bindPort: Int,
         peerHost: String,
         peerPort: Int,
+        peerResolveFamily: String = "prefer-ipv6",
         mtu: Int,
         tunIfname: String,
         tunnelAddress: String,
@@ -2545,6 +2859,7 @@ final class PacketTunnelProviderSwiftUDPBridgeProbe {
             bindPort: bindPort,
             peerHost: peerHost,
             peerPort: peerPort,
+            peerResolveFamily: peerResolveFamily,
             mtu: mtu,
             tunIfname: tunIfname,
             tunnelAddress: tunnelAddress,

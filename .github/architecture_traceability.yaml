@@ -25,6 +25,10 @@
 # ARC-CMP-004, and ARC-CMP-006 mappings intact while fixing WS SecureLink
 # transport-epoch reconnect sequencing and hardening the shared TCP/WS IPv6 test
 # harness against listener-startup races under xdist.
+# NOTE: The 2026-05-31 transport-scoped peer-resolution follow-up keeps the
+# existing ARC-CMP-004 runtime/bootstrap mappings intact while renaming
+# resolve-family settings per transport and adding multi-host IPv4/IPv6
+# selection coverage in unit and overlay integration tests.
 
 ARC-CMP-001:
   unit_tests:
@@ -108,6 +112,9 @@ ARC-CMP-003:
 
 ARC-CMP-004:
   unit_tests:
+    - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv6_literal_when_available
+    - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_falls_back_to_ipv4_when_ipv6_candidate_fails
+    - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_honors_bind_family_constraint
     - tests/unit/test_runner_config_persistence.py::test_runtime_config_encrypts_secret_fields_and_loads_them_back
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_psk
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_cert
@@ -167,6 +174,7 @@ ARC-CMP-004:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_reconnect_targets_selected_peer_id
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_default_entrypoint_config_bootstrap_and_webadmin_notice
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_udp_peer_multi_host_prefers_ipv6_and_falls_back_to_ipv4
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected

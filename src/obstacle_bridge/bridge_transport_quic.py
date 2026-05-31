@@ -86,6 +86,14 @@ class QuicSession(ISession):
             p.add_argument('--quic-peer', default=None, help='QUIC peer IP/FQDN')
         if not _has('--quic-peer-port'):
             p.add_argument('--quic-peer-port', type=int, default=443, help='QUIC peer overlay port')
+        if not _has('--quic-peer-resolve-family'):
+            p.add_argument(
+                '--quic-peer-resolve-family',
+                dest='quic_peer_resolve_family',
+                choices=['prefer-ipv6', 'ipv4', 'ipv6'],
+                default='prefer-ipv6',
+                help='QUIC peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.'
+            )
 
         if not _has('--quic-alpn'):
             p.add_argument('--quic-alpn', default='hq-29',
@@ -138,6 +146,7 @@ class QuicSession(ISession):
             args,
             peer_attr="quic_peer",
             peer_port_attr="quic_peer_port",
+            resolve_attr="quic_peer_resolve_family",
             bind_host=self._listen_host,
             socktype=socket.SOCK_DGRAM,
         )

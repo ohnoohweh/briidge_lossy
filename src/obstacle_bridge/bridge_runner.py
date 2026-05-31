@@ -1450,7 +1450,7 @@ class Runner:
                 default_port = {"tcp": 8081, "quic": 443, "ws": 8080}[proto]
                 p.add_argument(listen_port_opt, dest=f"{proto}_own_port", type=int, default=default_port, help=f'{proto.upper()} overlay own port')
             if not _has(peer_opt):
-                p.add_argument(peer_opt, default=None, help=f'{proto.upper()} peer IP/FQDN')
+                p.add_argument(peer_opt, default=None, help=f'{proto.upper()} peer IP/FQDN or comma-separated IPv4/IPv6 alternatives')
             if not _has(peer_port_opt):
                 default_peer_port = {"tcp": 8081, "quic": 443, "ws": 8080}[proto]
                 p.add_argument(peer_port_opt, type=int, default=default_peer_port, help=f'{proto.upper()} peer overlay port')

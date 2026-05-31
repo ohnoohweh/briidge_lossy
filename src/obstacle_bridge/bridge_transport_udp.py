@@ -1739,12 +1739,13 @@ class UdpSession(ISession):
             p.add_argument('--udp-own-port', dest='udp_own_port', type=int, default=4433, help='overlay own port')
         if not _has('--udp-peer'):
             p.add_argument('--udp-peer', '--peer', dest='udp_peer', default=None,
-                           help="peer IP/FQDN (IPv4 or IPv6 literal; IPv6 may be in [brackets])")
+                           help="peer IP/FQDN, or comma-separated IPv4/IPv6 alternatives (IPv6 may be in [brackets])")
         if not _has('--udp-peer-port'):
             p.add_argument('--udp-peer-port', '--peer-port', dest='udp_peer_port', type=int, default=4433, help='peer overlay port')
-        if not _has('--peer-resolve-family'):
+        if not _has('--udp-peer-resolve-family'):
             p.add_argument(
-                '--peer-resolve-family',
+                '--udp-peer-resolve-family',
+                dest='udp_peer_resolve_family',
                 choices=['prefer-ipv6', 'ipv4', 'ipv6'],
                 default='prefer-ipv6',
                 help='Peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.'
@@ -1960,6 +1961,7 @@ class UdpSession(ISession):
             self._args,
             peer_attr="udp_peer",
             peer_port_attr="udp_peer_port",
+            resolve_attr="udp_peer_resolve_family",
             bind_host=listen_host,
             socktype=socket.SOCK_DGRAM,
         )

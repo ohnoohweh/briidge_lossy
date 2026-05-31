@@ -38,7 +38,7 @@ Security controls that span multiple requirement areas, including WebAdmin authe
 - `REQ-OVL-004`: A peer client shall be able to establish a WebSocket overlay session to a listener and carry UDP application traffic across it.
 - `REQ-OVL-005`: A peer client shall be able to establish a QUIC overlay session to a listener and carry UDP application traffic across it.
 - `REQ-OVL-006`: Supported overlay transports shall work on both IPv4 and IPv6 where the specific transport mode is configured for that address family.
-- `REQ-OVL-007`: Localhost-based peer resolution shall behave deterministically for reconnect scenarios on both IPv4 and IPv6.
+- `REQ-OVL-007`: Overlay peer resolution shall behave deterministically for reconnect scenarios on both IPv4 and IPv6. The runtime configuration surface shall scope peer-family preference per transport (`udp_peer_resolve_family`, `tcp_peer_resolve_family`, `ws_peer_resolve_family`, `quic_peer_resolve_family`), and peer endpoint fields shall accept either one host/FQDN or an ordered comma-separated list of IPv4/IPv6 alternatives. When multiple alternatives are configured, the runtime shall prefer addresses that match the selected transport-local family policy, but if the preferred family cannot be used and a usable alternative family is available, connection bootstrap shall fall back to that alternative instead of failing solely because the first family choice was unavailable.
 
 ## WebSocket proxy and payload requirements
 

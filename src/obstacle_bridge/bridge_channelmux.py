@@ -203,6 +203,7 @@ class ChannelMux:
                     args,
                     peer_attr=peer_attr,
                     peer_port_attr=peer_port_attr,
+                    resolve_attr=f"{'udp' if active_transport == 'myudp' else active_transport}_peer_resolve_family",
                     bind_host=str(getattr(args, bind_attr, "") or ""),
                     socktype=socktype,
                 )

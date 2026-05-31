@@ -214,6 +214,14 @@ class WebSocketSession(ISession):
             p.add_argument('--ws-peer', default=None, help='WebSocket peer IP/FQDN')
         if not _has('--ws-peer-port'):
             p.add_argument('--ws-peer-port', type=int, default=8080, help='WebSocket peer overlay port')
+        if not _has('--ws-peer-resolve-family'):
+            p.add_argument(
+                '--ws-peer-resolve-family',
+                dest='ws_peer_resolve_family',
+                choices=['prefer-ipv6', 'ipv4', 'ipv6'],
+                default='prefer-ipv6',
+                help='WebSocket peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.'
+            )
 
         if not _has('--ws-path'):
             p.add_argument('--ws-path', default='/', help='WebSocket HTTP path (default /)')
@@ -307,6 +315,7 @@ class WebSocketSession(ISession):
             self._args,
             peer_attr="ws_peer",
             peer_port_attr="ws_peer_port",
+            resolve_attr="ws_peer_resolve_family",
             bind_host=self._listen_host,
             socktype=socket.SOCK_STREAM,
         )

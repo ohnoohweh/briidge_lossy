@@ -45,10 +45,14 @@ REQ-OVL-006:
 REQ-OVL-007:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_udp_peer_multi_host_prefers_ipv6_and_falls_back_to_ipv4
     - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
   unit_tests:
     - tests/unit/test_peer_resolution.py::test_resolve_localhost_ipv4_uses_loopback_fallback_on_gaierror
     - tests/unit/test_peer_resolution.py::test_resolve_localhost_ipv6_uses_loopback_fallback_on_gaierror
+    - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv6_literal_when_available
+    - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_falls_back_to_ipv4_when_ipv6_candidate_fails
+    - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_honors_bind_family_constraint
 
 # This manifest is CI/support metadata and therefore lives under .github/ rather than docs/.
 # NOTE: updated to reflect a small instrumentation/docs change (PR #178)
@@ -79,6 +83,10 @@ REQ-OVL-007:
 # intact while fixing SecureLink transport-epoch reconnect handling and adding
 # listener-readiness waits to the shared overlay harness for xdist-stable IPv6
 # TCP/WS startup.
+# NOTE: The 2026-05-31 transport-scoped peer-resolution follow-up keeps the
+# existing REQ-OVL-007 mapping intact while renaming resolve-family settings per
+# transport and adding multi-host IPv4/IPv6 preference-plus-fallback coverage in
+# unit and overlay integration tests.
 # The application-vs-library functional decomposition for REQ-WSP-* is documented in
 # docs/ARCHITECTURE.md under "WebSocket proxy tunneling".
 # The broader separation between user use-cases, external assumptions, and

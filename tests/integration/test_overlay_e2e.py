@@ -465,11 +465,23 @@ def _localhost_alias_name(case_index: int) -> str:
     return f'obhostalias{int(case_index)}'
 
 
+def _peer_resolve_option_name(transport: str) -> str:
+    rendered = str(transport or 'myudp').strip().lower()
+    prefix = 'udp' if rendered == 'myudp' else rendered
+    return f'--{prefix}-peer-resolve-family'
+
+
 def _case_prefers_ipv6_localhost(case: Case) -> bool:
     args = list(case.bridge_client_args)
-    if '--peer-resolve-family' not in args:
+    transport = 'myudp'
+    if '--overlay-transport' in args:
+        idx = args.index('--overlay-transport')
+        if idx + 1 < len(args):
+            transport = str(args[idx + 1]).strip().lower()
+    resolve_opt = _peer_resolve_option_name(transport)
+    if resolve_opt not in args:
         return False
-    idx = args.index('--peer-resolve-family')
+    idx = args.index(resolve_opt)
     return idx + 1 < len(args) and str(args[idx + 1]).strip().lower() == 'ipv6'
 
 
@@ -895,11 +907,12 @@ def _with_localhost_peer(case: Case, name: str, bind_host: str, resolve_family: 
     if transport in ('tcp', 'quic', 'ws'):
         bind_opt = f'--{transport}-bind'
         peer_opt = f'--{transport}-peer'
+    resolve_opt = _peer_resolve_option_name(transport)
 
     server_args = _replace_arg(case.bridge_server_args, bind_opt, bind_host)
     client_args = _replace_arg(case.bridge_client_args, peer_opt, 'localhost')
     client_args = _replace_arg(client_args, bind_opt, bind_host)
-    client_args = _append_args(client_args, ['--peer-resolve-family', resolve_family])
+    client_args = _append_args(client_args, [resolve_opt, resolve_family])
 
     server_env = dict(case.server_env)
     client_env = dict(case.client_env)
@@ -5756,6 +5769,77 @@ def test_overlay_e2e_basic(case_name: str, tmp_path: Path) -> None:
 @pytest.mark.parametrize("case_name", RECONNECT_CASES)
 def test_overlay_e2e_reconnect(case_name: str, tmp_path: Path) -> None:
     run_case_reconnect(CASES[case_name], tmp_path, CASE_INDEX_BASE_RECONNECT + ALL_CASES.index(case_name))
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_udp_peer_multi_host_prefers_ipv6_and_falls_back_to_ipv4(tmp_path: Path) -> None:
+    def _run_multi_peer_case(case: Case, *, case_index: int, expected_client_peer: str) -> None:
+        procs: List[Proc] = []
+        bounce = BounceBackServer(
+            name=f'{case.name}_bounce',
+            proto=case.bounce_proto,
+            bind_host=case.bounce_bind,
+            port=case.bounce_port,
+            log_path=tmp_path / f'{case.name}_bounce.log',
+        )
+        try:
+            bounce.start()
+            for name, cmd, env, admin_port in build_commands(case, tmp_path, case_index, enable_admin=True):
+                proc = start_proc(f'{case.name}_{name}', cmd, tmp_path, env_extra=env, admin_port=admin_port)
+                procs.append(proc)
+                assert_running(proc)
+                wait_admin_up(proc.admin_port or 0, timeout=10.0)
+            server_proc, client_proc = wait_both_connected(procs[0], procs[1], tmp_path, timeout=30.0)
+            wait_peer_row_visible(
+                client_proc.admin_port or 0,
+                transport='myudp',
+                peer=expected_client_peer,
+                state='connected',
+                timeout=12.0,
+                label=f'{case.name} client',
+            )
+            wait_peer_endpoint_visible(server_proc.admin_port or 0, timeout=12.0, label=f'{case.name} server', transport='myudp')
+            wait_probe(case, timeout=8.0)
+        finally:
+            for proc in reversed(procs):
+                stop_proc(proc)
+            bounce.stop()
+
+    prefer_case_index = 232
+    prefer_case = materialize_case_ports(CASES['case02_udp_over_own_udp_overlay_ipv6_clients_ipv4'], prefer_case_index)
+    prefer_ipv4_host = _loopback_ipv4_host(prefer_case_index)
+    prefer_overlay_port = _listener_overlay_port(prefer_case, 'myudp')
+    prefer_client_args = _replace_arg(prefer_case.bridge_client_args, '--udp-peer', f'[::1],{prefer_ipv4_host}')
+    prefer_client_args = _replace_option_values(prefer_client_args, '--udp-peer-resolve-family', ['prefer-ipv6'])
+    prefer_case = replace(
+        prefer_case,
+        name='case02_udp_over_own_udp_multi_peer_prefer_ipv6',
+        bridge_client_args=prefer_client_args,
+    )
+
+    fallback_case_index = 233
+    fallback_case = materialize_case_ports(CASES['case01_udp_over_own_udp_ipv4'], fallback_case_index)
+    fallback_ipv4_host = _loopback_ipv4_host(fallback_case_index)
+    fallback_overlay_port = _listener_overlay_port(fallback_case, 'myudp')
+    fallback_client_args = _replace_arg(fallback_case.bridge_client_args, '--udp-peer', f'[::1],{fallback_ipv4_host}')
+    fallback_client_args = _replace_option_values(fallback_client_args, '--udp-peer-resolve-family', ['prefer-ipv6'])
+    fallback_case = replace(
+        fallback_case,
+        name='case01_udp_over_own_udp_multi_peer_fallback_ipv4',
+        bridge_client_args=fallback_client_args,
+    )
+
+    _run_multi_peer_case(
+        prefer_case,
+        case_index=prefer_case_index,
+        expected_client_peer=f'[::1]:{prefer_overlay_port}',
+    )
+    _run_multi_peer_case(
+        fallback_case,
+        case_index=fallback_case_index,
+        expected_client_peer=f'{fallback_ipv4_host}:{fallback_overlay_port}',
+    )
 
 
 @pytest.mark.integration

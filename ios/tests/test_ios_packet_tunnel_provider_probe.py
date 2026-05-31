@@ -29,6 +29,12 @@ def _unused_tcp_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _unused_udp_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
 def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: Path) -> None:
     swiftc = require_swift_modules(
         "CryptoKit",
@@ -321,3 +327,93 @@ def test_ios_packet_tunnel_provider_probe_serves_multiple_tcp_connections_in_adm
     assert all(row["role"] == "server" for row in bridge_a_rows)
     assert all(row["state"] == "connected" for row in bridge_a_rows)
     assert all(row["stats"]["tx_bytes"] > 0 for row in bridge_a_rows)
+
+
+def test_ios_packet_tunnel_provider_probe_resolves_multi_host_peer_with_family_preference(tmp_path: Path) -> None:
+    source_path = tmp_path / "PacketTunnelProviderPeerResolutionProbe.swift"
+    binary_path = tmp_path / "packet-tunnel-provider-peer-resolution-probe"
+    bind_port_v6 = _unused_udp_port()
+    bind_port_v4 = _unused_udp_port()
+    peer_port_v6 = _unused_udp_port()
+    peer_port_v4 = _unused_udp_port()
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            enum ProbeError: Error {
+                case invalidArgs
+            }
+
+            @main
+            struct PacketTunnelProviderPeerResolutionProbeMain {
+                static func main() throws {
+                    guard CommandLine.arguments.count == 5 else {
+                        throw ProbeError.invalidArgs
+                    }
+                    guard
+                        let bindPortV6 = Int(CommandLine.arguments[1]),
+                        let bindPortV4 = Int(CommandLine.arguments[2]),
+                        let peerPortV6 = Int(CommandLine.arguments[3]),
+                        let peerPortV4 = Int(CommandLine.arguments[4])
+                    else {
+                        throw ProbeError.invalidArgs
+                    }
+
+                    let preferBridge = try PacketTunnelProviderSwiftUDPBridgeProbe(
+                        runtimeMode: "swift_udp",
+                        bindHost: "::",
+                        bindPort: bindPortV6,
+                        peerHost: "[::1],127.0.0.1",
+                        peerPort: peerPortV6,
+                        peerResolveFamily: "prefer-ipv6",
+                        mtu: 1400,
+                        tunIfname: "ios-utun",
+                        tunnelAddress: "192.168.106.1",
+                        tcpServiceSpecs: []
+                    )
+                    let fallbackBridge = try PacketTunnelProviderSwiftUDPBridgeProbe(
+                        runtimeMode: "swift_udp",
+                        bindHost: "127.0.0.1",
+                        bindPort: bindPortV4,
+                        peerHost: "[::1],127.0.0.1",
+                        peerPort: peerPortV4,
+                        peerResolveFamily: "prefer-ipv6",
+                        mtu: 1400,
+                        tunIfname: "ios-utun",
+                        tunnelAddress: "192.168.106.2",
+                        tcpServiceSpecs: []
+                    )
+
+                    let payload: [String: Any] = [
+                        "prefer": preferBridge.bridgeSnapshot(),
+                        "fallback": fallbackBridge.bridgeSnapshot(),
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_packet_tunnel_provider_probe(source_path, binary_path)
+    completed = subprocess.run(
+        [str(binary_path), str(bind_port_v6), str(bind_port_v4), str(peer_port_v6), str(peer_port_v4)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout)
+    assert payload["prefer"]["resolved_peer_family"] == "ipv6"
+    assert payload["prefer"]["resolved_peer_host"] == "::1"
+    assert payload["prefer"]["resolved_peer_port"] == peer_port_v6
+    assert payload["fallback"]["resolved_peer_family"] == "ipv4"
+    assert payload["fallback"]["resolved_peer_host"] == "127.0.0.1"
+    assert payload["fallback"]["resolved_peer_port"] == peer_port_v4

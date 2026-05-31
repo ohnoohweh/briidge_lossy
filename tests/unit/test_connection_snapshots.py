@@ -474,7 +474,7 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
             udp_own_port=4443,
             udp_peer=None,
             udp_peer_port=4433,
-            peer_resolve_family="prefer-ipv6",
+            udp_peer_resolve_family="prefer-ipv6",
         )
         session = UdpSession(args)
         session._listener_mode = True

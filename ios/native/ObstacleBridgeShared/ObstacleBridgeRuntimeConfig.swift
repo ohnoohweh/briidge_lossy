@@ -222,6 +222,7 @@ struct ObstacleBridgeSwiftUDPPeerConfig {
     let bindPort: Int
     let peerHost: String
     let peerPort: Int
+    let peerResolveFamily: String
     let mtu: Int
     let tunIfname: String
 }
@@ -441,6 +442,18 @@ enum ObstacleBridgeRuntimeConfig {
         return nil
     }
 
+    static func peerResolveFamilyValue(from value: Any?) -> String? {
+        guard let raw = stringValue(from: value)?.lowercased() else {
+            return nil
+        }
+        switch raw {
+        case "prefer-ipv6", "ipv4", "ipv6":
+            return raw
+        default:
+            return nil
+        }
+    }
+
     static func peerHost(for transport: String, payload: [String: Any]) -> String? {
         switch transport {
         case "myudp":
@@ -488,6 +501,7 @@ enum ObstacleBridgeRuntimeConfig {
         }
         let bindHost = stringValue(from: experiment["bind_host"]) ?? "0.0.0.0"
         let bindPort = intValue(from: experiment["bind_port"]) ?? peerPort
+        let peerResolveFamily = peerResolveFamilyValue(from: experiment["udp_peer_resolve_family"]) ?? "prefer-ipv6"
         let mtu = intValue(from: experiment["mtu"]) ?? defaultMTU
         let tunIfname = stringValue(from: experiment["ifname"]) ?? "ios-utun"
         return ObstacleBridgeSwiftUDPPeerConfig(
@@ -496,6 +510,7 @@ enum ObstacleBridgeRuntimeConfig {
             bindPort: bindPort > 0 ? bindPort : peerPort,
             peerHost: peerHost,
             peerPort: peerPort,
+            peerResolveFamily: peerResolveFamily,
             mtu: mtu,
             tunIfname: tunIfname
         )

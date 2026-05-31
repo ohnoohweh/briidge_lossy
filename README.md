@@ -12,6 +12,12 @@ Contributor note: 2026-05-29 transport-metrics docs synced for non-UDP
 Contributor note: 2026-05-31 Linux shared overlay CI lane repaired for WS
 SecureLink reconnect epoch handling and xdist IPv6 listener readiness.
 
+Contributor note: 2026-05-31 overlay peer resolution is now transport-scoped
+(`udp_peer_resolve_family`, `tcp_peer_resolve_family`, `ws_peer_resolve_family`,
+`quic_peer_resolve_family`), and UDP peer fields may now carry comma-separated
+IPv4/IPv6 alternatives with preferred-family selection plus fallback in both the
+Python runtime and the Swift UDP peer path.
+
 ## For Users
 
 ### Whitepaper

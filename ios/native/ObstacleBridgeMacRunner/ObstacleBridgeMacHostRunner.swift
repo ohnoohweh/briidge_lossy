@@ -223,14 +223,16 @@ private final class ObstacleBridgeConfigStore {
             "udp_session": [
                 schemaItem(key: "udp_bind", description: "overlay bind address (IPv4 '0.0.0.0' or IPv6 '::')", defaultValue: "::"),
                 schemaItem(key: "udp_own_port", description: "overlay own port", defaultValue: 4433),
-                schemaItem(key: "udp_peer", description: "peer IP/FQDN (IPv4 or IPv6 literal; IPv6 may be in [brackets])", defaultValue: NSNull()),
+                schemaItem(key: "udp_peer", description: "peer IP/FQDN, or comma-separated IPv4/IPv6 alternatives (IPv6 may be in [brackets])", defaultValue: NSNull()),
                 schemaItem(key: "udp_peer_port", description: "peer overlay port", defaultValue: 4433),
+                schemaItem(key: "udp_peer_resolve_family", description: "Peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.", defaultValue: "prefer-ipv6", choices: ["prefer-ipv6", "ipv4", "ipv6"]),
             ],
             "tcp_session": [
                 schemaItem(key: "tcp_bind", description: "TCP overlay bind address", defaultValue: "::"),
                 schemaItem(key: "tcp_own_port", description: "TCP overlay own port", defaultValue: 8081),
                 schemaItem(key: "tcp_peer", description: "TCP peer IP/FQDN", defaultValue: NSNull()),
                 schemaItem(key: "tcp_peer_port", description: "TCP peer overlay port", defaultValue: 8081),
+                schemaItem(key: "tcp_peer_resolve_family", description: "TCP peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.", defaultValue: "prefer-ipv6", choices: ["prefer-ipv6", "ipv4", "ipv6"]),
                 schemaItem(key: "tcp_bp_wbuf_threshold", description: "TCP backpressure write-buffer threshold", defaultValue: 128 * 1024),
             ],
             "ws_session": [
@@ -1627,6 +1629,9 @@ private final class ObstacleBridgeMacHostRunner {
         if payload["udp_peer_port"] == nil {
             payload["udp_peer_port"] = 4433
         }
+        if payload["udp_peer_resolve_family"] == nil {
+            payload["udp_peer_resolve_family"] = "prefer-ipv6"
+        }
         if payload["tcp_bind"] == nil {
             payload["tcp_bind"] = "::"
         }
@@ -1638,6 +1643,9 @@ private final class ObstacleBridgeMacHostRunner {
         }
         if payload["tcp_peer_port"] == nil {
             payload["tcp_peer_port"] = 8081
+        }
+        if payload["tcp_peer_resolve_family"] == nil {
+            payload["tcp_peer_resolve_family"] = "prefer-ipv6"
         }
         if payload["tcp_bp_wbuf_threshold"] == nil {
             payload["tcp_bp_wbuf_threshold"] = 128 * 1024

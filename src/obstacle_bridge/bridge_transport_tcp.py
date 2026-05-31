@@ -63,6 +63,14 @@ class TcpStreamSession(ISession):
             p.add_argument('--tcp-peer', default=None, help='TCP peer IP/FQDN')
         if not _has('--tcp-peer-port'):
             p.add_argument('--tcp-peer-port', type=int, default=8081, help='TCP peer overlay port')
+        if not _has('--tcp-peer-resolve-family'):
+            p.add_argument(
+                '--tcp-peer-resolve-family',
+                dest='tcp_peer_resolve_family',
+                choices=['prefer-ipv6', 'ipv4', 'ipv6'],
+                default='prefer-ipv6',
+                help='TCP peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.'
+            )
 
         if not _has('--tcp-bp-wbuf-threshold'):
             p.add_argument('--tcp-bp-wbuf-threshold', type=int, default=128 * 1024,
@@ -124,6 +132,7 @@ class TcpStreamSession(ISession):
             self._args,
             peer_attr="tcp_peer",
             peer_port_attr="tcp_peer_port",
+            resolve_attr="tcp_peer_resolve_family",
             bind_host=self._listen_host,
             socktype=socket.SOCK_STREAM,
         )
