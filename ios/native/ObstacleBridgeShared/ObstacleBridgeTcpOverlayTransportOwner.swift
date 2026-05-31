@@ -43,6 +43,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
 
     private let peerHost: String
     private let peerPort: Int
+    private let bindHost: String
+    private let bindPort: Int
     private let overlayRuntime: ObstacleBridgeTcpOverlayRuntime
     private let overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
     private let reconnectRetryDelayMS: Int
@@ -51,7 +53,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private let serviceNameByID: [Int: String]
 
     private var udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(instanceID: 0, connectionSeq: 0)
+    private var overlayListener: NWListener?
     private var overlayConnection: NWConnection?
+    private var overlayPeerID: Int?
     private var overlayConnected = false
     private var receiveBuffer = Data()
     private var udpServerConnections: [Int: NWConnection] = [:]
@@ -83,6 +87,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     init(
         peerHost: String,
         peerPort: Int,
+        bindHost: String = "0.0.0.0",
+        bindPort: Int = 0,
         overlayRuntime: ObstacleBridgeTcpOverlayRuntime,
         reconnectRetryDelayMS: Int = 30000,
         overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter? = nil,
@@ -92,6 +98,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     ) {
         self.peerHost = peerHost
         self.peerPort = peerPort
+        self.bindHost = bindHost
+        self.bindPort = max(0, bindPort)
         self.overlayRuntime = overlayRuntime
         self.reconnectRetryDelayMS = max(0, reconnectRetryDelayMS)
         self.overlayLayerTransportAdapter = overlayLayerTransportAdapter
@@ -101,11 +109,18 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     func start() {
-        guard !started, !peerHost.isEmpty, peerPort > 0 else {
+        guard !started else {
+            return
+        }
+        guard (!peerHost.isEmpty && peerPort > 0) || bindPort > 0 else {
             return
         }
         started = true
-        connectOverlay()
+        if !peerHost.isEmpty, peerPort > 0 {
+            connectOverlay()
+            return
+        }
+        startOverlayListener()
     }
 
     func stop() {
@@ -117,8 +132,11 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         reconnectScheduled = false
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
+        overlayListener?.cancel()
+        overlayListener = nil
         overlayConnection?.cancel()
         overlayConnection = nil
+        overlayPeerID = nil
         tcpTransportOwner.stop()
         for connection in udpServerConnections.values {
             connection.cancel()
@@ -146,6 +164,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     func transportSnapshot() -> [String: Any] {
         [
             "overlay_connected": overlayConnected,
+            "overlay_bind_host": bindHost,
+            "overlay_bind_port": bindPort,
             "overlay_host": peerHost,
             "overlay_port": peerPort,
             "reconnect_retry_delay_ms": reconnectRetryDelayMS,
@@ -231,6 +251,99 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         connection.start(queue: queue)
     }
 
+    private func startOverlayListener() {
+        guard started, bindPort > 0, let port = NWEndpoint.Port(rawValue: UInt16(bindPort)) else {
+            return
+        }
+        let params = NWParameters.tcp
+        params.allowLocalEndpointReuse = true
+        params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(bindHost), port: port)
+        do {
+            let listener = try NWListener(using: params)
+            listener.stateUpdateHandler = { [weak self] state in
+                self?.queue.async {
+                    self?.handleOverlayListenerState(state)
+                }
+            }
+            listener.newConnectionHandler = { [weak self] connection in
+                self?.queue.async {
+                    self?.acceptOverlayConnection(connection)
+                }
+            }
+            overlayListener = listener
+            listener.start(queue: queue)
+        } catch {
+            eventSink?("tcp_overlay_listener_failed", ["error": error.localizedDescription, "host": bindHost, "port": bindPort])
+        }
+    }
+
+    private func handleOverlayListenerState(_ state: NWListener.State) {
+        if case .failed(let error) = state {
+            eventSink?("tcp_overlay_listener_failed", ["error": error.localizedDescription, "host": bindHost, "port": bindPort])
+        }
+    }
+
+    private func acceptOverlayConnection(_ connection: NWConnection) {
+        guard started else {
+            connection.cancel()
+            return
+        }
+        if let existing = overlayConnection {
+            if let peerID = overlayPeerID {
+                let snapshot = overlayRuntime.closeServerPeer(peerID: peerID)
+                overlayConnected = snapshot.overlayConnected
+                overlayPeerID = nil
+            }
+            existing.cancel()
+        }
+        overlayConnection = connection
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let self, let connection else {
+                return
+            }
+            self.queue.async {
+                self.handleAcceptedOverlayState(state, connection: connection)
+            }
+        }
+        connection.start(queue: queue)
+    }
+
+    private func handleAcceptedOverlayState(_ state: NWConnection.State, connection: NWConnection) {
+        guard overlayConnection === connection else {
+            return
+        }
+        switch state {
+        case .ready:
+            let endpoint = Self.endpointDescription(connection.endpoint)
+            let snapshot = overlayRuntime.acceptServerPeer(peerHost: endpoint.host, peerPort: endpoint.port, socketPresent: true)
+            overlayPeerID = snapshot.peerID
+            overlayConnected = snapshot.overlayConnected
+            receiveFromOverlay()
+        case .failed(let error):
+            eventSink?("tcp_overlay_server_connection_failed", ["error": error.localizedDescription])
+            closeAcceptedOverlayConnection(connection)
+        case .cancelled:
+            closeAcceptedOverlayConnection(connection)
+        default:
+            break
+        }
+    }
+
+    private func closeAcceptedOverlayConnection(_ connection: NWConnection) {
+        guard overlayConnection === connection else {
+            return
+        }
+        overlayConnection = nil
+        connection.cancel()
+        if let peerID = overlayPeerID {
+            let snapshot = overlayRuntime.closeServerPeer(peerID: peerID)
+            overlayConnected = snapshot.overlayConnected
+            overlayPeerID = nil
+        } else {
+            overlayConnected = false
+        }
+    }
+
     private func handleOverlayState(_ state: NWConnection.State) {
         switch state {
         case .ready:
@@ -285,6 +398,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
             self?.queue.async {
                 guard let self, self.started else { return }
+                guard self.overlayConnection === connection else { return }
                 if let data, !data.isEmpty {
                     self.receiveBuffer.append(data)
                     let snapshot = self.overlayRuntime.handleInboundBytes(self.receiveBuffer)
@@ -296,7 +410,11 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
                     }
                 }
                 if isComplete || error != nil {
-                    self.overlayConnected = false
+                    if self.peerHost.isEmpty {
+                        self.closeAcceptedOverlayConnection(connection)
+                    } else {
+                        self.overlayConnected = false
+                    }
                     return
                 }
                 self.receiveFromOverlay()

@@ -25,24 +25,31 @@ Current iOS testing statistics:
 From repository root:
 
 ```bash
-pytest -q ios/tests/test_invite_import.py ios/tests/test_ios_profile_config.py ios/tests/test_ios_app_facade.py
+./ios/scripts/run_ios_pytest.sh -q ios/tests/test_invite_import.py ios/tests/test_ios_profile_config.py ios/tests/test_ios_app_facade.py
 ```
 
 ```bash
-pytest -q ios/tests/test_dependency_spike.py ios/tests/test_m25_ui.py
+./ios/scripts/run_ios_pytest.sh -q ios/tests/test_dependency_spike.py ios/tests/test_m25_ui.py
 ```
 
 ```bash
-pytest -q ios/tests/test_m3_tunnel.py ios/tests/test_m3_native_sources.py
+./ios/scripts/run_ios_pytest.sh -q ios/tests/test_m3_tunnel.py ios/tests/test_m3_native_sources.py
 ```
 
 ```bash
-pytest -q ios/tests/test_native_crypto.py ios/tests/test_ios_e2e_app_runner.py
+./ios/scripts/run_ios_pytest.sh -q ios/tests/test_native_crypto.py ios/tests/test_ios_e2e_app_runner.py
 ```
 
 ```bash
-pytest -q tests/integration/test_ios_e2e.py
+./ios/scripts/run_ios_pytest.sh -q tests/integration/test_ios_e2e.py
 ```
+
+`run_ios_pytest.sh` stages `OBSTACLEBRIDGE_IOS_DOCUMENTS_ROOT` under `/tmp` by default and removes it on exit, so repo-local temp folders such as `.tmp-ios-docs` do not accumulate while iterating.
+
+Useful toggles:
+
+- `KEEP_TEMP_DOCS_ROOT=1 ./ios/scripts/run_ios_pytest.sh ...` keeps the generated temp documents root for inspection
+- `OBSTACLEBRIDGE_IOS_DOCUMENTS_ROOT=/tmp/my-ios-docs ./ios/scripts/run_ios_pytest.sh ...` reuses a specific temp location
 
 ## Briefcase bootstrap
 

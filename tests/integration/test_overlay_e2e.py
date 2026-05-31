@@ -36,6 +36,8 @@ SRC = ROOT / 'src'
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 BRIDGE = ROOT / 'ObstacleBridge.py'
+SWIFT_SHARED_NATIVE_DIR = ROOT / 'ios' / 'native' / 'ObstacleBridgeShared'
+SWIFT_MAC_RUNNER_SOURCE = ROOT / 'ios' / 'native' / 'ObstacleBridgeMacRunner' / 'ObstacleBridgeMacHostRunner.swift'
 PAYLOAD_IN = b'\x01\x30'
 PAYLOAD_OUT = b'\x02\x30'
 
@@ -73,6 +75,12 @@ from obstacle_bridge.bridge import (
 )
 
 log = logging.getLogger()
+
+BRIDGE_RUNTIME_MODE_CHOICES = (
+    'python-python',
+    'swift-server-python-client',
+    'python-server-swift-client',
+)
 
 try:
     import fcntl
@@ -334,6 +342,7 @@ SECURE_LINK_LOOPBACK_KEYS_PER_WORKER = 512
 ADMIN_PORT_LOOPBACKS: Dict[int, Tuple[str, str]] = {}
 ALLOCATED_CASE_PORT_OFFSETS: Dict[int, int] = {}
 ALLOCATED_MYUDP_DELAY_LOSS_BASE_PORTS: Dict[int, int] = {}
+LOOPBACK_IPV4_BINDABILITY: Dict[str, bool] = {}
 
 
 def _loopback_host_octets(case_key: int, *, second_octet: int) -> Tuple[int, int, int, int]:
@@ -343,8 +352,25 @@ def _loopback_host_octets(case_key: int, *, second_octet: int) -> Tuple[int, int
     return 127, int(second_octet), third_octet, fourth_octet
 
 
+def _loopback_ipv4_bindable(host: str) -> bool:
+    cached = LOOPBACK_IPV4_BINDABILITY.get(str(host))
+    if cached is not None:
+        return cached
+    try:
+        with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((str(host), 0))
+        LOOPBACK_IPV4_BINDABILITY[str(host)] = True
+    except OSError:
+        LOOPBACK_IPV4_BINDABILITY[str(host)] = False
+    return LOOPBACK_IPV4_BINDABILITY[str(host)]
+
+
 def _loopback_ipv4_host(case_key: int, *, second_octet: int = LOOPBACK_IPV4_SECOND_OCTET) -> str:
-    return '.'.join(str(part) for part in _loopback_host_octets(case_key, second_octet=second_octet))
+    candidate = '.'.join(str(part) for part in _loopback_host_octets(case_key, second_octet=second_octet))
+    if _loopback_ipv4_bindable(candidate):
+        return candidate
+    return '127.0.0.1'
 
 
 def _loopback_ipv6_mapped_host(case_key: int) -> str:
@@ -1694,6 +1720,256 @@ def _normalize_service_specs_cli_args(args: List[str]) -> List[str]:
     return out
 
 
+def _compile_mac_host_runner(binary_path: Path) -> None:
+    swiftc = shutil.which('swiftc')
+    if not swiftc:
+        pytest.skip('swiftc is required for mixed Swift/Python overlay tests')
+    command = [
+        swiftc,
+        '-o',
+        str(binary_path),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeAdminAPI.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeChannelMuxCodec.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeSecureLinkPskCodec.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeSecureLinkPskRuntime.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeSecureLinkPskTransportAdapter.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeOverlayLayerTransportAdapter.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeRuntimeConfig.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeWebAdminServer.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeChannelMuxUdpRuntime.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeChannelMuxTcpRuntime.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeChannelMuxTCPTransportOwner.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlayCodec.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlaySessionCodec.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlayPeerRuntime.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlayTransportOwner.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeCompressLayerRuntime.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeOverlayStackPlanner.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeWebSocketPayloadCodec.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeWebSocketOverlayRuntime.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTcpOverlayRuntime.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTcpOverlayTransportOwner.swift'),
+        str(SWIFT_MAC_RUNNER_SOURCE),
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        raise AssertionError(
+            f'swiftc failed with exit code {completed.returncode}:\n'
+            f'STDOUT:\n{completed.stdout}\n'
+            f'STDERR:\n{completed.stderr}'
+        )
+
+
+def _write_mac_host_runner_build_info(binary_path: Path) -> None:
+    payload = {
+        'commit': 'overlaye2e',
+        'source': 'embedded-build-info',
+        'repo_root': '',
+        'tainted': True,
+        'tracked_changes': 0,
+        'untracked_changes': 0,
+        'available': True,
+        'diff_sha': 'overlaye2e',
+        'build_timestamp_utc': '2026-05-31T00:00:00Z',
+    }
+    binary_path.with_name(f'{binary_path.name}.build-info.json').write_text(
+        json.dumps(payload, sort_keys=True),
+        encoding='utf-8',
+    )
+
+
+def _swift_runner_binary(log_dir: Path) -> Path:
+    binary_path = log_dir / 'ObstacleBridgeMacHostRunner'
+    if not binary_path.exists():
+        _compile_mac_host_runner(binary_path)
+        _write_mac_host_runner_build_info(binary_path)
+    return binary_path
+
+
+def _bridge_runtime_sides(runtime_mode: str) -> Tuple[str, str]:
+    normalized = str(runtime_mode or 'python-python').strip().lower()
+    if normalized == 'python-python':
+        return 'python', 'python'
+    if normalized == 'swift-server-python-client':
+        return 'swift', 'python'
+    if normalized == 'python-server-swift-client':
+        return 'python', 'swift'
+    raise ValueError(f'Unsupported bridge runtime mode: {runtime_mode!r}')
+
+
+def _service_specs_from_args(args: List[str], option: str) -> List[Dict[str, Any]]:
+    specs: List[Dict[str, Any]] = []
+    i = 0
+    while i < len(args):
+        current = str(args[i])
+        if current != option:
+            i += 1
+            continue
+        i += 1
+        while i < len(args) and not str(args[i]).startswith('--'):
+            normalized = _normalize_service_arg_item(str(args[i]))
+            loaded = json.loads(normalized)
+            if isinstance(loaded, dict):
+                specs.append(loaded)
+            elif isinstance(loaded, list):
+                specs.extend(entry for entry in loaded if isinstance(entry, dict))
+            else:
+                raise RuntimeError(f'Unsupported service spec for {option}: {args[i]!r}')
+            i += 1
+    return specs
+
+
+def _runtime_config_from_bridge_args(
+    args: List[str],
+    *,
+    log_dir: Path,
+    case_name: str,
+    side: str,
+    admin_port: int,
+) -> Dict[str, Any]:
+    materialized_args = materialize_args(args, log_dir, case_name, side)
+    runtime_config: Dict[str, Any] = {
+        'admin_web': True,
+        'admin_web_bind': _admin_host_for_port(admin_port),
+        'admin_web_port': int(admin_port),
+    }
+    value_options: Dict[str, Tuple[str, Callable[[str], Any]]] = {
+        '--overlay-transport': ('overlay_transport', str),
+        '--udp-bind': ('udp_bind', str),
+        '--udp-peer': ('udp_peer', str),
+        '--udp-peer-port': ('udp_peer_port', int),
+        '--udp-own-port': ('udp_own_port', int),
+        '--tcp-bind': ('tcp_bind', str),
+        '--tcp-peer': ('tcp_peer', str),
+        '--tcp-peer-port': ('tcp_peer_port', int),
+        '--tcp-own-port': ('tcp_own_port', int),
+        '--ws-bind': ('ws_bind', str),
+        '--ws-peer': ('ws_peer', str),
+        '--ws-peer-port': ('ws_peer_port', int),
+        '--ws-own-port': ('ws_own_port', int),
+        '--quic-bind': ('quic_bind', str),
+        '--quic-peer': ('quic_peer', str),
+        '--quic-peer-port': ('quic_peer_port', int),
+        '--quic-own-port': ('quic_own_port', int),
+        '--quic-cert': ('quic_cert', str),
+        '--quic-key': ('quic_key', str),
+        '--peer-resolve-family': ('peer_resolve_family', str),
+        '--client-restart-if-disconnected': ('client_restart_if_disconnected', float),
+        '--overlay-reconnect-retry-delay-ms': ('overlay_reconnect_retry_delay_ms', int),
+        '--secure-link-mode': ('secure_link_mode', str),
+        '--secure-link-psk': ('secure_link_psk', str),
+        '--compress-layer-algo': ('compress_layer_algo', str),
+        '--compress-layer-level': ('compress_layer_level', int),
+        '--compress-layer-min-bytes': ('compress_layer_min_bytes', int),
+        '--compress-layer-types': ('compress_layer_types', str),
+        '--log-file': ('log_file', str),
+    }
+    flag_options = {
+        '--admin-web': ('admin_web', True),
+        '--quic-insecure': ('quic_insecure', True),
+        '--secure-link': ('secure_link', True),
+        '--compress-layer': ('compress_layer', True),
+        '--no-compress-layer': ('compress_layer', False),
+    }
+    ignored_options = {
+        '--config',
+        '--admin-web-bind',
+        '--admin-web-port',
+        '--log',
+        '--log-channel-mux',
+        '--log-udp-session',
+        '--log-tcp-session',
+        '--log-compress-layer',
+        '--log-secure-link',
+        '--log-overlay-layer',
+        '--log-overlay-transport',
+        '--log-websocket-overlay',
+    }
+    i = 0
+    while i < len(materialized_args):
+        option = str(materialized_args[i])
+        if option in ('--own-servers', '--remote-servers'):
+            i += 1
+            while i < len(materialized_args) and not str(materialized_args[i]).startswith('--'):
+                i += 1
+            continue
+        if option in flag_options:
+            key, value = flag_options[option]
+            runtime_config[key] = value
+            i += 1
+            continue
+        if option in ignored_options:
+            i += 2
+            continue
+        if option in value_options:
+            if i + 1 >= len(materialized_args):
+                raise RuntimeError(f'Missing value for runtime option {option}')
+            key, caster = value_options[option]
+            runtime_config[key] = caster(str(materialized_args[i + 1]))
+            i += 2
+            continue
+        if option.startswith('--'):
+            raise RuntimeError(f'Unsupported mixed-runtime bridge option: {option}')
+        i += 1
+    runtime_config['own_servers'] = _service_specs_from_args(materialized_args, '--own-servers')
+    runtime_config['remote_servers'] = _service_specs_from_args(materialized_args, '--remote-servers')
+    if 'overlay_transport' not in runtime_config:
+        runtime_config['overlay_transport'] = 'myudp'
+    return runtime_config
+
+
+def _swift_bridge_command(
+    args: List[str],
+    *,
+    log_dir: Path,
+    case_name: str,
+    side: str,
+    admin_port: int,
+) -> List[str]:
+    binary_path = _swift_runner_binary(log_dir)
+    runtime_config = _runtime_config_from_bridge_args(
+        args,
+        log_dir=log_dir,
+        case_name=case_name,
+        side=side,
+        admin_port=admin_port,
+    )
+    runtime_config_path = log_dir / f'{case_name}_{side}_swift_runtime.json'
+    runtime_config_path.write_text(json.dumps(runtime_config, sort_keys=True), encoding='utf-8')
+    return [
+        str(binary_path),
+        '--runtime-config',
+        str(runtime_config_path),
+        '--status-port',
+        str(admin_port),
+        '--hold-sec',
+        '180',
+    ]
+
+
+def build_bridge_command(
+    runtime: str,
+    *,
+    case_name: str,
+    side: str,
+    bridge_args: List[str],
+    log_dir: Path,
+    admin_port: int,
+) -> List[str]:
+    normalized_runtime = str(runtime).strip().lower()
+    if normalized_runtime == 'python':
+        return [sys.executable, str(BRIDGE)] + materialize_args(bridge_args, log_dir, case_name, side)
+    if normalized_runtime == 'swift':
+        return _swift_bridge_command(
+            bridge_args,
+            log_dir=log_dir,
+            case_name=case_name,
+            side=side,
+            admin_port=admin_port,
+        )
+    raise RuntimeError(f'Unsupported bridge runtime {runtime!r}')
+
+
 def start_proc(name: str, cmd: List[str], log_dir: Path, env_extra: Optional[Dict[str, str]] = None, admin_port: Optional[int] = None) -> Proc:
     normalized_cmd = _normalize_service_specs_cli_args([str(part) for part in cmd])
     log_path = log_dir / f'{name}.log'
@@ -2132,34 +2408,56 @@ def admin_args(port: int) -> List[str]:
     return ['--admin-web', '--admin-web-bind', _admin_host_for_port(port), '--admin-web-port', str(port)]
 
 
-def build_commands(case: Case, log_dir: Path, case_index: int, enable_admin: bool = False) -> List[tuple[str, List[str], Dict[str, str], Optional[int]]]:
-    py = sys.executable
+def build_commands(
+    case: Case,
+    log_dir: Path,
+    case_index: int,
+    enable_admin: bool = False,
+    runtime_mode: str = 'python-python',
+) -> List[tuple[str, List[str], Dict[str, str], Optional[int]]]:
     server_admin, client_admin = alloc_admin_ports(case_index)
+    server_runtime, client_runtime = _bridge_runtime_sides(runtime_mode)
     missing_cfg = str(log_dir / f'{case.name}_missing.cfg')
-    server_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_server_args, log_dir, case.name, 'bridge_server')
-    client_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_client_args, log_dir, case.name, 'bridge_client')
     server_env = dict(case.server_env)
     client_env = dict(case.client_env)
-    server_cmd, client_cmd, server_env, client_env = _with_hostaliases(
-        case,
-        log_dir,
-        case_index,
-        server_cmd,
-        client_cmd,
-        server_env,
-        client_env,
-    )
-    # Force default startup values from CLI/test case and avoid loading local ObstacleBridge.cfg.
-    # ConfigAwareCLI treats a missing explicitly-requested config as non-fatal and continues with defaults.
-    server_cmd += ['--config', missing_cfg]
-    client_cmd += ['--config', missing_cfg]
-    # Prevent accidental fixed-port collisions from external config defaults.
-    server_cmd += ['--admin-web-port', '0']
-    client_cmd += ['--admin-web-port', '0']
-    client_cmd += ['--client-restart-if-disconnected', '10']
+    server_args = list(case.bridge_server_args)
+    client_args = list(case.bridge_client_args)
+    if server_runtime == 'python' and client_runtime == 'python':
+        server_cmd = [sys.executable, str(BRIDGE)] + materialize_args(server_args, log_dir, case.name, 'bridge_server')
+        client_cmd = [sys.executable, str(BRIDGE)] + materialize_args(client_args, log_dir, case.name, 'bridge_client')
+        server_cmd, client_cmd, server_env, client_env = _with_hostaliases(
+            case,
+            log_dir,
+            case_index,
+            server_cmd,
+            client_cmd,
+            server_env,
+            client_env,
+        )
+        server_args = server_cmd[2:]
+        client_args = client_cmd[2:]
+    # Force startup values from the test case and avoid loading a local ObstacleBridge.cfg.
+    server_args += ['--config', missing_cfg, '--admin-web-port', '0']
+    client_args += ['--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '10']
     if enable_admin:
-        server_cmd += admin_args(server_admin)
-        client_cmd += admin_args(client_admin)
+        server_args += admin_args(server_admin)
+        client_args += admin_args(client_admin)
+    server_cmd = build_bridge_command(
+        server_runtime,
+        case_name=case.name,
+        side='bridge_server',
+        bridge_args=server_args,
+        log_dir=log_dir,
+        admin_port=server_admin,
+    )
+    client_cmd = build_bridge_command(
+        client_runtime,
+        case_name=case.name,
+        side='bridge_client',
+        bridge_args=client_args,
+        log_dir=log_dir,
+        admin_port=client_admin,
+    )
     return [
         ('bridge_server', server_cmd, server_env, server_admin if enable_admin else None),
         ('bridge_client', client_cmd, client_env, client_admin if enable_admin else None),
@@ -2355,8 +2653,23 @@ def assert_static_http_root_serves_repeatedly(url: str, *, attempts: int = 6, ti
 
 
 def get_health(admin_port: int) -> dict:
-    _code, body = fetch_json(f'http://127.0.0.1:{admin_port}/api/health', timeout=1.5)
-    return body
+    urls = [
+        f'http://127.0.0.1:{admin_port}/api/health',
+        f'http://127.0.0.1:{admin_port}/healthz',
+        f'http://127.0.0.1:{admin_port}/api/status',
+    ]
+    last_exc: Optional[Exception] = None
+    for url in urls:
+        try:
+            _code, body = fetch_json(url, timeout=1.5)
+            if isinstance(body, dict) and 'ok' not in body:
+                body = {'ok': True, **body}
+            return body
+        except Exception as exc:
+            last_exc = exc
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f'No admin health endpoint responded on port {admin_port}')
 
 
 def try_get_status(admin_port: int) -> Optional[dict]:
@@ -2379,8 +2692,7 @@ def wait_admin_up(admin_port: int, timeout: float = 10.0) -> dict:
     
     end = time.time() + timeout
     last_exc = None
-    url = f'http://127.0.0.1:{admin_port}/api/health'
-    log.info(f'[HARNESS] wait_admin_up using {url}')
+    log.info(f'[HARNESS] wait_admin_up using port {admin_port}')
     while time.time() < end:
         try:
             body = get_health(admin_port)
@@ -3178,6 +3490,7 @@ def wait_peer_compress_layer_stats(
 ) -> dict:
     end = time.time() + timeout
     last_doc = None
+    last_status_doc = None
     normalized_transport = str(transport or '').strip().lower()
     while time.time() < end:
         _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
@@ -3195,9 +3508,26 @@ def wait_peer_compress_layer_stats(
             who = f' {label}' if label else ''
             log.info(f'[PEERS]{who} port={admin_port} compress_layer={comp!r}')
             return doc
+        _status_code, status_doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.5)
+        last_status_doc = status_doc
+        comp = status_doc.get('compress_layer') or {}
+        if normalized_transport and str(comp.get('transport', '')).strip().lower() not in ('', normalized_transport):
+            time.sleep(0.25)
+            continue
+        if enabled is not None and bool(comp.get('enabled')) != bool(enabled):
+            time.sleep(0.25)
+            continue
+        if minimum_applied_total is not None and int(comp.get('compress_applied_total') or 0) < int(minimum_applied_total):
+            time.sleep(0.25)
+            continue
+        if comp:
+            who = f' {label}' if label else ''
+            log.info(f'[STATUS]{who} port={admin_port} compress_layer={comp!r}')
+            return status_doc
         time.sleep(0.25)
     raise RuntimeError(
-        f'/api/peers did not expose matching compress_layer stats on port {admin_port}; last={last_doc!r}'
+        f'/api/peers or /api/status did not expose matching compress_layer stats on port {admin_port}; '
+        f'last_peers={last_doc!r} last_status={last_status_doc!r}'
     )
 
 
@@ -3371,8 +3701,29 @@ def wait_status_secure_link_consecutive_failures(
     )
 
 
+def _status_transport_runtime(doc: Optional[dict]) -> dict:
+    if not isinstance(doc, dict):
+        return {}
+    runtime = doc.get('transport_runtime') or {}
+    if not isinstance(runtime, dict):
+        return {}
+    kind = str(runtime.get('kind') or '').strip().lower()
+    if kind and isinstance(runtime.get(kind), dict):
+        return runtime.get(kind) or {}
+    return {}
+
+
 def status_state(doc: dict) -> str:
-    return str(doc.get('peer_state', '')).strip().upper()
+    state = str(doc.get('peer_state', '')).strip().upper()
+    if state:
+        return state
+    transport_runtime = _status_transport_runtime(doc)
+    if bool(transport_runtime.get('overlay_connected')):
+        return 'CONNECTED'
+    runtime_status = str((doc.get('bootstrap_state') or {}).get('status') or '').strip().upper()
+    if runtime_status:
+        return runtime_status
+    return ''
 
 def phase(msg: str) -> None:
     
@@ -3381,12 +3732,19 @@ def phase(msg: str) -> None:
 def fmt_state_doc(doc: Optional[dict]) -> str:
     if doc is None:
         return 'STATUS_503'
-    state = str(doc.get('peer_state', 'UNKNOWN')).strip().upper() or 'UNKNOWN'
+    state = status_state(doc) or 'UNKNOWN'
     overlay = doc.get('overlay') or {}
-    peer = overlay.get('peer')
+    transport_runtime = _status_transport_runtime(doc)
+    peer = overlay.get('peer') or transport_runtime.get('overlay_peer_host')
     bind = overlay.get('bind')
-    rtt = (doc.get('transport') or {}).get('rtt_est_ms')
-    txdly = (doc.get('transport') or {}).get('transmit_delay_est_ms')
+    if bind is None and transport_runtime:
+        bind_host = transport_runtime.get('overlay_bind_host')
+        bind_port = transport_runtime.get('overlay_bind_port')
+        if bind_host is not None and bind_port is not None:
+            bind = f'{bind_host}:{bind_port}'
+    transport = doc.get('transport') or transport_runtime
+    rtt = transport.get('rtt_est_ms')
+    txdly = transport.get('transmit_delay_est_ms')
     if isinstance(rtt, (int, float)) and isinstance(txdly, (int, float)):
         return f'{state} peer={peer} bind={bind} rtt_est_ms={rtt:.1f} tx_delay_est_ms={txdly:.1f}'
     if isinstance(rtt, (int, float)):
@@ -3407,7 +3765,7 @@ def wait_status_transport_metric_at_least(
     while time.time() < end:
         _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.5)
         last_doc = doc
-        transport = doc.get('transport') or {}
+        transport = doc.get('transport') or _status_transport_runtime(doc)
         value = transport.get(metric)
         if isinstance(value, (int, float)) and float(value) >= float(minimum_value):
             who = f' {label}' if label else ''
@@ -3583,7 +3941,13 @@ def wait_log_contains(log_path: Path, needle: str, timeout: float = 10.0) -> str
         time.sleep(0.2)
     raise RuntimeError(f'Log {log_path.name} did not contain {needle!r}\n--- tail ---\n{last}')
 
-def run_case(case: Case, log_dir: Path, case_index: int, settle_s: Optional[float] = None) -> None:
+def run_case(
+    case: Case,
+    log_dir: Path,
+    case_index: int,
+    settle_s: Optional[float] = None,
+    runtime_mode: str = 'python-python',
+) -> None:
     case = materialize_case_ports(case, case_index)
     procs: List[Proc] = []
     bounce = BounceBackServer(
@@ -3597,7 +3961,13 @@ def run_case(case: Case, log_dir: Path, case_index: int, settle_s: Optional[floa
         bounce.start()
         check_exact_bytes = case.name in EXACT_BYTES_CASES
         overlay_transport = str(_arg_value(case.bridge_server_args, '--overlay-transport', 'myudp')).strip().lower()
-        for name, cmd, env, admin_port in build_commands(case, log_dir, case_index, enable_admin=check_exact_bytes):
+        for name, cmd, env, admin_port in build_commands(
+            case,
+            log_dir,
+            case_index,
+            enable_admin=check_exact_bytes,
+            runtime_mode=runtime_mode,
+        ):
             proc = start_proc(f'{case.name}_{name}', cmd, log_dir, env_extra=env, admin_port=admin_port)
             procs.append(proc)
             time.sleep(0.5)
@@ -3691,7 +4061,12 @@ def _wait_udp_probe_result(host: str, port: int, payload: bytes, *, bind_host: s
     raise RuntimeError(f'UDP probe to {host}:{port} failed for payload len={len(payload)}: {last_exc!r}')
 
 
-def run_case_myudp_delay_loss(loss_case: MyudpDelayLossCase, log_dir: Path, case_index: int) -> None:
+def run_case_myudp_delay_loss(
+    loss_case: MyudpDelayLossCase,
+    log_dir: Path,
+    case_index: int,
+    runtime_mode: str = 'python-python',
+) -> None:
     base_port = _myudp_delay_loss_base_port(case_index)
     loopback_v4, _loopback_v6 = _loopback_hosts_for_case(case_index)
     server_overlay_port = base_port
@@ -3733,18 +4108,15 @@ def run_case_myudp_delay_loss(loss_case: MyudpDelayLossCase, log_dir: Path, case
         drop_server_to_client_control=loss_case.drop_server_to_client_control,
     )
 
-    py = sys.executable
     missing_cfg = str(log_dir / f'{loss_case.name}_missing.cfg')
-    server_cmd = [
-        py, str(BRIDGE),
+    server_args = [
         '--overlay-transport', 'myudp',
         '--udp-bind', loopback_v4, '--udp-own-port', str(server_overlay_port),
         '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
         '--log-file', str(log_dir / f'{loss_case.name}_bridge_server.txt'),
         '--config', missing_cfg, '--admin-web-port', '0',
     ] + admin_args(server_admin)
-    client_cmd = [
-        py, str(BRIDGE),
+    client_args = [
         '--overlay-transport', 'myudp',
         '--udp-peer', loopback_v4, '--udp-peer-port', str(proxy_listen_port),
         '--udp-bind', loopback_v4, '--udp-own-port', '0',
@@ -3754,6 +4126,23 @@ def run_case_myudp_delay_loss(loss_case: MyudpDelayLossCase, log_dir: Path, case
         '--log-file', str(log_dir / f'{loss_case.name}_bridge_client.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
     ] + admin_args(client_admin)
+    server_runtime, client_runtime = _bridge_runtime_sides(runtime_mode)
+    server_cmd = build_bridge_command(
+        server_runtime,
+        case_name=loss_case.name,
+        side='bridge_server',
+        bridge_args=server_args,
+        log_dir=log_dir,
+        admin_port=server_admin,
+    )
+    client_cmd = build_bridge_command(
+        client_runtime,
+        case_name=loss_case.name,
+        side='bridge_client',
+        bridge_args=client_args,
+        log_dir=log_dir,
+        admin_port=client_admin,
+    )
 
     server_proc: Optional[Proc] = None
     client_proc: Optional[Proc] = None
@@ -4838,6 +5227,7 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
     server_extra_args: Optional[List[str]] = None,
     client1_extra_args: Optional[List[str]] = None,
     client2_extra_args: Optional[List[str]] = None,
+    runtime_mode: str = 'python-python',
 ) -> None:
     base_tcp_port = case.bounce_port
     loopback_key = _secure_link_loopback_key(secure_slot) if secure_slot is not None else case_index
@@ -4857,19 +5247,27 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
     server_proc: Optional[Proc] = None
     client1_proc: Optional[Proc] = None
     client2_proc: Optional[Proc] = None
+    server_runtime, client_runtime = _bridge_runtime_sides(runtime_mode)
     admin_base = SECURE_LINK_ADMIN_BASE if secure_slot is not None else ADMIN_PORT_BASE
     server_admin, client1_admin = alloc_admin_ports(case_index, base=admin_base)
     client2_admin = alloc_admin_port({server_admin, client1_admin}, case_index=case_index + 2, base=admin_base)
     udp_peer_port = _listener_overlay_port(case, 'myudp')
 
-    py = sys.executable
     missing_cfg = str(log_dir / f'{case.name}_missing.cfg')
-    server_cmd = [py, str(BRIDGE)] + materialize_args(case.bridge_server_args, log_dir, case.name, 'bridge_server')
-    server_cmd += ['--config', missing_cfg, '--admin-web-port', '0']
-    server_cmd += list(server_extra_args or [])
-    server_cmd += admin_args(server_admin)
+    server_args = list(case.bridge_server_args)
+    server_args += ['--config', missing_cfg, '--admin-web-port', '0']
+    server_args += list(server_extra_args or [])
+    server_args += admin_args(server_admin)
+    server_cmd = build_bridge_command(
+        server_runtime,
+        case_name=case.name,
+        side='bridge_server',
+        bridge_args=server_args,
+        log_dir=log_dir,
+        admin_port=server_admin,
+    )
 
-    client1_cmd = [py, str(BRIDGE),
+    client1_args = [
         '--overlay-transport', 'myudp',
         '--udp-peer', udp_peer_host, '--udp-peer-port', str(udp_peer_port), '--udp-bind', loopback_v4, '--udp-own-port', '0',
         '--own-servers',
@@ -4884,10 +5282,18 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
         '--log-file', str(log_dir / f'{case.name}_bridge_client_1.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
     ]
-    client1_cmd += list(client1_extra_args or [])
-    client1_cmd += admin_args(client1_admin)
+    client1_args += list(client1_extra_args or [])
+    client1_args += admin_args(client1_admin)
+    client1_cmd = build_bridge_command(
+        client_runtime,
+        case_name=case.name,
+        side='bridge_client_1',
+        bridge_args=client1_args,
+        log_dir=log_dir,
+        admin_port=client1_admin,
+    )
 
-    client2_cmd = [py, str(BRIDGE),
+    client2_args = [
         '--overlay-transport', 'myudp',
         '--udp-peer', udp_peer_host, '--udp-peer-port', str(udp_peer_port), '--udp-bind', loopback_v4, '--udp-own-port', '0',
         '--own-servers',
@@ -4902,8 +5308,16 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
         '--log-file', str(log_dir / f'{case.name}_bridge_client_2.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
     ]
-    client2_cmd += list(client2_extra_args or [])
-    client2_cmd += admin_args(client2_admin)
+    client2_args += list(client2_extra_args or [])
+    client2_args += admin_args(client2_admin)
+    client2_cmd = build_bridge_command(
+        client_runtime,
+        case_name=case.name,
+        side='bridge_client_2',
+        bridge_args=client2_args,
+        log_dir=log_dir,
+        admin_port=client2_admin,
+    )
 
     tcp_specs = [
         ('client1-own-tcp-1', base_tcp_port + 32, b'\x01client1-own-tcp-1'),
@@ -5041,6 +5455,10 @@ def run_case_myudp_two_clients_concurrent_udp_tcp(
             wait_peer_myudp_transmit_stats(server_admin, minimum_count=2, timeout=12.0, label='server', transport='myudp')
             wait_peer_myudp_transmit_stats(client1_admin, minimum_count=1, timeout=12.0, label='client1', transport='myudp')
             wait_peer_myudp_transmit_stats(client2_admin, minimum_count=1, timeout=12.0, label='client2', transport='myudp')
+        if '--compress-layer' in list(server_extra_args or []) or '--compress-layer' in list(client1_extra_args or []) or '--compress-layer' in list(client2_extra_args or []):
+            wait_peer_compress_layer_stats(client1_admin, timeout=12.0, label='client1', transport='myudp', enabled=True, minimum_applied_total=1)
+            wait_peer_compress_layer_stats(client2_admin, timeout=12.0, label='client2', transport='myudp', enabled=True, minimum_applied_total=1)
+            wait_peer_compress_layer_stats(server_admin, timeout=12.0, label='server', transport='myudp', enabled=True, minimum_applied_total=1)
     finally:
         if client2_proc is not None:
             stop_proc(client2_proc)
@@ -5666,6 +6084,7 @@ def _start_case_with_secure_link_args(
     client_restart_if_disconnected: float = 5.0,
     use_failure_injection_entrypoint: bool = False,
     wait_client_admin: bool = True,
+    runtime_mode: str = 'python-python',
 ) -> tuple[Case, BounceBackServer, Proc, Proc]:
     case = materialize_secure_link_case_ports(case, secure_slot) if secure_slot is not None else materialize_case_ports(case, case_index)
     bounce = BounceBackServer(
@@ -5680,20 +6099,45 @@ def _start_case_with_secure_link_args(
     missing_cfg = str(log_dir / f'{case.name}_missing.cfg')
     server_name = 'bridge_server'
     client_name = 'bridge_client'
-    server_cmd = bridge_entrypoint(with_failure_injection=use_failure_injection_entrypoint) + materialize_args(case.bridge_server_args, log_dir, case.name, 'bridge_server')
-    client_cmd = bridge_entrypoint(with_failure_injection=use_failure_injection_entrypoint) + materialize_args(case.bridge_client_args, log_dir, case.name, 'bridge_client')
+    server_runtime, client_runtime = _bridge_runtime_sides(runtime_mode)
+    if use_failure_injection_entrypoint and (server_runtime != 'python' or client_runtime != 'python'):
+        raise RuntimeError('failure-injection entrypoint is only supported for python-python secure-link cases')
+    server_args = list(case.bridge_server_args)
+    client_args = list(case.bridge_client_args)
     server_env = dict(case.server_env)
     client_env = dict(case.client_env)
-    server_cmd += ['--config', missing_cfg, '--admin-web-port', '0']
-    client_cmd += ['--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', str(float(client_restart_if_disconnected))]
-    server_cmd += admin_args(server_admin)
-    client_cmd += admin_args(client_admin)
-    server_cmd = list(server_cmd) + list(server_extra_args or [])
-    client_cmd = list(client_cmd) + list(client_extra_args or [])
+    server_args += ['--config', missing_cfg, '--admin-web-port', '0']
+    client_args += ['--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', str(float(client_restart_if_disconnected))]
+    server_args += admin_args(server_admin)
+    client_args += admin_args(client_admin)
+    server_args = list(server_args) + list(server_extra_args or [])
+    client_args = list(client_args) + list(client_extra_args or [])
+    if server_runtime == 'python' and use_failure_injection_entrypoint:
+        server_cmd = bridge_entrypoint(with_failure_injection=True) + materialize_args(server_args, log_dir, case.name, 'bridge_server')
+    else:
+        server_cmd = build_bridge_command(
+            server_runtime,
+            case_name=case.name,
+            side='bridge_server',
+            bridge_args=server_args,
+            log_dir=log_dir,
+            admin_port=server_admin,
+        )
+    if client_runtime == 'python' and use_failure_injection_entrypoint:
+        client_cmd = bridge_entrypoint(with_failure_injection=True) + materialize_args(client_args, log_dir, case.name, 'bridge_client')
+    else:
+        client_cmd = build_bridge_command(
+            client_runtime,
+            case_name=case.name,
+            side='bridge_client',
+            bridge_args=client_args,
+            log_dir=log_dir,
+            admin_port=client_admin,
+        )
 
     server_proc = start_proc(f'{case.name}_{server_name}', server_cmd, log_dir, env_extra=server_env, admin_port=server_admin)
-    overlay_transport = str(_arg_value(case.bridge_server_args, '--overlay-transport', '')).strip().lower()
-    if overlay_transport in ('tcp', 'ws'):
+    overlay_transport = str(_arg_value(server_args, '--overlay-transport', '')).strip().lower()
+    if overlay_transport in ('tcp', 'ws') and server_runtime == 'python':
         listen_port = _listener_overlay_port(case, overlay_transport)
         connect_case_key = _secure_link_loopback_key(secure_slot) if secure_slot is not None else case_index
         listen_host = _connect_host_for_bind(_listener_overlay_bind_host(case, overlay_transport), connect_case_key)
@@ -5762,6 +6206,108 @@ def _copy_secure_link_cert_fixture_set(target_dir: Path) -> Path:
 @pytest.mark.parametrize("case_name", BASIC_CASES)
 def test_overlay_e2e_basic(case_name: str, tmp_path: Path) -> None:
     run_case(CASES[case_name], tmp_path, CASE_INDEX_BASE_BASIC + ALL_CASES.index(case_name))
+
+
+MIXED_RUNTIME_BASIC_CASES = [
+    'case01_udp_over_own_udp_ipv4',
+    'case04_tcp_over_own_udp_clients_ipv4',
+]
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize('runtime_mode', ['swift-server-python-client', 'python-server-swift-client'])
+@pytest.mark.parametrize('case_name', MIXED_RUNTIME_BASIC_CASES)
+def test_overlay_e2e_basic_mixed_runtime_myudp(case_name: str, runtime_mode: str, tmp_path: Path) -> None:
+    case = CASES[case_name]
+    if case_name == 'case04_tcp_over_own_udp_clients_ipv4':
+        case = replace(case, name='case04_tcp_over_own_udp_clients_ipv4_mixed')
+    run_case(
+        case,
+        tmp_path,
+        case_index=CASE_INDEX_BASE_BASIC + ALL_CASES.index(case_name),
+        runtime_mode=runtime_mode,
+    )
+
+
+MIXED_RUNTIME_MYUDP_DELAY_LOSS_CASES = [
+    'tc1a_drop_first_data_client_to_server',
+]
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize('runtime_mode', ['swift-server-python-client', 'python-server-swift-client'])
+@pytest.mark.parametrize('case_name', MIXED_RUNTIME_MYUDP_DELAY_LOSS_CASES)
+def test_overlay_e2e_mixed_runtime_myudp_delay_loss(case_name: str, runtime_mode: str, tmp_path: Path) -> None:
+    run_case_myudp_delay_loss(
+        MYUDP_DELAY_LOSS_CASES[case_name],
+        tmp_path,
+        CASE_INDEX_BASE_MYUDP_DELAY_LOSS + list(MYUDP_DELAY_LOSS_CASES.keys()).index(case_name),
+        runtime_mode=runtime_mode,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize('runtime_mode', ['swift-server-python-client', 'python-server-swift-client'])
+def test_overlay_e2e_mixed_runtime_tcp_secure_link_psk_compress_happy_path(tmp_path: Path, runtime_mode: str) -> None:
+    with secure_link_test_lock():
+        case = replace(
+            CASES['case04_tcp_over_own_udp_clients_ipv4'],
+            name='case04_tcp_over_own_udp_clients_ipv4_secure_link_compress_mixed',
+        )
+        bounce = None
+        server_proc = client_proc = None
+        try:
+            shared_secure_args = [
+                '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+                '--compress-layer',
+                '--compress-layer-algo', 'zlib',
+                '--compress-layer-level', '3',
+                '--compress-layer-min-bytes', '64',
+                '--compress-layer-types', 'data,data_frag',
+            ]
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=988,
+                secure_slot=34,
+                server_extra_args=shared_secure_args,
+                client_extra_args=shared_secure_args,
+                runtime_mode=runtime_mode,
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            wait_probe(case, timeout=12.0)
+            wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+            wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+            wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+            wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='myudp', authenticated=True)
+            wait_peer_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', transport='myudp', authenticated=True)
+            compressible_payload = b'\x21' + (b'C' * 1400)
+            wait_probe(case, payload=compressible_payload, expected=response_payload(compressible_payload), timeout=12.0)
+            wait_peer_compress_layer_stats(
+                client_proc.admin_port or 0,
+                timeout=12.0,
+                label='client',
+                transport='myudp',
+                enabled=True,
+                minimum_applied_total=1,
+            )
+            wait_peer_compress_layer_stats(
+                server_proc.admin_port or 0,
+                timeout=12.0,
+                label='server',
+                transport='myudp',
+                enabled=True,
+            )
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
 
 
 @pytest.mark.integration
@@ -10094,6 +10640,139 @@ def test_overlay_e2e_myudp_secure_link_psk_listener_two_clients_concurrent_udp_t
 
 @pytest.mark.integration
 @pytest.mark.slow
+@pytest.mark.parametrize('runtime_mode', ['swift-server-python-client', 'python-server-swift-client'])
+def test_overlay_e2e_mixed_runtime_myudp_secure_link_psk_compress_concurrent_tcp(tmp_path: Path, runtime_mode: str) -> None:
+    with secure_link_test_lock():
+        case = replace(
+            CASES['case04_tcp_over_own_udp_clients_ipv4'],
+            name='case04_tcp_over_own_udp_clients_ipv4_secure_link_compress_concurrent_mixed',
+        )
+        bounce = None
+        server_proc = client_proc = None
+        try:
+            shared_secure_args = [
+                '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret',
+                '--compress-layer',
+                '--compress-layer-algo', 'zlib',
+                '--compress-layer-level', '3',
+                '--compress-layer-min-bytes', '64',
+                '--compress-layer-types', 'data,data_frag',
+            ]
+            case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
+                case,
+                tmp_path,
+                case_index=989,
+                secure_slot=21,
+                server_extra_args=shared_secure_args,
+                client_extra_args=shared_secure_args,
+                runtime_mode=runtime_mode,
+            )
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
+            warmup_payload = b'\x21warmup' * 64
+            wait_probe(case, payload=warmup_payload, expected=response_payload(warmup_payload), timeout=12.0)
+            wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
+            wait_status_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', authenticated=True)
+            wait_status_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+            wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='myudp', authenticated=True)
+            wait_peer_secure_link_state(server_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='server', transport='myudp', authenticated=True)
+
+            payloads = [
+                b'\x21alpha' * 16,
+                b'\x21bravo' * 32,
+                b'\x21charlie' * 64,
+                b'\x21delta' * 96,
+                b'\x21echo' * 128,
+            ]
+            wait_tcp_listen(case.probe_host, case.probe_port, timeout=8.0)
+
+            start_evt = threading.Event()
+            release_close_evt = threading.Event()
+            ready_for_poll_evt = threading.Event()
+            ready_lock = threading.Lock()
+            ready_count = 0
+            results: list[Optional[bytes]] = [None] * len(payloads)
+            errors: list[tuple[int, Exception]] = []
+
+            def _before_close() -> None:
+                nonlocal ready_count
+                with ready_lock:
+                    ready_count += 1
+                    if ready_count == len(payloads):
+                        ready_for_poll_evt.set()
+                if not release_close_evt.wait(timeout=8.0):
+                    raise TimeoutError('Timed out waiting to release TCP channel close')
+
+            def _worker(i: int, payload: bytes) -> None:
+                try:
+                    start_evt.wait(timeout=5.0)
+                    results[i] = probe_tcp(
+                        case.probe_host,
+                        case.probe_port,
+                        case.probe_bind,
+                        payload,
+                        timeout=4.0,
+                        before_close=_before_close,
+                    )
+                except Exception as e:
+                    errors.append((i, e))
+
+            threads = [threading.Thread(target=_worker, args=(idx, payload), daemon=True) for idx, payload in enumerate(payloads)]
+            for thread in threads:
+                thread.start()
+            start_evt.set()
+
+            try:
+                if not ready_for_poll_evt.wait(timeout=8.0):
+                    raise RuntimeError('Timed out waiting for concurrent TCP channels before /api/connections polling')
+                wait_connected_tcp_rows_across_admins(
+                    {
+                        'server': server_proc.admin_port or 0,
+                        'client': client_proc.admin_port or 0,
+                    },
+                    len(payloads),
+                    timeout=8.0,
+                    label='mixed myudp concurrent TCP hold',
+                )
+            finally:
+                release_close_evt.set()
+
+            for thread in threads:
+                thread.join(timeout=8.0)
+            if errors:
+                raise RuntimeError(f'Concurrent TCP probes failed: {errors!r}')
+
+            for idx, payload in enumerate(payloads):
+                expected = response_payload(payload)
+                if results[idx] != expected:
+                    raise RuntimeError(f'Concurrent TCP channel {idx} mismatch: got={results[idx]!r} expected={expected!r}')
+
+            wait_peer_compress_layer_stats(
+                client_proc.admin_port or 0,
+                timeout=12.0,
+                label='client',
+                transport='myudp',
+                enabled=True,
+                minimum_applied_total=1,
+            )
+            wait_peer_compress_layer_stats(
+                server_proc.admin_port or 0,
+                timeout=12.0,
+                label='server',
+                transport='myudp',
+                enabled=True,
+                minimum_applied_total=1,
+            )
+        finally:
+            if bounce is not None:
+                bounce.stop()
+            if client_proc is not None:
+                stop_proc(client_proc)
+            if server_proc is not None:
+                stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
 def test_overlay_e2e_quic_secure_link_psk_listener_two_clients_concurrent_udp_tcp(tmp_path: Path) -> None:
     with secure_link_test_lock():
         case = materialize_secure_link_case_ports(CASES['case17_overlay_listener_quic_two_clients_concurrent_udp_tcp'], 8)
@@ -10296,6 +10975,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument('--settle-seconds', type=float, default=None, help='Override per-case settle time')
     p.add_argument('--require-aioquic', action='store_true', help='Fail fast if aioquic is not importable')
     p.add_argument('--reconnect-timeout', type=float, default=30.0, help='Timeout for connected/disconnected state transitions')
+    p.add_argument('--runtime-mode', choices=BRIDGE_RUNTIME_MODE_CHOICES, default='python-python')
     return p.parse_args(argv)
 
 
@@ -10341,6 +11021,7 @@ def main() -> int:
     log.info(f'ObstacleBridge.py: {BRIDGE}')
     log.info('Bounce-back server: built into this harness')
     log.info(f'Mode: {selected_mode}')
+    log.info(f'Runtime mode: {args.runtime_mode}')
 
     if args.require_aioquic:
         try:
@@ -10355,12 +11036,18 @@ def main() -> int:
         log.info(f'=== RUN {case.name} ===')
         try:
             if selected_mode == 'basic':
-                run_case(case, log_dir, idx, settle_s=args.settle_seconds)
+                run_case(case, log_dir, idx, settle_s=args.settle_seconds, runtime_mode=args.runtime_mode)
             elif selected_mode == 'listener-two-clients':
+                if args.runtime_mode != 'python-python':
+                    raise RuntimeError('Mixed runtime mode is currently supported only for basic workflow cases')
                 run_case_two_peer_clients_listener(case, log_dir, idx, settle_s=args.settle_seconds)
             elif selected_mode == 'concurrent-tcp-channels':
+                if args.runtime_mode != 'python-python':
+                    raise RuntimeError('Mixed runtime mode is currently supported only for basic workflow cases')
                 run_case_concurrent_tcp_channels(case, log_dir, idx, settle_s=args.settle_seconds)
             else:
+                if args.runtime_mode != 'python-python':
+                    raise RuntimeError('Mixed runtime mode is currently supported only for basic workflow cases')
                 run_case_reconnect(case, log_dir, idx, settle_s=args.settle_seconds, reconnect_timeout=args.reconnect_timeout)
             log.info(f'PASS {case.name}')
         except Exception as e:

@@ -76,6 +76,11 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "runtimeNetworkFallback(from: runtimeConfig)" in provider
     assert "ObstacleBridgeRuntimeConfig.tunnelRoutingOverride" in provider
     assert "ObstacleBridgeRuntimeConfig.localTunServiceSpec" in provider
+    assert "private var nativeRuntimeActive: Bool" in provider
+    assert 'runtimeMode == "swift_simple_udp_peer" || runtimeMode == "swift_udp"' in provider
+    assert "private func nativeAppMessageResponse(for payload: [String: Any]) throws -> [String: Any]" in provider
+    assert "startTunnel_completed_swift_udp" in provider
+    assert 'if !nativeRuntimeActive {' in provider
 
 
 def test_native_packet_flow_bridge_source_exists() -> None:

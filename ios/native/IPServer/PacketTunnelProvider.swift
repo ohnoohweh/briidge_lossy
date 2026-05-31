@@ -149,6 +149,41 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         runtimeMode == "swift_udp"
     }
 
+    private var nativeRuntimeActive: Bool {
+        runtimeMode == "swift_simple_udp_peer" || runtimeMode == "swift_udp"
+    }
+
+    private func nativeAppMessageResponse(for payload: [String: Any]) throws -> [String: Any] {
+        let command = String(describing: payload["command"] ?? "")
+        switch command {
+        case "", "snapshot":
+            return [
+                "ok": true,
+                "started": true,
+                "mode": runtimeMode,
+                "status": adminStatusSnapshot(),
+                "connections": adminConnectionsSnapshot(),
+                "peers": adminPeersSnapshot(),
+                "config": adminRuntimeConfigPayload() ?? [:],
+                "swift_udp_bridge_state": swiftSimpleUDPPeerBridge?.snapshot() ?? [:],
+            ]
+        case "stop":
+            return [
+                "ok": true,
+                "stopped": true,
+                "mode": runtimeMode,
+            ]
+        default:
+            return [
+                "ok": true,
+                "mode": runtimeMode,
+                "status": "provider alive",
+                "command": command,
+                "swift_udp_bridge_state": swiftSimpleUDPPeerBridge?.snapshot() ?? [:],
+            ]
+        }
+    }
+
     private func startProviderHeartbeat() {
         heartbeatTimer?.cancel()
         heartbeatTickCount = 0
@@ -317,10 +352,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                             return
                         }
                         self.runtimeMode = "swift_udp"
+                        self.startProviderHeartbeat()
+                        self.recordNativeEvent("startTunnel_completed_swift_udp")
                         self.updateProviderState(
-                            "startTunnel_swift_udp_bridge_started",
+                            "startTunnel_completed_swift_udp",
                             extraFields: ["mode": swiftSettings.runtimeMode]
                         )
+                        completionHandler(nil)
+                        return
                     } catch {
                         self.recordNativeEvent(
                             swiftSettings.runtimeMode == "swift_udp"
@@ -429,12 +468,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         swiftSimpleUDPPeerBridge?.stop()
         swiftSimpleUDPPeerBridge = nil
         #if !OB_IPSERVER_SWIFT_SMOKE
-        if runtimeMode != "swift_simple_udp_peer" {
+        if !nativeRuntimeActive {
             _ = try? bridgeResponse(for: ["command": "stop", "reason": reason.rawValue])
         }
         #endif
         packetPumpRunning = false
-        if runtimeMode != "swift_simple_udp_peer" && runtimeMode != "swift_udp" {
+        if !nativeRuntimeActive {
             ObstacleBridgePacketFlowBridge.deactivate()
         }
         recordNativeEvent("stopTunnel_completed", fields: ["reason": reason.rawValue])
@@ -542,14 +581,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
             #else
             let response: [String: Any]
-            if runtimeMode == "swift_simple_udp_peer" {
-                response = [
-                    "ok": true,
-                    "mode": "swift_simple_udp_peer",
-                    "status": "provider alive",
-                    "command": String(describing: payload["command"] ?? ""),
-                    "swift_udp_bridge_state": swiftSimpleUDPPeerBridge?.snapshot() ?? [:],
-                ]
+            if nativeRuntimeActive {
+                response = try nativeAppMessageResponse(for: payload)
             } else {
                 response = try bridgeResponse(for: payload)
             }

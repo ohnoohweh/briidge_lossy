@@ -9,3 +9,8 @@ Cert_SecureLink/
 .pytest_cache/
 /ios/build/
 /ios/logs/
+/.tmp-home/
+/.tmp-ios-docs/
+/ios/.pytest-documents/
+/ios/.logs/
+/logs/

@@ -137,13 +137,18 @@ Contents:
 From repository root:
 
 ```bash
-ios/build/macos/ObstacleBridgeMacHostRunner \
-  --runtime-config ios/examples/macos_runtime.json \
-  --bind-host 127.0.0.1 \
-  --status-port 18080
+./ios/scripts/run_macos_app.sh
 ```
 
 If the runner starts successfully it keeps serving until stopped.
+
+The wrapper script stages a temporary macOS home under `/tmp`, points the iOS-style documents root at that temp area, and removes it automatically on exit so repo-local folders such as `.tmp-home` do not accumulate.
+
+Useful toggles:
+
+- `KEEP_TEMP_HOME=1 ./ios/scripts/run_macos_app.sh` keeps the generated temp home for inspection
+- `OBSTACLEBRIDGE_TMP_HOME=/tmp/my-obstaclebridge-home ./ios/scripts/run_macos_app.sh` reuses a specific temp location
+- `./ios/scripts/run_macos_app.sh --runtime-config ios/examples/macos_runtime.json --status-port 18081 --hold-sec 30` forwards custom runner arguments unchanged
 
 Open Admin Web in Safari:
 

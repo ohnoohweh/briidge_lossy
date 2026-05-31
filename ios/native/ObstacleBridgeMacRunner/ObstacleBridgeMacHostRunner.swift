@@ -746,6 +746,7 @@ private final class ObstacleBridgeMacHostRunner {
     private var sharedWebSocketOverlayRuntime: ObstacleBridgeWebSocketOverlayRuntime?
     private var sharedTcpOverlayRuntime: ObstacleBridgeTcpOverlayRuntime?
     private var sharedTcpOverlayTransportOwner: ObstacleBridgeTcpOverlayTransportOwner?
+    private var sharedUdpOverlayTransportOwner: ObstacleBridgeUdpOverlayTransportOwner?
     private var clientRestartWatchdog: DispatchSourceTimer?
     private var overlayDisconnectedAt: TimeInterval?
     private var authChallenges: [String: [String: Any]] = [:]
@@ -783,6 +784,7 @@ private final class ObstacleBridgeMacHostRunner {
         prepareSharedOverlayBootstrap()
         try startOwnServers()
         startSharedTCPOverlayTransportOwnerIfNeeded()
+        try startSharedUDPOverlayTransportOwnerIfNeeded()
         let controlServer = try ObstacleBridgeWebAdminServer(
             bindHost: bindHost,
             port: statusPort,
@@ -824,6 +826,8 @@ private final class ObstacleBridgeMacHostRunner {
         clientRestartWatchdog = nil
         sharedTcpOverlayTransportOwner?.stop()
         sharedTcpOverlayTransportOwner = nil
+        sharedUdpOverlayTransportOwner?.stop()
+        sharedUdpOverlayTransportOwner = nil
         stopOwnServers()
         controlServer?.stop()
         controlServer = nil
@@ -914,7 +918,15 @@ private final class ObstacleBridgeMacHostRunner {
         let counts = connections["counts"] as? [String: Any] ?? [:]
         let transport = bootstrapState["transport"] ?? (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp")
         let peerEndpoint = peerEndpointSnapshot()
-        let stateText = bootstrapState["status"] as? String == "prepared" ? "connecting" : "failed"
+        let overlayConnected = overlayCurrentlyConnected() ?? false
+        let stateText: String
+        if overlayConnected {
+            stateText = "connected"
+        } else if bootstrapState["status"] as? String == "prepared" {
+            stateText = "connecting"
+        } else {
+            stateText = "failed"
+        }
         var peer: [String: Any] = [
             "id": 1,
             "transport": transport,
@@ -961,9 +973,16 @@ private final class ObstacleBridgeMacHostRunner {
     }
 
     private func peerEndpointSnapshot() -> Any {
-        let host = bootstrapState["peer_host"] ?? (Self.peerHost(for: Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp", payload: runtimeConfig) ?? "")
+        let overlayTransport = Self.stringValue(from: bootstrapState["transport"]) ?? (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp")
+        if overlayTransport == "myudp",
+           let ownerSnapshot = serviceStateQueue.sync(execute: { sharedUdpOverlayTransportOwner?.transportSnapshot() }),
+           let host = ownerSnapshot["overlay_peer_host"] as? String,
+           !host.isEmpty {
+            return ["host": host, "port": ownerSnapshot["overlay_peer_port"] ?? NSNull()]
+        }
+        let host = bootstrapState["peer_host"] ?? (Self.peerHost(for: overlayTransport, payload: runtimeConfig) ?? "")
         let port: Any
-        switch Self.stringValue(from: bootstrapState["transport"]) ?? (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp") {
+        switch overlayTransport {
         case "tcp":
             port = Self.intValue(from: runtimeConfig["tcp_peer_port"]) ?? NSNull()
         case "ws":
@@ -991,7 +1010,16 @@ private final class ObstacleBridgeMacHostRunner {
         if let tcp = tcpRuntimeSnapshot() {
             snapshot["tcp"] = tcp
         }
+        if let udp = udpRuntimeSnapshot() {
+            snapshot["myudp"] = udp
+        }
         return snapshot
+    }
+
+    private func udpRuntimeSnapshot() -> [String: Any]? {
+        serviceStateQueue.sync {
+            sharedUdpOverlayTransportOwner?.transportSnapshot()
+        }
     }
 
     private func webSocketRuntimeSnapshot() -> [String: Any]? {
@@ -1309,6 +1337,18 @@ private final class ObstacleBridgeMacHostRunner {
                 return
             }
         }
+        if let owner = sharedUdpOverlayTransportOwner,
+           (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp").lowercased() == "myudp" {
+            if owner.acceptLocalUDPConnection(
+                connection,
+                spec: spec.toChannelMuxServiceSpec(),
+                listenerHost: spec.listenBind,
+                listenerPort: spec.listenPort,
+                serviceKey: "svc-\(spec.svcID)"
+            ) {
+                return
+            }
+        }
         guard let remotePort = NWEndpoint.Port(rawValue: UInt16(spec.targetPort)) else {
             connection.cancel()
             return
@@ -1374,6 +1414,17 @@ private final class ObstacleBridgeMacHostRunner {
                 return
             }
         }
+        if let owner = sharedUdpOverlayTransportOwner,
+           (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp").lowercased() == "myudp" {
+            if owner.acceptLocalTCPConnection(
+                connection,
+                spec: spec.toChannelMuxServiceSpec(),
+                listenerHost: spec.listenBind,
+                listenerPort: spec.listenPort
+            ) {
+                return
+            }
+        }
         let acceptSnapshot = try? sharedChannelMuxTcpRuntime.handleAcceptedServerConnection(
             spec: spec.toChannelMuxServiceSpec(),
             overlayConnected: true,
@@ -1415,7 +1466,8 @@ private final class ObstacleBridgeMacHostRunner {
 
     private func connectionsSnapshot() -> [String: Any] {
         serviceStateQueue.sync {
-            let overlayRows = sharedTcpOverlayTransportOwner?.connectionRows()
+            let tcpOverlayRows = sharedTcpOverlayTransportOwner?.connectionRows()
+            let udpOverlayRows = sharedUdpOverlayTransportOwner?.connectionRows()
             let tcpListeningRows = ownServerSpecs
                 .filter { $0.listenProtocol == "tcp" && $0.targetProtocol == "tcp" }
                 .map { spec in
@@ -1450,8 +1502,8 @@ private final class ObstacleBridgeMacHostRunner {
                         "stats": ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0],
                     ] as [String: Any]
                 }
-            let udpConnectedRows = udpConnectionStates.values.map { $0 } + (overlayRows?.udp ?? [])
-            let tcpConnectedRows = tcpConnectionStates.values.map { $0 } + (overlayRows?.tcp ?? [])
+            let udpConnectedRows = udpConnectionStates.values.map { $0 } + (tcpOverlayRows?.udp ?? []) + (udpOverlayRows?.udp ?? [])
+            let tcpConnectedRows = tcpConnectionStates.values.map { $0 } + (tcpOverlayRows?.tcp ?? []) + (udpOverlayRows?.tcp ?? [])
             let udpRows = (udpConnectedRows + udpListeningRows).sorted { lhs, rhs in
                 let leftListening = String(describing: lhs["state"] ?? "") == "listening"
                 let rightListening = String(describing: rhs["state"] ?? "") == "listening"
@@ -1888,6 +1940,7 @@ private final class ObstacleBridgeMacHostRunner {
         restartCount += 1
         prepareSharedOverlayBootstrap()
         startSharedTCPOverlayTransportOwnerIfNeeded()
+        try? startSharedUDPOverlayTransportOwnerIfNeeded()
         return [
             "ok": true,
             "restart_requested": true,
@@ -1902,6 +1955,7 @@ private final class ObstacleBridgeMacHostRunner {
         reconnectCount += 1
         prepareSharedOverlayBootstrap()
         startSharedTCPOverlayTransportOwnerIfNeeded()
+        try? startSharedUDPOverlayTransportOwnerIfNeeded()
         return [
             "ok": true,
             "reconnect_requested": true,
@@ -1924,12 +1978,14 @@ private final class ObstacleBridgeMacHostRunner {
 
     private func prepareSharedOverlayBootstrap() {
         sharedTcpOverlayTransportOwner?.stop()
+        sharedUdpOverlayTransportOwner?.stop()
         sharedCompressLayerRuntime = nil
         sharedSecureLinkPskTransportAdapter = nil
         sharedOverlayLayerTransportAdapter = nil
         sharedWebSocketOverlayRuntime = nil
         sharedTcpOverlayRuntime = nil
         sharedTcpOverlayTransportOwner = nil
+        sharedUdpOverlayTransportOwner = nil
         bootstrapState = [:]
 
         do {
@@ -1996,6 +2052,10 @@ private final class ObstacleBridgeMacHostRunner {
                 summary["tcp_bp_wbuf_threshold"] = threshold
             }
 
+            if settings.transport == "myudp" {
+                summary["udp_runtime"] = "ready"
+            }
+
             summary["admin_web_enabled"] = ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_web"]) ?? false
             summary["admin_web_bind"] = bindHost
             summary["admin_web_port"] = statusPort
@@ -2033,17 +2093,22 @@ private final class ObstacleBridgeMacHostRunner {
 
     private func startSharedTCPOverlayTransportOwnerIfNeeded() {
         guard let runtime = sharedTcpOverlayRuntime,
-              (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "").lowercased() == "tcp",
-              let peerHost = Self.stringValue(from: runtimeConfig["tcp_peer"]),
-              let peerPort = Self.intValue(from: runtimeConfig["tcp_peer_port"]),
-              !peerHost.isEmpty,
-              peerPort > 0
+              (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "").lowercased() == "tcp"
         else {
+            return
+        }
+        let peerHost = Self.stringValue(from: runtimeConfig["tcp_peer"]) ?? ""
+        let peerPort = Self.intValue(from: runtimeConfig["tcp_peer_port"]) ?? 0
+        let bindHost = Self.stringValue(from: runtimeConfig["tcp_bind"]) ?? "0.0.0.0"
+        let bindPort = Self.intValue(from: runtimeConfig["tcp_own_port"]) ?? 0
+        guard (!peerHost.isEmpty && peerPort > 0) || bindPort > 0 else {
             return
         }
         let owner = ObstacleBridgeTcpOverlayTransportOwner(
             peerHost: peerHost,
             peerPort: peerPort,
+            bindHost: bindHost,
+            bindPort: bindPort,
             overlayRuntime: runtime,
             reconnectRetryDelayMS: Self.intValue(from: runtimeConfig["overlay_reconnect_retry_delay_ms"]) ?? 30000,
             overlayLayerTransportAdapter: sharedOverlayLayerTransportAdapter,
@@ -2054,11 +2119,40 @@ private final class ObstacleBridgeMacHostRunner {
         owner.start()
     }
 
+    private func startSharedUDPOverlayTransportOwnerIfNeeded() throws {
+        guard (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp").lowercased() == "myudp" else {
+            return
+        }
+        let bindHost = Self.stringValue(from: runtimeConfig["udp_bind"]) ?? "0.0.0.0"
+        let bindPort = Self.intValue(from: runtimeConfig["udp_own_port"]) ?? 0
+        guard bindPort >= 0 else {
+            return
+        }
+        let peerHost = Self.stringValue(from: runtimeConfig["udp_peer"])
+        let peerPort = Self.intValue(from: runtimeConfig["udp_peer_port"])
+        let owner = ObstacleBridgeUdpOverlayTransportOwner(
+            bindHost: bindHost,
+            bindPort: bindPort,
+            peerHost: peerHost,
+            peerPort: peerPort,
+            overlayLayerTransportAdapter: sharedOverlayLayerTransportAdapter,
+            queue: serviceStateQueue,
+            serviceNameByID: Dictionary(uniqueKeysWithValues: ownServerSpecs.map { ($0.svcID, $0.name ?? "") })
+        )
+        sharedUdpOverlayTransportOwner = owner
+        try owner.start()
+    }
+
     private func hasConfiguredOverlayPeer() -> Bool {
         let transport = (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp").lowercased()
         if transport == "tcp" {
             let peerHost = (Self.stringValue(from: runtimeConfig["tcp_peer"]) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let peerPort = Self.intValue(from: runtimeConfig["tcp_peer_port"]) ?? 0
+            return !peerHost.isEmpty && peerPort > 0
+        }
+        if transport == "myudp" {
+            let peerHost = (Self.stringValue(from: runtimeConfig["udp_peer"]) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let peerPort = Self.intValue(from: runtimeConfig["udp_peer_port"]) ?? 0
             return !peerHost.isEmpty && peerPort > 0
         }
         return false
@@ -2068,6 +2162,9 @@ private final class ObstacleBridgeMacHostRunner {
         let transport = (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp").lowercased()
         if transport == "tcp" {
             return sharedTcpOverlayTransportOwner?.transportSnapshot()["overlay_connected"] as? Bool
+        }
+        if transport == "myudp" {
+            return sharedUdpOverlayTransportOwner?.transportSnapshot()["overlay_connected"] as? Bool
         }
         return nil
     }
