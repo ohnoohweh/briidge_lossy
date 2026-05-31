@@ -524,6 +524,68 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         new_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
         self.assertNotEqual(old_session_id, new_session_id)
 
+    async def test_transport_epoch_change_ignores_stale_disconnect_during_client_rehandshake(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+
+        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
+        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
+
+        await client.start()
+        await server.start()
+
+        server_inner.emit_state(True)
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        old_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
+        self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
+
+        client_inner.emit_transport_epoch(2)
+        client_inner.emit_state(False)
+        for _ in range(8):
+            await asyncio.sleep(0)
+
+        self.assertGreaterEqual(self._count_frame_type(client_inner.sent, client._SL_TYPE_CLIENT_HELLO), 2)
+        self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
+        new_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
+        self.assertNotEqual(old_session_id, new_session_id)
+
+    async def test_transport_epoch_change_survives_runner_reset_callback(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+
+        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
+        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
+        client.set_on_transport_epoch_change(lambda _epoch: client.reset_transport_epoch())
+
+        await client.start()
+        await server.start()
+
+        server_inner.emit_state(True)
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        old_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
+        self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
+
+        client_inner.emit_transport_epoch(2)
+        for _ in range(8):
+            await asyncio.sleep(0)
+
+        self.assertGreaterEqual(self._count_frame_type(client_inner.sent, client._SL_TYPE_CLIENT_HELLO), 2)
+        self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
+        new_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
+        self.assertNotEqual(old_session_id, new_session_id)
+
     async def test_explicit_transport_epoch_reset_forwards_to_inner_and_clears_client_state(self):
         client_inner = FakeInnerSession(connected=True)
         client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')

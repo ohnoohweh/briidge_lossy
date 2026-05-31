@@ -3,10 +3,17 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
 import pytest
+
+TESTS_DIR = Path(__file__).resolve().parent
+if str(TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(TESTS_DIR))
+
+from swift_test_support import require_swift_modules
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -14,9 +21,12 @@ SHARED_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeShared"
 
 
 def _compile_swift_overlay_layer_transport_probe(source_path: Path, binary_path: Path) -> None:
-    swiftc = shutil.which("swiftc")
-    if not swiftc:
-        pytest.skip("swiftc is required for Swift overlay layer transport adapter tests")
+    swiftc = require_swift_modules(
+        "CryptoKit",
+        "zlib",
+        missing_swiftc_reason="swiftc is required for Swift overlay layer transport adapter tests",
+        missing_module_reason="Swift overlay layer transport adapter tests require a Swift toolchain with CryptoKit and zlib support",
+    )
     command = [
         swiftc,
         "-o",

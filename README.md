@@ -9,6 +9,9 @@ ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for ba
 Contributor note: 2026-05-29 transport-metrics docs synced for non-UDP
 `transmit_delay_est_ms` reporting.
 
+Contributor note: 2026-05-31 Linux shared overlay CI lane repaired for WS
+SecureLink reconnect epoch handling and xdist IPv6 listener readiness.
+
 ## For Users
 
 ### Whitepaper

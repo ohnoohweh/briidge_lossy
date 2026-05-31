@@ -3583,11 +3583,18 @@ def run_case(case: Case, log_dir: Path, case_index: int, settle_s: Optional[floa
     try:
         bounce.start()
         check_exact_bytes = case.name in EXACT_BYTES_CASES
+        overlay_transport = str(_arg_value(case.bridge_server_args, '--overlay-transport', 'myudp')).strip().lower()
         for name, cmd, env, admin_port in build_commands(case, log_dir, case_index, enable_admin=check_exact_bytes):
             proc = start_proc(f'{case.name}_{name}', cmd, log_dir, env_extra=env, admin_port=admin_port)
             procs.append(proc)
             time.sleep(0.5)
             assert_running(proc)
+            if len(procs) == 1 and overlay_transport in ('tcp', 'ws'):
+                wait_tcp_listen(
+                    _connect_host_for_bind(_listener_overlay_bind_host(case, overlay_transport), case_index),
+                    _listener_overlay_port(case, overlay_transport),
+                    timeout=10.0,
+                )
             if check_exact_bytes:
                 wait_admin_up(proc.admin_port or 0, timeout=10.0)
 

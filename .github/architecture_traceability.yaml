@@ -21,6 +21,10 @@
 # changing the underlying defending test mappings yet; implementation work for
 # those bounded-queue and backpressure behaviors is expected to extend the same
 # component families rather than redefining them.
+# NOTE: The 2026-05-31 Linux shared CI repair keeps the existing ARC-CMP-001,
+# ARC-CMP-004, and ARC-CMP-006 mappings intact while fixing WS SecureLink
+# transport-epoch reconnect sequencing and hardening the shared TCP/WS IPv6 test
+# harness against listener-startup races under xdist.
 
 ARC-CMP-001:
   unit_tests:
@@ -90,7 +94,7 @@ ARC-CMP-003:
     - tests/unit/test_bridge_tun_ios.py::test_register_tun_reader_drains_bridge_queue
     - tests/unit/test_check_ios_fedora_log_fit.py::test_check_ios_fedora_log_fit_selects_shared_epoch
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_drops_when_transmit_delay_est_too_high
-    - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_applies_ios_tunnel_network_override
+    - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_applies_tun_routing_override
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels

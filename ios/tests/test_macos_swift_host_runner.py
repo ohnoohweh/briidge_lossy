@@ -10,6 +10,7 @@ import shutil
 import socket
 import struct
 import subprocess
+import sys
 import threading
 import time
 import contextlib
@@ -23,6 +24,12 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from obstacle_bridge.bridge import AdminWebUI, CONFIG_SECRET_PREFIX, _decrypt_config_secret, _encrypt_config_secret
+
+TESTS_DIR = Path(__file__).resolve().parent
+if str(TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(TESTS_DIR))
+
+from swift_test_support import require_swift_modules
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -38,9 +45,12 @@ def _unused_tcp_port() -> int:
 
 
 def _compile_mac_host_runner(binary_path: Path) -> None:
-    swiftc = shutil.which("swiftc")
-    if not swiftc:
-        pytest.skip("swiftc is required for macOS Swift host runner tests")
+    swiftc = require_swift_modules(
+        "CryptoKit",
+        "zlib",
+        missing_swiftc_reason="swiftc is required for macOS Swift host runner tests",
+        missing_module_reason="macOS Swift host runner tests require a Swift toolchain with CryptoKit and zlib support",
+    )
     command = [
         swiftc,
         "-o",

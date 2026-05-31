@@ -74,6 +74,11 @@ REQ-OVL-007:
 # NOTE: The 2026-05-15 Windows proxy-negotiation import fix keeps the existing
 # REQ-WSP-009 and REQ-WSP-012 mappings intact while restoring ctypes-backed
 # WinHTTP/SSPI Negotiate behavior in the split WebSocket transport module.
+# NOTE: The 2026-05-31 Linux shared CI repair keeps the existing REQ-OVL-003,
+# REQ-OVL-004, REQ-OVL-006, REQ-OVL-007, REQ-AUT-006, and REQ-AUT-007 mappings
+# intact while fixing SecureLink transport-epoch reconnect handling and adding
+# listener-readiness waits to the shared overlay harness for xdist-stable IPv6
+# TCP/WS startup.
 # The application-vs-library functional decomposition for REQ-WSP-* is documented in
 # docs/ARCHITECTURE.md under "WebSocket proxy tunneling".
 # The broader separation between user use-cases, external assumptions, and
@@ -684,7 +689,7 @@ REQ-MUX-010:
     - tests/unit/test_bridge_tun_ios.py::test_register_tun_reader_drains_bridge_queue
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_prefers_local_ios_tun_hook_env
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_can_fallback_to_remote_peer_addr
-    - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_applies_ios_tunnel_network_override
+    - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_applies_tun_routing_override
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists
 
 REQ-MYU-001:

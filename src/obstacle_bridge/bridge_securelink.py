@@ -1705,6 +1705,12 @@ class SecureLinkPskSession(ISession):
             resetter()
 
     def reset_transport_epoch(self) -> None:
+        recent_inner_epoch_change = bool(
+            self._last_transport_epoch_change_unix_ts is not None
+            and (time.time() - float(self._last_transport_epoch_change_unix_ts)) <= 2.0
+        )
+        if recent_inner_epoch_change:
+            return
         self._cancel_client_retry_task(clear_schedule=False)
         self._cancel_client_rekey_task(clear_schedule=False)
         self._clear_all_states()
@@ -2261,6 +2267,22 @@ class SecureLinkPskSession(ISession):
             self._cancel_client_retry_task(clear_schedule=False)
             self._cancel_client_rekey_task(clear_schedule=False)
             if self._client_mode:
+                preserving_epoch_restart_handshake = bool(
+                    self._last_transport_epoch_change_unix_ts is not None
+                    and (time.time() - float(self._last_transport_epoch_change_unix_ts)) <= 2.0
+                    and any(
+                        not state.authenticated
+                        and int(state.session_id or 0) > 0
+                        and int(state.handshake_attempts_total or 0) > 0
+                        and not int(state.auth_fail_code or 0)
+                        and not str(state.disconnect_reason or "")
+                        and not str(state.disconnect_detail or "")
+                        for state in self._peer_states.values()
+                    )
+                )
+                if preserving_epoch_restart_handshake:
+                    self._refresh_connected_state()
+                    return
                 preserving_failure_state = bool(
                     self._client_recovery_not_before_mono > 0.0
                     or self._client_recovery_not_before_unix_ts is not None
