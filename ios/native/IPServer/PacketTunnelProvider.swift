@@ -28,7 +28,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var packetPumpRunning = false
     private var providerStateUpdateCount = 0
     private var heartbeatTickCount = 0
-    private var runtimeMode = "python_runtime"
+    private var runtimeMode = "unconfigured"
     private var swiftSimpleUDPPeerBridge: SwiftSimpleUDPPeerBridge?
     private var sharedOverlayBootstrapState: [String: Any] = [:]
     private var effectivePacketTunnelSettingsState: [String: Any] = [:]
@@ -137,28 +137,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         try? (text + "\n").write(to: logURL, atomically: true, encoding: .utf8)
     }
 
-    #if !OB_IPSERVER_SWIFT_SMOKE
-    private func bridgeResponse(for payload: [String: Any]) throws -> [String: Any] {
-        NSLog("ObstacleBridge IPServer bridge command=%@", String(describing: payload["command"] ?? ""))
-        guard let response = try ObstacleBridgePythonBridge.shared().sendMessage(payload) as? [String: Any] else {
-            throw NSError(
-                domain: errorDomain,
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "IPServer bridge returned no response"]
-            )
-        }
-        if let ok = response["ok"] as? Bool, ok {
-            return response
-        }
-        let message = (response["error"] as? String) ?? "IPServer command failed"
-        throw NSError(
-            domain: errorDomain,
-            code: 2,
-            userInfo: [NSLocalizedDescriptionKey: message]
-        )
-    }
-    #endif
-
     private var heartbeatTimer: DispatchSourceTimer?
 
     private var swiftUDPRuntimeActive: Bool {
@@ -166,7 +144,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private var nativeRuntimeActive: Bool {
-        runtimeMode == "swift_simple_udp_peer" || runtimeMode == "swift_udp"
+        runtimeMode == "swift_simple_udp" || runtimeMode == "swift_udp"
     }
 
     private func nativeAppMessageResponse(for payload: [String: Any]) throws -> [String: Any] {
@@ -250,7 +228,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
 
     public override func startTunnel(options: [String : NSObject]?, completionHandler: @escaping (Error?) -> Void) {
-        runtimeMode = "python_runtime"
+        runtimeMode = "unconfigured"
         swiftSimpleUDPPeerBridge = nil
         effectivePacketTunnelSettingsState = [:]
         providerStartedAt = Date().timeIntervalSince1970
@@ -296,141 +274,103 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     fields: settingsPayload
                 )
                 self.prepareSharedOverlayBootstrap(providerConfiguration: providerConfiguration)
-                if let connectorMode = self.packetflowConnectorMode(providerConfiguration: providerConfiguration) {
-                    if connectorMode == "simple_udp_peer" {
-                        self.runtimeMode = "simple_udp_peer"
-                    } else if connectorMode == "swift_udp" || connectorMode == "swift_udp_peer" {
-                        self.runtimeMode = "swift_udp"
-                    } else {
-                        self.runtimeMode = "python_runtime"
-                    }
+                guard let swiftSettings = self.swiftSimpleUDPPeerSettings(
+                    providerConfiguration: providerConfiguration,
+                    defaultMTU: configuration.mtu
+                ) else {
+                    let connectorMode = self.packetflowConnectorMode(providerConfiguration: providerConfiguration) ?? ""
+                    let error = NSError(
+                        domain: self.errorDomain,
+                        code: 3,
+                        userInfo: [NSLocalizedDescriptionKey: "IPServer requires packetflow_connector to be swift_udp or swift_simple_udp"]
+                    )
                     self.recordNativeEvent(
-                        "packetflow_connector_mode_selected",
+                        "startTunnel_unsupported_runtime_mode",
                         fields: ["mode": connectorMode]
                     )
                     self.updateProviderState(
-                        "packetflow_connector_mode_selected",
+                        "startTunnel_unsupported_runtime_mode",
                         extraFields: ["mode": connectorMode]
                     )
+                    completionHandler(error)
+                    return
                 }
-                if let swiftSettings = self.swiftSimpleUDPPeerSettings(
-                    providerConfiguration: providerConfiguration,
-                    defaultMTU: configuration.mtu
-                ) {
-                    do {
-                        let tcpServiceSpecs = self.localTCPServiceSpecs(providerConfiguration: providerConfiguration)
-                        let bridge = try SwiftSimpleUDPPeerBridge(
-                            provider: self,
-                            settings: swiftSettings,
-                            tunnelAddress: configuration.tunnelAddress,
-                            tcpServiceSpecs: tcpServiceSpecs,
-                            overlayLayerTransportAdapter: self.sharedOverlayLayerTransportAdapter
-                        )
-                        self.swiftSimpleUDPPeerBridge = bridge
-                        bridge.start()
-                        self.recordNativeEvent(
-                            swiftSettings.runtimeMode == "swift_udp"
-                                ? "startTunnel_swift_udp_bridge_started"
-                                : "startTunnel_completed_swift_simple_udp_peer",
-                            fields: [
-                                "mode": swiftSettings.runtimeMode,
-                                "peer_host": swiftSettings.peerHost,
-                                "peer_port": swiftSettings.peerPort,
-                                "bind_host": swiftSettings.bindHost,
-                                "bind_port": swiftSettings.bindPort,
-                                "mtu": swiftSettings.mtu,
-                            ]
-                        )
-                        if swiftSettings.runtimeMode == "swift_simple_udp_peer" {
-                            self.runtimeMode = "swift_simple_udp_peer"
-                            self.startProviderHeartbeat()
-                            self.updateProviderState("startTunnel_completed_swift_simple_udp_peer")
-                            completionHandler(nil)
-                            return
-                        }
-                        self.runtimeMode = "swift_udp"
+                self.runtimeMode = swiftSettings.runtimeMode
+                self.recordNativeEvent(
+                    "packetflow_connector_mode_selected",
+                    fields: ["mode": swiftSettings.runtimeMode]
+                )
+                self.updateProviderState(
+                    "packetflow_connector_mode_selected",
+                    extraFields: ["mode": swiftSettings.runtimeMode]
+                )
+                do {
+                    let tcpServiceSpecs = self.localTCPServiceSpecs(providerConfiguration: providerConfiguration)
+                    let bridge = try SwiftSimpleUDPPeerBridge(
+                        provider: self,
+                        settings: swiftSettings,
+                        tunnelAddress: configuration.tunnelAddress,
+                        tcpServiceSpecs: tcpServiceSpecs,
+                        overlayLayerTransportAdapter: self.sharedOverlayLayerTransportAdapter
+                    )
+                    self.swiftSimpleUDPPeerBridge = bridge
+                    bridge.start()
+                    self.recordNativeEvent(
+                        swiftSettings.runtimeMode == "swift_udp"
+                            ? "startTunnel_swift_udp_bridge_started"
+                            : "startTunnel_completed_swift_simple_udp",
+                        fields: [
+                            "mode": swiftSettings.runtimeMode,
+                            "peer_host": swiftSettings.peerHost,
+                            "peer_port": swiftSettings.peerPort,
+                            "bind_host": swiftSettings.bindHost,
+                            "bind_port": swiftSettings.bindPort,
+                            "mtu": swiftSettings.mtu,
+                        ]
+                    )
+                    if swiftSettings.runtimeMode == "swift_simple_udp" {
                         self.startProviderHeartbeat()
-                        self.recordNativeEvent("startTunnel_completed_swift_udp")
-                        self.updateProviderState(
-                            "startTunnel_completed_swift_udp",
-                            extraFields: ["mode": swiftSettings.runtimeMode]
-                        )
+                        self.updateProviderState("startTunnel_completed_swift_simple_udp")
                         completionHandler(nil)
                         return
-                    } catch {
-                        self.recordNativeEvent(
-                            swiftSettings.runtimeMode == "swift_udp"
-                                ? "startTunnel_swift_udp_bridge_failed"
-                                : "startTunnel_swift_simple_udp_peer_failed",
-                            fields: [
-                                "mode": swiftSettings.runtimeMode,
-                                "error": error.localizedDescription,
-                                "error_type": String(describing: type(of: error)),
-                            ]
-                        )
-                        self.updateProviderState(
-                            swiftSettings.runtimeMode == "swift_udp"
-                                ? "startTunnel_swift_udp_bridge_failed"
-                                : "startTunnel_swift_simple_udp_peer_failed",
-                            extraFields: [
-                                "error": error.localizedDescription,
-                                "mode": swiftSettings.runtimeMode,
-                            ]
-                        )
-                        completionHandler(error)
-                        return
                     }
+                    self.startProviderHeartbeat()
+                    self.recordNativeEvent("startTunnel_completed_swift_udp")
+                    self.updateProviderState(
+                        "startTunnel_completed_swift_udp",
+                        extraFields: ["mode": swiftSettings.runtimeMode]
+                    )
+                    completionHandler(nil)
+                    return
+                } catch {
+                    self.recordNativeEvent(
+                        swiftSettings.runtimeMode == "swift_udp"
+                            ? "startTunnel_swift_udp_bridge_failed"
+                            : "startTunnel_swift_simple_udp_failed",
+                        fields: [
+                            "mode": swiftSettings.runtimeMode,
+                            "error": error.localizedDescription,
+                            "error_type": String(describing: type(of: error)),
+                        ]
+                    )
+                    self.updateProviderState(
+                        swiftSettings.runtimeMode == "swift_udp"
+                            ? "startTunnel_swift_udp_bridge_failed"
+                            : "startTunnel_swift_simple_udp_failed",
+                        extraFields: [
+                            "error": error.localizedDescription,
+                            "mode": swiftSettings.runtimeMode,
+                        ]
+                    )
+                    completionHandler(error)
+                    return
                 }
                 #if OB_IPSERVER_SWIFT_SMOKE
                 self.recordNativeEvent("startTunnel_completed_swift_smoke")
                 completionHandler(nil)
-                #elseif OB_IPSERVER_PYTHON_PROBE
-                self.recordNativeEvent("startTunnel_completed_python_probe")
-                completionHandler(nil)
                 #else
-                if !self.swiftUDPRuntimeActive {
-                    ObstacleBridgePacketFlowBridge.activate(
-                        provider: self,
-                        tunnelAddress: configuration.tunnelAddress,
-                        mtu: configuration.mtu
-                    )
-                    self.startPacketPump()
-                }
-                self.startProviderHeartbeat()
-                self.recordNativeEvent("startTunnel_completed_runtime_start_async")
-                self.updateProviderState("startTunnel_completed_runtime_start_async")
+                self.recordNativeEvent("startTunnel_completed_swift_only")
                 completionHandler(nil)
-                DispatchQueue.global(qos: .utility).async {
-                    self.recordNativeEvent("embedded_webadmin_call_entered")
-
-                    do {
-                        self.recordNativeEvent("embedded_webadmin_bridgeResponse_before")
-
-                        let response = try self.bridgeResponse(
-                            for: [
-                                "command": "start_embedded_webadmin",
-                                "provider_configuration": providerConfiguration ?? [:],
-                            ]
-                        )
-
-                        self.recordNativeEvent("embedded_webadmin_bridgeResponse_after")
-
-                        self.recordNativeEvent(
-                            "embedded_webadmin_started",
-                            fields: ["response": response]
-                        )
-                    } catch {
-                        self.recordNativeEvent(
-                            "embedded_webadmin_failed",
-                            fields: [
-                                "error": error.localizedDescription,
-                                "error_type": String(describing: type(of: error)),
-                            ]
-                        )
-                    }
-
-                    self.recordNativeEvent("embedded_webadmin_call_exited")
-                }
                 #endif
             }
         } catch {
@@ -464,11 +404,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         heartbeatTimer = nil
         swiftSimpleUDPPeerBridge?.stop()
         swiftSimpleUDPPeerBridge = nil
-        #if !OB_IPSERVER_SWIFT_SMOKE
-        if !nativeRuntimeActive {
-            _ = try? bridgeResponse(for: ["command": "stop", "reason": reason.rawValue])
-        }
-        #endif
         packetPumpRunning = false
         if !nativeRuntimeActive {
             ObstacleBridgePacketFlowBridge.deactivate()
@@ -519,70 +454,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 "status": "provider alive",
                 "command": String(describing: payload["command"] ?? ""),
             ]
-            #elseif OB_IPSERVER_PYTHON_PROBE
-            let command = String(describing: payload["command"] ?? "")
-            let response: [String: Any]
-            if command == "native_python_probe" {
-                guard let probeResponse = try ObstacleBridgePythonBridge.shared().probePythonRuntime() as? [String: Any] else {
-                    throw NSError(
-                        domain: errorDomain,
-                        code: 3,
-                        userInfo: [NSLocalizedDescriptionKey: "native Python probe returned no response"]
-                    )
-                }
-                recordNativeEvent("python_probe_completed", fields: ["response": probeResponse])
-                response = probeResponse
-            } else if command.hasPrefix("probe_module:") {
-                let moduleName = String(command.dropFirst("probe_module:".count))
-                guard !moduleName.isEmpty else {
-                    throw NSError(
-                        domain: errorDomain,
-                        code: 5,
-                        userInfo: [NSLocalizedDescriptionKey: "probe_module command requires a module name"]
-                    )
-                }
-                guard let probeResponse = try ObstacleBridgePythonBridge.shared().probePythonModules([moduleName]) as? [String: Any] else {
-                    throw NSError(
-                        domain: errorDomain,
-                        code: 4,
-                        userInfo: [NSLocalizedDescriptionKey: "module probe returned no response for \(moduleName)"]
-                    )
-                }
-                recordNativeEvent("single_module_probe_completed", fields: ["module": moduleName, "response": probeResponse])
-                response = probeResponse
-            } else if command == "obstaclebridge_module_probe" {
-                let defaultModules = [
-                    "obstacle_bridge",
-                    "obstacle_bridge.core",
-                    "obstacle_bridge_ios.diagnostics",
-                    "obstacle_bridge_ios.app",
-                    "obstacle_bridge_ios.ipserver_extension",
-                ]
-                let modules = payload["modules"] as? [String] ?? defaultModules
-                guard let probeResponse = try ObstacleBridgePythonBridge.shared().probePythonModules(modules) as? [String: Any] else {
-                    throw NSError(
-                        domain: errorDomain,
-                        code: 4,
-                        userInfo: [NSLocalizedDescriptionKey: "ObstacleBridge module probe returned no response"]
-                    )
-                }
-                recordNativeEvent("obstaclebridge_module_probe_completed", fields: ["response": probeResponse])
-                response = probeResponse
-            } else {
-                response = [
-                    "ok": true,
-                    "mode": "python_probe",
-                    "status": "provider alive",
-                "command": command,
-                ]
-            }
             #else
-            let response: [String: Any]
-            if nativeRuntimeActive {
-                response = try nativeAppMessageResponse(for: payload)
-            } else {
-                response = try bridgeResponse(for: payload)
+            guard nativeRuntimeActive else {
+                throw NSError(
+                    domain: errorDomain,
+                    code: 4,
+                    userInfo: [NSLocalizedDescriptionKey: "IPServer Swift runtime is not active"]
+                )
             }
+            let response = try nativeAppMessageResponse(for: payload)
             #endif
             recordNativeEvent(
                 "handleAppMessage_completed",
@@ -1832,7 +1712,7 @@ private final class SwiftSimpleUDPPeerBridge {
         }
 
         provider.recordPacketBridgeEvent(
-            "swift_simple_udp_peer_started",
+            "swift_simple_udp_started",
             fields: [
                 "bind_host": settings.bindHost,
                 "bind_port": settings.bindPort,
@@ -1885,7 +1765,7 @@ private final class SwiftSimpleUDPPeerBridge {
             socketFD = -1
         }
         provider?.recordPacketBridgeEvent(
-            "swift_simple_udp_peer_stopped",
+            "swift_simple_udp_stopped",
             fields: snapshot()
         )
     }
@@ -1969,7 +1849,7 @@ private final class SwiftSimpleUDPPeerBridge {
                 self.handlePacketFlowRead(packets: packets, protocols: protocols)
                 if self.packetFlowCallbacks <= 3 || (self.packetFlowCallbacks % 128) == 0 {
                     self.provider?.recordPacketBridgeEvent(
-                        "swift_simple_udp_peer_packetflow_batch",
+                        "swift_simple_udp_packetflow_batch",
                         fields: [
                             "callback_index": self.packetFlowCallbacks,
                             "packet_count": packets.count,
@@ -2004,7 +1884,7 @@ private final class SwiftSimpleUDPPeerBridge {
         }
         if packetsFromSystem <= 3 || (packetsFromSystem % 128) == 0 {
             provider.recordPacketBridgeEvent(
-                "swift_simple_udp_peer_packetflow_read",
+                "swift_simple_udp_packetflow_read",
                 fields: [
                     "packet_count": packets.count,
                     "protocol_count": protocols.count,
@@ -2053,7 +1933,7 @@ private final class SwiftSimpleUDPPeerBridge {
                 break
             }
             provider?.recordPacketBridgeEvent(
-                "swift_simple_udp_peer_recv_failed",
+                "swift_simple_udp_recv_failed",
                 fields: ["errno": errno]
             )
             withState {
@@ -2074,7 +1954,7 @@ private final class SwiftSimpleUDPPeerBridge {
         }
         if packetsToSystem <= 3 || (packetsToSystem % 128) == 0 {
             provider?.recordPacketBridgeEvent(
-                "swift_simple_udp_peer_socket_read",
+                "swift_simple_udp_socket_read",
                 fields: [
                     "packet_count": packets.count,
                     "total_bytes": totalBytes,
@@ -2139,7 +2019,7 @@ private final class SwiftSimpleUDPPeerBridge {
         currentPeerSelectedAtNS = nowNS
         lastInboundDatagramNS = 0
         provider?.recordPacketBridgeEvent(
-            "swift_simple_udp_peer_fallback_rotate",
+            "swift_simple_udp_fallback_rotate",
             fields: [
                 "candidate_index": peerCandidateIndex,
                 "resolved_peer_host": peerAddress.host,
@@ -2442,7 +2322,7 @@ private final class SwiftSimpleUDPPeerBridge {
                         sendFailures += 1
                     }
                     provider?.recordPacketBridgeEvent(
-                        "swift_simple_udp_peer_send_failed",
+                        "swift_simple_udp_send_failed",
                         fields: [
                             "errno": err,
                             "packet_bytes": rawBuffer.count,

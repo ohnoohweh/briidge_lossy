@@ -672,20 +672,21 @@ enum ObstacleBridgeRuntimeConfig {
         let connectorMode = (experiment["packetflow_connector"] as? String ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-        guard !connectorMode.isEmpty else {
+        switch connectorMode {
+        case "swift_udp", "swift_udp_peer":
+            return "swift_udp"
+        case "swift_simple_udp", "swift_simple_udp_peer", "simple_udp_peer":
+            return "swift_simple_udp"
+        default:
             return nil
         }
-        return connectorMode
     }
 
     static func swiftUDPPeerConfig(from payload: [String: Any], defaultMTU: Int) -> ObstacleBridgeSwiftUDPPeerConfig? {
         guard let experiment = packetflowConnectorSection(from: payload) else {
             return nil
         }
-        let connectorMode = (experiment["packetflow_connector"] as? String ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        guard connectorMode == "swift_simple_udp_peer" || connectorMode == "swift_udp" || connectorMode == "swift_udp_peer" else {
+        guard let connectorMode = packetflowConnectorMode(from: payload) else {
             return nil
         }
         guard let peerHost = stringValue(from: experiment["peer_host"]) else {
@@ -701,7 +702,7 @@ enum ObstacleBridgeRuntimeConfig {
         let mtu = intValue(from: experiment["mtu"]) ?? defaultMTU
         let tunIfname = stringValue(from: experiment["ifname"]) ?? "ios-utun"
         return ObstacleBridgeSwiftUDPPeerConfig(
-            runtimeMode: connectorMode == "swift_udp_peer" ? "swift_udp" : connectorMode,
+            runtimeMode: connectorMode,
             bindHost: bindHost,
             bindPort: bindPort > 0 ? bindPort : peerPort,
             peerHost: peerHost,

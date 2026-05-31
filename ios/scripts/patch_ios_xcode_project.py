@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Patch Briefcase's generated iOS Xcode project with the IPServer extension target."""
+"""Patch the generated iOS Xcode project with the IPServer extension target."""
 
 from __future__ import annotations
 
@@ -172,17 +172,10 @@ def add_ipserver_native_crypto_source(text: str) -> str:
             "\t\t\t\t71C300000000000000000002 /* ObstacleBridgeNativeCrypto.swift in Sources */,\n",
             "",
         )
-        if "71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */," not in text:
-            text = text.replace(
-                "\t\t\t\t71C200000000000000000001 /* PacketTunnelProvider.swift in Sources */,\n",
-                "\t\t\t\t71C200000000000000000001 /* PacketTunnelProvider.swift in Sources */,\n"
-                "\t\t\t\t71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */,\n",
-                1,
-            )
         if "71C300000000000000000002 /* ObstacleBridgeNativeCrypto.swift in IPServer Sources */," not in text:
             text = text.replace(
-                "\t\t\t\t71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */,\n",
-                "\t\t\t\t71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */,\n"
+                "\t\t\t\t71C200000000000000000007 /* ObstacleBridgePacketFlowBridge.swift in Sources */,\n",
+                "\t\t\t\t71C200000000000000000007 /* ObstacleBridgePacketFlowBridge.swift in Sources */,\n"
                 "\t\t\t\t71C300000000000000000002 /* ObstacleBridgeNativeCrypto.swift in IPServer Sources */,\n",
                 1,
             )
@@ -193,7 +186,7 @@ def add_ipserver_native_crypto_source(text: str) -> str:
         "\t\t\tbuildActionMask = 2147483647;\n"
         "\t\t\tfiles = (\n"
         "\t\t\t\t71C200000000000000000001 /* PacketTunnelProvider.swift in Sources */,\n"
-        "\t\t\t\t71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */,\n"
+        "\t\t\t\t71C200000000000000000007 /* ObstacleBridgePacketFlowBridge.swift in Sources */,\n"
         "\t\t\t);\n"
         "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
         "\t\t};\n"
@@ -204,7 +197,7 @@ def add_ipserver_native_crypto_source(text: str) -> str:
         "\t\t\tbuildActionMask = 2147483647;\n"
         "\t\t\tfiles = (\n"
         "\t\t\t\t71C200000000000000000001 /* PacketTunnelProvider.swift in Sources */,\n"
-        "\t\t\t\t71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */,\n"
+        "\t\t\t\t71C200000000000000000007 /* ObstacleBridgePacketFlowBridge.swift in Sources */,\n"
         "\t\t\t\t71C300000000000000000002 /* ObstacleBridgeNativeCrypto.swift in IPServer Sources */,\n"
         "\t\t\t);\n"
         "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
@@ -408,7 +401,35 @@ def patch_app_target(text: str) -> str:
     return text
 
 
+def strip_legacy_ipserver_python_support(text: str) -> str:
+    snippets = [
+        "\t\t71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = 71C200000000000000000033 /* ObstacleBridgePythonBridge.m */; };\n",
+        "\t\t71C200000000000000000005 /* Python.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 60813D352B02EBFC00EFB492 /* Python.xcframework */; };\n",
+        "\t\t71C200000000000000000033 /* ObstacleBridgePythonBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = ObstacleBridgePythonBridge.m; path = \"../../../../native/IPServer/ObstacleBridgePythonBridge.m\"; sourceTree = SOURCE_ROOT; };\n",
+        "\t\t71C200000000000000000034 /* ObstacleBridgePythonBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = ObstacleBridgePythonBridge.h; path = \"../../../../native/IPServer/ObstacleBridgePythonBridge.h\"; sourceTree = SOURCE_ROOT; };\n",
+        "\t\t71C200000000000000000035 /* IPServer-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = \"IPServer-Bridging-Header.h\"; path = \"../../../../native/IPServer/IPServer-Bridging-Header.h\"; sourceTree = SOURCE_ROOT; };\n",
+        "\t\t\t\t71C200000000000000000005 /* Python.xcframework in Frameworks */,\n",
+        "\t\t\t\t71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */,\n",
+        "\t\t\t\t71C200000000000000000033 /* ObstacleBridgePythonBridge.m */,\n",
+        "\t\t\t\t71C200000000000000000034 /* ObstacleBridgePythonBridge.h */,\n",
+        "\t\t\t\t71C200000000000000000035 /* IPServer-Bridging-Header.h */,\n",
+        "\t\t\t\t71C2000000000000000000C0 /* Process Python libraries for IPServer */,\n",
+        "\t\t\t\tHEADER_SEARCH_PATHS = \"\\\"$(BUILT_PRODUCTS_DIR)/Python.framework/Headers\\\"\";\n",
+        "\t\t\t\tSWIFT_OBJC_BRIDGING_HEADER = \"../../../../native/IPServer/IPServer-Bridging-Header.h\";\n",
+    ]
+    for snippet in snippets:
+        text = text.replace(snippet, "")
+    text = re.sub(
+        r"\t\t71C2000000000000000000C0 /\* Process Python libraries for IPServer \*/ = \{\n.*?\t\t\};\n",
+        "",
+        text,
+        flags=re.DOTALL,
+    )
+    return text
+
+
 def patch_ipserver_target(text: str) -> str:
+    text = strip_legacy_ipserver_python_support(text)
     text = text.replace("AppProxyProvider.swift", "PacketTunnelProvider.swift")
     text = text.replace("native/IPServer/AppProxyProvider.swift", "native/IPServer/PacketTunnelProvider.swift")
     text = text.replace("com.apple.networkextension.app-proxy", "com.apple.networkextension.packet-tunnel")
@@ -419,11 +440,9 @@ def patch_ipserver_target(text: str) -> str:
         text,
         "/* End PBXBuildFile section */\n",
         "\t\t71C200000000000000000001 /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71C200000000000000000032 /* PacketTunnelProvider.swift */; };\n"
-        "\t\t71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = 71C200000000000000000033 /* ObstacleBridgePythonBridge.m */; };\n"
         "\t\t71C200000000000000000007 /* ObstacleBridgePacketFlowBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71C200000000000000000038 /* ObstacleBridgePacketFlowBridge.swift */; };\n"
         "\t\t71C200000000000000000003 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 610000000000000000000900 /* Foundation.framework */; };\n"
         "\t\t71C200000000000000000004 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 71C200000000000000000030 /* NetworkExtension.framework */; };\n"
-        "\t\t71C200000000000000000005 /* Python.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 60813D352B02EBFC00EFB492 /* Python.xcframework */; };\n"
         "\t\t71C200000000000000000006 /* IPServer.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 71C200000000000000000031 /* IPServer.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };\n",
     )
     text = insert_before(
@@ -460,9 +479,6 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t71C200000000000000000030 /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };\n"
         "\t\t71C200000000000000000031 /* IPServer.appex */ = {isa = PBXFileReference; explicitFileType = \"wrapper.app-extension\"; includeInIndex = 0; path = IPServer.appex; sourceTree = BUILT_PRODUCTS_DIR; };\n"
         "\t\t71C200000000000000000032 /* PacketTunnelProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PacketTunnelProvider.swift; path = \"GeneratedSources/IPServer/PacketTunnelProvider.swift\"; sourceTree = SOURCE_ROOT; };\n"
-        "\t\t71C200000000000000000033 /* ObstacleBridgePythonBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = ObstacleBridgePythonBridge.m; path = \"../../../../native/IPServer/ObstacleBridgePythonBridge.m\"; sourceTree = SOURCE_ROOT; };\n"
-        "\t\t71C200000000000000000034 /* ObstacleBridgePythonBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = ObstacleBridgePythonBridge.h; path = \"../../../../native/IPServer/ObstacleBridgePythonBridge.h\"; sourceTree = SOURCE_ROOT; };\n"
-        "\t\t71C200000000000000000035 /* IPServer-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = \"IPServer-Bridging-Header.h\"; path = \"../../../../native/IPServer/IPServer-Bridging-Header.h\"; sourceTree = SOURCE_ROOT; };\n"
         "\t\t71C200000000000000000036 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = \"../../../../native/IPServer/Info.plist\"; sourceTree = SOURCE_ROOT; };\n"
         "\t\t71C200000000000000000037 /* IPServer.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = IPServer.entitlements; path = \"../../../../native/IPServer/IPServer.entitlements\"; sourceTree = SOURCE_ROOT; };\n"
         "\t\t71C200000000000000000038 /* ObstacleBridgePacketFlowBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgePacketFlowBridge.swift; path = \"../../../../native/IPServer/ObstacleBridgePacketFlowBridge.swift\"; sourceTree = SOURCE_ROOT; };\n",
@@ -476,7 +492,6 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t\tfiles = (\n"
         "\t\t\t\t71C200000000000000000003 /* Foundation.framework in Frameworks */,\n"
         "\t\t\t\t71C200000000000000000004 /* NetworkExtension.framework in Frameworks */,\n"
-        "\t\t\t\t71C200000000000000000005 /* Python.xcframework in Frameworks */,\n"
         "\t\t\t);\n"
         "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
         "\t\t};\n",
@@ -507,9 +522,6 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t\tchildren = (\n"
         "\t\t\t\t71C200000000000000000032 /* PacketTunnelProvider.swift */,\n"
         "\t\t\t\t71C200000000000000000038 /* ObstacleBridgePacketFlowBridge.swift */,\n"
-        "\t\t\t\t71C200000000000000000033 /* ObstacleBridgePythonBridge.m */,\n"
-        "\t\t\t\t71C200000000000000000034 /* ObstacleBridgePythonBridge.h */,\n"
-        "\t\t\t\t71C200000000000000000035 /* IPServer-Bridging-Header.h */,\n"
         "\t\t\t\t71C200000000000000000036 /* Info.plist */,\n"
         "\t\t\t\t71C200000000000000000037 /* IPServer.entitlements */,\n"
         "\t\t\t);\n"
@@ -527,7 +539,6 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t\t\t71C200000000000000000080 /* Sources */,\n"
         "\t\t\t\t71C200000000000000000040 /* Frameworks */,\n"
         "\t\t\t\t71C200000000000000000070 /* Resources */,\n"
-        "\t\t\t\t71C2000000000000000000C0 /* Process Python libraries for IPServer */,\n"
         "\t\t\t);\n"
         "\t\t\tbuildRules = (\n"
         "\t\t\t);\n"
@@ -555,33 +566,9 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
         "\t\t};\n",
     )
-    text = insert_before(
-        text,
-        "/* End PBXShellScriptBuildPhase section */\n",
-        "\t\t71C2000000000000000000C0 /* Process Python libraries for IPServer */ = {\n"
-        "\t\t\tisa = PBXShellScriptBuildPhase;\n"
-        "\t\t\talwaysOutOfDate = 1;\n"
-        "\t\t\tbuildActionMask = 2147483647;\n"
-        "\t\t\tfiles = (\n"
-        "\t\t\t);\n"
-        "\t\t\tinputFileListPaths = (\n"
-        "\t\t\t);\n"
-        "\t\t\tinputPaths = (\n"
-        "\t\t\t);\n"
-        "\t\t\tname = \"Process Python libraries for IPServer\";\n"
-        "\t\t\toutputFileListPaths = (\n"
-        "\t\t\t);\n"
-        "\t\t\toutputPaths = (\n"
-        "\t\t\t);\n"
-        "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
-        "\t\t\tshellPath = /bin/sh;\n"
-        "\t\t\tshellScript = \"set -e\\nsource $PROJECT_DIR/Support/Python.xcframework/build/utils.sh\\n\\nif [ -z \\\"${EXPANDED_CODE_SIGN_IDENTITY:-}\\\" ]; then\\n    export EXPANDED_CODE_SIGN_IDENTITY=-\\n    export EXPANDED_CODE_SIGN_IDENTITY_NAME=\\\"Ad Hoc\\\"\\nfi\\n\\nif [ \\\"$EFFECTIVE_PLATFORM_NAME\\\" = \\\"-iphonesimulator\\\" ]; then\\n    PACKAGES_PATH=\\\"app_packages.iphonesimulator\\\"\\nelse\\n    PACKAGES_PATH=\\\"app_packages.iphoneos\\\"\\nfi\\nrsync -au --delete \\\"$PROJECT_DIR/ObstacleBridge/$PACKAGES_PATH/\\\" \\\"$CODESIGNING_FOLDER_PATH/app_packages\\\"\\ninstall_python Support/Python.xcframework app_packages\\n\";\n"
-        "\t\t};\n",
-    )
     if "71C200000000000000000080 /* Sources */ = {" in text:
         text = add_ipserver_native_crypto_source(text)
         text = add_ipserver_packet_flow_bridge_source(text)
-        text = add_ipserver_shared_swift_sources(text)
     else:
         text = insert_before(
             text,
@@ -592,7 +579,6 @@ def patch_ipserver_target(text: str) -> str:
             "\t\t\tfiles = (\n"
             "\t\t\t\t71C200000000000000000001 /* PacketTunnelProvider.swift in Sources */,\n"
             "\t\t\t\t71C200000000000000000007 /* ObstacleBridgePacketFlowBridge.swift in Sources */,\n"
-            "\t\t\t\t71C200000000000000000002 /* ObstacleBridgePythonBridge.m in Sources */,\n"
             "\t\t\t\t71C300000000000000000002 /* ObstacleBridgeNativeCrypto.swift in IPServer Sources */,\n"
             "\t\t\t\t71C500000000000000000001 /* ObstacleBridgeAdminAPI.swift in Sources */,\n"
             "\t\t\t\t71C500000000000000000002 /* ObstacleBridgeChannelMuxCodec.swift in Sources */,\n"
@@ -617,6 +603,7 @@ def patch_ipserver_target(text: str) -> str:
             "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
             "\t\t};\n",
         )
+    text = add_ipserver_shared_swift_sources(text)
     text = insert_before(
         text,
         "/* Begin PBXVariantGroup section */\n",
@@ -639,9 +626,7 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t\t\tCODE_SIGN_STYLE = Automatic;\n"
         "\t\t\t\tCURRENT_PROJECT_VERSION = 1;\n"
         "\t\t\t\tDEVELOPMENT_TEAM = 99WZ498FCV;\n"
-        "\t\t\t\tFRAMEWORK_SEARCH_PATHS = \"\\\"$(PROJECT_DIR)/Support\\\"\";\n"
         "\t\t\t\tGENERATE_INFOPLIST_FILE = NO;\n"
-        "\t\t\t\tHEADER_SEARCH_PATHS = \"\\\"$(BUILT_PRODUCTS_DIR)/Python.framework/Headers\\\"\";\n"
         "\t\t\t\tINFOPLIST_FILE = \"../../../../native/IPServer/Info.plist\";\n"
         "\t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 13.0;\n"
         "\t\t\t\tLD_RUNPATH_SEARCH_PATHS = (\n"
@@ -653,7 +638,6 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = \"com.obstaclebridge.obstacle-bridge-ios.IPServer\";\n"
         "\t\t\t\tPRODUCT_NAME = \"$(TARGET_NAME)\";\n"
         "\t\t\t\tSKIP_INSTALL = YES;\n"
-        "\t\t\t\tSWIFT_OBJC_BRIDGING_HEADER = \"../../../../native/IPServer/IPServer-Bridging-Header.h\";\n"
         "\t\t\t\tSWIFT_VERSION = 5.0;\n"
         "\t\t\t\tTARGETED_DEVICE_FAMILY = \"1,2\";\n"
         "\t\t\t\tWRAPPER_EXTENSION = appex;\n"
@@ -668,9 +652,7 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t\t\tCODE_SIGN_STYLE = Automatic;\n"
         "\t\t\t\tCURRENT_PROJECT_VERSION = 1;\n"
         "\t\t\t\tDEVELOPMENT_TEAM = 99WZ498FCV;\n"
-        "\t\t\t\tFRAMEWORK_SEARCH_PATHS = \"\\\"$(PROJECT_DIR)/Support\\\"\";\n"
         "\t\t\t\tGENERATE_INFOPLIST_FILE = NO;\n"
-        "\t\t\t\tHEADER_SEARCH_PATHS = \"\\\"$(BUILT_PRODUCTS_DIR)/Python.framework/Headers\\\"\";\n"
         "\t\t\t\tINFOPLIST_FILE = \"../../../../native/IPServer/Info.plist\";\n"
         "\t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 13.0;\n"
         "\t\t\t\tLD_RUNPATH_SEARCH_PATHS = (\n"
@@ -682,7 +664,6 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = \"com.obstaclebridge.obstacle-bridge-ios.IPServer\";\n"
         "\t\t\t\tPRODUCT_NAME = \"$(TARGET_NAME)\";\n"
         "\t\t\t\tSKIP_INSTALL = YES;\n"
-        "\t\t\t\tSWIFT_OBJC_BRIDGING_HEADER = \"../../../../native/IPServer/IPServer-Bridging-Header.h\";\n"
         "\t\t\t\tSWIFT_VERSION = 5.0;\n"
         "\t\t\t\tTARGETED_DEVICE_FAMILY = \"1,2\";\n"
         "\t\t\t\tWRAPPER_EXTENSION = appex;\n"

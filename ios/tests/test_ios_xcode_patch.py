@@ -8,8 +8,8 @@ import shutil
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "ios" / "scripts"))
 
-import patch_briefcase_xcode_project as patcher
-from patch_briefcase_xcode_project import patch_pbxproj_file, patch_pbxproj_text
+import patch_ios_xcode_project as patcher
+from patch_ios_xcode_project import patch_pbxproj_file, patch_pbxproj_text
 
 
 BASELINE_PROJECT = """// !$*UTF8*$!
@@ -210,10 +210,12 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "native/ObstacleBridgeShared/ObstacleBridgeNativeCrypto.swift" in patched
     assert "ObstacleBridgeNativeCrypto.swift in Sources" in patched
     assert "ObstacleBridgeNativeCrypto.swift in IPServer Sources" in patched
-    assert "SWIFT_OBJC_BRIDGING_HEADER" in patched
     assert "SWIFT_VERSION = 5.0;" in patched
     assert 'CODE_SIGN_ENTITLEMENTS = "../../../../native/ObstacleBridgeApp/ObstacleBridge.entitlements";' in patched
     assert 'export EXPANDED_CODE_SIGN_IDENTITY=-' in patched
+    assert "Process Python libraries for IPServer" not in patched
+    assert "ObstacleBridgePythonBridge.m" not in patched
+    assert "IPServer-Bridging-Header.h" not in patched
     assert "ObstacleBridgeTunnel.appex" not in patched
 
 

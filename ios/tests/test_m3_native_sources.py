@@ -32,17 +32,9 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "ObstacleBridgeAdminAPI" in provider
     assert '"admin_api_request"' in provider
     assert "setTunnelNetworkSettings" in provider
-    assert "ObstacleBridgePacketFlowBridge.activate" in provider
-    assert "start_embedded_webadmin" in provider
     assert "OB_IPSERVER_SWIFT_SMOKE" in provider
     assert "startTunnel_completed_swift_smoke" in provider
-    assert "OB_IPSERVER_PYTHON_PROBE" in provider
-    assert "python_probe_completed" in provider
-    assert "obstaclebridge_module_probe_completed" in provider
-    assert "probe_module:" in provider
-    assert "single_module_probe_completed" in provider
-    assert "startTunnel_completed_runtime_start_async" in provider
-    assert "embedded_webadmin_started" in provider
+    assert "startTunnel_completed_swift_only" in provider
     assert "handleAppMessage" in provider
     assert "packet_pump_forwarded_packets" in provider
     assert "ipserver-native-provider-state.json" in provider
@@ -54,9 +46,8 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "task_vm_info_kern_return" in provider
     assert "SwiftSimpleUDPPeerBridge" in provider
     assert "ObstacleBridgeUdpOverlayPeerRuntime" in provider
-    assert "swift_simple_udp_peer" in provider
+    assert "swift_simple_udp" in provider
     assert "swift_udp" in provider
-    assert "simple_udp_peer" in provider
     assert "packetflow_connector_mode_selected" in provider
     assert "swift_udp_payload_send_failed" in provider
     assert "swift_udp_inbound_control_failed" in provider
@@ -89,9 +80,11 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "configuration.makeNetworkSettings()" in provider
     assert "ObstacleBridgeRuntimeConfig.localTunServiceSpec" in provider
     assert "private var nativeRuntimeActive: Bool" in provider
-    assert 'runtimeMode == "swift_simple_udp_peer" || runtimeMode == "swift_udp"' in provider
+    assert 'runtimeMode == "swift_simple_udp" || runtimeMode == "swift_udp"' in provider
     assert "private func nativeAppMessageResponse(for payload: [String: Any]) throws -> [String: Any]" in provider
     assert "startTunnel_completed_swift_udp" in provider
+    assert "startTunnel_completed_swift_simple_udp" in provider
+    assert "startTunnel_unsupported_runtime_mode" in provider
     assert 'if !nativeRuntimeActive {' in provider
 
 
@@ -492,7 +485,7 @@ def test_udp_overlay_peer_runtime_source_exists() -> None:
     assert "noteControlSent(" in runtime
 
 
-def test_ios_briefcase_configs_include_rubicon_for_native_crypto_bridge() -> None:
+def test_ios_packaging_config_includes_rubicon_for_native_crypto_bridge() -> None:
     pyproject = tomllib.loads((ROOT / "ios" / "pyproject.toml").read_text(encoding="utf-8"))
 
     app_sources = pyproject["tool"]["briefcase"]["app"]["obstacle_bridge_ios"]["sources"]
@@ -502,16 +495,14 @@ def test_ios_briefcase_configs_include_rubicon_for_native_crypto_bridge() -> Non
     assert "rubicon-objc>=0.5.3" in app_requires
 
 
-def test_ipserver_extension_sources_bootstrap_python_runtime() -> None:
+def test_ipserver_extension_sources_are_swift_only() -> None:
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
-    bridge = (IPSERVER_NATIVE_DIR / "ObstacleBridgePythonBridge.m").read_text(encoding="utf-8")
     entitlements = (IPSERVER_NATIVE_DIR / "IPServer.entitlements").read_text(encoding="utf-8")
     info_plist = (IPSERVER_NATIVE_DIR / "Info.plist").read_text(encoding="utf-8")
 
     assert "NEPacketTunnelProvider" in provider
     assert "@objc(PacketTunnelProvider)" in provider
     assert "class PacketTunnelProvider: NEPacketTunnelProvider" in provider
-    assert "start_embedded_webadmin" in provider
     assert "handleAppMessage" in provider
     assert "recordNativeEvent" in provider
     assert "stopTunnel_entered" in provider
@@ -523,13 +514,12 @@ def test_ipserver_extension_sources_bootstrap_python_runtime() -> None:
     assert "ObstacleBridgeTcpOverlayRuntime" in provider
     assert "shared_overlay_runtime_prepared" in provider
     assert "shared_overlay_bootstrap_state" in provider
-    assert "obstacle_bridge_ios.ipserver_extension" in bridge
-    assert "ObstacleBridgePythonBridge sendMessage" in bridge
-    assert "probePythonRuntimeWithError" in bridge
-    assert "probePythonModules" in bridge
-    assert 'PyImport_ImportModule(moduleName.UTF8String)' in bridge
-    assert "Py_InitializeFromConfig" in bridge
-    assert "app_packages" in bridge
+    assert "ObstacleBridgePythonBridge" not in provider
+    assert not (IPSERVER_NATIVE_DIR / "ObstacleBridgePythonBridge.m").exists()
+    assert not (IPSERVER_NATIVE_DIR / "ObstacleBridgePythonBridge.h").exists()
+    assert not (IPSERVER_NATIVE_DIR / "IPServer-Bridging-Header.h").exists()
+    assert not (ROOT / "ios" / "src" / "obstacle_bridge_ios" / "ipserver_extension.py").exists()
+    assert not (ROOT / "ios" / "src" / "obstacle_bridge_ios" / "ipserver_runtime.py").exists()
     assert "com.apple.security.application-groups" in entitlements
     assert "com.apple.networkextension.packet-tunnel" in info_plist
 
@@ -557,9 +547,6 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "sendProviderMessage" in control
     assert "requestProviderSnapshot" in control
     assert "requestProviderMessage" in control
-    assert "native_python_probe" in control
-    assert "probe_module:obstacle_bridge" in control
-    assert "probe_module:obstacle_bridge_ios.ipserver_extension" in control
     assert "stopVPNTunnel" in control
     assert "scheduleAdminTunnelReload" in control
     assert "restart_after_save" in control

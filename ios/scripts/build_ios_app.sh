@@ -36,13 +36,13 @@ if [ ! -f "${PROJECT_PBXPROJ}" ]; then
   echo "[build_ios_app] Xcode project missing, creating it first"
   "${IOS_DIR}/scripts/create_ios_xcode_project.sh" --no-input
 else
-  echo "[build_ios_app] updating Briefcase iOS bundle so changed Python sources are included"
+  echo "[build_ios_app] refreshing iOS app bundle so changed packaged sources are included"
   (
     cd "${IOS_DIR}"
     "${BRIEFCASE_CMD}" update iOS --no-input -a obstacle_bridge_ios
   )
   echo "[build_ios_app] reapplying repo-owned Xcode project patches"
-  "${PYTHON_CMD}" "${IOS_DIR}/scripts/patch_briefcase_xcode_project.py" "${PROJECT_PBXPROJ}"
+  "${PYTHON_CMD}" "${IOS_DIR}/scripts/patch_ios_xcode_project.py" "${PROJECT_PBXPROJ}"
 fi
 
 if [ -d "${SIM_APP_PACKAGES_DIR}" ]; then

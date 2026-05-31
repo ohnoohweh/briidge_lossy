@@ -1,10 +1,10 @@
 # ObstacleBridge iOS Prototype
 
-This directory contains the BeeWare companion app prototype and native iOS packet tunnel POC sources.
+This directory contains the repo-owned iOS app prototype and native iOS packet tunnel POC sources.
 
 Current scope:
 
-- briefcase-ready project metadata for an iOS app container
+- repo-owned iOS app sources, Xcode project generation scripts, and native packet-tunnel sources
 - shared ObstacleBridge import/preview logic wired into iOS-side helpers
 - profile persistence that keeps plaintext secrets out of normal profile files
 - focused tests for invite/config import preview and profile secret redaction
@@ -51,31 +51,55 @@ Useful toggles:
 - `KEEP_TEMP_DOCS_ROOT=1 ./ios/scripts/run_ios_pytest.sh ...` keeps the generated temp documents root for inspection
 - `OBSTACLEBRIDGE_IOS_DOCUMENTS_ROOT=/tmp/my-ios-docs ./ios/scripts/run_ios_pytest.sh ...` reuses a specific temp location
 
-## Briefcase bootstrap
+## Build and project generation
 
-From `ios/`:
+From repository root, generate or refresh the iOS Xcode project:
 
 ```bash
-python -m pip install briefcase
-briefcase create iOS
-briefcase build iOS
+./ios/scripts/create_ios_xcode_project.sh --no-input
 ```
 
-The app module is `obstacle_bridge_ios.app:main`.
+This writes the Xcode project to `ios/build/obstacle_bridge_ios/ios/xcode/ObstacleBridge.xcodeproj`
+and reapplies the repo-owned project patching for the `IPServer` packet-tunnel target.
 
-Custom iOS app artwork lives under `ios/resources/`. The Briefcase app config points
-`icon` at `resources/obstaclebridge-icon`, so rerunning `briefcase create iOS` or
-`briefcase update iOS` will regenerate the Xcode asset catalog from those repo-owned
-PNG sizes instead of using the default BeeWare artwork.
+To build for a signed device target:
 
-The reusable probe helpers remain under `ios/e2e_app/src/obstacle_bridge_ios_e2e` for host-side/unit integration coverage, but there is no separate Briefcase-managed iOS E2E application target anymore.
+```bash
+OB_APPLE_TEAM_ID=YOURTEAMID ./ios/scripts/build_ios_app.sh
+```
+
+Useful build overrides:
+
+- `OB_IOS_DEVICE_ID=<device-udid>` builds for a connected physical device instead of the generic iOS destination
+- `DERIVED_DATA_PATH=/tmp/obstaclebridge-ios-build` overrides the Xcode derived-data output path
+
+Custom iOS app artwork lives under `ios/resources/`. Rerunning
+`./ios/scripts/create_ios_xcode_project.sh --no-input` refreshes the generated asset
+catalog from those repo-owned PNG sizes.
+
+To inspect or run the app from Xcode, open:
+
+```bash
+open ios/build/obstacle_bridge_ios/ios/xcode/ObstacleBridge.xcodeproj
+```
+
+The reusable probe helpers remain under `ios/e2e_app/src/obstacle_bridge_ios_e2e` for host-side and unit integration coverage, but there is no separate standalone iOS E2E application target anymore.
 
 ## M2 dependency spike run
 
-Run on simulator:
+Run the dependency spike on a simulator by launching the app from Xcode with the
+argument `--m2-dependency-spike`, or build/install/launch it from the command line:
 
 ```bash
-briefcase run iOS -u --no-input -d "iPhone 17 Pro" -- --m2-dependency-spike
+xcodebuild \
+  -project ios/build/obstacle_bridge_ios/ios/xcode/ObstacleBridge.xcodeproj \
+  -scheme ObstacleBridge \
+  -configuration Debug \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  -derivedDataPath /tmp/obstaclebridge-ios-sim-build \
+  build
+xcrun simctl install booted /tmp/obstaclebridge-ios-sim-build/Build/Products/Debug-iphonesimulator/ObstacleBridge.app
+xcrun simctl launch booted com.obstaclebridge.obstacle-bridge-ios --m2-dependency-spike
 ```
 
 Then retrieve the generated JSON report from the iOS app container:
@@ -85,7 +109,8 @@ APP_DATA_DIR="$(xcrun simctl get_app_container booted com.obstaclebridge.obstacl
 cat "${APP_DATA_DIR}/Documents/ObstacleBridge/m2-dependency-spike-latest.json"
 ```
 
-Run on a physical iOS device by replacing `-d` with the connected device UDID or name.
+Run on a physical iOS device by building with `./ios/scripts/build_ios_app.sh`, then
+installing and launching from Xcode or your normal device-deployment workflow.
 
 ## M2.5 UI behavior
 
@@ -98,12 +123,16 @@ Run on a physical iOS device by replacing `-d` with the connected device UDID or
 Source of truth:
 
 - `ios/src/obstacle_bridge_ios/m3_tunnel.py` builds the `NETunnelProviderProtocol.providerConfiguration` payload from an existing iOS profile.
-- `ios/native/IPServer/PacketTunnelProvider.swift` is the packet-tunnel extension entrypoint and applies `NEPacketTunnelNetworkSettings` before booting the shared Python runtime.
-- `ios/native/IPServer/ObstacleBridgePythonBridge.m` bootstraps the packaged Python runtime inside the extension so WebAdmin, ChannelMux, and the lower Python layers can execute in the packet-tunnel process.
+- `ios/native/IPServer/PacketTunnelProvider.swift` is the packet-tunnel extension entrypoint and applies `NEPacketTunnelNetworkSettings` before starting the Swift packet-flow runtime.
+- The extension now runs only the Swift connector modes `swift_udp` and `swift_simple_udp`; the old Python fallback and extension-local Python packaging were removed from the `IPServer` target.
 
 The M3 bridge is intentionally a POC transport (`tcp-length-prefixed-packets`) so packet-flow behavior can be validated before M4 secure-link parity. Production secure-link, DNS/route hardening, and App Store entitlement/distribution validation remain M4+ work.
 
-The native files are not generated Briefcase output. The repo-owned Xcode patcher now injects the `IPServer` packet-tunnel target after `briefcase create iOS`, and the app can then install it through `NETunnelProviderManager`.
+The native files are not generated output. The repo-owned Xcode patcher injects the
+`IPServer` packet-tunnel target when `./ios/scripts/create_ios_xcode_project.sh`
+refreshes the project, and the app can then install it through
+`NETunnelProviderManager`. The extension target no longer embeds a separate Python
+runtime or Python build phase.
 
 ## iOS simulator to macOS host connection test
 
@@ -115,9 +144,8 @@ OBSTACLEBRIDGE_RUN_IOS_SIMULATOR=1 pytest -q tests/integration/test_ios_simulato
 
 Useful overrides:
 
-- `OBSTACLEBRIDGE_IOS_SIMULATOR_DEVICE="iPhone 17 Pro"` chooses the simulator device passed to Briefcase.
-- `OBSTACLEBRIDGE_IOS_SIMULATOR_TIMEOUT=600` controls the Briefcase launch timeout.
-- `BRIEFCASE=/path/to/briefcase` chooses the Briefcase executable when it is not on `PATH`.
+- `OBSTACLEBRIDGE_IOS_SIMULATOR_DEVICE="iPhone 17 Pro"` chooses the simulator device used by the iOS simulator lane.
+- `OBSTACLEBRIDGE_IOS_SIMULATOR_TIMEOUT=600` controls the simulator launch timeout.
 
 The simulator lane also includes a WS overlay plus UDP service probe. Pytest starts a host-side ObstacleBridge WS listener and UDP echo target, then uses the legacy probe harness to bind a local UDP port, stimulate that port, and verify the UDP response that crossed the WS overlay:
 
@@ -395,7 +423,7 @@ Linux machine has IP 10.10.1.6 assigned
 
 ```json  
 "iOS_TUN_connector": {
-  "packetflow_connector": "simple_udp_peer",
+  "packetflow_connector": "swift_simple_udp",
   "peer_host": "10.10.1.6",
   "peer_port": 5555,
   "bind_host": "0.0.0.0",
