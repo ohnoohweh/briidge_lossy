@@ -586,3 +586,77 @@ def test_ios_packet_tunnel_provider_probe_rotates_to_next_peer_candidate_after_i
     assert payload["resolved_peer_index"] == 1
     assert payload["resolved_peer_port"] == peer_port
     assert payload["resolved_peer_host"] != "::1"
+
+
+def test_ios_packet_tunnel_provider_probe_immediately_rotates_after_unreachable_ipv6_send_error(tmp_path: Path) -> None:
+    source_path = tmp_path / "PacketTunnelProviderImmediatePeerFallbackProbe.swift"
+    binary_path = tmp_path / "packet-tunnel-provider-immediate-peer-fallback-probe"
+    bind_port = _unused_udp_port()
+    peer_port = _unused_udp_port()
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            enum ProbeError: Error {
+                case invalidArgs
+            }
+
+            @main
+            struct PacketTunnelProviderImmediatePeerFallbackProbeMain {
+                static func main() throws {
+                    guard CommandLine.arguments.count == 3 else {
+                        throw ProbeError.invalidArgs
+                    }
+                    guard
+                        let bindPort = Int(CommandLine.arguments[1]),
+                        let peerPort = Int(CommandLine.arguments[2])
+                    else {
+                        throw ProbeError.invalidArgs
+                    }
+
+                    let bridge = try PacketTunnelProviderSwiftUDPBridgeProbe(
+                        runtimeMode: "swift_udp",
+                        bindHost: "::",
+                        bindPort: bindPort,
+                        peerHost: "[2001:db8::10],127.0.0.1",
+                        peerPort: peerPort,
+                        peerResolveFamily: "prefer-ipv6",
+                        mtu: 1400,
+                        tunIfname: "ios-utun",
+                        tunnelAddress: "192.168.106.1",
+                        tcpServiceSpecs: []
+                    )
+
+                    bridge.start()
+                    Thread.sleep(forTimeInterval: 0.35)
+                    let payload = bridge.bridgeSnapshot()
+                    bridge.stop()
+
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_packet_tunnel_provider_probe(source_path, binary_path)
+    completed = subprocess.run(
+        [str(binary_path), str(bind_port), str(peer_port)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout)
+    assert payload["resolved_peer_candidate_count"] == 2
+    assert payload["resolved_peer_index"] == 1
+    assert payload["resolved_peer_family"] == "ipv6"
+    assert payload["resolved_peer_host"].endswith("127.0.0.1")
+    assert payload["resolved_peer_port"] == peer_port

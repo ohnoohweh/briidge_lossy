@@ -2032,6 +2032,28 @@ private final class SwiftSimpleUDPPeerBridge {
         }
     }
 
+    private func handleImmediatePeerFallback(sendErrno: Int32) {
+        guard started, peerCandidateIndex + 1 < peerCandidates.count else {
+            return
+        }
+        switch sendErrno {
+        case ENETUNREACH, EHOSTUNREACH, EADDRNOTAVAIL:
+            provider?.recordPacketBridgeEvent(
+                "swift_simple_udp_send_error_fallback",
+                fields: [
+                    "errno": sendErrno,
+                    "candidate_index": peerCandidateIndex,
+                    "resolved_peer_host": peerAddress.host,
+                    "resolved_peer_port": peerAddress.port,
+                    "resolved_peer_family": Self.familyName(peerAddress.family),
+                ]
+            )
+            rotateToNextPeerCandidate(nowNS: monotonicNowNS())
+        default:
+            break
+        }
+    }
+
     private func startTCPServices() {
         guard settings.runtimeMode == "swift_udp" else {
             return
@@ -2328,6 +2350,7 @@ private final class SwiftSimpleUDPPeerBridge {
                             "packet_bytes": rawBuffer.count,
                         ]
                     )
+                    handleImmediatePeerFallback(sendErrno: err)
                 }
             }
         }

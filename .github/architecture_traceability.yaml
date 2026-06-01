@@ -114,6 +114,7 @@ ARC-CMP-003:
 
 ARC-CMP-004:
   unit_tests:
+    - tests/unit/test_peer_resolution.py::test_udp_session_immediately_falls_back_to_ipv4_on_unreachable_ipv6_send_error
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv6_literal_when_available
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_falls_back_to_ipv4_when_ipv6_candidate_fails
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_honors_bind_family_constraint
@@ -167,14 +168,13 @@ ARC-CMP-004:
     - tests/unit/test_embeddable_core.py::test_memory_packet_io_round_trip_boundaries
     - tests/unit/test_runner_events.py::test_install_process_signal_handlers_requests_shutdown
     - tests/unit/test_runner_events.py::test_main_logs_system_exit_code
-    - ios/tests/test_ipserver_extension.py::test_handle_message_connects_profile_by_id
-    - ios/tests/test_ipserver_extension.py::test_handle_message_disconnects_profile
-    - ios/tests/test_ipserver_extension.py::test_embedded_restart_reload_reads_grouped_config_and_restarts_client
-    - ios/tests/test_ipserver_extension.py::test_embedded_restart_times_out_old_runtime_stop
+    - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_restart_reloads_runtime_config_from_disk
     - ios/tests/test_ios_e2e_app_runner.py::test_e2e_runner_runtime_config_reports_webadmin_url_and_started_state
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_prefers_local_ios_tun_hook_env
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_can_fallback_to_remote_peer_addr
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists
+    - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_immediately_rotates_after_unreachable_ipv6_send_error
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_reconnect_targets_selected_peer_id
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_default_entrypoint_config_bootstrap_and_webadmin_notice

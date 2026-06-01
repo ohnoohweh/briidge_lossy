@@ -48,8 +48,10 @@ REQ-OVL-007:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_udp_peer_multi_host_prefers_ipv6_and_falls_back_to_ipv4
     - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
   unit_tests:
+    - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_immediately_rotates_after_unreachable_ipv6_send_error
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_resolves_multi_host_peer_with_family_preference
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_rotates_to_next_peer_candidate_after_idle_timeout
+    - tests/unit/test_peer_resolution.py::test_udp_session_immediately_falls_back_to_ipv4_on_unreachable_ipv6_send_error
     - tests/unit/test_peer_resolution.py::test_resolve_localhost_ipv4_uses_loopback_fallback_on_gaierror
     - tests/unit/test_peer_resolution.py::test_resolve_localhost_ipv6_uses_loopback_fallback_on_gaierror
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv6_literal_when_available
@@ -500,8 +502,8 @@ REQ-LIFE-004:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_server_restart_closes_tcp_preserves_udp
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_sender_reset_clears_stale_reconnect_state
-    - ios/tests/test_ipserver_extension.py::test_embedded_restart_reload_reads_grouped_config_and_restarts_client
-    - ios/tests/test_ipserver_extension.py::test_embedded_restart_times_out_old_runtime_stop
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_restart_reloads_runtime_config_from_disk
+    - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
 
 REQ-LIFE-005:
   integration_tests:
@@ -560,10 +562,8 @@ REQ-LIFE-010:
     - tests/unit/test_embeddable_core.py::test_memory_packet_io_round_trip_boundaries
     - tests/unit/test_runner_events.py::test_install_process_signal_handlers_requests_shutdown
     - tests/unit/test_runner_events.py::test_main_logs_system_exit_code
-    - ios/tests/test_ipserver_extension.py::test_handle_message_connects_profile_by_id
-    - ios/tests/test_ipserver_extension.py::test_handle_message_disconnects_profile
-    - ios/tests/test_ipserver_extension.py::test_embedded_restart_reload_reads_grouped_config_and_restarts_client
-    - ios/tests/test_ipserver_extension.py::test_embedded_restart_times_out_old_runtime_stop
+    - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_restart_reloads_runtime_config_from_disk
     - ios/tests/test_ios_e2e_app_runner.py::test_e2e_runner_runtime_config_reports_webadmin_url_and_started_state
 
 REQ-LST-001:

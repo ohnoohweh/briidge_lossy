@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import struct
 import ipaddress
 
@@ -1050,6 +1051,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
         on_peer_tx_bytes: Optional[Callable[[int], None]] = None,
         on_rtt_success: Optional[Callable[[int], None]] = None,
         on_state_change: Optional[Callable[[bool], None]] = None,
+        on_send_error: Optional[Callable[[Exception], None]] = None,
     ):
         self.session = session
         self.proto = proto or getattr(session, "proto", PROTO)
@@ -1063,6 +1065,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
         self._on_peer_tx_bytes = on_peer_tx_bytes
         self._on_rtt_success = on_rtt_success
         self._on_state_change = on_state_change
+        self._on_send_error = on_send_error
         super().__init__()
         self._last_control_sent_ns = 0
         self._last_sent_last_in_order = 0
@@ -1156,6 +1159,12 @@ class PeerProtocol(asyncio.DatagramProtocol):
 
     def error_received(self, exc):
         self.session.log.debug("[UDP/PROTO] error_received exc=%r", exc)
+        if exc is None or self._on_send_error is None:
+            return
+        try:
+            self._on_send_error(exc)
+        except Exception:
+            self.session.log.debug("[UDP/PROTO] on_send_error callback failed", exc_info=True)
 
 
     def notify_send_port_ready(self) -> None:
@@ -2027,6 +2036,7 @@ class UdpSession(ISession):
                 on_peer_tx_bytes=self._on_peer_tx_bytes,
                 on_rtt_success=self._on_rtt_success,
                 on_state_change=self._on_state_change,
+                on_send_error=self._on_peer_send_error,
             )
 
         sock = None
@@ -2389,6 +2399,22 @@ class UdpSession(ISession):
             self._proto._proto_rt._next_probe_due_ns = 0
             self._proto._proto_rt._send_idle_probe(initial=True)
         return True
+
+    def _on_peer_send_error(self, exc: Exception) -> None:
+        err = getattr(exc, "errno", None)
+        if err not in {errno.ENETUNREACH, errno.EHOSTUNREACH, errno.EADDRNOTAVAIL}:
+            return
+        if self._listener_mode or len(self._peer_candidates) <= 1:
+            return
+        current = None
+        if self._proto is not None and getattr(self._proto, "send_port", None) is not None:
+            current = self._proto.send_port.peer_addr
+        self._log.warning(
+            "[UDP/SESSION] peer send error err=%r current_peer=%r attempting immediate fallback",
+            err,
+            current,
+        )
+        self._rotate_to_next_peer_candidate()
 
     async def _peer_candidate_fallback_loop(self) -> None:
         try:

@@ -1,8 +1,11 @@
+import argparse
+import errno
 import socket
 
 import pytest
 
 from obstacle_bridge.bridge import _resolve_peer_endpoint
+from obstacle_bridge.bridge_transport_udp import UdpSession
 
 
 def test_resolve_localhost_ipv6_uses_loopback_fallback_on_gaierror(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -69,3 +72,54 @@ def test_resolve_multi_peer_honors_bind_family_constraint() -> None:
         socktype=socket.SOCK_DGRAM,
     )
     assert (host, port, family) == ("192.0.2.10", 443, socket.AF_INET)
+
+
+def test_udp_session_immediately_falls_back_to_ipv4_on_unreachable_ipv6_send_error() -> None:
+    args = argparse.Namespace(
+        max_inflight=32,
+        udp_bind="::",
+        udp_own_port=4433,
+        udp_peer="[2001:db8::10],192.0.2.10",
+        udp_peer_port=4433,
+        udp_peer_resolve_family="prefer-ipv6",
+    )
+    session = UdpSession(args)
+    session._listener_mode = False
+    session._peer_candidates = [
+        ("2001:db8::10", 4433, socket.AF_INET6),
+        ("192.0.2.10", 4433, socket.AF_INET),
+    ]
+    session._peer_candidate_index = 0
+
+    class _FakeRuntime:
+        def __init__(self) -> None:
+            self._conn_evt = type("_Evt", (), {"clear": lambda self: None})()
+            self._conn_state = True
+            self._next_probe_due_ns = 123
+            self.sent_initial = False
+
+        def _send_idle_probe(self, initial: bool = False) -> None:
+            self.sent_initial = bool(initial)
+
+    class _FakeSendPort:
+        def __init__(self) -> None:
+            self.peer_addr = ("2001:db8::10", 4433)
+
+        def set_peer(self, addr) -> None:
+            self.peer_addr = addr
+
+    fake_runtime = _FakeRuntime()
+    fake_send_port = _FakeSendPort()
+    session._proto = type("_Proto", (), {"send_port": fake_send_port, "_proto_rt": fake_runtime})()
+
+    learned = []
+    session._on_peer_set = lambda host, port: learned.append((host, port))
+
+    session._on_peer_send_error(OSError(errno.ENETUNREACH, "Network is unreachable"))
+
+    assert session._peer_candidate_index == 1
+    assert fake_send_port.peer_addr == ("192.0.2.10", 4433)
+    assert learned == [("192.0.2.10", 4433)]
+    assert fake_runtime._conn_state is False
+    assert fake_runtime._next_probe_due_ns == 0
+    assert fake_runtime.sent_initial is True
