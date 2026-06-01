@@ -3,7 +3,7 @@ import Darwin
 import Foundation
 import Network
 
-private enum ObstacleBridgeMacHostRunnerError: Error, LocalizedError {
+private enum ObstacleBridgeHostRunnerError: Error, LocalizedError {
     case usage(String)
     case invalidArgument(String)
     case unreadableRuntimeConfig(String)
@@ -87,7 +87,7 @@ private enum ObstacleBridgeConfigSecretCodec {
         let sealed = try ChaChaPoly.SealedBox(combined: combined)
         let plaintext = try ChaChaPoly.open(sealed, using: derivedKey(), authenticating: aad)
         guard let stringValue = String(data: plaintext, encoding: .utf8) else {
-            throw ObstacleBridgeMacHostRunnerError.invalidArgument("failed to decode config secret")
+            throw ObstacleBridgeHostRunnerError.invalidArgument("failed to decode config secret")
         }
         return stringValue
     }
@@ -127,7 +127,7 @@ private enum ObstacleBridgeConfigSecretCodec {
             normalized += String(repeating: "=", count: 4 - remainder)
         }
         guard let data = Data(base64Encoded: normalized) else {
-            throw ObstacleBridgeMacHostRunnerError.invalidArgument("invalid base64 config secret")
+            throw ObstacleBridgeHostRunnerError.invalidArgument("invalid base64 config secret")
         }
         return data
     }
@@ -154,7 +154,7 @@ private final class ObstacleBridgeConfigStore {
     }
 
     func adminWebDirectory() -> String {
-        if let explicit = ObstacleBridgeMacHostRunner.stringValue(from: runtimeConfig["admin_web_dir"]) {
+        if let explicit = ObstacleBridgeHostRunner.stringValue(from: runtimeConfig["admin_web_dir"]) {
             return explicit
         }
         let bundled = URL(fileURLWithPath: configRoot).appendingPathComponent("admin_web").path
@@ -166,10 +166,10 @@ private final class ObstacleBridgeConfigStore {
 
     func debugLogFilePath() -> String? {
         if let nested = groupedConfig["debug_logging"] as? [String: Any],
-           let path = ObstacleBridgeMacHostRunner.stringValue(from: nested["log_file"]) {
+           let path = ObstacleBridgeHostRunner.stringValue(from: nested["log_file"]) {
             return path
         }
-        return ObstacleBridgeMacHostRunner.stringValue(from: runtimeConfig["log_file"])
+        return ObstacleBridgeHostRunner.stringValue(from: runtimeConfig["log_file"])
     }
 
     func updateConfigs(groupedConfig: [String: Any], runtimeConfig: [String: Any]) {
@@ -252,6 +252,18 @@ private final class ObstacleBridgeConfigStore {
                 schemaItem(key: "compress_layer_level", description: "Compression level", defaultValue: 3),
                 schemaItem(key: "compress_layer_min_bytes", description: "Minimum payload size before compression", defaultValue: 64),
                 schemaItem(key: "compress_layer_types", description: "Comma-separated message types eligible for compression", defaultValue: "data,data_frag"),
+            ],
+            "TUN_routing": [
+                schemaItem(key: "tunnel_address", description: "Optional IPv4 tunnel address override for the local iOS/macOS tunnel endpoint.", defaultValue: NSNull()),
+                schemaItem(key: "tunnel_prefix", description: "Optional IPv4 tunnel prefix length override.", defaultValue: NSNull()),
+                schemaItem(key: "included_routes", description: "IPv4 routes that should be included in the packet tunnel.", defaultValue: []),
+                schemaItem(key: "excluded_routes", description: "IPv4 routes that should bypass the packet tunnel.", defaultValue: []),
+                schemaItem(key: "tunnel_address6", description: "Optional IPv6 tunnel address override for the local iOS/macOS tunnel endpoint.", defaultValue: NSNull()),
+                schemaItem(key: "tunnel_prefix6", description: "Optional IPv6 tunnel prefix length override.", defaultValue: NSNull()),
+                schemaItem(key: "included_routes6", description: "IPv6 routes that should be included in the packet tunnel.", defaultValue: []),
+                schemaItem(key: "excluded_routes6", description: "IPv6 routes that should bypass the packet tunnel.", defaultValue: []),
+                schemaItem(key: "dns_servers", description: "DNS servers advertised to the packet tunnel network settings.", defaultValue: []),
+                schemaItem(key: "mtu", description: "Optional MTU override applied to the packet tunnel network settings.", defaultValue: NSNull()),
             ],
             "channel_mux": [
                 schemaItem(
@@ -712,7 +724,7 @@ private final class ObstacleBridgeUDPProxyConnection {
     }
 }
 
-private final class ObstacleBridgeMacHostRunner {
+final class ObstacleBridgeHostRunner {
     private static let authChallengeTTL: TimeInterval = 300
     private static let authSessionTTL: TimeInterval = 12 * 60 * 60
     private static let configChallengeTTL: TimeInterval = 90
@@ -725,8 +737,8 @@ private final class ObstacleBridgeMacHostRunner {
     private let bindHost: String
     private let statusPort: Int
     private let startedAt = Date()
-    private let serviceStateQueue = DispatchQueue(label: "ObstacleBridgeMacHostRunner.Services")
-    private let authStateQueue = DispatchQueue(label: "ObstacleBridgeMacHostRunner.Auth")
+    private let serviceStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Services")
+    private let authStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Auth")
     private var controlServer: ObstacleBridgeWebAdminServer?
     private var bootstrapState: [String: Any] = [:]
     private var restartCount = 0
@@ -765,21 +777,62 @@ private final class ObstacleBridgeMacHostRunner {
         self.statusPort = statusPortOverride ?? configuredPort ?? 18080
     }
 
+    static func appScopedRuntimeConfigPath() throws -> String {
+        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            throw ObstacleBridgeHostRunnerError.unreadableRuntimeConfig("app Documents/config/ObstacleBridge.cfg")
+        }
+        return documents
+            .appendingPathComponent("config", isDirectory: true)
+            .appendingPathComponent("ObstacleBridge.cfg", isDirectory: false)
+            .path
+    }
+
+    static func makeAppScopedRunner() throws -> ObstacleBridgeHostRunner {
+        try ObstacleBridgeHostRunner(
+            runtimeConfigPath: appScopedRuntimeConfigPath(),
+            bindHostOverride: nil,
+            statusPortOverride: nil
+        )
+    }
+
+    static func makeRunner(cli: ObstacleBridgeHostRunnerCLI) throws -> ObstacleBridgeHostRunner {
+        try ObstacleBridgeHostRunner(
+            runtimeConfigPath: cli.runtimeConfigPath,
+            bindHostOverride: cli.bindHost,
+            statusPortOverride: cli.statusPort
+        )
+    }
+
+    static func runMain(arguments: [String]) throws {
+        let cli = try ObstacleBridgeHostRunnerCLI.parse(arguments)
+        let runner = try makeRunner(cli: cli)
+        try runner.start()
+        defer { runner.stop() }
+        if cli.holdSec > 0 {
+            let deadline = Date().addingTimeInterval(cli.holdSec)
+            while Date() < deadline {
+                _ = RunLoop.current.run(mode: .default, before: min(deadline, Date().addingTimeInterval(0.1)))
+            }
+            return
+        }
+        dispatchMain()
+    }
+
     private static func loadRuntimeConfigFromDisk(runtimeConfigPath: String) throws -> [String: Any] {
         let url = URL(fileURLWithPath: runtimeConfigPath)
         guard let data = try? Data(contentsOf: url) else {
-            throw ObstacleBridgeMacHostRunnerError.unreadableRuntimeConfig(runtimeConfigPath)
+            throw ObstacleBridgeHostRunnerError.unreadableRuntimeConfig(runtimeConfigPath)
         }
         guard let object = try? JSONSerialization.jsonObject(with: data),
               let rawDecoded = object as? [String: Any] else {
-            throw ObstacleBridgeMacHostRunnerError.invalidRuntimeConfigRoot
+            throw ObstacleBridgeHostRunnerError.invalidRuntimeConfigRoot
         }
         do {
             return try ObstacleBridgeConfigSecretCodec.decryptPayload(rawDecoded)
-        } catch let error as ObstacleBridgeMacHostRunnerError {
+        } catch let error as ObstacleBridgeHostRunnerError {
             throw error
         } catch {
-            throw ObstacleBridgeMacHostRunnerError.invalidEncryptedConfigSecret("runtime_config")
+            throw ObstacleBridgeHostRunnerError.invalidEncryptedConfigSecret("runtime_config")
         }
     }
 
@@ -1329,7 +1382,7 @@ private final class ObstacleBridgeMacHostRunner {
 
     private func startUDPService(_ spec: ObstacleBridgeNativeServiceSpec) throws {
         guard let port = NWEndpoint.Port(rawValue: UInt16(spec.listenPort)) else {
-            throw ObstacleBridgeMacHostRunnerError.invalidArgument("invalid own_server udp listen port: \(spec.listenPort)")
+            throw ObstacleBridgeHostRunnerError.invalidArgument("invalid own_server udp listen port: \(spec.listenPort)")
         }
         let params = NWParameters.udp
         params.allowLocalEndpointReuse = true
@@ -1407,7 +1460,7 @@ private final class ObstacleBridgeMacHostRunner {
 
     private func startTCPService(_ spec: ObstacleBridgeNativeServiceSpec) throws {
         guard let port = NWEndpoint.Port(rawValue: UInt16(spec.listenPort)) else {
-            throw ObstacleBridgeMacHostRunnerError.invalidArgument("invalid own_server tcp listen port: \(spec.listenPort)")
+            throw ObstacleBridgeHostRunnerError.invalidArgument("invalid own_server tcp listen port: \(spec.listenPort)")
         }
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
@@ -1896,19 +1949,19 @@ private final class ObstacleBridgeMacHostRunner {
         let normalized = normalizedConfigUpdates(updates)
         for (key, rawValue) in normalized {
             guard let schemaRow = configStore.schemaRow(forKey: key) else {
-                throw ObstacleBridgeMacHostRunnerError.invalidArgument("unknown config key: \(key)")
+                throw ObstacleBridgeHostRunnerError.invalidArgument("unknown config key: \(key)")
             }
             let defaultValue = schemaRow["default"]
             let value: Any
             switch defaultValue {
             case is Bool:
                 guard let boolValue = rawValue as? Bool else {
-                    throw ObstacleBridgeMacHostRunnerError.invalidArgument("\(key) expects boolean")
+                    throw ObstacleBridgeHostRunnerError.invalidArgument("\(key) expects boolean")
                 }
                 value = boolValue
             case is Int:
                 guard let intValue = rawValue as? Int else {
-                    throw ObstacleBridgeMacHostRunnerError.invalidArgument("\(key) expects integer")
+                    throw ObstacleBridgeHostRunnerError.invalidArgument("\(key) expects integer")
                 }
                 value = intValue
             case is Double:
@@ -1917,16 +1970,16 @@ private final class ObstacleBridgeMacHostRunner {
                 } else if let intValue = rawValue as? Int {
                     value = Double(intValue)
                 } else {
-                    throw ObstacleBridgeMacHostRunnerError.invalidArgument("\(key) expects number")
+                    throw ObstacleBridgeHostRunnerError.invalidArgument("\(key) expects number")
                 }
             case is String:
                 guard let stringValue = rawValue as? String else {
-                    throw ObstacleBridgeMacHostRunnerError.invalidArgument("\(key) expects string")
+                    throw ObstacleBridgeHostRunnerError.invalidArgument("\(key) expects string")
                 }
                 value = stringValue
             case is [Any]:
                 guard let listValue = rawValue as? [Any] else {
-                    throw ObstacleBridgeMacHostRunnerError.invalidArgument("\(key) expects list")
+                    throw ObstacleBridgeHostRunnerError.invalidArgument("\(key) expects list")
                 }
                 value = listValue
             default:
@@ -2244,7 +2297,7 @@ private final class ObstacleBridgeMacHostRunner {
     }
 }
 
-extension ObstacleBridgeMacHostRunner: ObstacleBridgeAdminAPIStateProvider {
+extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
     func adminStatusSnapshot() -> [String: Any] {
         snapshot()
     }
@@ -2466,7 +2519,7 @@ extension ObstacleBridgeMacHostRunner: ObstacleBridgeAdminAPIStateProvider {
         }
         do {
             try persistConfigUpdates(updates)
-        } catch let error as ObstacleBridgeMacHostRunnerError {
+        } catch let error as ObstacleBridgeHostRunnerError {
             return ObstacleBridgeAdminAPI.jsonResponse([
                 "ok": false,
                 "error": error.localizedDescription,
@@ -2544,7 +2597,7 @@ extension ObstacleBridgeMacHostRunner: ObstacleBridgeAdminAPIStateProvider {
     }
 }
 
-private struct ObstacleBridgeMacHostRunnerCLI {
+struct ObstacleBridgeHostRunnerCLI {
     static let defaultRuntimeConfigName = "ObstacleBridge.cfg"
 
     let runtimeConfigPath: String
@@ -2552,7 +2605,7 @@ private struct ObstacleBridgeMacHostRunnerCLI {
     let statusPort: Int?
     let holdSec: Double
 
-    static func parse(_ args: [String]) throws -> ObstacleBridgeMacHostRunnerCLI {
+    static func parse(_ args: [String]) throws -> ObstacleBridgeHostRunnerCLI {
         var runtimeConfigPath: String?
         var bindHost: String?
         var statusPort: Int?
@@ -2564,35 +2617,35 @@ private struct ObstacleBridgeMacHostRunnerCLI {
             case "--runtime-config":
                 index += 1
                 guard index < args.count else {
-                    throw ObstacleBridgeMacHostRunnerError.usage(Self.usageText())
+                    throw ObstacleBridgeHostRunnerError.usage(Self.usageText())
                 }
                 runtimeConfigPath = args[index]
             case "--bind-host":
                 index += 1
                 guard index < args.count else {
-                    throw ObstacleBridgeMacHostRunnerError.usage(Self.usageText())
+                    throw ObstacleBridgeHostRunnerError.usage(Self.usageText())
                 }
                 bindHost = args[index]
             case "--status-port":
                 index += 1
                 guard index < args.count, let port = Int(args[index]) else {
-                    throw ObstacleBridgeMacHostRunnerError.invalidArgument("--status-port requires an integer")
+                    throw ObstacleBridgeHostRunnerError.invalidArgument("--status-port requires an integer")
                 }
                 statusPort = port
             case "--hold-sec":
                 index += 1
                 guard index < args.count, let seconds = Double(args[index]) else {
-                    throw ObstacleBridgeMacHostRunnerError.invalidArgument("--hold-sec requires a number")
+                    throw ObstacleBridgeHostRunnerError.invalidArgument("--hold-sec requires a number")
                 }
                 holdSec = max(0.0, seconds)
             case "--help", "-h":
-                throw ObstacleBridgeMacHostRunnerError.usage(Self.usageText())
+                throw ObstacleBridgeHostRunnerError.usage(Self.usageText())
             default:
-                throw ObstacleBridgeMacHostRunnerError.invalidArgument("Unknown argument: \(arg)")
+                throw ObstacleBridgeHostRunnerError.invalidArgument("Unknown argument: \(arg)")
             }
             index += 1
         }
-        return ObstacleBridgeMacHostRunnerCLI(
+        return ObstacleBridgeHostRunnerCLI(
             runtimeConfigPath: runtimeConfigPath ?? defaultRuntimeConfigPath(),
             bindHost: bindHost,
             statusPort: statusPort,
@@ -2607,33 +2660,6 @@ private struct ObstacleBridgeMacHostRunnerCLI {
     }
 
     static func usageText() -> String {
-        "Usage: ObstacleBridgeMacHostRunner [--runtime-config <path>] [--bind-host <host>] [--status-port <port>] [--hold-sec <seconds>]"
-    }
-}
-
-@main
-struct ObstacleBridgeMacHostRunnerMain {
-    static func main() {
-        do {
-            let cli = try ObstacleBridgeMacHostRunnerCLI.parse(Array(CommandLine.arguments.dropFirst()))
-            let runner = try ObstacleBridgeMacHostRunner(
-                runtimeConfigPath: cli.runtimeConfigPath,
-                bindHostOverride: cli.bindHost,
-                statusPortOverride: cli.statusPort
-            )
-            try runner.start()
-            if cli.holdSec > 0 {
-                let deadline = Date().addingTimeInterval(cli.holdSec)
-                while Date() < deadline {
-                    _ = RunLoop.current.run(mode: .default, before: min(deadline, Date().addingTimeInterval(0.1)))
-                }
-            } else {
-                dispatchMain()
-            }
-            runner.stop()
-        } catch {
-            fputs("\(error.localizedDescription)\n", stderr)
-            exit(2)
-        }
+        "Usage: ObstacleBridgeHostRunner [--runtime-config <path>] [--bind-host <host>] [--status-port <port>] [--hold-sec <seconds>]"
     }
 }

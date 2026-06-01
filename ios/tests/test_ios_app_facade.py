@@ -19,9 +19,11 @@ def test_app_default_facade_reports_extension_as_runtime_owner() -> None:
     snapshot = app.connection_snapshot()
 
     assert snapshot["started"] is False
+    assert snapshot["runtime_mode"] == "swift_udp"
     assert snapshot["runtime_owner"] == "IPServer Network Extension"
     assert snapshot["active_profile_id"] is None
     assert snapshot["config"]["admin_web"]["admin_web"] is True
+    assert snapshot["config"]["iOS_TUN_connector"]["packetflow_connector"] == "swift_udp"
 
 
 def test_load_grouped_runtime_config_preserves_saved_transport_fields(tmp_path: Path) -> None:
@@ -52,7 +54,44 @@ def test_load_grouped_runtime_config_preserves_saved_transport_fields(tmp_path: 
     assert config["admin_web"]["admin_web"] is True
     assert config["admin_web"]["admin_web_bind"] == "0.0.0.0"
     assert config["admin_web"]["admin_web_port"] == 18080
+    assert config["iOS_TUN_connector"]["packetflow_connector"] == "swift_udp"
     assert "log_file" in config["debug_logging"]
+
+
+def test_app_facade_reports_swift_host_runner_mode_from_config(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "Documents"
+    (root / "config").mkdir(parents=True, exist_ok=True)
+    (root / "config" / "ObstacleBridge.cfg").write_text(
+        json.dumps(
+            {
+                "admin_web": {
+                    "admin_web": True,
+                    "admin_web_bind": "127.0.0.1",
+                    "admin_web_port": 18090,
+                },
+                "iOS_TUN_connector": {
+                    "packetflow_connector": "swift_host_runner",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ObstacleBridgeIOSApp, "DOCUMENTS_ROOT", root)
+    monkeypatch.setattr(ObstacleBridgeIOSApp, "CONFIG_DIR", root / "config")
+    monkeypatch.setattr(ObstacleBridgeIOSApp, "CONFIG_FILE", root / "config" / "ObstacleBridge.cfg")
+    monkeypatch.setattr(ObstacleBridgeIOSApp, "PROFILES_DIR", root / "profiles")
+    monkeypatch.setattr(ObstacleBridgeIOSApp, "LOGS_DIR", root / "logs")
+    monkeypatch.setattr(ObstacleBridgeIOSApp, "LOG_FILE", root / "logs" / "obstaclebridge.log")
+    monkeypatch.setattr(ObstacleBridgeIOSApp, "ADMIN_WEB_DIR", root / "admin_web")
+    monkeypatch.setattr(ObstacleBridgeIOSApp, "WEB_DIR", root / "web")
+
+    app = ObstacleBridgeIOSApp()
+
+    snapshot = app.connection_snapshot()
+
+    assert snapshot["runtime_mode"] == "swift_host_runner"
+    assert snapshot["runtime_owner"] == "ObstacleBridgeApp swift_host_runner"
+    assert snapshot["webadmin_url"] == "http://127.0.0.1:18090/"
 
 
 def test_startup_artifacts_seed_documents_config_logs_and_web_files(tmp_path: Path) -> None:
@@ -73,6 +112,8 @@ def test_startup_artifacts_seed_documents_config_logs_and_web_files(tmp_path: Pa
     assert manifest["diagnostics_file"] == str(root / "logs" / "ios-diagnostics.jsonl")
     assert manifest["admin_web_files_copied"] is True
     assert manifest["web_files_copied"] is True
+    config_payload = json.loads((root / "config" / "ObstacleBridge.cfg").read_text(encoding="utf-8"))
+    assert config_payload["iOS_TUN_connector"]["packetflow_connector"] == "swift_udp"
 
 
 def test_resolve_toga_webview_class_uses_widget_module_fallback(monkeypatch) -> None:

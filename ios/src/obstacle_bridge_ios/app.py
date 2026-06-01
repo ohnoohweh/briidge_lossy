@@ -15,6 +15,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from obstacle_bridge import bridge_tun_ios
+
 from .m3_tunnel import network_settings_from_runtime_config
 
 ConfigAwareCLI: Any = None
@@ -25,7 +27,7 @@ from .diagnostics import (
     snapshot as diagnostics_snapshot,
 )
 from .profiles import ProfileStore
-from .tunnel_control import harvest_shared_logs, ipserver_tunnel_status, start_ipserver_tunnel
+from .tunnel_control import harvest_runtime_logs, runtime_status, start_runtime
 
 try:
     import toga
@@ -170,6 +172,15 @@ def _default_ios_grouped_config(root: Path) -> dict[str, Any]:
             "log_file_max_bytes": 1_048_576,
             "log_file_backup_count": 5,
         },
+        "iOS_TUN_connector": {
+            "packetflow_connector": "swift_udp",
+            "bind_host": bridge_tun_ios.DEFAULT_IOS_PACKETFLOW_BIND_HOST,
+            "bind_port": bridge_tun_ios.DEFAULT_IOS_PACKETFLOW_BIND_PORT,
+            "peer_host": "",
+            "peer_port": 0,
+            "ifname": bridge_tun_ios.DEFAULT_IOS_PACKETFLOW_IFNAME,
+            "mtu": bridge_tun_ios.DEFAULT_IOS_PACKETFLOW_MTU,
+        },
         "ws_session": {
             "ws_static_dir": str(root / "web"),
         },
@@ -221,6 +232,17 @@ def _flatten_grouped_runtime_config(config: Mapping[str, Any]) -> dict[str, Any]
         else:
             flattened[key] = value
     return flattened
+
+
+def _runtime_mode_from_grouped_config(config: Mapping[str, Any]) -> str:
+    mode = bridge_tun_ios.packetflow_connector_mode_from_config(config)
+    return mode or "swift_udp"
+
+
+def _runtime_owner_from_mode(mode: str) -> str:
+    if mode == "swift_host_runner":
+        return "ObstacleBridgeApp swift_host_runner"
+    return "IPServer Network Extension"
 
 
 def _write_default_config_file(root: Path) -> Path:
@@ -301,7 +323,14 @@ class ObstacleBridgeIOSApp:
     def __init__(self) -> None:
         _write_startup_artifacts(self.DOCUMENTS_ROOT)
         install_crash_hooks(self.DOCUMENTS_ROOT)
-        log_event(self.DOCUMENTS_ROOT, "ios_app.facade_init", runtime_owner="IPServer Network Extension")
+        runtime_cfg = _load_grouped_runtime_config(self.DOCUMENTS_ROOT)
+        runtime_mode = _runtime_mode_from_grouped_config(runtime_cfg)
+        log_event(
+            self.DOCUMENTS_ROOT,
+            "ios_app.facade_init",
+            runtime_mode=runtime_mode,
+            runtime_owner=_runtime_owner_from_mode(runtime_mode),
+        )
         self.profile_store = ProfileStore(self.PROFILES_DIR)
         self._active_profile_id: Optional[str] = None
 
@@ -338,9 +367,11 @@ class ObstacleBridgeIOSApp:
 
     def connection_snapshot(self) -> dict[str, Any]:
         runtime_cfg = _load_grouped_runtime_config(self.DOCUMENTS_ROOT)
+        runtime_mode = _runtime_mode_from_grouped_config(runtime_cfg)
         return {
             "started": False,
-            "runtime_owner": "IPServer Network Extension",
+            "runtime_mode": runtime_mode,
+            "runtime_owner": _runtime_owner_from_mode(runtime_mode),
             "active_profile_id": self._active_profile_id,
             "config": runtime_cfg,
             "webadmin_url": self.webadmin_url_from_config(_flatten_grouped_runtime_config(runtime_cfg)),
@@ -491,18 +522,19 @@ def main(argv: list[str] | None = None):
                     log_event(
                         ObstacleBridgeIOSApp.DOCUMENTS_ROOT,
                         "toga.ui_ready_runtime_not_started",
-                        runtime_owner="IPServer Network Extension",
+                        runtime_mode=bridge_app.connection_snapshot().get("runtime_mode", ""),
+                        runtime_owner=bridge_app.connection_snapshot().get("runtime_owner", ""),
                     )
-                    harvested_logs = harvest_shared_logs()
+                    harvested_logs = harvest_runtime_logs()
                     log_event(
                         ObstacleBridgeIOSApp.DOCUMENTS_ROOT,
-                        "toga.ipserver_shared_logs_harvested",
+                        "toga.runtime_logs_harvested",
                         result=harvested_logs,
                     )
-                    tunnel_start = start_ipserver_tunnel()
+                    tunnel_start = start_runtime()
                     log_event(
                         ObstacleBridgeIOSApp.DOCUMENTS_ROOT,
-                        "toga.ipserver_tunnel_start_requested",
+                        "toga.runtime_start_requested",
                         result=tunnel_start,
                     )
                     _refresh_webadmin()
@@ -511,8 +543,8 @@ def main(argv: list[str] | None = None):
                         await asyncio.sleep(3.0)
                         log_event(
                             ObstacleBridgeIOSApp.DOCUMENTS_ROOT,
-                            "toga.ipserver_tunnel_status_after_start",
-                            result=ipserver_tunnel_status(),
+                            "toga.runtime_status_after_start",
+                            result=runtime_status(),
                         )
 
                     async def _on_running(app, **kwargs) -> None:
@@ -533,8 +565,8 @@ def main(argv: list[str] | None = None):
                         log_event(ObstacleBridgeIOSApp.DOCUMENTS_ROOT, "toga.on_resume")
                         log_event(
                             ObstacleBridgeIOSApp.DOCUMENTS_ROOT,
-                            "toga.ipserver_tunnel_status",
-                            result=ipserver_tunnel_status(),
+                            "toga.runtime_status",
+                            result=runtime_status(),
                         )
                         _schedule_webadmin_refresh()
 

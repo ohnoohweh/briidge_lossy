@@ -45,6 +45,10 @@ def start_ipserver_tunnel() -> dict[str, Any]:
         return {"ok": False, "error": f"startIPServerTunnel failed: {type(exc).__name__}: {exc}"}
 
 
+def start_runtime() -> dict[str, Any]:
+    return start_ipserver_tunnel()
+
+
 def prepare_ipserver_tunnel() -> dict[str, Any]:
     bridge = _load_bridge()
     if bridge is None:
@@ -53,6 +57,10 @@ def prepare_ipserver_tunnel() -> dict[str, Any]:
         return _decode_response(bridge.prepareIPServerTunnel())
     except Exception as exc:
         return {"ok": False, "error": f"prepareIPServerTunnel failed: {type(exc).__name__}: {exc}"}
+
+
+def prepare_runtime() -> dict[str, Any]:
+    return prepare_ipserver_tunnel()
 
 
 def harvest_shared_logs() -> dict[str, Any]:
@@ -65,6 +73,10 @@ def harvest_shared_logs() -> dict[str, Any]:
         return {"ok": False, "error": f"harvestSharedLogs failed: {type(exc).__name__}: {exc}"}
 
 
+def harvest_runtime_logs() -> dict[str, Any]:
+    return harvest_shared_logs()
+
+
 def ipserver_tunnel_status() -> dict[str, Any]:
     bridge = _load_bridge()
     if bridge is None:
@@ -73,3 +85,7 @@ def ipserver_tunnel_status() -> dict[str, Any]:
         return _decode_response(bridge.status())
     except Exception as exc:
         return {"ok": False, "error": f"status failed: {type(exc).__name__}: {exc}"}
+
+
+def runtime_status() -> dict[str, Any]:
+    return ipserver_tunnel_status()

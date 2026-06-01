@@ -7,7 +7,6 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[2]
 SHARED_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeShared"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
-MAC_RUNNER_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeMacRunner"
 IPSERVER_DIR = ROOT / "ios" / "build" / "obstacle_bridge_ios" / "ios" / "xcode" / "IPServer"
 IPSERVER_NATIVE_DIR = ROOT / "ios" / "native" / "IPServer"
 
@@ -270,7 +269,11 @@ def test_runtime_config_source_exists() -> None:
     assert "static func remoteServerSpecs(" in runtime
     assert "static func tunnelRoutingOverride(" in runtime
     assert "static func localTunServiceSpec(" in runtime
+    assert "static func packetflowConnectorSelection(" in runtime
+    assert "static func runtimeExecutionMode(" in runtime
     assert "static func swiftUDPPeerConfig(" in runtime
+    assert '"TUN_routing"' in runtime
+    assert "included_routes6" in runtime
     assert "listenerHookEnvBlocks()" in runtime
     assert "derivedLocalTunnelSettings(" in runtime
     assert "derivedRemoteTunnelSettings(" in runtime
@@ -303,10 +306,18 @@ def test_admin_api_source_exists() -> None:
 
 
 def test_macos_swift_host_runner_source_exists() -> None:
-    runtime = (MAC_RUNNER_NATIVE_DIR / "ObstacleBridgeMacHostRunner.swift").read_text(encoding="utf-8")
+    wrapper = (APP_NATIVE_DIR / "ObstacleBridgeHostRunnerMain.swift").read_text(encoding="utf-8")
+    runtime = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
 
-    assert "@main" in runtime
-    assert "ObstacleBridgeMacHostRunner" in runtime
+    assert "@main" in wrapper
+    assert "ObstacleBridgeHostRunnerMain" in wrapper
+    assert "ObstacleBridgeHostRunner.runMain" in wrapper
+    assert "ObstacleBridgeHostRunner" in runtime
+    assert "makeAppScopedRunner" in runtime
+    assert "makeRunner(cli:" in runtime
+    assert "appScopedRuntimeConfigPath" in runtime
+    assert "ObstacleBridgeHostRunnerCLI.parse" in runtime
+    assert "dispatchMain()" in runtime
     assert "ObstacleBridgeAdminAPI" in runtime
     assert "ObstacleBridgeWebAdminServer" in runtime
     assert "ObstacleBridgeRuntimeConfig.flatten" in runtime
@@ -317,6 +328,7 @@ def test_macos_swift_host_runner_source_exists() -> None:
     assert "ObstacleBridgeTcpOverlayRuntime" in runtime
     assert "ObstacleBridgeTcpOverlayTransportOwner" in runtime
     assert "ObstacleBridgeSecureLinkPskTransportAdapter" in runtime
+    assert '"TUN_routing"' in runtime
     assert '"swift_host_runner"' in runtime
 
 
@@ -536,6 +548,12 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "prepareIPServerTunnel" in control
     assert "startIPServerTunnel" in control
     assert "harvestSharedLogs" in control
+    assert "runtimeExecutionMode()" in control
+    assert "ObstacleBridgeRuntimeConfig.runtimeExecutionMode" in control
+    assert "startSwiftHostRunner()" in control
+    assert "prepareSwiftHostRunner()" in control
+    assert "refreshSwiftHostRunnerStatus()" in control
+    assert '"swift_host_runner"' in control
     assert "shared_logs_harvested" in control
     assert "syncConfigurationFileInternal" in control
     assert "config_sync_completed" in control

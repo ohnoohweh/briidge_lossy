@@ -13,6 +13,7 @@ from obstacle_bridge_ios.m3_tunnel import (
     m3_tunnel_config_from_profile,
     m3_vpn_profile_from_profile,
     network_settings_from_runtime_config,
+    normalized_ios_tun_connector_config,
     provider_status_request_message,
     provider_configuration_from_m3_config,
     tunnel_status_from_provider_payload,
@@ -59,6 +60,33 @@ def test_m3_tunnel_config_uses_profile_peer_and_network_settings() -> None:
     assert cfg.peer_port == 4433
     assert cfg.server_address == "bridge.example.net:4433"
     assert cfg.network.included_routes == ["10.88.0.0/24"]
+    assert cfg.runtime_config["iOS_TUN_connector"]["packetflow_connector"] == "swift_udp"
+
+
+def test_normalized_ios_tun_connector_config_preserves_explicit_section_values() -> None:
+    section = normalized_ios_tun_connector_config(
+        {
+            "iOS_TUN_connector": {
+                "packetflow_connector": "swift_host_runner",
+                "bind_host": "127.0.0.1",
+                "bind_port": 7000,
+                "peer_host": "example.invalid",
+                "peer_port": 7001,
+                "ifname": "ios-utun9",
+                "mtu": 1500,
+            }
+        }
+    )
+
+    assert section == {
+        "packetflow_connector": "swift_host_runner",
+        "bind_host": "127.0.0.1",
+        "bind_port": 7000,
+        "peer_host": "example.invalid",
+        "peer_port": 7001,
+        "ifname": "ios-utun9",
+        "mtu": 1500,
+    }
 
 
 def test_provider_configuration_is_native_extension_contract() -> None:
@@ -87,6 +115,7 @@ def test_provider_configuration_is_native_extension_contract() -> None:
     assert provider_config["runtime_config"]["overlay_transport"] == "tcp"
     assert provider_config["runtime_config"]["tcp_peer"] == "bridge.example.net"
     assert provider_config["runtime_config"]["tcp_peer_port"] == 4433
+    assert provider_config["runtime_config"]["iOS_TUN_connector"]["packetflow_connector"] == "swift_udp"
     assert provider_config["runtime_config"]["iOS_TUN_connector"]["bind_host"] == "127.0.0.1"
     assert provider_config["runtime_config"]["iOS_TUN_connector"]["peer_host"] == "127.0.0.1"
     assert provider_config["runtime_config"]["iOS_TUN_connector"]["peer_port"] == 5556

@@ -47,6 +47,15 @@ def profile_from_m25_config(cfg: M25Config) -> dict[str, Any]:
         f"{attr_prefix}_peer": peer_host,
         f"{attr_prefix}_peer_port": int(cfg.peer_port),
         "secure_link_mode": str(cfg.secure_link_mode or "off").strip().lower() or "off",
+        "iOS_TUN_connector": {
+            "packetflow_connector": "swift_udp",
+            "bind_host": "0.0.0.0",
+            "bind_port": 5555,
+            "peer_host": "",
+            "peer_port": 0,
+            "ifname": "ios-utun",
+            "mtu": 1280,
+        },
         "own_servers": [
             {
                 "name": "ios-local-tcp",

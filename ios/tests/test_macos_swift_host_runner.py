@@ -34,7 +34,9 @@ from swift_test_support import require_swift_modules
 
 ROOT = Path(__file__).resolve().parents[2]
 SHARED_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeShared"
-MAC_RUNNER_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeMacRunner" / "ObstacleBridgeMacHostRunner.swift"
+APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
+HOST_RUNNER_MAIN_SOURCE = APP_NATIVE_DIR / "ObstacleBridgeHostRunnerMain.swift"
+APP_MAC_RUNNER_SOURCE = APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift"
 
 
 def _unused_tcp_port() -> int:
@@ -76,7 +78,8 @@ def _compile_mac_host_runner(binary_path: Path) -> None:
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift"),
-        str(MAC_RUNNER_SOURCE),
+        str(APP_MAC_RUNNER_SOURCE),
+        str(HOST_RUNNER_MAIN_SOURCE),
     ]
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
     if completed.returncode != 0:

@@ -37,7 +37,9 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 BRIDGE = ROOT / 'ObstacleBridge.py'
 SWIFT_SHARED_NATIVE_DIR = ROOT / 'ios' / 'native' / 'ObstacleBridgeShared'
-SWIFT_MAC_RUNNER_SOURCE = ROOT / 'ios' / 'native' / 'ObstacleBridgeMacRunner' / 'ObstacleBridgeMacHostRunner.swift'
+SWIFT_APP_NATIVE_DIR = ROOT / 'ios' / 'native' / 'ObstacleBridgeApp'
+SWIFT_HOST_RUNNER_MAIN_SOURCE = SWIFT_APP_NATIVE_DIR / 'ObstacleBridgeHostRunnerMain.swift'
+SWIFT_APP_MAC_RUNNER_SOURCE = SWIFT_APP_NATIVE_DIR / 'ObstacleBridgeHostRunner.swift'
 PAYLOAD_IN = b'\x01\x30'
 PAYLOAD_OUT = b'\x02\x30'
 
@@ -1749,7 +1751,8 @@ def _compile_mac_host_runner(binary_path: Path) -> None:
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeWebSocketOverlayRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTcpOverlayRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTcpOverlayTransportOwner.swift'),
-        str(SWIFT_MAC_RUNNER_SOURCE),
+        str(SWIFT_APP_MAC_RUNNER_SOURCE),
+        str(SWIFT_HOST_RUNNER_MAIN_SOURCE),
     ]
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
     if completed.returncode != 0:
@@ -1779,7 +1782,7 @@ def _write_mac_host_runner_build_info(binary_path: Path) -> None:
 
 
 def _swift_runner_binary(log_dir: Path) -> Path:
-    binary_path = log_dir / 'ObstacleBridgeMacHostRunner'
+    binary_path = log_dir / 'ObstacleBridgeHostRunner'
     if not binary_path.exists():
         _compile_mac_host_runner(binary_path)
         _write_mac_host_runner_build_info(binary_path)

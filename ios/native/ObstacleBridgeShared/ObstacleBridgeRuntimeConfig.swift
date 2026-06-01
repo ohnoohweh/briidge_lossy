@@ -314,6 +314,7 @@ enum ObstacleBridgeRuntimeConfig {
         "ws_session",
         "secure_link",
         "compress_layer",
+        "TUN_routing",
         "admin_web",
         "debug_logging",
     ]
@@ -381,6 +382,18 @@ enum ObstacleBridgeRuntimeConfig {
                 schemaItem(key: "compress_layer_level", description: "Compression level", defaultValue: 3),
                 schemaItem(key: "compress_layer_min_bytes", description: "Minimum payload size before compression", defaultValue: 64),
                 schemaItem(key: "compress_layer_types", description: "Comma-separated message types eligible for compression", defaultValue: "data,data_frag"),
+            ],
+            "TUN_routing": [
+                schemaItem(key: "tunnel_address", description: "Optional IPv4 tunnel address override for the local iOS/macOS tunnel endpoint.", defaultValue: NSNull()),
+                schemaItem(key: "tunnel_prefix", description: "Optional IPv4 tunnel prefix length override.", defaultValue: NSNull()),
+                schemaItem(key: "included_routes", description: "IPv4 routes that should be included in the packet tunnel.", defaultValue: []),
+                schemaItem(key: "excluded_routes", description: "IPv4 routes that should bypass the packet tunnel.", defaultValue: []),
+                schemaItem(key: "tunnel_address6", description: "Optional IPv6 tunnel address override for the local iOS/macOS tunnel endpoint.", defaultValue: NSNull()),
+                schemaItem(key: "tunnel_prefix6", description: "Optional IPv6 tunnel prefix length override.", defaultValue: NSNull()),
+                schemaItem(key: "included_routes6", description: "IPv6 routes that should be included in the packet tunnel.", defaultValue: []),
+                schemaItem(key: "excluded_routes6", description: "IPv6 routes that should bypass the packet tunnel.", defaultValue: []),
+                schemaItem(key: "dns_servers", description: "DNS servers advertised to the packet tunnel network settings.", defaultValue: []),
+                schemaItem(key: "mtu", description: "Optional MTU override applied to the packet tunnel network settings.", defaultValue: NSNull()),
             ],
             "channel_mux": [
                 schemaItem(key: "own_servers", description: "Service catalog for local listeners in client mode. Use structured service objects with listen/target fields.", defaultValue: []),
@@ -665,13 +678,30 @@ enum ObstacleBridgeRuntimeConfig {
         }
     }
 
-    static func packetflowConnectorMode(from payload: [String: Any]) -> String? {
+    static func packetflowConnectorSelection(from payload: [String: Any]) -> String? {
         guard let experiment = packetflowConnectorSection(from: payload) else {
             return nil
         }
         let connectorMode = (experiment["packetflow_connector"] as? String ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+        return connectorMode.isEmpty ? nil : connectorMode
+    }
+
+    static func runtimeExecutionMode(from payload: [String: Any], supportsSwiftHostRunner: Bool) -> String {
+        guard let connectorMode = packetflowConnectorSelection(from: payload) else {
+            return "packet_tunnel"
+        }
+        if supportsSwiftHostRunner && connectorMode == "swift_host_runner" {
+            return "swift_host_runner"
+        }
+        return "packet_tunnel"
+    }
+
+    static func packetflowConnectorMode(from payload: [String: Any]) -> String? {
+        guard let connectorMode = packetflowConnectorSelection(from: payload) else {
+            return nil
+        }
         switch connectorMode {
         case "swift_udp", "swift_udp_peer":
             return "swift_udp"

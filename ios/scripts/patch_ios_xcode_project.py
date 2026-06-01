@@ -73,6 +73,7 @@ def add_app_native_crypto_source(text: str) -> str:
     required_entries = [
         "\t\t\t\t71C300000000000000000001 /* ObstacleBridgeNativeCrypto.swift in Sources */,\n",
         "\t\t\t\t71C400000000000000000001 /* ObstacleBridgeTunnelControl.swift in Sources */,\n",
+        "\t\t\t\t71C400000000000000000002 /* ObstacleBridgeHostRunner.swift in Sources */,\n",
     ]
 
     if all(entry in text for entry in required_entries):
@@ -350,7 +351,8 @@ def patch_app_target(text: str) -> str:
     text = insert_before(
         text,
         "/* End PBXBuildFile section */\n",
-        "\t\t71C400000000000000000001 /* ObstacleBridgeTunnelControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71C400000000000000000010 /* ObstacleBridgeTunnelControl.swift */; };\n",
+        "\t\t71C400000000000000000001 /* ObstacleBridgeTunnelControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71C400000000000000000010 /* ObstacleBridgeTunnelControl.swift */; };\n"
+        "\t\t71C400000000000000000002 /* ObstacleBridgeHostRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71C400000000000000000011 /* ObstacleBridgeHostRunner.swift */; };\n",
     )
     text = insert_before(
         text,
@@ -360,7 +362,8 @@ def patch_app_target(text: str) -> str:
     text = insert_before(
         text,
         "/* End PBXFileReference section */\n",
-        "\t\t71C400000000000000000010 /* ObstacleBridgeTunnelControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgeTunnelControl.swift; path = \"../../../../native/ObstacleBridgeApp/ObstacleBridgeTunnelControl.swift\"; sourceTree = SOURCE_ROOT; };\n",
+        "\t\t71C400000000000000000010 /* ObstacleBridgeTunnelControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgeTunnelControl.swift; path = \"../../../../native/ObstacleBridgeApp/ObstacleBridgeTunnelControl.swift\"; sourceTree = SOURCE_ROOT; };\n"
+        "\t\t71C400000000000000000011 /* ObstacleBridgeHostRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgeHostRunner.swift; path = \"../../../../native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift\"; sourceTree = SOURCE_ROOT; };\n",
     )
     text = replace_once(
         text,
@@ -392,6 +395,7 @@ def patch_app_target(text: str) -> str:
         "\t\t\tchildren = (\n"
         "\t\t\t\t71C300000000000000000010 /* ObstacleBridgeNativeCrypto.swift */,\n"
         "\t\t\t\t71C400000000000000000010 /* ObstacleBridgeTunnelControl.swift */,\n"
+        "\t\t\t\t71C400000000000000000011 /* ObstacleBridgeHostRunner.swift */,\n"
         "\t\t\t);\n"
         "\t\t\tname = \"Shared Native\";\n"
         "\t\t\tsourceTree = \"<group>\";\n"

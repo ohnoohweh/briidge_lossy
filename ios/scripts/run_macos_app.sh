@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 IOS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${IOS_DIR}/.." && pwd)"
-BINARY_PATH="${IOS_DIR}/build/macos/ObstacleBridgeMacHostRunner"
+BINARY_PATH="${IOS_DIR}/build/macos/ObstacleBridgeHostRunner"
 DEFAULT_RUNTIME_CONFIG="${IOS_DIR}/examples/macos_runtime.json"
 TMP_BASE="${TMPDIR:-/tmp}"
 KEEP_TEMP_HOME="${KEEP_TEMP_HOME:-0}"

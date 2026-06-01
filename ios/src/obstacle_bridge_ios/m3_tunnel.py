@@ -31,6 +31,7 @@ M3_TUNNEL_SCHEMA = "obstaclebridge.ios.packet-tunnel.v1"
 M3_APP_MESSAGE_SCHEMA = "obstaclebridge.ios.packet-tunnel.app-message.v1"
 M3_TUNNEL_STATUS_STATES = {"idle", "starting", "running", "stopping", "stopped", "failed"}
 DEFAULT_IOS_TUN_IFNAME = "ios-utun"
+DEFAULT_IOS_PACKETFLOW_CONNECTOR = "swift_udp"
 
 
 @dataclass
@@ -113,6 +114,33 @@ def _normalize_bootstrap_peer_host(value: Any) -> str:
         if candidate:
             return candidate
     return raw
+
+
+def normalized_ios_tun_connector_config(
+    config: Mapping[str, Any] | None,
+    *,
+    default_packetflow_connector: str = DEFAULT_IOS_PACKETFLOW_CONNECTOR,
+) -> dict[str, Any]:
+    settings = bridge_tun_ios.IOSTUNConnectorSettings.from_mapping(config)
+    section: Mapping[str, Any] = {}
+    if isinstance(config, Mapping):
+        raw_section = config.get(bridge_tun_ios.IOS_TUN_CONNECTOR_SECTION)
+        if isinstance(raw_section, Mapping):
+            section = raw_section
+    packetflow_connector = str(
+        section.get("packetflow_connector")
+        or settings.packetflow_connector
+        or default_packetflow_connector
+    ).strip().lower()
+    return {
+        "packetflow_connector": packetflow_connector or default_packetflow_connector,
+        "bind_host": str(section.get("bind_host") or settings.bind_host).strip() or bridge_tun_ios.DEFAULT_IOS_PACKETFLOW_BIND_HOST,
+        "bind_port": int(section.get("bind_port") or settings.bind_port or bridge_tun_ios.DEFAULT_IOS_PACKETFLOW_BIND_PORT),
+        "peer_host": str(section.get("peer_host") or settings.peer_host).strip(),
+        "peer_port": int(section.get("peer_port") or settings.peer_port or 0),
+        "ifname": str(section.get("ifname") or settings.ifname).strip() or bridge_tun_ios.DEFAULT_IOS_PACKETFLOW_IFNAME,
+        "mtu": int(section.get("mtu") or settings.mtu or bridge_tun_ios.DEFAULT_IOS_PACKETFLOW_MTU),
+    }
 
 
 def _override_network_settings(
@@ -351,6 +379,9 @@ def m3_tunnel_config_from_profile(
     peer_host = _required_string(_normalize_bootstrap_peer_host(ob_cfg.get(host_key)), host_key)
     peer_port = _validate_port(ob_cfg.get(port_key), port_key)
 
+    runtime_config = dict(ob_cfg)
+    runtime_config["iOS_TUN_connector"] = normalized_ios_tun_connector_config(runtime_config)
+
     settings = network or M3NetworkSettings()
     _validate_network_settings(settings)
     return M3TunnelConfig(
@@ -361,7 +392,7 @@ def m3_tunnel_config_from_profile(
         peer_host=peer_host,
         peer_port=peer_port,
         server_address=f"{peer_host}:{peer_port}",
-        runtime_config=dict(ob_cfg),
+        runtime_config=runtime_config,
         network=settings,
     )
 

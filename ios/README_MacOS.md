@@ -16,7 +16,7 @@ Goal and current scope:
 - Admin Web config display, config change, config save, restart, and statistics are in scope
 - connection statistics are working, including live `/api/connections`, `/api/peers`, and `/api/meta` data from the Swift runtime
 
-The current macOS runtime owner is implemented in [ios/native/ObstacleBridgeMacRunner/ObstacleBridgeMacHostRunner.swift](ios/native/ObstacleBridgeMacRunner/ObstacleBridgeMacHostRunner.swift).
+The current macOS runtime owner is implemented in [ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift](ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift), with the thin CLI entrypoint in [ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunnerMain.swift](ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunnerMain.swift).
 
 ## Prerequisites
 
@@ -33,20 +33,45 @@ swiftc --version
 
 ## Compile
 
+There are two different things to keep straight:
+
+- **today's runnable macOS build** is the Swift host-runner binary built by `ios/scripts/build_macos_app.sh`
+- **the shared app-owned macOS surface** now lives in `ObstacleBridgeApp` sources, so the same host-runner logic can be used from the app-side `swift_host_runner` mode without starting a Network Extension
+
+### Build the current macOS ObstacleBridge runtime
+
 From repository root:
 
 ```bash
 ./ios/scripts/build_macos_app.sh
 ```
 
-This script uses the same compile surface used by the focused macOS host-runner tests in [ios/tests/test_macos_swift_host_runner.py](ios/tests/test_macos_swift_host_runner.py), refreshes the shared build timestamp metadata before compiling, and writes a sidecar with the same `build` fields used by the iOS and Python admin payloads.
+This is the checked-in build path we use today. It compiles:
+
+- shared Swift runtime sources from `ios/native/ObstacleBridgeShared/`
+- the app-owned host-runner implementation from [ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift](ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift)
+- the tiny macOS CLI entrypoint from [ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunnerMain.swift](ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunnerMain.swift)
+
+The script uses the same compile surface covered by [ios/tests/test_macos_swift_host_runner.py](ios/tests/test_macos_swift_host_runner.py), refreshes the shared build timestamp metadata before compiling, and writes a sidecar with the same `build` fields used by the iOS and Python admin payloads.
 
 Build outputs:
 
-- binary: `ios/build/macos/ObstacleBridgeMacHostRunner`
-- sidecar build identification: `ios/build/macos/ObstacleBridgeMacHostRunner.build-info.json`
+- binary: `ios/build/macos/ObstacleBridgeHostRunner`
+- sidecar build identification: `ios/build/macos/ObstacleBridgeHostRunner.build-info.json`
 
 The sidecar file contains the build timestamp, commit, dirty state, and diff hash so locally built macOS artifacts can be identified as easily as the iOS app builds.
+
+### Build the app-owned macOS source surface
+
+The host-runner implementation is now owned by `ObstacleBridgeApp`, and [ObstacleBridgeTunnelControl.swift](ios/native/ObstacleBridgeApp/ObstacleBridgeTunnelControl.swift) understands a macOS-only runtime mode named `swift_host_runner`.
+
+That mode means:
+
+- run ObstacleBridge inside the app-owned Swift runtime
+- do **not** start `NETunnelProviderManager`
+- keep the Network Extension out of the loop for macOS host-runner experiments
+
+The repo currently verifies that app-owned macOS Swift surface by compiling the shared app/runtime sources in tests and smoke builds. The checked-in one-command artifact is still the host-runner binary above rather than a signed standalone `.app` bundle.
 
 ## Runtime config
 
@@ -55,7 +80,7 @@ The runner accepts `--runtime-config`, but if you omit it the executable default
 CLI usage:
 
 ```bash
-ios/build/macos/ObstacleBridgeMacHostRunner \
+ios/build/macos/ObstacleBridgeHostRunner \
   [--runtime-config <path>] \
   [--bind-host <host>] \
   [--status-port <port>] \
@@ -65,6 +90,7 @@ ios/build/macos/ObstacleBridgeMacHostRunner \
 Notes:
 
 - grouped and flat config shapes are accepted through the shared runtime-config parser
+- the macOS app-side host-runner mode is selected by setting `packetflow_connector` to `swift_host_runner` inside the `iOS_TUN_connector` section of the runtime config
 - when `--runtime-config` is omitted, `ObstacleBridge.cfg` is loaded from the shell's current working directory
 - if `admin_web_dir` is not set, the runner first looks for `admin_web` under the config root and then falls back to `./admin_web`
 - the static Admin Web assets used by the runner come from the repo `admin_web/` directory unless overridden
@@ -168,7 +194,7 @@ curl http://127.0.0.1:18080/api/peers
 Useful finite run for scripting:
 
 ```bash
-ios/build/macos/ObstacleBridgeMacHostRunner \
+ios/build/macos/ObstacleBridgeHostRunner \
   --runtime-config ios/examples/macos_runtime.json \
   --status-port 18080 \
   --hold-sec 30
@@ -212,12 +238,14 @@ This repo now has the shared packet-tunnel configuration building blocks needed 
 
 Current status:
 
-- available today: the macOS host runner in [ios/native/ObstacleBridgeMacRunner/ObstacleBridgeMacHostRunner.swift](/Users/ohnoohweh/briidge_lossy/ios/native/ObstacleBridgeMacRunner/ObstacleBridgeMacHostRunner.swift)
+- available today: the macOS host runner in [ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift](/Users/ohnoohweh/briidge_lossy/ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift)
 - available today: the shared packet-tunnel network-settings helper in [ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift](/Users/ohnoohweh/briidge_lossy/ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift)
-- available today: reference packet-tunnel providers in [ios/native/IPServer/PacketTunnelProvider.swift](/Users/ohnoohweh/briidge_lossy/ios/native/IPServer/PacketTunnelProvider.swift) and [ios/native/ObstacleBridgeTunnel/PacketTunnelProvider.swift](/Users/ohnoohweh/briidge_lossy/ios/native/ObstacleBridgeTunnel/PacketTunnelProvider.swift)
+- available today: reference packet-tunnel provider in [ios/native/IPServer/PacketTunnelProvider.swift](/Users/ohnoohweh/briidge_lossy/ios/native/IPServer/PacketTunnelProvider.swift)
 - not checked in yet: a macOS containing app plus macOS packet-tunnel extension bundle wired for signing, installation, and `NETunnelProviderManager` lifecycle on macOS
 
 The practical consequence is that macOS packet-tunnel work should currently be understood as an architecture and integration path, not as a finished one-command installer like the host runner.
+
+In other words: the repo can build and run the macOS Swift runtime today, and the app now owns that runtime code, but the polished signed macOS app-plus-extension packaging lane is still a separate step.
 
 ## What gets installed
 

@@ -1222,7 +1222,6 @@ The next document-worthy plan should focus on TUN functionality itself, because 
 
 - Review and document the live packet path across:
   - `ios/native/IPServer/PacketTunnelProvider.swift`
-  - `ios/native/ObstacleBridgeTunnel/PacketFlowBridge.swift`
   - `ios/src/obstacle_bridge_ios/ipserver_extension.py`
   - `src/obstacle_bridge/packet_io.py`
 - Produce one short packet-flow diagram from `NEPacketTunnelFlow` to Python packet handler and back.

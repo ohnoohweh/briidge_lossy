@@ -5,8 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 IOS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${IOS_DIR}/.." && pwd)"
 BUILD_DIR="${IOS_DIR}/build/macos"
-BINARY_PATH="${BUILD_DIR}/ObstacleBridgeMacHostRunner"
-BUILD_INFO_JSON="${BUILD_DIR}/ObstacleBridgeMacHostRunner.build-info.json"
+BINARY_PATH="${BUILD_DIR}/ObstacleBridgeHostRunner"
+BUILD_INFO_JSON="${BUILD_DIR}/ObstacleBridgeHostRunner.build-info.json"
 
 if command -v swiftc >/dev/null 2>&1; then
   SWIFTC_CMD="$(command -v swiftc)"
@@ -56,7 +56,8 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayRuntime.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayRuntime.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeMacRunner/ObstacleBridgeMacHostRunner.swift"
+  "${REPO_ROOT}/ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunnerMain.swift"
 
 echo "[build_macos_app] writing build identification sidecar"
 OBSTACLEBRIDGE_REPO_ROOT="${REPO_ROOT}" "${PYTHON_CMD}" - <<'PY' > "${BUILD_INFO_JSON}"
