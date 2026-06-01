@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-from . import bridge as _bridge
+from ._bridge_import import export_bridge_globals
 
-globals().update({
-    key: value
-    for key, value in _bridge.__dict__.items()
-    if key not in {"__builtins__", "__name__", "__package__", "__file__", "__cached__", "__doc__", "__spec__", "__loader__"}
-})
+_bridge = export_bridge_globals(globals())
 
 class CompressLayerSession(ISession):
     _MUX_HDR = struct.Struct(">HBHBH")
@@ -453,4 +449,3 @@ class CompressLayerSession(ISession):
         any_peer_active = any(bool(s.get("active")) for s in self._peer_compress.values() if isinstance(s, dict))
         enabled = bool(self._configured_enabled) if self._is_peer_client else bool(any_peer_active)
         return self._compress_snapshot_from_counters(counters, enabled=enabled)
-

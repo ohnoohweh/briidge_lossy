@@ -68,6 +68,8 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "swift_udp_tcp_mux_send_failed" in provider
     assert "routeOverlayPayloadsToSystem" in provider
     assert "loadSharedRuntimeConfigJSON" in provider
+    assert "primeOverlayTransportConnection()" in provider
+    assert "swift_udp_transport_prime_failed" in provider
     assert "packet_pump_dropped_packets" not in provider
     assert "obstaclebridge.ios.packet-tunnel.v1" in provider
     assert "tunnel_address6" in provider
@@ -76,11 +78,16 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "fallbackRuntimeConfig: loadSharedRuntimeConfigJSON()" in provider
     assert "ObstacleBridgePacketTunnelConfiguration(" in provider
     assert '"effective_tunnel_network_settings"' in provider
+    assert '"bootstrap_state"' in provider
     assert "configuration.makeNetworkSettings()" in provider
     assert "ObstacleBridgeRuntimeConfig.localTunServiceSpec" in provider
     assert "private var nativeRuntimeActive: Bool" in provider
     assert 'runtimeMode == "swift_simple_udp" || runtimeMode == "swift_udp"' in provider
     assert "private func nativeAppMessageResponse(for payload: [String: Any]) throws -> [String: Any]" in provider
+    assert '"admin_ui"' in provider
+    assert '"home_tab_enabled"' in provider
+    assert '"security_advisor"' in provider
+    assert '"first_tab"' in provider
     assert "startTunnel_completed_swift_udp" in provider
     assert "startTunnel_completed_swift_simple_udp" in provider
     assert "startTunnel_unsupported_runtime_mode" in provider
@@ -283,6 +290,9 @@ def test_webadmin_server_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebAdminServer.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeWebAdminServer" in runtime
+    assert "normalizedListenerHost(" in runtime
+    assert 'host == "0.0.0.0"' in runtime
+    assert 'host == "localhost"' in runtime
     assert '"/api/status"' in runtime
     assert '"/api/live"' in runtime
     assert "101 Switching Protocols" in runtime
@@ -330,6 +340,38 @@ def test_macos_swift_host_runner_source_exists() -> None:
     assert "ObstacleBridgeSecureLinkPskTransportAdapter" in runtime
     assert '"TUN_routing"' in runtime
     assert '"swift_host_runner"' in runtime
+
+
+def test_shared_admin_api_exposes_status_and_bootstrap_routes() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeAdminAPI.swift").read_text(encoding="utf-8")
+
+    assert 'case ("GET", "/api/status")' in runtime
+    assert 'provider.adminStatusSnapshot()' in runtime
+    assert 'case ("GET", "/api/bootstrap")' in runtime
+    assert 'provider.adminMetaSnapshot()["bootstrap_state"] ?? [:]' in runtime
+
+
+def test_macos_app_main_source_exists() -> None:
+    app_main = (APP_NATIVE_DIR / "ObstacleBridgeMacAppMain.swift").read_text(encoding="utf-8")
+    build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
+    control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
+    runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+
+    assert "@main" in app_main
+    assert "WKWebView" in app_main
+    assert "ObstacleBridgeTunnelControl.startIPServerTunnel" in app_main
+    assert "seedDocumentsSurfaceIfNeeded" in app_main
+    assert ".applicationSupportDirectory" in app_main
+    assert '.appendingPathComponent("ObstacleBridge"' in app_main
+    assert ".applicationSupportDirectory" in control
+    assert "let root = base" in control
+    assert ".applicationSupportDirectory" in runner
+    assert '.appendingPathComponent("ObstacleBridge"' in runner
+    assert 'ObstacleBridgeHostRunnerError.unreadableRuntimeConfig("Documents")' in runner
+    assert "ObstacleBridge.app" in build_script
+    assert "ObstacleBridgeMacAppMain.swift" in build_script
+    assert "codesign" in build_script
+    assert 'APP_ENTITLEMENTS="${OBSTACLEBRIDGE_CODESIGN_ENTITLEMENTS:-}"' in build_script
 
 
 def test_websocket_payload_codec_source_exists() -> None:
@@ -511,6 +553,8 @@ def test_ipserver_extension_sources_are_swift_only() -> None:
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     entitlements = (IPSERVER_NATIVE_DIR / "IPServer.entitlements").read_text(encoding="utf-8")
     info_plist = (IPSERVER_NATIVE_DIR / "Info.plist").read_text(encoding="utf-8")
+    shim = (ROOT / "ios" / "src" / "obstacle_bridge_ios" / "ipserver_extension.py").read_text(encoding="utf-8")
+    shim_runtime = (ROOT / "ios" / "src" / "obstacle_bridge_ios" / "ipserver_runtime.py").read_text(encoding="utf-8")
 
     assert "NEPacketTunnelProvider" in provider
     assert "@objc(PacketTunnelProvider)" in provider
@@ -526,12 +570,19 @@ def test_ipserver_extension_sources_are_swift_only() -> None:
     assert "ObstacleBridgeTcpOverlayRuntime" in provider
     assert "shared_overlay_runtime_prepared" in provider
     assert "shared_overlay_bootstrap_state" in provider
+    assert "adminOnboardingConnectionProfiles()" in provider
+    assert "adminOnboardingInviteGenerate(request:" in provider
+    assert "adminOnboardingInvitePreview(request:" in provider
+    assert "invite_token" in provider
     assert "ObstacleBridgePythonBridge" not in provider
     assert not (IPSERVER_NATIVE_DIR / "ObstacleBridgePythonBridge.m").exists()
     assert not (IPSERVER_NATIVE_DIR / "ObstacleBridgePythonBridge.h").exists()
     assert not (IPSERVER_NATIVE_DIR / "IPServer-Bridging-Header.h").exists()
-    assert not (ROOT / "ios" / "src" / "obstacle_bridge_ios" / "ipserver_extension.py").exists()
-    assert not (ROOT / "ios" / "src" / "obstacle_bridge_ios" / "ipserver_runtime.py").exists()
+    assert "Python-side stand-in for the iOS packet-tunnel extension used in E2E tests." in shim
+    assert "ObstacleBridgeClient" in shim
+    assert "handle_message" in shim
+    assert "Minimal Python runtime shim used by iOS extension-style integration tests." in shim_runtime
+    assert "LAST_PROVIDER_CONFIGURATION" in shim_runtime
     assert "com.apple.security.application-groups" in entitlements
     assert "com.apple.networkextension.packet-tunnel" in info_plist
 

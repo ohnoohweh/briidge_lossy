@@ -43,7 +43,7 @@ class IOSTUNConnectorSettings:
         g.add_argument(
             "--packetflow-connector",
             default="",
-            choices=["", "udp", "direct", "simple_udp_peer", "swift_udp", "swift_udp_peer"],
+            choices=["", "udp", "direct", "simple_udp_peer", "swift_udp", "swift_udp_peer", "swift_host_runner"],
             help="iOS packetflow connector mode for native and Python packet tunnel handoff",
         )
         g.add_argument("--ios-tun-connector-peer-host", dest="peer_host", default="", help="peer host for simple_udp_peer packetflow mode")
@@ -396,14 +396,14 @@ def _packetflow_connector_mode(dev: Optional[Any] = None) -> str:
         if mode:
             if mode == "swift_udp_peer":
                 return "swift_udp"
-            if mode in {"udp", "direct", "simple_udp_peer", "swift_udp"}:
+            if mode in {"udp", "direct", "simple_udp_peer", "swift_udp", "swift_host_runner"}:
                 return mode
     mode = os.environ.get("OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR", "")
     if mode.strip():
         selected = mode.strip().lower()
         if selected == "swift_udp_peer":
             return "swift_udp"
-        if selected in {"udp", "direct", "simple_udp_peer", "swift_udp"}:
+        if selected in {"udp", "direct", "simple_udp_peer", "swift_udp", "swift_host_runner"}:
             return selected
     return "udp" if _option_bool(os.environ.get("OBSTACLEBRIDGE_IOS_PACKETFLOW_UDP")) is True else "direct"
 

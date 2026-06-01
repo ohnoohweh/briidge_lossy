@@ -52,14 +52,51 @@ This is the checked-in build path we use today. It compiles:
 - the app-owned host-runner implementation from [ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift](ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift)
 - the tiny macOS CLI entrypoint from [ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunnerMain.swift](ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunnerMain.swift)
 
+The script now produces both:
+
+- the CLI/runtime binary
+- a macOS app bundle built from `ObstacleBridgeApp` sources
+
+It also packages the checked-in artwork from `ios/resources/` into the app bundle as `Contents/Resources/ObstacleBridge.icns`, so the standalone macOS app shows the project icon in Finder and the Dock.
+
 The script uses the same compile surface covered by [ios/tests/test_macos_swift_host_runner.py](ios/tests/test_macos_swift_host_runner.py), refreshes the shared build timestamp metadata before compiling, and writes a sidecar with the same `build` fields used by the iOS and Python admin payloads.
 
 Build outputs:
 
 - binary: `ios/build/macos/ObstacleBridgeHostRunner`
 - sidecar build identification: `ios/build/macos/ObstacleBridgeHostRunner.build-info.json`
+- app bundle: `ios/build/macos/ObstacleBridge.app`
 
 The sidecar file contains the build timestamp, commit, dirty state, and diff hash so locally built macOS artifacts can be identified as easily as the iOS app builds.
+
+When launched as the macOS app bundle, ObstacleBridge now keeps its default app-owned runtime surface under:
+
+- `~/Library/Application Support/ObstacleBridge/config/ObstacleBridge.cfg`
+- `~/Library/Application Support/ObstacleBridge/logs/`
+- `~/Library/Application Support/ObstacleBridge/admin_web/`
+- `~/Library/Application Support/ObstacleBridge/web/`
+
+That keeps the signed app inside its natural macOS application-support scope by default instead of touching `~/Documents` or the shell working directory.
+
+By default, the app bundle is ad-hoc signed without extra entitlements so it stays launchable as a standalone local macOS app. You can override the signing identity:
+
+```bash
+OBSTACLEBRIDGE_CODESIGN_IDENTITY="Developer ID Application: Example Corp" ./ios/scripts/build_macos_app.sh
+```
+
+If you need explicit entitlements for a future macOS app-extension packaging lane, pass them in deliberately:
+
+```bash
+OBSTACLEBRIDGE_CODESIGN_IDENTITY="Developer ID Application: Example Corp" \
+OBSTACLEBRIDGE_CODESIGN_ENTITLEMENTS=ios/native/ObstacleBridgeApp/ObstacleBridge.entitlements \
+./ios/scripts/build_macos_app.sh
+```
+
+Or skip signing during local iteration:
+
+```bash
+OBSTACLEBRIDGE_CODESIGN_IDENTITY=off ./ios/scripts/build_macos_app.sh
+```
 
 ### Build the app-owned macOS source surface
 

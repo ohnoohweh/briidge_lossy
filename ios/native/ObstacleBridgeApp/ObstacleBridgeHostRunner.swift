@@ -94,8 +94,15 @@ private enum ObstacleBridgeConfigSecretCodec {
 
     private static func derivedKey() -> SymmetricKey {
         let seed = configSecretSeed()
-        let keyMaterial = SymmetricKey(data: seed)
-        return HKDF<SHA256>.deriveKey(inputKeyMaterial: keyMaterial, salt: salt, info: info, outputByteCount: 32)
+        guard let derived = ObstacleBridgeNativeCrypto.hkdfSHA256Salt(
+            salt as NSData,
+            info: info as NSData,
+            keyMaterial: seed as NSData,
+            lengthValue: 32
+        ) as Data? else {
+            return SymmetricKey(data: seed)
+        }
+        return SymmetricKey(data: derived)
     }
 
     private static func configSecretSeed() -> Data {
@@ -157,11 +164,7 @@ private final class ObstacleBridgeConfigStore {
         if let explicit = ObstacleBridgeHostRunner.stringValue(from: runtimeConfig["admin_web_dir"]) {
             return explicit
         }
-        let bundled = URL(fileURLWithPath: configRoot).appendingPathComponent("admin_web").path
-        if FileManager.default.fileExists(atPath: bundled) {
-            return bundled
-        }
-        return FileManager.default.currentDirectoryPath + "/admin_web"
+        return URL(fileURLWithPath: configRoot).appendingPathComponent("admin_web").path
     }
 
     func debugLogFilePath() -> String? {
@@ -734,6 +737,7 @@ final class ObstacleBridgeHostRunner {
     private var runtimeConfig: [String: Any]
     private let configStore: ObstacleBridgeConfigStore
     private var ownServerSpecs: [ObstacleBridgeNativeServiceSpec]
+    private var remoteServerSpecs: [ObstacleBridgeNativeServiceSpec]
     private let bindHost: String
     private let statusPort: Int
     private let startedAt = Date()
@@ -772,16 +776,30 @@ final class ObstacleBridgeHostRunner {
         self.runtimeConfig = ObstacleBridgeRuntimeConfig.flatten(decoded)
         self.configStore = ObstacleBridgeConfigStore(configPath: runtimeConfigPath, groupedConfig: decoded, runtimeConfig: runtimeConfig)
         self.ownServerSpecs = ObstacleBridgeRuntimeConfig.ownServerSpecs(from: runtimeConfig).map(ObstacleBridgeNativeServiceSpec.init)
+        self.remoteServerSpecs = ObstacleBridgeRuntimeConfig.remoteServerSpecs(from: runtimeConfig).map(ObstacleBridgeNativeServiceSpec.init)
         self.bindHost = bindHostOverride ?? (ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_bind"]) ?? "127.0.0.1")
         let configuredPort = ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["admin_web_port"])
         self.statusPort = statusPortOverride ?? configuredPort ?? 18080
     }
 
-    static func appScopedRuntimeConfigPath() throws -> String {
-        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
-            throw ObstacleBridgeHostRunnerError.unreadableRuntimeConfig("app Documents/config/ObstacleBridge.cfg")
+    static func appScopedRootURL() throws -> URL {
+#if os(macOS)
+        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            throw ObstacleBridgeHostRunnerError.unreadableRuntimeConfig("Application Support/ObstacleBridge")
         }
-        return documents
+        let root = base.appendingPathComponent("ObstacleBridge", isDirectory: true)
+#else
+        guard let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            throw ObstacleBridgeHostRunnerError.unreadableRuntimeConfig("Documents")
+        }
+        let root = base
+#endif
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    static func appScopedRuntimeConfigPath() throws -> String {
+        return try appScopedRootURL()
             .appendingPathComponent("config", isDirectory: true)
             .appendingPathComponent("ObstacleBridge.cfg", isDirectory: false)
             .path
@@ -842,6 +860,7 @@ final class ObstacleBridgeHostRunner {
         runtimeConfig = ObstacleBridgeRuntimeConfig.flatten(decoded)
         configStore.updateConfigs(groupedConfig: decoded, runtimeConfig: runtimeConfig)
         ownServerSpecs = ObstacleBridgeRuntimeConfig.ownServerSpecs(from: runtimeConfig).map(ObstacleBridgeNativeServiceSpec.init)
+        remoteServerSpecs = ObstacleBridgeRuntimeConfig.remoteServerSpecs(from: runtimeConfig).map(ObstacleBridgeNativeServiceSpec.init)
     }
 
     private func reloadRuntimeStateForControlAction() throws {
@@ -1926,6 +1945,43 @@ final class ObstacleBridgeHostRunner {
         SHA256.hash(data: Data("\(seed):\(username):\(password):\(updatesDigest)".utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
+    private func onboardingConnectionProfiles() -> [[String: Any]] {
+        ObstacleBridgeOnboarding.connectionProfiles(runtimeConfig: runtimeConfig)
+    }
+
+    private func onboardingBlueprints() -> [[String: Any]] {
+        []
+    }
+
+    private func sanitizeOnboardingServices(_ value: Any?) -> [[String: Any]] {
+        ObstacleBridgeOnboarding.sanitizeServices(value)
+    }
+
+    private func onboardingTokenPayload(connection: [String: Any], ownServices: [[String: Any]], remoteServices: [[String: Any]]) -> [String: Any] {
+        ObstacleBridgeOnboarding.tokenPayload(
+            runtimeConfig: runtimeConfig,
+            connection: connection,
+            ownServices: ownServices,
+            remoteServices: remoteServices,
+            encryptSecrets: ObstacleBridgeConfigSecretCodec.encryptPayload
+        )
+    }
+
+    private func encodeOnboardingToken(_ payload: [String: Any]) throws -> String {
+        try ObstacleBridgeOnboarding.encodeToken(payload)
+    }
+
+    private func decodeOnboardingToken(_ token: String) throws -> [String: Any] {
+        try ObstacleBridgeOnboarding.decodeToken(token)
+    }
+
+    private func onboardingUpdates(from payload: [String: Any]) -> [String: Any] {
+        ObstacleBridgeOnboarding.updates(
+            from: payload,
+            decryptSecrets: ObstacleBridgeConfigSecretCodec.decryptPayload
+        )
+    }
+
     private func normalizedConfigUpdates(_ updates: [String: Any]) -> [String: Any] {
         var normalized = updates
         if (normalized["admin_web_auth_disable"] as? Bool) == true {
@@ -2202,6 +2258,7 @@ final class ObstacleBridgeHostRunner {
             overlayRuntime: runtime,
             reconnectRetryDelayMS: Self.intValue(from: runtimeConfig["overlay_reconnect_retry_delay_ms"]) ?? 30000,
             overlayLayerTransportAdapter: sharedOverlayLayerTransportAdapter,
+            startupMuxFrames: remoteServiceCatalogMuxFrames(),
             queue: serviceStateQueue,
             serviceNameByID: Dictionary(uniqueKeysWithValues: ownServerSpecs.map { ($0.svcID, $0.name ?? "") })
         )
@@ -2226,11 +2283,54 @@ final class ObstacleBridgeHostRunner {
             peerHost: peerHost,
             peerPort: peerPort,
             overlayLayerTransportAdapter: sharedOverlayLayerTransportAdapter,
+            startupMuxFrames: remoteServiceCatalogMuxFrames(),
             queue: serviceStateQueue,
             serviceNameByID: Dictionary(uniqueKeysWithValues: ownServerSpecs.map { ($0.svcID, $0.name ?? "") })
         )
         sharedUdpOverlayTransportOwner = owner
         try owner.start()
+    }
+
+    private func remoteServiceCatalogMuxFrames() -> [Data] {
+        guard !remoteServerSpecs.isEmpty else {
+            return []
+        }
+        do {
+            let specs = remoteServerSpecs.map { $0.toChannelMuxServiceSpec() }
+            let payload = try ObstacleBridgeChannelMuxCodec.encodeRemoteServicesSetV2(
+                instanceID: 0,
+                connectionSeq: 0,
+                services: specs
+            )
+            if ObstacleBridgeChannelMuxCodec.muxHeaderSize + payload.count <= 65535 {
+                return [
+                    try ObstacleBridgeChannelMuxCodec.packMux(
+                        chanID: 0,
+                        proto: .udp,
+                        counter: 0,
+                        mtype: .remoteServicesSetV2,
+                        body: payload
+                    )
+                ]
+            }
+            let tx = ObstacleBridgeChannelMuxCodec.nextControlChunkTxID(current: 1)
+            let chunks = ObstacleBridgeChannelMuxCodec.chunkControlPayload(
+                txID: tx.txID,
+                maxAppPayload: 65535,
+                payload: payload
+            )
+            return try chunks.enumerated().map { index, chunk in
+                try ObstacleBridgeChannelMuxCodec.packMux(
+                    chanID: 0,
+                    proto: .udp,
+                    counter: index & 0xFFFF,
+                    mtype: .remoteServicesSetV2Chunk,
+                    body: chunk
+                )
+            }
+        } catch {
+            return []
+        }
     }
 
     private func hasConfiguredOverlayPeer() -> Bool {
@@ -2319,6 +2419,109 @@ extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
             "config": maskedRuntimeConfigSnapshot(),
             "schema": configStore.schemaSnapshot(),
         ]
+    }
+
+    func adminOnboardingConnectionProfiles() -> [[String: Any]] {
+        onboardingConnectionProfiles()
+    }
+
+    func adminOnboardingBlueprints() -> [[String: Any]] {
+        onboardingBlueprints()
+    }
+
+    func adminOnboardingInviteGenerate(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        guard request.method.uppercased() == "POST" else {
+            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
+        }
+        guard let body = request.body,
+              let object = try? JSONSerialization.jsonObject(with: body),
+              let payload = object as? [String: Any] else {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": "invalid JSON body",
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+        let profiles = onboardingConnectionProfiles()
+        let connectionID = (payload["connection_id"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedConnection: [String: Any]?
+        if profiles.count > 1 && connectionID.isEmpty {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": "multiple connection profiles available; select connection_id",
+                "profiles": profiles,
+            ], statusLine: "HTTP/1.1 409 Conflict")
+        }
+        if !connectionID.isEmpty {
+            selectedConnection = profiles.first { String(describing: $0["id"] ?? "") == connectionID }
+            if selectedConnection == nil {
+                return ObstacleBridgeAdminAPI.jsonResponse([
+                    "ok": false,
+                    "error": "unknown connection_id: \(connectionID)",
+                ], statusLine: "HTTP/1.1 400 Bad Request")
+            }
+        } else {
+            selectedConnection = profiles.first
+        }
+        let own = sanitizeOnboardingServices(payload["own_servers"] ?? runtimeConfig["own_servers"])
+        let remote = sanitizeOnboardingServices(payload["remote_servers"] ?? runtimeConfig["remote_servers"])
+        let preview = onboardingTokenPayload(connection: selectedConnection ?? [:], ownServices: own, remoteServices: remote)
+        do {
+            let token = try encodeOnboardingToken(preview)
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": true,
+                "invite_token": token,
+                "preview": preview,
+            ])
+        } catch {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": "failed to encode invite token",
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+    }
+
+    func adminOnboardingInvitePreview(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        guard request.method.uppercased() == "POST" else {
+            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
+        }
+        guard let body = request.body,
+              let object = try? JSONSerialization.jsonObject(with: body),
+              let payload = object as? [String: Any] else {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": "invalid JSON body",
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+        let token = (payload["invite_token"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": "invite_token is required",
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+        do {
+            let decoded = try decodeOnboardingToken(token)
+            var preview = decoded
+            if let psk = preview["secure_link_psk"] as? String, !psk.isEmpty {
+                preview["secure_link_psk"] = "***hidden***"
+                preview["secure_link_psk_present"] = true
+            }
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": true,
+                "preview": preview,
+                "suggested_updates": onboardingUpdates(from: decoded),
+            ])
+        } catch let error as ObstacleBridgeHostRunnerError {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": error.localizedDescription,
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        } catch {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": "invite token has invalid JSON payload",
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
     }
 
     func adminConfigChallenge(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {

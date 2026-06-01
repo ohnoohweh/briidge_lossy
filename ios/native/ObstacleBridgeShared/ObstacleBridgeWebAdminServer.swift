@@ -64,8 +64,7 @@ final class ObstacleBridgeWebAdminServer {
         }
         let parameters = NWParameters.tcp
         parameters.allowLocalEndpointReuse = true
-        let host = bindHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !host.isEmpty {
+        if let host = Self.normalizedListenerHost(bindHost) {
             parameters.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(host), port: nwPort)
         }
         self.listener = try NWListener(using: parameters)
@@ -88,6 +87,17 @@ final class ObstacleBridgeWebAdminServer {
         listener.newConnectionHandler = { [weak self] connection in
             self?.handle(connection)
         }
+    }
+
+    private static func normalizedListenerHost(_ bindHost: String) -> String? {
+        let host = bindHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if host.isEmpty || host == "*" || host == "0.0.0.0" || host == "::" || host == "[::]" {
+            return nil
+        }
+        if host == "localhost" {
+            return "127.0.0.1"
+        }
+        return bindHost.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func start() {

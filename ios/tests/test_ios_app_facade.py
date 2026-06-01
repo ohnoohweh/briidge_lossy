@@ -13,7 +13,17 @@ from obstacle_bridge_ios import app as ios_app_module
 from obstacle_bridge_ios.app import ObstacleBridgeIOSApp, _load_grouped_runtime_config, _write_startup_artifacts
 
 
-def test_app_default_facade_reports_extension_as_runtime_owner() -> None:
+def test_app_default_facade_reports_extension_as_runtime_owner(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "Documents"
+    monkeypatch.setattr(ObstacleBridgeIOSApp, "DOCUMENTS_ROOT", root)
+    monkeypatch.setattr(ObstacleBridgeIOSApp, "CONFIG_DIR", root / "config")
+    monkeypatch.setattr(ObstacleBridgeIOSApp, "CONFIG_FILE", root / "config" / "ObstacleBridge.cfg")
+    monkeypatch.setattr(ObstacleBridgeIOSApp, "PROFILES_DIR", root / "profiles")
+    monkeypatch.setattr(ObstacleBridgeIOSApp, "LOGS_DIR", root / "logs")
+    monkeypatch.setattr(ObstacleBridgeIOSApp, "LOG_FILE", root / "logs" / "obstaclebridge.log")
+    monkeypatch.setattr(ObstacleBridgeIOSApp, "ADMIN_WEB_DIR", root / "admin_web")
+    monkeypatch.setattr(ObstacleBridgeIOSApp, "WEB_DIR", root / "web")
+
     app = ObstacleBridgeIOSApp()
 
     snapshot = app.connection_snapshot()
@@ -38,7 +48,7 @@ def test_load_grouped_runtime_config_preserves_saved_transport_fields(tmp_path: 
                     "tcp_peer_port": 4433,
                 },
                 "admin_web": {
-                    "admin_web_bind": "0.0.0.0",
+                    "admin_web_bind": "127.0.0.1",
                     "admin_web_port": 18080,
                 },
             }
@@ -52,9 +62,11 @@ def test_load_grouped_runtime_config_preserves_saved_transport_fields(tmp_path: 
     assert config["tcp_session"]["tcp_peer"] == "bridge.example.net"
     assert config["tcp_session"]["tcp_peer_port"] == 4433
     assert config["admin_web"]["admin_web"] is True
-    assert config["admin_web"]["admin_web_bind"] == "0.0.0.0"
+    assert config["admin_web"]["admin_web_bind"] == "127.0.0.1"
     assert config["admin_web"]["admin_web_port"] == 18080
     assert config["iOS_TUN_connector"]["packetflow_connector"] == "swift_udp"
+    assert config["iOS_TUN_connector"]["peer_host"] == ""
+    assert config["iOS_TUN_connector"]["peer_port"] == 0
     assert "log_file" in config["debug_logging"]
 
 
@@ -168,7 +180,7 @@ def test_webadmin_url_from_config_uses_ios_tun_address_when_running_on_ios(monke
                 },
             }
         )
-        == "http://192.168.105.9:18090/"
+        == "http://127.0.0.1:18090/"
     )
 
 

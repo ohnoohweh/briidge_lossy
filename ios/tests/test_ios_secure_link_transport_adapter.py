@@ -141,3 +141,89 @@ def test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_
         "client_session_id": "72623859790382856",
         "server_session_id": "72623859790382856",
     }
+
+
+def test_ios_secure_link_transport_adapter_can_prime_handshake_on_transport_connect(tmp_path: Path) -> None:
+    source_path = tmp_path / "SecureLinkTransportConnectProbe.swift"
+    binary_path = tmp_path / "secure-link-transport-connect-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            enum ProbeError: Error {
+                case badState(String)
+            }
+
+            @main
+            struct SecureLinkTransportConnectProbe {
+                static func main() throws {
+                    let client = ObstacleBridgeSecureLinkPskTransportAdapter(
+                        runtime: ObstacleBridgeSecureLinkPskRuntime(
+                            clientMode: true,
+                            psk: "shared-psk",
+                            randomBytes: { count in Data(repeating: 0x11, count: count) },
+                            sessionIDProvider: { 0x0102030405060708 }
+                        )
+                    )
+                    let server = ObstacleBridgeSecureLinkPskTransportAdapter(
+                        runtime: ObstacleBridgeSecureLinkPskRuntime(
+                            clientMode: false,
+                            psk: "shared-psk",
+                            randomBytes: { count in Data(repeating: 0x22, count: count) },
+                            sessionIDProvider: { 0 }
+                        )
+                    )
+
+                    let primed = try client.handleTransportConnected()
+                    guard let clientHello = primed.emittedFrames.first else {
+                        throw ProbeError.badState("missing client hello on transport connect")
+                    }
+
+                    let serverHello = server.handleInboundFrame(clientHello)
+                    guard let serverHelloFrame = serverHello.emittedFrames.first else {
+                        throw ProbeError.badState("missing server hello")
+                    }
+
+                    let clientAuth = client.handleInboundFrame(serverHelloFrame)
+                    guard let clientProofFrame = clientAuth.emittedFrames.first else {
+                        throw ProbeError.badState("missing client proof")
+                    }
+
+                    _ = server.handleInboundFrame(clientProofFrame)
+                    let serverSend = try server.handleOutboundPayload(Data("reply-secure".utf8))
+                    guard let serverReplyFrame = serverSend.emittedFrames.first else {
+                        throw ProbeError.badState("missing server reply")
+                    }
+                    let clientData = client.handleInboundFrame(serverReplyFrame)
+
+                    let payload: [String: Any] = [
+                        "primed_client_frames": primed.emittedFrames.count,
+                        "client_auth_frames": clientAuth.emittedFrames.count,
+                        "client_authenticated": client.statusSnapshot().authenticated,
+                        "server_authenticated": server.statusSnapshot().authenticated,
+                        "client_received": clientData.deliveredPayloads.map { String(data: $0, encoding: .utf8) ?? "" },
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_secure_link_transport_probe(source_path, binary_path)
+    completed = subprocess.run([str(binary_path)], capture_output=True, text=True, check=False, timeout=30)
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+    payload = json.loads(completed.stdout)
+
+    assert payload == {
+        "primed_client_frames": 1,
+        "client_auth_frames": 1,
+        "client_authenticated": True,
+        "server_authenticated": True,
+        "client_received": ["reply-secure"],
+    }

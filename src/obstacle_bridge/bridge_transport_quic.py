@@ -10,13 +10,15 @@ import struct
 import time
 from typing import Any, Callable, Dict, Optional, Tuple
 
-from . import bridge as _bridge
+from ._bridge_import import resolve_bridge_module
 from .bridge_transport_common import (
     StreamRTT,
     StreamRTTRuntime,
     _resolve_cli_peer,
     _strip_brackets,
 )
+
+_bridge = resolve_bridge_module()
 
 ISession = _bridge.ISession
 SessionMetrics = _bridge.SessionMetrics

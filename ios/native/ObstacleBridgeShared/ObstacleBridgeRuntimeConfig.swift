@@ -678,6 +678,34 @@ enum ObstacleBridgeRuntimeConfig {
         }
     }
 
+    static func peerPort(for transport: String, payload: [String: Any]) -> Int? {
+        switch transport {
+        case "myudp":
+            return intValue(from: payload["udp_peer_port"])
+        case "tcp":
+            return intValue(from: payload["tcp_peer_port"])
+        case "quic":
+            return intValue(from: payload["quic_peer_port"])
+        case "ws":
+            return intValue(from: payload["ws_peer_port"])
+        default:
+            return nil
+        }
+    }
+
+    private static func isLegacySwiftUDPShimPeer(host: String?, port: Int?, bindPort: Int) -> Bool {
+        guard let host = host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !host.isEmpty,
+              let port
+        else {
+            return false
+        }
+        guard host == "127.0.0.1" || host == "::1" || host == "localhost" else {
+            return false
+        }
+        return port == 5556 || port == bindPort + 1
+    }
+
     static func packetflowConnectorSelection(from payload: [String: Any]) -> String? {
         guard let experiment = packetflowConnectorSection(from: payload) else {
             return nil
@@ -719,15 +747,28 @@ enum ObstacleBridgeRuntimeConfig {
         guard let connectorMode = packetflowConnectorMode(from: payload) else {
             return nil
         }
-        guard let peerHost = stringValue(from: experiment["peer_host"]) else {
+        let bindHost = stringValue(from: experiment["bind_host"]) ?? "0.0.0.0"
+        let bindPort = intValue(from: experiment["bind_port"]) ?? 5555
+        let overlayTransport = stringValue(from: payload["overlay_transport"]) ?? "myudp"
+        let selectedTransport = overlayTransport
+            .split(separator: ",")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty }) ?? "myudp"
+        let explicitPeerHost = stringValue(from: experiment["peer_host"])
+        let explicitPeerPort = intValue(from: experiment["peer_port"])
+        let useOverlayPeerFallback =
+            connectorMode == "swift_udp"
+            && isLegacySwiftUDPShimPeer(host: explicitPeerHost, port: explicitPeerPort, bindPort: bindPort)
+        let peerHost = (useOverlayPeerFallback ? nil : explicitPeerHost)
+            ?? (connectorMode == "swift_udp" ? peerHost(for: selectedTransport, payload: payload) : nil)
+        guard let peerHost else {
             return nil
         }
-        let peerPort = intValue(from: experiment["peer_port"]) ?? 0
+        let peerPort = (useOverlayPeerFallback ? nil : explicitPeerPort)
+            ?? (connectorMode == "swift_udp" ? (peerPort(for: selectedTransport, payload: payload) ?? 0) : 0)
         guard peerPort > 0 else {
             return nil
         }
-        let bindHost = stringValue(from: experiment["bind_host"]) ?? "0.0.0.0"
-        let bindPort = intValue(from: experiment["bind_port"]) ?? peerPort
         let peerResolveFamily = peerResolveFamilyValue(from: experiment["udp_peer_resolve_family"]) ?? "prefer-ipv6"
         let mtu = intValue(from: experiment["mtu"]) ?? defaultMTU
         let tunIfname = stringValue(from: experiment["ifname"]) ?? "ios-utun"

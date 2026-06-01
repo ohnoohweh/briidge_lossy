@@ -283,6 +283,38 @@ async def _probe_tcp_line_roundtrip(host: str, port: int, payload: bytes, *, att
     raise AssertionError(f"failed to round-trip TCP probe to {host}:{port}: {last_error}")
 
 
+async def _probe_http_get(host: str, port: int, path: str, *, attempts: int = 40) -> tuple[int, str]:
+    last_error: BaseException | None = None
+    request = (
+        f"GET {path} HTTP/1.1\r\n"
+        f"Host: {host}:{int(port)}\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+    ).encode("utf-8")
+    for _ in range(attempts):
+        reader: asyncio.StreamReader | None = None
+        writer: asyncio.StreamWriter | None = None
+        try:
+            reader, writer = await asyncio.wait_for(asyncio.open_connection(host, int(port)), timeout=0.5)
+            writer.write(request)
+            await asyncio.wait_for(writer.drain(), timeout=2.0)
+            raw = await asyncio.wait_for(reader.read(), timeout=4.0)
+            head, _, body = raw.partition(b"\r\n\r\n")
+            status_line = head.splitlines()[0].decode("iso-8859-1", errors="replace")
+            parts = status_line.split(" ", 2)
+            if len(parts) < 2:
+                raise AssertionError(f"invalid HTTP status line: {status_line!r}")
+            return int(parts[1]), body.decode("utf-8", errors="replace")
+        except (OSError, asyncio.TimeoutError, ConnectionError, AssertionError) as exc:
+            last_error = exc
+            await asyncio.sleep(0.1)
+        finally:
+            if writer is not None:
+                writer.close()
+                await asyncio.wait_for(writer.wait_closed(), timeout=2.0)
+    raise AssertionError(f"failed to fetch HTTP GET {path} from {host}:{port}: {last_error}")
+
+
 async def _wait_tcp_listener_ready(host: str, port: int, *, attempts: int = 120) -> None:
     last_error: BaseException | None = None
     for _ in range(attempts):
@@ -304,6 +336,12 @@ def _fetch_json(url: str, timeout: float = 1.5) -> tuple[int, dict]:
     with urllib.request.urlopen(url, timeout=timeout) as response:
         payload = json.loads(response.read().decode("utf-8"))
         return int(getattr(response, "status", 200) or 200), payload if isinstance(payload, dict) else {}
+
+
+def _fetch_text(url: str, timeout: float = 2.0) -> tuple[int, str]:
+    with urllib.request.urlopen(url, timeout=timeout) as response:
+        payload = response.read().decode("utf-8", errors="replace")
+        return int(getattr(response, "status", 200) or 200), payload
 
 
 def _wait_admin_peer_secure_link_state(
@@ -589,11 +627,17 @@ def _build_myudp_extension_provider_configuration(
     swift_bind_port: int,
     swift_peer_port: int,
     own_servers: list[dict[str, Any]],
+    remote_servers: list[dict[str, Any]] | None = None,
+    admin_web: bool = False,
+    admin_web_bind: str = "127.0.0.1",
+    admin_web_port: int = 0,
+    admin_web_auth_disable: bool = True,
     tunnel_address: str,
     included_routes: list[str],
     profile_id: str,
     display_name: str,
 ) -> dict[str, Any]:
+    remote_specs = list(remote_servers or [])
     return provider_configuration_from_m3_config(
         M3TunnelConfig(
             profile_id=profile_id,
@@ -617,8 +661,10 @@ def _build_myudp_extension_provider_configuration(
                 "compress_layer_level": 3,
                 "compress_layer_min_bytes": 64,
                 "compress_layer_types": "data,data_frag",
+                "remote_servers": remote_specs,
                 "channel_mux": {
                     "own_servers": list(own_servers),
+                    "remote_servers": remote_specs,
                 },
                 "iOS_TUN_connector": {
                     "packetflow_connector": "swift_udp",
@@ -629,7 +675,10 @@ def _build_myudp_extension_provider_configuration(
                     "ifname": "ios-utun",
                     "mtu": 1400,
                 },
-                "admin_web": False,
+                "admin_web": admin_web,
+                "admin_web_bind": admin_web_bind,
+                "admin_web_port": int(admin_web_port),
+                "admin_web_auth_disable": admin_web_auth_disable,
                 "status": False,
             },
             network=M3NetworkSettings(
@@ -845,6 +894,21 @@ def test_ios_extension_shim_swift_udp_ws_tcp_service_reaches_host_peer_on_macos(
             stop_result: dict[str, object] | None = None
             try:
                 await bridge_server.start()
+                direct_admin_doc: dict[str, Any] | None = None
+                direct_admin_deadline = time.time() + 12.0
+                while time.time() < direct_admin_deadline:
+                    try:
+                        _direct_status_code, direct_admin_doc = _fetch_json(
+                            f"http://127.0.0.1:{admin_port}/api/status",
+                            timeout=1.0,
+                        )
+                        if direct_admin_doc.get("ok") is True:
+                            break
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.25)
+                assert direct_admin_doc is not None and direct_admin_doc.get("ok") is True, direct_admin_doc
+
                 start_result = ipserver_extension.handle_message(
                     {
                         "command": "start_embedded_webadmin",
@@ -875,6 +939,167 @@ def test_ios_extension_shim_swift_udp_ws_tcp_service_reaches_host_peer_on_macos(
                         await bridge_server.stop()
                 tcp_server.close()
                 await tcp_server.wait_closed()
+
+            assert stop_result is not None
+            assert stop_result["ok"] is True, stop_result
+
+        asyncio.run(scenario())
+
+    monkeypatch.setenv("OBSTACLEBRIDGE_IOS_DOCUMENTS_ROOT", str(documents_root))
+    monkeypatch.setenv("HOME", str(home_root))
+    importlib.reload(ios_app)
+    importlib.reload(ipserver_runtime)
+    importlib.reload(ipserver_extension)
+
+
+@pytest.mark.integration
+@pytest.mark.ios
+def test_ios_extension_shim_swift_udp_ws_secure_link_remote_tcp_server_reaches_extension_admin_web(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    documents_root = tmp_path / "ios-documents-ws-remote-tcp"
+    home_root = tmp_path / "home-ws-remote-tcp"
+    documents_root.mkdir(parents=True, exist_ok=True)
+    home_root.mkdir(parents=True, exist_ok=True)
+
+    with monkeypatch.context() as local_mp:
+        local_mp.setenv("OBSTACLEBRIDGE_IOS_DOCUMENTS_ROOT", str(documents_root))
+        local_mp.setenv("HOME", str(home_root))
+
+        ios_app, ipserver_extension, ipserver_runtime = _reload_extension_modules(documents_root, home_root)
+
+        async def scenario() -> None:
+            ws_port = _alloc_local_port(socket.SOCK_STREAM, case_index=36, base=IOS_E2E_TCP_PORT_BASE)
+            swift_bind_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=37, base=IOS_E2E_UDP_PORT_BASE)
+            swift_peer_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=38, base=IOS_E2E_UDP_PORT_BASE)
+            server_admin_port = _alloc_local_port(socket.SOCK_STREAM, case_index=39, base=IOS_E2E_TCP_PORT_BASE + 1000)
+            extension_admin_port = _alloc_local_port(socket.SOCK_STREAM, case_index=40, base=IOS_E2E_TCP_PORT_BASE + 1200)
+            remote_tcp_port = _alloc_local_port(socket.SOCK_STREAM, case_index=41, base=IOS_E2E_TCP_PORT_BASE + 200)
+            remote_servers = [
+                {
+                    "name": "ws-remote-admin-http",
+                    "listen": {"bind": "127.0.0.1", "port": remote_tcp_port, "protocol": "tcp"},
+                    "target": {"host": "127.0.0.1", "port": extension_admin_port, "protocol": "tcp"},
+                }
+            ]
+
+            bridge_server_config = _ws_secure_link_server_config(ws_port, case_index=42)
+            bridge_server_config["admin_web_port"] = server_admin_port
+            bridge_server = ObstacleBridgeClient(bridge_server_config)
+            provider_configuration = provider_configuration_from_m3_config(
+                M3TunnelConfig(
+                    profile_id="ios-extension-shim-ws-remote-tcp-e2e",
+                    display_name="iOS Extension Shim WS Remote TCP E2E",
+                    provider_bundle_identifier="com.obstaclebridge.ObstacleBridge.PacketTunnel",
+                    transport="ws",
+                    peer_host="127.0.0.1",
+                    peer_port=ws_port,
+                    server_address=f"127.0.0.1:{ws_port}",
+                    runtime_config={
+                        "overlay_transport": "ws",
+                        "ws_peer": "127.0.0.1",
+                        "ws_peer_port": ws_port,
+                        "ws_bind": "127.0.0.1",
+                        "ws_own_port": 0,
+                        "secure_link": True,
+                        "secure_link_mode": "psk",
+                        "secure_link_psk": "ios-e2e-secure-link-psk",
+                        "compress_layer": True,
+                        "compress_layer_algo": "zlib",
+                        "compress_layer_level": 3,
+                        "compress_layer_min_bytes": 64,
+                        "compress_layer_types": "data,data_frag",
+                        "remote_servers": remote_servers,
+                        "channel_mux": {
+                            "own_servers": [],
+                            "remote_servers": remote_servers,
+                        },
+                        "iOS_TUN_connector": {
+                            "packetflow_connector": "swift_udp",
+                            "bind_host": "127.0.0.1",
+                            "bind_port": swift_bind_port,
+                            "peer_host": "127.0.0.1",
+                            "peer_port": swift_peer_port,
+                            "ifname": "ios-utun",
+                            "mtu": 1400,
+                        },
+                        "admin_web": True,
+                        "admin_web_bind": "127.0.0.1",
+                        "admin_web_port": extension_admin_port,
+                        "admin_web_auth_disable": True,
+                        "status": False,
+                    },
+                    network=M3NetworkSettings(
+                        tunnel_address="192.168.106.22",
+                        tunnel_prefix=30,
+                        included_routes=["192.168.106.20/30"],
+                        excluded_routes=[],
+                        dns_servers=["1.1.1.1"],
+                        mtu=1400,
+                    ),
+                )
+            )
+            start_result: dict[str, object] | None = None
+            stop_result: dict[str, object] | None = None
+            try:
+                await bridge_server.start()
+                start_result = ipserver_extension.handle_message(
+                    {
+                        "command": "start_embedded_webadmin",
+                        "provider_configuration": provider_configuration,
+                    }
+                )
+                assert start_result["ok"] is True, start_result
+
+                await _wait_client_peer_secure_link_state(
+                    bridge_server,
+                    transport="ws",
+                    expected_state="authenticated",
+                    authenticated=True,
+                    timeout=12.0,
+                )
+                await _wait_tcp_listener_ready("127.0.0.1", remote_tcp_port)
+
+                status_code, status_text = await _probe_http_get("127.0.0.1", remote_tcp_port, "/api/status")
+                assert status_code == 200
+                status_doc = json.loads(status_text)
+                assert "admin_ui" in status_doc or "build" in status_doc, status_doc
+
+                root_code, root_html = await _probe_http_get("127.0.0.1", remote_tcp_port, "/")
+                assert root_code == 200
+                assert "ObstacleBridge" in root_html or "Admin Web" in root_html
+
+                burst_results = await asyncio.gather(
+                    _probe_http_get("127.0.0.1", remote_tcp_port, "/api/status"),
+                    _probe_http_get("127.0.0.1", remote_tcp_port, "/api/meta"),
+                    _probe_http_get("127.0.0.1", remote_tcp_port, "/api/connections"),
+                    _probe_http_get("127.0.0.1", remote_tcp_port, "/api/peers"),
+                    _probe_http_get("127.0.0.1", remote_tcp_port, "/"),
+                    _probe_http_get("127.0.0.1", remote_tcp_port, "/api/status"),
+                )
+                for path, (code, text) in zip(
+                    ["/api/status", "/api/meta", "/api/connections", "/api/peers", "/", "/api/status"],
+                    burst_results,
+                    strict=False,
+                ):
+                    assert code == 200, (path, code, text)
+                burst_status = json.loads(burst_results[0][1])
+                burst_meta = json.loads(burst_results[1][1])
+                burst_connections = json.loads(burst_results[2][1])
+                burst_peers = json.loads(burst_results[3][1])
+                burst_root = burst_results[4][1]
+                assert "admin_ui" in burst_status or "build" in burst_status, burst_status
+                assert "build" in burst_meta or "admin_web_name" in burst_meta, burst_meta
+                assert "counts" in burst_connections, burst_connections
+                assert "peers" in burst_peers, burst_peers
+                assert "ObstacleBridge" in burst_root or "Admin Web" in burst_root
+            finally:
+                if ipserver_extension._CONTROLLER is not None:
+                    stop_result = ipserver_extension.handle_message({"command": "disconnect_profile"})
+                    ipserver_extension._CONTROLLER = None
+                with contextlib.suppress(asyncio.CancelledError):
+                    await bridge_server.stop()
 
             assert stop_result is not None
             assert stop_result["ok"] is True, stop_result
@@ -1034,6 +1259,117 @@ def test_ios_extension_shim_swift_udp_myudp_secure_link_compress_concurrent_tcp_
 
 @pytest.mark.integration
 @pytest.mark.ios
+def test_ios_extension_shim_swift_udp_myudp_secure_link_tcp_own_server_reaches_python_admin_web(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    documents_root = tmp_path / "ios-documents-myudp-admin"
+    home_root = tmp_path / "home-myudp-admin"
+    documents_root.mkdir(parents=True, exist_ok=True)
+    home_root.mkdir(parents=True, exist_ok=True)
+
+    with monkeypatch.context() as local_mp:
+        local_mp.setenv("OBSTACLEBRIDGE_IOS_DOCUMENTS_ROOT", str(documents_root))
+        local_mp.setenv("HOME", str(home_root))
+
+        ios_app, ipserver_extension, ipserver_runtime = _reload_extension_modules(documents_root, home_root)
+
+        async def scenario() -> None:
+            myudp_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=20, base=IOS_E2E_UDP_PORT_BASE)
+            swift_bind_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=21, base=IOS_E2E_UDP_PORT_BASE)
+            swift_peer_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=22, base=IOS_E2E_UDP_PORT_BASE)
+            admin_port = _alloc_local_port(socket.SOCK_STREAM, case_index=23, base=IOS_E2E_TCP_PORT_BASE + 1000)
+            local_http_port = _alloc_local_port(socket.SOCK_STREAM, case_index=24, base=IOS_E2E_TCP_PORT_BASE)
+            own_servers = [
+                {
+                    "name": "remote-admin-http",
+                    "listen": {"bind": "127.0.0.1", "port": local_http_port, "protocol": "tcp"},
+                    "target": {"host": "127.0.0.1", "port": admin_port, "protocol": "tcp"},
+                },
+                {
+                    "name": "tun",
+                    "listen": {"ifname": "ios-utun", "mtu": 1400, "protocol": "tun"},
+                    "target": {"ifname": "obtun2", "mtu": 1400, "protocol": "tun"},
+                },
+            ]
+
+            bridge_server = ObstacleBridgeClient(
+                _myudp_secure_link_compress_server_config(myudp_port, admin_port=admin_port)
+            )
+            provider_configuration = _build_myudp_extension_provider_configuration(
+                myudp_port=myudp_port,
+                swift_bind_port=swift_bind_port,
+                swift_peer_port=swift_peer_port,
+                own_servers=own_servers,
+                tunnel_address="192.168.106.14",
+                included_routes=["192.168.106.12/30"],
+                profile_id="ios-extension-shim-myudp-admin-e2e",
+                display_name="iOS Extension Shim myUDP Admin E2E",
+            )
+            start_result: dict[str, object] | None = None
+            stop_result: dict[str, object] | None = None
+            try:
+                await bridge_server.start()
+                start_result = ipserver_extension.handle_message(
+                    {
+                        "command": "start_embedded_webadmin",
+                        "provider_configuration": provider_configuration,
+                    }
+                )
+                assert start_result["ok"] is True, start_result
+                await _wait_extension_listener_count(
+                    lambda: ipserver_extension.handle_message({"command": "snapshot"})["result"],
+                    protocol="tcp",
+                    minimum_count=1,
+                    timeout=12.0,
+                )
+                await _wait_tcp_listener_ready("127.0.0.1", local_http_port)
+
+                await _wait_client_peer_secure_link_state(
+                    bridge_server,
+                    transport="myudp",
+                    expected_state="authenticated",
+                    authenticated=True,
+                    timeout=12.0,
+                )
+
+                status_code, status_text = await _probe_http_get("127.0.0.1", local_http_port, "/api/status")
+                assert status_code == 200
+                status_doc = json.loads(status_text)
+                assert "admin_ui" in status_doc or "build" in status_doc, status_doc
+
+                root_code, root_html = await _probe_http_get("127.0.0.1", local_http_port, "/")
+                assert root_code == 200
+                assert "ObstacleBridge" in root_html or "Admin Web" in root_html
+
+                await _wait_client_peer_secure_link_state(
+                    bridge_server,
+                    transport="myudp",
+                    expected_state="authenticated",
+                    authenticated=True,
+                    timeout=6.0,
+                )
+            finally:
+                if ipserver_extension._CONTROLLER is not None:
+                    stop_result = ipserver_extension.handle_message({"command": "disconnect_profile"})
+                    ipserver_extension._CONTROLLER = None
+                with contextlib.suppress(asyncio.CancelledError):
+                    await bridge_server.stop()
+
+            assert stop_result is not None
+            assert stop_result["ok"] is True, stop_result
+
+        asyncio.run(scenario())
+
+    monkeypatch.setenv("OBSTACLEBRIDGE_IOS_DOCUMENTS_ROOT", str(documents_root))
+    monkeypatch.setenv("HOME", str(home_root))
+    importlib.reload(ios_app)
+    importlib.reload(ipserver_runtime)
+    importlib.reload(ipserver_extension)
+
+
+@pytest.mark.integration
+@pytest.mark.ios
 def test_ios_extension_shim_swift_udp_myudp_secure_link_compress_udp_own_server_reaches_python_peer(
     tmp_path: Path,
     monkeypatch,
@@ -1145,6 +1481,137 @@ def test_ios_extension_shim_swift_udp_myudp_secure_link_compress_udp_own_server_
                 with contextlib.suppress(asyncio.CancelledError):
                     await bridge_server.stop()
                 udp_transport.close()
+
+            assert stop_result is not None
+            assert stop_result["ok"] is True, stop_result
+
+        asyncio.run(scenario())
+
+    monkeypatch.setenv("OBSTACLEBRIDGE_IOS_DOCUMENTS_ROOT", str(documents_root))
+    monkeypatch.setenv("HOME", str(home_root))
+    importlib.reload(ios_app)
+    importlib.reload(ipserver_runtime)
+    importlib.reload(ipserver_extension)
+
+
+@pytest.mark.integration
+@pytest.mark.ios
+def test_ios_extension_shim_swift_udp_myudp_secure_link_remote_tcp_server_reaches_extension_admin_web(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    documents_root = tmp_path / "ios-documents-myudp-remote-tcp"
+    home_root = tmp_path / "home-myudp-remote-tcp"
+    documents_root.mkdir(parents=True, exist_ok=True)
+    home_root.mkdir(parents=True, exist_ok=True)
+
+    with monkeypatch.context() as local_mp:
+        local_mp.setenv("OBSTACLEBRIDGE_IOS_DOCUMENTS_ROOT", str(documents_root))
+        local_mp.setenv("HOME", str(home_root))
+
+        ios_app, ipserver_extension, ipserver_runtime = _reload_extension_modules(documents_root, home_root)
+
+        async def scenario() -> None:
+            myudp_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=30, base=IOS_E2E_UDP_PORT_BASE)
+            swift_bind_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=31, base=IOS_E2E_UDP_PORT_BASE)
+            swift_peer_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=32, base=IOS_E2E_UDP_PORT_BASE)
+            server_admin_port = _alloc_local_port(socket.SOCK_STREAM, case_index=33, base=IOS_E2E_TCP_PORT_BASE + 1000)
+            extension_admin_port = _alloc_local_port(socket.SOCK_STREAM, case_index=34, base=IOS_E2E_TCP_PORT_BASE + 1200)
+            remote_tcp_port = _alloc_local_port(socket.SOCK_STREAM, case_index=35, base=IOS_E2E_TCP_PORT_BASE + 200)
+            remote_servers = [
+                {
+                    "name": "remote-admin-http",
+                    "listen": {"bind": "127.0.0.1", "port": remote_tcp_port, "protocol": "tcp"},
+                    "target": {"host": "127.0.0.1", "port": extension_admin_port, "protocol": "tcp"},
+                }
+            ]
+
+            bridge_server = ObstacleBridgeClient(
+                _myudp_secure_link_compress_server_config(myudp_port, admin_port=server_admin_port)
+            )
+            provider_configuration = _build_myudp_extension_provider_configuration(
+                myudp_port=myudp_port,
+                swift_bind_port=swift_bind_port,
+                swift_peer_port=swift_peer_port,
+                own_servers=[],
+                remote_servers=remote_servers,
+                admin_web=True,
+                admin_web_bind="127.0.0.1",
+                admin_web_port=extension_admin_port,
+                admin_web_auth_disable=True,
+                tunnel_address="192.168.106.18",
+                included_routes=["192.168.106.16/30"],
+                profile_id="ios-extension-shim-myudp-remote-tcp-e2e",
+                display_name="iOS Extension Shim myUDP Remote TCP E2E",
+            )
+            start_result: dict[str, object] | None = None
+            stop_result: dict[str, object] | None = None
+            try:
+                await bridge_server.start()
+                start_result = ipserver_extension.handle_message(
+                    {
+                        "command": "start_embedded_webadmin",
+                        "provider_configuration": provider_configuration,
+                    }
+                )
+                assert start_result["ok"] is True, start_result
+
+                await _wait_client_peer_secure_link_state(
+                    bridge_server,
+                    transport="myudp",
+                    expected_state="authenticated",
+                    authenticated=True,
+                    timeout=12.0,
+                )
+                await _wait_tcp_listener_ready("127.0.0.1", remote_tcp_port)
+
+                status_code, status_text = await _probe_http_get("127.0.0.1", remote_tcp_port, "/api/status")
+                assert status_code == 200
+                status_doc = json.loads(status_text)
+                assert "admin_ui" in status_doc or "build" in status_doc, status_doc
+
+                root_code, root_html = await _probe_http_get("127.0.0.1", remote_tcp_port, "/")
+                assert root_code == 200
+                assert "ObstacleBridge" in root_html or "Admin Web" in root_html
+
+                burst_results = await asyncio.gather(
+                    _probe_http_get("127.0.0.1", remote_tcp_port, "/api/status"),
+                    _probe_http_get("127.0.0.1", remote_tcp_port, "/api/meta"),
+                    _probe_http_get("127.0.0.1", remote_tcp_port, "/api/connections"),
+                    _probe_http_get("127.0.0.1", remote_tcp_port, "/api/peers"),
+                    _probe_http_get("127.0.0.1", remote_tcp_port, "/"),
+                    _probe_http_get("127.0.0.1", remote_tcp_port, "/api/status"),
+                )
+                for path, (code, text) in zip(
+                    ["/api/status", "/api/meta", "/api/connections", "/api/peers", "/", "/api/status"],
+                    burst_results,
+                    strict=False,
+                ):
+                    assert code == 200, (path, code, text)
+                burst_status = json.loads(burst_results[0][1])
+                burst_meta = json.loads(burst_results[1][1])
+                burst_connections = json.loads(burst_results[2][1])
+                burst_peers = json.loads(burst_results[3][1])
+                burst_root = burst_results[4][1]
+                assert "admin_ui" in burst_status or "build" in burst_status, burst_status
+                assert "build" in burst_meta or "admin_web_name" in burst_meta, burst_meta
+                assert "counts" in burst_connections, burst_connections
+                assert "peers" in burst_peers, burst_peers
+                assert "ObstacleBridge" in burst_root or "Admin Web" in burst_root
+
+                await _wait_client_peer_secure_link_state(
+                    bridge_server,
+                    transport="myudp",
+                    expected_state="authenticated",
+                    authenticated=True,
+                    timeout=6.0,
+                )
+            finally:
+                if ipserver_extension._CONTROLLER is not None:
+                    stop_result = ipserver_extension.handle_message({"command": "disconnect_profile"})
+                    ipserver_extension._CONTROLLER = None
+                with contextlib.suppress(asyncio.CancelledError):
+                    await bridge_server.stop()
 
             assert stop_result is not None
             assert stop_result["ok"] is True, stop_result

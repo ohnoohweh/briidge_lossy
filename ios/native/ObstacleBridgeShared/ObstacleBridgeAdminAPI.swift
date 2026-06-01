@@ -18,6 +18,10 @@ protocol ObstacleBridgeAdminAPIStateProvider: AnyObject {
     func adminRequestReconnect(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse
     func adminRequestShutdown(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse
     func adminLogLines(limit: Int) -> [String]
+    func adminOnboardingConnectionProfiles() -> [[String: Any]]
+    func adminOnboardingBlueprints() -> [[String: Any]]
+    func adminOnboardingInviteGenerate(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse
+    func adminOnboardingInvitePreview(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse
     func adminRequestRestart() -> [String: Any]
     func adminRequestReconnect() -> [String: Any]
     func adminRequestShutdown() -> [String: Any]
@@ -130,6 +134,30 @@ extension ObstacleBridgeAdminAPIStateProvider {
         return []
     }
 
+    func adminOnboardingConnectionProfiles() -> [[String: Any]] {
+        []
+    }
+
+    func adminOnboardingBlueprints() -> [[String: Any]] {
+        []
+    }
+
+    func adminOnboardingInviteGenerate(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        _ = request
+        return ObstacleBridgeAdminAPI.jsonResponse([
+            "ok": false,
+            "error": "invite generation unsupported",
+        ], statusLine: "HTTP/1.1 400 Bad Request")
+    }
+
+    func adminOnboardingInvitePreview(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        _ = request
+        return ObstacleBridgeAdminAPI.jsonResponse([
+            "ok": false,
+            "error": "invite preview unsupported",
+        ], statusLine: "HTTP/1.1 400 Bad Request")
+    }
+
     func adminRequestRestart() -> [String: Any] {
         ["ok": false, "error": "restart unsupported"]
     }
@@ -169,6 +197,10 @@ enum ObstacleBridgeAdminAPI {
         let normalizedMethod = request.method.uppercased()
         let normalizedPath = request.path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? request.path
         switch (normalizedMethod, normalizedPath) {
+        case ("GET", "/api/status"):
+            return jsonResponse(provider.adminStatusSnapshot())
+        case ("GET", "/api/bootstrap"):
+            return jsonResponse(provider.adminMetaSnapshot()["bootstrap_state"] ?? [:])
         case ("GET", "/api/auth/state"):
             return jsonResponse(provider.adminAuthState(headers: request.headers))
         case ("GET", "/api/meta"):
@@ -179,6 +211,16 @@ enum ObstacleBridgeAdminAPI {
             return jsonResponse(["peers": provider.adminPeersSnapshot()])
         case ("GET", "/api/config"):
             return jsonResponse(provider.adminConfigSnapshot())
+        case ("GET", "/api/onboarding/connection-profiles"):
+            let profiles = provider.adminOnboardingConnectionProfiles()
+            return jsonResponse(["ok": true, "count": profiles.count, "profiles": profiles])
+        case ("GET", "/api/onboarding/blueprints"):
+            let blueprints = provider.adminOnboardingBlueprints()
+            return jsonResponse(["ok": true, "count": blueprints.count, "blueprints": blueprints])
+        case ("POST", "/api/onboarding/invite/generate"):
+            return provider.adminOnboardingInviteGenerate(request: request)
+        case ("POST", "/api/onboarding/invite/preview"):
+            return provider.adminOnboardingInvitePreview(request: request)
         case ("POST", "/api/config/challenge"):
             return provider.adminConfigChallenge(request: request)
         case ("POST", "/api/config"):

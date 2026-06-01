@@ -1,7 +1,129 @@
+import CryptoKit
 import Foundation
 import Network
 import NetworkExtension
 import Darwin
+
+private enum PacketTunnelProviderOnboardingError: LocalizedError {
+    case invalidArgument(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidArgument(let message):
+            return message
+        }
+    }
+}
+
+private enum PacketTunnelProviderConfigSecretCodec {
+    private static let secretFields: Set<String> = ["admin_web_password", "secure_link_psk"]
+    private static let prefix = "enc:v1:"
+    private static let salt = Data("ObstacleBridge config secret v1".utf8)
+    private static let info = Data("ObstacleBridge config field encryption".utf8)
+    private static let aad = Data("ObstacleBridge cfg secret".utf8)
+
+    static func decryptPayload(_ payload: [String: Any]) throws -> [String: Any] {
+        guard let decoded = try transformSecrets(in: payload, transform: decryptSecret) as? [String: Any] else {
+            return payload
+        }
+        return decoded
+    }
+
+    static func encryptPayload(_ payload: [String: Any]) throws -> [String: Any] {
+        guard let encoded = try transformSecrets(in: payload, transform: encryptSecret) as? [String: Any] else {
+            return payload
+        }
+        return encoded
+    }
+
+    private static func transformSecrets(in object: Any, transform: (String) throws -> String) throws -> Any {
+        if let dict = object as? [String: Any] {
+            var out: [String: Any] = [:]
+            out.reserveCapacity(dict.count)
+            for (key, value) in dict {
+                if secretFields.contains(key), let stringValue = value as? String {
+                    out[key] = stringValue.isEmpty ? "" : try transform(stringValue)
+                } else {
+                    out[key] = try transformSecrets(in: value, transform: transform)
+                }
+            }
+            return out
+        }
+        if let list = object as? [Any] {
+            return try list.map { try transformSecrets(in: $0, transform: transform) }
+        }
+        return object
+    }
+
+    private static func encryptSecret(_ value: String) throws -> String {
+        let key = derivedKey()
+        let nonceData = Data((0..<12).map { _ in UInt8.random(in: 0...255) })
+        let nonce = try ChaChaPoly.Nonce(data: nonceData)
+        let sealed = try ChaChaPoly.seal(Data(value.utf8), using: key, nonce: nonce, authenticating: aad)
+        return prefix + urlSafeBase64Encode(sealed.combined)
+    }
+
+    private static func decryptSecret(_ value: String) throws -> String {
+        guard value.hasPrefix(prefix) else {
+            return value
+        }
+        let encoded = String(value.dropFirst(prefix.count))
+        let combined = try urlSafeBase64Decode(encoded)
+        let sealed = try ChaChaPoly.SealedBox(combined: combined)
+        let plaintext = try ChaChaPoly.open(sealed, using: derivedKey(), authenticating: aad)
+        guard let stringValue = String(data: plaintext, encoding: .utf8) else {
+            throw PacketTunnelProviderOnboardingError.invalidArgument("failed to decode config secret")
+        }
+        return stringValue
+    }
+
+    private static func derivedKey() -> SymmetricKey {
+        let seed = configSecretSeed()
+        guard let derived = ObstacleBridgeNativeCrypto.hkdfSHA256Salt(
+            salt as NSData,
+            info: info as NSData,
+            keyMaterial: seed as NSData,
+            lengthValue: 32
+        ) as Data? else {
+            return SymmetricKey(data: seed)
+        }
+        return SymmetricKey(data: derived)
+    }
+
+    private static func configSecretSeed() -> Data {
+        var hostname = [CChar](repeating: 0, count: Int(MAXHOSTNAMELEN) + 1)
+        if gethostname(&hostname, hostname.count) == 0,
+           let text = String(validatingUTF8: hostname),
+           !text.isEmpty {
+            return Data(text.utf8)
+        }
+        let fallback = ProcessInfo.processInfo.hostName
+        if !fallback.isEmpty {
+            return Data(fallback.utf8)
+        }
+        return Data("obstacle-bridge".utf8)
+    }
+
+    private static func urlSafeBase64Encode(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+    }
+
+    private static func urlSafeBase64Decode(_ text: String) throws -> Data {
+        var normalized = text
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let remainder = normalized.count % 4
+        if remainder != 0 {
+            normalized += String(repeating: "=", count: 4 - remainder)
+        }
+        guard let data = Data(base64Encoded: normalized) else {
+            throw PacketTunnelProviderOnboardingError.invalidArgument("invalid base64 config secret")
+        }
+        return data
+    }
+}
 
 @objc(PacketTunnelProvider)
 class PacketTunnelProvider: NEPacketTunnelProvider {
@@ -37,6 +159,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var sharedOverlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
     private var sharedWebSocketOverlayRuntime: ObstacleBridgeWebSocketOverlayRuntime?
     private var sharedTcpOverlayRuntime: ObstacleBridgeTcpOverlayRuntime?
+    private var controlServer: ObstacleBridgeWebAdminServer?
     private var providerStartedAt = Date().timeIntervalSince1970
 
     override init() {
@@ -315,6 +438,20 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     )
                     self.swiftSimpleUDPPeerBridge = bridge
                     bridge.start()
+                    do {
+                        try self.startControlServer()
+                    } catch {
+                        self.recordNativeEvent(
+                            "startTunnel_admin_web_failed",
+                            fields: ["error": error.localizedDescription]
+                        )
+                        self.updateProviderState(
+                            "startTunnel_admin_web_failed",
+                            extraFields: ["error": error.localizedDescription]
+                        )
+                        completionHandler(error)
+                        return
+                    }
                     self.recordNativeEvent(
                         swiftSettings.runtimeMode == "swift_udp"
                             ? "startTunnel_swift_udp_bridge_started"
@@ -402,6 +539,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         )
         heartbeatTimer?.cancel()
         heartbeatTimer = nil
+        controlServer?.stop()
+        controlServer = nil
         swiftSimpleUDPPeerBridge?.stop()
         swiftSimpleUDPPeerBridge = nil
         packetPumpRunning = false
@@ -623,14 +762,25 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         return containerURL.appendingPathComponent("config/ObstacleBridge.cfg", isDirectory: false)
     }
 
+    private func sharedAdminWebDirectoryURL() -> URL? {
+        guard let containerURL = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.com.obstaclebridge.shared"
+        ) else {
+            return nil
+        }
+        let directory = containerURL.appendingPathComponent("admin_web", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
     private func loadSharedRuntimeConfigJSON() -> [String: Any]? {
         guard let url = runtimeConfigURL(),
               let data = try? Data(contentsOf: url),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+              let rawJSON = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
             return nil
         }
-        return json
+        return (try? PacketTunnelProviderConfigSecretCodec.decryptPayload(rawJSON)) ?? rawJSON
     }
 
     private func swiftSimpleUDPPeerSettings(
@@ -754,6 +904,91 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
+    private func startControlServer() throws {
+        controlServer?.stop()
+        let runtimeConfig = adminRuntimeConfigPayload() ?? [:]
+        let bindHost = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_bind"]) ?? "127.0.0.1"
+        let port = ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["admin_web_port"]) ?? 18080
+        let server = try ObstacleBridgeWebAdminServer(
+            bindHost: bindHost,
+            port: port,
+            fallbackIndexTitle: "ObstacleBridge iOS Network Extension",
+            fallbackIndexSubtitle: "Network-extension hosted WebAdmin backed directly by the packet-tunnel runtime.",
+            statusProvider: { [weak self] in
+                self?.adminStatusSnapshot() ?? ["ok": false, "error": "provider unavailable"]
+            },
+            apiProvider: { [weak self] method, path, headers, body in
+                guard let self else {
+                    return nil
+                }
+                let request = ObstacleBridgeAdminAPIRequest(method: method, path: path, headers: headers, body: body)
+                return ObstacleBridgeAdminAPI.response(for: request, provider: self)
+            },
+            staticFileProvider: { [weak self] path in
+                self?.staticFileResponse(path: path)
+            },
+            liveTopicProvider: { [weak self] topic in
+                guard let self else {
+                    return nil
+                }
+                return ObstacleBridgeAdminAPI.liveTopicPayload(topic: topic, provider: self)
+            },
+            authRequiredProvider: { [weak self] in
+                self?.adminAuthRequired() ?? false
+            },
+            authenticatedProvider: { [weak self] headers in
+                self?.adminIsAuthenticated(headers: headers) ?? false
+            }
+        )
+        controlServer = server
+        server.start()
+        recordNativeEvent(
+            "admin_web_started",
+            fields: [
+                "bind_host": bindHost,
+                "port": port,
+                "admin_web_dir": sharedAdminWebDirectoryURL()?.path ?? "",
+            ]
+        )
+    }
+
+    private func staticFileResponse(path: String) -> (contentType: String, body: Data)? {
+        let cleanedPath = normalizeStaticPath(path)
+        guard let adminWebDirectory = sharedAdminWebDirectoryURL() else {
+            return nil
+        }
+        let fileURL = adminWebDirectory.appendingPathComponent(cleanedPath, isDirectory: false)
+        guard fileURL.path.hasPrefix(adminWebDirectory.path),
+              let data = try? Data(contentsOf: fileURL) else {
+            return nil
+        }
+        return (contentType(for: fileURL.pathExtension), data)
+    }
+
+    private func normalizeStaticPath(_ rawPath: String) -> String {
+        let basePath = rawPath.split(separator: "?", maxSplits: 1).first.map(String.init) ?? "/"
+        let candidate = basePath == "/" ? "index.html" : String(basePath.drop(while: { $0 == "/" }))
+        let components = candidate.split(separator: "/").filter { $0 != "." && $0 != ".." }
+        return components.isEmpty ? "index.html" : components.joined(separator: "/")
+    }
+
+    private func contentType(for pathExtension: String) -> String {
+        switch pathExtension.lowercased() {
+        case "html":
+            return "text/html; charset=utf-8"
+        case "js":
+            return "application/javascript; charset=utf-8"
+        case "css":
+            return "text/css; charset=utf-8"
+        case "json":
+            return "application/json; charset=utf-8"
+        case "svg":
+            return "image/svg+xml"
+        default:
+            return "application/octet-stream"
+        }
+    }
+
     private static func packetflowConnectorMode(from payload: [String: Any]) -> String? {
         ObstacleBridgeRuntimeConfig.packetflowConnectorMode(from: payload)
     }
@@ -819,14 +1054,19 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
     func adminStatusSnapshot() -> [String: Any] {
         let bridgeSnapshot = adminBridgeSnapshot()
         let startedAt = adminStartedAt(bridgeSnapshot: bridgeSnapshot)
+        let runtimeConfig = adminRuntimeConfigPayload() ?? [:]
         var payload: [String: Any] = [
             "runtime_owner": "IPServer Network Extension",
             "runtime_mode": runtimeMode,
+            "admin_web_name": ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_name"]) ?? "",
+            "admin_ui": adminUIPayload(runtimeConfig: runtimeConfig),
+            "security_advisor": securityAdvisorPayload(runtimeConfig: runtimeConfig),
             "started_at": startedAt,
             "uptime_sec": adminUptimeSeconds(startedAt: startedAt),
             "packet_pump_running": packetPumpRunning,
             "provider_state_update_count": providerStateUpdateCount,
             "heartbeat_tick_count": heartbeatTickCount,
+            "bootstrap_state": sharedOverlayBootstrapState,
             "bridge_state": ObstacleBridgePacketFlowBridge.bridgeStateSnapshot(),
             "shared_overlay_bootstrap_state": sharedOverlayBootstrapState,
             "transport_runtime": adminTransportRuntimeSnapshot(bridgeSnapshot: bridgeSnapshot),
@@ -881,9 +1121,13 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
     func adminMetaSnapshot() -> [String: Any] {
         let bridgeSnapshot = adminBridgeSnapshot()
         let startedAt = adminStartedAt(bridgeSnapshot: bridgeSnapshot)
+        let runtimeConfig = adminRuntimeConfigPayload() ?? [:]
         return [
             "runtime_owner": "IPServer Network Extension",
             "runtime_mode": runtimeMode,
+            "admin_web_name": ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_name"]) ?? "",
+            "admin_ui": adminUIPayload(runtimeConfig: runtimeConfig),
+            "security_advisor": securityAdvisorPayload(runtimeConfig: runtimeConfig),
             "started_at": startedAt,
             "uptime_sec": adminUptimeSeconds(startedAt: startedAt),
             "bootstrap_state": sharedOverlayBootstrapState,
@@ -904,6 +1148,114 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "config": ObstacleBridgeRuntimeConfig.maskedConfigSnapshot(adminRuntimeConfigPayload() ?? [:]),
             "schema": ObstacleBridgeRuntimeConfig.configSchemaSnapshot(),
         ]
+    }
+
+    func adminOnboardingConnectionProfiles() -> [[String: Any]] {
+        ObstacleBridgeOnboarding.connectionProfiles(runtimeConfig: adminRuntimeConfigPayload() ?? [:])
+    }
+
+    func adminOnboardingBlueprints() -> [[String: Any]] {
+        []
+    }
+
+    func adminOnboardingInviteGenerate(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        guard request.method.uppercased() == "POST" else {
+            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
+        }
+        guard let body = request.body,
+              let object = try? JSONSerialization.jsonObject(with: body),
+              let payload = object as? [String: Any] else {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": "invalid JSON body",
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+        let profiles = adminOnboardingConnectionProfiles()
+        let connectionID = (payload["connection_id"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedConnection: [String: Any]?
+        if profiles.count > 1 && connectionID.isEmpty {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": "multiple connection profiles available; select connection_id",
+                "profiles": profiles,
+            ], statusLine: "HTTP/1.1 409 Conflict")
+        }
+        if !connectionID.isEmpty {
+            selectedConnection = profiles.first { String(describing: $0["id"] ?? "") == connectionID }
+            if selectedConnection == nil {
+                return ObstacleBridgeAdminAPI.jsonResponse([
+                    "ok": false,
+                    "error": "unknown connection_id: \(connectionID)",
+                ], statusLine: "HTTP/1.1 400 Bad Request")
+            }
+        } else {
+            selectedConnection = profiles.first
+        }
+        let runtimeConfig = adminRuntimeConfigPayload() ?? [:]
+        let own = ObstacleBridgeOnboarding.sanitizeServices(payload["own_servers"] ?? runtimeConfig["own_servers"])
+        let remote = ObstacleBridgeOnboarding.sanitizeServices(payload["remote_servers"] ?? runtimeConfig["remote_servers"])
+        let preview = ObstacleBridgeOnboarding.tokenPayload(
+            runtimeConfig: runtimeConfig,
+            connection: selectedConnection ?? [:],
+            ownServices: own,
+            remoteServices: remote,
+            encryptSecrets: PacketTunnelProviderConfigSecretCodec.encryptPayload
+        )
+        do {
+            let token = try ObstacleBridgeOnboarding.encodeToken(preview)
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": true,
+                "invite_token": token,
+                "preview": preview,
+            ])
+        } catch {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": "failed to encode invite token",
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+    }
+
+    func adminOnboardingInvitePreview(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        guard request.method.uppercased() == "POST" else {
+            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
+        }
+        guard let body = request.body,
+              let object = try? JSONSerialization.jsonObject(with: body),
+              let payload = object as? [String: Any] else {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": "invalid JSON body",
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+        let token = (payload["invite_token"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": "invite_token is required",
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+        do {
+            let decoded = try ObstacleBridgeOnboarding.decodeToken(token)
+            var preview = decoded
+            if let psk = preview["secure_link_psk"] as? String, !psk.isEmpty {
+                preview["secure_link_psk"] = "***hidden***"
+                preview["secure_link_psk_present"] = true
+            }
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": true,
+                "preview": preview,
+                "suggested_updates": ObstacleBridgeOnboarding.updates(
+                    from: decoded,
+                    decryptSecrets: PacketTunnelProviderConfigSecretCodec.decryptPayload
+                ),
+            ])
+        } catch {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": error.localizedDescription,
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
     }
 
     func adminUpdateConfig(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
@@ -969,6 +1321,130 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "reconnect_requested": true,
             "reconnect_supported": true,
         ]
+    }
+
+    private func adminRuntimeDependenciesPayload() -> [String: Any] {
+        [
+            "ok": true,
+            "missing": [],
+            "install_hint": "",
+        ]
+    }
+
+    private func adminUIPayload(runtimeConfig: [String: Any]) -> [String: Any] {
+        [
+            "home_tab_enabled": true,
+            "landing_page_enabled": false,
+            "security_advisor_enabled": !(ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_web_security_advisor_disable"]) ?? false),
+            "security_advisor_startup_enabled": !(ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_web_security_advisor_startup_disable"]) ?? false),
+            "first_tab": ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_first_tab"]) ?? "home",
+            "first_start_detected": false,
+            "config_file_state": "unknown",
+            "platform": "ios",
+            "runtime_dependencies": adminRuntimeDependenciesPayload(),
+        ]
+    }
+
+    private func securityAdvisorPayload(runtimeConfig: [String: Any]) -> [String: Any] {
+        let enabled = !(ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_web_security_advisor_disable"]) ?? false)
+        let bind = (ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_bind"]) ?? "127.0.0.1")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let adminLocalOnly = Self.isLoopbackHost(bind)
+        let secureMode = (ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["secure_link_mode"]) ?? "off")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let securePSK = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["secure_link_psk"]) ?? ""
+        let authDisabled = ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_web_auth_disable"]) ?? false
+        var findings: [[String: Any]] = []
+        if enabled {
+            if (ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_web"]) ?? false), authDisabled {
+                let adminMessage = adminLocalOnly
+                    ? "Admin Web password protection is recommended even on localhost-only setups. Enable admin authentication in the configuration unless you intentionally want friction-free local access."
+                    : "Admin Web is reachable beyond localhost and admin authentication is disabled in the configuration. This should be treated as a warning. Enable admin authentication or bind Admin Web to localhost."
+                findings.append([
+                    "id": "admin_auth_disabled",
+                    "severity": adminLocalOnly ? "recommended" : "warning",
+                    "title": "Protect Admin Web",
+                    "message": adminMessage,
+                    "action_label": "Open Configuration",
+                    "action_target": "configuration",
+                ])
+            }
+            if ["", "off", "none"].contains(secureMode) {
+                let message = adminLocalOnly
+                    ? "SecureLink is currently disabled. That can be acceptable for localhost-only or lab-style setups, but enabling SecureLink is still recommended."
+                    : "This node is not localhost-only and SecureLink is currently disabled. Running without SecureLink should be treated as a warning. Start with PSK for quick protection or move to certificates for deployment-grade trust."
+                findings.append([
+                    "id": "secure_link_disabled",
+                    "severity": adminLocalOnly ? "recommended" : "warning",
+                    "title": "Enable SecureLink",
+                    "message": message,
+                    "action_label": "Open Secure-Link",
+                    "action_target": "secure-link",
+                ])
+            } else if secureMode == "psk" {
+                if securePSK.trimmingCharacters(in: .whitespacesAndNewlines).count < 12 {
+                    findings.append([
+                        "id": "secure_link_psk_weak",
+                        "severity": "recommended",
+                        "title": "Strengthen PSK",
+                        "message": "SecureLink PSK is enabled, but the configured secret looks short. Use a stronger shared secret for better protection.",
+                        "action_label": "Open Configuration",
+                        "action_target": "configuration",
+                    ])
+                }
+                findings.append([
+                    "id": "secure_link_cert_followup",
+                    "severity": "informational",
+                    "title": "Plan Certificate Trust",
+                    "message": "PSK is a good quick-start protection mode. For longer-lived deployments, certificate-based SecureLink provides a stronger operational trust model.",
+                    "action_label": "Open Secure-Link",
+                    "action_target": "secure-link",
+                ])
+            }
+        }
+        let highest: String
+        if findings.contains(where: { String(describing: $0["severity"] ?? "") == "critical" }) {
+            highest = "critical"
+        } else if findings.contains(where: { String(describing: $0["severity"] ?? "") == "warning" }) {
+            highest = "warning"
+        } else if findings.contains(where: { String(describing: $0["severity"] ?? "") == "recommended" }) {
+            highest = "recommended"
+        } else {
+            highest = "informational"
+        }
+        let summary: String
+        if !enabled {
+            summary = "Security advisor disabled."
+        } else if findings.isEmpty {
+            summary = "Current settings look reasonably hardened for this first implementation slice."
+        } else if highest == "critical" {
+            summary = "Security advisor found settings that should be addressed before wider exposure."
+        } else if highest == "warning" {
+            summary = "Security advisor found warning-level hardening issues for this node."
+        } else if highest == "recommended" {
+            summary = "Security advisor found recommended hardening steps for this node."
+        } else {
+            summary = "Security advisor found optional follow-up improvements."
+        }
+        return [
+            "enabled": enabled,
+            "summary": summary,
+            "highest_severity": highest,
+            "findings": findings,
+        ]
+    }
+
+    private static func isLoopbackHost(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return false
+        }
+        let lowered = trimmed.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        if lowered == "localhost" || lowered == "ip6-localhost" {
+            return true
+        }
+        return lowered == "127.0.0.1" || lowered == "::1"
     }
 
     private func adminRuntimeConfigPayload() -> [String: Any]? {
@@ -1060,7 +1536,8 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         }
         let directoryURL = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+        let persistedPayload = try PacketTunnelProviderConfigSecretCodec.encryptPayload(payload)
+        let data = try JSONSerialization.data(withJSONObject: persistedPayload, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: url, options: [.atomic])
     }
 
@@ -1708,6 +2185,7 @@ private final class SwiftSimpleUDPPeerBridge {
         if settings.runtimeMode == "swift_udp" {
             startOverlayTimers()
             startTCPServices()
+            primeOverlayTransportConnection()
             sendInitialIdleProbe()
         }
 
@@ -1743,6 +2221,7 @@ private final class SwiftSimpleUDPPeerBridge {
         if settings.runtimeMode == "swift_udp" {
             startOverlayTimers()
             startTCPServices()
+            primeOverlayTransportConnection()
             sendInitialIdleProbe()
         }
     }
@@ -2174,6 +2653,25 @@ private final class SwiftSimpleUDPPeerBridge {
         } catch {
             provider?.recordPacketBridgeEvent(
                 "swift_udp_idle_probe_failed",
+                fields: ["error": error.localizedDescription]
+            )
+        }
+    }
+
+    private func primeOverlayTransportConnection() {
+        guard settings.runtimeMode == "swift_udp",
+              let adapter = overlayLayerTransportAdapter,
+              let runtime = overlayRuntime else {
+            return
+        }
+        do {
+            let snapshot = try adapter.handleTransportConnected()
+            for frame in snapshot.emittedFrames {
+                try sendOverlayTransportPayload(frame, runtime: runtime)
+            }
+        } catch {
+            provider?.recordPacketBridgeEvent(
+                "swift_udp_transport_prime_failed",
                 fields: ["error": error.localizedDescription]
             )
         }

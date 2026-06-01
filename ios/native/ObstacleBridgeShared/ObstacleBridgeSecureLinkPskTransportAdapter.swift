@@ -28,6 +28,32 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         runtime.statusSnapshot()
     }
 
+    func handleTransportConnected() throws -> OutboundSnapshot {
+        let status = runtime.statusSnapshot()
+        guard status.clientMode, !status.authenticated else {
+            return OutboundSnapshot(
+                emittedFrames: [],
+                queuedPayloads: pendingPayloads.count,
+                authenticated: status.authenticated,
+                sessionID: status.sessionID
+            )
+        }
+
+        var emittedFrames: [Data] = []
+        if status.sessionID == 0 || status.authFailCode != 0 {
+            let handshake = try runtime.beginClientHandshake()
+            emittedFrames.append(contentsOf: handshake.emittedFrames)
+        }
+
+        let updatedStatus = runtime.statusSnapshot()
+        return OutboundSnapshot(
+            emittedFrames: emittedFrames,
+            queuedPayloads: pendingPayloads.count,
+            authenticated: updatedStatus.authenticated,
+            sessionID: updatedStatus.sessionID
+        )
+    }
+
     func handleOutboundPayload(_ payload: Data) throws -> OutboundSnapshot {
         let status = runtime.statusSnapshot()
         if status.authenticated {
@@ -41,15 +67,11 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         }
 
         pendingPayloads.append(payload)
-        var emittedFrames: [Data] = []
-        if status.clientMode && (status.sessionID == 0 || status.authFailCode != 0) {
-            let handshake = try runtime.beginClientHandshake()
-            emittedFrames.append(contentsOf: handshake.emittedFrames)
-        }
+        let primed = try handleTransportConnected()
 
         let updatedStatus = runtime.statusSnapshot()
         return OutboundSnapshot(
-            emittedFrames: emittedFrames,
+            emittedFrames: primed.emittedFrames,
             queuedPayloads: pendingPayloads.count,
             authenticated: updatedStatus.authenticated,
             sessionID: updatedStatus.sessionID

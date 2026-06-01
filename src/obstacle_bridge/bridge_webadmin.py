@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-from . import bridge as _bridge
+from ._bridge_import import export_bridge_globals
 
-globals().update({
-    key: value
-    for key, value in _bridge.__dict__.items()
-    if key not in {"__builtins__", "__name__", "__package__", "__file__", "__cached__", "__doc__", "__spec__", "__loader__"}
-})
+_bridge = export_bridge_globals(globals())
 
 class AdminWebUI:
     AUTH_CHALLENGE_TTL_SEC = 90

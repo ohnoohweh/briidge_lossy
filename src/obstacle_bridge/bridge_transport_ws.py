@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 from ctypes import wintypes
 
-from . import bridge as _bridge
+from ._bridge_import import resolve_bridge_module
 from .bridge_transport_common import (
     StreamRTT,
     StreamRTTRuntime,
@@ -31,6 +31,8 @@ from .bridge_transport_common import (
     _resolve_cli_peer,
     _strip_brackets,
 )
+
+_bridge = resolve_bridge_module()
 
 format_stream_endpoints = _bridge.format_stream_endpoints
 ISession = _bridge.ISession

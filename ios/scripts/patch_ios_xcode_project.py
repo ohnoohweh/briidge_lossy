@@ -42,14 +42,34 @@ IPSERVER_SHARED_SWIFT_SOURCES = [
     ("71C500000000000000000011", "71C500000000000000000111", "ObstacleBridgeWebSocketPayloadCodec.swift"),
     ("71C500000000000000000012", "71C500000000000000000112", "ObstacleBridgeWebSocketOverlayRuntime.swift"),
     ("71C500000000000000000013", "71C500000000000000000113", "ObstacleBridgeTcpOverlayRuntime.swift"),
+    ("71C500000000000000000014", "71C500000000000000000114", "ObstacleBridgeWebAdminServer.swift"),
+    ("71C500000000000000000015", "71C500000000000000000115", "ObstacleBridgeOnboarding.swift"),
 ]
 
 APP_SHARED_SWIFT_SOURCES = [
-    ("71C600000000000000000001", "71C600000000000000000101", "ObstacleBridgeAdminAPI.swift"),
-    ("71C600000000000000000002", "71C600000000000000000102", "ObstacleBridgeChannelMuxCodec.swift"),
-    ("71C600000000000000000003", "71C600000000000000000103", "ObstacleBridgeRuntimeConfig.swift"),
-    ("71C600000000000000000004", "71C600000000000000000104", "ObstacleBridgeWebAdminServer.swift"),
-    ("71C600000000000000000005", "71C600000000000000000105", "ObstacleBridgeOverlayStackPlanner.swift"),
+    ("71C610000000000000000001", "71C610000000000000000101", "ObstacleBridgeSecureLinkPskCodec.swift"),
+    ("71C610000000000000000002", "71C610000000000000000102", "ObstacleBridgeSecureLinkPskRuntime.swift"),
+    ("71C610000000000000000003", "71C610000000000000000103", "ObstacleBridgeSecureLinkPskTransportAdapter.swift"),
+    ("71C610000000000000000004", "71C610000000000000000104", "ObstacleBridgeOverlayLayerTransportAdapter.swift"),
+    ("71C610000000000000000005", "71C610000000000000000105", "ObstacleBridgeChannelMuxUdpRuntime.swift"),
+    ("71C610000000000000000006", "71C610000000000000000106", "ObstacleBridgeChannelMuxTcpRuntime.swift"),
+    ("71C610000000000000000007", "71C610000000000000000107", "ObstacleBridgeChannelMuxTCPTransportOwner.swift"),
+    ("71C610000000000000000008", "71C610000000000000000108", "ObstacleBridgeUdpOverlayCodec.swift"),
+    ("71C610000000000000000009", "71C610000000000000000109", "ObstacleBridgeUdpOverlaySessionCodec.swift"),
+    ("71C61000000000000000000A", "71C61000000000000000010A", "ObstacleBridgeUdpOverlayPeerRuntime.swift"),
+    ("71C61000000000000000000B", "71C61000000000000000010B", "ObstacleBridgeUdpOverlayTransportOwner.swift"),
+    ("71C61000000000000000000C", "71C61000000000000000010C", "ObstacleBridgeCompressLayerRuntime.swift"),
+    ("71C61000000000000000000D", "71C61000000000000000010D", "ObstacleBridgeWebSocketPayloadCodec.swift"),
+    ("71C61000000000000000000E", "71C61000000000000000010E", "ObstacleBridgeWebSocketOverlayRuntime.swift"),
+    ("71C61000000000000000000F", "71C61000000000000000010F", "ObstacleBridgeTcpOverlayRuntime.swift"),
+    ("71C610000000000000000010", "71C610000000000000000110", "ObstacleBridgeTcpOverlayTransportOwner.swift"),
+    ("71C610000000000000000012", "71C610000000000000000112", "ObstacleBridgeOnboarding.swift"),
+]
+
+APP_SHARED_STALE_DUPLICATE_IDS = [
+    ("71C600000000000000000007", "71C600000000000000000107", "ObstacleBridgeRuntimeConfig.swift"),
+    ("71C600000000000000000008", "71C600000000000000000108", "ObstacleBridgeWebAdminServer.swift"),
+    ("71C600000000000000000011", "71C600000000000000000111", "ObstacleBridgeOverlayStackPlanner.swift"),
 ]
 
 
@@ -131,6 +151,35 @@ def add_app_native_crypto_source(text: str) -> str:
 
 
 def add_app_shared_swift_sources(text: str) -> str:
+    for build_id, file_id, name in APP_SHARED_STALE_DUPLICATE_IDS:
+        text = re.sub(
+            rf'^\t\t{build_id} /\* {re.escape(name)} in Sources \*/ = \{{isa = PBXBuildFile; fileRef = {file_id} /\* {re.escape(name)} \*/; \}};\n',
+            "",
+            text,
+            flags=re.MULTILINE,
+        )
+        text = re.sub(
+            rf'^\t\t{file_id} /\* {re.escape(name)} \*/ = \{{isa = PBXFileReference; lastKnownFileType = sourcecode\.swift; name = {re.escape(name)}; path = "\.\./\.\./\.\./\.\./native/ObstacleBridgeShared/{re.escape(name)}"; sourceTree = SOURCE_ROOT; \}};\n',
+            "",
+            text,
+            flags=re.MULTILINE,
+        )
+
+    stale_names = [name for _, _, name in APP_SHARED_SWIFT_SOURCES]
+    for name in stale_names:
+        text = re.sub(
+            rf'^\t\t71C600000000000000000[0-9A-F]{{3}} /\* {re.escape(name)} in Sources \*/ = \{{isa = PBXBuildFile; fileRef = 71C6000000000000000001[0-9A-F]{{2}} /\* {re.escape(name)} \*/; \}};\n',
+            "",
+            text,
+            flags=re.MULTILINE,
+        )
+        text = re.sub(
+            rf'^\t\t71C6000000000000000001[0-9A-F]{{2}} /\* {re.escape(name)} \*/ = \{{isa = PBXFileReference; lastKnownFileType = sourcecode\.swift; name = {re.escape(name)}; path = "\.\./\.\./\.\./\.\./native/ObstacleBridgeShared/{re.escape(name)}"; sourceTree = SOURCE_ROOT; \}};\n',
+            "",
+            text,
+            flags=re.MULTILINE,
+        )
+
     for build_id, file_id, name in APP_SHARED_SWIFT_SOURCES:
         text = insert_before(
             text,
@@ -159,6 +208,20 @@ def add_app_shared_swift_sources(text: str) -> str:
         raise ValueError("ObstacleBridge Sources build phase block not found")
 
     body = match.group("body")
+    for build_id, _, name in APP_SHARED_STALE_DUPLICATE_IDS:
+        body = re.sub(
+            rf'^\t\t\t\t{build_id} /\* {re.escape(name)} in Sources \*/,\n',
+            "",
+            body,
+            flags=re.MULTILINE,
+        )
+    for _, _, name in APP_SHARED_SWIFT_SOURCES:
+        body = re.sub(
+            rf'^\t\t\t\t71C600000000000000000[0-9A-F]{{3}} /\* {re.escape(name)} in Sources \*/,\n',
+            "",
+            body,
+            flags=re.MULTILINE,
+        )
     for build_id, _, name in APP_SHARED_SWIFT_SOURCES:
         entry = f"\t\t\t\t{build_id} /* {name} in Sources */,\n"
         if entry not in body:

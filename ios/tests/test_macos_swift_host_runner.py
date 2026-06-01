@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -17,6 +18,7 @@ import contextlib
 import urllib.error
 import urllib.request
 import zlib
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -24,6 +26,8 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from obstacle_bridge.bridge import AdminWebUI, CONFIG_SECRET_PREFIX, _decrypt_config_secret, _encrypt_config_secret
+from obstacle_bridge.core import ObstacleBridgeClient
+from obstacle_bridge.onboarding import encode_invite_token
 
 TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
@@ -37,6 +41,55 @@ SHARED_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeShared"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
 HOST_RUNNER_MAIN_SOURCE = APP_NATIVE_DIR / "ObstacleBridgeHostRunnerMain.swift"
 APP_MAC_RUNNER_SOURCE = APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift"
+
+
+class _AsyncBridgeClientThread:
+    def __init__(self, config: dict) -> None:
+        self.client = ObstacleBridgeClient(config)
+        self._thread: threading.Thread | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._ready = threading.Event()
+
+    def _thread_main(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self._loop = loop
+        self._ready.set()
+        loop.run_forever()
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.close()
+
+    def start(self) -> None:
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._thread_main, name="macos-swift-hostrunner-peer", daemon=True)
+            self._thread.start()
+            self._ready.wait(timeout=5.0)
+        self._submit(self.client.start()).result(timeout=20.0)
+
+    def stop(self) -> None:
+        if self._loop is None:
+            return
+        try:
+            self._submit(self.client.stop()).result(timeout=10.0)
+        finally:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            if self._thread is not None:
+                self._thread.join(timeout=5.0)
+            self._thread = None
+            self._loop = None
+            self._ready.clear()
+
+    def snapshot(self) -> dict:
+        return dict(self.client.snapshot() or {})
+
+    def _submit(self, coro) -> Future:
+        if self._loop is None:
+            raise RuntimeError("bridge client loop not started")
+        return asyncio.run_coroutine_threadsafe(coro, self._loop)
 
 
 def _unused_tcp_port() -> int:
@@ -58,12 +111,14 @@ def _compile_mac_host_runner(binary_path: Path) -> None:
         "-o",
         str(binary_path),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminAPI.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeNativeCrypto.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskTransportAdapter.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeOnboarding.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebAdminServer.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxUdpRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTcpRuntime.swift"),
@@ -170,6 +225,18 @@ def _wait_http_json(url: str, *, timeout_sec: float = 10.0) -> dict:
             last_error = f"{type(exc).__name__}: {exc}"
             time.sleep(0.1)
     raise AssertionError(f"timed out waiting for {url}: {last_error}")
+
+
+def _wait_snapshot_condition(snapshot_getter, predicate, *, timeout_sec: float = 12.0):
+    deadline = time.time() + timeout_sec
+    last_snapshot = None
+    while time.time() < deadline:
+        snapshot = snapshot_getter()
+        last_snapshot = snapshot
+        if predicate(snapshot):
+            return snapshot
+        time.sleep(0.1)
+    raise AssertionError(f"timed out waiting for snapshot condition; last={last_snapshot!r}")
 
 
 def _wait_process_exit(process: subprocess.Popen[str], *, timeout_sec: float = 5.0) -> int:
@@ -542,6 +609,35 @@ class _WrappedTCPOverlayPeer(_TCPOverlayPeer):
         frame = self._seal_secure(4, self._session_id, self._server_tx_counter, wrapped, self._s2c_key)
         self._server_tx_counter += 1
         conn.sendall(_pack_tcp_overlay_payload(frame))
+
+    def recv_secure_mux(self) -> tuple[int, int, int, int, bytes]:
+        conn = self.wait_connected()
+        while not self._stop.is_set():
+            payload = _recv_tcp_overlay_payload(conn)
+            sl_type, session_id, counter, body = self._parse_sl_frame(payload)
+            if sl_type == 1:
+                if len(body) < 34 or body[32] != 1:
+                    raise AssertionError("invalid client hello")
+                self._session_id = session_id
+                self._client_nonce = body[:32]
+                self._server_nonce = bytes([0x22]) * 32
+                self._c2s_key, self._s2c_key = self._derive_keys(self._session_id, self._client_nonce, self._server_nonce)
+                proof = self._server_proof(self._session_id, self._client_nonce, self._server_nonce)
+                conn.sendall(_pack_tcp_overlay_payload(self._sl_hdr(2, self._session_id, 0) + self._server_nonce + b"\x01" + proof))
+                continue
+            if sl_type != 4 or not self._c2s_key:
+                raise AssertionError(f"unexpected secure-link frame type {sl_type}")
+            plaintext = self._open_secure(4, session_id, counter, body, self._c2s_key)
+            if not self._authenticated:
+                self._authenticated = True
+                if not plaintext:
+                    continue
+            if not plaintext:
+                continue
+            mux_payload = self._decompress_mux_if_needed(plaintext)
+            chan_id, proto, mux_counter, mtype, size = struct.unpack(">HBHBH", mux_payload[:8])
+            return chan_id, proto, mux_counter, mtype, mux_payload[8 : 8 + size]
+        raise AssertionError("stopped before secure mux frame arrived")
 
     def _echo_loop(self) -> None:
         conn = self.wait_connected()
@@ -1334,6 +1430,104 @@ def test_macos_swift_host_runner_matches_python_admin_web_payloads_and_token_con
     finally:
         if process.poll() is None:
             process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5.0)
+        if process.returncode not in (0, -15):
+            raise AssertionError(
+                f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            )
+
+
+def test_macos_swift_host_runner_accepts_python_invite_tokens_without_app_path_leakage(tmp_path: Path) -> None:
+    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
+    _compile_mac_host_runner(binary_path)
+
+    status_port = _unused_tcp_port()
+    runtime_config_path = tmp_path / "runtime.json"
+    runtime_config_path.write_text(
+        json.dumps(
+            {
+                "overlay_transport": "myudp",
+                "udp_bind": "::",
+                "udp_own_port": 4433,
+                "admin_web": True,
+                "admin_web_bind": "127.0.0.1",
+                "admin_web_port": status_port,
+                "admin_web_dir": str(tmp_path / "admin_web"),
+                "ws_static_dir": str(tmp_path / "web"),
+                "log_file": str(tmp_path / "logs" / "obstaclebridge.log"),
+                "secure_link_mode": "psk",
+                "secure_link_psk": "swift-host-secret",
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    invite_token = encode_invite_token(
+        {
+            "version": 1,
+            "connection": {
+                "transport": "tcp",
+                "endpoint_host": "bridge.example.net",
+                "endpoint_port": 4433,
+            },
+            "secure_link_mode": "psk",
+            "secure_link_psk": _encrypt_config_secret("python-side-secret"),
+            "own_servers": [
+                {
+                    "name": "HTTP bridge",
+                    "listen": {"protocol": "tcp", "bind": "127.0.0.1", "port": 18010},
+                    "target": {"protocol": "tcp", "host": "127.0.0.1", "port": 8010},
+                }
+            ],
+            "remote_servers": [],
+        }
+    )
+
+    process = subprocess.Popen(
+        [
+            str(binary_path),
+            "--runtime-config",
+            str(runtime_config_path),
+            "--status-port",
+            str(status_port),
+            "--hold-sec",
+            "20",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        profiles_doc = _wait_http_json(f"http://127.0.0.1:{status_port}/api/onboarding/connection-profiles")
+        blueprints_doc = _http_json(f"http://127.0.0.1:{status_port}/api/onboarding/blueprints")
+        preview_doc = _http_request_json(
+            f"http://127.0.0.1:{status_port}/api/onboarding/invite/preview",
+            method="POST",
+            payload={"invite_token": invite_token},
+        )
+
+        assert profiles_doc["ok"] is True
+        assert isinstance(profiles_doc["profiles"], list)
+        assert blueprints_doc == {"ok": True, "count": 0, "blueprints": []}
+
+        assert preview_doc["ok"] is True
+        assert preview_doc["preview"]["secure_link_psk"] == "***hidden***"
+        assert preview_doc["preview"]["secure_link_psk_present"] is True
+        assert preview_doc["suggested_updates"]["overlay_transport"] == "tcp"
+        assert preview_doc["suggested_updates"]["tcp_peer"] == "bridge.example.net"
+        assert preview_doc["suggested_updates"]["tcp_peer_port"] == 4433
+        assert preview_doc["suggested_updates"]["secure_link_psk"] == "python-side-secret"
+        assert preview_doc["suggested_updates"]["own_servers"][0]["name"] == "HTTP bridge"
+        assert "admin_web_dir" not in preview_doc["suggested_updates"]
+        assert "ws_static_dir" not in preview_doc["suggested_updates"]
+        assert "log_file" not in preview_doc["suggested_updates"]
+    finally:
+        process.terminate()
         try:
             stdout, stderr = process.communicate(timeout=5.0)
         except subprocess.TimeoutExpired:
@@ -2478,6 +2672,225 @@ def test_macos_swift_host_runner_udp_ownserver_proxies_wrapped_overlay_chain(tmp
             with contextlib.suppress(OSError):
                 client.close()
         overlay_peer.stop()
+        if process.poll() is None:
+            process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5.0)
+        if process.returncode not in (0, -15):
+            raise AssertionError(
+                f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            )
+
+
+def test_macos_swift_host_runner_pushes_remote_service_catalog_after_secure_link_auth(tmp_path: Path) -> None:
+    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
+    _compile_mac_host_runner(binary_path)
+
+    overlay_port = _unused_tcp_port()
+    status_port = _unused_tcp_port()
+    overlay_peer = _WrappedTCPOverlayPeer(
+        "127.0.0.1",
+        overlay_port,
+        psk="remote-catalog-psk",
+        compress_level=5,
+        compress_min_bytes=64,
+    )
+    overlay_peer.start()
+
+    runtime_config_path = tmp_path / "runtime_remote_catalog.json"
+    runtime_config_path.write_text(
+        json.dumps(
+            {
+                "overlay_transport": "tcp",
+                "tcp_peer": "127.0.0.1",
+                "tcp_peer_port": overlay_port,
+                "secure_link": True,
+                "secure_link_mode": "psk",
+                "secure_link_psk": "remote-catalog-psk",
+                "compress_layer": True,
+                "compress_layer_algo": "zlib",
+                "compress_layer_level": 5,
+                "compress_layer_min_bytes": 64,
+                "compress_layer_types": "data",
+                "admin_web": True,
+                "admin_web_bind": "127.0.0.1",
+                "admin_web_port": status_port,
+                "remote_servers": [
+                    {
+                        "name": "Remote Admin",
+                        "listen": {
+                            "protocol": "tcp",
+                            "bind": "0.0.0.0",
+                            "port": 14081,
+                        },
+                        "target": {
+                            "protocol": "tcp",
+                            "host": "127.0.0.1",
+                            "port": 18090,
+                        },
+                    }
+                ],
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    process = subprocess.Popen(
+        [
+            str(binary_path),
+            "--runtime-config",
+            str(runtime_config_path),
+            "--hold-sec",
+            "20",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        _wait_http_json(f"http://127.0.0.1:{status_port}/api/status")
+        chan_id, proto, _counter, mtype, body = overlay_peer.recv_secure_mux()
+        assert chan_id == 0
+        assert proto == 0
+        assert mtype == 4
+        assert body.startswith(b"RS3")
+        payload_len = struct.unpack(">I", body[15:19])[0]
+        doc = json.loads(body[19 : 19 + payload_len].decode("utf-8"))
+        assert isinstance(doc, list)
+        assert len(doc) == 1
+        assert doc[0]["name"] == "Remote Admin"
+        assert doc[0]["l_port"] == 14081
+        assert doc[0]["r_port"] == 18090
+    finally:
+        overlay_peer.stop()
+        if process.poll() is None:
+            process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5.0)
+        if process.returncode not in (0, -15):
+            raise AssertionError(
+                f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            )
+
+
+def test_macos_swift_host_runner_remote_tcp_admin_web_handles_multiple_connections(tmp_path: Path) -> None:
+    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
+    _compile_mac_host_runner(binary_path)
+
+    overlay_port = _unused_tcp_port()
+    hostrunner_admin_port = _unused_tcp_port()
+    python_peer_admin_port = _unused_tcp_port()
+    remote_tcp_port = _unused_tcp_port()
+
+    python_peer = _AsyncBridgeClientThread(
+        {
+            "overlay_transport": "tcp",
+            "tcp_bind": "127.0.0.1",
+            "tcp_own_port": overlay_port,
+            "secure_link": True,
+            "secure_link_mode": "psk",
+            "secure_link_psk": "remote-admin-burst-psk",
+            "compress_layer": True,
+            "compress_layer_algo": "zlib",
+            "compress_layer_level": 5,
+            "compress_layer_min_bytes": 64,
+            "compress_layer_types": "data",
+            "admin_web": True,
+            "admin_web_bind": "127.0.0.1",
+            "admin_web_port": python_peer_admin_port,
+            "admin_web_auth_disable": True,
+            "status": False,
+        }
+    )
+
+    runtime_config_path = tmp_path / "runtime_remote_admin_burst.json"
+    runtime_config_path.write_text(
+        json.dumps(
+            {
+                "overlay_transport": "tcp",
+                "tcp_peer": "127.0.0.1",
+                "tcp_peer_port": overlay_port,
+                "secure_link": True,
+                "secure_link_mode": "psk",
+                "secure_link_psk": "remote-admin-burst-psk",
+                "compress_layer": True,
+                "compress_layer_algo": "zlib",
+                "compress_layer_level": 5,
+                "compress_layer_min_bytes": 64,
+                "compress_layer_types": "data",
+                "admin_web": True,
+                "admin_web_bind": "127.0.0.1",
+                "admin_web_port": hostrunner_admin_port,
+                "admin_web_auth_disable": True,
+                "remote_servers": [
+                    {
+                        "name": "Remote Admin Burst",
+                        "listen": {
+                            "protocol": "tcp",
+                            "bind": "127.0.0.1",
+                            "port": remote_tcp_port,
+                        },
+                        "target": {
+                            "protocol": "tcp",
+                            "host": "127.0.0.1",
+                            "port": hostrunner_admin_port,
+                        },
+                    }
+                ],
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    process = subprocess.Popen(
+        [
+            str(binary_path),
+            "--runtime-config",
+            str(runtime_config_path),
+            "--hold-sec",
+            "20",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        python_peer.start()
+        _wait_http_json(f"http://127.0.0.1:{hostrunner_admin_port}/api/status")
+        _wait_http_json(f"http://127.0.0.1:{remote_tcp_port}/api/status", timeout_sec=20.0)
+
+        def _fetch_path(path: str) -> tuple[str, object]:
+            url = f"http://127.0.0.1:{remote_tcp_port}{path}"
+            if path == "/":
+                return path, _http_text(url)
+            return path, _http_json(url)
+
+        paths = ["/api/status", "/api/meta", "/api/connections", "/api/peers", "/", "/api/status"]
+        with ThreadPoolExecutor(max_workers=len(paths)) as executor:
+            results = list(executor.map(_fetch_path, paths))
+
+        result_map = {path: payload for path, payload in results}
+        status = result_map["/api/status"]
+        meta = result_map["/api/meta"]
+        connections = result_map["/api/connections"]
+        peers = result_map["/api/peers"]
+        root_html = result_map["/"]
+
+        assert isinstance(status, dict) and ("admin_ui" in status or "build" in status)
+        assert isinstance(meta, dict) and "transport_runtime" in meta
+        assert isinstance(connections, dict) and "counts" in connections
+        assert isinstance(peers, dict) and "peers" in peers
+        assert isinstance(root_html, str) and ("ObstacleBridge" in root_html or "Admin Web" in root_html)
+    finally:
+        python_peer.stop()
         if process.poll() is None:
             process.terminate()
         try:

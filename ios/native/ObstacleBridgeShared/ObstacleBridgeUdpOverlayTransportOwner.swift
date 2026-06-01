@@ -55,6 +55,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private let configuredPeerHost: String?
     private let configuredPeerPort: Int?
     private let overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
+    private let startupMuxFrames: [Data]
     private let queue: DispatchQueue
     private let eventSink: EventSink?
     private let serviceNameByID: [Int: String]
@@ -90,6 +91,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private var udpConnectionStates: [Int: ConnectionState] = [:]
     private var tcpConnectionStates: [Int: ConnectionState] = [:]
     private var started = false
+    private var secureLinkHandshakePrimed = false
+    private var startupMuxFramesSent = false
 
     init(
         bindHost: String,
@@ -97,6 +100,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         peerHost: String? = nil,
         peerPort: Int? = nil,
         overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter? = nil,
+        startupMuxFrames: [Data] = [],
         queue: DispatchQueue = DispatchQueue(label: "ObstacleBridgeUdpOverlayTransportOwner"),
         serviceNameByID: [Int: String] = [:],
         eventSink: EventSink? = nil
@@ -107,6 +111,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         self.configuredPeerHost = (trimmedPeerHost?.isEmpty == false) ? trimmedPeerHost : nil
         self.configuredPeerPort = peerPort
         self.overlayLayerTransportAdapter = overlayLayerTransportAdapter
+        self.startupMuxFrames = startupMuxFrames
         self.queue = queue
         self.serviceNameByID = serviceNameByID
         self.eventSink = eventSink
@@ -167,6 +172,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         udpConnectionStates.removeAll()
         tcpConnectionStates.removeAll()
         currentPeerAddress = fixedPeerAddress
+        secureLinkHandshakePrimed = false
+        startupMuxFramesSent = false
         if socketFD >= 0 {
             Darwin.close(socketFD)
             socketFD = -1
@@ -351,6 +358,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func handleOverlayDatagram(_ datagram: Data) {
+        let wasConnected = overlayConnected
         guard let frame = ObstacleBridgeUdpOverlayCodec.parseProtocolFrame(datagram) else {
             return
         }
@@ -414,6 +422,10 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         default:
             break
         }
+        if !wasConnected && overlayConnected {
+            maybePrimeSecureLinkHandshake()
+            maybeSendStartupMuxFrames()
+        }
     }
 
     private func routeOverlayPayloads(_ payloads: [Data]) {
@@ -433,6 +445,29 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             }
             handleOverlayPayload(payload)
         }
+    }
+
+    private func maybePrimeSecureLinkHandshake() {
+        guard overlayConnected, !secureLinkHandshakePrimed, let adapter = overlayLayerTransportAdapter else {
+            return
+        }
+        do {
+            let snapshot = try adapter.handleTransportConnected()
+            secureLinkHandshakePrimed = true
+            for frame in snapshot.emittedFrames {
+                sendOverlayTransportPayload(frame)
+            }
+        } catch {
+            eventSink?("udp_overlay_secure_link_prime_failed", ["error": error.localizedDescription])
+        }
+    }
+
+    private func maybeSendStartupMuxFrames() {
+        guard overlayConnected, !startupMuxFramesSent, !startupMuxFrames.isEmpty else {
+            return
+        }
+        startupMuxFramesSent = true
+        sendMuxFrames(startupMuxFrames)
     }
 
     private func handleOverlayPayload(_ payload: Data) {
