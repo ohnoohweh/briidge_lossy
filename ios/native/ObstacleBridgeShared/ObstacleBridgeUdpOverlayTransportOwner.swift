@@ -580,8 +580,6 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             tcpTransportOwner.handleInboundMuxFrame(frame)
         case .udp:
             handleInboundUDPMuxFrame(frame)
-        default:
-            break
         }
     }
 

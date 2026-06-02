@@ -152,10 +152,11 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
 
     func isConnected(nowNS: UInt64? = nil) -> Bool {
         let now = nowNS ?? DispatchTime.now().uptimeNanoseconds
-        guard lastRttOkNS > 0 else {
+        let activityNS = max(lastRttOkNS, lastRxWallNS)
+        guard activityNS > 0 else {
             return false
         }
-        return now >= lastRttOkNS && (now - lastRttOkNS) <= connectedLossNS
+        return now >= activityNS && (now - activityNS) <= connectedLossNS
     }
 
     func sendApplicationPayload(_ payload: Data, nowNS: UInt64, echoNS: UInt64 = 0) throws -> OutboundDataSnapshot {

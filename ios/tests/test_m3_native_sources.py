@@ -562,6 +562,7 @@ def test_ipserver_extension_sources_are_swift_only() -> None:
     info_plist = (IPSERVER_NATIVE_DIR / "Info.plist").read_text(encoding="utf-8")
     shim = (ROOT / "ios" / "src" / "obstacle_bridge_ios" / "ipserver_extension.py").read_text(encoding="utf-8")
     shim_runtime = (ROOT / "ios" / "src" / "obstacle_bridge_ios" / "ipserver_runtime.py").read_text(encoding="utf-8")
+    config_support = (SHARED_NATIVE_DIR / "ObstacleBridgeAdminConfigSupport.swift").read_text(encoding="utf-8")
 
     assert "NEPacketTunnelProvider" in provider
     assert "@objc(PacketTunnelProvider)" in provider
@@ -580,7 +581,7 @@ def test_ipserver_extension_sources_are_swift_only() -> None:
     assert "adminOnboardingConnectionProfiles()" in provider
     assert "adminOnboardingInviteGenerate(request:" in provider
     assert "adminOnboardingInvitePreview(request:" in provider
-    assert "invite_token" in provider
+    assert "invite_token" in config_support
     assert "ObstacleBridgePythonBridge" not in provider
     assert not (IPSERVER_NATIVE_DIR / "ObstacleBridgePythonBridge.m").exists()
     assert not (IPSERVER_NATIVE_DIR / "ObstacleBridgePythonBridge.h").exists()

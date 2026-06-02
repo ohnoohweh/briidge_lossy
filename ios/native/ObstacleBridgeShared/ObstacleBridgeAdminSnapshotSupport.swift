@@ -94,15 +94,18 @@ enum ObstacleBridgeAdminSnapshotSupport {
         return snapshot
     }
 
-    static func transportConnected(lastRttOKNSValue: Any?, fallbackConnected: Bool) -> Bool {
-        guard let lastRttOkNS = uint64Value(lastRttOKNSValue) else {
+    static func transportConnected(lastRttOKNSValue: Any?, lastRxWallNSValue: Any? = nil, fallbackConnected: Bool) -> Bool {
+        let lastRttOkNS = uint64Value(lastRttOKNSValue) ?? 0
+        let lastRxWallNS = uint64Value(lastRxWallNSValue) ?? 0
+        let activityNS = max(lastRttOkNS, lastRxWallNS)
+        guard activityNS > 0 else {
             return fallbackConnected
         }
         let now = DispatchTime.now().uptimeNanoseconds
-        guard now >= lastRttOkNS else {
+        guard now >= activityNS else {
             return false
         }
-        return (now - lastRttOkNS) <= 20_000_000_000
+        return (now - activityNS) <= 20_000_000_000
     }
 
     static func lastIncomingAgeSeconds(from runtime: [String: Any]) -> Any {

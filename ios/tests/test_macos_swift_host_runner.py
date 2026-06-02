@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import contextlib
+import textwrap
 import urllib.error
 import urllib.request
 import zlib
@@ -181,6 +182,25 @@ def _compile_swift_runtime_probe(source_path: Path, binary_path: Path) -> None:
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayStackPlanner.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift"),
+        str(source_path),
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        raise AssertionError(f"swiftc failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}")
+
+
+def _compile_swift_udp_overlay_peer_probe(source_path: Path, binary_path: Path) -> None:
+    swiftc = shutil.which("swiftc")
+    if not swiftc:
+        pytest.skip("swiftc is required for shared Swift UDP overlay runtime tests")
+    command = [
+        swiftc,
+        "-o",
+        str(binary_path),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayCodec.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlaySessionCodec.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift"),
         str(source_path),
     ]
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
@@ -842,6 +862,48 @@ struct RuntimeProbe {
     }
 
 
+def test_shared_udp_overlay_peer_runtime_recent_inbound_keeps_connected_state(tmp_path: Path) -> None:
+    source_path = tmp_path / "UdpOverlayPeerRuntimeProbe.swift"
+    binary_path = tmp_path / "udp-overlay-peer-runtime-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            @main
+            struct UdpOverlayPeerRuntimeProbeMain {
+                static func main() throws {
+                    let runtime = ObstacleBridgeUdpOverlayPeerRuntime()
+                    let now = DispatchTime.now().uptimeNanoseconds
+                    let txNS = now > 5_000_000 ? now - 5_000_000 : now
+                    _ = try runtime.handleInboundIdleFrame(
+                        nowNS: now,
+                        txNS: txNS,
+                        echoNS: 0,
+                        sendPortPresent: false
+                    )
+                    let connected = runtime.isConnected(nowNS: now + 1_000_000_000)
+                    let payload: [String: Any] = [
+                        "connected": connected,
+                        "last_rx_wall_ns": runtime.lastRxWallNS,
+                        "last_rtt_ok_ns": runtime.lastRttOkNS,
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_udp_overlay_peer_probe(source_path, binary_path)
+    completed = subprocess.run([str(binary_path)], capture_output=True, text=True, check=True)
+    payload = json.loads(completed.stdout)
+    assert payload["connected"] is True
+    assert int(payload["last_rx_wall_ns"]) > 0
+    assert int(payload["last_rtt_ok_ns"]) == 0
+
+
 class _TCPEchoServer:
     def __init__(self, host: str, port: int) -> None:
         self.host = host
@@ -992,6 +1054,143 @@ def test_macos_swift_host_runner_reports_python_style_build_payload(tmp_path: Pa
         assert meta["build"] == expected_build
     finally:
         process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5.0)
+        if process.returncode not in (0, -15):
+            raise AssertionError(
+                f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            )
+
+
+def test_macos_swift_host_runner_myudp_remote_tcp_admin_web_handles_multiple_connections(tmp_path: Path) -> None:
+    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
+    _compile_mac_host_runner(binary_path)
+
+    overlay_port = _unused_tcp_port()
+    hostrunner_admin_port = _unused_tcp_port()
+    python_peer_admin_port = _unused_tcp_port()
+    remote_tcp_port = _unused_tcp_port()
+    hostrunner_udp_port = _unused_tcp_port()
+
+    python_peer = _AsyncBridgeClientThread(
+        {
+            "overlay_transport": "myudp",
+            "udp_bind": "127.0.0.1",
+            "udp_own_port": overlay_port,
+            "secure_link": True,
+            "secure_link_mode": "psk",
+            "secure_link_psk": "remote-admin-myudp-burst-psk",
+            "compress_layer": True,
+            "compress_layer_algo": "zlib",
+            "compress_layer_level": 5,
+            "compress_layer_min_bytes": 64,
+            "compress_layer_types": "data",
+            "admin_web": True,
+            "admin_web_bind": "127.0.0.1",
+            "admin_web_port": python_peer_admin_port,
+            "admin_web_auth_disable": True,
+            "status": False,
+        }
+    )
+
+    runtime_config_path = tmp_path / "runtime_remote_admin_myudp_burst.json"
+    runtime_config_path.write_text(
+        json.dumps(
+            {
+                "overlay_transport": "myudp",
+                "udp_bind": "127.0.0.1",
+                "udp_own_port": hostrunner_udp_port,
+                "udp_peer": "127.0.0.1",
+                "udp_peer_port": overlay_port,
+                "secure_link": True,
+                "secure_link_mode": "psk",
+                "secure_link_psk": "remote-admin-myudp-burst-psk",
+                "compress_layer": True,
+                "compress_layer_algo": "zlib",
+                "compress_layer_level": 5,
+                "compress_layer_min_bytes": 64,
+                "compress_layer_types": "data",
+                "admin_web": True,
+                "admin_web_bind": "127.0.0.1",
+                "admin_web_port": hostrunner_admin_port,
+                "admin_web_dir": str((ROOT / "admin_web").resolve()),
+                "admin_web_auth_disable": True,
+                "remote_servers": [
+                    {
+                        "name": "Remote Admin Burst myUDP",
+                        "listen": {
+                            "protocol": "tcp",
+                            "bind": "127.0.0.1",
+                            "port": remote_tcp_port,
+                        },
+                        "target": {
+                            "protocol": "tcp",
+                            "host": "127.0.0.1",
+                            "port": hostrunner_admin_port,
+                        },
+                    }
+                ],
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    process = subprocess.Popen(
+        [
+            str(binary_path),
+            "--runtime-config",
+            str(runtime_config_path),
+            "--hold-sec",
+            "20",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        python_peer.start()
+        _wait_http_json(f"http://127.0.0.1:{hostrunner_admin_port}/api/status", timeout_sec=20.0)
+        _wait_http_json(f"http://127.0.0.1:{remote_tcp_port}/api/status", timeout_sec=20.0)
+
+        def _fetch_path(path: str) -> tuple[str, object]:
+            url = f"http://127.0.0.1:{remote_tcp_port}{path}"
+            if path in {"/", "/app.js", "/style.css"}:
+                return path, _http_text(url)
+            return path, _http_json(url, timeout_sec=5.0)
+
+        paths = ["/api/status", "/api/meta", "/api/connections", "/api/peers", "/", "/app.js", "/style.css", "/api/status"]
+        with ThreadPoolExecutor(max_workers=len(paths)) as executor:
+            results = list(executor.map(_fetch_path, paths))
+
+        result_map = {path: payload for path, payload in results}
+        status = result_map["/api/status"]
+        meta = result_map["/api/meta"]
+        connections = result_map["/api/connections"]
+        peers = result_map["/api/peers"]
+        root_html = result_map["/"]
+        app_js = result_map["/app.js"]
+        style_css = result_map["/style.css"]
+
+        assert isinstance(status, dict) and ("admin_ui" in status or "build" in status)
+        assert isinstance(meta, dict) and "transport_runtime" in meta
+        assert isinstance(connections, dict) and "counts" in connections
+        assert isinstance(peers, dict) and "peers" in peers
+        peer_row = peers["peers"][0]
+        assert peer_row["transport"] == "myudp"
+        assert peer_row["runtime"]["kind"] == "myudp"
+        assert peer_row["peer"]["host"] == "127.0.0.1"
+        assert int(peer_row["open_connections"]["tcp"]) >= 1
+        assert isinstance(root_html, str) and ("ObstacleBridge" in root_html or "Admin Web" in root_html)
+        assert isinstance(app_js, str) and "async function loadStatus()" in app_js
+        assert isinstance(style_css, str) and "--bg:" in style_css
+    finally:
+        python_peer.stop()
+        if process.poll() is None:
+            process.terminate()
         try:
             stdout, stderr = process.communicate(timeout=5.0)
         except subprocess.TimeoutExpired:

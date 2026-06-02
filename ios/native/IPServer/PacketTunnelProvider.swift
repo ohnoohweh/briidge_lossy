@@ -1122,6 +1122,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         let myudpRuntime = bridgeSnapshot["myudp_runtime"] as? [String: Any] ?? [:]
         return ObstacleBridgeAdminSnapshotSupport.transportConnected(
             lastRttOKNSValue: myudpRuntime["last_rtt_ok_ns"],
+            lastRxWallNSValue: myudpRuntime["last_rx_wall_ns"],
             fallbackConnected: adminBoolValue(myudpRuntime["connected"])
         )
     }
