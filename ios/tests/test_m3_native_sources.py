@@ -44,32 +44,17 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "phys_footprint" in provider
     assert "task_vm_info_kern_return" in provider
     assert "SwiftSimpleUDPPeerBridge" in provider
-    assert "ObstacleBridgeUdpOverlayPeerRuntime" in provider
+    assert "ObstacleBridgeUdpOverlayTransportOwner" in provider
     assert "swift_simple_udp" in provider
     assert "swift_udp" in provider
     assert "packetflow_connector_mode_selected" in provider
-    assert "swift_udp_payload_send_failed" in provider
-    assert "swift_udp_inbound_control_failed" in provider
-    assert "swift_udp_inbound_idle_failed" in provider
-    assert "swift_udp_retransmit_timer_failed" in provider
-    assert "ObstacleBridgeChannelMuxTunRuntime" in provider
-    assert "ObstacleBridgeChannelMuxTcpRuntime" in provider
-    assert "ObstacleBridgeChannelMuxTCPTransportOwner" in provider
     assert "ObstacleBridgeOverlayLayerTransportAdapter" in provider
     assert "connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]])" in provider
-    assert "handleTCPTransportEvent(_ event: ObstacleBridgeChannelMuxTCPTransportOwner.TransportEvent)" in provider
-    assert "tcpConnectionStates" in provider
     assert "startTCPServices()" in provider
-    assert "handleInboundTCPMuxFrame" in provider
     assert "localTCPServiceSpecs(providerConfiguration:" in provider
-    assert "swift_udp_channelmux_tun_open_rejected" in provider
-    assert "swift_udp_channelmux_tun_open_chunk_rejected" in provider
     assert "swift_udp_tcp_listener_ready" in provider
-    assert "swift_udp_tcp_mux_send_failed" in provider
-    assert "routeOverlayPayloadsToSystem" in provider
+    assert "sendLocalTunPacket(packet)" in provider
     assert "loadSharedRuntimeConfigJSON" in provider
-    assert "primeOverlayTransportConnection()" in provider
-    assert "swift_udp_transport_prime_failed" in provider
     assert "packet_pump_dropped_packets" not in provider
     assert "obstaclebridge.ios.packet-tunnel.v1" in provider
     assert "tunnel_address6" in provider
@@ -78,17 +63,13 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "fallbackRuntimeConfig: loadSharedRuntimeConfigJSON()" in provider
     assert "ObstacleBridgePacketTunnelConfiguration(" in provider
     assert '"effective_tunnel_network_settings"' in provider
-    assert '"bootstrap_state"' in provider
+    assert '"shared_overlay_bootstrap_state"' in provider
     assert "configuration.makeNetworkSettings()" in provider
-    assert "ObstacleBridgeRuntimeConfig.localTunServiceSpec" in provider
     assert "private var nativeRuntimeActive: Bool" in provider
     assert 'runtimeMode == "swift_simple_udp" || runtimeMode == "swift_udp"' in provider
     assert "private func nativeAppMessageResponse(for payload: [String: Any]) throws -> [String: Any]" in provider
-    assert '"admin_ui"' in provider
-    assert '"home_tab_enabled"' in provider
-    assert '"security_advisor"' in provider
-    assert '"first_tab"' in provider
-    assert "adminUIBootstrapState" in provider
+    assert "adminUIPayload(runtimeConfig:" in provider
+    assert "securityAdvisorPayload(runtimeConfig:" in provider
     assert "scheduleEmbeddedRuntimeReload(action:" in provider
     assert '"restart_embedded": true' in provider
     assert '"embedded_runtime_reload_completed"' in provider
@@ -98,19 +79,15 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "startTunnel_waiting_for_onboarding" in provider
     assert 'if !nativeRuntimeActive {' in provider
     assert "private static func decodedProviderRuntimeConfig" in provider
-    assert "PacketTunnelProviderConfigSecretCodec.decryptPayload(runtimeConfig)" in provider
+    assert "ObstacleBridgeConfigSecretCodec.decryptPayload(runtimeConfig)" in provider
     assert "if let runtimeConfig = Self.decodedProviderRuntimeConfig(providerConfiguration)" in provider
     assert '"myudp_runtime": myudpRuntime' in provider
-    assert '"myudp": myudpRuntime' in provider
-    assert "try sendOverlayApplicationPayload(muxFrame, runtime: runtime)" in provider
-    assert "guard let runtime = overlayRuntime else {" in provider
+    assert "ObstacleBridgeAdminSnapshotSupport.transportRuntimeEnvelope(" in provider
     assert "provider?.recordPacketBridgeEvent(" in provider
     assert "private var peerTrafficRateState:" in provider
     assert "private var secureLinkConnectedSinceUnixTS:" in provider
     assert '"rx_bytes_per_sec": rxRate' in provider
     assert '"connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTS ?? nowUnixTS)' in provider
-    assert "overlayConnectedProvider: { [weak self] in" in provider
-    assert "activateClientOnReady: true" in provider
 
     runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
     assert "struct ObstacleBridgeAdminUIBootstrapState" in runtime_config
@@ -344,6 +321,7 @@ def test_admin_api_source_exists() -> None:
 def test_macos_swift_host_runner_source_exists() -> None:
     wrapper = (APP_NATIVE_DIR / "ObstacleBridgeHostRunnerMain.swift").read_text(encoding="utf-8")
     runtime = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    shared_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
 
     assert "@main" in wrapper
     assert "ObstacleBridgeHostRunnerMain" in wrapper
@@ -364,10 +342,10 @@ def test_macos_swift_host_runner_source_exists() -> None:
     assert "ObstacleBridgeTcpOverlayRuntime" in runtime
     assert "ObstacleBridgeTcpOverlayTransportOwner" in runtime
     assert "ObstacleBridgeSecureLinkPskTransportAdapter" in runtime
-    assert '"TUN_routing"' in runtime
-    assert "tunnel_gateway" in runtime
-    assert "tunnel_gateway6" in runtime
-    assert "log_TUN_routing" in runtime
+    assert '"TUN_routing"' in shared_runtime
+    assert "tunnel_gateway" in shared_runtime
+    assert "tunnel_gateway6" in shared_runtime
+    assert "log_TUN_routing" in shared_runtime
     assert '"swift_host_runner"' in runtime
 
 

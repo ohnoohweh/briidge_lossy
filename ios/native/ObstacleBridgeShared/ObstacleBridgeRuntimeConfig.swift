@@ -323,6 +323,7 @@ enum ObstacleBridgeRuntimeConfig {
         "admin_web",
         "debug_logging",
     ]
+    private static let secureLinkFrameHeaderSize = 20
     private static let secureLinkAEADTagSize = 16
 
     static func configSchemaSnapshot() -> [String: Any] {
@@ -462,7 +463,7 @@ enum ObstacleBridgeRuntimeConfig {
         let secureLinkEnabled = boolValue(from: payload["secure_link"]) ?? false
         let secureLinkMode = (stringValue(from: payload["secure_link_mode"]) ?? "off").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if secureLinkEnabled, secureLinkMode != "off" {
-            limit = max(0, limit - ObstacleBridgeSecureLinkPskCodec.headerSize - secureLinkAEADTagSize)
+            limit = max(0, limit - secureLinkFrameHeaderSize - secureLinkAEADTagSize)
         }
         return max(0, limit)
     }
@@ -614,6 +615,49 @@ enum ObstacleBridgeRuntimeConfig {
             lifecycleHooks: nil,
             options: nil
         ).toChannelMuxServiceSpec()
+    }
+
+    static func remoteServiceCatalogMuxFrames(from payload: [String: Any]) -> [Data] {
+        let specs = remoteServerSpecs(from: payload, preserveInputIndices: true)
+            .map { $0.toChannelMuxServiceSpec() }
+        guard !specs.isEmpty else {
+            return []
+        }
+        do {
+            let payload = try ObstacleBridgeChannelMuxCodec.encodeRemoteServicesSetV2(
+                instanceID: 0,
+                connectionSeq: 0,
+                services: specs
+            )
+            if ObstacleBridgeChannelMuxCodec.muxHeaderSize + payload.count <= 65535 {
+                return [
+                    try ObstacleBridgeChannelMuxCodec.packMux(
+                        chanID: 0,
+                        proto: .udp,
+                        counter: 0,
+                        mtype: .remoteServicesSetV2,
+                        body: payload
+                    )
+                ]
+            }
+            let tx = ObstacleBridgeChannelMuxCodec.nextControlChunkTxID(current: 1)
+            let chunks = ObstacleBridgeChannelMuxCodec.chunkControlPayload(
+                txID: tx.txID,
+                maxAppPayload: 65535,
+                payload: payload
+            )
+            return try chunks.enumerated().map { index, chunk in
+                try ObstacleBridgeChannelMuxCodec.packMux(
+                    chanID: 0,
+                    proto: .udp,
+                    counter: index & 0xFFFF,
+                    mtype: .remoteServicesSetV2Chunk,
+                    body: chunk
+                )
+            }
+        } catch {
+            return []
+        }
     }
 
     static func intValue(from value: Any?) -> Int? {

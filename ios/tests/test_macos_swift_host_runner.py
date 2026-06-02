@@ -111,16 +111,27 @@ def _compile_mac_host_runner(binary_path: Path) -> None:
         "-o",
         str(binary_path),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminAPI.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminAuth.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminConfigChallenge.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminConfigSupport.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeConfigSecretCodec.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminSnapshotSupport.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminWebSupport.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeNativeCrypto.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskTransportAdapter.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeNativeServiceSpec.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeNativeProxyConnections.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayConnectionSupport.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressResolver.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeOnboarding.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebAdminServer.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxUdpRuntime.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTcpRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTCPTransportOwner.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayCodec.swift"),
@@ -1197,7 +1208,7 @@ def test_macos_swift_host_runner_empty_config_serves_onboarding_without_peer(tmp
         assert isinstance(profiles["profiles"], list)
         assert blueprints["ok"] is True
         assert isinstance(blueprints["blueprints"], list)
-        assert "ObstacleBridge macOS Swift Host Runner" in html or "/api/status" in html
+        assert "Setup Assistant" in html or "Open Setup Assistant" in html
     finally:
         process.terminate()
         try:
@@ -1757,12 +1768,15 @@ def test_macos_swift_host_runner_rejects_legacy_encrypted_invite_psk(tmp_path: P
         text=True,
     )
     try:
-        preview_doc = _http_request_json(
+        _wait_http_json(f"http://127.0.0.1:{status_port}/api/status")
+        status_code, _, body = _http_request(
             f"http://127.0.0.1:{status_port}/api/onboarding/invite/preview",
             method="POST",
             payload={"invite_token": invite_token},
         )
+        preview_doc = json.loads(body.decode("utf-8"))
 
+        assert status_code == 400
         assert preview_doc["ok"] is False
         assert "legacy encrypted secure_link_psk" in preview_doc["error"]
     finally:
@@ -3131,11 +3145,10 @@ def test_macos_swift_host_runner_remote_tcp_admin_web_handles_multiple_connectio
         assert isinstance(connections, dict) and "counts" in connections
         assert isinstance(peers, dict) and "peers" in peers
         peer_row = peers["peers"][0]
-        assert peer_row["transport"] == "myudp"
-        assert float(peer_row["rtt_est_ms"] or 0) > 0
-        assert float(peer_row["transmit_delay_est_ms"] or 0) > 0
-        assert peer_row["last_incoming_age_seconds"] is not None
-        assert int(peer_row["myudp"]["confirmed_total"]) >= 1
+        assert peer_row["transport"] == "tcp"
+        assert peer_row["runtime"]["kind"] == "tcp"
+        assert peer_row["peer"]["host"] == "127.0.0.1"
+        assert int(peer_row["open_connections"]["tcp"]) >= 1
         assert isinstance(root_html, str) and ("ObstacleBridge" in root_html or "Admin Web" in root_html)
         assert isinstance(app_js, str) and "async function loadStatus()" in app_js
         assert isinstance(style_css, str) and "--bg:" in style_css

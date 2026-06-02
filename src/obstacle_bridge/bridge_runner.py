@@ -1702,8 +1702,15 @@ class ConfigAwareCLI:
         for section in sections.keys():
             opt_name = f"log_{section}"       # internal dest
             cli_flag = f"--log-{section.replace('_', '-')}"
-            p.add_argument(cli_flag, dest=opt_name, default=None,
-                        help=f"Override log level for component '{section}'")
+            existing_option_strings = {
+                option
+                for action in p._actions
+                for option in getattr(action, "option_strings", [])
+            }
+            existing_dests = {getattr(action, "dest", None) for action in p._actions}
+            if cli_flag not in existing_option_strings and opt_name not in existing_dests:
+                p.add_argument(cli_flag, dest=opt_name, default=None,
+                            help=f"Override log level for component '{section}'")
 
             # 3) Add them directly into the SAME section
             sections[section].add(opt_name)

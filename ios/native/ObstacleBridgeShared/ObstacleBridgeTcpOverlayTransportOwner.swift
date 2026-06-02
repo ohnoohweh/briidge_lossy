@@ -4,43 +4,6 @@ import Network
 final class ObstacleBridgeTcpOverlayTransportOwner {
     typealias EventSink = (String, [String: Any]) -> Void
 
-    private struct ConnectionState {
-        let proto: String
-        let role: String
-        let chanID: Int
-        let svcID: Int
-        let serviceName: String
-        let remoteHost: String
-        let remotePort: Int
-        var state: String
-        var localHost: String?
-        var localPort: Int?
-        var stats: [String: Int]
-
-        func snapshot() -> [String: Any] {
-            [
-                "protocol": proto,
-                "role": role,
-                "state": state,
-                "chan_id": chanID,
-                "svc_id": svcID,
-                "service_name": serviceName,
-                "source": NSNull(),
-                "local": endpoint(host: localHost, port: localPort),
-                "local_port": localPort ?? NSNull(),
-                "remote_destination": endpoint(host: remoteHost, port: remotePort),
-                "stats": stats,
-            ]
-        }
-
-        private func endpoint(host: String?, port: Int?) -> Any {
-            guard let host, let port else {
-                return NSNull()
-            }
-            return ["host": host, "port": port]
-        }
-    }
-
     private let peerHost: String
     private let peerPort: Int
     private let bindHost: String
@@ -62,8 +25,10 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private var receiveBuffer = Data()
     private var udpServerConnections: [Int: NWConnection] = [:]
     private var udpClientConnections: [Int: NWConnection] = [:]
-    private var tcpConnectionStates: [Int: ConnectionState] = [:]
-    private var udpConnectionStates: [Int: ConnectionState] = [:]
+    private var udpClientDrivers: [Int: ObstacleBridgeUDPClientConnectionDriver] = [:]
+    private var tcpConnectionStates: [Int: ObstacleBridgeOverlayConnectionState] = [:]
+    private var udpConnectionStates: [Int: ObstacleBridgeOverlayConnectionState] = [:]
+    private var udpServerDrivers: [ObjectIdentifier: ObstacleBridgeUDPServerConnectionDriver] = [:]
     private var started = false
     private var reconnectAttempts = 0
     private var reconnectScheduled = false
@@ -150,9 +115,11 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         for connection in udpServerConnections.values {
             connection.cancel()
         }
+        udpServerDrivers.removeAll()
         for connection in udpClientConnections.values {
             connection.cancel()
         }
+        udpClientDrivers.removeAll()
         udpServerConnections.removeAll()
         udpClientConnections.removeAll()
         tcpConnectionStates.removeAll()
@@ -163,12 +130,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]]) {
-        let tcpRows = tcpConnectionStates.values.map { $0.snapshot() }.sorted { lhs, rhs in
-            (lhs["chan_id"] as? Int ?? -1) < (rhs["chan_id"] as? Int ?? -1)
-        }
-        let udpRows = udpConnectionStates.values.map { $0.snapshot() }.sorted { lhs, rhs in
-            (lhs["chan_id"] as? Int ?? -1) < (rhs["chan_id"] as? Int ?? -1)
-        }
+        let tcpRows = ObstacleBridgeOverlayConnectionSupport.connectionRows(from: tcpConnectionStates)
+        let udpRows = ObstacleBridgeOverlayConnectionSupport.connectionRows(from: udpConnectionStates)
         return (tcpRows, udpRows)
     }
 
@@ -197,18 +160,15 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         listenerPort: Int
     ) -> Bool {
         if let chanID = tcpTransportOwner.acceptLocalConnection(connection, spec: spec) {
-            tcpConnectionStates[chanID] = ConnectionState(
+            tcpConnectionStates[chanID] = ObstacleBridgeOverlayConnectionSupport.makeState(
                 proto: "tcp",
                 role: "server",
                 chanID: chanID,
-                svcID: spec.svcID,
+                spec: spec,
                 serviceName: serviceName(spec),
-                remoteHost: spec.rHost,
-                remotePort: spec.rPort,
                 state: "connecting",
                 localHost: listenerHost,
-                localPort: listenerPort,
-                stats: ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
+                localPort: listenerPort
             )
             return true
         }
@@ -224,19 +184,58 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         listenerPort: Int,
         serviceKey: String
     ) -> Bool {
+        var driver: ObstacleBridgeUDPServerConnectionDriver!
         connection.stateUpdateHandler = { [weak self] state in
             self?.queue.async {
                 self?.handleUDPServerConnectionState(state)
             }
         }
         connection.start(queue: queue)
-        receiveFromUDPServerConnection(
+        driver = ObstacleBridgeUDPServerConnectionDriver(
             connection: connection,
             spec: spec,
-            listenerHost: listenerHost,
-            listenerPort: listenerPort,
-            serviceKey: serviceKey
+            serviceKey: serviceKey,
+            queue: queue,
+            runtime: udpRuntime,
+            startedProvider: { [weak self] in self?.started ?? false },
+            overlayConnectedProvider: { [weak self] in self?.overlayConnected ?? false },
+            handleSnapshot: { [weak self] event in
+                guard let self else { return }
+                self.udpServerConnections[event.chanID] = connection
+                if self.udpConnectionStates[event.chanID] == nil {
+                    self.udpConnectionStates[event.chanID] = ObstacleBridgeOverlayConnectionSupport.makeState(
+                        proto: "udp",
+                        role: "server",
+                        chanID: event.chanID,
+                        spec: spec,
+                        serviceName: self.serviceName(spec),
+                        state: "connected",
+                        localHost: listenerHost,
+                        localPort: listenerPort
+                    )
+                } else {
+                    ObstacleBridgeOverlayConnectionSupport.updateConnectedState(
+                        states: &self.udpConnectionStates,
+                        proto: "udp",
+                        chanID: event.chanID,
+                        localHost: listenerHost,
+                        localPort: listenerPort
+                    )
+                }
+                self.sendMuxFrames(event.frames)
+                self.recordOutbound(proto: "udp", chanID: event.chanID, bytes: event.bytes)
+            },
+            handleClosed: { [weak self] chanID in
+                guard let self else { return }
+                if let chanID {
+                    self.udpServerConnections.removeValue(forKey: chanID)
+                    self.udpConnectionStates.removeValue(forKey: chanID)
+                }
+                self.udpServerDrivers.removeValue(forKey: ObjectIdentifier(connection))
+            }
         )
+        udpServerDrivers[ObjectIdentifier(connection)] = driver
+        driver.start()
         return true
     }
 
@@ -325,7 +324,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         }
         switch state {
         case .ready:
-            let endpoint = Self.endpointDescription(connection.endpoint)
+            let endpoint = ObstacleBridgeOverlayConnectionSupport.endpointDescription(connection.endpoint)
             let snapshot = overlayRuntime.acceptServerPeer(peerHost: endpoint.host, peerPort: endpoint.port, socketPresent: true)
             overlayPeerID = snapshot.peerID
             overlayConnected = snapshot.overlayConnected
@@ -547,10 +546,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             }
         case .close:
             let snapshot = udpRuntime.handleInboundClientClose(chanID: frame.chanID)
-            if snapshot.closed, let connection = udpClientConnections.removeValue(forKey: frame.chanID) {
-                connection.cancel()
+            if snapshot.closed {
+                closeUDPClientConnection(chanID: frame.chanID)
             }
-            udpConnectionStates.removeValue(forKey: frame.chanID)
         default:
             break
         }
@@ -564,18 +562,15 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         guard snapshot.accepted else {
             return
         }
-        udpConnectionStates[chanID] = ConnectionState(
+        udpConnectionStates[chanID] = ObstacleBridgeOverlayConnectionSupport.makeState(
             proto: "udp",
             role: "client",
             chanID: chanID,
-            svcID: parsed.spec.svcID,
+            spec: parsed.spec,
             serviceName: serviceName(parsed.spec),
-            remoteHost: parsed.spec.rHost,
-            remotePort: parsed.spec.rPort,
             state: snapshot.connected ? "connected" : "connecting",
             localHost: nil,
-            localPort: nil,
-            stats: ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
+            localPort: nil
         )
         if snapshot.connectRequested {
             startOutboundUDPConnection(chanID: chanID, spec: parsed.spec)
@@ -583,69 +578,57 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     private func startOutboundUDPConnection(chanID: Int, spec: ObstacleBridgeChannelMuxCodec.ServiceSpec) {
-        guard udpClientConnections[chanID] == nil,
-              let port = NWEndpoint.Port(rawValue: UInt16(spec.rPort))
-        else {
+        guard udpClientConnections[chanID] == nil else {
             return
         }
-        let connection = NWConnection(host: NWEndpoint.Host(spec.rHost), port: port, using: .udp)
-        udpClientConnections[chanID] = connection
-        connection.stateUpdateHandler = { [weak self] state in
-            self?.queue.async {
-                self?.handleUDPClientConnectionState(state, chanID: chanID, spec: spec)
-            }
-        }
-        connection.start(queue: queue)
-        let snapshot = udpRuntime.handleClientConnected(
+        let driver = ObstacleBridgeUDPClientConnectionDriver(
             chanID: chanID,
-            peerAddrHost: spec.rHost,
-            peerAddrPort: spec.rPort
-        )
-        updateConnectedState(proto: "udp", chanID: chanID, localHost: snapshot.localAddrHost, localPort: snapshot.localAddrPort)
-        for packet in snapshot.flushedPackets {
-            sendOnUDPConnection(connection, payload: packet, chanID: chanID)
-            recordInbound(proto: "udp", chanID: chanID, bytes: packet.count)
-        }
-        receiveFromUDPClientConnection(chanID: chanID)
-    }
-
-    private func handleUDPClientConnectionState(_ state: NWConnection.State, chanID: Int, spec: ObstacleBridgeChannelMuxCodec.ServiceSpec) {
-        switch state {
-        case .ready:
-            updateConnectedState(proto: "udp", chanID: chanID, localHost: nil, localPort: nil)
-        case .failed(let error):
-            eventSink?("tcp_overlay_udp_client_failed", ["chan_id": chanID, "error": error.localizedDescription, "host": spec.rHost, "port": spec.rPort])
-            closeUDPClientConnection(chanID: chanID)
-        case .cancelled:
-            closeUDPClientConnection(chanID: chanID)
-        default:
-            break
-        }
-    }
-
-    private func receiveFromUDPClientConnection(chanID: Int) {
-        guard started, let connection = udpClientConnections[chanID] else {
-            return
-        }
-        connection.receiveMessage { [weak self] data, _, _, error in
-            self?.queue.async {
-                guard let self, self.started else { return }
-                if let data, !data.isEmpty,
-                   let snapshot = try? self.udpRuntime.handleLocalClientDatagram(chanID: chanID, payload: data) {
-                    self.sendMuxFrames(snapshot.frames)
-                    self.recordOutbound(proto: "udp", chanID: chanID, bytes: data.count)
-                }
-                if error != nil {
-                    self.closeUDPClientConnection(chanID: chanID)
-                    return
-                }
-                self.receiveFromUDPClientConnection(chanID: chanID)
+            spec: spec,
+            queue: queue,
+            runtime: udpRuntime,
+            startedProvider: { [weak self] in self?.started ?? false },
+            registerConnection: { [weak self] connection in
+                self?.udpClientConnections[chanID] = connection
+            },
+            updateConnected: { [weak self] localHost, localPort in
+                guard let self else { return }
+                ObstacleBridgeOverlayConnectionSupport.updateConnectedState(
+                    states: &self.udpConnectionStates,
+                    proto: "udp",
+                    chanID: chanID,
+                    localHost: localHost,
+                    localPort: localPort
+                )
+            },
+            sendOnUDPConnection: { [weak self] connection, payload, chanID in
+                self?.sendOnUDPConnection(connection, payload: payload, chanID: chanID)
+            },
+            sendMuxFrames: { [weak self] frames in
+                self?.sendMuxFrames(frames)
+            },
+            recordInbound: { [weak self] bytes in
+                self?.recordInbound(proto: "udp", chanID: chanID, bytes: bytes)
+            },
+            recordOutbound: { [weak self] bytes in
+                self?.recordOutbound(proto: "udp", chanID: chanID, bytes: bytes)
+            },
+            eventSink: { [weak self] event, fields in
+                self?.eventSink?(event, fields)
+            },
+            failureEvent: "tcp_overlay_udp_client_failed",
+            handleClosed: { [weak self] in
+                self?.closeUDPClientConnection(chanID: chanID)
             }
-        }
+        )
+        udpClientDrivers[chanID] = driver
+        driver.start()
     }
 
     private func closeUDPClientConnection(chanID: Int) {
+        let driver = udpClientDrivers.removeValue(forKey: chanID)
+        driver?.stop()
         let connection = udpClientConnections.removeValue(forKey: chanID)
+        connection?.stateUpdateHandler = nil
         connection?.cancel()
         udpConnectionStates.removeValue(forKey: chanID)
     }
@@ -692,129 +675,29 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         })
     }
 
-    private func updateConnectedState(proto: String, chanID: Int, localHost: String?, localPort: Int?) {
-        switch proto {
-        case "tcp":
-            guard var state = tcpConnectionStates[chanID] else { return }
-            state.state = "connected"
-            state.localHost = localHost
-            state.localPort = localPort
-            tcpConnectionStates[chanID] = state
-        case "udp":
-            guard var state = udpConnectionStates[chanID] else { return }
-            state.state = "connected"
-            state.localHost = localHost
-            state.localPort = localPort
-            udpConnectionStates[chanID] = state
-        default:
-            break
-        }
-    }
-
     private func handleUDPServerConnectionState(_ state: NWConnection.State) {
         if case .failed(let error) = state {
             eventSink?("tcp_overlay_udp_server_connection_failed", ["error": error.localizedDescription])
         }
     }
 
-    private func receiveFromUDPServerConnection(
-        connection: NWConnection,
-        spec: ObstacleBridgeChannelMuxCodec.ServiceSpec,
-        listenerHost: String,
-        listenerPort: Int,
-        serviceKey: String
-    ) {
-        guard started else {
-            return
-        }
-        connection.receiveMessage { [weak self] data, _, _, error in
-            self?.queue.async {
-                guard let self, self.started else { return }
-                if let data, !data.isEmpty {
-                    let endpoint = Self.endpointDescription(connection.endpoint)
-                    if let snapshot = try? self.udpRuntime.handleLocalServerDatagram(
-                        spec: spec,
-                        serviceKey: serviceKey,
-                        payload: data,
-                        addrHost: endpoint.host,
-                        addrPort: endpoint.port,
-                        overlayConnected: self.overlayConnected,
-                        acceptingEnabled: true
-                    ) {
-                        self.udpServerConnections[snapshot.chanID] = connection
-                        var state = self.udpConnectionStates[snapshot.chanID] ?? ConnectionState(
-                            proto: "udp",
-                            role: "server",
-                            chanID: snapshot.chanID,
-                            svcID: spec.svcID,
-                            serviceName: self.serviceName(spec),
-                            remoteHost: spec.rHost,
-                            remotePort: spec.rPort,
-                            state: "connected",
-                            localHost: listenerHost,
-                            localPort: listenerPort,
-                            stats: ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
-                        )
-                        state.state = "connected"
-                        self.udpConnectionStates[snapshot.chanID] = state
-                        self.sendMuxFrames(snapshot.frames)
-                        self.recordOutbound(proto: "udp", chanID: snapshot.chanID, bytes: data.count)
-                    }
-                }
-                if error != nil {
-                    if let chanID = self.channelID(for: connection) {
-                        let snapshot = self.udpRuntime.handleInboundClose(chanID: chanID)
-                        if snapshot.closed {
-                            self.udpServerConnections.removeValue(forKey: chanID)
-                            self.udpConnectionStates.removeValue(forKey: chanID)
-                        }
-                    }
-                    connection.cancel()
-                    return
-                }
-                self.receiveFromUDPServerConnection(
-                    connection: connection,
-                    spec: spec,
-                    listenerHost: listenerHost,
-                    listenerPort: listenerPort,
-                    serviceKey: serviceKey
-                )
-            }
-        }
-    }
-
-    private func channelID(for connection: NWConnection) -> Int? {
-        let key = ObjectIdentifier(connection)
-        return udpServerConnections.first(where: { ObjectIdentifier($0.value) == key })?.key
-    }
-
-    private static func endpointDescription(_ endpoint: NWEndpoint) -> (host: String, port: Int) {
-        if case let .hostPort(host, port) = endpoint {
-            return (host.debugDescription, Int(port.rawValue))
-        }
-        return ("127.0.0.1", 0)
-    }
-
     private func recordInbound(proto: String, chanID: Int, bytes: Int) {
-        updateStats(proto: proto, chanID: chanID, keyMessages: "rx_msgs", keyBytes: "rx_bytes", bytes: bytes)
+        switch proto {
+        case "tcp":
+            ObstacleBridgeOverlayConnectionSupport.recordTraffic(states: &tcpConnectionStates, proto: proto, chanID: chanID, direction: "inbound", bytes: bytes)
+        case "udp":
+            ObstacleBridgeOverlayConnectionSupport.recordTraffic(states: &udpConnectionStates, proto: proto, chanID: chanID, direction: "inbound", bytes: bytes)
+        default:
+            break
+        }
     }
 
     private func recordOutbound(proto: String, chanID: Int, bytes: Int) {
-        updateStats(proto: proto, chanID: chanID, keyMessages: "tx_msgs", keyBytes: "tx_bytes", bytes: bytes)
-    }
-
-    private func updateStats(proto: String, chanID: Int, keyMessages: String, keyBytes: String, bytes: Int) {
         switch proto {
         case "tcp":
-            guard var state = tcpConnectionStates[chanID] else { return }
-            state.stats[keyMessages, default: 0] += 1
-            state.stats[keyBytes, default: 0] += bytes
-            tcpConnectionStates[chanID] = state
+            ObstacleBridgeOverlayConnectionSupport.recordTraffic(states: &tcpConnectionStates, proto: proto, chanID: chanID, direction: "outbound", bytes: bytes)
         case "udp":
-            guard var state = udpConnectionStates[chanID] else { return }
-            state.stats[keyMessages, default: 0] += 1
-            state.stats[keyBytes, default: 0] += bytes
-            udpConnectionStates[chanID] = state
+            ObstacleBridgeOverlayConnectionSupport.recordTraffic(states: &udpConnectionStates, proto: proto, chanID: chanID, direction: "outbound", bytes: bytes)
         default:
             break
         }
@@ -830,21 +713,18 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private func handleTCPTransportEvent(_ event: ObstacleBridgeChannelMuxTCPTransportOwner.TransportEvent) {
         switch event {
         case .clientAccepted(let chanID, let spec, let connected):
-            tcpConnectionStates[chanID] = ConnectionState(
+            tcpConnectionStates[chanID] = ObstacleBridgeOverlayConnectionSupport.makeState(
                 proto: "tcp",
                 role: "client",
                 chanID: chanID,
-                svcID: spec.svcID,
+                spec: spec,
                 serviceName: serviceName(spec),
-                remoteHost: spec.rHost,
-                remotePort: spec.rPort,
                 state: connected ? "connected" : "connecting",
                 localHost: nil,
-                localPort: nil,
-                stats: ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
+                localPort: nil
             )
         case .clientConnected(let chanID, let localHost, let localPort):
-            updateConnectedState(proto: "tcp", chanID: chanID, localHost: localHost, localPort: localPort)
+            ObstacleBridgeOverlayConnectionSupport.updateConnectedState(states: &tcpConnectionStates, proto: "tcp", chanID: chanID, localHost: localHost, localPort: localPort)
         case .clientInbound(let chanID, let bytes):
             recordInbound(proto: "tcp", chanID: chanID, bytes: bytes)
         case .clientOutbound(let chanID, let bytes):
@@ -852,10 +732,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         case .clientClosed(let chanID):
             tcpConnectionStates.removeValue(forKey: chanID)
         case .serverConnected(let chanID):
-            if var connectionState = tcpConnectionStates[chanID] {
-                connectionState.state = "connected"
-                tcpConnectionStates[chanID] = connectionState
-            }
+            ObstacleBridgeOverlayConnectionSupport.updateConnectedState(states: &tcpConnectionStates, proto: "tcp", chanID: chanID, localHost: nil, localPort: nil)
         case .serverInbound(let chanID, let bytes):
             recordInbound(proto: "tcp", chanID: chanID, bytes: bytes)
         case .serverOutbound(let chanID, let bytes):

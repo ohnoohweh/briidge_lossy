@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import Network
 import NetworkExtension
@@ -12,116 +11,6 @@ private enum PacketTunnelProviderOnboardingError: LocalizedError {
         case .invalidArgument(let message):
             return message
         }
-    }
-}
-
-private enum PacketTunnelProviderConfigSecretCodec {
-    private static let secretFields: Set<String> = ["admin_web_password", "secure_link_psk"]
-    private static let prefix = "enc:v1:"
-    private static let salt = Data("ObstacleBridge config secret v1".utf8)
-    private static let info = Data("ObstacleBridge config field encryption".utf8)
-    private static let aad = Data("ObstacleBridge cfg secret".utf8)
-
-    static func decryptPayload(_ payload: [String: Any]) throws -> [String: Any] {
-        guard let decoded = try transformSecrets(in: payload, transform: decryptSecret) as? [String: Any] else {
-            return payload
-        }
-        return decoded
-    }
-
-    static func encryptPayload(_ payload: [String: Any]) throws -> [String: Any] {
-        guard let encoded = try transformSecrets(in: payload, transform: encryptSecret) as? [String: Any] else {
-            return payload
-        }
-        return encoded
-    }
-
-    private static func transformSecrets(in object: Any, transform: (String) throws -> String) throws -> Any {
-        if let dict = object as? [String: Any] {
-            var out: [String: Any] = [:]
-            out.reserveCapacity(dict.count)
-            for (key, value) in dict {
-                if secretFields.contains(key), let stringValue = value as? String {
-                    out[key] = stringValue.isEmpty ? "" : try transform(stringValue)
-                } else {
-                    out[key] = try transformSecrets(in: value, transform: transform)
-                }
-            }
-            return out
-        }
-        if let list = object as? [Any] {
-            return try list.map { try transformSecrets(in: $0, transform: transform) }
-        }
-        return object
-    }
-
-    private static func encryptSecret(_ value: String) throws -> String {
-        let key = derivedKey()
-        let nonceData = Data((0..<12).map { _ in UInt8.random(in: 0...255) })
-        let nonce = try ChaChaPoly.Nonce(data: nonceData)
-        let sealed = try ChaChaPoly.seal(Data(value.utf8), using: key, nonce: nonce, authenticating: aad)
-        return prefix + urlSafeBase64Encode(sealed.combined)
-    }
-
-    private static func decryptSecret(_ value: String) throws -> String {
-        guard value.hasPrefix(prefix) else {
-            return value
-        }
-        let encoded = String(value.dropFirst(prefix.count))
-        let combined = try urlSafeBase64Decode(encoded)
-        let sealed = try ChaChaPoly.SealedBox(combined: combined)
-        let plaintext = try ChaChaPoly.open(sealed, using: derivedKey(), authenticating: aad)
-        guard let stringValue = String(data: plaintext, encoding: .utf8) else {
-            throw PacketTunnelProviderOnboardingError.invalidArgument("failed to decode config secret")
-        }
-        return stringValue
-    }
-
-    private static func derivedKey() -> SymmetricKey {
-        let seed = configSecretSeed()
-        guard let derived = ObstacleBridgeNativeCrypto.hkdfSHA256Salt(
-            salt as NSData,
-            info: info as NSData,
-            keyMaterial: seed as NSData,
-            lengthValue: 32
-        ) as Data? else {
-            return SymmetricKey(data: seed)
-        }
-        return SymmetricKey(data: derived)
-    }
-
-    private static func configSecretSeed() -> Data {
-        var hostname = [CChar](repeating: 0, count: Int(MAXHOSTNAMELEN) + 1)
-        if gethostname(&hostname, hostname.count) == 0,
-           let text = String(validatingUTF8: hostname),
-           !text.isEmpty {
-            return Data(text.utf8)
-        }
-        let fallback = ProcessInfo.processInfo.hostName
-        if !fallback.isEmpty {
-            return Data(fallback.utf8)
-        }
-        return Data("obstacle-bridge".utf8)
-    }
-
-    private static func urlSafeBase64Encode(_ data: Data) -> String {
-        data.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-    }
-
-    private static func urlSafeBase64Decode(_ text: String) throws -> Data {
-        var normalized = text
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let remainder = normalized.count % 4
-        if remainder != 0 {
-            normalized += String(repeating: "=", count: 4 - remainder)
-        }
-        guard let data = Data(base64Encoded: normalized) else {
-            throw PacketTunnelProviderOnboardingError.invalidArgument("invalid base64 config secret")
-        }
-        return data
     }
 }
 
@@ -166,6 +55,33 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var secureLinkConnectedSinceUnixTS: Int?
     private var secureLinkLastAuthenticatedUnixTS: Int?
     private var secureLinkLastSessionID: UInt64 = 0
+    private lazy var adminAuth = ObstacleBridgeAdminAuth(
+        queueLabel: "PacketTunnelProvider.AdminAuth",
+        authRequiredProvider: { [weak self] in
+            self?.adminAuthRequired() ?? false
+        },
+        usernameProvider: { [weak self] in
+            self?.adminAuthUsername() ?? ""
+        },
+        passwordProvider: { [weak self] in
+            self?.adminAuthPassword() ?? ""
+        },
+        bearerTokenProvider: { [weak self] in
+            self?.adminWebToken() ?? ""
+        },
+        cookieScopeProvider: { [weak self] in
+            self?.adminSessionCookieScope() ?? ""
+        }
+    )
+    private lazy var adminConfigChallengeStore = ObstacleBridgeAdminConfigChallenge(
+        queueLabel: "PacketTunnelProvider.AdminConfigChallenge",
+        usernameProvider: { [weak self] in
+            self?.adminAuthUsername() ?? ""
+        },
+        passwordProvider: { [weak self] in
+            self?.adminAuthPassword() ?? ""
+        }
+    )
 
     override init() {
         super.init()
@@ -859,7 +775,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         else {
             return nil
         }
-        return (try? PacketTunnelProviderConfigSecretCodec.decryptPayload(rawJSON)) ?? rawJSON
+        return (try? ObstacleBridgeConfigSecretCodec.decryptPayload(rawJSON)) ?? rawJSON
     }
 
     private func swiftSimpleUDPPeerSettings(
@@ -892,14 +808,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         guard let payload = runtimeConfigPayload(providerConfiguration: providerConfiguration) else {
             return []
         }
-        return Self.remoteServiceCatalogMuxFrames(from: payload)
+        return ObstacleBridgeRuntimeConfig.remoteServiceCatalogMuxFrames(from: payload)
     }
 
     private static func decodedProviderRuntimeConfig(_ providerConfiguration: [String: Any]?) -> [String: Any]? {
         guard let runtimeConfig = providerConfiguration?["runtime_config"] as? [String: Any] else {
             return nil
         }
-        if let decrypted = try? PacketTunnelProviderConfigSecretCodec.decryptPayload(runtimeConfig) {
+        if let decrypted = try? ObstacleBridgeConfigSecretCodec.decryptPayload(runtimeConfig) {
             return decrypted
         }
         return runtimeConfig
@@ -1049,40 +965,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func staticFileResponse(path: String) -> (contentType: String, body: Data)? {
-        let cleanedPath = normalizeStaticPath(path)
         guard let adminWebDirectory = sharedAdminWebDirectoryURL() else {
             return nil
         }
-        let fileURL = adminWebDirectory.appendingPathComponent(cleanedPath, isDirectory: false)
-        guard fileURL.path.hasPrefix(adminWebDirectory.path),
-              let data = try? Data(contentsOf: fileURL) else {
-            return nil
-        }
-        return (contentType(for: fileURL.pathExtension), data)
-    }
-
-    private func normalizeStaticPath(_ rawPath: String) -> String {
-        let basePath = rawPath.split(separator: "?", maxSplits: 1).first.map(String.init) ?? "/"
-        let candidate = basePath == "/" ? "index.html" : String(basePath.drop(while: { $0 == "/" }))
-        let components = candidate.split(separator: "/").filter { $0 != "." && $0 != ".." }
-        return components.isEmpty ? "index.html" : components.joined(separator: "/")
-    }
-
-    private func contentType(for pathExtension: String) -> String {
-        switch pathExtension.lowercased() {
-        case "html":
-            return "text/html; charset=utf-8"
-        case "js":
-            return "application/javascript; charset=utf-8"
-        case "css":
-            return "text/css; charset=utf-8"
-        case "json":
-            return "application/json; charset=utf-8"
-        case "svg":
-            return "image/svg+xml"
-        default:
-            return "application/octet-stream"
-        }
+        return ObstacleBridgeAdminWebSupport.staticFileResponse(baseDirectoryURL: adminWebDirectory, path: path)
     }
 
     private static func packetflowConnectorMode(from payload: [String: Any]) -> String? {
@@ -1091,49 +977,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private static func localTCPServiceSpecs(from payload: [String: Any]) -> [ObstacleBridgeChannelMuxCodec.ServiceSpec] {
         ObstacleBridgeRuntimeConfig.localTCPServiceSpecs(from: payload)
-    }
-
-    private static func remoteServiceCatalogMuxFrames(from payload: [String: Any]) -> [Data] {
-        let specs = ObstacleBridgeRuntimeConfig.remoteServerSpecs(from: payload, preserveInputIndices: true)
-            .map { $0.toChannelMuxServiceSpec() }
-        guard !specs.isEmpty else {
-            return []
-        }
-        do {
-            let payload = try ObstacleBridgeChannelMuxCodec.encodeRemoteServicesSetV2(
-                instanceID: 0,
-                connectionSeq: 0,
-                services: specs
-            )
-            if ObstacleBridgeChannelMuxCodec.muxHeaderSize + payload.count <= 65535 {
-                return [
-                    try ObstacleBridgeChannelMuxCodec.packMux(
-                        chanID: 0,
-                        proto: .udp,
-                        counter: 0,
-                        mtype: .remoteServicesSetV2,
-                        body: payload
-                    )
-                ]
-            }
-            let tx = ObstacleBridgeChannelMuxCodec.nextControlChunkTxID(current: 1)
-            let chunks = ObstacleBridgeChannelMuxCodec.chunkControlPayload(
-                txID: tx.txID,
-                maxAppPayload: 65535,
-                payload: payload
-            )
-            return try chunks.enumerated().map { index, chunk in
-                try ObstacleBridgeChannelMuxCodec.packMux(
-                    chanID: 0,
-                    proto: .udp,
-                    counter: index & 0xFFFF,
-                    mtype: .remoteServicesSetV2Chunk,
-                    body: chunk
-                )
-            }
-        } catch {
-            return []
-        }
     }
 
     private static func intValue(from value: Any?) -> Int? {
@@ -1195,23 +1038,25 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         let bridgeSnapshot = adminBridgeSnapshot()
         let startedAt = adminStartedAt(bridgeSnapshot: bridgeSnapshot)
         let runtimeConfig = adminRuntimeConfigPayload() ?? [:]
-        var payload: [String: Any] = [
-            "runtime_owner": "IPServer Network Extension",
-            "runtime_mode": runtimeMode,
-            "admin_web_name": ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_name"]) ?? "",
-            "admin_ui": adminUIPayload(runtimeConfig: runtimeConfig),
-            "security_advisor": securityAdvisorPayload(runtimeConfig: runtimeConfig),
-            "started_at": startedAt,
-            "uptime_sec": adminUptimeSeconds(startedAt: startedAt),
-            "packet_pump_running": packetPumpRunning,
-            "provider_state_update_count": providerStateUpdateCount,
-            "heartbeat_tick_count": heartbeatTickCount,
-            "bootstrap_state": sharedOverlayBootstrapState,
-            "bridge_state": ObstacleBridgePacketFlowBridge.bridgeStateSnapshot(),
-            "shared_overlay_bootstrap_state": sharedOverlayBootstrapState,
-            "transport_runtime": adminTransportRuntimeSnapshot(bridgeSnapshot: bridgeSnapshot),
-            "compress_layer": adminCompressLayerSnapshot() ?? NSNull(),
-        ]
+        var payload = ObstacleBridgeAdminSnapshotSupport.statusEnvelope(
+            runtimeOwner: "IPServer Network Extension",
+            runtimeMode: runtimeMode,
+            adminWebName: ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_name"]) ?? "",
+            adminUI: adminUIPayload(runtimeConfig: runtimeConfig),
+            securityAdvisor: securityAdvisorPayload(runtimeConfig: runtimeConfig),
+            startedAt: startedAt,
+            uptimeSec: adminUptimeSeconds(startedAt: startedAt),
+            bootstrapState: sharedOverlayBootstrapState,
+            transportRuntime: adminTransportRuntimeSnapshot(bridgeSnapshot: bridgeSnapshot),
+            compressLayer: adminCompressLayerSnapshot() ?? NSNull(),
+            extra: [
+                "packet_pump_running": packetPumpRunning,
+                "provider_state_update_count": providerStateUpdateCount,
+                "heartbeat_tick_count": heartbeatTickCount,
+                "bridge_state": ObstacleBridgePacketFlowBridge.bridgeStateSnapshot(),
+                "shared_overlay_bootstrap_state": sharedOverlayBootstrapState,
+            ]
+        )
         if !bridgeSnapshot.isEmpty {
             payload["swift_udp_bridge_state"] = bridgeSnapshot
         }
@@ -1275,58 +1120,90 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             return false
         }
         let myudpRuntime = bridgeSnapshot["myudp_runtime"] as? [String: Any] ?? [:]
-        guard let lastRttOkNS = myudpRuntime["last_rtt_ok_ns"] as? UInt64
-            ?? (myudpRuntime["last_rtt_ok_ns"] as? NSNumber)?.uint64Value else {
-            return adminBoolValue(myudpRuntime["connected"])
-        }
-        let now = DispatchTime.now().uptimeNanoseconds
-        guard now >= lastRttOkNS else {
-            return false
-        }
-        return (now - lastRttOkNS) <= 20_000_000_000
+        return ObstacleBridgeAdminSnapshotSupport.transportConnected(
+            lastRttOKNSValue: myudpRuntime["last_rtt_ok_ns"],
+            fallbackConnected: adminBoolValue(myudpRuntime["connected"])
+        )
     }
 
     private func adminLastIncomingAgeSeconds(runtime: [String: Any]) -> Any {
-        guard let lastRxWall = runtime["last_rx_wall_ns"] as? UInt64, lastRxWall > 0 else {
-            return NSNull()
-        }
-        let now = DispatchTime.now().uptimeNanoseconds
-        guard now >= lastRxWall else {
-            return NSNull()
-        }
-        return Double(now - lastRxWall) / 1_000_000_000.0
+        ObstacleBridgeAdminSnapshotSupport.lastIncomingAgeSeconds(from: runtime)
     }
 
     func adminMetaSnapshot() -> [String: Any] {
         let bridgeSnapshot = adminBridgeSnapshot()
         let startedAt = adminStartedAt(bridgeSnapshot: bridgeSnapshot)
         let runtimeConfig = adminRuntimeConfigPayload() ?? [:]
-        return [
-            "runtime_owner": "IPServer Network Extension",
-            "runtime_mode": runtimeMode,
-            "admin_web_name": ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_name"]) ?? "",
-            "admin_ui": adminUIPayload(runtimeConfig: runtimeConfig),
-            "security_advisor": securityAdvisorPayload(runtimeConfig: runtimeConfig),
-            "started_at": startedAt,
-            "uptime_sec": adminUptimeSeconds(startedAt: startedAt),
-            "bootstrap_state": sharedOverlayBootstrapState,
-            "effective_tunnel_network_settings": effectivePacketTunnelSettingsState,
-            "control_actions": [
+        return ObstacleBridgeAdminSnapshotSupport.metaEnvelope(
+            runtimeOwner: "IPServer Network Extension",
+            runtimeMode: runtimeMode,
+            adminWebName: ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_name"]) ?? "",
+            adminUI: adminUIPayload(runtimeConfig: runtimeConfig),
+            securityAdvisor: securityAdvisorPayload(runtimeConfig: runtimeConfig),
+            startedAt: startedAt,
+            uptimeSec: adminUptimeSeconds(startedAt: startedAt),
+            bootstrapState: sharedOverlayBootstrapState,
+            transportRuntime: adminTransportRuntimeSnapshot(bridgeSnapshot: bridgeSnapshot),
+            compressLayer: adminCompressLayerSnapshot() ?? NSNull(),
+            extra: [
+                "effective_tunnel_network_settings": effectivePacketTunnelSettingsState,
+                "control_actions": [
                 "restart_supported": true,
                 "reconnect_supported": true,
                 "shutdown_supported": false,
-            ],
-            "transport_runtime": adminTransportRuntimeSnapshot(bridgeSnapshot: bridgeSnapshot),
-            "compress_layer": adminCompressLayerSnapshot() ?? NSNull(),
-            "secure_link": adminSecureLinkSnapshot(state: packetPumpRunning ? "connected" : "idle"),
-        ]
+                ],
+                "secure_link": adminSecureLinkSnapshot(state: packetPumpRunning ? "connected" : "idle"),
+            ]
+        )
     }
 
     func adminConfigSnapshot() -> [String: Any] {
-        [
-            "config": ObstacleBridgeRuntimeConfig.maskedConfigSnapshot(adminRuntimeConfigPayload() ?? [:]),
-            "schema": ObstacleBridgeRuntimeConfig.configSchemaSnapshot(),
-        ]
+        ObstacleBridgeAdminSnapshotSupport.configEnvelope(
+            config: ObstacleBridgeRuntimeConfig.maskedConfigSnapshot(adminRuntimeConfigPayload() ?? [:]),
+            schema: ObstacleBridgeRuntimeConfig.configSchemaSnapshot()
+        )
+    }
+
+    func adminConfigChallenge(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        ObstacleBridgeAdminConfigSupport.configChallengeResponse(
+            request: request,
+            authRequired: adminAuthRequired(),
+            authenticated: adminIsAuthenticated(headers: request.headers),
+            challengeIssuer: { [weak self] updates in
+                guard let self else {
+                    throw NSError(domain: "ObstacleBridge.IPServer", code: 27, userInfo: [NSLocalizedDescriptionKey: "provider unavailable"])
+                }
+                return try self.adminConfigChallengeStore.issueChallenge(updates: updates)
+            }
+        )
+    }
+
+    func adminAuthRequired() -> Bool {
+        let runtimeConfig = adminRuntimeConfigPayload() ?? [:]
+        if ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_web_auth_disable"]) ?? false {
+            return false
+        }
+        return !adminAuthUsername().isEmpty && !adminAuthPassword().isEmpty
+    }
+
+    func adminIsAuthenticated(headers: [String: String]) -> Bool {
+        adminAuth.isAuthenticated(headers: headers)
+    }
+
+    func adminAuthState(headers: [String: String]) -> [String: Any] {
+        adminAuth.authState(headers: headers)
+    }
+
+    func adminAuthChallenge(method: String) -> ObstacleBridgeAdminAPIResponse {
+        adminAuth.authChallenge(method: method)
+    }
+
+    func adminAuthLogin(method: String, body: Data?) -> ObstacleBridgeAdminAPIResponse {
+        adminAuth.authLogin(method: method, body: body)
+    }
+
+    func adminAuthLogout(method: String, headers: [String: String]) -> ObstacleBridgeAdminAPIResponse {
+        adminAuth.authLogout(method: method, headers: headers)
     }
 
     func adminOnboardingConnectionProfiles() -> [[String: Any]] {
@@ -1338,125 +1215,49 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
     }
 
     func adminOnboardingInviteGenerate(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
-        guard request.method.uppercased() == "POST" else {
-            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
-        }
-        guard let body = request.body,
-              let object = try? JSONSerialization.jsonObject(with: body),
-              let payload = object as? [String: Any] else {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": "invalid JSON body",
-            ], statusLine: "HTTP/1.1 400 Bad Request")
-        }
         let profiles = adminOnboardingConnectionProfiles()
-        let connectionID = (payload["connection_id"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let selectedConnection: [String: Any]?
-        if profiles.count > 1 && connectionID.isEmpty {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": "multiple connection profiles available; select connection_id",
-                "profiles": profiles,
-            ], statusLine: "HTTP/1.1 409 Conflict")
-        }
-        if !connectionID.isEmpty {
-            selectedConnection = profiles.first { String(describing: $0["id"] ?? "") == connectionID }
-            if selectedConnection == nil {
-                return ObstacleBridgeAdminAPI.jsonResponse([
-                    "ok": false,
-                    "error": "unknown connection_id: \(connectionID)",
-                ], statusLine: "HTTP/1.1 400 Bad Request")
-            }
-        } else {
-            selectedConnection = profiles.first
-        }
-        let runtimeConfig = ObstacleBridgeOnboarding.tokenRuntimeConfig(
+        return ObstacleBridgeAdminConfigSupport.inviteGenerateResponse(
+            method: request.method,
+            body: request.body,
             runtimeConfig: adminRuntimeConfigPayload() ?? [:],
-            requestPayload: payload
+            profiles: profiles,
+            encryptSecrets: ObstacleBridgeConfigSecretCodec.encryptPayload
         )
-        let own = ObstacleBridgeOnboarding.sanitizeServices(payload["own_servers"] ?? runtimeConfig["own_servers"])
-        let remote = ObstacleBridgeOnboarding.sanitizeServices(payload["remote_servers"] ?? runtimeConfig["remote_servers"])
-        let preview = ObstacleBridgeOnboarding.tokenPayload(
-            runtimeConfig: runtimeConfig,
-            connection: selectedConnection ?? [:],
-            ownServices: own,
-            remoteServices: remote,
-            encryptSecrets: PacketTunnelProviderConfigSecretCodec.encryptPayload
-        )
-        do {
-            let token = try ObstacleBridgeOnboarding.encodeToken(preview)
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": true,
-                "invite_token": token,
-                "preview": preview,
-            ])
-        } catch {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": "failed to encode invite token",
-            ], statusLine: "HTTP/1.1 400 Bad Request")
-        }
     }
 
     func adminOnboardingInvitePreview(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
-        guard request.method.uppercased() == "POST" else {
-            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
-        }
-        guard let body = request.body,
-              let object = try? JSONSerialization.jsonObject(with: body),
-              let payload = object as? [String: Any] else {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": "invalid JSON body",
-            ], statusLine: "HTTP/1.1 400 Bad Request")
-        }
-        let token = (payload["invite_token"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !token.isEmpty else {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": "invite_token is required",
-            ], statusLine: "HTTP/1.1 400 Bad Request")
-        }
-        do {
-            let decoded = try ObstacleBridgeOnboarding.decodeToken(token)
-            var preview = decoded
-            if let psk = preview["secure_link_psk"] as? String, !psk.isEmpty {
-                preview["secure_link_psk"] = "***hidden***"
-                preview["secure_link_psk_present"] = true
-            }
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": true,
-                "preview": preview,
-                "suggested_updates": try ObstacleBridgeOnboarding.updates(
-                    from: decoded,
-                    decryptSecrets: PacketTunnelProviderConfigSecretCodec.decryptPayload
-                ),
-            ])
-        } catch {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": error.localizedDescription,
-            ], statusLine: "HTTP/1.1 400 Bad Request")
-        }
+        ObstacleBridgeAdminConfigSupport.invitePreviewResponse(
+            method: request.method,
+            body: request.body,
+            decryptSecrets: ObstacleBridgeConfigSecretCodec.decryptPayload
+        )
     }
 
     func adminUpdateConfig(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
-        guard request.method.uppercased() == "POST" else {
-            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
+        let payload: [String: Any]
+        switch ObstacleBridgeAdminConfigSupport.jsonObjectBody(method: request.method, expectedMethod: "POST", body: request.body) {
+        case .response(let response):
+            return response
+        case .payload(let value):
+            payload = value
         }
-        guard let body = request.body,
-              let object = try? JSONSerialization.jsonObject(with: body),
-              let payload = object as? [String: Any] else {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": "invalid JSON body",
-            ], statusLine: "HTTP/1.1 400 Bad Request")
+        let updates: [String: Any]
+        switch ObstacleBridgeAdminConfigSupport.updatesObject(from: payload) {
+        case .response(let response):
+            return response
+        case .payload(let value):
+            updates = value
         }
-        guard let updates = payload["updates"] as? [String: Any] else {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": "updates must be an object",
-            ], statusLine: "HTTP/1.1 400 Bad Request")
+
+        if let response = ObstacleBridgeAdminConfigSupport.validateConfigChallengePayload(
+            payload: payload,
+            updates: updates,
+            authRequired: adminAuthRequired(),
+            challengeValidator: { [weak self] challengeID, proof, updates in
+                self?.adminConfigChallengeStore.validate(challengeID: challengeID, proof: proof, updates: updates)
+            }
+        ) {
+            return response
         }
 
         do {
@@ -1472,15 +1273,15 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         if restartAfterSave {
             scheduleEmbeddedRuntimeReload(action: "restart_after_save")
         }
-        return ObstacleBridgeAdminAPI.jsonResponse([
-            "ok": true,
-            "config": ObstacleBridgeRuntimeConfig.maskedConfigSnapshot(adminRuntimeConfigPayload() ?? [:]),
-            "restart_requested": restartAfterSave,
-            "restart_supported": true,
-            "restart_delay_sec": 0,
-            "restart_embedded": restartAfterSave,
-            "restart_mode": restartAfterSave ? "immediate" : "",
-        ])
+        if updates.keys.contains(where: { ["admin_web_auth_disable", "admin_web_username", "admin_web_password", "secure_link_psk"].contains($0) }) {
+            adminConfigChallengeStore.reset()
+            adminAuth.resetState()
+        }
+        return ObstacleBridgeAdminConfigSupport.configUpdateSuccessResponse(
+            maskedConfig: ObstacleBridgeRuntimeConfig.maskedConfigSnapshot(adminRuntimeConfigPayload() ?? [:]),
+            restartAfterSave: restartAfterSave,
+            restartEmbedded: restartAfterSave
+        )
     }
 
     func adminLogLines(limit: Int) -> [String] {
@@ -1514,129 +1315,73 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         ]
     }
 
+    func adminRequestRestart(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        guard request.method.uppercased() == "POST" else {
+            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
+        }
+        if let forbidden = adminAuth.validateBearer(headers: request.headers) {
+            return forbidden
+        }
+        return ObstacleBridgeAdminAPI.jsonResponse(adminRequestRestart())
+    }
+
+    func adminRequestReconnect(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        guard request.method.uppercased() == "POST" else {
+            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
+        }
+        if let forbidden = adminAuth.validateBearer(headers: request.headers) {
+            return forbidden
+        }
+        return ObstacleBridgeAdminAPI.jsonResponse(adminRequestReconnect())
+    }
+
+    func adminRequestShutdown(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        guard request.method.uppercased() == "POST" else {
+            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
+        }
+        if let forbidden = adminAuth.validateBearer(headers: request.headers) {
+            return forbidden
+        }
+        return ObstacleBridgeAdminAPI.jsonResponse(adminRequestShutdown())
+    }
+
     private func adminRuntimeDependenciesPayload() -> [String: Any] {
-        [
-            "ok": true,
-            "missing": [],
-            "install_hint": "",
-        ]
+        ObstacleBridgeAdminWebSupport.adminRuntimeDependenciesPayload()
     }
 
     private func adminUIPayload(runtimeConfig: [String: Any]) -> [String: Any] {
-        let bootstrapState = ObstacleBridgeRuntimeConfig.adminUIBootstrapState(from: runtimeConfig)
-        return [
-            "home_tab_enabled": true,
-            "landing_page_enabled": false,
-            "security_advisor_enabled": !(ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_web_security_advisor_disable"]) ?? false),
-            "security_advisor_startup_enabled": !(ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_web_security_advisor_startup_disable"]) ?? false),
-            "first_tab": ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_first_tab"]) ?? "home",
-            "first_start_detected": bootstrapState.firstStartDetected,
-            "config_file_state": bootstrapState.configFileState,
-            "platform": "ios",
-            "runtime_dependencies": adminRuntimeDependenciesPayload(),
-        ]
+        ObstacleBridgeAdminWebSupport.adminUIPayload(
+            runtimeConfig: runtimeConfig,
+            platform: "ios",
+            runtimeDependencies: adminRuntimeDependenciesPayload()
+        )
     }
 
     private func securityAdvisorPayload(runtimeConfig: [String: Any]) -> [String: Any] {
-        let enabled = !(ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_web_security_advisor_disable"]) ?? false)
-        let bind = (ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_bind"]) ?? "127.0.0.1")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let adminLocalOnly = Self.isLoopbackHost(bind)
-        let secureMode = (ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["secure_link_mode"]) ?? "off")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        let securePSK = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["secure_link_psk"]) ?? ""
-        let authDisabled = ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_web_auth_disable"]) ?? false
-        var findings: [[String: Any]] = []
-        if enabled {
-            if (ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_web"]) ?? false), authDisabled {
-                let adminMessage = adminLocalOnly
-                    ? "Admin Web password protection is recommended even on localhost-only setups. Enable admin authentication in the configuration unless you intentionally want friction-free local access."
-                    : "Admin Web is reachable beyond localhost and admin authentication is disabled in the configuration. This should be treated as a warning. Enable admin authentication or bind Admin Web to localhost."
-                findings.append([
-                    "id": "admin_auth_disabled",
-                    "severity": adminLocalOnly ? "recommended" : "warning",
-                    "title": "Protect Admin Web",
-                    "message": adminMessage,
-                    "action_label": "Open Configuration",
-                    "action_target": "configuration",
-                ])
-            }
-            if ["", "off", "none"].contains(secureMode) {
-                let message = adminLocalOnly
-                    ? "SecureLink is currently disabled. That can be acceptable for localhost-only or lab-style setups, but enabling SecureLink is still recommended."
-                    : "This node is not localhost-only and SecureLink is currently disabled. Running without SecureLink should be treated as a warning. Start with PSK for quick protection or move to certificates for deployment-grade trust."
-                findings.append([
-                    "id": "secure_link_disabled",
-                    "severity": adminLocalOnly ? "recommended" : "warning",
-                    "title": "Enable SecureLink",
-                    "message": message,
-                    "action_label": "Open Secure-Link",
-                    "action_target": "secure-link",
-                ])
-            } else if secureMode == "psk" {
-                if securePSK.trimmingCharacters(in: .whitespacesAndNewlines).count < 12 {
-                    findings.append([
-                        "id": "secure_link_psk_weak",
-                        "severity": "recommended",
-                        "title": "Strengthen PSK",
-                        "message": "SecureLink PSK is enabled, but the configured secret looks short. Use a stronger shared secret for better protection.",
-                        "action_label": "Open Configuration",
-                        "action_target": "configuration",
-                    ])
-                }
-                findings.append([
-                    "id": "secure_link_cert_followup",
-                    "severity": "informational",
-                    "title": "Plan Certificate Trust",
-                    "message": "PSK is a good quick-start protection mode. For longer-lived deployments, certificate-based SecureLink provides a stronger operational trust model.",
-                    "action_label": "Open Secure-Link",
-                    "action_target": "secure-link",
-                ])
-            }
-        }
-        let highest: String
-        if findings.contains(where: { String(describing: $0["severity"] ?? "") == "critical" }) {
-            highest = "critical"
-        } else if findings.contains(where: { String(describing: $0["severity"] ?? "") == "warning" }) {
-            highest = "warning"
-        } else if findings.contains(where: { String(describing: $0["severity"] ?? "") == "recommended" }) {
-            highest = "recommended"
-        } else {
-            highest = "informational"
-        }
-        let summary: String
-        if !enabled {
-            summary = "Security advisor disabled."
-        } else if findings.isEmpty {
-            summary = "Current settings look reasonably hardened for this first implementation slice."
-        } else if highest == "critical" {
-            summary = "Security advisor found settings that should be addressed before wider exposure."
-        } else if highest == "warning" {
-            summary = "Security advisor found warning-level hardening issues for this node."
-        } else if highest == "recommended" {
-            summary = "Security advisor found recommended hardening steps for this node."
-        } else {
-            summary = "Security advisor found optional follow-up improvements."
-        }
-        return [
-            "enabled": enabled,
-            "summary": summary,
-            "highest_severity": highest,
-            "findings": findings,
-        ]
+        ObstacleBridgeAdminWebSupport.securityAdvisorPayload(
+            runtimeConfig: runtimeConfig,
+            bindHostFallback: "127.0.0.1"
+        )
     }
 
-    private static func isLoopbackHost(_ value: String) -> Bool {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return false
-        }
-        let lowered = trimmed.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        if lowered == "localhost" || lowered == "ip6-localhost" {
-            return true
-        }
-        return lowered == "127.0.0.1" || lowered == "::1"
+    private func adminAuthUsername() -> String {
+        ObstacleBridgeRuntimeConfig.stringValue(from: adminRuntimeConfigPayload()?["admin_web_username"]) ?? ""
+    }
+
+    private func adminAuthPassword() -> String {
+        ObstacleBridgeRuntimeConfig.stringValue(from: adminRuntimeConfigPayload()?["admin_web_password"]) ?? ""
+    }
+
+    private func adminWebToken() -> String {
+        ObstacleBridgeRuntimeConfig.stringValue(from: adminRuntimeConfigPayload()?["admin_web_token"]) ?? ""
+    }
+
+    private func adminSessionCookieScope() -> String {
+        let runtimeConfig = adminRuntimeConfigPayload() ?? [:]
+        let bindHost = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_bind"]) ?? "127.0.0.1"
+        let port = ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["admin_web_port"]) ?? 18080
+        let path = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_path"]) ?? "/"
+        return [bindHost, String(port), path].joined(separator: "|")
     }
 
     private func adminRuntimeConfigPayload() -> [String: Any]? {
@@ -1664,62 +1409,14 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
     private func persistAdminConfigUpdates(_ updates: [String: Any]) throws {
         let currentRawConfig = adminRuntimeConfigRawPayload()
         let currentRuntimeConfig = ObstacleBridgeRuntimeConfig.flatten(currentRawConfig)
-        let normalized = ObstacleBridgeRuntimeConfig.normalizedConfigUpdates(updates, currentRuntimeConfig: currentRuntimeConfig)
-        let grouped = ObstacleBridgeRuntimeConfig.looksGrouped(currentRawConfig)
-        var nextRawConfig = currentRawConfig
-
-        for (key, rawValue) in normalized {
-            guard let schemaRow = ObstacleBridgeRuntimeConfig.schemaRow(forKey: key) else {
-                throw NSError(domain: errorDomain, code: 20, userInfo: [NSLocalizedDescriptionKey: "unknown config key: \(key)"])
-            }
-            let value = try validatedAdminConfigValue(key: key, rawValue: rawValue, schemaRow: schemaRow)
-            if grouped, let section = ObstacleBridgeRuntimeConfig.sectionName(forKey: key) {
-                var block = (nextRawConfig[section] as? [String: Any]) ?? [:]
-                block[key] = value
-                nextRawConfig[section] = block
-            } else {
-                nextRawConfig[key] = value
-            }
-        }
-
+        let result = try ObstacleBridgeAdminConfigSupport.validatedNextRawConfig(
+            currentRawConfig: currentRawConfig,
+            currentRuntimeConfig: currentRuntimeConfig,
+            updates: updates
+        )
+        let nextRawConfig = result.nextRawConfig
         try persistSharedRuntimeConfigJSON(nextRawConfig)
-        recordNativeEvent("admin_config_updated", fields: ["keys": Array(normalized.keys).sorted()])
-    }
-
-    private func validatedAdminConfigValue(key: String, rawValue: Any, schemaRow: [String: Any]) throws -> Any {
-        let defaultValue = schemaRow["default"]
-        switch defaultValue {
-        case is Bool:
-            guard let boolValue = rawValue as? Bool else {
-                throw NSError(domain: errorDomain, code: 21, userInfo: [NSLocalizedDescriptionKey: "\(key) expects boolean"])
-            }
-            return boolValue
-        case is Int:
-            guard let intValue = rawValue as? Int else {
-                throw NSError(domain: errorDomain, code: 22, userInfo: [NSLocalizedDescriptionKey: "\(key) expects integer"])
-            }
-            return intValue
-        case is Double:
-            if let doubleValue = rawValue as? Double {
-                return doubleValue
-            }
-            if let intValue = rawValue as? Int {
-                return Double(intValue)
-            }
-            throw NSError(domain: errorDomain, code: 23, userInfo: [NSLocalizedDescriptionKey: "\(key) expects number"])
-        case is String:
-            guard let stringValue = rawValue as? String else {
-                throw NSError(domain: errorDomain, code: 24, userInfo: [NSLocalizedDescriptionKey: "\(key) expects string"])
-            }
-            return stringValue
-        case is [Any]:
-            guard let listValue = rawValue as? [Any] else {
-                throw NSError(domain: errorDomain, code: 25, userInfo: [NSLocalizedDescriptionKey: "\(key) expects list"])
-            }
-            return listValue
-        default:
-            return rawValue
-        }
+        recordNativeEvent("admin_config_updated", fields: ["keys": result.normalizedKeys])
     }
 
     private func persistSharedRuntimeConfigJSON(_ payload: [String: Any]) throws {
@@ -1728,7 +1425,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         }
         let directoryURL = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        let persistedPayload = try PacketTunnelProviderConfigSecretCodec.encryptPayload(payload)
+        let persistedPayload = try ObstacleBridgeConfigSecretCodec.encryptPayload(payload)
         let data = try JSONSerialization.data(withJSONObject: persistedPayload, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: url, options: [.atomic])
     }
@@ -1754,17 +1451,21 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
     private func adminTransportRuntimeSnapshot(bridgeSnapshot: [String: Any]) -> [String: Any] {
         let overlayConnected = adminTransportConnectedState(bridgeSnapshot: bridgeSnapshot)
         let myudpRuntime = bridgeSnapshot["myudp_runtime"] as? [String: Any] ?? [:]
-        return [
-            "packetflow_bridge": ObstacleBridgePacketFlowBridge.bridgeStateSnapshot(),
-            "swift_udp_bridge_state": bridgeSnapshot,
-            "myudp": myudpRuntime,
-            "tcp": [
+        return ObstacleBridgeAdminSnapshotSupport.transportRuntimeEnvelope(
+            kind: ObstacleBridgeRuntimeConfig.stringValue(from: adminRuntimeConfigPayload()?["overlay_transport"]) ?? "myudp",
+            status: sharedOverlayBootstrapState["status"] ?? "unknown",
+            myudp: myudpRuntime,
+            tcp: [
                 "overlay_connected": overlayConnected,
                 "listener_count": adminIntValue(bridgeSnapshot["tcp_listener_count"]),
                 "server_connection_count": adminIntValue(bridgeSnapshot["tcp_server_connection_count"]),
                 "client_connection_count": adminIntValue(bridgeSnapshot["tcp_client_connection_count"]),
             ],
-        ]
+            extra: [
+                "packetflow_bridge": ObstacleBridgePacketFlowBridge.bridgeStateSnapshot(),
+                "swift_udp_bridge_state": bridgeSnapshot,
+            ]
+        )
     }
 
     private func adminPeerTraffic(bridgeSnapshot: [String: Any]) -> [String: Any] {
@@ -2265,43 +1966,6 @@ private struct SwiftSimpleUDPPeerSettings {
 }
 
 private final class SwiftSimpleUDPPeerBridge {
-    private struct ConnectionState {
-        let proto: String
-        let role: String
-        let chanID: Int
-        let svcID: Int
-        let serviceName: String
-        let remoteHost: String
-        let remotePort: Int
-        var state: String
-        var localHost: String?
-        var localPort: Int?
-        var stats: [String: Int]
-
-        func snapshot() -> [String: Any] {
-            [
-                "protocol": proto,
-                "role": role,
-                "state": state,
-                "chan_id": chanID,
-                "svc_id": svcID,
-                "service_name": serviceName,
-                "source": NSNull(),
-                "local": endpoint(host: localHost, port: localPort),
-                "local_port": localPort ?? NSNull(),
-                "remote_destination": endpoint(host: remoteHost, port: remotePort),
-                "stats": stats,
-            ]
-        }
-
-        private func endpoint(host: String?, port: Int?) -> Any {
-            guard let host, let port else {
-                return NSNull()
-            }
-            return ["host": host, "port": port]
-        }
-    }
-
     private static let queueKey = DispatchSpecificKey<UInt8>()
     private static let peerFallbackIdleNS: UInt64 = 3_000_000_000
     private weak var provider: PacketTunnelProvider?
@@ -2310,25 +1974,20 @@ private final class SwiftSimpleUDPPeerBridge {
     private let tcpServiceSpecs: [ObstacleBridgeChannelMuxCodec.ServiceSpec]
     private let startupMuxFrames: [Data]
     private let queue = DispatchQueue(label: "com.obstaclebridge.ipserver.swift-simple-udp-peer")
+    private var udpOverlayTransportOwner: ObstacleBridgeUdpOverlayTransportOwner?
     private var socketFD: Int32 = -1
     private let socketFamily: Int32
     private let peerCandidates: [ResolvedAddress]
     private var peerCandidateIndex = 0
     private var peerAddress: ResolvedAddress
-    private var overlayRuntime: ObstacleBridgeUdpOverlayPeerRuntime?
-    private var channelMuxTunRuntime: ObstacleBridgeChannelMuxTunRuntime?
-    private var channelMuxTcpTransportOwner: ObstacleBridgeChannelMuxTCPTransportOwner?
     private var overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
     private var tcpListeners: [Int: NWListener] = [:]
     private var readSource: DispatchSourceRead?
-    private var controlTimer: DispatchSourceTimer?
-    private var retransmitTimer: DispatchSourceTimer?
     private var peerFallbackTimer: DispatchSourceTimer?
     private var started = false
     private var startedAt = Date().timeIntervalSince1970
     private var currentPeerSelectedAtNS: UInt64 = 0
     private var lastInboundDatagramNS: UInt64 = 0
-    private var startupMuxFramesSent = false
     private var packetsFromSystem = 0
     private var packetsToSystem = 0
     private var bytesFromSystem = 0
@@ -2340,12 +1999,7 @@ private final class SwiftSimpleUDPPeerBridge {
     private var packetFlowCallbacks = 0
     private var lastFromSystemAt = 0.0
     private var lastToSystemAt = 0.0
-    private var overlayFramesFromSystem = 0
-    private var overlayFramesToSystem = 0
     private var tcpListenerFailures = 0
-    private var tcpConnectionsAccepted = 0
-    private var tcpConnectionsDialed = 0
-    private var tcpConnectionStates: [Int: ConnectionState] = [:]
 
     init(
         provider: PacketTunnelProvider? = nil,
@@ -2363,58 +2017,49 @@ private final class SwiftSimpleUDPPeerBridge {
         self.overlayLayerTransportAdapter = overlayLayerTransportAdapter
         let sessionMaxAppPayload = ObstacleBridgeRuntimeConfig.overlaySessionMaxAppPayload(from: settings.runtimeConfig)
         self.queue.setSpecific(key: Self.queueKey, value: 1)
-        let boundSocket = try Self.makeBoundSocket(
-            bindHost: settings.bindHost,
-            bindPort: settings.bindPort,
-            peerHost: settings.peerHost,
-            peerPort: settings.peerPort,
-            peerResolveFamily: settings.peerResolveFamily
-        )
-        self.socketFD = boundSocket.socketFD
-        self.socketFamily = boundSocket.socketFamily
-        self.peerCandidates = boundSocket.peerCandidates
-        self.peerAddress = boundSocket.peerAddress
         if settings.runtimeMode == "swift_udp" {
-            self.overlayRuntime = ObstacleBridgeUdpOverlayPeerRuntime()
-            self.channelMuxTunRuntime = ObstacleBridgeChannelMuxTunRuntime(
-                instanceID: UInt64.random(in: 1...UInt64.max),
-                connectionSeq: UInt32.random(in: 1...UInt32.max),
-                localSpec: ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: settings.tunIfname, mtu: settings.mtu)
+            self.socketFD = -1
+            self.socketFamily = AF_INET
+            self.peerCandidates = []
+            self.peerAddress = ResolvedAddress(
+                family: AF_INET,
+                host: settings.peerHost,
+                port: settings.peerPort,
+                storage: Data(),
+                length: 0
             )
-            let tcpRuntime = ObstacleBridgeChannelMuxTcpRuntime(
-                instanceID: UInt64.random(in: 1...UInt64.max),
-                connectionSeq: UInt32.random(in: 1...UInt32.max),
-                sessionMaxAppPayload: sessionMaxAppPayload
-            )
-            self.channelMuxTcpTransportOwner = ObstacleBridgeChannelMuxTCPTransportOwner(
-                runtime: tcpRuntime,
+            self.udpOverlayTransportOwner = ObstacleBridgeUdpOverlayTransportOwner(
+                bindHost: settings.bindHost,
+                bindPort: settings.bindPort,
+                peerHost: settings.peerHost,
+                peerPort: settings.peerPort,
+                peerResolveFamily: settings.peerResolveFamily,
                 sessionMaxAppPayload: sessionMaxAppPayload,
+                overlayLayerTransportAdapter: overlayLayerTransportAdapter,
+                startupMuxFrames: startupMuxFrames,
                 queue: queue,
-                eventPrefix: "swift_udp",
+                serviceNameByID: Dictionary(uniqueKeysWithValues: tcpServiceSpecs.map { ($0.svcID, $0.name ?? "") }),
+                tunIfname: settings.tunIfname,
+                tunMTU: settings.mtu,
+                tunPacketSink: { [weak self] packet in
+                    self?.deliverPacketToSystem(packet)
+                },
                 eventSink: { [weak self] event, fields in
                     self?.provider?.recordPacketBridgeEvent(event, fields: fields)
-                },
-                muxFrameSink: { [weak self] frames in
-                    self?.sendMuxFrames(frames)
-                },
-                metricSink: { [weak self] metric in
-                    switch metric {
-                    case "server_accepted":
-                        self?.tcpConnectionsAccepted += 1
-                    case "client_dialed":
-                        self?.tcpConnectionsDialed += 1
-                    default:
-                        break
-                    }
-                },
-                transportEventSink: { [weak self] event in
-                    self?.handleTCPTransportEvent(event)
-                },
-                overlayConnectedProvider: { [weak self] in
-                    self?.overlayTransportConnected() ?? false
-                },
-                activateClientOnReady: true
+                }
             )
+        } else {
+            let boundSocket = try Self.makeBoundSocket(
+                bindHost: settings.bindHost,
+                bindPort: settings.bindPort,
+                peerHost: settings.peerHost,
+                peerPort: settings.peerPort,
+                peerResolveFamily: settings.peerResolveFamily
+            )
+            self.socketFD = boundSocket.socketFD
+            self.socketFamily = boundSocket.socketFamily
+            self.peerCandidates = boundSocket.peerCandidates
+            self.peerAddress = boundSocket.peerAddress
         }
     }
 
@@ -2428,20 +2073,18 @@ private final class SwiftSimpleUDPPeerBridge {
         startedAt = Date().timeIntervalSince1970
         currentPeerSelectedAtNS = monotonicNowNS()
         lastInboundDatagramNS = 0
-        startupMuxFramesSent = false
 
-        let source = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: queue)
-        source.setEventHandler { [weak self] in
-            self?.drainSocket()
-        }
-        readSource = source
-        source.resume()
-        startPeerFallbackTimer()
         if settings.runtimeMode == "swift_udp" {
-            startOverlayTimers()
+            try? udpOverlayTransportOwner?.start()
             startTCPServices()
-            primeOverlayTransportConnection()
-            sendInitialIdleProbe()
+        } else {
+            let source = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: queue)
+            source.setEventHandler { [weak self] in
+                self?.drainSocket()
+            }
+            readSource = source
+            source.resume()
+            startPeerFallbackTimer()
         }
 
         provider.recordPacketBridgeEvent(
@@ -2465,36 +2108,30 @@ private final class SwiftSimpleUDPPeerBridge {
         startedAt = Date().timeIntervalSince1970
         currentPeerSelectedAtNS = monotonicNowNS()
         lastInboundDatagramNS = 0
-        startupMuxFramesSent = false
 
-        let source = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: queue)
-        source.setEventHandler { [weak self] in
-            self?.drainSocket()
-        }
-        readSource = source
-        source.resume()
-        startPeerFallbackTimer()
         if settings.runtimeMode == "swift_udp" {
-            startOverlayTimers()
+            try? udpOverlayTransportOwner?.start()
             startTCPServices()
-            primeOverlayTransportConnection()
-            sendInitialIdleProbe()
+        } else {
+            let source = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: queue)
+            source.setEventHandler { [weak self] in
+                self?.drainSocket()
+            }
+            readSource = source
+            source.resume()
+            startPeerFallbackTimer()
         }
     }
 
     func stop() {
         guard started else { return }
         started = false
-        controlTimer?.cancel()
-        controlTimer = nil
-        retransmitTimer?.cancel()
-        retransmitTimer = nil
         peerFallbackTimer?.cancel()
         peerFallbackTimer = nil
         readSource?.cancel()
         readSource = nil
+        udpOverlayTransportOwner?.stop()
         stopTCPServices()
-        tcpConnectionStates.removeAll()
         if socketFD >= 0 {
             Darwin.close(socketFD)
             socketFD = -1
@@ -2507,22 +2144,7 @@ private final class SwiftSimpleUDPPeerBridge {
 
     func snapshot() -> [String: Any] {
         withState {
-            let myudpRuntime: [String: Any]
-            if let overlayRuntime {
-                myudpRuntime = [
-                    "connected": overlayRuntime.isConnected(),
-                    "rtt_est_ms": overlayRuntime.rttEstMS,
-                    "transmit_delay_est_ms": overlayRuntime.transmitDelayEstMS,
-                    "rtt_sample_ms": overlayRuntime.rttSampleMS,
-                    "established_ns": overlayRuntime.establishedNS,
-                    "last_rx_tx_ns": overlayRuntime.lastRxTxNS,
-                    "last_rx_wall_ns": overlayRuntime.lastRxWallNS,
-                    "last_rtt_ok_ns": overlayRuntime.lastRttOkNS,
-                    "protocol_stats": overlayRuntime.protocolStatsSnapshot(),
-                ]
-            } else {
-                myudpRuntime = [:]
-            }
+            let myudpRuntime = udpOverlayTransportOwner?.transportSnapshot() ?? [:]
             return [
                 "active": started,
                 "bind_host": settings.bindHost,
@@ -2530,9 +2152,9 @@ private final class SwiftSimpleUDPPeerBridge {
                 "peer_host": settings.peerHost,
                 "peer_port": settings.peerPort,
                 "peer_resolve_family": settings.peerResolveFamily,
-                "resolved_peer_host": peerAddress.host,
-                "resolved_peer_port": peerAddress.port,
-                "resolved_peer_family": Self.familyName(peerAddress.family),
+                "resolved_peer_host": myudpRuntime["overlay_peer_host"] ?? peerAddress.host,
+                "resolved_peer_port": myudpRuntime["overlay_peer_port"] ?? peerAddress.port,
+                "resolved_peer_family": myudpRuntime["overlay_peer_family"] ?? Self.familyName(peerAddress.family),
                 "resolved_peer_index": peerCandidateIndex,
                 "resolved_peer_candidate_count": peerCandidates.count,
                 "resolved_peer_candidates": peerCandidates.map { "\($0.host):\($0.port)/\(Self.familyName($0.family))" },
@@ -2550,14 +2172,10 @@ private final class SwiftSimpleUDPPeerBridge {
                 "send_failures": sendFailures,
                 "recv_failures": recvFailures,
                 "overlay_mode": settings.runtimeMode,
-                "overlay_frames_from_system": overlayFramesFromSystem,
-                "overlay_frames_to_system": overlayFramesToSystem,
                 "tcp_listener_count": tcpListeners.count,
-                "tcp_server_connection_count": channelMuxTcpTransportOwner?.serverConnectionCount ?? 0,
-                "tcp_client_connection_count": channelMuxTcpTransportOwner?.clientConnectionCount ?? 0,
+                "tcp_server_connection_count": myudpRuntime["server_tcp_channels"] ?? 0,
+                "tcp_client_connection_count": myudpRuntime["client_tcp_channels"] ?? 0,
                 "tcp_listener_failures": tcpListenerFailures,
-                "tcp_connections_accepted": tcpConnectionsAccepted,
-                "tcp_connections_dialed": tcpConnectionsDialed,
                 "last_from_system_at": lastFromSystemAt,
                 "last_to_system_at": lastToSystemAt,
                 "started_at": startedAt,
@@ -2568,16 +2186,20 @@ private final class SwiftSimpleUDPPeerBridge {
 
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]]) {
         withState {
-            let tcpRows = tcpConnectionStates.values.map { $0.snapshot() }.sorted { lhs, rhs in
-                (lhs["chan_id"] as? Int ?? -1) < (rhs["chan_id"] as? Int ?? -1)
+            if let udpOverlayTransportOwner {
+                let rows = udpOverlayTransportOwner.connectionRows()
+                return (rows.tcp, rows.udp, [])
             }
-            return (tcpRows, [], [])
+            return ([], [], [])
         }
     }
 
     func overlayEstablishedForProbe() -> Bool {
         withState {
-            overlayTransportConnected()
+            if let udpOverlayTransportOwner {
+                return udpOverlayTransportOwner.overlayConnected
+            }
+            return false
         }
     }
 
@@ -2602,11 +2224,15 @@ private final class SwiftSimpleUDPPeerBridge {
         return queue.sync(execute: body)
     }
 
-    private func overlayTransportConnected() -> Bool {
-        guard let overlayRuntime else {
-            return false
+    private func deliverPacketToSystem(_ packet: Data) {
+        guard let provider else {
+            return
         }
-        return overlayRuntime.isConnected()
+        provider.packetFlow.writePackets([packet], withProtocols: [NSNumber(value: Self.protocolFamily(for: packet))])
+        packetsToSystem += 1
+        bytesToSystem += packet.count
+        writeBatches += 1
+        lastToSystemAt = Date().timeIntervalSince1970
     }
 
     private func beginPacketFlowReadLoop() {
@@ -2640,7 +2266,7 @@ private final class SwiftSimpleUDPPeerBridge {
         var totalBytes = 0
         for packet in packets {
             if settings.runtimeMode == "swift_udp" {
-                sendOverlayPayload(packet)
+                udpOverlayTransportOwner?.sendLocalTunPacket(packet)
             } else {
                 sendDatagram(packet)
             }
@@ -2682,18 +2308,9 @@ private final class SwiftSimpleUDPPeerBridge {
             if received > 0 {
                 lastInboundDatagramNS = monotonicNowNS()
                 let packet = Data(buffer[0..<received])
-                if settings.runtimeMode == "swift_udp" {
-                    let completed = handleOverlayDatagram(packet)
-                    for payload in completed {
-                        packets.append(payload)
-                        protocols.append(NSNumber(value: Self.protocolFamily(for: payload)))
-                        totalBytes += payload.count
-                    }
-                } else {
-                    packets.append(packet)
-                    protocols.append(NSNumber(value: Self.protocolFamily(for: packet)))
-                    totalBytes += Int(received)
-                }
+                packets.append(packet)
+                protocols.append(NSNumber(value: Self.protocolFamily(for: packet)))
+                totalBytes += Int(received)
                 continue
             }
             if received == 0 {
@@ -2731,24 +2348,6 @@ private final class SwiftSimpleUDPPeerBridge {
                 ]
             )
         }
-    }
-
-    private func startOverlayTimers() {
-        let control = DispatchSource.makeTimerSource(queue: queue)
-        control.schedule(deadline: .now() + .milliseconds(25), repeating: .milliseconds(25))
-        control.setEventHandler { [weak self] in
-            self?.handleOverlayControlTimer()
-        }
-        control.resume()
-        controlTimer = control
-
-        let retransmit = DispatchSource.makeTimerSource(queue: queue)
-        retransmit.schedule(deadline: .now() + .milliseconds(25), repeating: .milliseconds(25))
-        retransmit.setEventHandler { [weak self] in
-            self?.handleOverlayRetransmitTimer()
-        }
-        retransmit.resume()
-        retransmitTimer = retransmit
     }
 
     private func startPeerFallbackTimer() {
@@ -2797,9 +2396,6 @@ private final class SwiftSimpleUDPPeerBridge {
                 "resolved_peer_family": Self.familyName(peerAddress.family),
             ]
         )
-        if settings.runtimeMode == "swift_udp" {
-            sendInitialIdleProbe()
-        }
     }
 
     private func handleImmediatePeerFallback(sendErrno: Int32) {
@@ -2879,7 +2475,6 @@ private final class SwiftSimpleUDPPeerBridge {
             listener.cancel()
         }
         tcpListeners.removeAll()
-        channelMuxTcpTransportOwner?.stop()
     }
 
     private func handleTCPListenerState(_ state: NWListener.State, spec: ObstacleBridgeChannelMuxCodec.ServiceSpec) {
@@ -2906,234 +2501,14 @@ private final class SwiftSimpleUDPPeerBridge {
     }
 
     private func handleAcceptedTCPConnection(_ connection: NWConnection, spec: ObstacleBridgeChannelMuxCodec.ServiceSpec) {
-        guard let owner = channelMuxTcpTransportOwner else {
+        guard let owner = udpOverlayTransportOwner else {
             cancelConnection(connection)
             return
         }
-        guard let chanID = owner.acceptLocalConnection(connection, spec: spec) else {
+        guard owner.acceptLocalTCPConnection(connection, spec: spec, listenerHost: spec.lBind, listenerPort: spec.lPort) else {
             cancelConnection(connection)
             return
         }
-        tcpConnectionStates[chanID] = ConnectionState(
-            proto: "tcp",
-            role: "server",
-            chanID: chanID,
-            svcID: spec.svcID,
-            serviceName: serviceName(spec),
-            remoteHost: spec.rHost,
-            remotePort: spec.rPort,
-            state: "connecting",
-            localHost: spec.lBind,
-            localPort: spec.lPort,
-            stats: ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
-        )
-    }
-
-    private func sendInitialIdleProbe() {
-        guard settings.runtimeMode == "swift_udp" else {
-            return
-        }
-        do {
-            let frame = try ObstacleBridgeUdpOverlayCodec.buildProtocolFrame(
-                ptype: ObstacleBridgeUdpOverlayCodec.ptypeIdle,
-                payload: Data(),
-                txNS: monotonicNowNS(),
-                echoNS: 0
-            )
-            sendDatagram(frame)
-        } catch {
-            provider?.recordPacketBridgeEvent(
-                "swift_udp_idle_probe_failed",
-                fields: ["error": error.localizedDescription]
-            )
-        }
-    }
-
-    private func primeOverlayTransportConnection() {
-        guard settings.runtimeMode == "swift_udp",
-              let adapter = overlayLayerTransportAdapter,
-              let runtime = overlayRuntime else {
-            return
-        }
-        do {
-            let snapshot = try adapter.handleTransportConnected()
-            for frame in snapshot.emittedFrames {
-                try sendOverlayTransportPayload(frame, runtime: runtime)
-            }
-        } catch {
-            provider?.recordPacketBridgeEvent(
-                "swift_udp_transport_prime_failed",
-                fields: ["error": error.localizedDescription]
-            )
-        }
-    }
-
-    private func handleOverlayControlTimer() {
-        guard started, settings.runtimeMode == "swift_udp", let runtime = overlayRuntime else {
-            return
-        }
-        let nowNS = monotonicNowNS()
-        let snapshot = runtime.handleControlTimerTick(nowNS: nowNS, sendPortPresent: true)
-        guard snapshot.controlShouldEmit else {
-            return
-        }
-        do {
-            let control = try runtime.buildOutboundControl(nowNS: nowNS, echoNS: currentEchoNS(nowNS))
-            sendDatagram(control.frame)
-        } catch {
-            provider?.recordPacketBridgeEvent(
-                "swift_udp_control_timer_failed",
-                fields: ["error": error.localizedDescription]
-            )
-        }
-    }
-
-    private func handleOverlayRetransmitTimer() {
-        guard started, settings.runtimeMode == "swift_udp", let runtime = overlayRuntime else {
-            return
-        }
-        do {
-            let snapshot = try runtime.handleRetransmitTimerTick(nowNS: monotonicNowNS(), sendPortPresent: true)
-            for frame in snapshot.emittedFrames {
-                sendDatagram(frame)
-            }
-        } catch {
-            provider?.recordPacketBridgeEvent(
-                "swift_udp_retransmit_timer_failed",
-                fields: ["error": error.localizedDescription]
-            )
-        }
-    }
-
-    private func sendOverlayPayload(_ packet: Data) {
-        guard let runtime = overlayRuntime else {
-            sendDatagram(packet)
-            return
-        }
-        do {
-            if let muxRuntime = channelMuxTunRuntime {
-                guard let localSnapshot = try muxRuntime.handleLocalTunPacket(
-                    packet: packet,
-                    mtu: settings.mtu,
-                    spec: ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: settings.tunIfname, mtu: settings.mtu),
-                    overlayConnected: true,
-                    acceptingEnabled: true
-                ) else {
-                    return
-                }
-                for muxFrame in localSnapshot.frames {
-                    try sendOverlayApplicationPayload(muxFrame, runtime: runtime)
-                }
-                return
-            }
-            try sendOverlayApplicationPayload(packet, runtime: runtime)
-        } catch {
-            provider?.recordPacketBridgeEvent(
-                "swift_udp_payload_send_failed",
-                fields: [
-                    "error": error.localizedDescription,
-                    "packet_bytes": packet.count,
-                ]
-            )
-        }
-    }
-
-    private func handleOverlayDatagram(_ datagram: Data) -> [Data] {
-        let wasConnected = overlayTransportConnected()
-        guard let runtime = overlayRuntime,
-              let frame = ObstacleBridgeUdpOverlayCodec.parseProtocolFrame(datagram)
-        else {
-            return []
-        }
-        defer {
-            if !wasConnected && overlayTransportConnected() {
-                maybeSendStartupMuxFrames()
-            }
-        }
-        let nowNS = monotonicNowNS()
-        switch frame.ptype {
-        case ObstacleBridgeUdpOverlayCodec.ptypeData:
-            guard let snapshot = runtime.handleInboundDataFrame(
-                frame: datagram,
-                nowNS: nowNS,
-                txNS: frame.txNS,
-                echoNS: frame.echoNS,
-                sendPortPresent: true
-            ) else {
-                return []
-            }
-            if !snapshot.controlReasons.isEmpty {
-                do {
-                    let control = try runtime.buildOutboundControl(nowNS: nowNS, echoNS: currentEchoNS(nowNS))
-                    sendDatagram(control.frame)
-                } catch {
-                    provider?.recordPacketBridgeEvent(
-                        "swift_udp_data_control_emit_failed",
-                        fields: ["error": error.localizedDescription]
-                    )
-                }
-            }
-            overlayFramesToSystem += 1
-            return routeOverlayPayloadsToSystem(handleInboundOverlayApplicationPayloads(snapshot.completedPayloads))
-        case ObstacleBridgeUdpOverlayCodec.ptypeControl:
-            guard let control = ObstacleBridgeUdpOverlayCodec.parseControlFrame(datagram) else {
-                return []
-            }
-            do {
-                let snapshot = try runtime.handleInboundControlPacket(
-                    nowNS: nowNS,
-                    txNS: frame.txNS,
-                    echoNS: frame.echoNS,
-                    packetLastInOrder: control.lastInOrderRX,
-                    packetHighest: control.highestRX,
-                    packetMissed: control.missed,
-                    sendPortPresent: true
-                )
-                for frame in snapshot.emittedFrames {
-                    sendDatagram(frame)
-                }
-                if snapshot.controlShouldEmit {
-                    let outbound = try runtime.buildOutboundControl(nowNS: nowNS, echoNS: currentEchoNS(nowNS))
-                    sendDatagram(outbound.frame)
-                }
-            } catch {
-                provider?.recordPacketBridgeEvent(
-                    "swift_udp_inbound_control_failed",
-                    fields: ["error": error.localizedDescription]
-                )
-            }
-            overlayFramesToSystem += 1
-            return []
-        case ObstacleBridgeUdpOverlayCodec.ptypeIdle:
-            do {
-                let snapshot = try runtime.handleInboundIdleFrame(
-                    nowNS: nowNS,
-                    txNS: frame.txNS,
-                    echoNS: frame.echoNS,
-                    sendPortPresent: true
-                )
-                if let reflected = snapshot.reflectedFrame {
-                    sendDatagram(reflected)
-                }
-            } catch {
-                provider?.recordPacketBridgeEvent(
-                    "swift_udp_inbound_idle_failed",
-                    fields: ["error": error.localizedDescription]
-                )
-            }
-            overlayFramesToSystem += 1
-            return []
-        default:
-            return []
-        }
-    }
-
-    private func maybeSendStartupMuxFrames() {
-        guard overlayTransportConnected(), !startupMuxFramesSent, !startupMuxFrames.isEmpty else {
-            return
-        }
-        startupMuxFramesSent = true
-        sendMuxFrames(startupMuxFrames)
     }
 
     private func sendDatagram(_ packet: Data) {
@@ -3161,227 +2536,9 @@ private final class SwiftSimpleUDPPeerBridge {
         }
     }
 
-    private func sendOverlayApplicationPayload(_ payload: Data, runtime: ObstacleBridgeUdpOverlayPeerRuntime) throws {
-        if let adapter = overlayLayerTransportAdapter {
-            let snapshot = try adapter.handleOutboundPayload(payload)
-            for frame in snapshot.emittedFrames {
-                try sendOverlayTransportPayload(frame, runtime: runtime)
-            }
-            return
-        }
-        try sendOverlayTransportPayload(payload, runtime: runtime)
-    }
-
-    private func sendOverlayTransportPayload(_ payload: Data, runtime: ObstacleBridgeUdpOverlayPeerRuntime) throws {
-        let nowNS = monotonicNowNS()
-        let snapshot = try runtime.sendApplicationPayload(payload, nowNS: nowNS, echoNS: currentEchoNS(nowNS))
-        for frame in snapshot.frames {
-            sendDatagram(frame)
-        }
-        overlayFramesFromSystem += snapshot.frames.count
-    }
-
-    private func handleInboundOverlayApplicationPayloads(_ payloads: [Data]) -> [Data] {
-        guard let adapter = overlayLayerTransportAdapter else {
-            return payloads
-        }
-        guard let runtime = overlayRuntime else {
-            return []
-        }
-        var deliveredPayloads: [Data] = []
-        for payload in payloads {
-            let snapshot = adapter.handleInboundFrame(payload)
-            do {
-                for frame in snapshot.emittedFrames {
-                    try sendOverlayTransportPayload(frame, runtime: runtime)
-                }
-            } catch {
-                provider?.recordPacketBridgeEvent(
-                    "swift_udp_overlay_layer_emit_failed",
-                    fields: [
-                        "error": error.localizedDescription,
-                        "payload_bytes": payload.count,
-                    ]
-                )
-            }
-            deliveredPayloads.append(contentsOf: snapshot.deliveredPayloads)
-        }
-        return deliveredPayloads
-    }
-
-    private func routeOverlayPayloadsToSystem(_ payloads: [Data]) -> [Data] {
-        var packets: [Data] = []
-        for payload in payloads {
-            guard let frame = ObstacleBridgeChannelMuxCodec.unpackMux(payload) else {
-                continue
-            }
-            switch frame.proto {
-            case .tun:
-                guard let muxRuntime = channelMuxTunRuntime else {
-                    continue
-                }
-                switch frame.mtype {
-                case .open:
-                    let snapshot = muxRuntime.handleInboundTunOpen(chanID: frame.chanID, payload: frame.body)
-                    if !snapshot.accepted {
-                        provider?.recordPacketBridgeEvent(
-                            "swift_udp_channelmux_tun_open_rejected",
-                            fields: ["chan_id": frame.chanID]
-                        )
-                    }
-                case .openChunk:
-                    let snapshot = muxRuntime.handleInboundTunOpenChunk(chanID: frame.chanID, payload: frame.body)
-                    if snapshot.assembled && !snapshot.accepted {
-                        provider?.recordPacketBridgeEvent(
-                            "swift_udp_channelmux_tun_open_chunk_rejected",
-                            fields: ["chan_id": frame.chanID]
-                        )
-                    }
-                case .data:
-                    let snapshot = muxRuntime.handleInboundTunData(chanID: frame.chanID, body: frame.body, mtu: settings.mtu)
-                    if let packet = snapshot.packet, snapshot.delivered {
-                        packets.append(packet)
-                    }
-                case .dataFrag:
-                    let snapshot = muxRuntime.handleInboundTunFragment(chanID: frame.chanID, payload: frame.body, mtu: settings.mtu)
-                    if let packet = snapshot.packet, snapshot.delivered {
-                        packets.append(packet)
-                    }
-                case .close:
-                    _ = muxRuntime.handleInboundTunClose(chanID: frame.chanID)
-                default:
-                    continue
-                }
-            case .tcp:
-                handleInboundTCPMuxFrame(frame)
-            default:
-                continue
-            }
-        }
-        return packets
-    }
-
-    private func handleInboundTCPMuxFrame(_ frame: ObstacleBridgeChannelMuxCodec.MuxFrame) {
-        guard let owner = channelMuxTcpTransportOwner else {
-            return
-        }
-        owner.handleInboundMuxFrame(frame)
-    }
-
-    private func sendMuxFrames(_ muxFrames: [Data]) {
-        guard let runtime = overlayRuntime else {
-            return
-        }
-        for muxFrame in muxFrames {
-            do {
-                try sendOverlayApplicationPayload(muxFrame, runtime: runtime)
-            } catch {
-                provider?.recordPacketBridgeEvent(
-                    "swift_udp_tcp_mux_send_failed",
-                    fields: [
-                        "error": error.localizedDescription,
-                        "mux_frame_bytes": muxFrame.count,
-                    ]
-                )
-            }
-        }
-    }
-
-    private func sendOnTCPConnection(_ connection: NWConnection, payload: Data, chanID: Int, event: String) {
-        connection.send(content: payload, completion: .contentProcessed { [weak self] error in
-            guard let self, let error else { return }
-            self.queue.async {
-                self.provider?.recordPacketBridgeEvent(
-                    event,
-                    fields: ["chan_id": chanID, "error": error.localizedDescription]
-                )
-            }
-        })
-    }
-
     private func cancelConnection(_ connection: NWConnection) {
         connection.stateUpdateHandler = nil
         connection.cancel()
-    }
-
-    private func serviceName(_ spec: ObstacleBridgeChannelMuxCodec.ServiceSpec) -> String {
-        spec.name ?? ""
-    }
-
-    private func updateConnectedState(chanID: Int, localHost: String?, localPort: Int?) {
-        guard var state = tcpConnectionStates[chanID] else {
-            return
-        }
-        state.state = "connected"
-        state.localHost = localHost ?? state.localHost
-        state.localPort = localPort ?? state.localPort
-        tcpConnectionStates[chanID] = state
-    }
-
-    private func recordInbound(chanID: Int, bytes: Int) {
-        guard var state = tcpConnectionStates[chanID] else {
-            return
-        }
-        state.stats["rx_msgs", default: 0] += 1
-        state.stats["rx_bytes", default: 0] += bytes
-        tcpConnectionStates[chanID] = state
-    }
-
-    private func recordOutbound(chanID: Int, bytes: Int) {
-        guard var state = tcpConnectionStates[chanID] else {
-            return
-        }
-        state.stats["tx_msgs", default: 0] += 1
-        state.stats["tx_bytes", default: 0] += bytes
-        tcpConnectionStates[chanID] = state
-    }
-
-    private func handleTCPTransportEvent(_ event: ObstacleBridgeChannelMuxTCPTransportOwner.TransportEvent) {
-        switch event {
-        case .clientAccepted(let chanID, let spec, let connected):
-            tcpConnectionStates[chanID] = ConnectionState(
-                proto: "tcp",
-                role: "client",
-                chanID: chanID,
-                svcID: spec.svcID,
-                serviceName: serviceName(spec),
-                remoteHost: spec.rHost,
-                remotePort: spec.rPort,
-                state: connected ? "connected" : "connecting",
-                localHost: nil,
-                localPort: nil,
-                stats: ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
-            )
-        case .clientConnected(let chanID, let localHost, let localPort):
-            updateConnectedState(chanID: chanID, localHost: localHost, localPort: localPort)
-        case .clientInbound(let chanID, let bytes):
-            recordInbound(chanID: chanID, bytes: bytes)
-        case .clientOutbound(let chanID, let bytes):
-            recordOutbound(chanID: chanID, bytes: bytes)
-        case .clientClosed(let chanID):
-            tcpConnectionStates.removeValue(forKey: chanID)
-        case .serverConnected(let chanID):
-            updateConnectedState(chanID: chanID, localHost: nil, localPort: nil)
-        case .serverInbound(let chanID, let bytes):
-            recordInbound(chanID: chanID, bytes: bytes)
-        case .serverOutbound(let chanID, let bytes):
-            recordOutbound(chanID: chanID, bytes: bytes)
-        case .serverClosed(let chanID):
-            tcpConnectionStates.removeValue(forKey: chanID)
-        }
-    }
-
-    private static let maxTCPReadSize = 65527
-
-    private func currentEchoNS(_ nowNS: UInt64) -> UInt64 {
-        guard let runtime = overlayRuntime,
-              runtime.lastRxTxNS != 0,
-              runtime.lastRxWallNS != 0,
-              nowNS >= runtime.lastRxWallNS
-        else {
-            return 0
-        }
-        return runtime.lastRxTxNS + (nowNS - runtime.lastRxWallNS)
     }
 
     private func monotonicNowNS() -> UInt64 {
@@ -3396,353 +2553,8 @@ private final class SwiftSimpleUDPPeerBridge {
         return version == 6 ? AF_INET6 : AF_INET
     }
 
-    private enum PeerResolveMode {
-        case preferIPv6
-        case ipv4
-        case ipv6
-
-        init(rawValue: String) {
-            switch rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-            case "ipv4":
-                self = .ipv4
-            case "ipv6":
-                self = .ipv6
-            default:
-                self = .preferIPv6
-            }
-        }
-
-        func rank(for family: Int32) -> Int {
-            switch self {
-            case .preferIPv6, .ipv6:
-                return family == AF_INET6 ? 0 : 1
-            case .ipv4:
-                return family == AF_INET ? 0 : 1
-            }
-        }
-
-        var localhostFallback: (host: String, family: Int32)? {
-            switch self {
-            case .ipv4:
-                return ("127.0.0.1", AF_INET)
-            case .ipv6:
-                return ("::1", AF_INET6)
-            case .preferIPv6:
-                return nil
-            }
-        }
-
-        var preferredFamily: Int32? {
-            switch self {
-            case .ipv4:
-                return AF_INET
-            case .ipv6:
-                return AF_INET6
-            case .preferIPv6:
-                return nil
-            }
-        }
-    }
-
     private static func familyName(_ family: Int32) -> String {
-        switch family {
-        case AF_INET:
-            return "ipv4"
-        case AF_INET6:
-            return "ipv6"
-        default:
-            return "unspecified"
-        }
-    }
-
-    private static func stripBrackets(_ host: String) -> String {
-        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
-            return String(trimmed.dropFirst().dropLast())
-        }
-        return trimmed
-    }
-
-    private static func splitConfiguredPeerHosts(_ host: String) -> [String] {
-        let rendered = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !rendered.isEmpty else {
-            return []
-        }
-        guard rendered.contains(",") || rendered.contains(";") else {
-            return [rendered]
-        }
-        return rendered
-            .replacingOccurrences(of: ";", with: ",")
-            .split(separator: ",")
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-    }
-
-    private static func hostIPFamily(_ host: String) -> Int32? {
-        let rendered = stripBrackets(host)
-        guard !rendered.isEmpty else {
-            return nil
-        }
-        var ipv4 = in_addr()
-        if rendered.withCString({ inet_pton(AF_INET, $0, &ipv4) }) == 1 {
-            return AF_INET
-        }
-        var ipv6 = in6_addr()
-        if rendered.withCString({ inet_pton(AF_INET6, $0, &ipv6) }) == 1 {
-            return AF_INET6
-        }
-        return nil
-    }
-
-    private static func bindFamilyConstraint(_ bindHost: String) -> Int32? {
-        let rendered = stripBrackets(bindHost)
-        if rendered.isEmpty || rendered == "::" {
-            return nil
-        }
-        return hostIPFamily(rendered)
-    }
-
-    private static func ipv4MappedIPv6(_ host: String) -> String {
-        return "::ffff:\(host)"
-    }
-
-    private static func numericHostPort(from storage: Data, length: socklen_t) throws -> (String, Int) {
-        var hostBuffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-        var serviceBuffer = [CChar](repeating: 0, count: Int(NI_MAXSERV))
-        let status: Int32 = storage.withUnsafeBytes { rawBuffer in
-            guard let base = rawBuffer.baseAddress else {
-                return EAI_FAIL
-            }
-            let sockaddrPtr = base.assumingMemoryBound(to: sockaddr.self)
-            return getnameinfo(
-                sockaddrPtr,
-                length,
-                &hostBuffer,
-                socklen_t(hostBuffer.count),
-                &serviceBuffer,
-                socklen_t(serviceBuffer.count),
-                NI_NUMERICHOST | NI_NUMERICSERV
-            )
-        }
-        guard status == 0 else {
-            throw NSError(
-                domain: "ObstacleBridge.IPServer",
-                code: 35,
-                userInfo: [NSLocalizedDescriptionKey: "getnameinfo() failed status=\(status)"]
-            )
-        }
-        return (String(cString: hostBuffer), Int(String(cString: serviceBuffer)) ?? 0)
-    }
-
-    private static func resolveAddressCandidates(host: String, port: Int, passive: Bool, family: Int32) throws -> [ResolvedAddress] {
-        var hints = addrinfo(
-            ai_flags: passive ? AI_PASSIVE : 0,
-            ai_family: family,
-            ai_socktype: SOCK_DGRAM,
-            ai_protocol: IPPROTO_UDP,
-            ai_addrlen: 0,
-            ai_canonname: nil,
-            ai_addr: nil,
-            ai_next: nil
-        )
-        var results: UnsafeMutablePointer<addrinfo>?
-        let status = getaddrinfo(host, String(port), &hints, &results)
-        guard status == 0, let info = results else {
-            throw NSError(
-                domain: "ObstacleBridge.IPServer",
-                code: 34,
-                userInfo: [NSLocalizedDescriptionKey: "getaddrinfo() failed for \(host):\(port) status=\(status)"]
-            )
-        }
-        defer { freeaddrinfo(results) }
-        var candidates: [ResolvedAddress] = []
-        var cursor: UnsafeMutablePointer<addrinfo>? = info
-        while let current = cursor {
-            let family = current.pointee.ai_family
-            if (family == AF_INET || family == AF_INET6), let addr = current.pointee.ai_addr {
-                let data = Data(bytes: addr, count: Int(current.pointee.ai_addrlen))
-                let numeric = try numericHostPort(from: data, length: current.pointee.ai_addrlen)
-                let resolved = ResolvedAddress(
-                    family: family,
-                    host: numeric.0,
-                    port: numeric.1,
-                    storage: data,
-                    length: current.pointee.ai_addrlen
-                )
-                if !candidates.contains(where: { $0.family == resolved.family && $0.host == resolved.host && $0.port == resolved.port }) {
-                    candidates.append(resolved)
-                }
-            }
-            cursor = current.pointee.ai_next
-        }
-        guard !candidates.isEmpty else {
-            throw NSError(
-                domain: "ObstacleBridge.IPServer",
-                code: 36,
-                userInfo: [NSLocalizedDescriptionKey: "Could not resolve overlay peer \(host)"]
-            )
-        }
-        return candidates
-    }
-
-    private static func resolveAddress(host: String, port: Int, passive: Bool, family: Int32) throws -> ResolvedAddress {
-        guard let first = try resolveAddressCandidates(host: host, port: port, passive: passive, family: family).first else {
-            throw NSError(
-                domain: "ObstacleBridge.IPServer",
-                code: 36,
-                userInfo: [NSLocalizedDescriptionKey: "Could not resolve overlay peer \(host)"]
-            )
-        }
-        return first
-    }
-
-    private static func resolvePeerCandidates(
-        host: String,
-        port: Int,
-        mode: PeerResolveMode,
-        strictFamily: Bool
-    ) throws -> [ResolvedAddress] {
-        let rendered = stripBrackets(host)
-        guard !rendered.isEmpty else {
-            throw NSError(
-                domain: "ObstacleBridge.IPServer",
-                code: 37,
-                userInfo: [NSLocalizedDescriptionKey: "overlay peer requires a non-empty host name"]
-            )
-        }
-        if let family = hostIPFamily(rendered) {
-            var resolvedHost = rendered
-            var resolvedFamily = family
-            if strictFamily {
-                switch mode {
-                case .ipv4 where family != AF_INET:
-                    throw NSError(
-                        domain: "ObstacleBridge.IPServer",
-                        code: 38,
-                        userInfo: [NSLocalizedDescriptionKey: "overlay peer '\(rendered)' is not an IPv4 address"]
-                    )
-                case .ipv6 where family != AF_INET6:
-                    if family == AF_INET {
-                        resolvedHost = ipv4MappedIPv6(rendered)
-                        resolvedFamily = AF_INET6
-                    } else {
-                        throw NSError(
-                            domain: "ObstacleBridge.IPServer",
-                            code: 39,
-                            userInfo: [NSLocalizedDescriptionKey: "overlay peer '\(rendered)' is not an IPv6 address"]
-                        )
-                    }
-                default:
-                    break
-                }
-            }
-            return [try resolveAddress(host: resolvedHost, port: port, passive: false, family: resolvedFamily)]
-        }
-
-        let lookupFamily = strictFamily ? (mode.preferredFamily ?? AF_UNSPEC) : AF_UNSPEC
-        do {
-            return try resolveAddressCandidates(host: rendered, port: port, passive: false, family: lookupFamily)
-        } catch {
-            if rendered.lowercased() == "localhost", let fallback = mode.localhostFallback {
-                return [try resolveAddress(host: fallback.host, port: port, passive: false, family: fallback.family)]
-            }
-            throw error
-        }
-    }
-
-    private static func normalizePeerCandidate(
-        _ candidate: ResolvedAddress,
-        socketFamily: Int32
-    ) throws -> ResolvedAddress {
-        guard candidate.family != socketFamily else {
-            return candidate
-        }
-        if socketFamily == AF_INET6, candidate.family == AF_INET {
-            return try resolveAddress(
-                host: ipv4MappedIPv6(candidate.host),
-                port: candidate.port,
-                passive: false,
-                family: AF_INET6
-            )
-        }
-        throw NSError(
-            domain: "ObstacleBridge.IPServer",
-            code: 41,
-            userInfo: [NSLocalizedDescriptionKey: "overlay peer '\(candidate.host)' is not compatible with socket family \(familyName(socketFamily))"]
-        )
-    }
-
-    private static func resolvePeerAddresses(
-        host: String,
-        port: Int,
-        resolveFamily: String,
-        bindHost: String
-    ) throws -> [ResolvedAddress] {
-        let configuredHosts = splitConfiguredPeerHosts(host)
-        guard !configuredHosts.isEmpty else {
-            throw NSError(
-                domain: "ObstacleBridge.IPServer",
-                code: 37,
-                userInfo: [NSLocalizedDescriptionKey: "overlay peer requires a non-empty host name"]
-            )
-        }
-        let mode = PeerResolveMode(rawValue: resolveFamily)
-        let strictFamily = configuredHosts.count == 1
-        var candidates: [ResolvedAddress] = []
-        if strictFamily {
-            candidates = try resolvePeerCandidates(host: configuredHosts[0], port: port, mode: mode, strictFamily: true)
-        } else {
-            for configuredHost in configuredHosts {
-                if let resolved = try? resolvePeerCandidates(host: configuredHost, port: port, mode: mode, strictFamily: false) {
-                    candidates.append(contentsOf: resolved)
-                }
-            }
-            if candidates.isEmpty {
-                throw NSError(
-                    domain: "ObstacleBridge.IPServer",
-                    code: 36,
-                    userInfo: [NSLocalizedDescriptionKey: "Could not resolve overlay peer '\(host)'"]
-                )
-            }
-        }
-
-        candidates.sort { lhs, rhs in
-            let lhsRank = mode.rank(for: lhs.family)
-            let rhsRank = mode.rank(for: rhs.family)
-            if lhsRank != rhsRank {
-                return lhsRank < rhsRank
-            }
-            if lhs.family != rhs.family {
-                return lhs.family < rhs.family
-            }
-            if lhs.host != rhs.host {
-                return lhs.host < rhs.host
-            }
-            return lhs.port < rhs.port
-        }
-
-        if let bindFamily = bindFamilyConstraint(bindHost) {
-            let compatible = candidates.filter { $0.family == bindFamily }
-            if !compatible.isEmpty {
-                return compatible
-            }
-            let famName = bindFamily == AF_INET6 ? "IPv6" : "IPv4"
-            throw NSError(
-                domain: "ObstacleBridge.IPServer",
-                code: 40,
-                userInfo: [NSLocalizedDescriptionKey: "overlay peer '\(host)' resolved, but no \(famName) address is compatible with bind '\(bindHost)'"]
-            )
-        }
-
-        guard let first = candidates.first else {
-            throw NSError(
-                domain: "ObstacleBridge.IPServer",
-                code: 36,
-                userInfo: [NSLocalizedDescriptionKey: "Could not resolve overlay peer '\(host)'"]
-            )
-        }
-        _ = first
-        return candidates
+        ObstacleBridgePeerAddressResolver.familyName(family)
     }
 
     private static func makeBoundSocket(
@@ -3752,14 +2564,15 @@ private final class SwiftSimpleUDPPeerBridge {
         peerPort: Int,
         peerResolveFamily: String
     ) throws -> (socketFD: Int32, socketFamily: Int32, peerCandidates: [ResolvedAddress], peerAddress: ResolvedAddress) {
-        let resolvedCandidates = try resolvePeerAddresses(
+        let resolvedCandidates = try ObstacleBridgePeerAddressResolver.resolvePeerAddresses(
             host: peerHost,
             port: peerPort,
             resolveFamily: peerResolveFamily,
-            bindHost: bindHost
+            bindHost: bindHost,
+            errorDomain: "ObstacleBridge.IPServer"
         )
         let socketFamily: Int32
-        if let bindFamily = bindFamilyConstraint(bindHost) {
+        if let bindFamily = ObstacleBridgePeerAddressResolver.bindFamilyConstraint(bindHost) {
             socketFamily = bindFamily
         } else if resolvedCandidates.contains(where: { $0.family == AF_INET6 }) {
             socketFamily = AF_INET6
@@ -3769,7 +2582,11 @@ private final class SwiftSimpleUDPPeerBridge {
 
         var peerCandidates: [ResolvedAddress] = []
         for candidate in resolvedCandidates {
-            let normalized = try normalizePeerCandidate(candidate, socketFamily: socketFamily)
+            let normalized = try ObstacleBridgePeerAddressResolver.normalizePeerCandidate(
+                candidate,
+                socketFamily: socketFamily,
+                errorDomain: "ObstacleBridge.IPServer"
+            )
             if !peerCandidates.contains(where: {
                 $0.family == normalized.family && $0.host == normalized.host && $0.port == normalized.port
             }) {
@@ -3808,7 +2625,13 @@ private final class SwiftSimpleUDPPeerBridge {
             } else {
                 resolvedBindHost = bindHost
             }
-            let bindAddr = try resolveAddress(host: resolvedBindHost, port: bindPort, passive: true, family: socketFamily)
+            let bindAddr = try ObstacleBridgePeerAddressResolver.resolveAddress(
+                host: resolvedBindHost,
+                port: bindPort,
+                passive: true,
+                family: socketFamily,
+                errorDomain: "ObstacleBridge.IPServer"
+            )
             let bindResult = bindAddr.storage.withUnsafeBytes { rawBuffer -> Int32 in
                 let sockaddrPtr = rawBuffer.baseAddress!.assumingMemoryBound(to: sockaddr.self)
                 return Darwin.bind(sock, sockaddrPtr, bindAddr.length)
@@ -3823,13 +2646,7 @@ private final class SwiftSimpleUDPPeerBridge {
         }
     }
 
-    private struct ResolvedAddress {
-        let family: Int32
-        let host: String
-        let port: Int
-        let storage: Data
-        let length: socklen_t
-    }
+    private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
 }
 
 #if OB_IPSERVER_SWIFT_PROBE
@@ -3874,7 +2691,7 @@ extension PacketTunnelProvider {
     static func probeEncodedProviderRuntimeConfig(
         runtimeConfig: [String: Any]
     ) throws -> [String: Any] {
-        try PacketTunnelProviderConfigSecretCodec.encryptPayload(runtimeConfig)
+        try ObstacleBridgeConfigSecretCodec.encryptPayload(runtimeConfig)
     }
 
     static func probeDecodedProviderRuntimeConfig(

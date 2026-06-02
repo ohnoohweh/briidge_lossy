@@ -1,4 +1,3 @@
-import CryptoKit
 import Darwin
 import Foundation
 import Network
@@ -29,117 +28,6 @@ private enum ObstacleBridgeHostRunnerError: Error, LocalizedError {
     }
 }
 
-private enum ObstacleBridgeConfigSecretCodec {
-    private static let secretFields: Set<String> = ["admin_web_password", "secure_link_psk"]
-    private static let prefix = "enc:v1:"
-    private static let salt = Data("ObstacleBridge config secret v1".utf8)
-    private static let info = Data("ObstacleBridge config field encryption".utf8)
-    private static let aad = Data("ObstacleBridge cfg secret".utf8)
-
-    static func decryptPayload(_ payload: [String: Any]) throws -> [String: Any] {
-        guard let decoded = try transformSecrets(in: payload, transform: decryptSecret) as? [String: Any] else {
-            return payload
-        }
-        return decoded
-    }
-
-    static func encryptPayload(_ payload: [String: Any]) throws -> [String: Any] {
-        guard let encoded = try transformSecrets(in: payload, transform: encryptSecret) as? [String: Any] else {
-            return payload
-        }
-        return encoded
-    }
-
-    private static func transformSecrets(in object: Any, transform: (String) throws -> String) throws -> Any {
-        if let dict = object as? [String: Any] {
-            var out: [String: Any] = [:]
-            out.reserveCapacity(dict.count)
-            for (key, value) in dict {
-                if secretFields.contains(key), let stringValue = value as? String {
-                    out[key] = stringValue.isEmpty ? "" : try transform(stringValue)
-                } else {
-                    out[key] = try transformSecrets(in: value, transform: transform)
-                }
-            }
-            return out
-        }
-        if let list = object as? [Any] {
-            return try list.map { try transformSecrets(in: $0, transform: transform) }
-        }
-        return object
-    }
-
-    private static func encryptSecret(_ value: String) throws -> String {
-        let key = derivedKey()
-        let nonceData = Data((0..<12).map { _ in UInt8.random(in: 0...255) })
-        let nonce = try ChaChaPoly.Nonce(data: nonceData)
-        let sealed = try ChaChaPoly.seal(Data(value.utf8), using: key, nonce: nonce, authenticating: aad)
-        let combined = sealed.combined
-        return prefix + urlSafeBase64Encode(combined)
-    }
-
-    private static func decryptSecret(_ value: String) throws -> String {
-        guard value.hasPrefix(prefix) else {
-            return value
-        }
-        let encoded = String(value.dropFirst(prefix.count))
-        let combined = try urlSafeBase64Decode(encoded)
-        let sealed = try ChaChaPoly.SealedBox(combined: combined)
-        let plaintext = try ChaChaPoly.open(sealed, using: derivedKey(), authenticating: aad)
-        guard let stringValue = String(data: plaintext, encoding: .utf8) else {
-            throw ObstacleBridgeHostRunnerError.invalidArgument("failed to decode config secret")
-        }
-        return stringValue
-    }
-
-    private static func derivedKey() -> SymmetricKey {
-        let seed = configSecretSeed()
-        guard let derived = ObstacleBridgeNativeCrypto.hkdfSHA256Salt(
-            salt as NSData,
-            info: info as NSData,
-            keyMaterial: seed as NSData,
-            lengthValue: 32
-        ) as Data? else {
-            return SymmetricKey(data: seed)
-        }
-        return SymmetricKey(data: derived)
-    }
-
-    private static func configSecretSeed() -> Data {
-        var hostname = [CChar](repeating: 0, count: Int(MAXHOSTNAMELEN) + 1)
-        if gethostname(&hostname, hostname.count) == 0,
-           let text = String(validatingUTF8: hostname),
-           !text.isEmpty {
-            return Data(text.utf8)
-        }
-        let fallback = ProcessInfo.processInfo.hostName
-        if !fallback.isEmpty {
-            return Data(fallback.utf8)
-        }
-        return Data("obstacle-bridge".utf8)
-    }
-
-    private static func urlSafeBase64Encode(_ data: Data) -> String {
-        data.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-    }
-
-    private static func urlSafeBase64Decode(_ text: String) throws -> Data {
-        var normalized = text
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let remainder = normalized.count % 4
-        if remainder != 0 {
-            normalized += String(repeating: "=", count: 4 - remainder)
-        }
-        guard let data = Data(base64Encoded: normalized) else {
-            throw ObstacleBridgeHostRunnerError.invalidArgument("invalid base64 config secret")
-        }
-        return data
-    }
-}
-
 private final class ObstacleBridgeConfigStore {
     let configPath: String
     let configRoot: String
@@ -164,7 +52,16 @@ private final class ObstacleBridgeConfigStore {
         if let explicit = ObstacleBridgeHostRunner.stringValue(from: runtimeConfig["admin_web_dir"]) {
             return explicit
         }
-        return URL(fileURLWithPath: configRoot).appendingPathComponent("admin_web").path
+        let fileManager = FileManager.default
+        let candidates = [
+            URL(fileURLWithPath: configRoot).appendingPathComponent("admin_web").path,
+            URL(fileURLWithPath: fileManager.currentDirectoryPath).appendingPathComponent("admin_web").path,
+            URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("admin_web").path,
+        ]
+        for candidate in candidates where fileManager.fileExists(atPath: candidate) {
+            return candidate
+        }
+        return candidates.first ?? URL(fileURLWithPath: configRoot).appendingPathComponent("admin_web").path
     }
 
     func debugLogFilePath() -> String? {
@@ -181,559 +78,21 @@ private final class ObstacleBridgeConfigStore {
     }
 
     func schemaSnapshot() -> [String: Any] {
-        let sections = [
-            "admin_web": [
-                schemaItem(key: "admin_web", description: "Enable admin web interface", defaultValue: true),
-                schemaItem(key: "admin_web_auth_disable", description: "Disable username/password challenge for admin web access", defaultValue: false),
-                schemaItem(key: "admin_web_bind", description: "Bind address for admin web interface", defaultValue: "127.0.0.1"),
-                schemaItem(key: "admin_web_port", description: "Port for admin web interface", defaultValue: 18080),
-                schemaItem(key: "admin_web_path", description: "Base path for admin web interface", defaultValue: "/"),
-                schemaItem(key: "admin_web_dir", description: "Directory containing admin web files", defaultValue: "./admin_web"),
-                schemaItem(key: "admin_web_name", description: "Optional instance name shown in the admin web title and headline", defaultValue: ""),
-                schemaItem(key: "admin_web_landing_page_disable", description: "Disable the Admin Web landing/quick-start panel for advanced users.", defaultValue: false),
-                schemaItem(key: "admin_web_security_advisor_disable", description: "Disable the Admin Web startup security advisor panel for advanced users.", defaultValue: false),
-                schemaItem(key: "admin_web_security_advisor_startup_disable", description: "Do not auto-open the security advisor on first page load.", defaultValue: false),
-                schemaItem(key: "admin_web_first_tab", description: "Initial Admin Web tab. Use status for an advanced/operator-focused default.", defaultValue: "home", choices: ["home", "status", "secure-link", "configuration", "logs", "misc"]),
-                schemaItem(key: "admin_web_token", description: "Optional bearer token for admin restart endpoint", defaultValue: ""),
-                schemaItem(key: "admin_web_username", description: "Username for admin web access when challenge-based authentication is enabled", defaultValue: ""),
-                schemaItem(key: "admin_web_password", description: "Password for admin web access when challenge-based authentication is enabled", defaultValue: "", secret: true),
-            ],
-            "debug_logging": [
-                schemaItem(key: "log", description: "Global log level", defaultValue: "DEBUG", choices: ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"]),
-                schemaItem(key: "file_level", description: "File log level", defaultValue: "DEBUG", choices: ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"]),
-                schemaItem(key: "console_level", description: "Console log level", defaultValue: "INFO", choices: ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"]),
-                schemaItem(key: "log_file", description: "Debug log file path", defaultValue: ""),
-                schemaItem(key: "log_file_max_bytes", description: "Maximum size of each log file before rotation", defaultValue: 1_048_576),
-                schemaItem(key: "log_file_backup_count", description: "Number of rotated log files to keep", defaultValue: 5),
-            ],
-            "runner": [
-                schemaItem(
-                    key: "overlay_transport",
-                    description: "Overlay transport between peers: comma-separated list from myudp,tcp,quic,ws. Multiple transports are supported simultaneously for listening instances.",
-                    defaultValue: "myudp"
-                ),
-                schemaItem(
-                    key: "client_restart_if_disconnected",
-                    description: "If configured as a peer client and the overlay stays disconnected for this many seconds, request runner restart. 0 disables.",
-                    defaultValue: 0.0
-                ),
-                schemaItem(
-                    key: "overlay_reconnect_retry_delay_ms",
-                    description: "Delay in milliseconds between failed reconnect attempts for reconnect-capable client overlays.",
-                    defaultValue: 30000
-                ),
-            ],
-            "udp_session": [
-                schemaItem(key: "udp_bind", description: "overlay bind address (IPv4 '0.0.0.0' or IPv6 '::')", defaultValue: "::"),
-                schemaItem(key: "udp_own_port", description: "overlay own port", defaultValue: 4433),
-                schemaItem(key: "udp_peer", description: "peer IP/FQDN, or comma-separated IPv4/IPv6 alternatives (IPv6 may be in [brackets])", defaultValue: NSNull()),
-                schemaItem(key: "udp_peer_port", description: "peer overlay port", defaultValue: 4433),
-                schemaItem(key: "udp_peer_resolve_family", description: "Peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.", defaultValue: "prefer-ipv6", choices: ["prefer-ipv6", "ipv4", "ipv6"]),
-            ],
-            "tcp_session": [
-                schemaItem(key: "tcp_bind", description: "TCP overlay bind address", defaultValue: "::"),
-                schemaItem(key: "tcp_own_port", description: "TCP overlay own port", defaultValue: 8081),
-                schemaItem(key: "tcp_peer", description: "TCP peer IP/FQDN", defaultValue: NSNull()),
-                schemaItem(key: "tcp_peer_port", description: "TCP peer overlay port", defaultValue: 8081),
-                schemaItem(key: "tcp_peer_resolve_family", description: "TCP peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.", defaultValue: "prefer-ipv6", choices: ["prefer-ipv6", "ipv4", "ipv6"]),
-                schemaItem(key: "tcp_bp_wbuf_threshold", description: "TCP backpressure write-buffer threshold", defaultValue: 128 * 1024),
-            ],
-            "ws_session": [
-                schemaItem(key: "ws_peer", description: "Remote WebSocket peer host", defaultValue: "bridge.example.com"),
-                schemaItem(key: "ws_peer_port", description: "Remote WebSocket peer port", defaultValue: 443),
-                schemaItem(key: "ws_payload_mode", description: "WebSocket payload framing mode", defaultValue: "binary", choices: ["binary", "base64", "json-base64", "semi-text-shape"]),
-                schemaItem(key: "ws_static_dir", description: "Directory containing static web assets", defaultValue: "./web"),
-            ],
-            "secure_link": [
-                schemaItem(key: "secure_link", description: "Enable SecureLink", defaultValue: false),
-                schemaItem(key: "secure_link_mode", description: "SecureLink mode", defaultValue: "off", choices: ["off", "psk", "cert"]),
-                schemaItem(key: "secure_link_psk", description: "SecureLink PSK secret", defaultValue: "", secret: true),
-            ],
-            "compress_layer": [
-                schemaItem(key: "compress_layer", description: "Enable transport compression", defaultValue: false),
-                schemaItem(key: "compress_layer_algo", description: "Compression algorithm", defaultValue: "zlib"),
-                schemaItem(key: "compress_layer_level", description: "Compression level", defaultValue: 3),
-                schemaItem(key: "compress_layer_min_bytes", description: "Minimum payload size before compression", defaultValue: 64),
-                schemaItem(key: "compress_layer_types", description: "Comma-separated message types eligible for compression", defaultValue: "data,data_frag"),
-            ],
-            "TUN_routing": [
-                schemaItem(key: "tunnel_address", description: "IPv4 tunnel address for the local iOS/macOS tunnel endpoint.", defaultValue: "192.168.106.1"),
-                schemaItem(key: "tunnel_prefix", description: "IPv4 tunnel prefix length.", defaultValue: 30),
-                schemaItem(key: "tunnel_gateway", description: "IPv4 peer gateway address used by TUN hook helpers.", defaultValue: "192.168.106.2"),
-                schemaItem(key: "included_routes", description: "IPv4 routes that should be included in the packet tunnel.", defaultValue: ["0.0.0.0/0"]),
-                schemaItem(key: "excluded_routes", description: "IPv4 routes that should bypass the packet tunnel.", defaultValue: ["127.0.0.0/8"]),
-                schemaItem(key: "tunnel_address6", description: "IPv6 tunnel address for the local iOS/macOS tunnel endpoint.", defaultValue: "fd20:106::1"),
-                schemaItem(key: "tunnel_prefix6", description: "IPv6 tunnel prefix length.", defaultValue: 126),
-                schemaItem(key: "tunnel_gateway6", description: "IPv6 peer gateway address used by TUN hook helpers.", defaultValue: "fd20:106::2"),
-                schemaItem(key: "included_routes6", description: "IPv6 routes that should be included in the packet tunnel.", defaultValue: ["::/0"]),
-                schemaItem(key: "excluded_routes6", description: "IPv6 routes that should bypass the packet tunnel.", defaultValue: ["::1/128"]),
-                schemaItem(key: "dns_servers", description: "DNS servers advertised to the packet tunnel network settings.", defaultValue: ["1.1.1.1"]),
-                schemaItem(key: "mtu", description: "MTU applied to the packet tunnel network settings.", defaultValue: 1600),
-                schemaItem(key: "log_TUN_routing", description: "Log level for TUN routing helpers.", defaultValue: "CRITICAL"),
-            ],
-            "channel_mux": [
-                schemaItem(
-                    key: "own_servers",
-                    description: "Service catalog for local listeners in client mode. Use structured service objects with listen/target fields.",
-                    defaultValue: []
-                ),
-                schemaItem(
-                    key: "remote_servers",
-                    description: "Service catalog pushed to the connected peer in client mode. Use structured service objects with listen/target fields.",
-                    defaultValue: []
-                ),
-            ],
-        ]
-        return sections
-    }
-
-    private func schemaItem(key: String, description: String, defaultValue: Any, choices: [Any]? = nil, secret: Bool = false) -> [String: Any] {
-        var row: [String: Any] = [
-            "key": key,
-            "description": description,
-            "default": defaultValue,
-        ]
-        if let choices {
-            row["choices"] = choices
-        }
-        if secret {
-            row["secret"] = true
-        }
-        return row
+        ObstacleBridgeRuntimeConfig.configSchemaSnapshot()
     }
 
     func schemaRow(forKey key: String) -> [String: Any]? {
-        for rows in schemaSnapshot().values {
-            guard let items = rows as? [[String: Any]] else {
-                continue
-            }
-            for row in items where String(describing: row["key"] ?? "") == key {
-                return row
-            }
-        }
-        return nil
+        ObstacleBridgeRuntimeConfig.schemaRow(forKey: key)
     }
 
     func sectionName(forKey key: String) -> String? {
-        for (section, rows) in schemaSnapshot() {
-            guard let items = rows as? [[String: Any]] else {
-                continue
-            }
-            if items.contains(where: { String(describing: $0["key"] ?? "") == key }) {
-                return section
-            }
-        }
-        return nil
-    }
-}
-
-private struct ObstacleBridgeNativeServiceSpec {
-    let svcID: Int
-    let name: String?
-    let listenProtocol: String
-    let listenBind: String
-    let listenPort: Int
-    let targetProtocol: String
-    let targetHost: String
-    let targetPort: Int
-
-    init(sharedSpec: ObstacleBridgeRuntimeServiceSpec) {
-        self.svcID = sharedSpec.svcID
-        self.name = sharedSpec.name
-        self.listenProtocol = sharedSpec.listenProtocol
-        self.listenBind = sharedSpec.listenBind
-        self.listenPort = sharedSpec.listenPort
-        self.targetProtocol = sharedSpec.targetProtocol
-        self.targetHost = sharedSpec.targetHost
-        self.targetPort = sharedSpec.targetPort
-    }
-
-    func toChannelMuxServiceSpec() -> ObstacleBridgeChannelMuxCodec.ServiceSpec {
-        ObstacleBridgeChannelMuxCodec.ServiceSpec(
-            svcID: svcID,
-            lProto: listenProtocol,
-            lBind: listenBind,
-            lPort: listenPort,
-            rProto: targetProtocol,
-            rHost: targetHost,
-            rPort: targetPort,
-            name: name,
-            lifecycleHooks: nil,
-            options: nil
-        )
-    }
-}
-
-private final class ObstacleBridgeTCPProxyConnection {
-    private let chanID: Int
-    private let spec: ObstacleBridgeNativeServiceSpec
-    private let listenerHost: String
-    private let listenerPort: Int
-    private let runtime: ObstacleBridgeChannelMuxTcpRuntime
-    private let localConnection: NWConnection
-    private let remoteConnection: NWConnection
-    private let queue: DispatchQueue
-    private let updateState: ([String: Any]) -> Void
-    private let finish: (Int) -> Void
-
-    private var localClosed = false
-    private var remoteClosed = false
-    private var state = "connecting"
-    private var sourceHost: String?
-    private var sourcePort: Int?
-    private var stats: [String: Int] = [
-        "rx_msgs": 0,
-        "tx_msgs": 0,
-        "rx_bytes": 0,
-        "tx_bytes": 0,
-    ]
-
-    init(
-        chanID: Int,
-        spec: ObstacleBridgeNativeServiceSpec,
-        listenerHost: String,
-        listenerPort: Int,
-        runtime: ObstacleBridgeChannelMuxTcpRuntime,
-        localConnection: NWConnection,
-        remoteConnection: NWConnection,
-        queue: DispatchQueue,
-        updateState: @escaping ([String: Any]) -> Void,
-        finish: @escaping (Int) -> Void
-    ) {
-        self.chanID = chanID
-        self.spec = spec
-        self.listenerHost = listenerHost
-        self.listenerPort = listenerPort
-        self.runtime = runtime
-        self.localConnection = localConnection
-        self.remoteConnection = remoteConnection
-        self.queue = queue
-        self.updateState = updateState
-        self.finish = finish
-    }
-
-    func start() {
-        captureSourceEndpoint()
-        localConnection.stateUpdateHandler = { [weak self] state in
-            self?.handleLocalState(state)
-        }
-        remoteConnection.stateUpdateHandler = { [weak self] state in
-            self?.handleRemoteState(state)
-        }
-        localConnection.start(queue: queue)
-        remoteConnection.start(queue: queue)
-        updateState(snapshot())
-    }
-
-    func stop() {
-        localClosed = true
-        remoteClosed = true
-        localConnection.cancel()
-        remoteConnection.cancel()
-        state = "closed"
-        updateState(snapshot())
-        finish(chanID)
-    }
-
-    private func captureSourceEndpoint() {
-        if case let .hostPort(host, port) = localConnection.endpoint {
-            sourceHost = host.debugDescription
-            sourcePort = Int(port.rawValue)
-        }
-    }
-
-    private func handleLocalState(_ state: NWConnection.State) {
-        switch state {
-        case .ready:
-            receiveFromLocal()
-        case .failed, .cancelled:
-            closeLocal()
-        default:
-            break
-        }
-    }
-
-    private func handleRemoteState(_ state: NWConnection.State) {
-        switch state {
-        case .ready:
-            self.state = "connected"
-            updateState(snapshot())
-            receiveFromRemote()
-        case .failed, .cancelled:
-            closeRemote()
-        default:
-            break
-        }
-    }
-
-    private func receiveFromLocal() {
-        localConnection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
-            guard let self else { return }
-            if let data, !data.isEmpty {
-                _ = try? self.runtime.handleLocalServerData(chanID: self.chanID, payload: data, overlayConnected: true)
-                self.stats["tx_msgs", default: 0] += 1
-                self.stats["tx_bytes", default: 0] += data.count
-                self.updateState(self.snapshot())
-                self.remoteConnection.send(content: data, completion: .contentProcessed { _ in })
-            }
-            if isComplete || error != nil {
-                self.closeLocal()
-                return
-            }
-            self.receiveFromLocal()
-        }
-    }
-
-    private func receiveFromRemote() {
-        remoteConnection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
-            guard let self else { return }
-            if let data, !data.isEmpty {
-                let inbound = self.runtime.handleInboundServerData(chanID: self.chanID, body: data)
-                if inbound.delivered {
-                    for buffer in inbound.writtenBuffers {
-                        self.stats["rx_msgs", default: 0] += 1
-                        self.stats["rx_bytes", default: 0] += buffer.count
-                        self.localConnection.send(content: buffer, completion: .contentProcessed { _ in })
-                    }
-                    self.updateState(self.snapshot())
-                }
-            }
-            if isComplete || error != nil {
-                self.closeRemote()
-                return
-            }
-            self.receiveFromRemote()
-        }
-    }
-
-    private func closeLocal() {
-        guard !localClosed else { return }
-        localClosed = true
-        _ = try? runtime.handleLocalServerEOF(chanID: chanID, overlayConnected: true)
-        localConnection.cancel()
-        maybeFinish()
-    }
-
-    private func closeRemote() {
-        guard !remoteClosed else { return }
-        remoteClosed = true
-        _ = runtime.handleInboundServerClose(chanID: chanID)
-        remoteConnection.cancel()
-        maybeFinish()
-    }
-
-    private func maybeFinish() {
-        if localClosed || remoteClosed {
-            state = "closed"
-            updateState(snapshot())
-        }
-        if localClosed && remoteClosed {
-            finish(chanID)
-        } else if localClosed {
-            remoteConnection.cancel()
-            remoteClosed = true
-            finish(chanID)
-        } else if remoteClosed {
-            localConnection.cancel()
-            localClosed = true
-            finish(chanID)
-        }
-    }
-
-    func snapshot() -> [String: Any] {
-        [
-            "protocol": "tcp",
-            "role": "server",
-            "state": state,
-            "chan_id": chanID,
-            "svc_id": spec.svcID,
-            "service_name": spec.name ?? "",
-            "source": endpointDict(host: sourceHost, port: sourcePort),
-            "local": endpointDict(host: listenerHost, port: listenerPort),
-            "local_port": listenerPort,
-            "remote_destination": endpointDict(host: spec.targetHost, port: spec.targetPort),
-            "stats": stats,
-        ]
-    }
-
-    private func endpointDict(host: String?, port: Int?) -> Any {
-        guard let host, let port else {
-            return NSNull()
-        }
-        return ["host": host, "port": port]
-    }
-}
-
-private final class ObstacleBridgeUDPProxyConnection {
-    private let spec: ObstacleBridgeNativeServiceSpec
-    private let listenerHost: String
-    private let listenerPort: Int
-    private let runtime: ObstacleBridgeChannelMuxUdpRuntime
-    private let localConnection: NWConnection
-    private let remoteConnection: NWConnection
-    private let queue: DispatchQueue
-    private let updateState: ([String: Any]?) -> Void
-    private let finish: (Int?) -> Void
-
-    private var chanID: Int?
-    private var sourceHost: String?
-    private var sourcePort: Int?
-    private var closed = false
-    private var stats: [String: Int] = [
-        "rx_msgs": 0,
-        "tx_msgs": 0,
-        "rx_bytes": 0,
-        "tx_bytes": 0,
-    ]
-
-    init(
-        spec: ObstacleBridgeNativeServiceSpec,
-        listenerHost: String,
-        listenerPort: Int,
-        runtime: ObstacleBridgeChannelMuxUdpRuntime,
-        localConnection: NWConnection,
-        remoteConnection: NWConnection,
-        queue: DispatchQueue,
-        updateState: @escaping ([String: Any]?) -> Void,
-        finish: @escaping (Int?) -> Void
-    ) {
-        self.spec = spec
-        self.listenerHost = listenerHost
-        self.listenerPort = listenerPort
-        self.runtime = runtime
-        self.localConnection = localConnection
-        self.remoteConnection = remoteConnection
-        self.queue = queue
-        self.updateState = updateState
-        self.finish = finish
-    }
-
-    func start() {
-        captureSourceEndpoint()
-        localConnection.stateUpdateHandler = { [weak self] state in
-            self?.handleState(state, isLocal: true)
-        }
-        remoteConnection.stateUpdateHandler = { [weak self] state in
-            self?.handleState(state, isLocal: false)
-        }
-        localConnection.start(queue: queue)
-        remoteConnection.start(queue: queue)
-    }
-
-    func stop() {
-        guard !closed else { return }
-        closed = true
-        localConnection.cancel()
-        remoteConnection.cancel()
-        if let chanID {
-            _ = runtime.handleInboundClose(chanID: chanID)
-        }
-        updateState(nil)
-        finish(chanID)
-    }
-
-    private func captureSourceEndpoint() {
-        if case let .hostPort(host, port) = localConnection.endpoint {
-            sourceHost = host.debugDescription
-            sourcePort = Int(port.rawValue)
-        }
-    }
-
-    private func handleState(_ state: NWConnection.State, isLocal: Bool) {
-        switch state {
-        case .ready:
-            if isLocal {
-                receiveFromLocal()
-            } else {
-                receiveFromRemote()
-            }
-        case .failed, .cancelled:
-            stop()
-        default:
-            break
-        }
-    }
-
-    private func receiveFromLocal() {
-        localConnection.receiveMessage { [weak self] data, _, _, error in
-            guard let self else { return }
-            if let data, !data.isEmpty {
-                let snapshot = try? self.runtime.handleLocalServerDatagram(
-                    spec: self.spec.toChannelMuxServiceSpec(),
-                    serviceKey: "svc-\(self.spec.svcID)",
-                    payload: data,
-                    addrHost: self.sourceHost ?? "127.0.0.1",
-                    addrPort: self.sourcePort ?? 0,
-                    overlayConnected: true,
-                    acceptingEnabled: true
-                )
-                if let snapshot {
-                    self.chanID = snapshot.chanID
-                    self.stats["tx_msgs", default: 0] += 1
-                    self.stats["tx_bytes", default: 0] += data.count
-                    self.updateState(self.snapshot())
-                    self.remoteConnection.send(content: data, completion: .contentProcessed { _ in })
-                }
-            }
-            if error != nil || self.closed {
-                self.stop()
-                return
-            }
-            self.receiveFromLocal()
-        }
-    }
-
-    private func receiveFromRemote() {
-        remoteConnection.receiveMessage { [weak self] data, _, _, error in
-            guard let self else { return }
-            if let data, !data.isEmpty, let chanID = self.chanID {
-                let inbound = self.runtime.handleInboundServerData(chanID: chanID, body: data)
-                if inbound.delivered, let packet = inbound.packet {
-                    self.stats["rx_msgs", default: 0] += 1
-                    self.stats["rx_bytes", default: 0] += packet.count
-                    self.updateState(self.snapshot())
-                    self.localConnection.send(content: packet, completion: .contentProcessed { _ in })
-                }
-            }
-            if error != nil || self.closed {
-                self.stop()
-                return
-            }
-            self.receiveFromRemote()
-        }
-    }
-
-    func snapshot() -> [String: Any]? {
-        guard let chanID else {
-            return nil
-        }
-        return [
-            "protocol": "udp",
-            "role": "server",
-            "state": "connected",
-            "chan_id": chanID,
-            "svc_id": spec.svcID,
-            "service_name": spec.name ?? "",
-            "source": endpointDict(host: sourceHost, port: sourcePort),
-            "local": endpointDict(host: listenerHost, port: listenerPort),
-            "local_port": listenerPort,
-            "remote_destination": endpointDict(host: spec.targetHost, port: spec.targetPort),
-            "stats": stats,
-        ]
-    }
-
-    private func endpointDict(host: String?, port: Int?) -> Any {
-        guard let host, let port else {
-            return NSNull()
-        }
-        return ["host": host, "port": port]
+        ObstacleBridgeRuntimeConfig.sectionName(forKey: key)
     }
 }
 
 final class ObstacleBridgeHostRunner {
-    private static let authChallengeTTL: TimeInterval = 300
-    private static let authSessionTTL: TimeInterval = 12 * 60 * 60
     private static let configChallengeTTL: TimeInterval = 90
+    private static let serviceStateQueueKey = DispatchSpecificKey<UInt8>()
 
     private let runtimeConfigPath: String
     private var runtimeConfigRaw: [String: Any]
@@ -768,9 +127,33 @@ final class ObstacleBridgeHostRunner {
     private var sharedUdpOverlayTransportOwner: ObstacleBridgeUdpOverlayTransportOwner?
     private var clientRestartWatchdog: DispatchSourceTimer?
     private var overlayDisconnectedAt: TimeInterval?
-    private var authChallenges: [String: [String: Any]] = [:]
-    private var configChallenges: [String: [String: Any]] = [:]
-    private var authSessions: [String: TimeInterval] = [:]
+    private lazy var adminAuth = ObstacleBridgeAdminAuth(
+        queueLabel: "ObstacleBridgeHostRunner.AdminAuth",
+        authRequiredProvider: { [weak self] in
+            self?.adminAuthRequired() ?? false
+        },
+        usernameProvider: { [weak self] in
+            self?.adminAuthUsername() ?? ""
+        },
+        passwordProvider: { [weak self] in
+            self?.adminAuthPassword() ?? ""
+        },
+        bearerTokenProvider: { [weak self] in
+            self?.adminWebToken() ?? ""
+        },
+        cookieScopeProvider: { [weak self] in
+            self?.adminSessionCookieScope() ?? ""
+        }
+    )
+    private lazy var adminConfigChallengeStore = ObstacleBridgeAdminConfigChallenge(
+        queueLabel: "ObstacleBridgeHostRunner.AdminConfigChallenge",
+        usernameProvider: { [weak self] in
+            self?.adminAuthUsername() ?? ""
+        },
+        passwordProvider: { [weak self] in
+            self?.adminAuthPassword() ?? ""
+        }
+    )
 
     init(runtimeConfigPath: String, bindHostOverride: String?, statusPortOverride: Int?) throws {
         self.runtimeConfigPath = runtimeConfigPath
@@ -783,6 +166,7 @@ final class ObstacleBridgeHostRunner {
         self.bindHost = bindHostOverride ?? (ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_bind"]) ?? "127.0.0.1")
         let configuredPort = ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["admin_web_port"])
         self.statusPort = statusPortOverride ?? configuredPort ?? 18080
+        serviceStateQueue.setSpecific(key: Self.serviceStateQueueKey, value: 1)
     }
 
     static func appScopedRootURL() throws -> URL {
@@ -961,52 +345,32 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func staticFileResponse(path: String) -> (contentType: String, body: Data)? {
-        let cleanedPath = normalizeStaticPath(path)
         let adminWebDir = configStore.adminWebDirectory()
-        let fileURL = URL(fileURLWithPath: adminWebDir).appendingPathComponent(cleanedPath)
-        guard fileURL.path.hasPrefix(URL(fileURLWithPath: adminWebDir).path),
-              let data = try? Data(contentsOf: fileURL) else {
-            return nil
-        }
-        return (contentType(for: fileURL.pathExtension), data)
-    }
-
-    private func normalizeStaticPath(_ rawPath: String) -> String {
-        let basePath = rawPath.split(separator: "?", maxSplits: 1).first.map(String.init) ?? "/"
-        let candidate = basePath == "/" ? "index.html" : String(basePath.drop(while: { $0 == "/" }))
-        let components = candidate.split(separator: "/").filter { $0 != "." && $0 != ".." }
-        return components.isEmpty ? "index.html" : components.joined(separator: "/")
-    }
-
-    private func contentType(for pathExtension: String) -> String {
-        switch pathExtension.lowercased() {
-        case "html":
-            return "text/html; charset=utf-8"
-        case "js":
-            return "application/javascript; charset=utf-8"
-        case "css":
-            return "text/css; charset=utf-8"
-        case "json":
-            return "application/json; charset=utf-8"
-        case "svg":
-            return "image/svg+xml"
-        default:
-            return "application/octet-stream"
-        }
+        return ObstacleBridgeAdminWebSupport.staticFileResponse(
+            baseDirectoryURL: URL(fileURLWithPath: adminWebDir),
+            path: path
+        )
     }
 
     private func metaSnapshot() -> [String: Any] {
         let uptimeSec = Int(Date().timeIntervalSince(startedAt))
-        return [
-            "admin_web_name": Self.stringValue(from: runtimeConfig["admin_web_name"]) ?? "",
-            "uptime_sec": uptimeSec,
-            "build": buildSummary(),
-            "runtime_dependencies": adminRuntimeDependenciesPayload(),
-            "bootstrap_state": bootstrapState,
-            "control_actions": controlActionSnapshot(),
-            "transport_runtime": transportRuntimeSnapshot(),
-            "compress_layer": compressLayerSnapshot(peerID: nil) ?? NSNull(),
-        ]
+        return ObstacleBridgeAdminSnapshotSupport.metaEnvelope(
+            runtimeOwner: "ObstacleBridgeApp swift_host_runner",
+            runtimeMode: "swift_host_runner",
+            adminWebName: Self.stringValue(from: runtimeConfig["admin_web_name"]) ?? "",
+            adminUI: adminUIPayload(),
+            securityAdvisor: securityAdvisorPayload(),
+            startedAt: startedAt.timeIntervalSince1970,
+            uptimeSec: uptimeSec,
+            bootstrapState: bootstrapState,
+            transportRuntime: transportRuntimeSnapshot(),
+            compressLayer: compressLayerSnapshot(peerID: nil) ?? NSNull(),
+            extra: [
+                "build": buildSummary(),
+                "runtime_dependencies": adminRuntimeDependenciesPayload(),
+                "control_actions": controlActionSnapshot(),
+            ]
+        )
     }
 
     private func peersSnapshot() -> [[String: Any]] {
@@ -1074,14 +438,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func lastIncomingAgeSeconds(from runtime: [String: Any]) -> Any {
-        guard let lastRxWall = runtime["last_rx_wall_ns"] as? UInt64, lastRxWall > 0 else {
-            return NSNull()
-        }
-        let now = DispatchTime.now().uptimeNanoseconds
-        guard now >= lastRxWall else {
-            return NSNull()
-        }
-        return Double(now - lastRxWall) / 1_000_000_000.0
+        ObstacleBridgeAdminSnapshotSupport.lastIncomingAgeSeconds(from: runtime)
     }
 
     private func peerEndpointSnapshot() -> Any {
@@ -1112,20 +469,13 @@ final class ObstacleBridgeHostRunner {
 
     private func transportRuntimeSnapshot() -> [String: Any] {
         let transport = Self.stringValue(from: bootstrapState["transport"]) ?? (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp")
-        var snapshot: [String: Any] = [
-            "kind": transport,
-            "status": bootstrapState["status"] ?? "unknown",
-        ]
-        if let websocket = webSocketRuntimeSnapshot() {
-            snapshot["websocket"] = websocket
-        }
-        if let tcp = tcpRuntimeSnapshot() {
-            snapshot["tcp"] = tcp
-        }
-        if let udp = udpRuntimeSnapshot() {
-            snapshot["myudp"] = udp
-        }
-        return snapshot
+        return ObstacleBridgeAdminSnapshotSupport.transportRuntimeEnvelope(
+            kind: transport,
+            status: bootstrapState["status"] ?? "unknown",
+            myudp: udpRuntimeSnapshot(),
+            tcp: tcpRuntimeSnapshot(),
+            websocket: webSocketRuntimeSnapshot()
+        )
     }
 
     private func udpRuntimeSnapshot() -> [String: Any]? {
@@ -1397,7 +747,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func stopOwnServers() {
-        serviceStateQueue.sync {
+        withServiceStateQueue {
             for connection in tcpConnectionObjects.values {
                 connection.stop()
             }
@@ -1431,7 +781,7 @@ final class ObstacleBridgeHostRunner {
             self?.acceptUDPConnection(connection, spec: spec)
         }
         listener.start(queue: serviceStateQueue)
-        serviceStateQueue.sync {
+        withServiceStateQueue {
             udpServiceListeners[spec.svcID] = listener
         }
     }
@@ -1509,7 +859,7 @@ final class ObstacleBridgeHostRunner {
             self?.acceptTCPConnection(connection, spec: spec)
         }
         listener.start(queue: serviceStateQueue)
-        serviceStateQueue.sync {
+        withServiceStateQueue {
             tcpServiceListeners[spec.svcID] = listener
         }
     }
@@ -1577,7 +927,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func connectionsSnapshot() -> [String: Any] {
-        serviceStateQueue.sync {
+        withServiceStateQueue {
             let tcpOverlayRows = sharedTcpOverlayTransportOwner?.connectionRows()
             let udpOverlayRows = sharedUdpOverlayTransportOwner?.connectionRows()
             let tcpListeningRows = ownServerSpecs
@@ -1652,6 +1002,13 @@ final class ObstacleBridgeHostRunner {
         }
     }
 
+    private func withServiceStateQueue<T>(_ body: () -> T) -> T {
+        if DispatchQueue.getSpecific(key: Self.serviceStateQueueKey) != nil {
+            return body()
+        }
+        return serviceStateQueue.sync(execute: body)
+    }
+
     private func controlActionSnapshot() -> [String: Any] {
         [
             "restart_supported": true,
@@ -1665,169 +1022,29 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func adminRuntimeDependenciesPayload() -> [String: Any] {
-        [
-            "ok": true,
-            "missing": [],
-            "install_hint": "",
-        ]
+        ObstacleBridgeAdminWebSupport.adminRuntimeDependenciesPayload()
     }
 
     private func adminUIPayload() -> [String: Any] {
-        let bootstrapState = ObstacleBridgeRuntimeConfig.adminUIBootstrapState(from: runtimeConfig)
-        return [
-            "home_tab_enabled": true,
-            "landing_page_enabled": false,
-            "security_advisor_enabled": !(Self.boolValue(from: runtimeConfig["admin_web_security_advisor_disable"]) ?? false),
-            "security_advisor_startup_enabled": !(Self.boolValue(from: runtimeConfig["admin_web_security_advisor_startup_disable"]) ?? false),
-            "first_tab": Self.stringValue(from: runtimeConfig["admin_web_first_tab"]) ?? "home",
-            "first_start_detected": bootstrapState.firstStartDetected,
-            "config_file_state": bootstrapState.configFileState,
-            "platform": "darwin",
-            "runtime_dependencies": adminRuntimeDependenciesPayload(),
-        ]
+        var payload = ObstacleBridgeAdminWebSupport.adminUIPayload(
+            runtimeConfig: runtimeConfig,
+            platform: "darwin",
+            runtimeDependencies: adminRuntimeDependenciesPayload()
+        )
+        let firstStartDetected = (payload["first_start_detected"] as? Bool) ?? false
+        payload["config_file_state"] = firstStartDetected ? "empty" : "unknown"
+        return payload
     }
 
     private func securityAdvisorPayload() -> [String: Any] {
-        let enabled = !(Self.boolValue(from: runtimeConfig["admin_web_security_advisor_disable"]) ?? false)
-        let bind = (Self.stringValue(from: runtimeConfig["admin_web_bind"]) ?? bindHost).trimmingCharacters(in: .whitespacesAndNewlines)
-        let adminLocalOnly = Self.isLoopbackHost(bind)
-        let secureMode = (Self.stringValue(from: runtimeConfig["secure_link_mode"]) ?? "off").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let securePSK = Self.stringValue(from: runtimeConfig["secure_link_psk"]) ?? ""
-        let authDisabled = Self.boolValue(from: runtimeConfig["admin_web_auth_disable"]) ?? false
-        var findings: [[String: Any]] = []
-        if enabled {
-            if (Self.boolValue(from: runtimeConfig["admin_web"]) ?? false), authDisabled {
-                let adminMessage = adminLocalOnly
-                    ? "Admin Web password protection is recommended even on localhost-only setups. Enable admin authentication in the configuration unless you intentionally want friction-free local access."
-                    : "Admin Web is reachable beyond localhost and admin authentication is disabled in the configuration. This should be treated as a warning. Enable admin authentication or bind Admin Web to localhost."
-                findings.append([
-                    "id": "admin_auth_disabled",
-                    "severity": adminLocalOnly ? "recommended" : "warning",
-                    "title": "Protect Admin Web",
-                    "message": adminMessage,
-                    "action_label": "Open Configuration",
-                    "action_target": "configuration",
-                ])
-            }
-            if ["", "off", "none"].contains(secureMode) {
-                let message = adminLocalOnly
-                    ? "SecureLink is currently disabled. That can be acceptable for localhost-only or lab-style setups, but enabling SecureLink is still recommended."
-                    : "This node is not localhost-only and SecureLink is currently disabled. Running without SecureLink should be treated as a warning. Start with PSK for quick protection or move to certificates for deployment-grade trust."
-                findings.append([
-                    "id": "secure_link_disabled",
-                    "severity": adminLocalOnly ? "recommended" : "warning",
-                    "title": "Enable SecureLink",
-                    "message": message,
-                    "action_label": "Open Secure-Link",
-                    "action_target": "secure-link",
-                ])
-            } else if secureMode == "psk" {
-                if securePSK.trimmingCharacters(in: .whitespacesAndNewlines).count < 12 {
-                    findings.append([
-                        "id": "secure_link_psk_weak",
-                        "severity": "recommended",
-                        "title": "Strengthen PSK",
-                        "message": "SecureLink PSK is enabled, but the configured secret looks short. Use a stronger shared secret for better protection.",
-                        "action_label": "Open Configuration",
-                        "action_target": "configuration",
-                    ])
-                }
-                findings.append([
-                    "id": "secure_link_cert_followup",
-                    "severity": "informational",
-                    "title": "Plan Certificate Trust",
-                    "message": "PSK is a good quick-start protection mode. For longer-lived deployments, certificate-based SecureLink provides a stronger operational trust model.",
-                    "action_label": "Open Secure-Link",
-                    "action_target": "secure-link",
-                ])
-            }
-        }
-        let highest: String
-        if findings.contains(where: { String(describing: $0["severity"] ?? "") == "critical" }) {
-            highest = "critical"
-        } else if findings.contains(where: { String(describing: $0["severity"] ?? "") == "warning" }) {
-            highest = "warning"
-        } else if findings.contains(where: { String(describing: $0["severity"] ?? "") == "recommended" }) {
-            highest = "recommended"
-        } else {
-            highest = "informational"
-        }
-        let summary: String
-        if !enabled {
-            summary = "Security advisor disabled."
-        } else if findings.isEmpty {
-            summary = "Current settings look reasonably hardened for this first implementation slice."
-        } else if highest == "critical" {
-            summary = "Security advisor found settings that should be addressed before wider exposure."
-        } else if highest == "warning" {
-            summary = "Security advisor found warning-level hardening issues for this node."
-        } else if highest == "recommended" {
-            summary = "Security advisor found recommended hardening steps for this node."
-        } else {
-            summary = "Security advisor found optional follow-up improvements."
-        }
-        return [
-            "enabled": enabled,
-            "summary": summary,
-            "highest_severity": highest,
-            "findings": findings,
-        ]
+        ObstacleBridgeAdminWebSupport.securityAdvisorPayload(
+            runtimeConfig: runtimeConfig,
+            bindHostFallback: bindHost
+        )
     }
 
     private func maskedRuntimeConfigSnapshot() -> [String: Any] {
-        var payload = runtimeConfig
-        if payload["overlay_transport"] == nil {
-            payload["overlay_transport"] = "myudp"
-        }
-        if payload["client_restart_if_disconnected"] == nil {
-            payload["client_restart_if_disconnected"] = 0.0
-        }
-        if payload["overlay_reconnect_retry_delay_ms"] == nil {
-            payload["overlay_reconnect_retry_delay_ms"] = 30000
-        }
-        if payload["udp_bind"] == nil {
-            payload["udp_bind"] = "::"
-        }
-        if payload["udp_own_port"] == nil {
-            payload["udp_own_port"] = 4433
-        }
-        if payload["udp_peer"] == nil {
-            payload["udp_peer"] = NSNull()
-        }
-        if payload["udp_peer_port"] == nil {
-            payload["udp_peer_port"] = 4433
-        }
-        if payload["udp_peer_resolve_family"] == nil {
-            payload["udp_peer_resolve_family"] = "prefer-ipv6"
-        }
-        if payload["tcp_bind"] == nil {
-            payload["tcp_bind"] = "::"
-        }
-        if payload["tcp_own_port"] == nil {
-            payload["tcp_own_port"] = 8081
-        }
-        if payload["tcp_peer"] == nil {
-            payload["tcp_peer"] = NSNull()
-        }
-        if payload["tcp_peer_port"] == nil {
-            payload["tcp_peer_port"] = 8081
-        }
-        if payload["tcp_peer_resolve_family"] == nil {
-            payload["tcp_peer_resolve_family"] = "prefer-ipv6"
-        }
-        if payload["tcp_bp_wbuf_threshold"] == nil {
-            payload["tcp_bp_wbuf_threshold"] = 128 * 1024
-        }
-        if payload["own_servers"] == nil {
-            payload["own_servers"] = []
-        }
-        if payload["remote_servers"] == nil {
-            payload["remote_servers"] = []
-        }
-        for key in ["admin_web_password", "secure_link_psk"] where payload[key] != nil {
-            payload[key] = ""
-        }
-        return payload
+        ObstacleBridgeRuntimeConfig.maskedConfigSnapshot(runtimeConfig)
     }
 
     private func adminAuthUsername() -> String {
@@ -1839,131 +1056,28 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func pruneAuthState() {
-        let now = Date().timeIntervalSince1970
-        authChallenges = authChallenges.filter { _, item in
-            (item["expires_at"] as? TimeInterval ?? 0) > now
-        }
-        configChallenges = configChallenges.filter { _, item in
-            (item["expires_at"] as? TimeInterval ?? 0) > now
-        }
-        authSessions = authSessions.filter { _, expiresAt in
-            expiresAt > now
-        }
+        adminConfigChallengeStore.reset()
     }
 
     private func resetAuthState() {
-        authChallenges.removeAll()
-        configChallenges.removeAll()
-        authSessions.removeAll()
-    }
-
-    private func parseCookieHeader(_ headers: [String: String]) -> [String: String] {
-        let raw = headers["cookie"] ?? ""
-        var cookies: [String: String] = [:]
-        for part in raw.split(separator: ";") {
-            let item = String(part).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !item.isEmpty, let equals = item.firstIndex(of: "=") else {
-                continue
-            }
-            let key = String(item[..<equals]).trimmingCharacters(in: .whitespacesAndNewlines)
-            let value = String(item[item.index(after: equals)...]).trimmingCharacters(in: .whitespacesAndNewlines)
-            cookies[key] = value
-        }
-        return cookies
-    }
-
-    private func sessionCookieName() -> String {
-        let scope = [bindHost, String(statusPort), Self.stringValue(from: runtimeConfig["admin_web_path"]) ?? "/"].joined(separator: "|")
-        let digest = SHA256.hash(data: Data(scope.utf8)).map { String(format: "%02x", $0) }.joined()
-        return "admin_web_session_\(digest.prefix(12))"
-    }
-
-    private static func isLoopbackHost(_ value: String) -> Bool {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return false
-        }
-        let lowered = trimmed.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        if lowered == "localhost" || lowered == "ip6-localhost" {
-            return true
-        }
-        return lowered == "127.0.0.1" || lowered == "::1"
+        adminConfigChallengeStore.reset()
+        adminAuth.resetState()
     }
 
     private func adminWebToken() -> String {
         Self.stringValue(from: runtimeConfig["admin_web_token"]) ?? ""
     }
 
-    private func validateAdminWebToken(headers: [String: String]) -> ObstacleBridgeAdminAPIResponse? {
-        let token = adminWebToken().trimmingCharacters(in: .whitespacesAndNewlines)
-        if token.isEmpty {
-            return nil
-        }
-        if (headers["authorization"] ?? "") == "Bearer \(token)" {
-            return nil
-        }
-        return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 403 Forbidden", body: "Forbidden")
-    }
-
-    private func buildAuthProof(seed: String, username: String, password: String) -> String {
-        SHA256.hash(data: Data("\(seed):\(username):\(password)".utf8)).map { String(format: "%02x", $0) }.joined()
-    }
-
-    private func canonicalConfigUpdateData(_ updates: [String: Any]) throws -> Data {
-        try JSONSerialization.data(withJSONObject: updates, options: [.sortedKeys])
-    }
-
-    private func configUpdateDigest(_ updates: [String: Any]) throws -> String {
-        let data = try canonicalConfigUpdateData(updates)
-        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    private func adminSessionCookieScope() -> String {
+        [bindHost, String(statusPort), Self.stringValue(from: runtimeConfig["admin_web_path"]) ?? "/"].joined(separator: "|")
     }
 
     private func issueConfigChallenge(updates: [String: Any]) throws -> [String: Any] {
-        let challengeID = UUID().uuidString.lowercased()
-        let seed = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() + challengeID
-        let updatesDigest = try configUpdateDigest(updates)
-        authStateQueue.sync {
-            pruneAuthState()
-            configChallenges[challengeID] = [
-                "seed": seed,
-                "updates_digest": updatesDigest,
-                "expires_at": Date().timeIntervalSince1970 + Self.configChallengeTTL,
-            ]
-        }
-        return [
-            "challenge_id": challengeID,
-            "seed": seed,
-            "updates_digest": updatesDigest,
-        ]
+        try adminConfigChallengeStore.issueChallenge(updates: updates)
     }
 
     private func validateConfigChallenge(challengeID: String, proof: String, updates: [String: Any]) -> String? {
-        authStateQueue.sync {
-            pruneAuthState()
-            guard let challenge = configChallenges.removeValue(forKey: challengeID) else {
-                return "invalid or expired configuration change challenge"
-            }
-            let updatesDigest: String
-            do {
-                updatesDigest = try configUpdateDigest(updates)
-            } catch {
-                return "failed to digest configuration updates"
-            }
-            guard updatesDigest == String(describing: challenge["updates_digest"] ?? "") else {
-                return "configuration update payload mismatch"
-            }
-            let expected = buildConfigProof(
-                seed: String(describing: challenge["seed"] ?? ""),
-                username: adminAuthUsername(),
-                password: adminAuthPassword(),
-                updatesDigest: updatesDigest
-            )
-            return proof == expected ? nil : "configuration change confirmation failed"
-        }
-    }
-
-    private func buildConfigProof(seed: String, username: String, password: String, updatesDigest: String) -> String {
-        SHA256.hash(data: Data("\(seed):\(username):\(password):\(updatesDigest)".utf8)).map { String(format: "%02x", $0) }.joined()
+        adminConfigChallengeStore.validate(challengeID: challengeID, proof: proof, updates: updates)
     }
 
     private func onboardingConnectionProfiles() -> [[String: Any]] {
@@ -1972,43 +1086,6 @@ final class ObstacleBridgeHostRunner {
 
     private func onboardingBlueprints() -> [[String: Any]] {
         []
-    }
-
-    private func sanitizeOnboardingServices(_ value: Any?) -> [[String: Any]] {
-        ObstacleBridgeOnboarding.sanitizeServices(value)
-    }
-
-    private func onboardingTokenPayload(
-        connection: [String: Any],
-        ownServices: [[String: Any]],
-        remoteServices: [[String: Any]],
-        requestPayload: [String: Any] = [:]
-    ) -> [String: Any] {
-        ObstacleBridgeOnboarding.tokenPayload(
-            runtimeConfig: ObstacleBridgeOnboarding.tokenRuntimeConfig(
-                runtimeConfig: runtimeConfig,
-                requestPayload: requestPayload
-            ),
-            connection: connection,
-            ownServices: ownServices,
-            remoteServices: remoteServices,
-            encryptSecrets: ObstacleBridgeConfigSecretCodec.encryptPayload
-        )
-    }
-
-    private func encodeOnboardingToken(_ payload: [String: Any]) throws -> String {
-        try ObstacleBridgeOnboarding.encodeToken(payload)
-    }
-
-    private func decodeOnboardingToken(_ token: String) throws -> [String: Any] {
-        try ObstacleBridgeOnboarding.decodeToken(token)
-    }
-
-    private func onboardingUpdates(from payload: [String: Any]) throws -> [String: Any] {
-        try ObstacleBridgeOnboarding.updates(
-            from: payload,
-            decryptSecrets: ObstacleBridgeConfigSecretCodec.decryptPayload
-        )
     }
 
     private func normalizedConfigUpdates(_ updates: [String: Any]) -> [String: Any] {
@@ -2029,72 +1106,18 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func persistConfigUpdates(_ updates: [String: Any]) throws {
-        let grouped = ObstacleBridgeRuntimeConfig.looksGrouped(runtimeConfigRaw)
-        var nextRaw = runtimeConfigRaw
-        let normalized = normalizedConfigUpdates(updates)
-        for (key, rawValue) in normalized {
-            guard let schemaRow = configStore.schemaRow(forKey: key) else {
-                throw ObstacleBridgeHostRunnerError.invalidArgument("unknown config key: \(key)")
-            }
-            let defaultValue = schemaRow["default"]
-            let value: Any
-            switch defaultValue {
-            case is Bool:
-                guard let boolValue = rawValue as? Bool else {
-                    throw ObstacleBridgeHostRunnerError.invalidArgument("\(key) expects boolean")
-                }
-                value = boolValue
-            case is Int:
-                guard let intValue = rawValue as? Int else {
-                    throw ObstacleBridgeHostRunnerError.invalidArgument("\(key) expects integer")
-                }
-                value = intValue
-            case is Double:
-                if let doubleValue = rawValue as? Double {
-                    value = doubleValue
-                } else if let intValue = rawValue as? Int {
-                    value = Double(intValue)
-                } else {
-                    throw ObstacleBridgeHostRunnerError.invalidArgument("\(key) expects number")
-                }
-            case is String:
-                guard let stringValue = rawValue as? String else {
-                    throw ObstacleBridgeHostRunnerError.invalidArgument("\(key) expects string")
-                }
-                value = stringValue
-            case is [Any]:
-                guard let listValue = rawValue as? [Any] else {
-                    throw ObstacleBridgeHostRunnerError.invalidArgument("\(key) expects list")
-                }
-                value = listValue
-            default:
-                value = rawValue
-            }
-
-            if grouped, let section = configStore.sectionName(forKey: key) {
-                var block = (nextRaw[section] as? [String: Any]) ?? [:]
-                block[key] = value
-                nextRaw[section] = block
-            } else {
-                nextRaw[key] = value
-            }
-        }
-
+        let result = try ObstacleBridgeAdminConfigSupport.validatedNextRawConfig(
+            currentRawConfig: runtimeConfigRaw,
+            currentRuntimeConfig: runtimeConfig,
+            updates: normalizedConfigUpdates(updates)
+        )
+        let nextRaw = result.nextRawConfig
         let persistedPayload = try ObstacleBridgeConfigSecretCodec.encryptPayload(nextRaw)
         let data = try JSONSerialization.data(withJSONObject: persistedPayload, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: URL(fileURLWithPath: runtimeConfigPath), options: [.atomic])
         runtimeConfigRaw = nextRaw
         runtimeConfig = ObstacleBridgeRuntimeConfig.flatten(nextRaw)
         configStore.updateConfigs(groupedConfig: nextRaw, runtimeConfig: runtimeConfig)
-    }
-
-    private func issueSessionHeaders() -> [(String, String)] {
-        let token = UUID().uuidString.replacingOccurrences(of: "-", with: "") + UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        authStateQueue.sync {
-            pruneAuthState()
-            authSessions[token] = Date().timeIntervalSince1970 + Self.authSessionTTL
-        }
-        return [("Set-Cookie", "\(sessionCookieName())=\(token); Path=/; HttpOnly; SameSite=Strict")]
     }
 
     private func requestRestart() -> [String: Any] {
@@ -2311,11 +1334,13 @@ final class ObstacleBridgeHostRunner {
         }
         let peerHost = Self.stringValue(from: runtimeConfig["udp_peer"])
         let peerPort = Self.intValue(from: runtimeConfig["udp_peer_port"])
+        let peerResolveFamily = Self.stringValue(from: runtimeConfig["udp_peer_resolve_family"]) ?? "prefer-ipv6"
         let owner = ObstacleBridgeUdpOverlayTransportOwner(
             bindHost: bindHost,
             bindPort: bindPort,
             peerHost: peerHost,
             peerPort: peerPort,
+            peerResolveFamily: peerResolveFamily,
             sessionMaxAppPayload: ObstacleBridgeRuntimeConfig.overlaySessionMaxAppPayload(from: runtimeConfig),
             overlayLayerTransportAdapter: sharedOverlayLayerTransportAdapter,
             startupMuxFrames: remoteServiceCatalogMuxFrames(),
@@ -2327,45 +1352,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func remoteServiceCatalogMuxFrames() -> [Data] {
-        guard !remoteServerSpecs.isEmpty else {
-            return []
-        }
-        do {
-            let specs = remoteServerSpecs.map { $0.toChannelMuxServiceSpec() }
-            let payload = try ObstacleBridgeChannelMuxCodec.encodeRemoteServicesSetV2(
-                instanceID: 0,
-                connectionSeq: 0,
-                services: specs
-            )
-            if ObstacleBridgeChannelMuxCodec.muxHeaderSize + payload.count <= 65535 {
-                return [
-                    try ObstacleBridgeChannelMuxCodec.packMux(
-                        chanID: 0,
-                        proto: .udp,
-                        counter: 0,
-                        mtype: .remoteServicesSetV2,
-                        body: payload
-                    )
-                ]
-            }
-            let tx = ObstacleBridgeChannelMuxCodec.nextControlChunkTxID(current: 1)
-            let chunks = ObstacleBridgeChannelMuxCodec.chunkControlPayload(
-                txID: tx.txID,
-                maxAppPayload: 65535,
-                payload: payload
-            )
-            return try chunks.enumerated().map { index, chunk in
-                try ObstacleBridgeChannelMuxCodec.packMux(
-                    chanID: 0,
-                    proto: .udp,
-                    counter: index & 0xFFFF,
-                    mtype: .remoteServicesSetV2Chunk,
-                    body: chunk
-                )
-            }
-        } catch {
-            return []
-        }
+        ObstacleBridgeRuntimeConfig.remoteServiceCatalogMuxFrames(from: runtimeConfig)
     }
 
     private func hasConfiguredOverlayPeer() -> Bool {
@@ -2450,10 +1437,10 @@ extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
     }
 
     func adminConfigSnapshot() -> [String: Any] {
-        [
-            "config": maskedRuntimeConfigSnapshot(),
-            "schema": configStore.schemaSnapshot(),
-        ]
+        ObstacleBridgeAdminSnapshotSupport.configEnvelope(
+            config: maskedRuntimeConfigSnapshot(),
+            schema: configStore.schemaSnapshot()
+        )
     }
 
     func adminOnboardingConnectionProfiles() -> [[String: Any]] {
@@ -2465,146 +1452,30 @@ extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
     }
 
     func adminOnboardingInviteGenerate(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
-        guard request.method.uppercased() == "POST" else {
-            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
-        }
-        guard let body = request.body,
-              let object = try? JSONSerialization.jsonObject(with: body),
-              let payload = object as? [String: Any] else {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": "invalid JSON body",
-            ], statusLine: "HTTP/1.1 400 Bad Request")
-        }
-        let profiles = onboardingConnectionProfiles()
-        let connectionID = (payload["connection_id"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let selectedConnection: [String: Any]?
-        if profiles.count > 1 && connectionID.isEmpty {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": "multiple connection profiles available; select connection_id",
-                "profiles": profiles,
-            ], statusLine: "HTTP/1.1 409 Conflict")
-        }
-        if !connectionID.isEmpty {
-            selectedConnection = profiles.first { String(describing: $0["id"] ?? "") == connectionID }
-            if selectedConnection == nil {
-                return ObstacleBridgeAdminAPI.jsonResponse([
-                    "ok": false,
-                    "error": "unknown connection_id: \(connectionID)",
-                ], statusLine: "HTTP/1.1 400 Bad Request")
-            }
-        } else {
-            selectedConnection = profiles.first
-        }
-        let own = sanitizeOnboardingServices(payload["own_servers"] ?? runtimeConfig["own_servers"])
-        let remote = sanitizeOnboardingServices(payload["remote_servers"] ?? runtimeConfig["remote_servers"])
-        let preview = onboardingTokenPayload(
-            connection: selectedConnection ?? [:],
-            ownServices: own,
-            remoteServices: remote,
-            requestPayload: payload
+        ObstacleBridgeAdminConfigSupport.inviteGenerateResponse(
+            method: request.method,
+            body: request.body,
+            runtimeConfig: runtimeConfig,
+            profiles: onboardingConnectionProfiles(),
+            encryptSecrets: ObstacleBridgeConfigSecretCodec.encryptPayload
         )
-        do {
-            let token = try encodeOnboardingToken(preview)
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": true,
-                "invite_token": token,
-                "preview": preview,
-            ])
-        } catch {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": "failed to encode invite token",
-            ], statusLine: "HTTP/1.1 400 Bad Request")
-        }
     }
 
     func adminOnboardingInvitePreview(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
-        guard request.method.uppercased() == "POST" else {
-            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
-        }
-        guard let body = request.body,
-              let object = try? JSONSerialization.jsonObject(with: body),
-              let payload = object as? [String: Any] else {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": "invalid JSON body",
-            ], statusLine: "HTTP/1.1 400 Bad Request")
-        }
-        let token = (payload["invite_token"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !token.isEmpty else {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": "invite_token is required",
-            ], statusLine: "HTTP/1.1 400 Bad Request")
-        }
-        do {
-            let decoded = try decodeOnboardingToken(token)
-            var preview = decoded
-            if let psk = preview["secure_link_psk"] as? String, !psk.isEmpty {
-                preview["secure_link_psk"] = "***hidden***"
-                preview["secure_link_psk_present"] = true
-            }
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": true,
-                "preview": preview,
-                "suggested_updates": try onboardingUpdates(from: decoded),
-            ])
-        } catch let error as ObstacleBridgeHostRunnerError {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": error.localizedDescription,
-            ], statusLine: "HTTP/1.1 400 Bad Request")
-        } catch {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": error.localizedDescription,
-            ], statusLine: "HTTP/1.1 400 Bad Request")
-        }
+        ObstacleBridgeAdminConfigSupport.invitePreviewResponse(
+            method: request.method,
+            body: request.body,
+            decryptSecrets: ObstacleBridgeConfigSecretCodec.decryptPayload
+        )
     }
 
     func adminConfigChallenge(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
-        guard request.method.uppercased() == "POST" else {
-            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
-        }
-        guard let body = request.body,
-              let object = try? JSONSerialization.jsonObject(with: body),
-              let payload = object as? [String: Any] else {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": "invalid JSON body",
-            ], statusLine: "HTTP/1.1 400 Bad Request")
-        }
-        let updates = payload["updates"] as? [String: Any] ?? [:]
-        guard adminAuthRequired() else {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": true,
-                "auth_required": false,
-            ])
-        }
-        guard adminIsAuthenticated(headers: request.headers) else {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "authenticated": false,
-                "error": "authentication required",
-            ], statusLine: "HTTP/1.1 401 Unauthorized")
-        }
-        do {
-            let challenge = try issueConfigChallenge(updates: updates)
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": true,
-                "auth_required": true,
-                "challenge_id": challenge["challenge_id"] as? String ?? "",
-                "seed": challenge["seed"] as? String ?? "",
-                "updates_digest": challenge["updates_digest"] as? String ?? "",
-            ])
-        } catch {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": "failed to issue configuration change challenge",
-            ], statusLine: "HTTP/1.1 400 Bad Request")
-        }
+        ObstacleBridgeAdminConfigSupport.configChallengeResponse(
+            request: request,
+            authRequired: adminAuthRequired(),
+            authenticated: adminIsAuthenticated(headers: request.headers),
+            challengeIssuer: issueConfigChallenge
+        )
     }
 
     func adminAuthRequired() -> Bool {
@@ -2615,150 +1486,48 @@ extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
     }
 
     func adminIsAuthenticated(headers: [String: String]) -> Bool {
-        if !adminAuthRequired() {
-            return true
-        }
-        return authStateQueue.sync {
-            pruneAuthState()
-            let token = parseCookieHeader(headers)[sessionCookieName()] ?? ""
-            return !token.isEmpty && authSessions[token] != nil
-        }
+        adminAuth.isAuthenticated(headers: headers)
     }
 
     func adminAuthState(headers: [String: String]) -> [String: Any] {
-        [
-            "ok": true,
-            "auth_required": adminAuthRequired(),
-            "authenticated": adminIsAuthenticated(headers: headers),
-            "username": adminAuthRequired() ? adminAuthUsername() : "",
-        ]
+        adminAuth.authState(headers: headers)
     }
 
     func adminAuthChallenge(method: String) -> ObstacleBridgeAdminAPIResponse {
-        guard method.uppercased() == "GET" else {
-            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
-        }
-        guard adminAuthRequired() else {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": true,
-                "auth_required": false,
-            ])
-        }
-        return authStateQueue.sync {
-            pruneAuthState()
-            let challengeID = UUID().uuidString.lowercased()
-            let seed = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() + challengeID
-            authChallenges[challengeID] = [
-                "seed": seed,
-                "expires_at": Date().timeIntervalSince1970 + Self.authChallengeTTL,
-            ]
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": true,
-                "auth_required": true,
-                "challenge_id": challengeID,
-                "seed": seed,
-                "algorithm": "sha256(seed:username:password)",
-            ])
-        }
+        adminAuth.authChallenge(method: method)
     }
 
     func adminAuthLogin(method: String, body: Data?) -> ObstacleBridgeAdminAPIResponse {
-        guard method.uppercased() == "POST" else {
-            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
-        }
-        guard adminAuthRequired() else {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": true,
-                "auth_required": false,
-                "authenticated": true,
-            ], headers: issueSessionHeaders())
-        }
-        guard let body,
-              let object = try? JSONSerialization.jsonObject(with: body),
-              let payload = object as? [String: Any] else {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": "invalid JSON body",
-            ], statusLine: "HTTP/1.1 400 Bad Request")
-        }
-        let challengeID = (payload["challenge_id"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let proof = (payload["proof"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let seed: String? = authStateQueue.sync {
-            pruneAuthState()
-            let item = authChallenges.removeValue(forKey: challengeID)
-            return item?["seed"] as? String
-        }
-        guard let seed else {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "authenticated": false,
-                "error": "invalid or expired challenge",
-            ], statusLine: "HTTP/1.1 403 Forbidden")
-        }
-        let expected = buildAuthProof(seed: seed, username: adminAuthUsername(), password: adminAuthPassword())
-        guard proof == expected else {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "authenticated": false,
-                "error": "authentication failed",
-            ], statusLine: "HTTP/1.1 403 Forbidden")
-        }
-        return ObstacleBridgeAdminAPI.jsonResponse([
-            "ok": true,
-            "authenticated": true,
-        ], headers: issueSessionHeaders())
+        adminAuth.authLogin(method: method, body: body)
     }
 
     func adminAuthLogout(method: String, headers: [String: String]) -> ObstacleBridgeAdminAPIResponse {
-        guard method.uppercased() == "POST" else {
-            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
-        }
-        let token = parseCookieHeader(headers)[sessionCookieName()] ?? ""
-        if !token.isEmpty {
-            _ = authStateQueue.sync {
-                authSessions.removeValue(forKey: token)
-            }
-        }
-        return ObstacleBridgeAdminAPI.jsonResponse([
-            "ok": true,
-            "authenticated": false,
-        ], headers: [("Set-Cookie", "\(sessionCookieName())=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")])
+        adminAuth.authLogout(method: method, headers: headers)
     }
 
     func adminUpdateConfig(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
-        guard request.method.uppercased() == "POST" else {
-            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
+        let payload: [String: Any]
+        switch ObstacleBridgeAdminConfigSupport.jsonObjectBody(method: request.method, expectedMethod: "POST", body: request.body) {
+        case .response(let response):
+            return response
+        case .payload(let value):
+            payload = value
         }
-        guard let body = request.body,
-              let object = try? JSONSerialization.jsonObject(with: body),
-              let payload = object as? [String: Any] else {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": "invalid JSON body",
-            ], statusLine: "HTTP/1.1 400 Bad Request")
-        }
-        guard let updates = payload["updates"] as? [String: Any] else {
-            return ObstacleBridgeAdminAPI.jsonResponse([
-                "ok": false,
-                "error": "updates must be an object",
-            ], statusLine: "HTTP/1.1 400 Bad Request")
+        let updates: [String: Any]
+        switch ObstacleBridgeAdminConfigSupport.updatesObject(from: payload) {
+        case .response(let response):
+            return response
+        case .payload(let value):
+            updates = value
         }
         let restartAfterSave = (payload["restart_after_save"] as? Bool) ?? false
-        if adminAuthRequired() {
-            let challengeID = (payload["challenge_id"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let proof = (payload["proof"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            guard !challengeID.isEmpty, !proof.isEmpty else {
-                return ObstacleBridgeAdminAPI.jsonResponse([
-                    "ok": false,
-                    "error": "configuration change confirmation required",
-                ], statusLine: "HTTP/1.1 428 Precondition Required")
-            }
-            if let error = validateConfigChallenge(challengeID: challengeID, proof: proof, updates: updates) {
-                return ObstacleBridgeAdminAPI.jsonResponse([
-                    "ok": false,
-                    "error": error,
-                ], statusLine: "HTTP/1.1 403 Forbidden")
-            }
+        if let response = ObstacleBridgeAdminConfigSupport.validateConfigChallengePayload(
+            payload: payload,
+            updates: updates,
+            authRequired: adminAuthRequired(),
+            challengeValidator: validateConfigChallenge
+        ) {
+            return response
         }
         do {
             try persistConfigUpdates(updates)
@@ -2780,26 +1549,21 @@ extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
             }
         }
 
-        let payloadResponse: [String: Any] = [
-            "ok": true,
-            "config": maskedRuntimeConfigSnapshot(),
-            "restart_requested": restartAfterSave,
-            "restart_supported": true,
-            "restart_mode": restartAfterSave ? "immediate" : "",
-            "restart_delay_sec": 0,
-            "restart_embedded": restartAfterSave,
-        ]
         if restartAfterSave {
             _ = requestRestart()
         }
-        return ObstacleBridgeAdminAPI.jsonResponse(payloadResponse)
+        return ObstacleBridgeAdminConfigSupport.configUpdateSuccessResponse(
+            maskedConfig: maskedRuntimeConfigSnapshot(),
+            restartAfterSave: restartAfterSave,
+            restartEmbedded: restartAfterSave
+        )
     }
 
     func adminRequestRestart(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
         guard request.method.uppercased() == "POST" else {
             return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
         }
-        if let forbidden = validateAdminWebToken(headers: request.headers) {
+        if let forbidden = adminAuth.validateBearer(headers: request.headers) {
             return forbidden
         }
         return ObstacleBridgeAdminAPI.jsonResponse(requestRestart())
@@ -2809,7 +1573,7 @@ extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
         guard request.method.uppercased() == "POST" else {
             return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
         }
-        if let forbidden = validateAdminWebToken(headers: request.headers) {
+        if let forbidden = adminAuth.validateBearer(headers: request.headers) {
             return forbidden
         }
         return ObstacleBridgeAdminAPI.jsonResponse(requestReconnect())
@@ -2819,7 +1583,7 @@ extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
         guard request.method.uppercased() == "POST" else {
             return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
         }
-        if let forbidden = validateAdminWebToken(headers: request.headers) {
+        if let forbidden = adminAuth.validateBearer(headers: request.headers) {
             return forbidden
         }
         return ObstacleBridgeAdminAPI.jsonResponse(requestShutdown())
