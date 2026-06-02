@@ -88,10 +88,16 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert '"home_tab_enabled"' in provider
     assert '"security_advisor"' in provider
     assert '"first_tab"' in provider
+    assert "adminUIBootstrapState" in provider
     assert "startTunnel_completed_swift_udp" in provider
     assert "startTunnel_completed_swift_simple_udp" in provider
     assert "startTunnel_unsupported_runtime_mode" in provider
+    assert "startTunnel_waiting_for_onboarding" in provider
     assert 'if !nativeRuntimeActive {' in provider
+
+    runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
+    assert "struct ObstacleBridgeAdminUIBootstrapState" in runtime_config
+    assert "static func adminUIBootstrapState" in runtime_config
 
 
 def test_native_packet_flow_bridge_source_exists() -> None:
@@ -635,6 +641,9 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "ObstacleBridgeRuntimeConfig.remoteServerSpecs" in control
     assert "derivedLocalTunnelSettings(" in control
     assert "derivedRemoteTunnelSettings(" in control
+    assert "overlayPeerConfigured(payload:" in control
+    assert "includedRoutes: []" in control
+    assert "includedRoutes6: []" in control
     assert "configuration_version" in control
     assert "provider_configuration_version" in control
     assert "localized_description" in control

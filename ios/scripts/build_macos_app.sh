@@ -21,6 +21,16 @@ APP_ICON_ICNS="${APP_RESOURCES_DIR}/ObstacleBridge.icns"
 APP_ICON_MASTER_PNG="${IOS_DIR}/resources/obstaclebridge-icon-master.png"
 APP_ICON_FALLBACK_PNG="${IOS_DIR}/resources/obstaclebridge-icon-1024.png"
 
+cleanup_macos_metadata() {
+  local path=""
+  for path in "${REPO_ROOT}/.DS_Store" "${IOS_DIR}/.DS_Store"; do
+    if [ -f "${path}" ]; then
+      rm -f "${path}"
+    fi
+  done
+  find "${BUILD_DIR}" -name '.DS_Store' -delete 2>/dev/null || true
+}
+
 build_macos_app_icon() {
   local icon_source=""
 
@@ -58,6 +68,8 @@ build_macos_app_icon() {
   iconutil -c icns "${APP_ICONSET_DIR}" -o "${APP_ICON_ICNS}"
   rm -rf "${APP_ICONSET_DIR}"
 }
+
+trap cleanup_macos_metadata EXIT
 
 if command -v swiftc >/dev/null 2>&1; then
   SWIFTC_CMD="$(command -v swiftc)"

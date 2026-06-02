@@ -306,6 +306,11 @@ struct ObstacleBridgeOverlayBootstrapSettings {
     }
 }
 
+struct ObstacleBridgeAdminUIBootstrapState {
+    let firstStartDetected: Bool
+    let configFileState: String
+}
+
 enum ObstacleBridgeRuntimeConfig {
     private static let knownGroupedSections = [
         "runner",
@@ -691,6 +696,31 @@ enum ObstacleBridgeRuntimeConfig {
         default:
             return nil
         }
+    }
+
+    static func adminUIBootstrapState(from payload: [String: Any]) -> ObstacleBridgeAdminUIBootstrapState {
+        let flattened = flatten(payload)
+        let overlayTransport = stringValue(from: flattened["overlay_transport"]) ?? "myudp"
+        let selectedTransport = overlayTransport
+            .split(separator: ",")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty }) ?? "myudp"
+        let peerConfigured: Bool
+        if let host = peerHost(for: selectedTransport, payload: flattened),
+           !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let port = peerPort(for: selectedTransport, payload: flattened),
+           port > 0 {
+            peerConfigured = true
+        } else {
+            peerConfigured = false
+        }
+        let ownConfigured = !ownServerSpecs(from: payload).isEmpty
+        let remoteConfigured = !remoteServerSpecs(from: payload).isEmpty
+        let firstStartDetected = !peerConfigured && !ownConfigured && !remoteConfigured
+        return ObstacleBridgeAdminUIBootstrapState(
+            firstStartDetected: firstStartDetected,
+            configFileState: firstStartDetected ? "empty" : "loaded"
+        )
     }
 
     private static func isLegacySwiftUDPShimPeer(host: String?, port: Int?, bindPort: Int) -> Bool {

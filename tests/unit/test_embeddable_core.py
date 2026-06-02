@@ -49,6 +49,18 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         self.assertEqual(args.tcp_peer, "peer.example")
         self.assertEqual(args.tcp_peer_port, 8443)
 
+    def test_build_runtime_args_from_onboarding_config_marks_first_start(self) -> None:
+        args = build_runtime_args_from_config(
+            {
+                "runner": {"overlay_transport": "myudp"},
+                "channel_mux": {"own_servers": [], "remote_servers": []},
+                "iOS_TUN_connector": {"packetflow_connector": "swift_udp"},
+            }
+        )
+
+        self.assertEqual(args._config_file_state, "empty")
+        self.assertTrue(args._first_start_detected)
+
     def test_build_runtime_args_preserves_ios_tun_connector_section(self) -> None:
         args = build_runtime_args_from_config(
             {

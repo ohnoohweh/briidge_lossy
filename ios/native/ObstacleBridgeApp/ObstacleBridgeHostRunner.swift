@@ -1653,14 +1653,15 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func adminUIPayload() -> [String: Any] {
-        [
+        let bootstrapState = ObstacleBridgeRuntimeConfig.adminUIBootstrapState(from: runtimeConfig)
+        return [
             "home_tab_enabled": true,
             "landing_page_enabled": false,
             "security_advisor_enabled": !(Self.boolValue(from: runtimeConfig["admin_web_security_advisor_disable"]) ?? false),
             "security_advisor_startup_enabled": !(Self.boolValue(from: runtimeConfig["admin_web_security_advisor_startup_disable"]) ?? false),
             "first_tab": Self.stringValue(from: runtimeConfig["admin_web_first_tab"]) ?? "home",
-            "first_start_detected": false,
-            "config_file_state": "unknown",
+            "first_start_detected": bootstrapState.firstStartDetected,
+            "config_file_state": bootstrapState.configFileState,
             "platform": "darwin",
             "runtime_dependencies": adminRuntimeDependenciesPayload(),
         ]

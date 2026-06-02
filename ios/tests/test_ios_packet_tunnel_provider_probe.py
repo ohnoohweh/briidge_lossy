@@ -50,9 +50,11 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         str(binary_path),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminAPI.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeNativeCrypto.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskTransportAdapter.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeOnboarding.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift"),
@@ -64,6 +66,7 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         str(SHARED_NATIVE_DIR / "ObstacleBridgeCompressLayerRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayStackPlanner.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgePacketTunnelConfiguration.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeWebAdminServer.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketPayloadCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayRuntime.swift"),
@@ -513,6 +516,100 @@ def test_ios_packet_tunnel_provider_probe_uses_tun_routing_for_full_route_and_ad
     assert payload["excluded_routes6"] == [{"destination": "::1", "prefix": 128}]
     assert payload["dns_servers"] == ["9.9.9.9"]
     assert payload["mtu"] == 1600
+
+
+def test_ios_packet_tunnel_provider_probe_accepts_non_capturing_onboarding_network_settings(tmp_path: Path) -> None:
+    source_path = tmp_path / "PacketTunnelProviderOnboardingRoutesProbe.swift"
+    binary_path = tmp_path / "packet-tunnel-provider-onboarding-routes-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            @main
+            struct PacketTunnelProviderOnboardingRoutesProbeMain {
+                static func main() throws {
+                    let configuration = try ObstacleBridgePacketTunnelConfiguration(
+                        [
+                            "peer": ["host": "bootstrap.invalid"],
+                            "network_settings": [
+                                "tunnel_address": "192.168.106.1",
+                                "tunnel_prefix": 30,
+                                "included_routes": [],
+                                "excluded_routes": [],
+                                "tunnel_address6": "fd20:106::1",
+                                "tunnel_prefix6": 126,
+                                "included_routes6": [],
+                                "excluded_routes6": [],
+                                "dns_servers": ["1.1.1.1"],
+                                "mtu": 1400,
+                            ],
+                            "runtime_config": [
+                                "iOS_TUN_connector": [
+                                    "packetflow_connector": "swift_udp",
+                                    "bind_host": "127.0.0.1",
+                                    "bind_port": 5555,
+                                    "peer_host": "",
+                                    "peer_port": 0,
+                                ],
+                            ],
+                        ],
+                        defaults: ObstacleBridgePacketTunnelDefaults(
+                            tunnelAddress: "192.168.106.1",
+                            tunnelPrefix: 30,
+                            includedRoutes: ["0.0.0.0/0"],
+                            excludedRoutes: ["127.0.0.0/8"],
+                            tunnelAddress6: "fd20:106::1",
+                            tunnelPrefix6: 126,
+                            includedRoutes6: ["::/0"],
+                            excludedRoutes6: ["::1/128"]
+                        )
+                    )
+
+                    let payload: [String: Any] = [
+                        "tunnel_address": configuration.tunnelAddress,
+                        "included_routes": configuration.includedRoutes.map {
+                            ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask]
+                        },
+                        "excluded_routes": configuration.excludedRoutes.map {
+                            ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask]
+                        },
+                        "tunnel_address6": configuration.tunnelAddress6,
+                        "included_routes6": configuration.includedRoutes6.map {
+                            ["destination": $0.destinationAddress, "prefix": $0.networkPrefixLength]
+                        },
+                        "excluded_routes6": configuration.excludedRoutes6.map {
+                            ["destination": $0.destinationAddress, "prefix": $0.networkPrefixLength]
+                        },
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_packet_tunnel_provider_probe(source_path, binary_path)
+    completed = subprocess.run(
+        [str(binary_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout)
+    assert payload["tunnel_address"] == "192.168.106.1"
+    assert payload["included_routes"] == []
+    assert payload["excluded_routes"] == []
+    assert payload["tunnel_address6"] == "fd20:106::1"
+    assert payload["included_routes6"] == []
+    assert payload["excluded_routes6"] == []
 
 
 def test_ios_packet_tunnel_provider_probe_rotates_to_next_peer_candidate_after_idle_timeout(tmp_path: Path) -> None:

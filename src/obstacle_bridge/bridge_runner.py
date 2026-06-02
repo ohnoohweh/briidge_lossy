@@ -3,6 +3,7 @@ from __future__ import annotations
 from ._bridge_import import export_bridge_globals
 import contextlib as _process_contextlib
 import signal as _process_signal
+from typing import Mapping
 
 _bridge = export_bridge_globals(globals())
 
@@ -2112,12 +2113,45 @@ def build_runtime_args_from_config(
     """
     cli = ConfigAwareCLI(description=RUNTIME_CLI_DESCRIPTION)
     parser = cli._build_full_parser(default_runtime_registrars())
+
+    def _config_value(doc: Mapping[str, Any], key: str, section: str | None = None) -> Any:
+        if key in doc:
+            return doc.get(key)
+        if section:
+            grouped = doc.get(section)
+            if isinstance(grouped, Mapping):
+                return grouped.get(key)
+        return None
+
+    def _semantic_bootstrap_state(doc: Mapping[str, Any]) -> tuple[bool, str]:
+        overlay_transport = str(
+            _config_value(doc, "overlay_transport", "runner") or "myudp"
+        ).split(",", 1)[0].strip() or "myudp"
+        if overlay_transport == "myudp":
+            peer_host = _config_value(doc, "udp_peer", "udp_session")
+            peer_port = _config_value(doc, "udp_peer_port", "udp_session")
+        elif overlay_transport == "tcp":
+            peer_host = _config_value(doc, "tcp_peer", "tcp_session")
+            peer_port = _config_value(doc, "tcp_peer_port", "tcp_session")
+        elif overlay_transport == "ws":
+            peer_host = _config_value(doc, "ws_peer", "ws_session")
+            peer_port = _config_value(doc, "ws_peer_port", "ws_session")
+        else:
+            peer_host = None
+            peer_port = None
+        peer_configured = bool(str(peer_host or "").strip()) and int(peer_port or 0) > 0
+        own_servers = _config_value(doc, "own_servers", "channel_mux") or []
+        remote_servers = _config_value(doc, "remote_servers", "channel_mux") or []
+        first_start_detected = not peer_configured and not own_servers and not remote_servers
+        return first_start_detected, ("empty" if first_start_detected else "loaded")
+
     if config:
         cli._raw_config = dict(config)
         cli._apply_config_defaults_from_json(parser, dict(config))
-        cli._config_file_state = "loaded"
+        cli._first_start_detected, cli._config_file_state = _semantic_bootstrap_state(dict(config))
     else:
         cli._config_file_state = "missing"
+        cli._first_start_detected = True
     argv_list = list(argv or [])
     args = parser.parse_args(argv_list)
     persisted_config_path = str(config_path or "")
@@ -2127,7 +2161,7 @@ def build_runtime_args_from_config(
     args.save_format = "json"
     args.force = False
     args._config_file_state = cli._config_file_state
-    args._first_start_detected = False
+    args._first_start_detected = cli._first_start_detected
     args._config_path = str(pathlib.Path(persisted_config_path).expanduser().resolve()) if persisted_config_path else ""
     _attach_runtime_cli_metadata(args, cli)
     cli._apply_per_section_overrides(args)

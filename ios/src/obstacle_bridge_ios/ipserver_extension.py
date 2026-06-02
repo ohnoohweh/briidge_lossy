@@ -64,6 +64,28 @@ def _publish_packetflow_env(runtime_config: dict[str, Any]) -> None:
         os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_PEER_PORT"] = str(int(section.get("peer_port") or 0))
 
 
+def _admin_ui_bootstrap_state(runtime_config: dict[str, Any]) -> tuple[bool, str]:
+    overlay_transport = str(runtime_config.get("overlay_transport") or "myudp").split(",", 1)[0].strip() or "myudp"
+    if overlay_transport == "myudp":
+        peer_host = runtime_config.get("udp_peer")
+        peer_port = runtime_config.get("udp_peer_port")
+    elif overlay_transport == "tcp":
+        peer_host = runtime_config.get("tcp_peer")
+        peer_port = runtime_config.get("tcp_peer_port")
+    elif overlay_transport == "ws":
+        peer_host = runtime_config.get("ws_peer")
+        peer_port = runtime_config.get("ws_peer_port")
+    else:
+        peer_host = None
+        peer_port = None
+    peer_configured = bool(str(peer_host or "").strip()) and int(peer_port or 0) > 0
+    channel_mux = dict(runtime_config.get("channel_mux") or {})
+    own_servers = list(channel_mux.get("own_servers") or [])
+    remote_servers = list(channel_mux.get("remote_servers") or [])
+    first_start_detected = not peer_configured and not own_servers and not remote_servers
+    return first_start_detected, ("empty" if first_start_detected else "loaded")
+
+
 class _RuntimeController:
     def __init__(self, runtime_config: dict[str, Any]) -> None:
         self.runtime_config = runtime_config
@@ -107,7 +129,14 @@ class _RuntimeController:
             self._ready.clear()
 
     def snapshot(self) -> dict[str, Any]:
-        return dict(self.client.snapshot() or {})
+        payload = dict(self.client.snapshot() or {})
+        admin_ui = dict(payload.get("admin_ui") or {})
+        if admin_ui:
+            first_start_detected, config_file_state = _admin_ui_bootstrap_state(self.runtime_config)
+            admin_ui["first_start_detected"] = first_start_detected
+            admin_ui["config_file_state"] = config_file_state
+            payload["admin_ui"] = admin_ui
+        return payload
 
     def _submit(self, coro: Any) -> Future[Any]:
         if self._loop is None:
@@ -140,4 +169,3 @@ def handle_message(message: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True, "result": {"started": False}}
 
     return {"ok": False, "error": f"unsupported command: {command}"}
-

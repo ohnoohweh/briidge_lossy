@@ -1149,6 +1149,68 @@ def test_macos_swift_host_runner_bootstraps_ws_stack_and_serves_status(tmp_path:
             )
 
 
+def test_macos_swift_host_runner_empty_config_serves_onboarding_without_peer(tmp_path: Path) -> None:
+    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
+    _compile_mac_host_runner(binary_path)
+
+    status_port = _unused_tcp_port()
+    runtime_config_path = tmp_path / "runtime_empty_onboarding.json"
+    runtime_config_path.write_text(
+        json.dumps(
+            {
+                "admin_web": True,
+                "admin_web_bind": "127.0.0.1",
+                "admin_web_port": status_port,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    process = subprocess.Popen(
+        [
+            str(binary_path),
+            "--runtime-config",
+            str(runtime_config_path),
+            "--status-port",
+            str(status_port),
+            "--hold-sec",
+            "20",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        status = _wait_http_json(f"http://127.0.0.1:{status_port}/api/status")
+        profiles = _http_json(f"http://127.0.0.1:{status_port}/api/onboarding/connection-profiles")
+        blueprints = _http_json(f"http://127.0.0.1:{status_port}/api/onboarding/blueprints")
+        html = _http_text(f"http://127.0.0.1:{status_port}/")
+
+        assert status["ok"] is True
+        assert status["mode"] == "swift_host_runner"
+        assert isinstance(status.get("admin_ui"), dict)
+        assert status["admin_ui"]["home_tab_enabled"] is True
+        assert status["admin_ui"]["first_start_detected"] is True
+        assert status["admin_ui"]["config_file_state"] == "empty"
+        assert profiles["ok"] is True
+        assert isinstance(profiles["profiles"], list)
+        assert blueprints["ok"] is True
+        assert isinstance(blueprints["blueprints"], list)
+        assert "ObstacleBridge macOS Swift Host Runner" in html or "/api/status" in html
+    finally:
+        process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5.0)
+        if process.returncode not in (0, -15):
+            raise AssertionError(
+                f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            )
+
+
 def test_macos_swift_host_runner_restart_reloads_runtime_config_from_disk(tmp_path: Path) -> None:
     binary_path = tmp_path / "obstaclebridge-mac-host-runner"
     _compile_mac_host_runner(binary_path)

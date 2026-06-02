@@ -75,6 +75,7 @@ from obstacle_bridge.bridge import (
     PTYPE_DATA,
     SecureLinkPskSession,
 )
+from obstacle_bridge.core import ObstacleBridgeClient
 
 log = logging.getLogger()
 
@@ -6890,6 +6891,56 @@ def test_overlay_e2e_onboarding_invite_api_masks_psk_and_returns_apply_updates(t
             _stop_proc_without_admin(client_proc)
         if server_proc is not None:
             stop_proc(server_proc)
+
+
+@pytest.mark.integration
+def test_overlay_e2e_admin_web_empty_config_serves_onboarding_without_peer(tmp_path: Path) -> None:
+    admin_port = alloc_admin_port(case_index=91)
+    config_path = tmp_path / "ObstacleBridge.cfg"
+    proc = start_proc(
+        'python_empty_onboarding',
+        bridge_entrypoint() + [
+            '--config',
+            str(config_path),
+            '--admin-web',
+            '--admin-web-bind',
+            '127.0.0.1',
+            '--admin-web-port',
+            str(admin_port),
+            '--admin-web-auth-disable',
+            '--log',
+            'INFO',
+        ],
+        tmp_path,
+        admin_port=admin_port,
+    )
+    try:
+        wait_admin_up(admin_port, timeout=10.0)
+        _status_code, status_doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.5)
+        _profiles_code, profiles_doc = request_json(
+            f'http://127.0.0.1:{admin_port}/api/onboarding/connection-profiles',
+            timeout=1.5,
+        )
+        _blueprints_code, blueprints_doc = request_json(
+            f'http://127.0.0.1:{admin_port}/api/onboarding/blueprints',
+            timeout=1.5,
+        )
+        code_root, headers_root, body_root = fetch_http_bytes(f'http://127.0.0.1:{admin_port}/', timeout=1.5)
+
+        assert status_doc.get('peer_state') == 'DISCONNECTED'
+        assert isinstance(status_doc.get('admin_ui'), dict)
+        assert (status_doc.get('admin_ui') or {}).get('home_tab_enabled') is True
+        assert (status_doc.get('admin_ui') or {}).get('first_start_detected') is True
+        assert (status_doc.get('admin_ui') or {}).get('config_file_state') in {'missing', 'empty'}
+        assert profiles_doc.get('ok') is True
+        assert isinstance(profiles_doc.get('profiles'), list)
+        assert blueprints_doc.get('ok') is True
+        assert isinstance(blueprints_doc.get('blueprints'), list)
+        assert code_root == 200
+        assert headers_root.get('content-type', '').startswith('text/html')
+        assert b'Open Setup Assistant' in body_root or b'Connection Profiles' in body_root
+    finally:
+        stop_proc(proc)
 
 
 @pytest.mark.integration

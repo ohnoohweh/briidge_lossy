@@ -397,11 +397,39 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     fields: settingsPayload
                 )
                 self.prepareSharedOverlayBootstrap(providerConfiguration: providerConfiguration)
+                let connectorMode = self.packetflowConnectorMode(providerConfiguration: providerConfiguration) ?? ""
                 guard let swiftSettings = self.swiftSimpleUDPPeerSettings(
                     providerConfiguration: providerConfiguration,
                     defaultMTU: configuration.mtu
                 ) else {
-                    let connectorMode = self.packetflowConnectorMode(providerConfiguration: providerConfiguration) ?? ""
+                    if connectorMode == "swift_udp" {
+                        self.runtimeMode = "swift_udp"
+                        do {
+                            try self.startControlServer()
+                        } catch {
+                            self.recordNativeEvent(
+                                "startTunnel_admin_web_failed",
+                                fields: ["error": error.localizedDescription]
+                            )
+                            self.updateProviderState(
+                                "startTunnel_admin_web_failed",
+                                extraFields: ["error": error.localizedDescription]
+                            )
+                            completionHandler(error)
+                            return
+                        }
+                        self.startProviderHeartbeat()
+                        self.recordNativeEvent(
+                            "startTunnel_waiting_for_onboarding",
+                            fields: ["mode": connectorMode]
+                        )
+                        self.updateProviderState(
+                            "startTunnel_waiting_for_onboarding",
+                            extraFields: ["mode": connectorMode]
+                        )
+                        completionHandler(nil)
+                        return
+                    }
                     let error = NSError(
                         domain: self.errorDomain,
                         code: 3,
@@ -1332,14 +1360,15 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
     }
 
     private func adminUIPayload(runtimeConfig: [String: Any]) -> [String: Any] {
-        [
+        let bootstrapState = ObstacleBridgeRuntimeConfig.adminUIBootstrapState(from: runtimeConfig)
+        return [
             "home_tab_enabled": true,
             "landing_page_enabled": false,
             "security_advisor_enabled": !(ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_web_security_advisor_disable"]) ?? false),
             "security_advisor_startup_enabled": !(ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_web_security_advisor_startup_disable"]) ?? false),
             "first_tab": ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_first_tab"]) ?? "home",
-            "first_start_detected": false,
-            "config_file_state": "unknown",
+            "first_start_detected": bootstrapState.firstStartDetected,
+            "config_file_state": bootstrapState.configFileState,
             "platform": "ios",
             "runtime_dependencies": adminRuntimeDependenciesPayload(),
         ]
