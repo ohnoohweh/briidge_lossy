@@ -1678,6 +1678,10 @@ function renderTokenGeneratorReview() {
   );
 }
 
+function getTokenGeneratorAdminName() {
+  return String(document.getElementById('onboardingTokenAdminName')?.value || '').trim();
+}
+
 function isLikelyLocalAdminBind(value) {
   const text = String(value || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
   return text === '::1' || text === '127.0.0.1' || text === 'localhost' || text === 'ip6-localhost';
@@ -1999,7 +2003,10 @@ async function generateOnboardingInvite() {
     uiState.onboarding.remoteServersDraft = remoteServers;
     const select = document.getElementById('onboardingConnectionSelect');
     const connectionId = String(select?.value || '').trim();
-    const tokenAdminName = String(document.getElementById('onboardingTokenAdminName')?.value || '').trim();
+    const tokenAdminName = getTokenGeneratorAdminName();
+    if (!tokenAdminName) {
+      throw new Error('Enter the name to include in the invite token before generating it.');
+    }
     const r = await apiFetch('/api/onboarding/invite/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -4003,6 +4010,11 @@ document.getElementById('tokenGeneratorNextBtn')?.addEventListener('click', asyn
     const selected = String(document.getElementById('onboardingConnectionSelect')?.value || '').trim();
     if (!selected) {
       setOnboardingMessage('Select a connection profile before continuing.');
+      return;
+    }
+    if (!getTokenGeneratorAdminName()) {
+      setOnboardingMessage('Enter the name to include in the invite token before continuing.');
+      document.getElementById('onboardingTokenAdminName')?.focus();
       return;
     }
     setTokenGeneratorStep(3);

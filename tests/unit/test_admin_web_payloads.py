@@ -307,6 +307,17 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertTrue((base / "index.html").is_file())
         self.assertEqual(base.name, "admin_web")
 
+    def test_token_generator_ui_requires_admin_web_name_before_generation(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        index_html = (repo_root / "admin_web" / "index.html").read_text(encoding="utf-8")
+        app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("Name To Include In Invite Token", index_html)
+        self.assertIn('id="onboardingTokenAdminName"', index_html)
+        self.assertIn("Enter the name to include in the invite token before continuing.", app_js)
+        self.assertIn("Enter the name to include in the invite token before generating it.", app_js)
+        self.assertIn("admin_web_name: tokenAdminName", app_js)
+
     def test_config_snapshot_hides_secure_link_psk_and_marks_it_read_only(self):
         args = argparse.Namespace(
             admin_web=True,

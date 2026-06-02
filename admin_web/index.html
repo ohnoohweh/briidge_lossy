@@ -526,14 +526,15 @@
           <p>I will guide you to generate a new invite token step by step.</p>
         </div>
         <div id="tokenGeneratorStep2" class="onboarding-step hidden">
-          <h3>Connection Profile</h3>
+          <h3>Connection Profile And Invite Name</h3>
+          <p>Choose the connection profile and enter the name that should be included in the invite token as <span class="mono">admin_web_name</span>.</p>
           <label class="service-field">
             <span>Select connection profile</span>
             <select id="onboardingConnectionSelect" class="config-editor mono"></select>
           </label>
           <label class="service-field">
-            <span>Admin web name</span>
-            <input id="onboardingTokenAdminName" class="config-editor mono" type="text" autocomplete="off" placeholder="Optional name for this instance" />
+            <span>Name To Include In Invite Token</span>
+            <input id="onboardingTokenAdminName" class="config-editor mono" type="text" autocomplete="off" placeholder="Enter the name peers should see for this instance" />
           </label>
         </div>
         <div id="tokenGeneratorStep3" class="onboarding-step hidden">
