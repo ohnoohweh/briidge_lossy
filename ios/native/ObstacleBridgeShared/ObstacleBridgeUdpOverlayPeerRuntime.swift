@@ -93,11 +93,19 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
     private(set) var establishedNS: UInt64
     private(set) var lastRxTxNS: UInt64
     private(set) var lastRxWallNS: UInt64
+    private(set) var lastRttOkNS: UInt64
     private(set) var rttSampleMS: Double
     private(set) var rttEstMS: Double
     private(set) var transmitDelayEstMS: Double
     private(set) var lastSentLastInOrder: Int
     private(set) var lastControlSentNS: UInt64
+    private(set) var createdTotal: Int
+    private(set) var confirmedTotal: Int
+    private(set) var firstPassTotal: Int
+    private(set) var repeatedOnceTotal: Int
+    private(set) var repeatedMultipleTotal: Int
+
+    private let connectedLossNS: UInt64 = 20_000_000_000
 
     init(
         establishedNS: UInt64 = 0,
@@ -129,11 +137,25 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
         self.establishedNS = establishedNS
         self.lastRxTxNS = 0
         self.lastRxWallNS = 0
+        self.lastRttOkNS = 0
         self.rttSampleMS = 0
         self.rttEstMS = rttEstMS
         self.transmitDelayEstMS = transmitDelayEstMS
         self.lastSentLastInOrder = lastSentLastInOrder
         self.lastControlSentNS = lastControlSentNS
+        self.createdTotal = 0
+        self.confirmedTotal = 0
+        self.firstPassTotal = 0
+        self.repeatedOnceTotal = 0
+        self.repeatedMultipleTotal = 0
+    }
+
+    func isConnected(nowNS: UInt64? = nil) -> Bool {
+        let now = nowNS ?? DispatchTime.now().uptimeNanoseconds
+        guard lastRttOkNS > 0 else {
+            return false
+        }
+        return now >= lastRttOkNS && (now - lastRttOkNS) <= connectedLossNS
     }
 
     func sendApplicationPayload(_ payload: Data, nowNS: UInt64, echoNS: UInt64 = 0) throws -> OutboundDataSnapshot {
@@ -160,6 +182,7 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
             sendAttempts[counter] = (sendAttempts[counter] ?? 0) + 1
             lastSendNS = nowNS
             nextCounter = counter == 65535 ? 1 : counter + 1
+            createdTotal += 1
         }
         sendBuffer = Array(Set(sendBuffer)).sorted()
         return OutboundDataSnapshot(
@@ -305,11 +328,14 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
 
     func handleInboundControlPacket(
         nowNS: UInt64,
+        txNS: UInt64,
+        echoNS: UInt64,
         packetLastInOrder: Int,
         packetHighest: Int,
         packetMissed: [Int],
         sendPortPresent: Bool
     ) throws -> InboundControlSnapshot {
+        updateInboundHeartbeat(nowNS: nowNS, txNS: txNS, echoNS: echoNS)
         let snapshot = try ObstacleBridgeUdpOverlaySessionCodec.handleInboundControlPacket(
             nowNS: nowNS,
             packetLastInOrder: packetLastInOrder,
@@ -332,6 +358,15 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
             establishedNS: establishedNS,
             rttEstMS: rttEstMS
         )
+
+        let priorCounters = Set(sendBuffer)
+        let updatedCounters = Set(snapshot.feedback.sendBufferKeys)
+        let confirmedCounters = priorCounters.subtracting(updatedCounters)
+        if !confirmedCounters.isEmpty {
+            for counter in confirmedCounters {
+                tallyConfirmedCounter(counter)
+            }
+        }
 
         sendBuffer = snapshot.feedback.sendBufferKeys
         peerReportedMissing = snapshot.retransmit.peerReportedMissing.sorted()
@@ -368,24 +403,7 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
         echoNS: UInt64,
         sendPortPresent: Bool
     ) throws -> InboundIdleSnapshot {
-        lastRxTxNS = txNS
-        lastRxWallNS = nowNS
-
-        if echoNS != 0 {
-            let sample = Double(nowNS - echoNS) / 1_000_000.0
-            rttSampleMS = sample
-            if rttEstMS < sample {
-                rttEstMS = sample
-            } else {
-                rttEstMS = (1.0 - 0.125) * rttEstMS + (0.125 * sample)
-            }
-            if rttEstMS > 0 {
-                transmitDelayEstMS = 0.5 * rttEstMS
-            }
-            if establishedNS == 0 {
-                establishedNS = nowNS
-            }
-        }
+        updateInboundHeartbeat(nowNS: nowNS, txNS: txNS, echoNS: echoNS)
 
         let reflected = echoNS == 0 && sendPortPresent
         let reflectedFrame: Data?
@@ -422,22 +440,7 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
         guard let packet = ObstacleBridgeUdpOverlayCodec.parseDataFrame(frame) else {
             return nil
         }
-
-        lastRxTxNS = txNS
-        lastRxWallNS = nowNS
-
-        if echoNS != 0 {
-            let sample = Double(nowNS - echoNS) / 1_000_000.0
-            rttSampleMS = sample
-            if rttEstMS < sample {
-                rttEstMS = sample
-            } else {
-                rttEstMS = (1.0 - 0.125) * rttEstMS + (0.125 * sample)
-            }
-            if establishedNS == 0 {
-                establishedNS = nowNS
-            }
-        }
+        updateInboundHeartbeat(nowNS: nowNS, txNS: txNS, echoNS: echoNS)
 
         let previousMissing = receiveState.missing
         let result = receiveState.process(packet)
@@ -476,5 +479,51 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
             lastSentLastInOrder: lastSentLastInOrder,
             lastControlSentNS: lastControlSentNS
         )
+    }
+
+    func protocolStatsSnapshot() -> [String: Any] {
+        [
+            "buffered_frames": sendBuffer.count,
+            "first_pass": firstPassTotal,
+            "repeated_once": repeatedOnceTotal,
+            "repeated_multiple": repeatedMultipleTotal,
+            "confirmed_total": confirmedTotal,
+        ]
+    }
+
+    private func updateInboundHeartbeat(nowNS: UInt64, txNS: UInt64, echoNS: UInt64) {
+        lastRxTxNS = txNS
+        lastRxWallNS = nowNS
+
+        guard echoNS != 0 else {
+            return
+        }
+
+        let sample = Double(nowNS - echoNS) / 1_000_000.0
+        rttSampleMS = sample
+        if rttEstMS < sample {
+            rttEstMS = sample
+        } else {
+            rttEstMS = (1.0 - 0.125) * rttEstMS + (0.125 * sample)
+        }
+        if rttEstMS > 0 {
+            transmitDelayEstMS = 0.5 * rttEstMS
+        }
+        if establishedNS == 0 {
+            establishedNS = nowNS
+        }
+        lastRttOkNS = nowNS
+    }
+
+    private func tallyConfirmedCounter(_ counter: Int) {
+        let attempts = max(1, sendAttempts[counter] ?? 1)
+        confirmedTotal += 1
+        if attempts <= 1 {
+            firstPassTotal += 1
+        } else if attempts == 2 {
+            repeatedOnceTotal += 1
+        } else {
+            repeatedMultipleTotal += 1
+        }
     }
 }

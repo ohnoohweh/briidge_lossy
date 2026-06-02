@@ -1491,16 +1491,26 @@ def test_ios_extension_shim_swift_udp_ws_secure_link_remote_tcp_server_reaches_e
                 assert root_code == 200
                 assert "ObstacleBridge" in root_html or "Admin Web" in root_html
 
+                app_js_code, app_js_text = await _probe_http_get("127.0.0.1", remote_tcp_port, "/app.js")
+                assert app_js_code == 200
+                assert "async function loadStatus()" in app_js_text
+
+                style_code, style_text = await _probe_http_get("127.0.0.1", remote_tcp_port, "/style.css")
+                assert style_code == 200
+                assert "--bg:" in style_text
+
                 burst_results = await asyncio.gather(
                     _probe_http_get("127.0.0.1", remote_tcp_port, "/api/status"),
                     _probe_http_get("127.0.0.1", remote_tcp_port, "/api/meta"),
                     _probe_http_get("127.0.0.1", remote_tcp_port, "/api/connections"),
                     _probe_http_get("127.0.0.1", remote_tcp_port, "/api/peers"),
                     _probe_http_get("127.0.0.1", remote_tcp_port, "/"),
+                    _probe_http_get("127.0.0.1", remote_tcp_port, "/app.js"),
+                    _probe_http_get("127.0.0.1", remote_tcp_port, "/style.css"),
                     _probe_http_get("127.0.0.1", remote_tcp_port, "/api/status"),
                 )
                 for path, (code, text) in zip(
-                    ["/api/status", "/api/meta", "/api/connections", "/api/peers", "/", "/api/status"],
+                    ["/api/status", "/api/meta", "/api/connections", "/api/peers", "/", "/app.js", "/style.css", "/api/status"],
                     burst_results,
                     strict=False,
                 ):
@@ -1510,11 +1520,21 @@ def test_ios_extension_shim_swift_udp_ws_secure_link_remote_tcp_server_reaches_e
                 burst_connections = json.loads(burst_results[2][1])
                 burst_peers = json.loads(burst_results[3][1])
                 burst_root = burst_results[4][1]
+                burst_app_js = burst_results[5][1]
+                burst_style = burst_results[6][1]
                 assert "admin_ui" in burst_status or "build" in burst_status, burst_status
                 assert "build" in burst_meta or "admin_web_name" in burst_meta, burst_meta
                 assert "counts" in burst_connections, burst_connections
                 assert "peers" in burst_peers, burst_peers
+                peer_row = burst_peers["peers"][0]
+                if peer_row["transport"] == "myudp":
+                    assert float(peer_row["rtt_est_ms"] or 0) > 0
+                    assert float(peer_row["transmit_delay_est_ms"] or 0) > 0
+                    assert peer_row["last_incoming_age_seconds"] is not None
+                    assert int(peer_row["myudp"]["confirmed_total"]) >= 1
                 assert "ObstacleBridge" in burst_root or "Admin Web" in burst_root
+                assert "async function loadStatus()" in burst_app_js
+                assert "--bg:" in burst_style
             finally:
                 if ipserver_extension._CONTROLLER is not None:
                     stop_result = ipserver_extension.handle_message({"command": "disconnect_profile"})

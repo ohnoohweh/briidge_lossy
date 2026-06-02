@@ -56,6 +56,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private let configuredPeerPort: Int?
     private let overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
     private let startupMuxFrames: [Data]
+    private let sessionMaxAppPayload: Int
     private let queue: DispatchQueue
     private let eventSink: EventSink?
     private let serviceNameByID: [Int: String]
@@ -63,6 +64,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private var udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(instanceID: 0, connectionSeq: 0)
     private let overlayRuntime = ObstacleBridgeUdpOverlayPeerRuntime()
     private lazy var tcpTransportOwner = ObstacleBridgeChannelMuxTCPTransportOwner(
+        sessionMaxAppPayload: sessionMaxAppPayload,
         queue: queue,
         eventPrefix: "udp_overlay",
         eventSink: { [weak self] event, fields in
@@ -99,6 +101,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         bindPort: Int,
         peerHost: String? = nil,
         peerPort: Int? = nil,
+        sessionMaxAppPayload: Int = 65535,
         overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter? = nil,
         startupMuxFrames: [Data] = [],
         queue: DispatchQueue = DispatchQueue(label: "ObstacleBridgeUdpOverlayTransportOwner"),
@@ -107,6 +110,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     ) {
         self.bindHost = bindHost
         self.bindPort = bindPort
+        self.sessionMaxAppPayload = max(0, sessionMaxAppPayload)
         let trimmedPeerHost = peerHost?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.configuredPeerHost = (trimmedPeerHost?.isEmpty == false) ? trimmedPeerHost : nil
         self.configuredPeerPort = peerPort
@@ -118,7 +122,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     var overlayConnected: Bool {
-        overlayRuntime.establishedNS != 0 && currentPeerAddress != nil
+        overlayRuntime.isConnected() && currentPeerAddress != nil
     }
 
     func start() throws {
@@ -205,8 +209,10 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             "client_udp_channels": udpConnectionStates.count,
             "established_ns": overlayRuntime.establishedNS,
             "last_rx_wall_ns": overlayRuntime.lastRxWallNS,
+            "last_rtt_ok_ns": overlayRuntime.lastRttOkNS,
             "rtt_est_ms": overlayRuntime.rttEstMS,
             "transmit_delay_est_ms": overlayRuntime.transmitDelayEstMS,
+            "protocol_stats": overlayRuntime.protocolStatsSnapshot(),
         ]
     }
 
@@ -390,6 +396,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             do {
                 let snapshot = try overlayRuntime.handleInboundControlPacket(
                     nowNS: nowNS,
+                    txNS: frame.txNS,
+                    echoNS: frame.echoNS,
                     packetLastInOrder: control.lastInOrderRX,
                     packetHighest: control.highestRX,
                     packetMissed: control.missed,

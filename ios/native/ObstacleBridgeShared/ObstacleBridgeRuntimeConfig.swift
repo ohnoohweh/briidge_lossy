@@ -323,6 +323,7 @@ enum ObstacleBridgeRuntimeConfig {
         "admin_web",
         "debug_logging",
     ]
+    private static let secureLinkAEADTagSize = 16
 
     static func configSchemaSnapshot() -> [String: Any] {
         [
@@ -389,16 +390,19 @@ enum ObstacleBridgeRuntimeConfig {
                 schemaItem(key: "compress_layer_types", description: "Comma-separated message types eligible for compression", defaultValue: "data,data_frag"),
             ],
             "TUN_routing": [
-                schemaItem(key: "tunnel_address", description: "Optional IPv4 tunnel address override for the local iOS/macOS tunnel endpoint.", defaultValue: NSNull()),
-                schemaItem(key: "tunnel_prefix", description: "Optional IPv4 tunnel prefix length override.", defaultValue: NSNull()),
-                schemaItem(key: "included_routes", description: "IPv4 routes that should be included in the packet tunnel.", defaultValue: []),
-                schemaItem(key: "excluded_routes", description: "IPv4 routes that should bypass the packet tunnel.", defaultValue: []),
-                schemaItem(key: "tunnel_address6", description: "Optional IPv6 tunnel address override for the local iOS/macOS tunnel endpoint.", defaultValue: NSNull()),
-                schemaItem(key: "tunnel_prefix6", description: "Optional IPv6 tunnel prefix length override.", defaultValue: NSNull()),
-                schemaItem(key: "included_routes6", description: "IPv6 routes that should be included in the packet tunnel.", defaultValue: []),
-                schemaItem(key: "excluded_routes6", description: "IPv6 routes that should bypass the packet tunnel.", defaultValue: []),
-                schemaItem(key: "dns_servers", description: "DNS servers advertised to the packet tunnel network settings.", defaultValue: []),
-                schemaItem(key: "mtu", description: "Optional MTU override applied to the packet tunnel network settings.", defaultValue: NSNull()),
+                schemaItem(key: "tunnel_address", description: "IPv4 tunnel address for the local iOS/macOS tunnel endpoint.", defaultValue: "192.168.106.1"),
+                schemaItem(key: "tunnel_prefix", description: "IPv4 tunnel prefix length.", defaultValue: 30),
+                schemaItem(key: "tunnel_gateway", description: "IPv4 peer gateway address used by TUN hook helpers.", defaultValue: "192.168.106.2"),
+                schemaItem(key: "included_routes", description: "IPv4 routes that should be included in the packet tunnel.", defaultValue: ["0.0.0.0/0"]),
+                schemaItem(key: "excluded_routes", description: "IPv4 routes that should bypass the packet tunnel.", defaultValue: ["127.0.0.0/8"]),
+                schemaItem(key: "tunnel_address6", description: "IPv6 tunnel address for the local iOS/macOS tunnel endpoint.", defaultValue: "fd20:106::1"),
+                schemaItem(key: "tunnel_prefix6", description: "IPv6 tunnel prefix length.", defaultValue: 126),
+                schemaItem(key: "tunnel_gateway6", description: "IPv6 peer gateway address used by TUN hook helpers.", defaultValue: "fd20:106::2"),
+                schemaItem(key: "included_routes6", description: "IPv6 routes that should be included in the packet tunnel.", defaultValue: ["::/0"]),
+                schemaItem(key: "excluded_routes6", description: "IPv6 routes that should bypass the packet tunnel.", defaultValue: ["::1/128"]),
+                schemaItem(key: "dns_servers", description: "DNS servers advertised to the packet tunnel network settings.", defaultValue: ["1.1.1.1"]),
+                schemaItem(key: "mtu", description: "MTU applied to the packet tunnel network settings.", defaultValue: 1600),
+                schemaItem(key: "log_TUN_routing", description: "Log level for TUN routing helpers.", defaultValue: "CRITICAL"),
             ],
             "channel_mux": [
                 schemaItem(key: "own_servers", description: "Service catalog for local listeners in client mode. Use structured service objects with listen/target fields.", defaultValue: []),
@@ -429,6 +433,38 @@ enum ObstacleBridgeRuntimeConfig {
             }
         }
         return nil
+    }
+
+    static func groupedSectionPayload(_ sectionName: String, runtimeConfig: [String: Any]) -> [String: Any] {
+        if let nested = runtimeConfig[sectionName] as? [String: Any] {
+            return nested
+        }
+        guard let rows = configSchemaSnapshot()[sectionName] as? [[String: Any]] else {
+            return [:]
+        }
+        var payload: [String: Any] = [:]
+        for row in rows {
+            let key = String(describing: row["key"] ?? "")
+            guard !key.isEmpty, let value = runtimeConfig[key] else {
+                continue
+            }
+            payload[key] = value
+        }
+        return payload
+    }
+
+    static func overlaySessionMaxAppPayload(from payload: [String: Any]) -> Int {
+        let transport = (stringValue(from: payload["overlay_transport"]) ?? "myudp").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var limit = 65535
+        if transport == "ws" {
+            limit = max(1, intValue(from: payload["ws_max_size"]) ?? 65535)
+        }
+        let secureLinkEnabled = boolValue(from: payload["secure_link"]) ?? false
+        let secureLinkMode = (stringValue(from: payload["secure_link_mode"]) ?? "off").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if secureLinkEnabled, secureLinkMode != "off" {
+            limit = max(0, limit - ObstacleBridgeSecureLinkPskCodec.headerSize - secureLinkAEADTagSize)
+        }
+        return max(0, limit)
     }
 
     static func normalizedConfigUpdates(_ updates: [String: Any], currentRuntimeConfig: [String: Any]) -> [String: Any] {
@@ -736,6 +772,18 @@ enum ObstacleBridgeRuntimeConfig {
         return port == 5556 || port == bindPort + 1
     }
 
+    private static func normalizedPacketflowBindHost(_ host: Any?, connectorMode: String) -> String {
+        let raw = stringValue(from: host)
+        let normalized = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        guard connectorMode == "swift_udp" || connectorMode == "swift_simple_udp" else {
+            return raw ?? "127.0.0.1"
+        }
+        if normalized.isEmpty || normalized == "0.0.0.0" || normalized == "::" || normalized == "*" || normalized == "localhost" {
+            return "127.0.0.1"
+        }
+        return raw ?? "127.0.0.1"
+    }
+
     static func packetflowConnectorSelection(from payload: [String: Any]) -> String? {
         guard let experiment = packetflowConnectorSection(from: payload) else {
             return nil
@@ -777,15 +825,19 @@ enum ObstacleBridgeRuntimeConfig {
         guard let connectorMode = packetflowConnectorMode(from: payload) else {
             return nil
         }
-        let bindHost = stringValue(from: experiment["bind_host"]) ?? "0.0.0.0"
+        let bindHost = normalizedPacketflowBindHost(experiment["bind_host"], connectorMode: connectorMode)
         let bindPort = intValue(from: experiment["bind_port"]) ?? 5555
         let overlayTransport = stringValue(from: payload["overlay_transport"]) ?? "myudp"
         let selectedTransport = overlayTransport
             .split(separator: ",")
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
             .first(where: { !$0.isEmpty }) ?? "myudp"
-        let explicitPeerHost = stringValue(from: experiment["peer_host"])
-        let explicitPeerPort = intValue(from: experiment["peer_port"])
+        let explicitPeerHostRaw = stringValue(from: experiment["peer_host"])
+        let explicitPeerHost = explicitPeerHostRaw?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? explicitPeerHostRaw?.trimmingCharacters(in: .whitespacesAndNewlines)
+            : nil
+        let explicitPeerPortRaw = intValue(from: experiment["peer_port"])
+        let explicitPeerPort = (explicitPeerPortRaw ?? 0) > 0 ? explicitPeerPortRaw : nil
         let useOverlayPeerFallback =
             connectorMode == "swift_udp"
             && isLegacySwiftUDPShimPeer(host: explicitPeerHost, port: explicitPeerPort, bindPort: bindPort)

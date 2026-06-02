@@ -27,7 +27,7 @@ from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from obstacle_bridge.bridge import AdminWebUI, CONFIG_SECRET_PREFIX, _decrypt_config_secret, _encrypt_config_secret
 from obstacle_bridge.core import ObstacleBridgeClient
-from obstacle_bridge.onboarding import encode_invite_token
+from obstacle_bridge.onboarding import decode_invite_token, encode_invite_token
 
 TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
@@ -1251,6 +1251,11 @@ def test_macos_swift_host_runner_restart_reloads_runtime_config_from_disk(tmp_pa
     try:
         initial = _wait_http_json(f"http://127.0.0.1:{status_port}/api/status")
         assert initial["transport_runtime"]["kind"] == "tcp"
+        uptime_before = int(initial.get("uptime_sec") or 0)
+        if uptime_before < 1:
+            time.sleep(1.2)
+            initial = _wait_http_json(f"http://127.0.0.1:{status_port}/api/status")
+            uptime_before = int(initial.get("uptime_sec") or 0)
 
         runtime_config_path.write_text(
             json.dumps(
@@ -1271,6 +1276,9 @@ def test_macos_swift_host_runner_restart_reloads_runtime_config_from_disk(tmp_pa
         restart = _http_request_json(f"http://127.0.0.1:{status_port}/api/restart", method="POST")
         assert restart["ok"] is True
         assert restart["restart_requested"] is True
+        assert restart["restart_supported"] is True
+        assert restart["restart_mode"] == "immediate"
+        assert restart["restart_embedded"] is True
 
         reloaded = _wait_http_condition(
             f"http://127.0.0.1:{status_port}/api/status",
@@ -1280,6 +1288,7 @@ def test_macos_swift_host_runner_restart_reloads_runtime_config_from_disk(tmp_pa
         assert reloaded["transport_runtime"]["kind"] == "ws"
         assert reloaded["transport_runtime"]["websocket"]["uri"] == "ws://bridge.example.net:8443/"
         assert reloaded["control_actions"]["restart_count"] >= 1
+        assert int(reloaded.get("uptime_sec") or 0) <= uptime_before
     finally:
         if process.poll() is None:
             process.terminate()
@@ -1532,13 +1541,23 @@ def test_macos_swift_host_runner_accepts_python_invite_tokens_without_app_path_l
     invite_token = encode_invite_token(
         {
             "version": 1,
+            "admin_web_name": "Imported Swift Node",
             "connection": {
                 "transport": "tcp",
                 "endpoint_host": "bridge.example.net",
                 "endpoint_port": 4433,
             },
             "secure_link_mode": "psk",
-            "secure_link_psk": _encrypt_config_secret("python-side-secret"),
+            "secure_link_psk": "python-side-secret",
+            "compress_layer": True,
+            "compress_layer_algo": "zlib",
+            "compress_layer_level": 5,
+            "compress_layer_min_bytes": 96,
+            "compress_layer_types": "data,data_ack",
+            "TUN_routing": {
+                "dns_servers": ["9.9.9.9"],
+                "included_routes": ["0.0.0.0/0"],
+            },
             "own_servers": [
                 {
                     "name": "HTTP bridge",
@@ -1584,10 +1603,168 @@ def test_macos_swift_host_runner_accepts_python_invite_tokens_without_app_path_l
         assert preview_doc["suggested_updates"]["tcp_peer"] == "bridge.example.net"
         assert preview_doc["suggested_updates"]["tcp_peer_port"] == 4433
         assert preview_doc["suggested_updates"]["secure_link_psk"] == "python-side-secret"
+        assert preview_doc["suggested_updates"]["admin_web_name"] == "Imported Swift Node"
+        assert preview_doc["suggested_updates"]["compress_layer"] is True
+        assert preview_doc["suggested_updates"]["compress_layer_level"] == 5
+        assert preview_doc["suggested_updates"]["compress_layer_types"] == "data,data_ack"
+        assert preview_doc["suggested_updates"]["TUN_routing"]["dns_servers"] == ["9.9.9.9"]
         assert preview_doc["suggested_updates"]["own_servers"][0]["name"] == "HTTP bridge"
         assert "admin_web_dir" not in preview_doc["suggested_updates"]
         assert "ws_static_dir" not in preview_doc["suggested_updates"]
         assert "log_file" not in preview_doc["suggested_updates"]
+    finally:
+        process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5.0)
+        if process.returncode not in (0, -15):
+            raise AssertionError(
+                f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            )
+
+
+def test_macos_swift_host_runner_generates_invite_token_with_override_name_and_extended_fields(tmp_path: Path) -> None:
+    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
+    _compile_mac_host_runner(binary_path)
+
+    status_port = _unused_tcp_port()
+    runtime_config_path = tmp_path / "runtime.json"
+    runtime_config_path.write_text(
+        json.dumps(
+            {
+                "overlay_transport": "tcp",
+                "tcp_bind": "::",
+                "tcp_own_port": 4433,
+                "tcp_peer": "bridge.example.net",
+                "tcp_peer_port": 4433,
+                "admin_web": True,
+                "admin_web_bind": "127.0.0.1",
+                "admin_web_port": status_port,
+                "admin_web_name": "Origin Node",
+                "admin_web_dir": str(tmp_path / "admin_web"),
+                "ws_static_dir": str(tmp_path / "web"),
+                "log_file": str(tmp_path / "logs" / "obstaclebridge.log"),
+                "compress_layer": True,
+                "compress_layer_algo": "zlib",
+                "compress_layer_level": 4,
+                "compress_layer_min_bytes": 80,
+                "compress_layer_types": "data,data_ack",
+                "TUN_routing": {
+                    "dns_servers": ["1.1.1.1"],
+                    "included_routes": ["0.0.0.0/0"],
+                },
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    process = subprocess.Popen(
+        [
+            str(binary_path),
+            "--runtime-config",
+            str(runtime_config_path),
+            "--status-port",
+            str(status_port),
+            "--hold-sec",
+            "20",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        profiles_doc = _wait_http_json(f"http://127.0.0.1:{status_port}/api/onboarding/connection-profiles")
+        profile_id = str((profiles_doc.get("profiles") or [{}])[0].get("id", "") or "")
+        invite_doc = _http_request_json(
+            f"http://127.0.0.1:{status_port}/api/onboarding/invite/generate",
+            method="POST",
+            payload={"connection_id": profile_id, "admin_web_name": "Invite Alias"},
+        )
+
+        assert invite_doc["ok"] is True
+        payload = decode_invite_token(invite_doc["invite_token"])
+        assert payload["generated_by"] == "Invite Alias"
+        assert payload["admin_web_name"] == "Invite Alias"
+        assert payload["compress_layer"] is True
+        assert payload["compress_layer_level"] == 4
+        assert payload["compress_layer_types"] == "data,data_ack"
+        assert payload["TUN_routing"]["dns_servers"] == ["1.1.1.1"]
+    finally:
+        process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5.0)
+        if process.returncode not in (0, -15):
+            raise AssertionError(
+                f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            )
+
+
+def test_macos_swift_host_runner_rejects_legacy_encrypted_invite_psk(tmp_path: Path) -> None:
+    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
+    _compile_mac_host_runner(binary_path)
+
+    status_port = _unused_tcp_port()
+    runtime_config_path = tmp_path / "runtime.json"
+    runtime_config_path.write_text(
+        json.dumps(
+            {
+                "overlay_transport": "myudp",
+                "udp_bind": "::",
+                "udp_own_port": 4433,
+                "admin_web": True,
+                "admin_web_bind": "127.0.0.1",
+                "admin_web_port": status_port,
+                "admin_web_dir": str(tmp_path / "admin_web"),
+                "ws_static_dir": str(tmp_path / "web"),
+                "log_file": str(tmp_path / "logs" / "obstaclebridge.log"),
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    invite_token = encode_invite_token(
+        {
+            "version": 1,
+            "connection": {
+                "transport": "tcp",
+                "endpoint_host": "bridge.example.net",
+                "endpoint_port": 4433,
+            },
+            "secure_link_mode": "psk",
+            "secure_link_psk": "enc:v1:not-portable-across-hosts",
+        }
+    )
+
+    process = subprocess.Popen(
+        [
+            str(binary_path),
+            "--runtime-config",
+            str(runtime_config_path),
+            "--status-port",
+            str(status_port),
+            "--hold-sec",
+            "20",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        preview_doc = _http_request_json(
+            f"http://127.0.0.1:{status_port}/api/onboarding/invite/preview",
+            method="POST",
+            payload={"invite_token": invite_token},
+        )
+
+        assert preview_doc["ok"] is False
+        assert "legacy encrypted secure_link_psk" in preview_doc["error"]
     finally:
         process.terminate()
         try:
@@ -2890,6 +3067,7 @@ def test_macos_swift_host_runner_remote_tcp_admin_web_handles_multiple_connectio
                 "admin_web": True,
                 "admin_web_bind": "127.0.0.1",
                 "admin_web_port": hostrunner_admin_port,
+                "admin_web_dir": str((ROOT / "admin_web").resolve()),
                 "admin_web_auth_disable": True,
                 "remote_servers": [
                     {
@@ -2931,11 +3109,11 @@ def test_macos_swift_host_runner_remote_tcp_admin_web_handles_multiple_connectio
 
         def _fetch_path(path: str) -> tuple[str, object]:
             url = f"http://127.0.0.1:{remote_tcp_port}{path}"
-            if path == "/":
+            if path in {"/", "/app.js", "/style.css"}:
                 return path, _http_text(url)
             return path, _http_json(url)
 
-        paths = ["/api/status", "/api/meta", "/api/connections", "/api/peers", "/", "/api/status"]
+        paths = ["/api/status", "/api/meta", "/api/connections", "/api/peers", "/", "/app.js", "/style.css", "/api/status"]
         with ThreadPoolExecutor(max_workers=len(paths)) as executor:
             results = list(executor.map(_fetch_path, paths))
 
@@ -2945,12 +3123,22 @@ def test_macos_swift_host_runner_remote_tcp_admin_web_handles_multiple_connectio
         connections = result_map["/api/connections"]
         peers = result_map["/api/peers"]
         root_html = result_map["/"]
+        app_js = result_map["/app.js"]
+        style_css = result_map["/style.css"]
 
         assert isinstance(status, dict) and ("admin_ui" in status or "build" in status)
         assert isinstance(meta, dict) and "transport_runtime" in meta
         assert isinstance(connections, dict) and "counts" in connections
         assert isinstance(peers, dict) and "peers" in peers
+        peer_row = peers["peers"][0]
+        assert peer_row["transport"] == "myudp"
+        assert float(peer_row["rtt_est_ms"] or 0) > 0
+        assert float(peer_row["transmit_delay_est_ms"] or 0) > 0
+        assert peer_row["last_incoming_age_seconds"] is not None
+        assert int(peer_row["myudp"]["confirmed_total"]) >= 1
         assert isinstance(root_html, str) and ("ObstacleBridge" in root_html or "Admin Web" in root_html)
+        assert isinstance(app_js, str) and "async function loadStatus()" in app_js
+        assert isinstance(style_css, str) and "--bg:" in style_css
     finally:
         python_peer.stop()
         if process.poll() is None:

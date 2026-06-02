@@ -161,6 +161,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var sharedTcpOverlayRuntime: ObstacleBridgeTcpOverlayRuntime?
     private var controlServer: ObstacleBridgeWebAdminServer?
     private var providerStartedAt = Date().timeIntervalSince1970
+    private var runtimeReloadInProgress = false
+    private var peerTrafficRateState: (timestamp: TimeInterval, rxBytes: Int, txBytes: Int)?
+    private var secureLinkConnectedSinceUnixTS: Int?
+    private var secureLinkLastAuthenticatedUnixTS: Int?
+    private var secureLinkLastSessionID: UInt64 = 0
 
     override init() {
         super.init()
@@ -457,11 +462,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 )
                 do {
                     let tcpServiceSpecs = self.localTCPServiceSpecs(providerConfiguration: providerConfiguration)
+                    let startupMuxFrames = self.remoteServiceCatalogMuxFrames(providerConfiguration: providerConfiguration)
                     let bridge = try SwiftSimpleUDPPeerBridge(
                         provider: self,
                         settings: swiftSettings,
                         tunnelAddress: configuration.tunnelAddress,
                         tcpServiceSpecs: tcpServiceSpecs,
+                        startupMuxFrames: startupMuxFrames,
                         overlayLayerTransportAdapter: self.sharedOverlayLayerTransportAdapter
                     )
                     self.swiftSimpleUDPPeerBridge = bridge
@@ -530,13 +537,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     completionHandler(error)
                     return
                 }
+                let completionEvent: String
                 #if OB_IPSERVER_SWIFT_SMOKE
-                self.recordNativeEvent("startTunnel_completed_swift_smoke")
-                completionHandler(nil)
+                completionEvent = "startTunnel_completed_swift_smoke"
                 #else
-                self.recordNativeEvent("startTunnel_completed_swift_only")
-                completionHandler(nil)
+                completionEvent = "startTunnel_completed_swift_only"
                 #endif
+                self.recordNativeEvent(completionEvent)
+                completionHandler(nil)
             }
         } catch {
             recordNativeEvent(
@@ -578,6 +586,49 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         recordNativeEvent("stopTunnel_completed", fields: ["reason": reason.rawValue])
         updateProviderState("stopTunnel_completed", extraFields: ["reason": reason.rawValue])
         completionHandler()
+    }
+
+    private func stopEmbeddedRuntimeForReload() {
+        heartbeatTimer?.cancel()
+        heartbeatTimer = nil
+        controlServer?.stop()
+        controlServer = nil
+        swiftSimpleUDPPeerBridge?.stop()
+        swiftSimpleUDPPeerBridge = nil
+        packetPumpRunning = false
+        if !nativeRuntimeActive {
+            ObstacleBridgePacketFlowBridge.deactivate()
+        }
+    }
+
+    private func scheduleEmbeddedRuntimeReload(action: String) {
+        guard !runtimeReloadInProgress else {
+            recordNativeEvent("embedded_runtime_reload_already_in_progress", fields: ["action": action])
+            return
+        }
+        runtimeReloadInProgress = true
+        recordNativeEvent("embedded_runtime_reload_requested", fields: ["action": action])
+        updateProviderState("embedded_runtime_reload_requested", extraFields: ["action": action])
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self else { return }
+            self.stopEmbeddedRuntimeForReload()
+            self.startTunnel(options: nil) { error in
+                self.runtimeReloadInProgress = false
+                if let error {
+                    self.recordNativeEvent("embedded_runtime_reload_failed", fields: [
+                        "action": action,
+                        "error": error.localizedDescription,
+                    ])
+                    self.updateProviderState("embedded_runtime_reload_failed", extraFields: [
+                        "action": action,
+                        "error": error.localizedDescription,
+                    ])
+                    return
+                }
+                self.recordNativeEvent("embedded_runtime_reload_completed", fields: ["action": action])
+                self.updateProviderState("embedded_runtime_reload_completed", extraFields: ["action": action])
+            }
+        }
     }
 
     public override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
@@ -837,8 +888,25 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         return []
     }
 
+    private func remoteServiceCatalogMuxFrames(providerConfiguration: [String: Any]?) -> [Data] {
+        guard let payload = runtimeConfigPayload(providerConfiguration: providerConfiguration) else {
+            return []
+        }
+        return Self.remoteServiceCatalogMuxFrames(from: payload)
+    }
+
+    private static func decodedProviderRuntimeConfig(_ providerConfiguration: [String: Any]?) -> [String: Any]? {
+        guard let runtimeConfig = providerConfiguration?["runtime_config"] as? [String: Any] else {
+            return nil
+        }
+        if let decrypted = try? PacketTunnelProviderConfigSecretCodec.decryptPayload(runtimeConfig) {
+            return decrypted
+        }
+        return runtimeConfig
+    }
+
     private func runtimeConfigPayload(providerConfiguration: [String: Any]?) -> [String: Any]? {
-        if let runtimeConfig = providerConfiguration?["runtime_config"] as? [String: Any] {
+        if let runtimeConfig = Self.decodedProviderRuntimeConfig(providerConfiguration) {
             return ObstacleBridgeRuntimeConfig.flatten(runtimeConfig)
         }
         if let payload = loadSharedRuntimeConfigJSON() {
@@ -867,7 +935,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 let allowedMTypes = ObstacleBridgeRuntimeConfig.stringValue(from: payload["compress_layer_types"]) ?? "data,data_frag"
                 let level = ObstacleBridgeRuntimeConfig.intValue(from: payload["compress_layer_level"]) ?? 3
                 let minBytes = ObstacleBridgeRuntimeConfig.intValue(from: payload["compress_layer_min_bytes"]) ?? 64
-                sharedCompressLayerRuntime = try ObstacleBridgeCompressLayerRuntime(
+                sharedCompressLayerRuntime = ObstacleBridgeCompressLayerRuntime(
                     algorithm: settings.compressAlgo,
                     level: level,
                     minBytes: minBytes,
@@ -1025,6 +1093,49 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         ObstacleBridgeRuntimeConfig.localTCPServiceSpecs(from: payload)
     }
 
+    private static func remoteServiceCatalogMuxFrames(from payload: [String: Any]) -> [Data] {
+        let specs = ObstacleBridgeRuntimeConfig.remoteServerSpecs(from: payload, preserveInputIndices: true)
+            .map { $0.toChannelMuxServiceSpec() }
+        guard !specs.isEmpty else {
+            return []
+        }
+        do {
+            let payload = try ObstacleBridgeChannelMuxCodec.encodeRemoteServicesSetV2(
+                instanceID: 0,
+                connectionSeq: 0,
+                services: specs
+            )
+            if ObstacleBridgeChannelMuxCodec.muxHeaderSize + payload.count <= 65535 {
+                return [
+                    try ObstacleBridgeChannelMuxCodec.packMux(
+                        chanID: 0,
+                        proto: .udp,
+                        counter: 0,
+                        mtype: .remoteServicesSetV2,
+                        body: payload
+                    )
+                ]
+            }
+            let tx = ObstacleBridgeChannelMuxCodec.nextControlChunkTxID(current: 1)
+            let chunks = ObstacleBridgeChannelMuxCodec.chunkControlPayload(
+                txID: tx.txID,
+                maxAppPayload: 65535,
+                payload: payload
+            )
+            return try chunks.enumerated().map { index, chunk in
+                try ObstacleBridgeChannelMuxCodec.packMux(
+                    chanID: 0,
+                    proto: .udp,
+                    counter: index & 0xFFFF,
+                    mtype: .remoteServicesSetV2Chunk,
+                    body: chunk
+                )
+            }
+        } catch {
+            return []
+        }
+    }
+
     private static func intValue(from value: Any?) -> Int? {
         ObstacleBridgeRuntimeConfig.intValue(from: value)
     }
@@ -1073,7 +1184,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             peerPort: config.peerPort,
             peerResolveFamily: config.peerResolveFamily,
             mtu: config.mtu,
-            tunIfname: config.tunIfname
+            tunIfname: config.tunIfname,
+            runtimeConfig: payload
         )
     }
 }
@@ -1125,10 +1237,13 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         let bridgeSnapshot = adminBridgeSnapshot()
         let traffic = adminPeerTraffic(bridgeSnapshot: bridgeSnapshot)
         let openConnections = adminOpenConnections(bridgeSnapshot: bridgeSnapshot)
-        let state = (adminBoolValue(bridgeSnapshot["active"]) || packetPumpRunning) ? "connected" : "idle"
+        let state = adminTransportConnectedState(bridgeSnapshot: bridgeSnapshot) ? "connected" : "connecting"
         let runtimeConfig = adminRuntimeConfigPayload()
         let transport = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig?["overlay_transport"]) ?? "myudp"
         let endpoint = adminPeerEndpoint(runtimeConfig: runtimeConfig)
+        let transportRuntime = adminTransportRuntimeSnapshot(bridgeSnapshot: bridgeSnapshot)
+        let myudpRuntime = transportRuntime["myudp"] as? [String: Any] ?? [:]
+        let protocolStats = myudpRuntime["protocol_stats"] as? [String: Any] ?? [:]
         return [[
             "id": 1,
             "transport": transport,
@@ -1136,14 +1251,50 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "listen": NSNull(),
             "peer": endpoint,
             "decode_errors": 0,
-            "inflight": 0,
-            "last_incoming_age_seconds": NSNull(),
+            "inflight": protocolStats["buffered_frames"] ?? 0,
+            "last_incoming_age_seconds": adminLastIncomingAgeSeconds(runtime: myudpRuntime),
+            "rtt_est_ms": myudpRuntime["rtt_est_ms"] ?? NSNull(),
+            "transmit_delay_est_ms": myudpRuntime["transmit_delay_est_ms"] ?? NSNull(),
             "traffic": traffic,
             "open_connections": openConnections,
             "secure_link": adminSecureLinkSnapshot(state: state),
             "compress_layer": adminCompressLayerSnapshot() ?? NSNull(),
-            "runtime": adminTransportRuntimeSnapshot(bridgeSnapshot: bridgeSnapshot),
+            "runtime": transportRuntime,
+            "myudp": [
+                "buffered_frames": protocolStats["buffered_frames"] ?? 0,
+                "first_pass": protocolStats["first_pass"] ?? 0,
+                "repeated_once": protocolStats["repeated_once"] ?? 0,
+                "repeated_multiple": protocolStats["repeated_multiple"] ?? 0,
+                "confirmed_total": protocolStats["confirmed_total"] ?? 0,
+            ],
         ]]
+    }
+
+    private func adminTransportConnectedState(bridgeSnapshot: [String: Any]) -> Bool {
+        guard adminBoolValue(bridgeSnapshot["active"]) else {
+            return false
+        }
+        let myudpRuntime = bridgeSnapshot["myudp_runtime"] as? [String: Any] ?? [:]
+        guard let lastRttOkNS = myudpRuntime["last_rtt_ok_ns"] as? UInt64
+            ?? (myudpRuntime["last_rtt_ok_ns"] as? NSNumber)?.uint64Value else {
+            return adminBoolValue(myudpRuntime["connected"])
+        }
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard now >= lastRttOkNS else {
+            return false
+        }
+        return (now - lastRttOkNS) <= 20_000_000_000
+    }
+
+    private func adminLastIncomingAgeSeconds(runtime: [String: Any]) -> Any {
+        guard let lastRxWall = runtime["last_rx_wall_ns"] as? UInt64, lastRxWall > 0 else {
+            return NSNull()
+        }
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard now >= lastRxWall else {
+            return NSNull()
+        }
+        return Double(now - lastRxWall) / 1_000_000_000.0
     }
 
     func adminMetaSnapshot() -> [String: Any] {
@@ -1219,7 +1370,10 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         } else {
             selectedConnection = profiles.first
         }
-        let runtimeConfig = adminRuntimeConfigPayload() ?? [:]
+        let runtimeConfig = ObstacleBridgeOnboarding.tokenRuntimeConfig(
+            runtimeConfig: adminRuntimeConfigPayload() ?? [:],
+            requestPayload: payload
+        )
         let own = ObstacleBridgeOnboarding.sanitizeServices(payload["own_servers"] ?? runtimeConfig["own_servers"])
         let remote = ObstacleBridgeOnboarding.sanitizeServices(payload["remote_servers"] ?? runtimeConfig["remote_servers"])
         let preview = ObstacleBridgeOnboarding.tokenPayload(
@@ -1273,7 +1427,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             return ObstacleBridgeAdminAPI.jsonResponse([
                 "ok": true,
                 "preview": preview,
-                "suggested_updates": ObstacleBridgeOnboarding.updates(
+                "suggested_updates": try ObstacleBridgeOnboarding.updates(
                     from: decoded,
                     decryptSecrets: PacketTunnelProviderConfigSecretCodec.decryptPayload
                 ),
@@ -1314,13 +1468,18 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             ], statusLine: "HTTP/1.1 400 Bad Request")
         }
 
+        let restartAfterSave = (payload["restart_after_save"] as? Bool) ?? false
+        if restartAfterSave {
+            scheduleEmbeddedRuntimeReload(action: "restart_after_save")
+        }
         return ObstacleBridgeAdminAPI.jsonResponse([
             "ok": true,
             "config": ObstacleBridgeRuntimeConfig.maskedConfigSnapshot(adminRuntimeConfigPayload() ?? [:]),
-            "restart_requested": false,
+            "restart_requested": restartAfterSave,
             "restart_supported": true,
             "restart_delay_sec": 0,
-            "restart_embedded": false,
+            "restart_embedded": restartAfterSave,
+            "restart_mode": restartAfterSave ? "immediate" : "",
         ])
     }
 
@@ -1334,20 +1493,24 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
     }
 
     func adminRequestRestart() -> [String: Any] {
-        [
+        scheduleEmbeddedRuntimeReload(action: "restart")
+        return [
             "ok": true,
             "restart_requested": true,
             "restart_supported": true,
             "restart_delay_sec": 0,
-            "restart_embedded": false,
+            "restart_embedded": true,
+            "restart_mode": "immediate",
         ]
     }
 
     func adminRequestReconnect() -> [String: Any] {
-        [
+        scheduleEmbeddedRuntimeReload(action: "reconnect")
+        return [
             "ok": true,
             "reconnect_requested": true,
             "reconnect_supported": true,
+            "restart_embedded": true,
         ]
     }
 
@@ -1481,7 +1644,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             return ObstacleBridgeRuntimeConfig.flatten(payload)
         }
         let providerConfiguration = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
-        if let runtimeConfig = providerConfiguration?["runtime_config"] as? [String: Any] {
+        if let runtimeConfig = Self.decodedProviderRuntimeConfig(providerConfiguration) {
             return ObstacleBridgeRuntimeConfig.flatten(runtimeConfig)
         }
         return nil
@@ -1492,7 +1655,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             return payload
         }
         let providerConfiguration = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
-        if let runtimeConfig = providerConfiguration?["runtime_config"] as? [String: Any] {
+        if let runtimeConfig = Self.decodedProviderRuntimeConfig(providerConfiguration) {
             return runtimeConfig
         }
         return [:]
@@ -1589,10 +1752,12 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
     }
 
     private func adminTransportRuntimeSnapshot(bridgeSnapshot: [String: Any]) -> [String: Any] {
-        let overlayConnected = adminBoolValue(bridgeSnapshot["active"]) || packetPumpRunning
+        let overlayConnected = adminTransportConnectedState(bridgeSnapshot: bridgeSnapshot)
+        let myudpRuntime = bridgeSnapshot["myudp_runtime"] as? [String: Any] ?? [:]
         return [
             "packetflow_bridge": ObstacleBridgePacketFlowBridge.bridgeStateSnapshot(),
             "swift_udp_bridge_state": bridgeSnapshot,
+            "myudp": myudpRuntime,
             "tcp": [
                 "overlay_connected": overlayConnected,
                 "listener_count": adminIntValue(bridgeSnapshot["tcp_listener_count"]),
@@ -1603,11 +1768,38 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
     }
 
     private func adminPeerTraffic(bridgeSnapshot: [String: Any]) -> [String: Any] {
-        [
-            "rx_bytes": adminIntValue(bridgeSnapshot["bytes_to_system"]),
-            "tx_bytes": adminIntValue(bridgeSnapshot["bytes_from_system"]),
-            "rx_bytes_per_sec": 0,
-            "tx_bytes_per_sec": 0,
+        let bridgeRows = swiftSimpleUDPPeerBridge?.connectionRows()
+        let tcpRows = bridgeRows?.tcp ?? []
+        let udpRows = bridgeRows?.udp ?? []
+        let tunRows = bridgeRows?.tun ?? []
+
+        var rxBytes = adminIntValue(bridgeSnapshot["bytes_to_system"])
+        var txBytes = adminIntValue(bridgeSnapshot["bytes_from_system"])
+        for row in tcpRows + udpRows + tunRows {
+            guard let stats = row["stats"] as? [String: Any] else {
+                continue
+            }
+            rxBytes += adminIntValue(stats["rx_bytes"])
+            txBytes += adminIntValue(stats["tx_bytes"])
+        }
+
+        let now = Date().timeIntervalSince1970
+        var rxRate = 0.0
+        var txRate = 0.0
+        if let previous = peerTrafficRateState {
+            let dt = now - previous.timestamp
+            if dt > 0 {
+                rxRate = Double(max(0, rxBytes - previous.rxBytes)) / dt
+                txRate = Double(max(0, txBytes - previous.txBytes)) / dt
+            }
+        }
+        peerTrafficRateState = (timestamp: now, rxBytes: rxBytes, txBytes: txBytes)
+
+        return [
+            "rx_bytes": rxBytes,
+            "tx_bytes": txBytes,
+            "rx_bytes_per_sec": rxRate,
+            "tx_bytes_per_sec": txRate,
         ]
     }
 
@@ -1727,6 +1919,9 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         let enabled = ObstacleBridgeRuntimeConfig.boolValue(from: adminRuntimeConfigPayload()?["secure_link"]) ?? false
         let mode = ObstacleBridgeRuntimeConfig.stringValue(from: adminRuntimeConfigPayload()?["secure_link_mode"]) ?? "off"
         guard enabled, let adapter = sharedSecureLinkPskTransportAdapter else {
+            secureLinkConnectedSinceUnixTS = nil
+            secureLinkLastAuthenticatedUnixTS = nil
+            secureLinkLastSessionID = 0
             return [
                 "enabled": enabled,
                 "mode": mode,
@@ -1761,6 +1956,24 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         }
 
         let snapshot = adapter.statusSnapshot()
+        let nowUnixTS = Int(Date().timeIntervalSince1970)
+        let previousSessionID = secureLinkLastSessionID
+        if snapshot.sessionID == 0 {
+            secureLinkConnectedSinceUnixTS = nil
+            secureLinkLastSessionID = 0
+        } else {
+            if previousSessionID != snapshot.sessionID || secureLinkConnectedSinceUnixTS == nil {
+                secureLinkConnectedSinceUnixTS = nowUnixTS
+            }
+            secureLinkLastSessionID = snapshot.sessionID
+        }
+        if snapshot.authenticated {
+            if secureLinkLastAuthenticatedUnixTS == nil || previousSessionID != snapshot.sessionID {
+                secureLinkLastAuthenticatedUnixTS = nowUnixTS
+            }
+        } else if snapshot.authFailCode != 0 {
+            secureLinkLastAuthenticatedUnixTS = nil
+        }
         let secureState: String
         let lastEvent: String
         let disconnectReason: String
@@ -1791,8 +2004,8 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "rekey_in_progress": false,
             "last_event": lastEvent,
             "last_event_unix_ts": NSNull(),
-            "last_authenticated_unix_ts": snapshot.authenticated ? Int(Date().timeIntervalSince1970) : NSNull(),
-            "connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : Int(Date().timeIntervalSince1970),
+            "last_authenticated_unix_ts": snapshot.authenticated ? (secureLinkLastAuthenticatedUnixTS ?? nowUnixTS) : NSNull(),
+            "connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTS ?? nowUnixTS),
             "authenticated_sessions_total": snapshot.authenticated ? 1 : 0,
             "rekeys_completed_total": 0,
             "peer_subject_id": "",
@@ -2048,6 +2261,7 @@ private struct SwiftSimpleUDPPeerSettings {
     let peerResolveFamily: String
     let mtu: Int
     let tunIfname: String
+    let runtimeConfig: [String: Any]
 }
 
 private final class SwiftSimpleUDPPeerBridge {
@@ -2094,6 +2308,7 @@ private final class SwiftSimpleUDPPeerBridge {
     private let settings: SwiftSimpleUDPPeerSettings
     private let tunnelAddress: String
     private let tcpServiceSpecs: [ObstacleBridgeChannelMuxCodec.ServiceSpec]
+    private let startupMuxFrames: [Data]
     private let queue = DispatchQueue(label: "com.obstaclebridge.ipserver.swift-simple-udp-peer")
     private var socketFD: Int32 = -1
     private let socketFamily: Int32
@@ -2113,6 +2328,7 @@ private final class SwiftSimpleUDPPeerBridge {
     private var startedAt = Date().timeIntervalSince1970
     private var currentPeerSelectedAtNS: UInt64 = 0
     private var lastInboundDatagramNS: UInt64 = 0
+    private var startupMuxFramesSent = false
     private var packetsFromSystem = 0
     private var packetsToSystem = 0
     private var bytesFromSystem = 0
@@ -2136,13 +2352,16 @@ private final class SwiftSimpleUDPPeerBridge {
         settings: SwiftSimpleUDPPeerSettings,
         tunnelAddress: String,
         tcpServiceSpecs: [ObstacleBridgeChannelMuxCodec.ServiceSpec],
+        startupMuxFrames: [Data] = [],
         overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter? = nil
     ) throws {
         self.provider = provider
         self.settings = settings
         self.tunnelAddress = tunnelAddress
         self.tcpServiceSpecs = tcpServiceSpecs
+        self.startupMuxFrames = startupMuxFrames
         self.overlayLayerTransportAdapter = overlayLayerTransportAdapter
+        let sessionMaxAppPayload = ObstacleBridgeRuntimeConfig.overlaySessionMaxAppPayload(from: settings.runtimeConfig)
         self.queue.setSpecific(key: Self.queueKey, value: 1)
         let boundSocket = try Self.makeBoundSocket(
             bindHost: settings.bindHost,
@@ -2164,10 +2383,12 @@ private final class SwiftSimpleUDPPeerBridge {
             )
             let tcpRuntime = ObstacleBridgeChannelMuxTcpRuntime(
                 instanceID: UInt64.random(in: 1...UInt64.max),
-                connectionSeq: UInt32.random(in: 1...UInt32.max)
+                connectionSeq: UInt32.random(in: 1...UInt32.max),
+                sessionMaxAppPayload: sessionMaxAppPayload
             )
             self.channelMuxTcpTransportOwner = ObstacleBridgeChannelMuxTCPTransportOwner(
                 runtime: tcpRuntime,
+                sessionMaxAppPayload: sessionMaxAppPayload,
                 queue: queue,
                 eventPrefix: "swift_udp",
                 eventSink: { [weak self] event, fields in
@@ -2188,7 +2409,11 @@ private final class SwiftSimpleUDPPeerBridge {
                 },
                 transportEventSink: { [weak self] event in
                     self?.handleTCPTransportEvent(event)
-                }
+                },
+                overlayConnectedProvider: { [weak self] in
+                    self?.overlayTransportConnected() ?? false
+                },
+                activateClientOnReady: true
             )
         }
     }
@@ -2203,6 +2428,7 @@ private final class SwiftSimpleUDPPeerBridge {
         startedAt = Date().timeIntervalSince1970
         currentPeerSelectedAtNS = monotonicNowNS()
         lastInboundDatagramNS = 0
+        startupMuxFramesSent = false
 
         let source = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: queue)
         source.setEventHandler { [weak self] in
@@ -2239,6 +2465,7 @@ private final class SwiftSimpleUDPPeerBridge {
         startedAt = Date().timeIntervalSince1970
         currentPeerSelectedAtNS = monotonicNowNS()
         lastInboundDatagramNS = 0
+        startupMuxFramesSent = false
 
         let source = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: queue)
         source.setEventHandler { [weak self] in
@@ -2280,7 +2507,23 @@ private final class SwiftSimpleUDPPeerBridge {
 
     func snapshot() -> [String: Any] {
         withState {
-            [
+            let myudpRuntime: [String: Any]
+            if let overlayRuntime {
+                myudpRuntime = [
+                    "connected": overlayRuntime.isConnected(),
+                    "rtt_est_ms": overlayRuntime.rttEstMS,
+                    "transmit_delay_est_ms": overlayRuntime.transmitDelayEstMS,
+                    "rtt_sample_ms": overlayRuntime.rttSampleMS,
+                    "established_ns": overlayRuntime.establishedNS,
+                    "last_rx_tx_ns": overlayRuntime.lastRxTxNS,
+                    "last_rx_wall_ns": overlayRuntime.lastRxWallNS,
+                    "last_rtt_ok_ns": overlayRuntime.lastRttOkNS,
+                    "protocol_stats": overlayRuntime.protocolStatsSnapshot(),
+                ]
+            } else {
+                myudpRuntime = [:]
+            }
+            return [
                 "active": started,
                 "bind_host": settings.bindHost,
                 "bind_port": settings.bindPort,
@@ -2318,6 +2561,7 @@ private final class SwiftSimpleUDPPeerBridge {
                 "last_from_system_at": lastFromSystemAt,
                 "last_to_system_at": lastToSystemAt,
                 "started_at": startedAt,
+                "myudp_runtime": myudpRuntime,
             ]
         }
     }
@@ -2333,10 +2577,21 @@ private final class SwiftSimpleUDPPeerBridge {
 
     func overlayEstablishedForProbe() -> Bool {
         withState {
-            guard let overlayRuntime else {
-                return false
+            overlayTransportConnected()
+        }
+    }
+
+    func secureLinkStatusForProbe() -> [String: Any] {
+        withState {
+            guard let snapshot = overlayLayerTransportAdapter?.secureLinkStatusSnapshot() else {
+                return ["configured": false, "authenticated": false, "session_id": 0, "auth_fail_code": 0]
             }
-            return overlayRuntime.establishedNS != 0 || overlayRuntime.lastRxWallNS != 0
+            return [
+                "configured": true,
+                "authenticated": snapshot.authenticated,
+                "session_id": snapshot.sessionID,
+                "auth_fail_code": snapshot.authFailCode,
+            ]
         }
     }
 
@@ -2345,6 +2600,13 @@ private final class SwiftSimpleUDPPeerBridge {
             return body()
         }
         return queue.sync(execute: body)
+    }
+
+    private func overlayTransportConnected() -> Bool {
+        guard let overlayRuntime else {
+            return false
+        }
+        return overlayRuntime.isConnected()
     }
 
     private func beginPacketFlowReadLoop() {
@@ -2777,10 +3039,16 @@ private final class SwiftSimpleUDPPeerBridge {
     }
 
     private func handleOverlayDatagram(_ datagram: Data) -> [Data] {
+        let wasConnected = overlayTransportConnected()
         guard let runtime = overlayRuntime,
               let frame = ObstacleBridgeUdpOverlayCodec.parseProtocolFrame(datagram)
         else {
             return []
+        }
+        defer {
+            if !wasConnected && overlayTransportConnected() {
+                maybeSendStartupMuxFrames()
+            }
         }
         let nowNS = monotonicNowNS()
         switch frame.ptype {
@@ -2814,6 +3082,8 @@ private final class SwiftSimpleUDPPeerBridge {
             do {
                 let snapshot = try runtime.handleInboundControlPacket(
                     nowNS: nowNS,
+                    txNS: frame.txNS,
+                    echoNS: frame.echoNS,
                     packetLastInOrder: control.lastInOrderRX,
                     packetHighest: control.highestRX,
                     packetMissed: control.missed,
@@ -2856,6 +3126,14 @@ private final class SwiftSimpleUDPPeerBridge {
         default:
             return []
         }
+    }
+
+    private func maybeSendStartupMuxFrames() {
+        guard overlayTransportConnected(), !startupMuxFramesSent, !startupMuxFrames.isEmpty else {
+            return
+        }
+        startupMuxFramesSent = true
+        sendMuxFrames(startupMuxFrames)
     }
 
     private func sendDatagram(_ packet: Data) {
@@ -2991,23 +3269,14 @@ private final class SwiftSimpleUDPPeerBridge {
     }
 
     private func sendMuxFrames(_ muxFrames: [Data]) {
-        guard let runtime = overlayRuntime, let provider else {
+        guard let runtime = overlayRuntime else {
             return
         }
         for muxFrame in muxFrames {
             do {
-                let nowNS = monotonicNowNS()
-                let snapshot = try runtime.sendApplicationPayload(
-                    muxFrame,
-                    nowNS: nowNS,
-                    echoNS: currentEchoNS(nowNS)
-                )
-                for frame in snapshot.frames {
-                    sendDatagram(frame)
-                }
-                overlayFramesFromSystem += snapshot.frames.count
+                try sendOverlayApplicationPayload(muxFrame, runtime: runtime)
             } catch {
-                provider.recordPacketBridgeEvent(
+                provider?.recordPacketBridgeEvent(
                     "swift_udp_tcp_mux_send_failed",
                     fields: [
                         "error": error.localizedDescription,
@@ -3586,7 +3855,11 @@ extension PacketTunnelProvider {
             peerPort: peerPort,
             peerResolveFamily: peerResolveFamily,
             mtu: mtu,
-            tunIfname: tunIfname
+            tunIfname: tunIfname,
+            runtimeConfig: [
+                "overlay_transport": "myudp",
+                "secure_link": overlayLayerTransportAdapter != nil,
+            ]
         )
         let bridge = try SwiftSimpleUDPPeerBridge(
             provider: nil,
@@ -3596,6 +3869,18 @@ extension PacketTunnelProvider {
             overlayLayerTransportAdapter: overlayLayerTransportAdapter
         )
         return bridge
+    }
+
+    static func probeEncodedProviderRuntimeConfig(
+        runtimeConfig: [String: Any]
+    ) throws -> [String: Any] {
+        try PacketTunnelProviderConfigSecretCodec.encryptPayload(runtimeConfig)
+    }
+
+    static func probeDecodedProviderRuntimeConfig(
+        providerConfiguration: [String: Any]
+    ) -> [String: Any]? {
+        decodedProviderRuntimeConfig(providerConfiguration)
     }
 }
 
@@ -3645,6 +3930,10 @@ final class PacketTunnelProviderSwiftUDPBridgeProbe {
 
     func bridgeSnapshot() -> [String: Any] {
         bridge.snapshot()
+    }
+
+    func secureLinkStatus() -> [String: Any] {
+        bridge.secureLinkStatusForProbe()
     }
 
     func adminConnectionsSnapshot() -> [String: Any] {

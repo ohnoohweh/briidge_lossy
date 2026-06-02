@@ -19,6 +19,7 @@ DEFAULT_INCLUDED_ROUTES6 = ["::/0"]
 DEFAULT_EXCLUDED_ROUTES6 = ["::1/128"]
 DEFAULT_DNS_SERVERS = ["1.1.1.1"]
 DEFAULT_TUNNEL_MTU = 1600
+DEFAULT_TUN_ROUTING_LOG = "CRITICAL"
 
 
 def _clean_list(value: Any, *, default: list[str]) -> list[str]:
@@ -63,6 +64,7 @@ class TunRoutingSettings:
     excluded_routes6: list[str] = field(default_factory=lambda: list(DEFAULT_EXCLUDED_ROUTES6))
     dns_servers: list[str] = field(default_factory=lambda: list(DEFAULT_DNS_SERVERS))
     mtu: int = DEFAULT_TUNNEL_MTU
+    log_TUN_routing: str = DEFAULT_TUN_ROUTING_LOG
 
     @staticmethod
     def register_cli(p: argparse.ArgumentParser) -> None:
@@ -79,6 +81,7 @@ class TunRoutingSettings:
         g.add_argument("--excluded-routes6", nargs="*", default=list(DEFAULT_EXCLUDED_ROUTES6), help="IPv6 routes excluded from tunnel routing")
         g.add_argument("--dns-servers", nargs="*", default=list(DEFAULT_DNS_SERVERS), help="DNS servers applied to tunnel routing")
         g.add_argument("--mtu", type=int, default=DEFAULT_TUNNEL_MTU, help="Tunnel MTU")
+        g.add_argument("--log-TUN-routing", dest="log_TUN_routing", default=DEFAULT_TUN_ROUTING_LOG, help="Log level for TUN routing hooks and helpers")
 
     @classmethod
     def from_mapping(
@@ -104,6 +107,7 @@ class TunRoutingSettings:
             excluded_routes6=_clean_list(values.get("excluded_routes6"), default=list(current.excluded_routes6)),
             dns_servers=_clean_list(values.get("dns_servers"), default=list(current.dns_servers)),
             mtu=int(values.get("mtu") or current.mtu),
+            log_TUN_routing=str(values.get("log_TUN_routing") or current.log_TUN_routing).strip() or current.log_TUN_routing,
         )
 
     def _local_gateway4(self) -> str:

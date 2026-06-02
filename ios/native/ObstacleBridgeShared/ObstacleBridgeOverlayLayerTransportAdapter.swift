@@ -21,6 +21,10 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         self.secureLinkAdapter = secureLinkAdapter
     }
 
+    func secureLinkStatusSnapshot() -> ObstacleBridgeSecureLinkPskRuntime.StatusSnapshot? {
+        secureLinkAdapter?.statusSnapshot()
+    }
+
     func handleTransportConnected() throws -> OutboundSnapshot {
         guard let secureLinkAdapter else {
             return OutboundSnapshot(emittedFrames: [])

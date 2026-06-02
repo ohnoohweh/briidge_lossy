@@ -820,7 +820,14 @@ class AdminWebPayloadTests(unittest.TestCase):
                 "endpoint_host": "bridge.example.net",
                 "endpoint_port": 4433,
             },
+            "admin_web_name": "Bridge Peer",
             "secure_link_mode": "psk",
+            "compress_layer": True,
+            "compress_layer_algo": "zlib",
+            "compress_layer_level": 4,
+            "compress_layer_min_bytes": 96,
+            "compress_layer_types": "data,data_ack",
+            "TUN_routing": {"dns_servers": ["1.1.1.1"]},
             "own_servers": [
                 {
                     "name": "api",
@@ -838,6 +845,13 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(updates["tcp_peer"], "bridge.example.net")
         self.assertEqual(updates["tcp_peer_port"], 4433)
         self.assertEqual(updates["secure_link_mode"], "psk")
+        self.assertEqual(updates["admin_web_name"], "Bridge Peer")
+        self.assertTrue(updates["compress_layer"])
+        self.assertEqual(updates["compress_layer_algo"], "zlib")
+        self.assertEqual(updates["compress_layer_level"], 4)
+        self.assertEqual(updates["compress_layer_min_bytes"], 96)
+        self.assertEqual(updates["compress_layer_types"], "data,data_ack")
+        self.assertEqual(updates["TUN_routing"]["dns_servers"], ["1.1.1.1"])
         self.assertIn("own_servers", updates)
 
     def test_onboarding_blueprints_group_active_peer_connections(self):
@@ -902,12 +916,17 @@ class AdminWebPayloadTests(unittest.TestCase):
             await ui._handle_onboarding_invite_generate(
                 generate_writer,
                 "POST",
-                json.dumps({"connection_id": profile_id}).encode("utf-8"),
+                json.dumps({"connection_id": profile_id, "admin_web_name": "Token Alias"}).encode("utf-8"),
             )
             generated = _http_json_body(generate_writer)
             self.assertTrue(generated["ok"])
             invite_token = str(generated.get("invite_token", "") or "")
             self.assertTrue(invite_token)
+            self.assertEqual(generated["preview"].get("generated_by"), "Token Alias")
+            self.assertEqual(generated["preview"].get("admin_web_name"), "Token Alias")
+            self.assertTrue(generated["preview"].get("compress_layer"))
+            self.assertEqual(generated["preview"].get("compress_layer_algo"), "zlib")
+            self.assertIn("TUN_routing", generated["preview"])
 
             preview_writer = _WriterStub()
             await ui._handle_onboarding_invite_preview(
@@ -920,5 +939,6 @@ class AdminWebPayloadTests(unittest.TestCase):
             self.assertEqual(preview["preview"].get("secure_link_psk"), "***hidden***")
             self.assertTrue(preview["preview"].get("secure_link_psk_present"))
             self.assertEqual(preview["suggested_updates"].get("secure_link_psk"), "lab-secret-12345")
+            self.assertEqual(preview["suggested_updates"].get("admin_web_name"), "Token Alias")
 
         asyncio.run(run_flow())

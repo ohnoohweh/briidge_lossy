@@ -257,16 +257,19 @@ private final class ObstacleBridgeConfigStore {
                 schemaItem(key: "compress_layer_types", description: "Comma-separated message types eligible for compression", defaultValue: "data,data_frag"),
             ],
             "TUN_routing": [
-                schemaItem(key: "tunnel_address", description: "Optional IPv4 tunnel address override for the local iOS/macOS tunnel endpoint.", defaultValue: NSNull()),
-                schemaItem(key: "tunnel_prefix", description: "Optional IPv4 tunnel prefix length override.", defaultValue: NSNull()),
-                schemaItem(key: "included_routes", description: "IPv4 routes that should be included in the packet tunnel.", defaultValue: []),
-                schemaItem(key: "excluded_routes", description: "IPv4 routes that should bypass the packet tunnel.", defaultValue: []),
-                schemaItem(key: "tunnel_address6", description: "Optional IPv6 tunnel address override for the local iOS/macOS tunnel endpoint.", defaultValue: NSNull()),
-                schemaItem(key: "tunnel_prefix6", description: "Optional IPv6 tunnel prefix length override.", defaultValue: NSNull()),
-                schemaItem(key: "included_routes6", description: "IPv6 routes that should be included in the packet tunnel.", defaultValue: []),
-                schemaItem(key: "excluded_routes6", description: "IPv6 routes that should bypass the packet tunnel.", defaultValue: []),
-                schemaItem(key: "dns_servers", description: "DNS servers advertised to the packet tunnel network settings.", defaultValue: []),
-                schemaItem(key: "mtu", description: "Optional MTU override applied to the packet tunnel network settings.", defaultValue: NSNull()),
+                schemaItem(key: "tunnel_address", description: "IPv4 tunnel address for the local iOS/macOS tunnel endpoint.", defaultValue: "192.168.106.1"),
+                schemaItem(key: "tunnel_prefix", description: "IPv4 tunnel prefix length.", defaultValue: 30),
+                schemaItem(key: "tunnel_gateway", description: "IPv4 peer gateway address used by TUN hook helpers.", defaultValue: "192.168.106.2"),
+                schemaItem(key: "included_routes", description: "IPv4 routes that should be included in the packet tunnel.", defaultValue: ["0.0.0.0/0"]),
+                schemaItem(key: "excluded_routes", description: "IPv4 routes that should bypass the packet tunnel.", defaultValue: ["127.0.0.0/8"]),
+                schemaItem(key: "tunnel_address6", description: "IPv6 tunnel address for the local iOS/macOS tunnel endpoint.", defaultValue: "fd20:106::1"),
+                schemaItem(key: "tunnel_prefix6", description: "IPv6 tunnel prefix length.", defaultValue: 126),
+                schemaItem(key: "tunnel_gateway6", description: "IPv6 peer gateway address used by TUN hook helpers.", defaultValue: "fd20:106::2"),
+                schemaItem(key: "included_routes6", description: "IPv6 routes that should be included in the packet tunnel.", defaultValue: ["::/0"]),
+                schemaItem(key: "excluded_routes6", description: "IPv6 routes that should bypass the packet tunnel.", defaultValue: ["::1/128"]),
+                schemaItem(key: "dns_servers", description: "DNS servers advertised to the packet tunnel network settings.", defaultValue: ["1.1.1.1"]),
+                schemaItem(key: "mtu", description: "MTU applied to the packet tunnel network settings.", defaultValue: 1600),
+                schemaItem(key: "log_TUN_routing", description: "Log level for TUN routing helpers.", defaultValue: "CRITICAL"),
             ],
             "channel_mux": [
                 schemaItem(
@@ -740,7 +743,7 @@ final class ObstacleBridgeHostRunner {
     private var remoteServerSpecs: [ObstacleBridgeNativeServiceSpec]
     private let bindHost: String
     private let statusPort: Int
-    private let startedAt = Date()
+    private var startedAt = Date()
     private let serviceStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Services")
     private let authStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Auth")
     private var controlServer: ObstacleBridgeWebAdminServer?
@@ -870,6 +873,7 @@ final class ObstacleBridgeHostRunner {
         try startOwnServers()
         startSharedTCPOverlayTransportOwnerIfNeeded()
         try startSharedUDPOverlayTransportOwnerIfNeeded()
+        startedAt = Date()
     }
 
     func start() throws {
@@ -1010,6 +1014,9 @@ final class ObstacleBridgeHostRunner {
         let counts = connections["counts"] as? [String: Any] ?? [:]
         let transport = bootstrapState["transport"] ?? (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp")
         let peerEndpoint = peerEndpointSnapshot()
+        let transportRuntime = transportRuntimeSnapshot()
+        let myudpRuntime = transportRuntime["myudp"] as? [String: Any] ?? [:]
+        let protocolStats = myudpRuntime["protocol_stats"] as? [String: Any] ?? [:]
         let overlayConnected = overlayCurrentlyConnected() ?? false
         let stateText: String
         if overlayConnected {
@@ -1026,8 +1033,10 @@ final class ObstacleBridgeHostRunner {
             "listen": NSNull(),
             "peer": peerEndpoint,
             "decode_errors": 0,
-            "inflight": 0,
-            "last_incoming_age_seconds": NSNull(),
+            "inflight": protocolStats["buffered_frames"] ?? 0,
+            "last_incoming_age_seconds": lastIncomingAgeSeconds(from: myudpRuntime),
+            "rtt_est_ms": myudpRuntime["rtt_est_ms"] ?? NSNull(),
+            "transmit_delay_est_ms": myudpRuntime["transmit_delay_est_ms"] ?? NSNull(),
             "traffic": [
                 "rx_bytes": 0,
                 "tx_bytes": 0,
@@ -1050,18 +1059,29 @@ final class ObstacleBridgeHostRunner {
                 "decompress_ok_total": 0,
                 "decompress_fail_total": 0,
             ],
-            "runtime": transportRuntimeSnapshot(),
+            "runtime": transportRuntime,
         ]
         if let myudp = bootstrapState["transport"] as? String, myudp == "myudp" {
             peer["myudp"] = [
-                "buffered_frames": 0,
-                "first_pass": 0,
-                "repeated_once": 0,
-                "repeated_multiple": 0,
-                "confirmed_total": 0,
+                "buffered_frames": protocolStats["buffered_frames"] ?? 0,
+                "first_pass": protocolStats["first_pass"] ?? 0,
+                "repeated_once": protocolStats["repeated_once"] ?? 0,
+                "repeated_multiple": protocolStats["repeated_multiple"] ?? 0,
+                "confirmed_total": protocolStats["confirmed_total"] ?? 0,
             ]
         }
         return [peer]
+    }
+
+    private func lastIncomingAgeSeconds(from runtime: [String: Any]) -> Any {
+        guard let lastRxWall = runtime["last_rx_wall_ns"] as? UInt64, lastRxWall > 0 else {
+            return NSNull()
+        }
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard now >= lastRxWall else {
+            return NSNull()
+        }
+        return Double(now - lastRxWall) / 1_000_000_000.0
     }
 
     private func peerEndpointSnapshot() -> Any {
@@ -1958,9 +1978,17 @@ final class ObstacleBridgeHostRunner {
         ObstacleBridgeOnboarding.sanitizeServices(value)
     }
 
-    private func onboardingTokenPayload(connection: [String: Any], ownServices: [[String: Any]], remoteServices: [[String: Any]]) -> [String: Any] {
+    private func onboardingTokenPayload(
+        connection: [String: Any],
+        ownServices: [[String: Any]],
+        remoteServices: [[String: Any]],
+        requestPayload: [String: Any] = [:]
+    ) -> [String: Any] {
         ObstacleBridgeOnboarding.tokenPayload(
-            runtimeConfig: runtimeConfig,
+            runtimeConfig: ObstacleBridgeOnboarding.tokenRuntimeConfig(
+                runtimeConfig: runtimeConfig,
+                requestPayload: requestPayload
+            ),
             connection: connection,
             ownServices: ownServices,
             remoteServices: remoteServices,
@@ -1976,8 +2004,8 @@ final class ObstacleBridgeHostRunner {
         try ObstacleBridgeOnboarding.decodeToken(token)
     }
 
-    private func onboardingUpdates(from payload: [String: Any]) -> [String: Any] {
-        ObstacleBridgeOnboarding.updates(
+    private func onboardingUpdates(from payload: [String: Any]) throws -> [String: Any] {
+        try ObstacleBridgeOnboarding.updates(
             from: payload,
             decryptSecrets: ObstacleBridgeConfigSecretCodec.decryptPayload
         )
@@ -2084,8 +2112,10 @@ final class ObstacleBridgeHostRunner {
         return [
             "ok": true,
             "restart_requested": true,
+            "restart_supported": true,
             "restart_delay_sec": 0,
-            "restart_embedded": false,
+            "restart_mode": "immediate",
+            "restart_embedded": true,
             "control_actions": controlActionSnapshot(),
             "bootstrap_state": bootstrapState,
         ]
@@ -2106,6 +2136,8 @@ final class ObstacleBridgeHostRunner {
         return [
             "ok": true,
             "reconnect_requested": true,
+            "reconnect_supported": true,
+            "restart_embedded": true,
             "control_actions": controlActionSnapshot(),
             "bootstrap_state": bootstrapState,
         ]
@@ -2258,6 +2290,7 @@ final class ObstacleBridgeHostRunner {
             bindPort: bindPort,
             overlayRuntime: runtime,
             reconnectRetryDelayMS: Self.intValue(from: runtimeConfig["overlay_reconnect_retry_delay_ms"]) ?? 30000,
+            sessionMaxAppPayload: ObstacleBridgeRuntimeConfig.overlaySessionMaxAppPayload(from: runtimeConfig),
             overlayLayerTransportAdapter: sharedOverlayLayerTransportAdapter,
             startupMuxFrames: remoteServiceCatalogMuxFrames(),
             queue: serviceStateQueue,
@@ -2283,6 +2316,7 @@ final class ObstacleBridgeHostRunner {
             bindPort: bindPort,
             peerHost: peerHost,
             peerPort: peerPort,
+            sessionMaxAppPayload: ObstacleBridgeRuntimeConfig.overlaySessionMaxAppPayload(from: runtimeConfig),
             overlayLayerTransportAdapter: sharedOverlayLayerTransportAdapter,
             startupMuxFrames: remoteServiceCatalogMuxFrames(),
             queue: serviceStateQueue,
@@ -2465,7 +2499,12 @@ extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
         }
         let own = sanitizeOnboardingServices(payload["own_servers"] ?? runtimeConfig["own_servers"])
         let remote = sanitizeOnboardingServices(payload["remote_servers"] ?? runtimeConfig["remote_servers"])
-        let preview = onboardingTokenPayload(connection: selectedConnection ?? [:], ownServices: own, remoteServices: remote)
+        let preview = onboardingTokenPayload(
+            connection: selectedConnection ?? [:],
+            ownServices: own,
+            remoteServices: remote,
+            requestPayload: payload
+        )
         do {
             let token = try encodeOnboardingToken(preview)
             return ObstacleBridgeAdminAPI.jsonResponse([
@@ -2510,7 +2549,7 @@ extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
             return ObstacleBridgeAdminAPI.jsonResponse([
                 "ok": true,
                 "preview": preview,
-                "suggested_updates": onboardingUpdates(from: decoded),
+                "suggested_updates": try onboardingUpdates(from: decoded),
             ])
         } catch let error as ObstacleBridgeHostRunnerError {
             return ObstacleBridgeAdminAPI.jsonResponse([
@@ -2520,7 +2559,7 @@ extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
         } catch {
             return ObstacleBridgeAdminAPI.jsonResponse([
                 "ok": false,
-                "error": "invite token has invalid JSON payload",
+                "error": error.localizedDescription,
             ], statusLine: "HTTP/1.1 400 Bad Request")
         }
     }
@@ -2745,8 +2784,10 @@ extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
             "ok": true,
             "config": maskedRuntimeConfigSnapshot(),
             "restart_requested": restartAfterSave,
+            "restart_supported": true,
             "restart_mode": restartAfterSave ? "immediate" : "",
             "restart_delay_sec": 0,
+            "restart_embedded": restartAfterSave,
         ]
         if restartAfterSave {
             _ = requestRestart()

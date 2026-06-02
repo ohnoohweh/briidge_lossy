@@ -1,6 +1,16 @@
 import Foundation
 
 enum ObstacleBridgeOnboarding {
+    static func tokenRuntimeConfig(runtimeConfig: [String: Any], requestPayload: [String: Any]) -> [String: Any] {
+        var effective = runtimeConfig
+        let adminWebName = (requestPayload["admin_web_name"] as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !adminWebName.isEmpty {
+            effective["admin_web_name"] = adminWebName
+        }
+        return effective
+    }
+
     static func normalizedOverlayTransports(runtimeConfig: [String: Any]) -> [String] {
         let raw = runtimeConfig["overlay_transport"]
         let candidates: [String]
@@ -142,23 +152,23 @@ enum ObstacleBridgeOnboarding {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         let plainPSK = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["secure_link_psk"]) ?? ""
-        let encryptedPSK: String
-        if plainPSK.isEmpty {
-            encryptedPSK = ""
-        } else if let encoded = try? encryptSecrets(["secure_link_psk": plainPSK]),
-                  let tokenValue = encoded["secure_link_psk"] as? String {
-            encryptedPSK = tokenValue
-        } else {
-            encryptedPSK = ""
-        }
+        let adminWebName = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_name"]) ?? ""
+        let tunRouting = ObstacleBridgeRuntimeConfig.groupedSectionPayload("TUN_routing", runtimeConfig: runtimeConfig)
         return [
             "version": 1,
             "generated_unix_ts": Int(Date().timeIntervalSince1970),
-            "generated_by": ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_name"]) ?? "",
+            "generated_by": adminWebName,
+            "admin_web_name": adminWebName,
             "connection": connection,
             "secure_link_mode": ["off", "none", "psk", "cert"].contains(secureMode) ? secureMode : "off",
-            "secure_link_psk": encryptedPSK,
+            "secure_link_psk": plainPSK,
             "secure_link_required": ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["secure_link_require"]) ?? false,
+            "compress_layer": ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["compress_layer"]) ?? true,
+            "compress_layer_algo": ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["compress_layer_algo"]) ?? "zlib",
+            "compress_layer_level": ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["compress_layer_level"]) ?? 3,
+            "compress_layer_min_bytes": ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["compress_layer_min_bytes"]) ?? 64,
+            "compress_layer_types": ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["compress_layer_types"]) ?? "data,data_frag",
+            "TUN_routing": tunRouting,
             "admin_auth_recommended": true,
             "own_servers": ownServices,
             "remote_servers": remoteServices,
@@ -188,7 +198,7 @@ enum ObstacleBridgeOnboarding {
     static func updates(
         from payload: [String: Any],
         decryptSecrets: ([String: Any]) throws -> [String: Any]
-    ) -> [String: Any] {
+    ) throws -> [String: Any] {
         guard let connection = payload["connection"] as? [String: Any] else {
             return [:]
         }
@@ -212,10 +222,42 @@ enum ObstacleBridgeOnboarding {
             updates["secure_link_mode"] = ["off", "none"].contains(secureMode) ? "off" : secureMode
             updates["secure_link"] = !["off", "none"].contains(secureMode)
         }
-        if let tokenPSK = ObstacleBridgeRuntimeConfig.stringValue(from: payload["secure_link_psk"]), !tokenPSK.isEmpty,
-           let decoded = try? decryptSecrets(["secure_link_psk": tokenPSK]),
-           let plainPSK = decoded["secure_link_psk"] as? String {
-            updates["secure_link_psk"] = plainPSK
+        if let adminWebName = ObstacleBridgeRuntimeConfig.stringValue(from: payload["admin_web_name"]), !adminWebName.isEmpty {
+            updates["admin_web_name"] = adminWebName
+        }
+        if payload["compress_layer"] != nil {
+            updates["compress_layer"] = ObstacleBridgeRuntimeConfig.boolValue(from: payload["compress_layer"]) ?? false
+        }
+        for key in ["compress_layer_algo", "compress_layer_level", "compress_layer_min_bytes", "compress_layer_types"] {
+            if let value = payload[key] {
+                updates[key] = value
+            }
+        }
+        if let tunRouting = payload["TUN_routing"] as? [String: Any], !tunRouting.isEmpty {
+            updates["TUN_routing"] = tunRouting
+        }
+        if let tokenPSK = ObstacleBridgeRuntimeConfig.stringValue(from: payload["secure_link_psk"]), !tokenPSK.isEmpty {
+            var plainPSK = tokenPSK
+            do {
+                if let decryptedPSK = try decryptSecrets(["secure_link_psk": tokenPSK])["secure_link_psk"] as? String,
+                   !decryptedPSK.isEmpty {
+                    plainPSK = decryptedPSK
+                }
+            } catch {
+                if tokenPSK.hasPrefix("enc:v1:") {
+                    throw NSError(
+                        domain: "ObstacleBridgeOnboarding",
+                        code: 4,
+                        userInfo: [
+                            NSLocalizedDescriptionKey:
+                                "invite token carries a legacy encrypted secure_link_psk that cannot be decrypted on this device; generate a fresh invite token"
+                        ]
+                    )
+                }
+            }
+            if !plainPSK.isEmpty {
+                updates["secure_link_psk"] = plainPSK
+            }
         }
         let own = sanitizeServices(payload["own_servers"])
         let remote = sanitizeServices(payload["remote_servers"])

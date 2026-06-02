@@ -65,8 +65,20 @@ def test_load_grouped_runtime_config_preserves_saved_transport_fields(tmp_path: 
     assert config["admin_web"]["admin_web_bind"] == "127.0.0.1"
     assert config["admin_web"]["admin_web_port"] == 18080
     assert config["iOS_TUN_connector"]["packetflow_connector"] == "swift_udp"
-    assert config["iOS_TUN_connector"]["peer_host"] == ""
-    assert config["iOS_TUN_connector"]["peer_port"] == 0
+    assert config["iOS_TUN_connector"]["bind_host"] == "127.0.0.1"
+    assert config["iOS_TUN_connector"]["peer_host"] == "127.0.0.1"
+    assert config["iOS_TUN_connector"]["peer_port"] == 5556
+    assert config["TUN_routing"]["tunnel_address"] == "192.168.106.1"
+    assert config["TUN_routing"]["tunnel_gateway"] == "192.168.106.2"
+    assert config["TUN_routing"]["included_routes"] == ["0.0.0.0/0"]
+    assert config["TUN_routing"]["excluded_routes"] == ["127.0.0.0/8"]
+    assert config["TUN_routing"]["tunnel_address6"] == "fd20:106::1"
+    assert config["TUN_routing"]["tunnel_gateway6"] == "fd20:106::2"
+    assert config["TUN_routing"]["included_routes6"] == ["::/0"]
+    assert config["TUN_routing"]["excluded_routes6"] == ["::1/128"]
+    assert config["TUN_routing"]["dns_servers"] == ["1.1.1.1"]
+    assert config["TUN_routing"]["mtu"] == 1600
+    assert config["TUN_routing"]["log_TUN_routing"] == "CRITICAL"
     assert "log_file" in config["debug_logging"]
 
 

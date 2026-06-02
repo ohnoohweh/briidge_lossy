@@ -27,6 +27,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
     private let transportEventSink: TransportEventSink?
     private let overlayConnectedProvider: () -> Bool
     private let activateClientOnReady: Bool
+    private let maxReadSize: Int
     private let openChunkReassembler = ObstacleBridgeChannelMuxCodec.ControlChunkReassembler()
 
     private var serverConnections: [Int: NWConnection] = [:]
@@ -36,6 +37,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
 
     init(
         runtime: ObstacleBridgeChannelMuxTcpRuntime = ObstacleBridgeChannelMuxTcpRuntime(),
+        sessionMaxAppPayload: Int = 65535,
         queue: DispatchQueue,
         eventPrefix: String,
         eventSink: EventSink? = nil,
@@ -54,6 +56,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
         self.transportEventSink = transportEventSink
         self.overlayConnectedProvider = overlayConnectedProvider
         self.activateClientOnReady = activateClientOnReady
+        self.maxReadSize = max(1, sessionMaxAppPayload - ObstacleBridgeChannelMuxCodec.muxHeaderSize)
     }
 
     var serverConnectionCount: Int {
@@ -186,7 +189,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
         guard active, let connection = serverConnections[chanID] else {
             return
         }
-        connection.receive(minimumIncompleteLength: 1, maximumLength: Self.maxReadSize) { [weak self] data, _, isComplete, error in
+        connection.receive(minimumIncompleteLength: 1, maximumLength: maxReadSize) { [weak self] data, _, isComplete, error in
             self?.queue.async {
                 guard let self, self.active else { return }
                 if let data, !data.isEmpty {
@@ -326,7 +329,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
         guard active, let connection = clientConnections[chanID] else {
             return
         }
-        connection.receive(minimumIncompleteLength: 1, maximumLength: Self.maxReadSize) { [weak self] data, _, isComplete, error in
+        connection.receive(minimumIncompleteLength: 1, maximumLength: maxReadSize) { [weak self] data, _, isComplete, error in
             self?.queue.async {
                 guard let self, self.active else { return }
                 if let data, !data.isEmpty {
@@ -380,6 +383,4 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
         connection.stateUpdateHandler = nil
         connection.cancel()
     }
-
-    private static let maxReadSize = 65527
 }

@@ -655,10 +655,36 @@ class AdminWebUI:
         if secure_mode in {"off", "none", "psk", "cert"}:
             updates["secure_link_mode"] = "off" if secure_mode in {"off", "none"} else secure_mode
             updates["secure_link"] = secure_mode not in {"off", "none"}
+        admin_web_name = str(payload.get("admin_web_name", "") or "").strip()
+        if admin_web_name:
+            updates["admin_web_name"] = admin_web_name
+        if "compress_layer" in payload:
+            updates["compress_layer"] = bool(payload.get("compress_layer"))
+        for key in (
+            "compress_layer_algo",
+            "compress_layer_level",
+            "compress_layer_min_bytes",
+            "compress_layer_types",
+        ):
+            if key in payload:
+                updates[key] = payload.get(key)
+        tun_routing = payload.get("TUN_routing")
+        if isinstance(tun_routing, dict) and tun_routing:
+            updates["TUN_routing"] = tun_routing
         psk_value = payload.get("secure_link_psk")
         if isinstance(psk_value, str) and psk_value.strip():
-            with contextlib.suppress(Exception):
-                updates["secure_link_psk"] = str(_decrypt_config_secret(psk_value) or "")
+            plain_psk = ""
+            try:
+                plain_psk = str(_decrypt_config_secret(psk_value) or "")
+            except Exception:
+                if psk_value.startswith(CONFIG_SECRET_PREFIX):
+                    raise ValueError(
+                        "invite token carries a legacy encrypted secure_link_psk that cannot be decrypted on this device; generate a fresh invite token"
+                    )
+            if not plain_psk:
+                plain_psk = psk_value
+            if plain_psk:
+                updates["secure_link_psk"] = plain_psk
         own = AdminWebUI._sanitize_onboarding_services(payload.get("own_servers"))
         remote = AdminWebUI._sanitize_onboarding_services(payload.get("remote_servers"))
         if own:
@@ -708,14 +734,22 @@ class AdminWebUI:
         secure_mode = str(getattr(self.args, "secure_link_mode", "off") or "off").strip().lower()
         own_services = self._sanitize_onboarding_services(req.get("own_servers", getattr(self.args, "own_servers", [])))
         remote_services = self._sanitize_onboarding_services(req.get("remote_servers", getattr(self.args, "remote_servers", [])))
+        selected_admin_web_name = str(req.get("admin_web_name", getattr(self.args, "admin_web_name", "")) or "").strip()
         payload_doc = {
             "version": 1,
             "generated_unix_ts": int(time.time()),
-            "generated_by": str(getattr(self.args, "admin_web_name", "") or ""),
+            "generated_by": selected_admin_web_name,
+            "admin_web_name": selected_admin_web_name,
             "connection": selected or {},
             "secure_link_mode": secure_mode if secure_mode in {"off", "none", "psk", "cert"} else "off",
-            "secure_link_psk": _encrypt_config_secret(str(getattr(self.args, "secure_link_psk", "") or "")),
+            "secure_link_psk": str(getattr(self.args, "secure_link_psk", "") or ""),
             "secure_link_required": bool(getattr(self.args, "secure_link_require", False)),
+            "compress_layer": bool(getattr(self.args, "compress_layer", True)),
+            "compress_layer_algo": str(getattr(self.args, "compress_layer_algo", "zlib") or "zlib"),
+            "compress_layer_level": int(getattr(self.args, "compress_layer_level", 3) or 3),
+            "compress_layer_min_bytes": int(getattr(self.args, "compress_layer_min_bytes", 64) or 64),
+            "compress_layer_types": str(getattr(self.args, "compress_layer_types", "data,data_frag") or "data,data_frag"),
+            "TUN_routing": dict(getattr(self.args, "TUN_routing", {}) or {}),
             "admin_auth_recommended": True,
             "own_servers": own_services,
             "remote_servers": remote_services,
@@ -743,7 +777,11 @@ class AdminWebUI:
         except Exception as exc:
             await self._send_json(writer, 400, {"ok": False, "error": str(exc)})
             return
-        updates = self._onboarding_updates_from_invite(payload_doc)
+        try:
+            updates = self._onboarding_updates_from_invite(payload_doc)
+        except Exception as exc:
+            await self._send_json(writer, 400, {"ok": False, "error": str(exc)})
+            return
         preview_doc = dict(payload_doc)
         if isinstance(preview_doc.get("secure_link_psk"), str) and preview_doc.get("secure_link_psk"):
             preview_doc["secure_link_psk"] = "***hidden***"

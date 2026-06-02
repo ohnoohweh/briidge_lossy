@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from obstacle_bridge.bridge import ChannelMux, SessionMetrics
+from obstacle_bridge.bridge_tun_routing import TunRoutingSettings
 
 
 class _FakeSession:
@@ -37,6 +38,20 @@ class _FakeSession:
 
 
 class ChannelMuxListenerModeTests(unittest.TestCase):
+    def test_tun_routing_defaults_match_bootstrap_shape(self):
+        settings = TunRoutingSettings()
+        self.assertEqual(settings.tunnel_address, "192.168.106.1")
+        self.assertEqual(settings.tunnel_gateway, "192.168.106.2")
+        self.assertEqual(settings.included_routes, ["0.0.0.0/0"])
+        self.assertEqual(settings.excluded_routes, ["127.0.0.0/8"])
+        self.assertEqual(settings.tunnel_address6, "fd20:106::1")
+        self.assertEqual(settings.tunnel_gateway6, "fd20:106::2")
+        self.assertEqual(settings.included_routes6, ["::/0"])
+        self.assertEqual(settings.excluded_routes6, ["::1/128"])
+        self.assertEqual(settings.dns_servers, ["1.1.1.1"])
+        self.assertEqual(settings.mtu, 1600)
+        self.assertEqual(settings.log_TUN_routing, "CRITICAL")
+
     def test_select_hook_argv_uses_list_directly(self):
         selected = ChannelMux._select_hook_argv({"argv": ["cmd", "arg1"]}, platform_key="linux")
         self.assertEqual(selected, ["cmd", "arg1"])

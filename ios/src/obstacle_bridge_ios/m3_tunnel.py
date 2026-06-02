@@ -135,7 +135,7 @@ def normalized_ios_tun_connector_config(
     bind_port = int(section.get("bind_port") or settings.bind_port or bridge_tun_ios.DEFAULT_IOS_PACKETFLOW_BIND_PORT)
     peer_host = str(section.get("peer_host") or settings.peer_host).strip()
     peer_port = int(section.get("peer_port") or settings.peer_port or 0)
-    if packetflow_connector in {"swift_simple_udp", "swift_simple_udp_peer", "simple_udp_peer"}:
+    if packetflow_connector in {"swift_udp", "swift_udp_peer", "swift_simple_udp", "swift_simple_udp_peer", "simple_udp_peer"}:
         if not peer_host:
             peer_host = bridge_tun_ios.DEFAULT_IOS_SWIFT_UDP_SHIM_HOST
         if peer_port <= 0:

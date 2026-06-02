@@ -89,11 +89,28 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert '"security_advisor"' in provider
     assert '"first_tab"' in provider
     assert "adminUIBootstrapState" in provider
+    assert "scheduleEmbeddedRuntimeReload(action:" in provider
+    assert '"restart_embedded": true' in provider
+    assert '"embedded_runtime_reload_completed"' in provider
     assert "startTunnel_completed_swift_udp" in provider
     assert "startTunnel_completed_swift_simple_udp" in provider
     assert "startTunnel_unsupported_runtime_mode" in provider
     assert "startTunnel_waiting_for_onboarding" in provider
     assert 'if !nativeRuntimeActive {' in provider
+    assert "private static func decodedProviderRuntimeConfig" in provider
+    assert "PacketTunnelProviderConfigSecretCodec.decryptPayload(runtimeConfig)" in provider
+    assert "if let runtimeConfig = Self.decodedProviderRuntimeConfig(providerConfiguration)" in provider
+    assert '"myudp_runtime": myudpRuntime' in provider
+    assert '"myudp": myudpRuntime' in provider
+    assert "try sendOverlayApplicationPayload(muxFrame, runtime: runtime)" in provider
+    assert "guard let runtime = overlayRuntime else {" in provider
+    assert "provider?.recordPacketBridgeEvent(" in provider
+    assert "private var peerTrafficRateState:" in provider
+    assert "private var secureLinkConnectedSinceUnixTS:" in provider
+    assert '"rx_bytes_per_sec": rxRate' in provider
+    assert '"connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTS ?? nowUnixTS)' in provider
+    assert "overlayConnectedProvider: { [weak self] in" in provider
+    assert "activateClientOnReady: true" in provider
 
     runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
     assert "struct ObstacleBridgeAdminUIBootstrapState" in runtime_config
@@ -286,6 +303,9 @@ def test_runtime_config_source_exists() -> None:
     assert "static func runtimeExecutionMode(" in runtime
     assert "static func swiftUDPPeerConfig(" in runtime
     assert '"TUN_routing"' in runtime
+    assert "tunnel_gateway" in runtime
+    assert "tunnel_gateway6" in runtime
+    assert "log_TUN_routing" in runtime
     assert "included_routes6" in runtime
     assert "listenerHookEnvBlocks()" in runtime
     assert "derivedLocalTunnelSettings(" in runtime
@@ -345,6 +365,9 @@ def test_macos_swift_host_runner_source_exists() -> None:
     assert "ObstacleBridgeTcpOverlayTransportOwner" in runtime
     assert "ObstacleBridgeSecureLinkPskTransportAdapter" in runtime
     assert '"TUN_routing"' in runtime
+    assert "tunnel_gateway" in runtime
+    assert "tunnel_gateway6" in runtime
+    assert "log_TUN_routing" in runtime
     assert '"swift_host_runner"' in runtime
 
 
@@ -627,6 +650,7 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "restart_after_save" in control
     assert "selectCanonicalManager" in control
     assert "removeFromPreferences" in control
+    assert "duplicate_cleanup_stop_requested" in control
     assert "preferences_reused" in control
     assert "desiredLocalizedDescription()" in control
     assert "providerBuildTimestampUTC" in control
@@ -637,6 +661,8 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert '"provider_configuration_mode": "config_derived_profile_persistence"' in control
     assert "needsConfigurationRepair" in control
     assert "desiredManagers" in control
+    assert "let desiredManagers = managers.filter { hasCurrentProviderConfiguration($0) }" in control
+    assert "let duplicates = managers.filter { $0 !== canonical }" in control
     assert "ObstacleBridgeRuntimeConfig.ownServerSpecs" in control
     assert "ObstacleBridgeRuntimeConfig.remoteServerSpecs" in control
     assert "derivedLocalTunnelSettings(" in control
@@ -675,3 +701,30 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "ios-native-tunnel-control.jsonl" in control
     assert "DispatchSemaphore" in control
     assert "timed out loading VPN preferences" not in control
+
+    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    assert "private func requestRestart()" in host_runner
+    assert "private func requestReconnect()" in host_runner
+    assert "private func reloadRuntimeStateForControlAction()" in host_runner
+    assert '"restart_supported": true' in host_runner
+    assert '"restart_mode": "immediate"' in host_runner
+    assert '"restart_embedded": true' in host_runner
+    assert '"reconnect_supported": true' in host_runner
+    assert '"rtt_est_ms": myudpRuntime["rtt_est_ms"] ?? NSNull()' in host_runner
+    assert '"confirmed_total": protocolStats["confirmed_total"] ?? 0' in host_runner
+
+
+def test_ios_packet_tunnel_provider_owns_restart_without_app_process() -> None:
+    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+
+    assert "private var runtimeReloadInProgress = false" in provider
+    assert "private func stopEmbeddedRuntimeForReload()" in provider
+    assert "private func scheduleEmbeddedRuntimeReload(action: String)" in provider
+    assert 'recordNativeEvent("embedded_runtime_reload_requested"' in provider
+    assert 'recordNativeEvent("embedded_runtime_reload_completed"' in provider
+    assert 'self.startTunnel(options: nil)' in provider
+    assert 'scheduleEmbeddedRuntimeReload(action: "restart")' in provider
+    assert 'scheduleEmbeddedRuntimeReload(action: "reconnect")' in provider
+    assert 'scheduleEmbeddedRuntimeReload(action: "restart_after_save")' in provider
+    assert '"restart_embedded": true' in provider
+    assert '"protocol_stats": overlayRuntime.protocolStatsSnapshot()' in (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")

@@ -1655,6 +1655,7 @@ function renderTokenGeneratorReview() {
   if (!node) return;
   const selectedId = String(document.getElementById('onboardingConnectionSelect')?.value || '').trim();
   const selected = (uiState.onboarding.profiles || []).find((item) => String(item?.id || '') === selectedId) || null;
+  const tokenAdminName = String(document.getElementById('onboardingTokenAdminName')?.value || '').trim();
   let ownServices = [];
   let remoteServices = [];
   try {
@@ -1667,6 +1668,7 @@ function renderTokenGeneratorReview() {
   node.textContent = JSON.stringify(
     {
       connection_profile: selected || '(not selected)',
+      admin_web_name: tokenAdminName || '(default)',
       own_servers: ownServices,
       remote_servers: remoteServices,
       secure_link_psk_included_encrypted: true,
@@ -1823,6 +1825,10 @@ function openTokenGeneratorGate() {
   renderOnboardingDependencyWarnings();
   const output = document.getElementById('onboardingInviteOutput');
   if (output instanceof HTMLTextAreaElement) output.value = '';
+  const tokenNameInput = document.getElementById('onboardingTokenAdminName');
+  if (tokenNameInput instanceof HTMLInputElement) {
+    tokenNameInput.value = String(configState.config?.admin_web_name || '').trim();
+  }
   setOnboardingMode('server');
   setTokenGeneratorStep(1);
   void ensureOnboardingInitialized();
@@ -1993,6 +1999,7 @@ async function generateOnboardingInvite() {
     uiState.onboarding.remoteServersDraft = remoteServers;
     const select = document.getElementById('onboardingConnectionSelect');
     const connectionId = String(select?.value || '').trim();
+    const tokenAdminName = String(document.getElementById('onboardingTokenAdminName')?.value || '').trim();
     const r = await apiFetch('/api/onboarding/invite/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2000,6 +2007,7 @@ async function generateOnboardingInvite() {
         connection_id: connectionId,
         own_servers: ownServers,
         remote_servers: remoteServers,
+        admin_web_name: tokenAdminName,
       }),
     });
     const j = await r.json();

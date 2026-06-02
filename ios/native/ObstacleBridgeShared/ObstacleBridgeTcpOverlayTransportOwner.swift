@@ -49,6 +49,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private let overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
     private let startupMuxFrames: [Data]
     private let reconnectRetryDelayMS: Int
+    private let sessionMaxAppPayload: Int
     private let queue: DispatchQueue
     private let eventSink: EventSink?
     private let serviceNameByID: [Int: String]
@@ -70,6 +71,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private var secureLinkHandshakePrimed = false
     private var startupMuxFramesSent = false
     private lazy var tcpTransportOwner = ObstacleBridgeChannelMuxTCPTransportOwner(
+        sessionMaxAppPayload: sessionMaxAppPayload,
         queue: queue,
         eventPrefix: "tcp_overlay",
         eventSink: { [weak self] event, fields in
@@ -94,6 +96,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         bindPort: Int = 0,
         overlayRuntime: ObstacleBridgeTcpOverlayRuntime,
         reconnectRetryDelayMS: Int = 30000,
+        sessionMaxAppPayload: Int = 65535,
         overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter? = nil,
         startupMuxFrames: [Data] = [],
         queue: DispatchQueue = DispatchQueue(label: "ObstacleBridgeTcpOverlayTransportOwner"),
@@ -106,6 +109,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         self.bindPort = max(0, bindPort)
         self.overlayRuntime = overlayRuntime
         self.reconnectRetryDelayMS = max(0, reconnectRetryDelayMS)
+        self.sessionMaxAppPayload = max(0, sessionMaxAppPayload)
         self.overlayLayerTransportAdapter = overlayLayerTransportAdapter
         self.startupMuxFrames = startupMuxFrames
         self.queue = queue
