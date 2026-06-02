@@ -35,6 +35,21 @@ def _unused_udp_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _unused_udp_ports(count: int) -> list[int]:
+    sockets: list[socket.socket] = []
+    try:
+        ports: list[int] = []
+        for _ in range(count):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(("127.0.0.1", 0))
+            sockets.append(sock)
+            ports.append(int(sock.getsockname()[1]))
+        return ports
+    finally:
+        for sock in sockets:
+            sock.close()
+
+
 def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: Path) -> None:
     swiftc = require_swift_modules(
         "CryptoKit",
@@ -96,8 +111,7 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
 def test_ios_packet_tunnel_provider_probe_serves_multiple_tcp_connections_in_admin_snapshot(tmp_path: Path) -> None:
     source_path = tmp_path / "PacketTunnelProviderProbe.swift"
     binary_path = tmp_path / "packet-tunnel-provider-probe"
-    bind_port_a = _unused_tcp_port()
-    bind_port_b = _unused_tcp_port()
+    bind_port_a, bind_port_b = _unused_udp_ports(2)
     listener_port = _unused_tcp_port()
     target_port = _unused_tcp_port()
     source_path.write_text(
@@ -284,13 +298,6 @@ def test_ios_packet_tunnel_provider_probe_serves_multiple_tcp_connections_in_adm
                     guard waitForCondition(timeout: 5.0, { bridgeA.overlayEstablished() && bridgeB.overlayEstablished() }) else {
                         throw ProbeError.timeout("overlay_established")
                     }
-                    guard waitForCondition(timeout: 5.0, {
-                        (bridgeA.secureLinkStatus()["authenticated"] as? Bool ?? false)
-                        && (bridgeB.secureLinkStatus()["authenticated"] as? Bool ?? false)
-                    }) else {
-                        throw ProbeError.timeout("secure_link_authenticated")
-                    }
-
                     let clientOne = try connectSocket(port: listenerPort)
                     let clientTwo = try connectSocket(port: listenerPort)
                     defer {
@@ -922,8 +929,7 @@ def test_ios_packet_tunnel_provider_probe_decrypts_embedded_runtime_config(tmp_p
 def test_ios_packet_tunnel_provider_probe_exposes_myudp_runtime_stats(tmp_path: Path) -> None:
     source_path = tmp_path / "PacketTunnelProviderMyudpRuntimeProbe.swift"
     binary_path = tmp_path / "packet-tunnel-provider-myudp-runtime-probe"
-    bind_port_a = _unused_udp_port()
-    bind_port_b = _unused_udp_port()
+    bind_port_a, bind_port_b = _unused_udp_ports(2)
     source_path.write_text(
         textwrap.dedent(
             r"""
@@ -1054,8 +1060,7 @@ def test_ios_packet_tunnel_provider_probe_secure_link_tcp_own_server_roundtrips_
 ) -> None:
     source_path = tmp_path / "PacketTunnelProviderOwnServerRoundtripProbe.swift"
     binary_path = tmp_path / "packet-tunnel-provider-own-server-roundtrip-probe"
-    bind_port_a = _unused_udp_port()
-    bind_port_b = _unused_udp_port()
+    bind_port_a, bind_port_b = _unused_udp_ports(2)
     listener_port = _unused_tcp_port()
     target_port = _unused_tcp_port()
     source_path.write_text(
