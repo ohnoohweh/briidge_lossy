@@ -148,6 +148,13 @@ The iOS app should not try to:
 
 The original design questions around "can BeeWare package the app?", "can Python run inside the extension?", "can the app own the runtime?", and "how should config move between app and extension?" are now largely answered by working code and device validation.
 
+Current product-status summary:
+
+- ObstacleBridge on iPhone has now crossed from "prototype packet tunnel host" into "initial full-blown VPN client".
+- The app can install and manage the VPN profile, onboard from invite/config material, run the extension-hosted WebAdmin, and route real traffic through the tunnel.
+- The earlier sudden-crash class that interrupted active tunnel sessions has been substantially reduced by the current Swift/native hardening work around the extension boundary and shared runtime integration.
+- The remaining observed weakness is different: the Network Extension can still disappear after the phone sleeps, after prolonged idle time, or after long periods without traffic, which points more toward iOS lifecycle/background policy, idle-session handling, or missing keepalive strategy than toward the original crash defect.
+
 ### Outcome 1: BeeWare Is Useful For The Containing App, Not For Replacing Network Extension
 
 The BeeWare/Briefcase app path is now proven useful for:
@@ -311,29 +318,51 @@ Design impact:
 - tunnel identity can evolve with config updates instead of requiring code edits
 - dual-stack support should be treated as part of the main design, not as a future appendix
 
-### Outcome 9: Current Risk Has Shifted From Reachability To Extension Hardening
+### Outcome 9: The Original Sudden-Crash Problem Is No Longer The Primary Risk
 
-The most recent failure mode no longer questions whether the tunnel can carry traffic. That part is proven. The remaining risk has moved to robustness under sustained traffic.
+The earlier "tunnel is working and then suddenly dies under live traffic" problem was an important design-learning phase, and it drove real changes at the Swift/native boundary. That specific class of failure is no longer the dominant story.
 
-Observed behavior:
+Observed outcome:
 
-- the Network Extension carried substantial IPv4 and IPv6 traffic successfully
-- logs ended abruptly during active packet forwarding
-- there was no normal Python traceback and no graceful shutdown path
-- the peer side only later observed overlay disconnect and TUN teardown
-
-Current interpretation:
-
-- this points more strongly to abrupt extension termination or native-boundary instability under load than to routing or configuration defects
+- the current Swift-backed extension path no longer presents the same abrupt crash signature as the main day-to-day blocker
+- the extension/runtime integration has matured enough that traffic forwarding, WebAdmin access, invite onboarding, and VPN profile control are all now part of normal product behavior
 
 Design impact:
 
-- the primary engineering goal has changed from "make iOS tunneling work at all" to "make the working tunnel resilient under sustained traffic"
+- iOS should now be described as an implemented VPN client product slice, not only as a tunnel-hosting experiment
+- Swift's role in lifecycle ownership, packet-boundary control, and runtime hardening is now proven and should be treated as part of the stable architecture
+- future iOS design work should assume that the packet path itself is basically real and concentrate on resilience and lifecycle correctness
+
+### Outcome 10: Current Risk Has Shifted From Reachability To Extension Lifecycle Hardening
+
+The most recent failure mode no longer questions whether the tunnel can carry traffic. That part is proven. The remaining risk has moved to robustness across iPhone sleep, idle periods, and extension lifecycle transitions.
+
+Observed behavior:
+
+- the Network Extension carries substantial IPv4 and IPv6 traffic successfully while active
+- the extension can still vanish later, especially when the iPhone turns off, sleeps, or appears idle for a while
+- this disappearance does not look like the original foreground-path crash symptom anymore
+- the resulting user-visible symptom is that the VPN disconnects or silently stops carrying traffic until the runtime is reawakened or restarted
+
+Current interpretation:
+
+- this now points more strongly to extension lifecycle policy, idle handling, missing keepalive behavior, or sleep-aware runtime design than to routing or configuration defects
+- if the product should remain connected while the phone sleeps or when traffic is sparse, the runtime likely needs an explicit strategy for idle preservation or reconnect after wake
+- a "sleep mode" in the design sense may be required: reduce noisy work, preserve session identity where possible, and keep enough control traffic alive that iOS does not treat the tunnel as disposable
+
+Design impact:
+
+- the primary engineering goal has changed from "make iOS tunneling work at all" to "make the working tunnel resilient across sleep, idle, and background lifecycle transitions"
 - observability and rate-aware diagnostics in the packet bridge are now important hardening tools
 - reducing hot-path logging pressure is part of the runtime-stability design, not just a cosmetic cleanup
+- future hardening should explicitly study:
+  - wake/reconnect behavior
+  - overlay/session keepalive policy
+  - idle-time extension survival
+  - whether low-traffic periods need synthetic maintenance traffic
 - for the localhost-UDP connector experiment, observability must exist on both sides of the seam: native `NEPacketTunnelFlow` PCAPs at the provider boundary and Python-side raw-IP PCAPs plus JSONL session manifests at the connector-to-ChannelMux boundary
 
-### Outcome 7: iOS Crypto Parity Is Achieved Through A Native Backend Boundary
+### Outcome 11: iOS Crypto Parity Is Achieved Through A Native Backend Boundary
 
 The project previously treated missing Python `cryptography` support on iOS as a release-blocking gap. That gap is now addressed by the current native iOS crypto path used by the extension runtime for the required subset of primitives.
 
@@ -343,7 +372,7 @@ Design impact:
 - the correct long-term pattern is a narrow internal crypto boundary with platform-appropriate implementations
 - the project should continue to avoid broad platform-specific protocol forks and instead keep compatibility at the runtime-contract level
 
-### Outcome 8: WebAdmin Restart Behavior Is Solved As A Runtime Concern
+### Outcome 12: WebAdmin Restart Behavior Is Solved As A Runtime Concern
 
 The WebAdmin restart path on iOS has now been exercised and hardened:
 
@@ -1200,117 +1229,117 @@ The remaining work is primarily:
 
 ## Remaining Questions That Still Matter
 
-The old question set is no longer the right one. The questions that still matter now are narrower:
+The old question set is no longer the right one. The questions that still matter now start from a working VPN client baseline:
 
-- Which route scope should be the first supported iOS TUN scope: one diagnostic subnet, selected private subnets, or full tunnel?
-- Which transport should be treated as first-class on iOS production paths: `ws`, `tcp`, `myudp`, and later `quic`?
+- How should the extension behave when the iPhone sleeps, the screen turns off, or traffic is idle for a long period?
+- Which keepalive, reconnect, or "sleep mode" policy is needed so the extension survives low-traffic periods without wasting power?
+- Which transport should be treated as first-class on the maintained iOS production path: `myudp`, `ws`, `tcp`, and later `quic`?
+- How much of the current WebAdmin operational surface should move into native iOS UI once the packet/runtime side is stable enough?
 - Should certificate private key generation happen on iOS, or should keys be provisioned/imported externally for the first product release?
 - What is the minimum supported iOS version for the maintained packet-tunnel product path?
-- How much of the current WebAdmin operational surface should later move into native iOS UI once the packet/runtime side is complete?
 
-## Current Forward Plan: TUN Enablement
+## Current Forward Plan: Hardening A Working VPN Client
 
-The next document-worthy plan should focus on TUN functionality itself, because earlier architectural unknowns are no longer the critical blocker.
+The next document-worthy plan should no longer read like "how do we make TUN work at all?" That part is already demonstrated. The forward plan should focus on hardening, parity, and productization.
 
-### 1. Define The Exact iOS TUN Target
+### 1. Preserve The Single Source Of Truth For Tunnel Identity
 
-- Decide whether the next slice is packet capture only, packet injection/inspection, or full routed forwarding.
-- Recommended first scope: `NEPacketTunnelProvider` reads IPv4 packets, passes them into the ObstacleBridge runtime, and can emit packets back to `packetFlow`.
-- Keep the current synthetic tunnel address model and document the first intercepted route scope explicitly.
+What is now known:
 
-### 2. Trace And Complete The Packet Path
+- `TUN_routing` must remain the source of truth for tunnel addresses, routes, DNS, and MTU
+- remote TUN lifecycle hook env such as `PEER_ADDR`, `PEER_ADDR6`, `TUN_ADDR`, `TUN_ADDR6`, `TUN_SUBNET`, and `TUN_SUBNET6` should be automatically derived from that block
+- TUN service definitions should declare that a tunnel exists, but should not silently redefine the tunnel IP plan
 
-- Review and document the live packet path across:
-  - `ios/native/IPServer/PacketTunnelProvider.swift`
-  - `ios/src/obstacle_bridge_ios/ipserver_extension.py`
-  - `src/obstacle_bridge/packet_io.py`
-- Produce one short packet-flow diagram from `NEPacketTunnelFlow` to Python packet handler and back.
-- Identify the exact missing links between packet read, packet framing, mux carriage, and packet write-back.
-- Keep crash-boundary artifacts explicit:
-  - provider-side raw-IP PCAPs prove whether the iOS packet provider itself survived long enough to enqueue and write packets
-  - connector-side `to-mux` and `from-mux` PCAPs plus JSONL session manifests prove whether the localhost UDP seam stayed alive and provide direct replay input for host-side synthetic crash reproduction
+Next hardening work:
 
-### 3. Build A Minimal Native TUN Smoke Path
+- keep Python and Swift aligned on this derivation path
+- continue to verify that invite generation/import preserves the same tunnel identity on both sides
+- defend against stale fallback defaults that can silently reintroduce wrong tunnel addresses
 
-- Add the smallest possible provider-level packet smoke path:
-  - read one packet from `packetFlow`
-  - log packet metadata
-  - optionally perform deterministic echo/drop behavior
-- Goal: prove native packet I/O independently from ChannelMux and transport concerns.
+### 2. Treat Sleep/Idle Survival As The Primary iOS Runtime Problem
 
-### 4. Define A Stable Swift <-> Python Packet Bridge Contract
+What is now known:
 
-- Keep packet framing between Swift and Python explicit:
-  - packet bytes
-  - address family
-  - optional diagnostic metadata
-- Keep this separate from higher-level ChannelMux framing.
-- Add backpressure rules so the native side cannot flood Python packet handling.
+- the original "sudden crash while forwarding" problem is no longer the main blocker
+- the extension can still disappear later, especially when the iPhone sleeps or when traffic is idle for a while
+- this points more strongly to lifecycle/keepalive handling than to the original packet-path viability question
 
-### 5. Implement The iOS `PacketIO` Runtime Adapter
+Next hardening work:
 
-- Finalize an iOS `PacketIO` adapter that can:
-  - read raw IP packets from the provider bridge
-  - write raw IP packets back to the provider bridge
-- Keep it transport-agnostic and reusable by the existing runtime APIs.
+- define what "connected while idle" should mean for the iOS product
+- decide whether sparse control traffic or explicit keepalive maintenance is required
+- document and test wake/reconnect behavior separately from initial connect behavior
+- treat "sleep mode" as a first-class runtime state rather than as an accidental gap
 
-### 6. Connect TUN To ChannelMux Deliberately
+### 3. Keep Python/Swift Functional Parity Visible
 
-- Decide the first tunnel carriage model:
-  - one logical TUN service over ChannelMux
-  - packet payloads carried as dedicated mux messages
-- Start with one peer and one tunnel session before broadening to multi-peer/multi-route complexity.
+What is now known:
 
-### 7. Start Narrow: IPv4 And Limited Routes
+- a substantial amount of direct parity and mixed-runtime evidence exists already
+- shared Swift runtime extraction reduced variance, but did not remove the need for parity evidence
+- some failures that looked like runtime bugs were actually parity or startup-race issues revealed by mixed Swift/Python lanes
 
-- Begin with a restricted route scope rather than full-device routing.
-- Recommended first route scope:
-  - a controlled test subnet or one selected destination range
-- Only expand to wider route coverage after steady packet read/write behavior is proven.
+Next hardening work:
 
-### 8. Add TUN-Specific Observability
+- keep parity-oriented tests visible in top-level reporting
+- prefer shared implementation for behavior that has no true platform boundary
+- add parity/interop coverage whenever Swift grows behavior that Python already has, or vice versa
 
-- Add explicit packet-runtime logs for:
-  - `packetFlow` read started/stopped
-  - packets read/written counts
-  - drop reasons
-  - bridge queue depth/backpressure
-  - TUN session open/close
-- Add WebAdmin or app-visible status fields for:
-  - TUN enabled
-  - packet rx/tx counts
-  - last packet timestamp
-  - active peer/session carrying TUN traffic
+### 4. Harden Extension Lifecycle, Not Only Packet Path
 
-### 9. Validate In Layers
+What is now known:
 
-- Unit tests:
-  - packet framing
-  - Python `PacketIO` adapter
-  - mux carriage for TUN payloads
-- Host integration tests:
-  - replay and frame tests without real iOS APIs
-- iOS-specific tests:
-  - provider bootstrap
-  - native bridge smoke
-  - packet read/write contract
-- Physical-device E2E:
-  - VPN up
-  - routed test traffic enters provider
-  - packet reaches peer or controlled sink
-  - response packet returns to the iOS stack
+- packet carriage through `NEPacketTunnelFlow`, ChannelMux, SecureLink, and the overlay is proven
+- extension-hosted WebAdmin, restart, config sync, and routed traffic are all part of the working baseline
+- the remaining product risk is lifecycle resilience rather than architecture viability
 
-### 10. Deliver In Concrete Milestones
+Next hardening work:
 
-- Milestone A: provider reads packets and logs them
-- Milestone B: provider can write packets back through the same bridge
-- Milestone C: Python runtime owns live TUN `PacketIO`
-- Milestone D: TUN packets traverse ChannelMux to the peer
-- Milestone E: routed app traffic works on device
-- Milestone F: routes broaden and lifecycle/reconnect behavior is hardened
+- make reconnect behavior robust after peer restart, phone sleep, and interface changes
+- keep tunnel/runtime startup deterministic when the app is not in the foreground
+- ensure admin state reflects real transport/security truth instead of stale optimistic state
+
+### 5. Continue To Use Layered Diagnostics
+
+What is now known:
+
+- provider-boundary PCAPs, connector-side PCAPs, JSONL logs, and host-side replays are all valuable
+- device-only debugging became much less painful once packet/runtime boundaries were made explicit
+
+Next hardening work:
+
+- preserve diagnostics at the provider boundary, bridge boundary, and ChannelMux TUN boundary
+- keep host-replay paths for iOS/Fedora failures so device-only incidents can be reproduced without the device
+- prefer low-overhead diagnostics that do not themselves become a source of instability
+
+### 6. Productize The User Surface Around The Working Core
+
+What is now known:
+
+- onboarding from invite/config works
+- extension-owned WebAdmin is the effective operator surface today
+- the app already behaves like a real VPN client in the important first-order sense: install profile, connect, route traffic, inspect status
+
+Next hardening work:
+
+- decide which WebAdmin flows should stay shared browser-style UI and which should later become native iOS UI
+- keep the containing app disposable while the extension continues running
+- continue to align the macOS app and the iOS app where there is no true platform boundary
+
+## Current Milestone Language
+
+The old milestone ladder is outdated. The product is no longer at "prove packet read/write" or "prove TUN traverses ChannelMux".
+
+The current milestone language should be:
+
+- Milestone A: working iOS VPN client with extension-owned runtime and real routed traffic
+- Milestone B: stable config/import/service-catalog/tunnel-identity behavior across Python, macOS, and iOS
+- Milestone C: resilient behavior across peer restarts, idle periods, and phone sleep/wake transitions
+- Milestone D: stronger automation and parity evidence for the full Python/Swift mixed product surface
+- Milestone E: gradual migration of selected operational flows from WebAdmin-only to richer native iOS product UI where useful
 
 Recommended immediate next milestone:
 
-- start with Milestone A and B only
-- prove native packet read/write on device with strong logs
-- then treat the next steps as overlay integration work rather than as unresolved iOS architecture work
+- focus on Milestone C first
+- make the working tunnel survive idle, sleep, and reconnect transitions more predictably
+- keep documenting new knowledge as implemented outcomes, not as speculative architecture guesses
