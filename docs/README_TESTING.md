@@ -1,10 +1,38 @@
 # Testing Guide
 
-This repository currently collects:
+This repository ships and tests three different products:
 
-- `158` integration tests across [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py), [tests/integration/test_ios_e2e.py](../tests/integration/test_ios_e2e.py), [tests/integration/test_ios_simulator_e2e.py](../tests/integration/test_ios_simulator_e2e.py), [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py), [tests/integration/test_windows_elevated.py](../tests/integration/test_windows_elevated.py), and [tests/integration/test_reconnect_regression.py](../tests/integration/test_reconnect_regression.py)
-- `268` unit tests in `tests/unit/`
-- `68` iOS-focused Python tests in `ios/tests/` when collected with `PYTHONPATH=src:ios/src`
+- `python`: the shared Python runtime, CLI, WebAdmin, and host integrations
+- `macos`: the Swift host-runner and app-bundle surface
+- `ios`: the Swift packet-tunnel / app surface plus the iOS-facing Python helpers
+
+The authoritative traceability manifests remain shared:
+
+- [.github/requirements_traceability.yaml](../.github/requirements_traceability.yaml)
+- [.github/architecture_traceability.yaml](../.github/architecture_traceability.yaml)
+
+Per-product statistics and traceability are now derived from those manifests rather than maintained as three separate copies. Use:
+
+```bash
+python scripts/report_product_traceability.py
+python scripts/report_product_traceability.py --product python
+python scripts/report_product_traceability.py --product macos
+python scripts/report_product_traceability.py --product ios
+```
+
+That report provides:
+
+- per-product test-suite statistics
+- per-product requirement traceability
+- per-product architecture traceability
+
+The product split is intentionally deterministic and maintenance-light:
+
+- `python` owns the shared `tests/unit/` and non-iOS integration harnesses unless a test is clearly iOS-specific
+- `macos` owns the `ios/tests/test_macos_*` host-runner suites and explicit macOS source checks
+- `ios` owns the iOS packet-tunnel, app-facade, simulator, and host-side iOS integration suites
+
+This keeps one source of truth for coverage while still letting us answer “what is covered for Python vs macOS vs iOS?” without hand-maintaining three drifting manifests.
 
 Recent test/content updates:
 
@@ -172,6 +200,33 @@ When a change touches WebSocket proxy discovery, client bootstrap, or same-socke
 - any new transport-specific bootstrap tradeoff must be recorded in [WEBSOCKET_DESIGN.md](WEBSOCKET_DESIGN.md)
 
 ### What to run for regression testing
+
+#### Per-product entry points
+
+Use these when you want a product-specific view instead of the blended shared regression flow:
+
+- `python`
+
+```bash
+pytest -q tests/unit
+pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"
+pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"
+```
+
+- `macos`
+
+```bash
+pytest -q ios/tests/test_macos_swift_host_runner.py
+pytest -q ios/tests/test_m3_native_sources.py -k "macos or host_runner"
+```
+
+- `ios`
+
+```bash
+PYTHONPATH=src:ios/src pytest -q ios/tests
+pytest -q tests/integration/test_ios_e2e.py
+OBSTACLEBRIDGE_RUN_IOS_SIMULATOR=1 pytest -q tests/integration/test_ios_simulator_e2e.py -m ios_simulator
+```
 
 Recommended full regression flow:
 
