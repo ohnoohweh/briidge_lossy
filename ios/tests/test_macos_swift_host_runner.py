@@ -805,6 +805,13 @@ struct RuntimeProbe {
                 "mtu": 1600,
             ]
         ]).map { localDerived?.applying($0) }
+        let flattenedOverride = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: [
+            "tunnel_address": "192.168.107.1",
+            "tunnel_prefix": 30,
+            "tunnel_gateway": "192.168.107.2",
+            "dns_servers": ["8.8.8.8"],
+            "mtu": 1400,
+        ])
         let loopbackTun = ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: "ios-utun", mtu: 1400)
         let result: [String: Any] = [
             "own_count": own.count,
@@ -823,6 +830,10 @@ struct RuntimeProbe {
             "override_dns": overridden??.dnsServers ?? [],
             "override_mtu": overridden??.mtu ?? -1,
             "override_included_routes": overridden??.includedRoutes ?? [],
+            "flattened_override_addr": flattenedOverride?.tunnelAddress ?? "",
+            "flattened_override_gateway": flattenedOverride?.tunnelGateway ?? "",
+            "flattened_override_dns": flattenedOverride?.dnsServers ?? [],
+            "flattened_override_mtu": flattenedOverride?.mtu ?? -1,
             "loopback_tun_bind": loopbackTun.lBind,
             "loopback_tun_port": loopbackTun.lPort,
             "loopback_tun_proto": loopbackTun.lProto,
@@ -854,6 +865,10 @@ struct RuntimeProbe {
         "loopback_tun_bind": "ios-utun",
         "loopback_tun_port": 1400,
         "loopback_tun_proto": "tun",
+        "flattened_override_addr": "192.168.107.1",
+        "flattened_override_dns": ["8.8.8.8"],
+        "flattened_override_gateway": "192.168.107.2",
+        "flattened_override_mtu": 1400,
         "override_dns": ["9.9.9.9"],
         "override_included_routes": ["198.18.0.254/32"],
         "override_mtu": 1600,

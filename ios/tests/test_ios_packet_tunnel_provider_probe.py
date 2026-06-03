@@ -252,6 +252,123 @@ def test_ios_packet_tunnel_provider_probe_remote_service_catalog_uses_runtime_ep
     assert payload["tun_created_env"]["TUN_SUBNET6"] == "fd20:107::/126"
 
 
+def test_ios_packet_tunnel_provider_probe_remote_service_catalog_uses_flattened_tun_routing(tmp_path: Path) -> None:
+    source_path = tmp_path / "PacketTunnelProviderRemoteCatalogFlatTunProbe.swift"
+    binary_path = tmp_path / "packet-tunnel-provider-remote-catalog-flat-tun-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            enum ProbeError: Error {
+                case missingFrame
+            }
+
+            @main
+            struct PacketTunnelProviderRemoteCatalogFlatTunProbeMain {
+                static func jsonObject(_ value: ObstacleBridgeChannelMuxCodec.JSONValue?) -> [String: ObstacleBridgeChannelMuxCodec.JSONValue]? {
+                    guard let value, case .object(let object) = value else {
+                        return nil
+                    }
+                    return object
+                }
+
+                static func stringMap(_ object: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?) -> [String: String] {
+                    guard let object else {
+                        return [:]
+                    }
+                    var out: [String: String] = [:]
+                    for (key, value) in object {
+                        if case .string(let stringValue) = value {
+                            out[key] = stringValue
+                        }
+                    }
+                    return out
+                }
+
+                static func main() throws {
+                    let flattenedConfig: [String: Any] = [
+                        "tunnel_address": "192.168.107.1",
+                        "tunnel_prefix": 30,
+                        "tunnel_gateway": "192.168.107.2",
+                        "tunnel_address6": "fd20:107::1",
+                        "tunnel_prefix6": 126,
+                        "tunnel_gateway6": "fd20:107::2",
+                        "channel_mux": [
+                            "remote_servers": [
+                                [
+                                    "name": "remote-tun",
+                                    "listen": [
+                                        "protocol": "tun",
+                                        "ifname": "Obtun3",
+                                        "mtu": 1600,
+                                    ],
+                                    "target": [
+                                        "protocol": "tun",
+                                        "ifname": "ios-utun",
+                                        "mtu": 1600,
+                                    ],
+                                    "lifecycle_hooks": [
+                                        "listener": [
+                                            "on_created": [
+                                                "argv": ["./scripts/server-tun-hook.sh", "up", "{ifname}"],
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ]
+                    let frames = ObstacleBridgeRuntimeConfig.remoteServiceCatalogMuxFrames(
+                        from: flattenedConfig,
+                        instanceID: 17,
+                        connectionSeq: 23
+                    )
+                    guard let frameData = frames.first,
+                          let frame = ObstacleBridgeChannelMuxCodec.unpackMux(frameData),
+                          let decoded = ObstacleBridgeChannelMuxCodec.decodeRemoteServicesSetV2(frame.body)
+                    else {
+                        throw ProbeError.missingFrame
+                    }
+                    let listenerHooks = jsonObject(decoded.2.first?.lifecycleHooks?["listener"])
+                    let onCreated = jsonObject(listenerHooks?["on_created"])
+                    let hookEnv = stringMap(jsonObject(onCreated?["env"]))
+                    let payload: [String: Any] = [
+                        "instance_id": String(decoded.0),
+                        "connection_seq": String(decoded.1),
+                        "tun_created_env": hookEnv,
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_packet_tunnel_provider_probe(source_path, binary_path)
+    completed = subprocess.run(
+        [str(binary_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+    payload = json.loads(completed.stdout)
+    assert payload["instance_id"] == "17"
+    assert payload["connection_seq"] == "23"
+    assert payload["tun_created_env"]["TUN_ADDR"] == "192.168.107.2/30"
+    assert payload["tun_created_env"]["PEER_ADDR"] == "192.168.107.1"
+    assert payload["tun_created_env"]["TUN_SUBNET"] == "192.168.107.0/30"
+    assert payload["tun_created_env"]["TUN_ADDR6"] == "fd20:107::2/126"
+    assert payload["tun_created_env"]["PEER_ADDR6"] == "fd20:107::1"
+    assert payload["tun_created_env"]["TUN_SUBNET6"] == "fd20:107::/126"
+
+
 def test_ios_packet_tunnel_provider_probe_serves_multiple_tcp_connections_in_admin_snapshot(tmp_path: Path) -> None:
     source_path = tmp_path / "PacketTunnelProviderProbe.swift"
     binary_path = tmp_path / "packet-tunnel-provider-probe"

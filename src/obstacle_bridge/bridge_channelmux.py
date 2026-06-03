@@ -2093,6 +2093,7 @@ class ChannelMux:
         ifname: str,
         mtu: int,
     ) -> Optional[tuple["ChannelMux.ServiceKey", "ChannelMux.ServiceSpec"]]:
+        mirrored_match: Optional[tuple["ChannelMux.ServiceKey", "ChannelMux.ServiceSpec"]] = None
         catalogs = (
             self._peer_installed_services,
             self._pending_peer_service_catalogs.get(int(peer_key), {}),
@@ -2105,7 +2106,13 @@ class ChannelMux:
                     continue
                 if str(spec.l_bind) == str(ifname) and int(spec.l_port) == int(mtu):
                     return svc_key, spec
-        return None
+                if (
+                    spec.r_proto == "tun"
+                    and str(spec.r_host) == str(ifname)
+                    and int(spec.r_port) == int(mtu)
+                ):
+                    mirrored_match = (svc_key, spec)
+        return mirrored_match
 
     def _ensure_peer_tun_listener_for_target(
         self,

@@ -699,6 +699,47 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(self.mux._tun_by_chan[1], self.mux._svc_tun_devices[svc_key])
         schedule_hook.assert_any_call(remote_tun, svc_key, 'listener', 'on_created')
 
+    async def test_tun_open_reuses_mirrored_peer_listener_target_without_opening_remote_ifname(self):
+        remote_tun = ChannelMux.ServiceSpec(
+            2,
+            'tun',
+            'Obtun3',
+            1600,
+            'tun',
+            'ios-utun',
+            1600,
+            lifecycle_hooks={'listener': {'on_created': {'argv': ['hook']}}},
+        )
+        catalog_payload = self.mux._encode_remote_services_set_v2([remote_tun])
+        catalog_frame = self.mux._pack_mux(
+            0,
+            ChannelMux.Proto.UDP,
+            0,
+            ChannelMux.MType.REMOTE_SERVICES_SET_V2,
+            catalog_payload,
+        )
+        mirrored_open = ChannelMux.ServiceSpec(5, 'tun', 'ios-utun', 1600, 'tun', 'ios-utun', 1600)
+        open_payload = self.mux._build_open_v4(mirrored_open)
+        svc_key = ('peer', 77, 2)
+
+        def open_tun(ifname, mtu, svc_key=None):
+            return ChannelMux.TunDevice(fd=45, ifname=ifname, mtu=mtu, service_key=svc_key)
+
+        with patch.object(self.mux, '_apply_peer_installed_services', new=AsyncMock()) as apply_peer, \
+             patch.object(self.mux, '_open_tun_device', side_effect=open_tun) as open_tun_device, \
+             patch.object(self.mux, '_register_tun_reader') as register_reader, \
+             patch.object(self.mux, '_schedule_service_hook') as schedule_hook:
+            self.assertTrue(self.mux.on_app_payload_from_peer(catalog_frame, peer_id=77))
+            self.mux._rx_tun_open(1, open_payload, peer_id=77)
+            await asyncio.sleep(0)
+
+        apply_peer.assert_awaited_once()
+        open_tun_device.assert_called_once_with('Obtun3', 1600, svc_key=svc_key)
+        register_reader.assert_called_once()
+        self.assertIn(svc_key, self.mux._peer_installed_services)
+        self.assertIs(self.mux._tun_by_chan[1], self.mux._svc_tun_devices[svc_key])
+        schedule_hook.assert_any_call(remote_tun, svc_key, 'listener', 'on_created')
+
     async def test_remote_catalog_replacement_adds_and_removes_services(self):
         svc1 = ChannelMux.ServiceSpec(1, 'udp', '127.0.0.1', 10001, 'udp', '127.0.0.1', 20001)
         svc2 = ChannelMux.ServiceSpec(2, 'tcp', '127.0.0.1', 10002, 'tcp', '127.0.0.1', 20002)

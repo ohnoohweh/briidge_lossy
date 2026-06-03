@@ -653,8 +653,34 @@ enum ObstacleBridgeRuntimeConfig {
     }
 
     static func tunnelRoutingOverride(from payload: [String: Any]) -> ObstacleBridgeTunnelRoutingOverride? {
-        guard let override = payload["TUN_routing"] as? [String: Any] else {
-            return nil
+        let override: [String: Any]
+        if let grouped = payload["TUN_routing"] as? [String: Any] {
+            override = grouped
+        } else {
+            var flattened: [String: Any] = [:]
+            let keys = [
+                "tunnel_address",
+                "tunnel_prefix",
+                "tunnel_gateway",
+                "included_routes",
+                "excluded_routes",
+                "tunnel_address6",
+                "tunnel_prefix6",
+                "tunnel_gateway6",
+                "included_routes6",
+                "excluded_routes6",
+                "dns_servers",
+                "mtu",
+            ]
+            for key in keys {
+                if let value = payload[key] {
+                    flattened[key] = value
+                }
+            }
+            guard !flattened.isEmpty else {
+                return nil
+            }
+            override = flattened
         }
         return ObstacleBridgeTunnelRoutingOverride(
             tunnelAddress: firstStringValue(from: override["tunnel_address"]),
