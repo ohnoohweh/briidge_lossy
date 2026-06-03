@@ -1191,15 +1191,18 @@ def test_macos_swift_host_runner_myudp_remote_tcp_admin_web_handles_multiple_con
         python_peer.stop()
         if process.poll() is None:
             process.terminate()
-        try:
-            stdout, stderr = process.communicate(timeout=5.0)
-        except subprocess.TimeoutExpired:
-            process.kill()
+            try:
+                stdout, stderr = process.communicate(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate(timeout=5.0)
+        else:
             stdout, stderr = process.communicate(timeout=5.0)
         if process.returncode not in (0, -15):
             raise AssertionError(
                 f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
             )
+
 
 
 def test_macos_swift_host_runner_bootstraps_ws_stack_and_serves_status(tmp_path: Path) -> None:
@@ -1835,6 +1838,139 @@ def test_macos_swift_host_runner_accepts_python_invite_tokens_without_app_path_l
             )
 
 
+def test_macos_swift_host_runner_applies_invite_updates_with_tun_routing_section(tmp_path: Path) -> None:
+    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
+    _compile_mac_host_runner(binary_path)
+
+    status_port = _unused_tcp_port()
+    runtime_config_path = tmp_path / "runtime.json"
+    runtime_config_path.write_text(
+        json.dumps(
+            {
+                "admin_web": {
+                    "admin_web": True,
+                    "admin_web_bind": "127.0.0.1",
+                    "admin_web_port": status_port,
+                    "admin_web_dir": str(tmp_path / "admin_web"),
+                    "admin_web_auth_disable": True,
+                    "admin_web_security_advisor_startup_disable": True,
+                },
+                "ws_session": {
+                    "ws_static_dir": str(tmp_path / "web"),
+                },
+                "debug_logging": {
+                    "log_file": str(tmp_path / "logs" / "obstaclebridge.log"),
+                },
+                "TUN_routing": {
+                    "tunnel_address": ["192.168.106.1"],
+                    "tunnel_prefix": 30,
+                    "tunnel_gateway": "192.168.106.2",
+                    "included_routes": ["0.0.0.0/0"],
+                    "excluded_routes": ["127.0.0.0/8"],
+                    "tunnel_address6": ["fd20:106::1"],
+                    "tunnel_prefix6": 126,
+                    "tunnel_gateway6": "fd20:106::2",
+                    "included_routes6": ["::/0"],
+                    "excluded_routes6": ["::1/128"],
+                    "dns_servers": ["1.1.1.1"],
+                    "mtu": 1600,
+                    "log_TUN_routing": "CRITICAL",
+                },
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    invite_token = encode_invite_token(
+        {
+            "version": 1,
+            "admin_web_name": "Imported Swift Node",
+            "connection": {
+                "transport": "udp",
+                "endpoint_host": "bridge.example.net",
+                "endpoint_port": 4433,
+            },
+            "secure_link_mode": "psk",
+            "secure_link_psk": "python-side-secret",
+            "TUN_routing": {
+                "dns_servers": ["9.9.9.9"],
+                "included_routes": ["0.0.0.0/0"],
+                "excluded_routes": ["127.0.0.0/8"],
+            },
+            "own_servers": [
+                {
+                    "name": "HTTP bridge",
+                    "listen": {"protocol": "tcp", "bind": "127.0.0.1", "port": 18010},
+                    "target": {"protocol": "tcp", "host": "127.0.0.1", "port": 8010},
+                }
+            ],
+            "remote_servers": [],
+        }
+    )
+
+    process = subprocess.Popen(
+        [
+            str(binary_path),
+            "--runtime-config",
+            str(runtime_config_path),
+            "--status-port",
+            str(status_port),
+            "--hold-sec",
+            "20",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        config_before = _wait_http_json(f"http://127.0.0.1:{status_port}/api/config")
+        assert config_before["config"]["tunnel_address"] == "192.168.106.1"
+        assert config_before["config"]["tunnel_address6"] == "fd20:106::1"
+
+        preview_doc = _http_request_json(
+            f"http://127.0.0.1:{status_port}/api/onboarding/invite/preview",
+            method="POST",
+            payload={"invite_token": invite_token},
+        )
+        assert preview_doc["ok"] is True
+        assert preview_doc["suggested_updates"]["TUN_routing"]["dns_servers"] == ["9.9.9.9"]
+
+        save_doc = _http_request_json(
+            f"http://127.0.0.1:{status_port}/api/config",
+            method="POST",
+            payload={"updates": preview_doc["suggested_updates"]},
+        )
+        assert save_doc["ok"] is True
+        assert save_doc["config"]["udp_peer"] == "bridge.example.net"
+        assert save_doc["config"]["udp_peer_port"] == 4433
+        assert save_doc["config"]["dns_servers"] == ["9.9.9.9"]
+        assert save_doc["config"]["included_routes"] == ["0.0.0.0/0"]
+        assert save_doc["config"]["tunnel_address"] == "192.168.106.1"
+        assert save_doc["config"]["tunnel_address6"] == "fd20:106::1"
+        assert save_doc["config"]["own_servers"][0]["name"] == "HTTP bridge"
+
+        persisted = json.loads(runtime_config_path.read_text(encoding="utf-8"))
+        assert persisted["runner"]["overlay_transport"] == "myudp"
+        assert persisted["udp_session"]["udp_peer"] == "bridge.example.net"
+        assert persisted["udp_session"]["udp_peer_port"] == 4433
+        assert persisted["TUN_routing"]["dns_servers"] == ["9.9.9.9"]
+        assert persisted["TUN_routing"]["tunnel_address"] == ["192.168.106.1"]
+        assert persisted["TUN_routing"]["tunnel_address6"] == ["fd20:106::1"]
+        assert persisted["channel_mux"]["own_servers"][0]["name"] == "HTTP bridge"
+    finally:
+        process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5.0)
+        if process.returncode not in (0, -15):
+            raise AssertionError(
+                f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            )
+
+
 def test_macos_swift_host_runner_generates_invite_token_with_override_name_and_extended_fields(tmp_path: Path) -> None:
     binary_path = tmp_path / "obstaclebridge-mac-host-runner"
     _compile_mac_host_runner(binary_path)
@@ -1891,7 +2027,16 @@ def test_macos_swift_host_runner_generates_invite_token_with_override_name_and_e
         invite_doc = _http_request_json(
             f"http://127.0.0.1:{status_port}/api/onboarding/invite/generate",
             method="POST",
-            payload={"connection_id": profile_id, "admin_web_name": "Invite Alias"},
+            payload={
+                "connection_id": profile_id,
+                "admin_web_name": "Invite Alias",
+                "TUN_routing": {
+                    "dns_servers": ["9.9.9.9"],
+                    "tunnel_address": ["192.168.250.1"],
+                    "tunnel_prefix": 30,
+                    "tunnel_gateway": "192.168.250.2",
+                },
+            },
         )
 
         assert invite_doc["ok"] is True
@@ -1901,7 +2046,9 @@ def test_macos_swift_host_runner_generates_invite_token_with_override_name_and_e
         assert payload["compress_layer"] is True
         assert payload["compress_layer_level"] == 4
         assert payload["compress_layer_types"] == "data,data_ack"
-        assert payload["TUN_routing"]["dns_servers"] == ["1.1.1.1"]
+        assert payload["TUN_routing"]["dns_servers"] == ["9.9.9.9"]
+        assert payload["TUN_routing"]["tunnel_address"] == "192.168.250.1"
+        assert payload["TUN_routing"]["tunnel_gateway"] == "192.168.250.2"
     finally:
         process.terminate()
         try:

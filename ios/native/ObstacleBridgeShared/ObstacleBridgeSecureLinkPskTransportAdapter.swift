@@ -28,6 +28,10 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         runtime.statusSnapshot()
     }
 
+    func handleTransportDisconnected() {
+        runtime.handleTransportDisconnected()
+    }
+
     func handleTransportConnected() throws -> OutboundSnapshot {
         let status = runtime.statusSnapshot()
         guard status.clientMode, !status.authenticated else {
@@ -39,11 +43,8 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
             )
         }
 
-        var emittedFrames: [Data] = []
-        if status.sessionID == 0 || status.authFailCode != 0 {
-            let handshake = try runtime.beginClientHandshake()
-            emittedFrames.append(contentsOf: handshake.emittedFrames)
-        }
+        let handshake = try runtime.beginClientHandshake()
+        let emittedFrames = handshake.emittedFrames
 
         let updatedStatus = runtime.statusSnapshot()
         return OutboundSnapshot(

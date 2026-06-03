@@ -538,6 +538,66 @@
           </label>
         </div>
         <div id="tokenGeneratorStep3" class="onboarding-step hidden">
+          <h3>TUN Routing For Invite Token</h3>
+          <p>Define the TUN routing values that should be embedded into the invite token. These values are only used for token generation and do not modify the local configuration.</p>
+          <div class="onboarding-grid manual-params-grid">
+            <label class="service-field">
+              <span>IPv4 tunnel address</span>
+              <input id="tokenTunAddress" class="config-editor mono" type="text" autocomplete="off" placeholder="192.168.106.1" />
+            </label>
+            <label class="service-field">
+              <span>IPv4 prefix</span>
+              <input id="tokenTunPrefix" class="config-editor mono" type="number" min="0" max="32" placeholder="30" />
+            </label>
+            <label class="service-field">
+              <span>IPv4 peer gateway</span>
+              <input id="tokenTunGateway" class="config-editor mono" type="text" autocomplete="off" placeholder="192.168.106.2" />
+            </label>
+            <label class="service-field">
+              <span>IPv6 tunnel address</span>
+              <input id="tokenTunAddress6" class="config-editor mono" type="text" autocomplete="off" placeholder="fd20:106::1" />
+            </label>
+            <label class="service-field">
+              <span>IPv6 prefix</span>
+              <input id="tokenTunPrefix6" class="config-editor mono" type="number" min="0" max="128" placeholder="126" />
+            </label>
+            <label class="service-field">
+              <span>IPv6 peer gateway</span>
+              <input id="tokenTunGateway6" class="config-editor mono" type="text" autocomplete="off" placeholder="fd20:106::2" />
+            </label>
+            <label class="service-field">
+              <span>MTU</span>
+              <input id="tokenTunMtu" class="config-editor mono" type="number" min="1" max="65535" placeholder="1600" />
+            </label>
+            <label class="service-field">
+              <span>DNS servers</span>
+              <input id="tokenTunDnsServers" class="config-editor mono" type="text" autocomplete="off" placeholder="1.1.1.1, 9.9.9.9" />
+            </label>
+            <label class="service-field">
+              <span>Log level</span>
+              <input id="tokenTunLogLevel" class="config-editor mono" type="text" autocomplete="off" placeholder="CRITICAL" />
+            </label>
+          </div>
+          <div class="onboarding-grid manual-params-grid">
+            <label class="service-field">
+              <span>Included IPv4 routes</span>
+              <textarea id="tokenTunIncludedRoutes" class="config-editor config-editor-textarea mono" rows="3" placeholder="0.0.0.0/0"></textarea>
+            </label>
+            <label class="service-field">
+              <span>Excluded IPv4 routes</span>
+              <textarea id="tokenTunExcludedRoutes" class="config-editor config-editor-textarea mono" rows="3" placeholder="127.0.0.0/8"></textarea>
+            </label>
+            <label class="service-field">
+              <span>Included IPv6 routes</span>
+              <textarea id="tokenTunIncludedRoutes6" class="config-editor config-editor-textarea mono" rows="3" placeholder="::/0"></textarea>
+            </label>
+            <label class="service-field">
+              <span>Excluded IPv6 routes</span>
+              <textarea id="tokenTunExcludedRoutes6" class="config-editor config-editor-textarea mono" rows="3" placeholder="::1/128"></textarea>
+            </label>
+          </div>
+        </div>
+        <div id="tokenGeneratorStep4" class="onboarding-step hidden">
           <h3>Own Service Definition</h3>
           <div class="quick-actions">
             <button id="onboardingLoadServicesBtn" class="btn btn-secondary" type="button">Load Services From Config</button>
@@ -552,14 +612,14 @@
           </div>
           <div id="onboardingOwnServicesList" class="service-catalog-items"></div>
         </div>
-        <div id="tokenGeneratorStep4" class="onboarding-step hidden">
+        <div id="tokenGeneratorStep5" class="onboarding-step hidden">
           <h3>Remote Service Definition</h3>
           <div class="quick-actions">
             <button id="onboardingAddRemoteServiceBtn" class="btn btn-secondary" type="button">Add Remote Service</button>
           </div>
           <div id="onboardingRemoteServicesList" class="service-catalog-items"></div>
         </div>
-        <div id="tokenGeneratorStep5" class="onboarding-step hidden">
+        <div id="tokenGeneratorStep6" class="onboarding-step hidden">
           <h3>Generate Invite Token</h3>
           <div id="tokenGeneratorReview" class="onboarding-preview"></div>
           <label class="service-field">

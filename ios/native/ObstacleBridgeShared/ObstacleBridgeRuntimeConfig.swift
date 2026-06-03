@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 struct ObstacleBridgeDerivedTunnelSettings {
     let tunnelAddress: String
@@ -31,10 +32,12 @@ struct ObstacleBridgeDerivedTunnelSettings {
 struct ObstacleBridgeTunnelRoutingOverride {
     let tunnelAddress: String?
     let tunnelPrefix: Int?
+    let tunnelGateway: String?
     let includedRoutes: [String]?
     let excludedRoutes: [String]?
     let tunnelAddress6: String?
     let tunnelPrefix6: Int?
+    let tunnelGateway6: String?
     let includedRoutes6: [String]?
     let excludedRoutes6: [String]?
     let dnsServers: [String]?
@@ -219,6 +222,7 @@ struct ObstacleBridgeRuntimeServiceSpec {
 struct ObstacleBridgeSwiftUDPPeerConfig {
     let runtimeMode: String
     let bindHost: String
+    let overlayBindHost: String
     let bindPort: Int
     let peerHost: String
     let peerPort: Int
@@ -438,7 +442,7 @@ enum ObstacleBridgeRuntimeConfig {
 
     static func groupedSectionPayload(_ sectionName: String, runtimeConfig: [String: Any]) -> [String: Any] {
         if let nested = runtimeConfig[sectionName] as? [String: Any] {
-            return nested
+            return normalizedSectionPayload(sectionName, payload: nested)
         }
         guard let rows = configSchemaSnapshot()[sectionName] as? [[String: Any]] else {
             return [:]
@@ -451,7 +455,7 @@ enum ObstacleBridgeRuntimeConfig {
             }
             payload[key] = value
         }
-        return payload
+        return normalizedSectionPayload(sectionName, payload: payload)
     }
 
     static func overlaySessionMaxAppPayload(from payload: [String: Any]) -> Int {
@@ -470,6 +474,15 @@ enum ObstacleBridgeRuntimeConfig {
 
     static func normalizedConfigUpdates(_ updates: [String: Any], currentRuntimeConfig: [String: Any]) -> [String: Any] {
         var normalized = updates
+        for sectionName in knownGroupedSections + ["channel_mux", "iOS_TUN_connector"] {
+            guard let payload = normalized[sectionName] as? [String: Any] else {
+                continue
+            }
+            normalized.removeValue(forKey: sectionName)
+            for (key, value) in normalizedSectionPayload(sectionName, payload: payload) {
+                normalized[key] = value
+            }
+        }
         if (normalized["admin_web_auth_disable"] as? Bool) == true {
             normalized["admin_web_username"] = ""
             normalized["admin_web_password"] = ""
@@ -487,6 +500,7 @@ enum ObstacleBridgeRuntimeConfig {
 
     static func maskedConfigSnapshot(_ runtimeConfig: [String: Any]) -> [String: Any] {
         var payload = runtimeConfig
+        normalizeFlatPayloadForSchema(&payload)
         if payload["overlay_transport"] == nil {
             payload["overlay_transport"] = "myudp"
         }
@@ -541,6 +555,60 @@ enum ObstacleBridgeRuntimeConfig {
         return payload
     }
 
+    private static func normalizedSectionPayload(_ sectionName: String, payload: [String: Any]) -> [String: Any] {
+        guard let rows = configSchemaSnapshot()[sectionName] as? [[String: Any]] else {
+            return payload
+        }
+        var normalized = payload
+        for row in rows {
+            let key = String(describing: row["key"] ?? "")
+            guard !key.isEmpty, let rawValue = normalized[key] else {
+                continue
+            }
+            normalized[key] = normalizeValueForSchema(rawValue: rawValue, defaultValue: row["default"])
+        }
+        return normalized
+    }
+
+    private static func normalizeFlatPayloadForSchema(_ payload: inout [String: Any]) {
+        for rowsValue in configSchemaSnapshot().values {
+            guard let rows = rowsValue as? [[String: Any]] else {
+                continue
+            }
+            for row in rows {
+                let key = String(describing: row["key"] ?? "")
+                guard !key.isEmpty, let rawValue = payload[key] else {
+                    continue
+                }
+                payload[key] = normalizeValueForSchema(rawValue: rawValue, defaultValue: row["default"])
+            }
+        }
+    }
+
+    private static func normalizeValueForSchema(rawValue: Any, defaultValue: Any?) -> Any {
+        switch defaultValue {
+        case is String:
+            if let string = firstStringValue(from: rawValue) {
+                return string
+            }
+        case is Int:
+            if let integer = intValue(from: rawValue) {
+                return integer
+            }
+        case is Double:
+            if let double = doubleValue(from: rawValue) {
+                return double
+            }
+        case is Bool:
+            if let bool = boolValue(from: rawValue) {
+                return bool
+            }
+        default:
+            break
+        }
+        return rawValue
+    }
+
     private static func schemaItem(key: String, description: String, defaultValue: Any, choices: [Any]? = nil, secret: Bool = false) -> [String: Any] {
         var row: [String: Any] = [
             "key": key,
@@ -591,15 +659,157 @@ enum ObstacleBridgeRuntimeConfig {
         return ObstacleBridgeTunnelRoutingOverride(
             tunnelAddress: firstStringValue(from: override["tunnel_address"]),
             tunnelPrefix: intValue(from: override["tunnel_prefix"]),
+            tunnelGateway: firstStringValue(from: override["tunnel_gateway"]),
             includedRoutes: override["included_routes"] as? [String],
             excludedRoutes: override["excluded_routes"] as? [String],
             tunnelAddress6: firstStringValue(from: override["tunnel_address6"]),
             tunnelPrefix6: intValue(from: override["tunnel_prefix6"]),
+            tunnelGateway6: firstStringValue(from: override["tunnel_gateway6"]),
             includedRoutes6: override["included_routes6"] as? [String],
             excludedRoutes6: override["excluded_routes6"] as? [String],
             dnsServers: override["dns_servers"] as? [String],
             mtu: intValue(from: override["mtu"])
         )
+    }
+
+    private static func tunnelRoutingString(
+        _ value: String?,
+        default defaultValue: String
+    ) -> String {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? defaultValue : trimmed
+    }
+
+    private static func tunnelRoutingInt(
+        _ value: Int?,
+        default defaultValue: Int
+    ) -> Int {
+        value ?? defaultValue
+    }
+
+    private static func tunnelHookRemoteEnv(from payload: [String: Any]) -> [String: String] {
+        let override = tunnelRoutingOverride(from: payload)
+        let tunnelAddress = tunnelRoutingString(override?.tunnelAddress, default: "192.168.106.1")
+        let tunnelPrefix = tunnelRoutingInt(override?.tunnelPrefix, default: 30)
+        let peerGateway4 = tunnelRoutingString(override?.tunnelGateway, default: "192.168.106.2")
+        let tunnelAddress6 = tunnelRoutingString(override?.tunnelAddress6, default: "fd20:106::1")
+        let tunnelPrefix6 = tunnelRoutingInt(override?.tunnelPrefix6, default: 126)
+        let peerGateway6 = tunnelRoutingString(override?.tunnelGateway6, default: "fd20:106::2")
+        var env: [String: String] = [
+            "TUN_ADDR": "\(peerGateway4)/\(tunnelPrefix)",
+            "PEER_ADDR": tunnelAddress,
+            "TUN_SUBNET": "\(tunnelAddress)/\(tunnelPrefix)",
+        ]
+        if !tunnelAddress6.isEmpty {
+            env["TUN_ADDR6"] = "\(peerGateway6)/\(tunnelPrefix6)"
+            env["PEER_ADDR6"] = tunnelAddress6
+            env["TUN_SUBNET6"] = "\(tunnelAddress6)/\(tunnelPrefix6)"
+        }
+        if let subnet4 = normalizedCIDR(address: tunnelAddress, prefix: tunnelPrefix) {
+            env["TUN_SUBNET"] = subnet4
+        }
+        if let subnet6 = normalizedCIDR(address: tunnelAddress6, prefix: tunnelPrefix6) {
+            env["TUN_SUBNET6"] = subnet6
+        }
+        return env
+    }
+
+    private static func normalizedCIDR(address: String, prefix: Int) -> String? {
+        let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        if prefix >= 0 && prefix <= 32 {
+            var addr = in_addr()
+            guard trimmed.withCString({ inet_pton(AF_INET, $0, &addr) }) == 1 else {
+                return nil
+            }
+            let hostOrder = UInt32(bigEndian: addr.s_addr)
+            let mask: UInt32 = prefix == 0 ? 0 : (UInt32.max << UInt32(32 - prefix))
+            let network = hostOrder & mask
+            var networkAddr = in_addr(s_addr: network.bigEndian)
+            var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+            guard inet_ntop(AF_INET, &networkAddr, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil else {
+                return nil
+            }
+            return "\(String(cString: buffer))/\(prefix)"
+        }
+        if prefix >= 0 && prefix <= 128 {
+            var addr6 = in6_addr()
+            guard trimmed.withCString({ inet_pton(AF_INET6, $0, &addr6) }) == 1 else {
+                return nil
+            }
+            var networkBytes = withUnsafeBytes(of: &addr6) { Array($0) }
+            var remaining = prefix
+            for index in networkBytes.indices {
+                if remaining >= 8 {
+                    remaining -= 8
+                    continue
+                }
+                if remaining <= 0 {
+                    networkBytes[index] = 0
+                } else {
+                    let shift = 8 - remaining
+                    let mask = UInt8(truncatingIfNeeded: 0xFF << shift)
+                    networkBytes[index] &= mask
+                    remaining = 0
+                }
+            }
+            var networkAddr6 = in6_addr()
+            withUnsafeMutableBytes(of: &networkAddr6) { bytes in
+                bytes.copyBytes(from: networkBytes)
+            }
+            var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+            guard inet_ntop(AF_INET6, &networkAddr6, &buffer, socklen_t(INET6_ADDRSTRLEN)) != nil else {
+                return nil
+            }
+            return "\(String(cString: buffer))/\(prefix)"
+        }
+        return nil
+    }
+
+    private static func mergedListenerHookEnv(
+        lifecycleHooks: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?,
+        envDefaults: [String: String]
+    ) -> [String: ObstacleBridgeChannelMuxCodec.JSONValue]? {
+        guard let lifecycleHooks,
+              !envDefaults.isEmpty,
+              case .object(let listenerHooks)? = lifecycleHooks["listener"]
+        else {
+            return lifecycleHooks
+        }
+        var changed = false
+        var mergedLifecycleHooks = lifecycleHooks
+        var mergedListenerHooks = listenerHooks
+        for (event, commandValue) in listenerHooks {
+            guard case .object(let commandObject) = commandValue else {
+                continue
+            }
+            var mergedCommandObject = commandObject
+            var mergedEnv = envDefaults.reduce(into: [String: ObstacleBridgeChannelMuxCodec.JSONValue]()) { partial, entry in
+                partial[entry.key] = .string(entry.value)
+            }
+            if case .object(let existingEnv)? = commandObject["env"] {
+                for (key, value) in existingEnv {
+                    mergedEnv[key] = value
+                }
+            }
+            let existingEnvObject: [String: ObstacleBridgeChannelMuxCodec.JSONValue]
+            if case .object(let envObject)? = commandObject["env"] {
+                existingEnvObject = envObject
+            } else {
+                existingEnvObject = [:]
+            }
+            if existingEnvObject != mergedEnv {
+                mergedCommandObject["env"] = .object(mergedEnv)
+                mergedListenerHooks[event] = .object(mergedCommandObject)
+                changed = true
+            }
+        }
+        if changed {
+            mergedLifecycleHooks["listener"] = .object(mergedListenerHooks)
+        }
+        return changed ? mergedLifecycleHooks : lifecycleHooks
     }
 
     static func localTunServiceSpec(ifname: String, mtu: Int, svcID: Int = 0, name: String? = nil) -> ObstacleBridgeChannelMuxCodec.ServiceSpec {
@@ -617,16 +827,42 @@ enum ObstacleBridgeRuntimeConfig {
         ).toChannelMuxServiceSpec()
     }
 
-    static func remoteServiceCatalogMuxFrames(from payload: [String: Any]) -> [Data] {
+    static func remoteServiceCatalogMuxFrames(
+        from payload: [String: Any],
+        instanceID: UInt64 = 0,
+        connectionSeq: UInt32 = 0
+    ) -> [Data] {
+        let remoteEnvDefaults = tunnelHookRemoteEnv(from: payload)
         let specs = remoteServerSpecs(from: payload, preserveInputIndices: true)
+            .map { spec -> ObstacleBridgeRuntimeServiceSpec in
+                guard spec.listenProtocol == "tun" else {
+                    return spec
+                }
+                let mergedHooks = mergedListenerHookEnv(
+                    lifecycleHooks: spec.lifecycleHooks,
+                    envDefaults: remoteEnvDefaults
+                )
+                return ObstacleBridgeRuntimeServiceSpec(
+                    svcID: spec.svcID,
+                    name: spec.name,
+                    listenProtocol: spec.listenProtocol,
+                    listenBind: spec.listenBind,
+                    listenPort: spec.listenPort,
+                    targetProtocol: spec.targetProtocol,
+                    targetHost: spec.targetHost,
+                    targetPort: spec.targetPort,
+                    lifecycleHooks: mergedHooks,
+                    options: spec.options
+                )
+            }
             .map { $0.toChannelMuxServiceSpec() }
         guard !specs.isEmpty else {
             return []
         }
         do {
             let payload = try ObstacleBridgeChannelMuxCodec.encodeRemoteServicesSetV2(
-                instanceID: 0,
-                connectionSeq: 0,
+                instanceID: instanceID,
+                connectionSeq: connectionSeq,
                 services: specs
             )
             if ObstacleBridgeChannelMuxCodec.muxHeaderSize + payload.count <= 65535 {
@@ -870,6 +1106,17 @@ enum ObstacleBridgeRuntimeConfig {
             return nil
         }
         let bindHost = normalizedPacketflowBindHost(experiment["bind_host"], connectorMode: connectorMode)
+        let overlayBindHost: String
+        let configuredOverlayBind = stringValue(from: payload["udp_bind"])?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if connectorMode == "swift_udp" {
+            if let configuredOverlayBind, !configuredOverlayBind.isEmpty {
+                overlayBindHost = configuredOverlayBind
+            } else {
+                overlayBindHost = "::"
+            }
+        } else {
+            overlayBindHost = bindHost
+        }
         let bindPort = intValue(from: experiment["bind_port"]) ?? 5555
         let overlayTransport = stringValue(from: payload["overlay_transport"]) ?? "myudp"
         let selectedTransport = overlayTransport
@@ -901,6 +1148,7 @@ enum ObstacleBridgeRuntimeConfig {
         return ObstacleBridgeSwiftUDPPeerConfig(
             runtimeMode: connectorMode,
             bindHost: bindHost,
+            overlayBindHost: overlayBindHost,
             bindPort: bindPort > 0 ? bindPort : peerPort,
             peerHost: peerHost,
             peerPort: peerPort,

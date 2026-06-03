@@ -665,6 +665,66 @@ class ChannelMux:
             return config.remote_hook_env()
         return {}
 
+    @staticmethod
+    def _merge_hook_env_defaults(
+        lifecycle_hooks: Optional[dict],
+        env_defaults: Dict[str, str],
+    ) -> Optional[dict]:
+        if not isinstance(lifecycle_hooks, dict) or not env_defaults:
+            return lifecycle_hooks
+        listener_hooks = lifecycle_hooks.get("listener")
+        if not isinstance(listener_hooks, dict):
+            return lifecycle_hooks
+        merged_hooks = dict(lifecycle_hooks)
+        merged_listener = dict(listener_hooks)
+        changed = False
+        for event, command_spec in listener_hooks.items():
+            if not isinstance(command_spec, dict):
+                continue
+            merged_command = dict(command_spec)
+            existing_env = merged_command.get("env")
+            merged_env = dict(env_defaults)
+            if isinstance(existing_env, dict):
+                for key, value in existing_env.items():
+                    merged_env[str(key)] = str(value)
+            if existing_env != merged_env:
+                merged_command["env"] = merged_env
+                changed = True
+            merged_listener[event] = merged_command
+        if not changed:
+            return lifecycle_hooks
+        merged_hooks["listener"] = merged_listener
+        return merged_hooks
+
+    def _service_spec_with_hook_env_defaults(
+        self,
+        spec: "ChannelMux.ServiceSpec",
+        *,
+        remote_install: bool,
+    ) -> "ChannelMux.ServiceSpec":
+        if str(spec.l_proto) != "tun" or self.args is None:
+            return spec
+        try:
+            config = TunRoutingSettings.from_mapping(vars(self.args))
+        except Exception:
+            return spec
+        env_defaults = config.remote_hook_env() if remote_install else config.local_hook_env()
+        lifecycle_hooks = self._merge_hook_env_defaults(spec.lifecycle_hooks, env_defaults)
+        if lifecycle_hooks is spec.lifecycle_hooks:
+            return spec
+        return ChannelMux.ServiceSpec(
+            svc_id=int(spec.svc_id),
+            l_proto=str(spec.l_proto),
+            l_bind=str(spec.l_bind),
+            l_port=int(spec.l_port),
+            r_proto=str(spec.r_proto),
+            r_host=str(spec.r_host),
+            r_port=int(spec.r_port),
+            name=spec.name,
+            lifecycle_hooks=lifecycle_hooks if isinstance(lifecycle_hooks, dict) else None,
+            options=spec.options if isinstance(spec.options, dict) else None,
+        )
+
     async def _run_service_hook(
         self,
         spec: "ChannelMux.ServiceSpec",
@@ -1023,7 +1083,12 @@ class ChannelMux:
     # RS2 legacy: compact fields.
     # RS3 extended: JSON entries preserving name/lifecycle_hooks/options.
     def _encode_remote_services_set_v2(self, services: list["ChannelMux.ServiceSpec"]) -> bytes:
-        rows = [self._service_spec_wire_obj(s) for s in services]
+        rows = [
+            self._service_spec_wire_obj(
+                self._service_spec_with_hook_env_defaults(s, remote_install=True)
+            )
+            for s in services
+        ]
         blob = json.dumps(rows, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         out = bytearray(b"RS3")
         out += struct.pack(

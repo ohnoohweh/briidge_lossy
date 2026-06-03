@@ -16,8 +16,10 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private let queue: DispatchQueue
     private let eventSink: EventSink?
     private let serviceNameByID: [Int: String]
+    private let muxInstanceID: UInt64
+    private let muxConnectionSeq: UInt32
 
-    private var udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(instanceID: 0, connectionSeq: 0)
+    private var udpRuntime: ObstacleBridgeChannelMuxUdpRuntime
     private var overlayListener: NWListener?
     private var overlayConnection: NWConnection?
     private var overlayPeerID: Int?
@@ -36,6 +38,11 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private var secureLinkHandshakePrimed = false
     private var startupMuxFramesSent = false
     private lazy var tcpTransportOwner = ObstacleBridgeChannelMuxTCPTransportOwner(
+        runtime: ObstacleBridgeChannelMuxTcpRuntime(
+            instanceID: muxInstanceID,
+            connectionSeq: muxConnectionSeq,
+            sessionMaxAppPayload: sessionMaxAppPayload
+        ),
         sessionMaxAppPayload: sessionMaxAppPayload,
         queue: queue,
         eventPrefix: "tcp_overlay",
@@ -66,6 +73,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         startupMuxFrames: [Data] = [],
         queue: DispatchQueue = DispatchQueue(label: "ObstacleBridgeTcpOverlayTransportOwner"),
         serviceNameByID: [Int: String] = [:],
+        muxInstanceID: UInt64 = UInt64.random(in: 1...UInt64.max),
+        muxConnectionSeq: UInt32 = UInt32.random(in: 1...UInt32.max),
         eventSink: EventSink? = nil
     ) {
         self.peerHost = peerHost
@@ -79,7 +88,13 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         self.startupMuxFrames = startupMuxFrames
         self.queue = queue
         self.serviceNameByID = serviceNameByID
+        self.muxInstanceID = muxInstanceID
+        self.muxConnectionSeq = muxConnectionSeq
         self.eventSink = eventSink
+        self.udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(
+            instanceID: muxInstanceID,
+            connectionSeq: muxConnectionSeq
+        )
     }
 
     func start() {
@@ -145,6 +160,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             "reconnect_retry_delay_ms": reconnectRetryDelayMS,
             "reconnect_attempts": reconnectAttempts,
             "reconnect_scheduled": reconnectScheduled,
+            "mux_instance_id": muxInstanceID,
+            "mux_connection_seq": muxConnectionSeq,
             "server_tcp_channels": tcpTransportOwner.serverConnectionCount,
             "client_tcp_channels": tcpConnectionStates.count,
             "server_udp_channels": udpServerConnections.count,

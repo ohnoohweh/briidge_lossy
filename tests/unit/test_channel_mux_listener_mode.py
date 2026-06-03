@@ -277,6 +277,59 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         finally:
             mux.loop.close()
 
+    def test_remote_tun_services_auto_inject_tun_routing_hook_env(self):
+        args = argparse.Namespace(
+            own_servers=None,
+            remote_servers=None,
+            overlay_transport="myudp",
+            udp_bind="0.0.0.0",
+            udp_peer="127.0.0.1",
+            udp_peer_port=4433,
+            tunnel_address="192.168.107.1",
+            tunnel_prefix=30,
+            tunnel_gateway="192.168.107.2",
+            included_routes=["0.0.0.0/0"],
+            excluded_routes=["127.0.0.0/8"],
+            tunnel_address6="fd20:107::1",
+            tunnel_prefix6=126,
+            tunnel_gateway6="fd20:107::2",
+            included_routes6=["::/0"],
+            excluded_routes6=["::1/128"],
+            dns_servers=["9.9.9.9", "1.1.1.1"],
+            mtu=1600,
+            mux_tcp_bp_threshold=1,
+            mux_tcp_bp_latency_ms=300,
+            mux_tcp_bp_poll_interval_ms=50,
+        )
+        mux = ChannelMux.from_args(_FakeSession(), asyncio.new_event_loop(), args)
+        try:
+            spec = ChannelMux.ServiceSpec(
+                svc_id=3,
+                l_proto='tun',
+                l_bind='obtun2',
+                l_port=1600,
+                r_proto='tun',
+                r_host='ios-utun',
+                r_port=1600,
+                name='remote-tun',
+                lifecycle_hooks={'listener': {'on_created': {'argv': ['echo', 'created']}}},
+                options=None,
+            )
+            payload = mux._encode_remote_services_set_v2([spec])
+            decoded = mux._decode_remote_services_set_v2(payload)
+            self.assertIsNotNone(decoded)
+            assert decoded is not None
+            remote_spec = decoded[2][0]
+            env = remote_spec.lifecycle_hooks["listener"]["on_created"]["env"]
+            self.assertEqual(env["TUN_ADDR"], "192.168.107.2/30")
+            self.assertEqual(env["PEER_ADDR"], "192.168.107.1")
+            self.assertEqual(env["TUN_SUBNET"], "192.168.107.0/30")
+            self.assertEqual(env["TUN_ADDR6"], "fd20:107::2/126")
+            self.assertEqual(env["PEER_ADDR6"], "fd20:107::1")
+            self.assertEqual(env["TUN_SUBNET6"], "fd20:107::/126")
+        finally:
+            mux.loop.close()
+
     def test_chunked_remote_services_transfer_reassembles_metadata(self):
         session = _FakeSession(connected=True, max_app_payload_size=96)
         mux = ChannelMux(session, asyncio.new_event_loop())

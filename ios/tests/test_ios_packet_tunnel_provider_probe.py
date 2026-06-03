@@ -108,6 +108,150 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         )
 
 
+def test_ios_packet_tunnel_provider_probe_remote_service_catalog_uses_runtime_epoch(tmp_path: Path) -> None:
+    source_path = tmp_path / "PacketTunnelProviderRemoteCatalogEpochProbe.swift"
+    binary_path = tmp_path / "packet-tunnel-provider-remote-catalog-epoch-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            enum ProbeError: Error {
+                case missingFrame
+                case invalidPayload
+            }
+
+                @main
+                struct PacketTunnelProviderRemoteCatalogEpochProbeMain {
+                    static func jsonObject(_ value: ObstacleBridgeChannelMuxCodec.JSONValue?) -> [String: ObstacleBridgeChannelMuxCodec.JSONValue]? {
+                        guard let value, case .object(let object) = value else {
+                            return nil
+                        }
+                        return object
+                    }
+
+                    static func stringMap(_ object: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?) -> [String: String] {
+                        guard let object else {
+                            return [:]
+                        }
+                        var out: [String: String] = [:]
+                        for (key, value) in object {
+                            if case .string(let stringValue) = value {
+                                out[key] = stringValue
+                            }
+                        }
+                        return out
+                    }
+
+                    static func main() throws {
+                    let instanceID: UInt64 = 0x0102030405060708
+                    let connectionSeq: UInt32 = 0x0A0B0C0D
+                    let runtimeConfig: [String: Any] = [
+                        "TUN_routing": [
+                            "tunnel_address": "192.168.107.1",
+                            "tunnel_prefix": 30,
+                            "tunnel_gateway": "192.168.107.2",
+                            "tunnel_address6": "fd20:107::1",
+                            "tunnel_prefix6": 126,
+                            "tunnel_gateway6": "fd20:107::2",
+                        ],
+                        "channel_mux": [
+                            "remote_servers": [
+                                [
+                                    "name": "remote-admin-http",
+                                    "listen": [
+                                        "protocol": "tcp",
+                                        "bind": "0.0.0.0",
+                                        "port": 14081,
+                                    ],
+                                    "target": [
+                                        "protocol": "tcp",
+                                        "host": "127.0.0.1",
+                                        "port": 18090,
+                                    ],
+                                ],
+                                [
+                                    "name": "remote-tun",
+                                    "listen": [
+                                        "protocol": "tun",
+                                        "ifname": "obtun2",
+                                        "mtu": 1600,
+                                    ],
+                                    "target": [
+                                        "protocol": "tun",
+                                        "ifname": "ios-utun",
+                                        "mtu": 1600,
+                                    ],
+                                    "lifecycle_hooks": [
+                                        "listener": [
+                                            "on_created": [
+                                                "argv": ["./scripts/server-tun-hook.sh", "up", "{ifname}"],
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ]
+                    let frames = ObstacleBridgeRuntimeConfig.remoteServiceCatalogMuxFrames(
+                        from: runtimeConfig,
+                        instanceID: instanceID,
+                        connectionSeq: connectionSeq
+                    )
+                    guard let frameData = frames.first,
+                          let frame = ObstacleBridgeChannelMuxCodec.unpackMux(frameData),
+                          let decoded = ObstacleBridgeChannelMuxCodec.decodeRemoteServicesSetV2(frame.body)
+                    else {
+                        throw ProbeError.missingFrame
+                    }
+                        let listenerHooks = jsonObject(decoded.2.last?.lifecycleHooks?["listener"])
+                        let onCreated = jsonObject(listenerHooks?["on_created"])
+                        let hookEnv = stringMap(jsonObject(onCreated?["env"]))
+                        let payload: [String: Any] = [
+                            "frame_count": frames.count,
+                            "mtype": frame.mtype.rawValue,
+                            "instance_id": String(decoded.0),
+                            "connection_seq": String(decoded.1),
+                            "service_count": decoded.2.count,
+                            "first_service_bind": decoded.2.first?.lBind ?? "",
+                            "first_service_port": decoded.2.first?.lPort ?? 0,
+                            "tun_created_env": hookEnv,
+                        ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_packet_tunnel_provider_probe(source_path, binary_path)
+    completed = subprocess.run(
+        [str(binary_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+    payload = json.loads(completed.stdout)
+    assert payload["frame_count"] == 1
+    assert payload["instance_id"] == str(0x0102030405060708)
+    assert payload["connection_seq"] == str(0x0A0B0C0D)
+    assert payload["service_count"] == 2
+    assert payload["first_service_bind"] == "0.0.0.0"
+    assert payload["first_service_port"] == 14081
+    assert payload["tun_created_env"]["TUN_ADDR"] == "192.168.107.2/30"
+    assert payload["tun_created_env"]["PEER_ADDR"] == "192.168.107.1"
+    assert payload["tun_created_env"]["TUN_SUBNET"] == "192.168.107.0/30"
+    assert payload["tun_created_env"]["TUN_ADDR6"] == "fd20:107::2/126"
+    assert payload["tun_created_env"]["PEER_ADDR6"] == "fd20:107::1"
+    assert payload["tun_created_env"]["TUN_SUBNET6"] == "fd20:107::/126"
+
+
 def test_ios_packet_tunnel_provider_probe_serves_multiple_tcp_connections_in_admin_snapshot(tmp_path: Path) -> None:
     source_path = tmp_path / "PacketTunnelProviderProbe.swift"
     binary_path = tmp_path / "packet-tunnel-provider-probe"
@@ -356,6 +500,138 @@ def test_ios_packet_tunnel_provider_probe_serves_multiple_tcp_connections_in_adm
     assert all(row["role"] == "server" for row in bridge_a_rows)
     assert all(row["state"] == "connected" for row in bridge_a_rows)
     assert all(row["stats"]["tx_bytes"] > 0 for row in bridge_a_rows)
+
+
+def test_ios_packet_tunnel_provider_probe_grouped_own_services_survive_admin_snapshots(tmp_path: Path) -> None:
+    source_path = tmp_path / "PacketTunnelProviderGroupedOwnServicesProbe.swift"
+    binary_path = tmp_path / "packet-tunnel-provider-grouped-own-services-probe"
+    bind_port, peer_port = _unused_udp_ports(2)
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            enum ProbeError: Error {
+                case invalidArgs
+            }
+
+            @main
+            struct PacketTunnelProviderGroupedOwnServicesProbeMain {
+                static func main() throws {
+                    guard CommandLine.arguments.count == 3 else {
+                        throw ProbeError.invalidArgs
+                    }
+                    guard
+                        let bindPort = Int(CommandLine.arguments[1]),
+                        let peerPort = Int(CommandLine.arguments[2])
+                    else {
+                        throw ProbeError.invalidArgs
+                    }
+
+                    let bridge = try PacketTunnelProviderSwiftUDPBridgeProbe(
+                        runtimeMode: "swift_udp",
+                        bindHost: "127.0.0.1",
+                        bindPort: bindPort,
+                        peerHost: "127.0.0.1",
+                        peerPort: peerPort,
+                        mtu: 1400,
+                        tunIfname: "ios-utun",
+                        tunnelAddress: "192.168.106.1",
+                        tcpServiceSpecs: []
+                    )
+                    defer { bridge.stop() }
+
+                    let runtimeConfig: [String: Any] = [
+                        "admin_web": [
+                            "admin_web_name": "probe",
+                        ],
+                        "channel_mux": [
+                            "own_servers": [
+                                [
+                                    "name": "WebAdmin remote",
+                                    "listen": [
+                                        "protocol": "tcp",
+                                        "bind": "127.0.0.1",
+                                        "port": 18081,
+                                    ],
+                                    "target": [
+                                        "protocol": "tcp",
+                                        "host": "127.0.0.1",
+                                        "port": 18090,
+                                    ],
+                                ],
+                                [
+                                    "name": "WireGuard",
+                                    "listen": [
+                                        "protocol": "udp",
+                                        "bind": "127.0.0.1",
+                                        "port": 16666,
+                                    ],
+                                    "target": [
+                                        "protocol": "udp",
+                                        "host": "127.0.0.1",
+                                        "port": 16666,
+                                    ],
+                                ],
+                                [
+                                    "name": "iOS FullTunnel",
+                                    "listen": [
+                                        "protocol": "tun",
+                                        "ifname": "ios-utun",
+                                        "mtu": 1600,
+                                    ],
+                                    "target": [
+                                        "protocol": "tun",
+                                        "ifname": "obtun2",
+                                        "mtu": 1600,
+                                    ],
+                                ],
+                            ],
+                            "remote_servers": [],
+                        ],
+                    ]
+
+                    let config = ObstacleBridgeRuntimeConfig.maskedConfigSnapshot(
+                        ObstacleBridgeRuntimeConfig.flatten(runtimeConfig)
+                    )
+                    let connections = bridge.adminConnectionsSnapshot(runtimeConfig: ObstacleBridgeRuntimeConfig.flatten(runtimeConfig))
+                    let payload: [String: Any] = [
+                        "config": config,
+                        "connections": connections,
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_packet_tunnel_provider_probe(source_path, binary_path)
+    completed = subprocess.run(
+        [str(binary_path), str(bind_port), str(peer_port)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout)
+    assert [row["name"] for row in payload["config"]["own_servers"]] == [
+        "WebAdmin remote",
+        "WireGuard",
+        "iOS FullTunnel",
+    ]
+    assert payload["connections"]["counts"]["tcp_listening"] >= 1
+    assert payload["connections"]["counts"]["udp_listening"] >= 1
+    assert payload["connections"]["counts"]["tun_listening"] >= 1
+    assert any(row["service_name"] == "WebAdmin remote" and row["state"] == "listening" for row in payload["connections"]["tcp"])
+    assert any(row["service_name"] == "WireGuard" and row["state"] == "listening" for row in payload["connections"]["udp"])
+    assert any(row["service_name"] == "iOS FullTunnel" and row["state"] == "listening" for row in payload["connections"]["tun"])
 
 
 def test_ios_packet_tunnel_provider_probe_resolves_multi_host_peer_with_family_preference(tmp_path: Path) -> None:
@@ -670,6 +946,7 @@ def test_ios_packet_tunnel_provider_probe_swift_udp_empty_connector_peer_falls_b
                         "peer_host": config.peerHost,
                         "peer_port": config.peerPort,
                         "bind_host": config.bindHost,
+                        "overlay_bind_host": config.overlayBindHost,
                         "bind_port": config.bindPort,
                     ]
                     let data = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
@@ -698,6 +975,7 @@ def test_ios_packet_tunnel_provider_probe_swift_udp_empty_connector_peer_falls_b
     assert payload["peer_host"] == "38.180.143.5"
     assert payload["peer_port"] == 4433
     assert payload["bind_host"] == "127.0.0.1"
+    assert payload["overlay_bind_host"] == "::"
     assert payload["bind_port"] == 5555
 
 

@@ -20,6 +20,7 @@ DEFAULT_PROJECT = (
 )
 
 GENERATED_PACKET_TUNNEL_PROVIDER_RELATIVE = Path("GeneratedSources") / "IPServer" / "PacketTunnelProvider.swift"
+GENERATED_APP_BUILD_STAMP_RELATIVE = Path("..") / ".." / ".." / "generated" / "ObstacleBridgeGeneratedBuildStamp.swift"
 REPO_PACKET_TUNNEL_PROVIDER = Path(__file__).resolve().parents[1] / "native" / "IPServer" / "PacketTunnelProvider.swift"
 
 IPSERVER_SHARED_SWIFT_SOURCES = [
@@ -95,6 +96,13 @@ APP_SHARED_STALE_DUPLICATE_IDS = [
     ("71C600000000000000000008", "71C600000000000000000108", "ObstacleBridgeWebAdminServer.swift"),
     ("71C600000000000000000011", "71C600000000000000000111", "ObstacleBridgeOverlayStackPlanner.swift"),
 ]
+
+APP_GENERATED_SWIFT_SOURCE = (
+    "71C610000000000000000021",
+    "71C610000000000000000121",
+    "ObstacleBridgeGeneratedBuildStamp.swift",
+    "../../../../build/generated/ObstacleBridgeGeneratedBuildStamp.swift",
+)
 
 
 def insert_before(text: str, marker: str, addition: str) -> str:
@@ -250,6 +258,42 @@ def add_app_shared_swift_sources(text: str) -> str:
         entry = f"\t\t\t\t{build_id} /* {name} in Sources */,\n"
         if entry not in body:
             body += entry
+
+    return text[:match.start()] + match.group("head") + body + match.group("tail") + text[match.end():]
+
+
+def add_app_generated_swift_source(text: str) -> str:
+    build_id, file_id, name, path = APP_GENERATED_SWIFT_SOURCE
+    text = insert_before(
+        text,
+        "/* End PBXBuildFile section */\n",
+        f"\t\t{build_id} /* {name} in Sources */ = {{isa = PBXBuildFile; fileRef = {file_id} /* {name} */; }};\n",
+    )
+    text = insert_before(
+        text,
+        "/* End PBXFileReference section */\n",
+        f"\t\t{file_id} /* {name} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = {name}; path = \"{path}\"; sourceTree = SOURCE_ROOT; }};\n",
+    )
+
+    match = re.search(
+        r"(?P<head>\t\t60796EDE19190F4100A9926B /\* Sources \*/ = \{\n"
+        r"\t\t\tisa = PBXSourcesBuildPhase;\n"
+        r"\t\t\tbuildActionMask = 2147483647;\n"
+        r"\t\t\tfiles = \(\n)"
+        r"(?P<body>.*?)"
+        r"(?P<tail>\t\t\t\);\n"
+        r"\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
+        r"\t\t\};)",
+        text,
+        flags=re.DOTALL,
+    )
+    if not match:
+        raise ValueError("ObstacleBridge Sources build phase block not found")
+
+    body = match.group("body")
+    entry = f"\t\t\t\t{build_id} /* {name} in Sources */,\n"
+    if entry not in body:
+        body += entry
 
     return text[:match.start()] + match.group("head") + body + match.group("tail") + text[match.end():]
 
@@ -474,6 +518,7 @@ def patch_app_target(text: str) -> str:
     )
     text = add_app_native_crypto_source(text)
     text = add_app_shared_swift_sources(text)
+    text = add_app_generated_swift_source(text)
     text = insert_before(
         text,
         "/* End PBXGroup section */\n",
@@ -481,6 +526,7 @@ def patch_app_target(text: str) -> str:
         "\t\t\tisa = PBXGroup;\n"
         "\t\t\tchildren = (\n"
         "\t\t\t\t71C300000000000000000010 /* ObstacleBridgeNativeCrypto.swift */,\n"
+        f"\t\t\t\t{APP_GENERATED_SWIFT_SOURCE[1]} /* {APP_GENERATED_SWIFT_SOURCE[2]} */,\n"
         "\t\t\t\t71C400000000000000000010 /* ObstacleBridgeTunnelControl.swift */,\n"
         "\t\t\t\t71C400000000000000000011 /* ObstacleBridgeHostRunner.swift */,\n"
         "\t\t\t);\n"
@@ -797,8 +843,21 @@ def ensure_generated_packet_tunnel_provider(pbxproj_path: Path) -> Path:
     return generated_path
 
 
+def ensure_generated_app_build_stamp(pbxproj_path: Path) -> Path:
+    xcode_root = pbxproj_path.resolve().parent.parent
+    generated_path = (xcode_root / GENERATED_APP_BUILD_STAMP_RELATIVE).resolve()
+    generated_path.parent.mkdir(parents=True, exist_ok=True)
+    if not generated_path.exists():
+        generated_path.write_text(
+            "import Foundation\n\nenum ObstacleBridgeGeneratedBuildStamp {\n    static let providerBuildTimestampUTC = \"unknown\"\n}\n",
+            encoding="utf-8",
+        )
+    return generated_path
+
+
 def patch_pbxproj_file(path: Path) -> bool:
     ensure_generated_packet_tunnel_provider(path)
+    ensure_generated_app_build_stamp(path)
     original = path.read_text(encoding="utf-8")
     patched = patch_pbxproj_text(original)
     if patched == original:

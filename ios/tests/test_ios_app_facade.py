@@ -34,6 +34,8 @@ def test_app_default_facade_reports_extension_as_runtime_owner(tmp_path: Path, m
     assert snapshot["active_profile_id"] is None
     assert snapshot["config"]["admin_web"]["admin_web"] is True
     assert snapshot["config"]["iOS_TUN_connector"]["packetflow_connector"] == "swift_udp"
+    assert snapshot["config"]["channel_mux"]["own_servers"] == []
+    assert snapshot["config"]["channel_mux"]["remote_servers"] == []
 
 
 def test_load_grouped_runtime_config_preserves_saved_transport_fields(tmp_path: Path) -> None:
@@ -138,6 +140,8 @@ def test_startup_artifacts_seed_documents_config_logs_and_web_files(tmp_path: Pa
     assert manifest["web_files_copied"] is True
     config_payload = json.loads((root / "config" / "ObstacleBridge.cfg").read_text(encoding="utf-8"))
     assert config_payload["iOS_TUN_connector"]["packetflow_connector"] == "swift_udp"
+    assert config_payload["channel_mux"]["own_servers"] == []
+    assert config_payload["channel_mux"]["remote_servers"] == []
 
 
 def test_resolve_toga_webview_class_uses_widget_module_fallback(monkeypatch) -> None:

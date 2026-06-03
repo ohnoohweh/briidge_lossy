@@ -8,6 +8,9 @@ enum ObstacleBridgeOnboarding {
         if !adminWebName.isEmpty {
             effective["admin_web_name"] = adminWebName
         }
+        if let tunRouting = requestPayload["TUN_routing"] as? [String: Any], !tunRouting.isEmpty {
+            effective["TUN_routing"] = tunRouting
+        }
         return effective
     }
 

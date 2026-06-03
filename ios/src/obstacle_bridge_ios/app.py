@@ -229,6 +229,10 @@ def _default_ios_grouped_config(root: Path) -> dict[str, Any]:
             "log_file_max_bytes": 1_048_576,
             "log_file_backup_count": 5,
         },
+        "channel_mux": {
+            "own_servers": [],
+            "remote_servers": [],
+        },
         "iOS_TUN_connector": {
             "packetflow_connector": "swift_udp",
             "bind_host": bridge_tun_ios.DEFAULT_IOS_PACKETFLOW_BIND_HOST,

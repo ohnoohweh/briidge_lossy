@@ -314,9 +314,12 @@ class AdminWebPayloadTests(unittest.TestCase):
 
         self.assertIn("Name To Include In Invite Token", index_html)
         self.assertIn('id="onboardingTokenAdminName"', index_html)
+        self.assertIn("TUN Routing For Invite Token", index_html)
+        self.assertIn('id="tokenTunAddress"', index_html)
         self.assertIn("Enter the name to include in the invite token before continuing.", app_js)
         self.assertIn("Enter the name to include in the invite token before generating it.", app_js)
         self.assertIn("admin_web_name: tokenAdminName", app_js)
+        self.assertIn("TUN_routing: tunRouting", app_js)
 
     def test_config_snapshot_hides_secure_link_psk_and_marks_it_read_only(self):
         args = argparse.Namespace(
@@ -927,7 +930,18 @@ class AdminWebPayloadTests(unittest.TestCase):
             await ui._handle_onboarding_invite_generate(
                 generate_writer,
                 "POST",
-                json.dumps({"connection_id": profile_id, "admin_web_name": "Token Alias"}).encode("utf-8"),
+                json.dumps(
+                    {
+                        "connection_id": profile_id,
+                        "admin_web_name": "Token Alias",
+                        "TUN_routing": {
+                            "dns_servers": ["9.9.9.9"],
+                            "tunnel_address": ["192.168.250.1"],
+                            "tunnel_prefix": 30,
+                            "tunnel_gateway": "192.168.250.2",
+                        },
+                    }
+                ).encode("utf-8"),
             )
             generated = _http_json_body(generate_writer)
             self.assertTrue(generated["ok"])
@@ -938,6 +952,8 @@ class AdminWebPayloadTests(unittest.TestCase):
             self.assertTrue(generated["preview"].get("compress_layer"))
             self.assertEqual(generated["preview"].get("compress_layer_algo"), "zlib")
             self.assertIn("TUN_routing", generated["preview"])
+            self.assertEqual(generated["preview"]["TUN_routing"]["dns_servers"], ["9.9.9.9"])
+            self.assertEqual(generated["preview"]["TUN_routing"]["tunnel_gateway"], "192.168.250.2")
 
             preview_writer = _WriterStub()
             await ui._handle_onboarding_invite_preview(
@@ -951,5 +967,6 @@ class AdminWebPayloadTests(unittest.TestCase):
             self.assertTrue(preview["preview"].get("secure_link_psk_present"))
             self.assertEqual(preview["suggested_updates"].get("secure_link_psk"), "lab-secret-12345")
             self.assertEqual(preview["suggested_updates"].get("admin_web_name"), "Token Alias")
+            self.assertEqual(preview["suggested_updates"]["TUN_routing"]["dns_servers"], ["9.9.9.9"])
 
         asyncio.run(run_flow())

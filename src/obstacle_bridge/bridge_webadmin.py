@@ -735,6 +735,7 @@ class AdminWebUI:
         own_services = self._sanitize_onboarding_services(req.get("own_servers", getattr(self.args, "own_servers", [])))
         remote_services = self._sanitize_onboarding_services(req.get("remote_servers", getattr(self.args, "remote_servers", [])))
         selected_admin_web_name = str(req.get("admin_web_name", getattr(self.args, "admin_web_name", "")) or "").strip()
+        selected_tun_routing = dict(req.get("TUN_routing", getattr(self.args, "TUN_routing", {})) or {})
         payload_doc = {
             "version": 1,
             "generated_unix_ts": int(time.time()),
@@ -749,7 +750,7 @@ class AdminWebUI:
             "compress_layer_level": int(getattr(self.args, "compress_layer_level", 3) or 3),
             "compress_layer_min_bytes": int(getattr(self.args, "compress_layer_min_bytes", 64) or 64),
             "compress_layer_types": str(getattr(self.args, "compress_layer_types", "data,data_frag") or "data,data_frag"),
-            "TUN_routing": dict(getattr(self.args, "TUN_routing", {}) or {}),
+            "TUN_routing": selected_tun_routing,
             "admin_auth_recommended": True,
             "own_servers": own_services,
             "remote_servers": remote_services,

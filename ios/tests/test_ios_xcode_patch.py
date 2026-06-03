@@ -222,7 +222,9 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "ObstacleBridgeWebAdminServer.swift in Sources" in patched
     assert "ObstacleBridgeOnboarding.swift in Sources" in patched
     assert "native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift" in patched
+    assert "build/generated/ObstacleBridgeGeneratedBuildStamp.swift" in patched
     assert "ObstacleBridgeHostRunner.swift in Sources" in patched
+    assert "ObstacleBridgeGeneratedBuildStamp.swift in Sources" in patched
     assert "SWIFT_VERSION = 5.0;" in patched
     assert 'CODE_SIGN_ENTITLEMENTS = "../../../../native/ObstacleBridgeApp/ObstacleBridge.entitlements";' in patched
     assert 'export EXPANDED_CODE_SIGN_IDENTITY=-' in patched

@@ -102,6 +102,11 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         )
     }
 
+    func handleTransportDisconnected() {
+        resetAuthState(keepSessionID: false)
+        lastAuthFailCode = 0
+    }
+
     func beginClientHandshake() throws -> OutboundSnapshot {
         guard clientMode, !psk.isEmpty else {
             throw ObstacleBridgeSecureLinkPskRuntimeError.invalidState

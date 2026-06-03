@@ -8,6 +8,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
 
     private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
     private static let peerFallbackIdleNS: UInt64 = 3_000_000_000
+    private static let reconnectProbeIntervalNS: UInt64 = 1_000_000_000
+    private static let secureLinkHandshakeRetryIntervalNS: UInt64 = 1_000_000_000
 
     private let bindHost: String
     private let bindPort: Int
@@ -23,11 +25,18 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private let tunIfname: String?
     private let tunMTU: Int
     private let tunPacketSink: TunPacketSink?
+    private let muxInstanceID: UInt64
+    private let muxConnectionSeq: UInt32
 
-    private var udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(instanceID: 0, connectionSeq: 0)
+    private var udpRuntime: ObstacleBridgeChannelMuxUdpRuntime
     private let overlayRuntime = ObstacleBridgeUdpOverlayPeerRuntime()
     private var tunRuntime: ObstacleBridgeChannelMuxTunRuntime?
     private lazy var tcpTransportOwner = ObstacleBridgeChannelMuxTCPTransportOwner(
+        runtime: ObstacleBridgeChannelMuxTcpRuntime(
+            instanceID: muxInstanceID,
+            connectionSeq: muxConnectionSeq,
+            sessionMaxAppPayload: sessionMaxAppPayload
+        ),
         sessionMaxAppPayload: sessionMaxAppPayload,
         queue: queue,
         eventPrefix: "udp_overlay",
@@ -61,12 +70,17 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private var udpClientDrivers: [Int: ObstacleBridgeUDPClientConnectionDriver] = [:]
     private var udpConnectionStates: [Int: ObstacleBridgeOverlayConnectionState] = [:]
     private var tcpConnectionStates: [Int: ObstacleBridgeOverlayConnectionState] = [:]
+    private var activeTunChanIDs: Set<Int> = []
+    private var tunStats: [String: Int] = ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
     private var udpServerDrivers: [ObjectIdentifier: ObstacleBridgeUDPServerConnectionDriver] = [:]
     private var started = false
     private var secureLinkHandshakePrimed = false
+    private var lastSecureLinkPrimeNS: UInt64 = 0
     private var startupMuxFramesSent = false
     private var currentPeerSelectedAtNS: UInt64 = 0
     private var lastInboundDatagramNS: UInt64 = 0
+    private var lastIdleProbeNS: UInt64 = 0
+    private var lastOverlayConnectedState = false
 
     init(
         bindHost: String,
@@ -82,6 +96,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         tunIfname: String? = nil,
         tunMTU: Int = 0,
         tunPacketSink: TunPacketSink? = nil,
+        muxInstanceID: UInt64 = UInt64.random(in: 1...UInt64.max),
+        muxConnectionSeq: UInt32 = UInt32.random(in: 1...UInt32.max),
         eventSink: EventSink? = nil
     ) {
         self.bindHost = bindHost
@@ -98,11 +114,17 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         self.tunIfname = tunIfname?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.tunMTU = max(0, tunMTU)
         self.tunPacketSink = tunPacketSink
+        self.muxInstanceID = muxInstanceID
+        self.muxConnectionSeq = muxConnectionSeq
         self.eventSink = eventSink
+        self.udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(
+            instanceID: muxInstanceID,
+            connectionSeq: muxConnectionSeq
+        )
         if let tunIfname = self.tunIfname, !tunIfname.isEmpty, self.tunMTU > 0 {
             self.tunRuntime = ObstacleBridgeChannelMuxTunRuntime(
-                instanceID: UInt64.random(in: 1...UInt64.max),
-                connectionSeq: UInt32.random(in: 1...UInt32.max),
+                instanceID: muxInstanceID,
+                connectionSeq: muxConnectionSeq,
                 localSpec: ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: tunIfname, mtu: self.tunMTU)
             )
         }
@@ -132,6 +154,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         started = true
         currentPeerSelectedAtNS = monotonicNowNS()
         lastInboundDatagramNS = 0
+        lastIdleProbeNS = 0
+        lastOverlayConnectedState = false
 
         let source = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: queue)
         source.setEventHandler { [weak self] in
@@ -173,23 +197,54 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         udpClientConnections.removeAll()
         udpConnectionStates.removeAll()
         tcpConnectionStates.removeAll()
+        activeTunChanIDs.removeAll()
+        tunStats = ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
         currentPeerAddress = fixedPeerAddress
         peerCandidates.removeAll()
         peerCandidateIndex = 0
         secureLinkHandshakePrimed = false
+        lastSecureLinkPrimeNS = 0
         startupMuxFramesSent = false
         currentPeerSelectedAtNS = 0
         lastInboundDatagramNS = 0
+        lastIdleProbeNS = 0
+        lastOverlayConnectedState = false
         if socketFD >= 0 {
             Darwin.close(socketFD)
             socketFD = -1
         }
     }
 
-    func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]]) {
+    func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]]) {
         let tcpRows = ObstacleBridgeOverlayConnectionSupport.connectionRows(from: tcpConnectionStates)
         let udpRows = ObstacleBridgeOverlayConnectionSupport.connectionRows(from: udpConnectionStates)
-        return (tcpRows, udpRows)
+        let tunRows: [[String: Any]]
+        if activeTunChanIDs.isEmpty, (tunStats["rx_bytes"] ?? 0) == 0, (tunStats["tx_bytes"] ?? 0) == 0 {
+            tunRows = []
+        } else {
+            let ifname = tunIfname ?? "tun"
+            let mtu = tunMTU
+            let spec = ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: ifname, mtu: mtu)
+            let stats = tunStats
+            tunRows = activeTunChanIDs.sorted().map { chanID in
+                ObstacleBridgeNativeConnectionSnapshot.make(
+                    proto: "tun",
+                    role: "server",
+                    state: "connected",
+                    chanID: chanID,
+                    svcID: spec.svcID,
+                    serviceName: "TUN",
+                    sourceHost: nil,
+                    sourcePort: nil,
+                    localHost: ifname,
+                    localPort: mtu,
+                    remoteHost: spec.rHost,
+                    remotePort: spec.rPort,
+                    stats: stats
+                )
+            }
+        }
+        return (tcpRows, udpRows, tunRows)
     }
 
     func transportSnapshot() -> [String: Any] {
@@ -204,10 +259,14 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             "overlay_peer_candidate_count": peerCandidates.count,
             "fixed_peer_host": configuredPeerHost ?? NSNull(),
             "fixed_peer_port": configuredPeerPort ?? NSNull(),
+            "mux_instance_id": muxInstanceID,
+            "mux_connection_seq": muxConnectionSeq,
             "server_tcp_channels": tcpTransportOwner.serverConnectionCount,
             "client_tcp_channels": tcpConnectionStates.count,
             "server_udp_channels": udpServerConnections.count,
             "client_udp_channels": udpConnectionStates.count,
+            "tun_channels": activeTunChanIDs.count,
+            "tun_stats": tunStats,
             "established_ns": overlayRuntime.establishedNS,
             "last_rx_wall_ns": overlayRuntime.lastRxWallNS,
             "last_rtt_ok_ns": overlayRuntime.lastRttOkNS,
@@ -231,6 +290,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             ) else {
                 return
             }
+            activeTunChanIDs.insert(localSnapshot.chanID)
+            tunStats["tx_msgs", default: 0] += 1
+            tunStats["tx_bytes", default: 0] += packet.count
             sendMuxFrames(localSnapshot.frames)
         } catch {
             eventSink?("udp_overlay_tun_send_failed", [
@@ -359,13 +421,15 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func sendInitialIdleProbe() {
+        let nowNS = monotonicNowNS()
         do {
             let frame = try ObstacleBridgeUdpOverlayCodec.buildProtocolFrame(
                 ptype: ObstacleBridgeUdpOverlayCodec.ptypeIdle,
                 payload: Data(),
-                txNS: monotonicNowNS(),
+                txNS: nowNS,
                 echoNS: 0
             )
+            lastIdleProbeNS = nowNS
             sendDatagram(frame)
         } catch {
             eventSink?("udp_overlay_idle_probe_failed", ["error": error.localizedDescription])
@@ -377,6 +441,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             return
         }
         let nowNS = monotonicNowNS()
+        handleTransportLiveness(nowNS: nowNS)
         let snapshot = overlayRuntime.handleControlTimerTick(nowNS: nowNS, sendPortPresent: currentPeerAddress != nil)
         guard snapshot.controlShouldEmit else {
             return
@@ -525,6 +590,29 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             maybePrimeSecureLinkHandshake()
             maybeSendStartupMuxFrames()
         }
+        lastOverlayConnectedState = overlayConnected
+    }
+
+    private func handleTransportLiveness(nowNS: UInt64) {
+        let connected = overlayConnected
+        if lastOverlayConnectedState && !connected {
+            secureLinkHandshakePrimed = false
+            lastSecureLinkPrimeNS = 0
+            startupMuxFramesSent = false
+            overlayLayerTransportAdapter?.handleTransportDisconnected()
+        }
+        lastOverlayConnectedState = connected
+        if connected {
+            maybePrimeSecureLinkHandshake(nowNS: nowNS)
+            maybeSendStartupMuxFrames()
+        }
+        guard !connected, started, currentPeerAddress != nil else {
+            return
+        }
+        if lastIdleProbeNS != 0, nowNS > lastIdleProbeNS, (nowNS - lastIdleProbeNS) < Self.reconnectProbeIntervalNS {
+            return
+        }
+        sendInitialIdleProbe()
     }
 
     private func routeOverlayPayloads(_ payloads: [Data]) {
@@ -546,13 +634,25 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         }
     }
 
-    private func maybePrimeSecureLinkHandshake() {
-        guard overlayConnected, !secureLinkHandshakePrimed, let adapter = overlayLayerTransportAdapter else {
+    private func maybePrimeSecureLinkHandshake(nowNS: UInt64? = nil) {
+        guard overlayConnected, let adapter = overlayLayerTransportAdapter else {
+            return
+        }
+        let currentNS = nowNS ?? monotonicNowNS()
+        if let status = adapter.secureLinkStatusSnapshot(), status.authenticated {
+            secureLinkHandshakePrimed = true
+            return
+        }
+        if secureLinkHandshakePrimed,
+           lastSecureLinkPrimeNS != 0,
+           currentNS > lastSecureLinkPrimeNS,
+           (currentNS - lastSecureLinkPrimeNS) < Self.secureLinkHandshakeRetryIntervalNS {
             return
         }
         do {
             let snapshot = try adapter.handleTransportConnected()
             secureLinkHandshakePrimed = true
+            lastSecureLinkPrimeNS = currentNS
             for frame in snapshot.emittedFrames {
                 sendOverlayTransportPayload(frame)
             }
@@ -592,24 +692,35 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             let snapshot = tunRuntime.handleInboundTunOpen(chanID: frame.chanID, payload: frame.body)
             if !snapshot.accepted {
                 eventSink?("udp_overlay_tun_open_rejected", ["chan_id": frame.chanID])
+            } else {
+                activeTunChanIDs.insert(frame.chanID)
             }
         case .openChunk:
             let snapshot = tunRuntime.handleInboundTunOpenChunk(chanID: frame.chanID, payload: frame.body)
             if snapshot.assembled && !snapshot.accepted {
                 eventSink?("udp_overlay_tun_open_chunk_rejected", ["chan_id": frame.chanID])
+            } else if snapshot.accepted {
+                activeTunChanIDs.insert(frame.chanID)
             }
         case .data:
             let snapshot = tunRuntime.handleInboundTunData(chanID: frame.chanID, body: frame.body, mtu: tunMTU)
             if let packet = snapshot.packet, snapshot.delivered {
+                activeTunChanIDs.insert(frame.chanID)
+                recordInbound(proto: "tun", chanID: frame.chanID, bytes: packet.count)
                 tunPacketSink?(packet)
             }
         case .dataFrag:
             let snapshot = tunRuntime.handleInboundTunFragment(chanID: frame.chanID, payload: frame.body, mtu: tunMTU)
             if let packet = snapshot.packet, snapshot.delivered {
+                activeTunChanIDs.insert(frame.chanID)
+                recordInbound(proto: "tun", chanID: frame.chanID, bytes: packet.count)
                 tunPacketSink?(packet)
             }
         case .close:
-            _ = tunRuntime.handleInboundTunClose(chanID: frame.chanID)
+            let snapshot = tunRuntime.handleInboundTunClose(chanID: frame.chanID)
+            if snapshot.closed {
+                activeTunChanIDs.remove(frame.chanID)
+            }
         default:
             break
         }
@@ -860,6 +971,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             ObstacleBridgeOverlayConnectionSupport.recordTraffic(states: &tcpConnectionStates, proto: proto, chanID: chanID, direction: "inbound", bytes: bytes)
         case "udp":
             ObstacleBridgeOverlayConnectionSupport.recordTraffic(states: &udpConnectionStates, proto: proto, chanID: chanID, direction: "inbound", bytes: bytes)
+        case "tun":
+            tunStats["rx_msgs", default: 0] += 1
+            tunStats["rx_bytes", default: 0] += bytes
         default:
             break
         }
@@ -871,6 +985,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             ObstacleBridgeOverlayConnectionSupport.recordTraffic(states: &tcpConnectionStates, proto: proto, chanID: chanID, direction: "outbound", bytes: bytes)
         case "udp":
             ObstacleBridgeOverlayConnectionSupport.recordTraffic(states: &udpConnectionStates, proto: proto, chanID: chanID, direction: "outbound", bytes: bytes)
+        case "tun":
+            tunStats["tx_msgs", default: 0] += 1
+            tunStats["tx_bytes", default: 0] += bytes
         default:
             break
         }

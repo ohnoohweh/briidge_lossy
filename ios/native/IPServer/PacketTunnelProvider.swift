@@ -377,14 +377,22 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     extraFields: ["mode": swiftSettings.runtimeMode]
                 )
                 do {
+                    let muxInstanceID = UInt64.random(in: 1...UInt64.max)
+                    let muxConnectionSeq = UInt32.random(in: 1...UInt32.max)
                     let tcpServiceSpecs = self.localTCPServiceSpecs(providerConfiguration: providerConfiguration)
-                    let startupMuxFrames = self.remoteServiceCatalogMuxFrames(providerConfiguration: providerConfiguration)
+                    let startupMuxFrames = self.remoteServiceCatalogMuxFrames(
+                        providerConfiguration: providerConfiguration,
+                        instanceID: muxInstanceID,
+                        connectionSeq: muxConnectionSeq
+                    )
                     let bridge = try SwiftSimpleUDPPeerBridge(
                         provider: self,
                         settings: swiftSettings,
                         tunnelAddress: configuration.tunnelAddress,
                         tcpServiceSpecs: tcpServiceSpecs,
                         startupMuxFrames: startupMuxFrames,
+                        muxInstanceID: muxInstanceID,
+                        muxConnectionSeq: muxConnectionSeq,
                         overlayLayerTransportAdapter: self.sharedOverlayLayerTransportAdapter
                     )
                     self.swiftSimpleUDPPeerBridge = bridge
@@ -453,14 +461,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     completionHandler(error)
                     return
                 }
-                let completionEvent: String
-                #if OB_IPSERVER_SWIFT_SMOKE
-                completionEvent = "startTunnel_completed_swift_smoke"
-                #else
-                completionEvent = "startTunnel_completed_swift_only"
-                #endif
-                self.recordNativeEvent(completionEvent)
-                completionHandler(nil)
             }
         } catch {
             recordNativeEvent(
@@ -804,11 +804,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         return []
     }
 
-    private func remoteServiceCatalogMuxFrames(providerConfiguration: [String: Any]?) -> [Data] {
+    private func remoteServiceCatalogMuxFrames(
+        providerConfiguration: [String: Any]?,
+        instanceID: UInt64 = 0,
+        connectionSeq: UInt32 = 0
+    ) -> [Data] {
         guard let payload = runtimeConfigPayload(providerConfiguration: providerConfiguration) else {
             return []
         }
-        return ObstacleBridgeRuntimeConfig.remoteServiceCatalogMuxFrames(from: payload)
+        return ObstacleBridgeRuntimeConfig.remoteServiceCatalogMuxFrames(
+            from: payload,
+            instanceID: instanceID,
+            connectionSeq: connectionSeq
+        )
     }
 
     private static func decodedProviderRuntimeConfig(_ providerConfiguration: [String: Any]?) -> [String: Any]? {
@@ -822,11 +830,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func runtimeConfigPayload(providerConfiguration: [String: Any]?) -> [String: Any]? {
-        if let runtimeConfig = Self.decodedProviderRuntimeConfig(providerConfiguration) {
-            return ObstacleBridgeRuntimeConfig.flatten(runtimeConfig)
-        }
         if let payload = loadSharedRuntimeConfigJSON() {
             return ObstacleBridgeRuntimeConfig.flatten(payload)
+        }
+        if let runtimeConfig = Self.decodedProviderRuntimeConfig(providerConfiguration) {
+            return ObstacleBridgeRuntimeConfig.flatten(runtimeConfig)
         }
         return nil
     }
@@ -1022,6 +1030,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         return SwiftSimpleUDPPeerSettings(
             runtimeMode: config.runtimeMode,
             bindHost: config.bindHost,
+            overlayBindHost: config.overlayBindHost,
             bindPort: config.bindPort,
             peerHost: config.peerHost,
             peerPort: config.peerPort,
@@ -1506,10 +1515,11 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
     }
 
     private func adminOpenConnections(bridgeSnapshot: [String: Any]) -> [String: Any] {
-        [
+        let myudpRuntime = bridgeSnapshot["myudp_runtime"] as? [String: Any] ?? [:]
+        return [
             "udp": 0,
             "tcp": adminIntValue(bridgeSnapshot["tcp_server_connection_count"]) + adminIntValue(bridgeSnapshot["tcp_client_connection_count"]),
-            "tun": packetPumpRunning ? 1 : 0,
+            "tun": max(packetPumpRunning ? 1 : 0, adminIntValue(myudpRuntime["tun_channels"])),
         ]
     }
 
@@ -1750,7 +1760,15 @@ private enum PacketTunnelProviderAdminSnapshotBuilder {
         let serviceSpecs = ObstacleBridgeRuntimeConfig.ownServerSpecs(from: runtimeConfig, preserveInputIndices: true)
         let tcpConnectedRows = bridgeRows?.tcp ?? []
         let tcpListening = max(intValue(bridgeSnapshot["tcp_listener_count"]), serviceSpecs.filter { $0.listenProtocol == "tcp" }.count)
-        let tunActive = packetPumpRunning ? 1 : 0
+        let myudpRuntime = bridgeSnapshot["myudp_runtime"] as? [String: Any] ?? [:]
+        let tunConnectedRows = bridgeRows?.tun ?? []
+        let tunActive = max(packetPumpRunning ? 1 : 0, intValue(myudpRuntime["tun_channels"]), tunConnectedRows.count)
+        let tunStats = (myudpRuntime["tun_stats"] as? [String: Int]) ?? [
+            "rx_msgs": 0,
+            "tx_msgs": 0,
+            "rx_bytes": intValue(bridgeSnapshot["bytes_to_system"]),
+            "tx_bytes": intValue(bridgeSnapshot["bytes_from_system"]),
+        ]
 
         var tcpRows = serviceSpecs
             .filter { $0.listenProtocol == "tcp" }
@@ -1774,8 +1792,9 @@ private enum PacketTunnelProviderAdminSnapshotBuilder {
         var tunRows = serviceSpecs
             .filter { $0.listenProtocol == "tun" }
             .map { connectionRow(for: $0, state: "listening") }
-        if tunActive > 0, let primaryTun = serviceSpecs.first(where: { $0.listenProtocol == "tun" }) {
-            tunRows.append(connectionRow(for: primaryTun, state: "connected"))
+        tunRows.append(contentsOf: tunConnectedRows)
+        if tunConnectedRows.isEmpty, tunActive > 0, let primaryTun = serviceSpecs.first(where: { $0.listenProtocol == "tun" }) {
+            tunRows.append(connectionRow(for: primaryTun, state: "connected", stats: tunStats))
         }
 
         return [
@@ -1957,6 +1976,7 @@ private struct TunnelProviderConfiguration {
 private struct SwiftSimpleUDPPeerSettings {
     let runtimeMode: String
     let bindHost: String
+    let overlayBindHost: String
     let bindPort: Int
     let peerHost: String
     let peerPort: Int
@@ -1974,6 +1994,8 @@ private final class SwiftSimpleUDPPeerBridge {
     private let tunnelAddress: String
     private let tcpServiceSpecs: [ObstacleBridgeChannelMuxCodec.ServiceSpec]
     private let startupMuxFrames: [Data]
+    private let muxInstanceID: UInt64
+    private let muxConnectionSeq: UInt32
     private let queue = DispatchQueue(label: "com.obstaclebridge.ipserver.swift-simple-udp-peer")
     private var udpOverlayTransportOwner: ObstacleBridgeUdpOverlayTransportOwner?
     private var socketFD: Int32 = -1
@@ -2008,6 +2030,8 @@ private final class SwiftSimpleUDPPeerBridge {
         tunnelAddress: String,
         tcpServiceSpecs: [ObstacleBridgeChannelMuxCodec.ServiceSpec],
         startupMuxFrames: [Data] = [],
+        muxInstanceID: UInt64 = UInt64.random(in: 1...UInt64.max),
+        muxConnectionSeq: UInt32 = UInt32.random(in: 1...UInt32.max),
         overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter? = nil
     ) throws {
         self.provider = provider
@@ -2015,12 +2039,14 @@ private final class SwiftSimpleUDPPeerBridge {
         self.tunnelAddress = tunnelAddress
         self.tcpServiceSpecs = tcpServiceSpecs
         self.startupMuxFrames = startupMuxFrames
+        self.muxInstanceID = muxInstanceID
+        self.muxConnectionSeq = muxConnectionSeq
         self.overlayLayerTransportAdapter = overlayLayerTransportAdapter
         let sessionMaxAppPayload = ObstacleBridgeRuntimeConfig.overlaySessionMaxAppPayload(from: settings.runtimeConfig)
         self.queue.setSpecific(key: Self.queueKey, value: 1)
         if settings.runtimeMode == "swift_udp" {
             let resolvedPeers = try Self.resolvePeerCandidates(
-                bindHost: settings.bindHost,
+                bindHost: settings.overlayBindHost,
                 peerHost: settings.peerHost,
                 peerPort: settings.peerPort,
                 peerResolveFamily: settings.peerResolveFamily
@@ -2030,7 +2056,7 @@ private final class SwiftSimpleUDPPeerBridge {
             self.peerCandidates = resolvedPeers.peerCandidates
             self.peerAddress = resolvedPeers.peerAddress
             self.udpOverlayTransportOwner = ObstacleBridgeUdpOverlayTransportOwner(
-                bindHost: settings.bindHost,
+                bindHost: settings.overlayBindHost,
                 bindPort: settings.bindPort,
                 peerHost: settings.peerHost,
                 peerPort: settings.peerPort,
@@ -2045,6 +2071,8 @@ private final class SwiftSimpleUDPPeerBridge {
                 tunPacketSink: { [weak self] packet in
                     self?.deliverPacketToSystem(packet)
                 },
+                muxInstanceID: muxInstanceID,
+                muxConnectionSeq: muxConnectionSeq,
                 eventSink: { [weak self] event, fields in
                     self?.provider?.recordPacketBridgeEvent(event, fields: fields)
                 }
@@ -2092,6 +2120,7 @@ private final class SwiftSimpleUDPPeerBridge {
             "swift_simple_udp_started",
             fields: [
                 "bind_host": settings.bindHost,
+                "overlay_bind_host": settings.overlayBindHost,
                 "bind_port": settings.bindPort,
                 "peer_host": settings.peerHost,
                 "peer_port": settings.peerPort,
@@ -2159,6 +2188,7 @@ private final class SwiftSimpleUDPPeerBridge {
             return [
                 "active": started,
                 "bind_host": settings.bindHost,
+                "overlay_bind_host": settings.overlayBindHost,
                 "bind_port": settings.bindPort,
                 "peer_host": settings.peerHost,
                 "peer_port": settings.peerPort,
@@ -2184,6 +2214,8 @@ private final class SwiftSimpleUDPPeerBridge {
                 "recv_failures": recvFailures,
                 "overlay_mode": settings.runtimeMode,
                 "tcp_listener_count": tcpListeners.count,
+                "mux_instance_id": muxInstanceID,
+                "mux_connection_seq": muxConnectionSeq,
                 "tcp_server_connection_count": myudpRuntime["server_tcp_channels"] ?? 0,
                 "tcp_client_connection_count": myudpRuntime["client_tcp_channels"] ?? 0,
                 "tcp_listener_failures": tcpListenerFailures,
@@ -2199,7 +2231,7 @@ private final class SwiftSimpleUDPPeerBridge {
         withState {
             if let udpOverlayTransportOwner {
                 let rows = udpOverlayTransportOwner.connectionRows()
-                return (rows.tcp, rows.udp, [])
+                return (rows.tcp, rows.udp, rows.tun)
             }
             return ([], [], [])
         }
@@ -2710,6 +2742,7 @@ extension PacketTunnelProvider {
         let settings = SwiftSimpleUDPPeerSettings(
             runtimeMode: runtimeMode,
             bindHost: bindHost,
+            overlayBindHost: bindHost,
             bindPort: bindPort,
             peerHost: peerHost,
             peerPort: peerPort,
@@ -2796,10 +2829,10 @@ final class PacketTunnelProviderSwiftUDPBridgeProbe {
         bridge.secureLinkStatusForProbe()
     }
 
-    func adminConnectionsSnapshot() -> [String: Any] {
+    func adminConnectionsSnapshot(runtimeConfig: [String: Any] = [:], packetPumpRunning: Bool = false) -> [String: Any] {
         PacketTunnelProviderAdminSnapshotBuilder.connectionsSnapshot(
-            runtimeConfig: [:],
-            packetPumpRunning: false,
+            runtimeConfig: runtimeConfig,
+            packetPumpRunning: packetPumpRunning,
             bridgeSnapshot: bridge.snapshot(),
             bridgeRows: bridge.connectionRows()
         )

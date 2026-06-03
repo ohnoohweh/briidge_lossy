@@ -7,12 +7,12 @@ import hashlib
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TARGET = ROOT / "src" / "obstacle_bridge" / "build_info.py"
-IOS_TUNNEL_CONTROL = ROOT / "ios" / "native" / "ObstacleBridgeApp" / "ObstacleBridgeTunnelControl.swift"
+PY_GENERATED_TARGET = ROOT / "src" / "obstacle_bridge" / "_generated" / "build_info_generated.py"
+JSON_GENERATED_TARGET = ROOT / "ios" / "build" / "generated" / "obstaclebridge-build-info.json"
+IOS_GENERATED_BUILD_STAMP = ROOT / "ios" / "build" / "generated" / "ObstacleBridgeGeneratedBuildStamp.swift"
 
 
 def _git(args: list[str]) -> str:
@@ -26,23 +26,75 @@ def _git(args: list[str]) -> str:
     return str(proc.stdout or "").strip() if proc.returncode == 0 else ""
 
 
-def _replace_once(pattern: str, replacement: str, text: str, *, path: Path) -> str:
-    updated, count = re.subn(pattern, replacement, text, count=1)
-    if count != 1:
-        raise RuntimeError(f"expected to replace exactly once in {path}: {pattern}")
-    return updated
-
-
-def _write_ios_tunnel_build_stamp(build_timestamp_utc: str) -> None:
-    original = IOS_TUNNEL_CONTROL.read_text(encoding="utf-8")
-    updated = _replace_once(
-        r'private static let providerBuildTimestampUTC = "[^"]+"',
-        f'private static let providerBuildTimestampUTC = "{build_timestamp_utc}"',
-        original,
-        path=IOS_TUNNEL_CONTROL,
+def _write_ios_generated_build_stamp(build_timestamp_utc: str) -> None:
+    IOS_GENERATED_BUILD_STAMP.parent.mkdir(parents=True, exist_ok=True)
+    IOS_GENERATED_BUILD_STAMP.write_text(
+        "\n".join(
+            [
+                "import Foundation",
+                "",
+                "enum ObstacleBridgeGeneratedBuildStamp {",
+                f'    static let providerBuildTimestampUTC = "{build_timestamp_utc}"',
+                "}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
     )
-    if updated != original:
-        IOS_TUNNEL_CONTROL.write_text(updated, encoding="utf-8")
+
+
+def _write_python_generated_build_info(
+    *,
+    commit: str,
+    dirty: bool,
+    diff_sha: str,
+    build_timestamp_utc: str,
+) -> None:
+    PY_GENERATED_TARGET.parent.mkdir(parents=True, exist_ok=True)
+    PY_GENERATED_TARGET.write_text(
+        "\n".join(
+            [
+                '"""Generated build metadata for packaged ObstacleBridge applications."""',
+                "",
+                f'BUILD_COMMIT = "{commit}"',
+                'BUILD_SOURCE = "embedded-build-info"',
+                f"BUILD_DIRTY = {dirty!r}",
+                f'BUILD_DIFF_SHA = "{diff_sha}"',
+                f'BUILD_TIMESTAMP_UTC = "{build_timestamp_utc}"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_generated_json(
+    *,
+    commit: str,
+    dirty: bool,
+    diff_sha: str,
+    build_timestamp_utc: str,
+) -> None:
+    import json
+
+    JSON_GENERATED_TARGET.parent.mkdir(parents=True, exist_ok=True)
+    JSON_GENERATED_TARGET.write_text(
+        json.dumps(
+            {
+                "commit": commit,
+                "source": "embedded-build-info",
+                "repo_root": "",
+                "tainted": dirty,
+                "tracked_changes": 0,
+                "untracked_changes": 0,
+                "available": True,
+                "diff_sha": diff_sha,
+                "build_timestamp_utc": build_timestamp_utc,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
 
 
 def main() -> int:
@@ -51,24 +103,22 @@ def main() -> int:
     diff = _git(["diff", "--binary", "HEAD"])
     diff_sha = hashlib.sha256(diff.encode("utf-8")).hexdigest()[:12] if diff else ""
     build_timestamp_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    TARGET.write_text(
-        "\n".join(
-            [
-                '"""Build metadata embedded into packaged ObstacleBridge applications."""',
-                "",
-                f'BUILD_COMMIT = "{commit}"',
-                'BUILD_SOURCE = "embedded-build-info"',
-                f"BUILD_DIRTY = {bool(status)!r}",
-                f'BUILD_DIFF_SHA = "{diff_sha}"',
-                f'BUILD_TIMESTAMP_UTC = "{build_timestamp_utc}"',
-                "",
-            ]
-        ),
-        encoding="utf-8",
+    dirty = bool(status)
+    _write_python_generated_build_info(
+        commit=commit,
+        dirty=dirty,
+        diff_sha=diff_sha,
+        build_timestamp_utc=build_timestamp_utc,
     )
-    _write_ios_tunnel_build_stamp(build_timestamp_utc)
+    _write_generated_json(
+        commit=commit,
+        dirty=dirty,
+        diff_sha=diff_sha,
+        build_timestamp_utc=build_timestamp_utc,
+    )
+    _write_ios_generated_build_stamp(build_timestamp_utc)
     print(
-        f"wrote {TARGET} commit={commit} dirty={bool(status)} diff_sha={diff_sha or '-'} "
+        f"wrote {PY_GENERATED_TARGET} commit={commit} dirty={dirty} diff_sha={diff_sha or '-'} "
         f"build_timestamp_utc={build_timestamp_utc}"
     )
     return 0

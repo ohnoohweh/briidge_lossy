@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 IOS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${IOS_DIR}/.." && pwd)"
 BUILD_DIR="${IOS_DIR}/build/macos"
+GENERATED_SWIFT_DIR="${IOS_DIR}/build/generated"
+GENERATED_BUILD_STAMP_SWIFT="${GENERATED_SWIFT_DIR}/ObstacleBridgeGeneratedBuildStamp.swift"
 BINARY_PATH="${BUILD_DIR}/ObstacleBridgeHostRunner"
 BUILD_INFO_JSON="${BUILD_DIR}/ObstacleBridgeHostRunner.build-info.json"
 APP_BUNDLE="${BUILD_DIR}/ObstacleBridge.app"
@@ -145,6 +147,7 @@ build_macos_app_icon
 echo "[build_macos_app] compiling macOS app executable"
 "${SWIFTC_CMD}" \
   -o "${APP_EXECUTABLE}" \
+  "${GENERATED_BUILD_STAMP_SWIFT}" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAPI.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAuth.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeAdminConfigChallenge.swift" \
@@ -220,30 +223,7 @@ cp -R "${REPO_ROOT}/admin_web" "${APP_RESOURCES_DIR}/admin_web"
 cp -R "${REPO_ROOT}/web" "${APP_RESOURCES_DIR}/web"
 
 echo "[build_macos_app] writing build identification sidecar"
-OBSTACLEBRIDGE_REPO_ROOT="${REPO_ROOT}" "${PYTHON_CMD}" - <<'PY' > "${BUILD_INFO_JSON}"
-from __future__ import annotations
-
-import json
-import os
-from pathlib import Path
-
-repo_root = Path(os.environ["OBSTACLEBRIDGE_REPO_ROOT"])
-namespace: dict[str, object] = {}
-build_info_path = repo_root / "src" / "obstacle_bridge" / "build_info.py"
-exec(build_info_path.read_text(encoding="utf-8"), namespace)
-payload = {
-  "commit": namespace.get("BUILD_COMMIT", "unknown"),
-  "source": namespace.get("BUILD_SOURCE", "embedded"),
-  "repo_root": "",
-  "tainted": bool(namespace.get("BUILD_DIRTY", False)),
-  "tracked_changes": 0,
-  "untracked_changes": 0,
-  "available": True,
-  "diff_sha": namespace.get("BUILD_DIFF_SHA", ""),
-    "build_timestamp_utc": namespace.get("BUILD_TIMESTAMP_UTC", ""),
-}
-print(json.dumps(payload, sort_keys=True))
-PY
+cp "${REPO_ROOT}/ios/build/generated/obstaclebridge-build-info.json" "${BUILD_INFO_JSON}"
 
 cp "${BUILD_INFO_JSON}" "${APP_RESOURCES_DIR}/ObstacleBridge.build-info.json"
 

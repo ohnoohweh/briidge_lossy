@@ -966,6 +966,24 @@ final class ObstacleBridgeHostRunner {
                 }
             let udpConnectedRows = udpConnectionStates.values.map { $0 } + (tcpOverlayRows?.udp ?? []) + (udpOverlayRows?.udp ?? [])
             let tcpConnectedRows = tcpConnectionStates.values.map { $0 } + (tcpOverlayRows?.tcp ?? []) + (udpOverlayRows?.tcp ?? [])
+            let tunListeningRows = ownServerSpecs
+                .filter { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
+                .map { spec in
+                    [
+                        "protocol": "tun",
+                        "role": "server",
+                        "state": "listening",
+                        "chan_id": NSNull(),
+                        "svc_id": spec.svcID,
+                        "service_name": spec.name ?? "",
+                        "source": NSNull(),
+                        "local": ["host": spec.listenBind, "port": spec.listenPort],
+                        "local_port": spec.listenPort,
+                        "remote_destination": ["host": spec.targetHost, "port": spec.targetPort],
+                        "stats": ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0],
+                    ] as [String: Any]
+                }
+            let tunConnectedRows = (udpOverlayRows?.tun ?? [])
             let udpRows = (udpConnectedRows + udpListeningRows).sorted { lhs, rhs in
                 let leftListening = String(describing: lhs["state"] ?? "") == "listening"
                 let rightListening = String(describing: rhs["state"] ?? "") == "listening"
@@ -986,17 +1004,27 @@ final class ObstacleBridgeHostRunner {
                 let rightChan = rhs["chan_id"] as? Int ?? -1
                 return leftChan < rightChan
             }
+            let tunRows = (tunConnectedRows + tunListeningRows).sorted { lhs, rhs in
+                let leftListening = String(describing: lhs["state"] ?? "") == "listening"
+                let rightListening = String(describing: rhs["state"] ?? "") == "listening"
+                if leftListening != rightListening {
+                    return !leftListening && rightListening
+                }
+                let leftChan = lhs["chan_id"] as? Int ?? -1
+                let rightChan = rhs["chan_id"] as? Int ?? -1
+                return leftChan < rightChan
+            }
             return [
                 "udp": udpRows,
                 "tcp": tcpRows,
-                "tun": [],
+                "tun": tunRows,
                 "counts": [
                     "udp": udpConnectedRows.count,
                     "tcp": tcpConnectedRows.count,
-                    "tun": 0,
+                    "tun": tunConnectedRows.count,
                     "udp_listening": udpListeningRows.count,
                     "tcp_listening": tcpListeningRows.count,
-                    "tun_listening": 0,
+                    "tun_listening": tunListeningRows.count,
                 ],
             ]
         }
@@ -1306,6 +1334,8 @@ final class ObstacleBridgeHostRunner {
         guard (!peerHost.isEmpty && peerPort > 0) || bindPort > 0 else {
             return
         }
+        let muxInstanceID = UInt64.random(in: 1...UInt64.max)
+        let muxConnectionSeq = UInt32.random(in: 1...UInt32.max)
         let owner = ObstacleBridgeTcpOverlayTransportOwner(
             peerHost: peerHost,
             peerPort: peerPort,
@@ -1315,9 +1345,14 @@ final class ObstacleBridgeHostRunner {
             reconnectRetryDelayMS: Self.intValue(from: runtimeConfig["overlay_reconnect_retry_delay_ms"]) ?? 30000,
             sessionMaxAppPayload: ObstacleBridgeRuntimeConfig.overlaySessionMaxAppPayload(from: runtimeConfig),
             overlayLayerTransportAdapter: sharedOverlayLayerTransportAdapter,
-            startupMuxFrames: remoteServiceCatalogMuxFrames(),
+            startupMuxFrames: remoteServiceCatalogMuxFrames(
+                instanceID: muxInstanceID,
+                connectionSeq: muxConnectionSeq
+            ),
             queue: serviceStateQueue,
-            serviceNameByID: Dictionary(uniqueKeysWithValues: ownServerSpecs.map { ($0.svcID, $0.name ?? "") })
+            serviceNameByID: Dictionary(uniqueKeysWithValues: ownServerSpecs.map { ($0.svcID, $0.name ?? "") }),
+            muxInstanceID: muxInstanceID,
+            muxConnectionSeq: muxConnectionSeq
         )
         sharedTcpOverlayTransportOwner = owner
         owner.start()
@@ -1335,6 +1370,9 @@ final class ObstacleBridgeHostRunner {
         let peerHost = Self.stringValue(from: runtimeConfig["udp_peer"])
         let peerPort = Self.intValue(from: runtimeConfig["udp_peer_port"])
         let peerResolveFamily = Self.stringValue(from: runtimeConfig["udp_peer_resolve_family"]) ?? "prefer-ipv6"
+        let tunService = ownServerSpecs.first { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
+        let muxInstanceID = UInt64.random(in: 1...UInt64.max)
+        let muxConnectionSeq = UInt32.random(in: 1...UInt32.max)
         let owner = ObstacleBridgeUdpOverlayTransportOwner(
             bindHost: bindHost,
             bindPort: bindPort,
@@ -1343,16 +1381,30 @@ final class ObstacleBridgeHostRunner {
             peerResolveFamily: peerResolveFamily,
             sessionMaxAppPayload: ObstacleBridgeRuntimeConfig.overlaySessionMaxAppPayload(from: runtimeConfig),
             overlayLayerTransportAdapter: sharedOverlayLayerTransportAdapter,
-            startupMuxFrames: remoteServiceCatalogMuxFrames(),
+            startupMuxFrames: remoteServiceCatalogMuxFrames(
+                instanceID: muxInstanceID,
+                connectionSeq: muxConnectionSeq
+            ),
             queue: serviceStateQueue,
-            serviceNameByID: Dictionary(uniqueKeysWithValues: ownServerSpecs.map { ($0.svcID, $0.name ?? "") })
+            serviceNameByID: Dictionary(uniqueKeysWithValues: ownServerSpecs.map { ($0.svcID, $0.name ?? "") }),
+            tunIfname: tunService?.listenBind,
+            tunMTU: tunService?.listenPort ?? 0,
+            muxInstanceID: muxInstanceID,
+            muxConnectionSeq: muxConnectionSeq
         )
         sharedUdpOverlayTransportOwner = owner
         try owner.start()
     }
 
-    private func remoteServiceCatalogMuxFrames() -> [Data] {
-        ObstacleBridgeRuntimeConfig.remoteServiceCatalogMuxFrames(from: runtimeConfig)
+    private func remoteServiceCatalogMuxFrames(
+        instanceID: UInt64 = 0,
+        connectionSeq: UInt32 = 0
+    ) -> [Data] {
+        ObstacleBridgeRuntimeConfig.remoteServiceCatalogMuxFrames(
+            from: runtimeConfig,
+            instanceID: instanceID,
+            connectionSeq: connectionSeq
+        )
     }
 
     private func hasConfiguredOverlayPeer() -> Bool {

@@ -256,9 +256,6 @@ final class ObstacleBridgeMacAppMain: NSObject, NSApplicationDelegate {
 
     private func copyBundledDirectoryIfNeeded(named name: String, to destination: URL) throws {
         let fm = FileManager.default
-        if fm.fileExists(atPath: destination.appendingPathComponent("index.html").path) {
-            return
-        }
         guard let resourceRoot = Bundle.main.resourceURL else {
             try fm.createDirectory(at: destination, withIntermediateDirectories: true)
             return
@@ -268,10 +265,45 @@ final class ObstacleBridgeMacAppMain: NSObject, NSApplicationDelegate {
             try fm.createDirectory(at: destination, withIntermediateDirectories: true)
             return
         }
-        if fm.fileExists(atPath: destination.path) {
-            try fm.removeItem(at: destination)
+        if !fm.fileExists(atPath: destination.path) {
+            try fm.copyItem(at: source, to: destination)
+            return
         }
-        try fm.copyItem(at: source, to: destination)
+        try refreshDirectoryContents(at: destination, from: source)
+    }
+
+    private func refreshDirectoryContents(at destination: URL, from source: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+        let sourceEntries = try fm.contentsOfDirectory(
+            at: source,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+        let destinationEntries = try fm.contentsOfDirectory(
+            at: destination,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+        let sourceNames = Set(sourceEntries.map(\.lastPathComponent))
+        for existing in destinationEntries where !sourceNames.contains(existing.lastPathComponent) {
+            try? fm.removeItem(at: existing)
+        }
+        for entry in sourceEntries {
+            let target = destination.appendingPathComponent(entry.lastPathComponent, isDirectory: false)
+            let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            if isDirectory {
+                if fm.fileExists(atPath: target.path) {
+                    try? fm.removeItem(at: target)
+                }
+                try fm.copyItem(at: entry, to: target)
+                continue
+            }
+            if fm.fileExists(atPath: target.path) {
+                try fm.removeItem(at: target)
+            }
+            try fm.copyItem(at: entry, to: target)
+        }
     }
 
     private static func appRuntimeRootURL() -> URL? {

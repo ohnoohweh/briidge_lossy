@@ -32,8 +32,8 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert '"admin_api_request"' in provider
     assert "setTunnelNetworkSettings" in provider
     assert "OB_IPSERVER_SWIFT_SMOKE" in provider
-    assert "startTunnel_completed_swift_smoke" in provider
-    assert "startTunnel_completed_swift_only" in provider
+    assert "startTunnel_completed_swift_udp" in provider
+    assert "startTunnel_completed_swift_simple_udp" in provider
     assert "handleAppMessage" in provider
     assert "packet_pump_forwarded_packets" in provider
     assert "ipserver-native-provider-state.json" in provider
@@ -581,6 +581,7 @@ def test_ipserver_extension_sources_are_swift_only() -> None:
     assert "adminOnboardingConnectionProfiles()" in provider
     assert "adminOnboardingInviteGenerate(request:" in provider
     assert "adminOnboardingInvitePreview(request:" in provider
+    assert "if let payload = loadSharedRuntimeConfigJSON()" in provider
     assert "invite_token" in config_support
     assert "ObstacleBridgePythonBridge" not in provider
     assert not (IPSERVER_NATIVE_DIR / "ObstacleBridgePythonBridge.m").exists()
@@ -609,12 +610,18 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "harvestSharedLogs" in control
     assert "runtimeExecutionMode()" in control
     assert "ObstacleBridgeRuntimeConfig.runtimeExecutionMode" in control
+    assert "loadSharedRuntimeConfigJSON()" in control
     assert "startSwiftHostRunner()" in control
     assert "prepareSwiftHostRunner()" in control
     assert "refreshSwiftHostRunnerStatus()" in control
     assert '"swift_host_runner"' in control
     assert "shared_logs_harvested" in control
     assert "syncConfigurationFileInternal" in control
+    assert "shared_semantically_newer" in control
+    assert "isSemanticallyConfiguredConfig" in control
+    assert "if !overlayPeerConfigured(payload: flattenedPayload)" in control
+    assert "includedRoutes: []" in control
+    assert "includedRoutes6: []" in control
     assert "config_sync_completed" in control
     assert "config_sync_before_prepare" in control
     assert 'app-documents-root.json' in control
@@ -632,7 +639,7 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "duplicate_cleanup_stop_requested" in control
     assert "preferences_reused" in control
     assert "desiredLocalizedDescription()" in control
-    assert "providerBuildTimestampUTC" in control
+    assert "ObstacleBridgeGeneratedBuildStamp.providerBuildTimestampUTC" in control
     assert 'legacyLocalizedDescription = "ObstacleBridge"' in control
     assert 'legacyLocalizedDescriptionAlt = "AdminWeb"' in control
     assert "applyIdentity(" in control
@@ -642,10 +649,6 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "desiredManagers" in control
     assert "let desiredManagers = managers.filter { hasCurrentProviderConfiguration($0) }" in control
     assert "let duplicates = managers.filter { $0 !== canonical }" in control
-    assert "ObstacleBridgeRuntimeConfig.ownServerSpecs" in control
-    assert "ObstacleBridgeRuntimeConfig.remoteServerSpecs" in control
-    assert "derivedLocalTunnelSettings(" in control
-    assert "derivedRemoteTunnelSettings(" in control
     assert "overlayPeerConfigured(payload:" in control
     assert "includedRoutes: []" in control
     assert "includedRoutes6: []" in control
@@ -672,9 +675,12 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "TUN_ADDR6" not in control
     assert "PEER_ADDR6" not in control
     assert "TUN_SUBNET6" not in control
-    assert "findLocalIOSTunnelService" in control
-    assert "findRemoteTunnelServiceTargetingIOS" in control
     assert "ObstacleBridgeRuntimeConfig.tunnelRoutingOverride" in control
+    assert "let routingOverride = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: payload)" in control
+    assert "derivedLocalTunnelSettings(" not in control
+    assert "derivedRemoteTunnelSettings(" not in control
+    assert "findLocalIOSTunnelService" not in control
+    assert "findRemoteTunnelServiceTargetingIOS" not in control
     assert "applyNetworkOverride(" not in control
     assert "loadRuntimeConfigJSON" in control
     assert "ios-native-tunnel-control.jsonl" in control
@@ -691,6 +697,9 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert '"reconnect_supported": true' in host_runner
     assert '"rtt_est_ms": myudpRuntime["rtt_est_ms"] ?? NSNull()' in host_runner
     assert '"confirmed_total": protocolStats["confirmed_total"] ?? 0' in host_runner
+    assert "let tunService = ownServerSpecs.first { $0.listenProtocol == \"tun\" && $0.targetProtocol == \"tun\" }" in host_runner
+    assert "tunIfname: tunService?.listenBind" in host_runner
+    assert '"tun": tunRows' in host_runner
 
 
 def test_ios_packet_tunnel_provider_owns_restart_without_app_process() -> None:
