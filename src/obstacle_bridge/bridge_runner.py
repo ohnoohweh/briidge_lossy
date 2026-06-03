@@ -113,6 +113,22 @@ class RunnerMuxAggregate:
             "decompress_fail_total": 0,
         }
 
+    @staticmethod
+    def _peer_label_for_ui(value) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, Mapping):
+            host = str(value.get("host") or "").strip()
+            try:
+                port = int(value.get("port") or 0)
+            except Exception:
+                port = 0
+            if host and port > 0:
+                return f"[{host}]:{port}" if ":" in host and not host.startswith("[") else f"{host}:{port}"
+            return host or None
+        text = str(value).strip()
+        return text or None
+
 
 class Runner:
     """
@@ -929,7 +945,7 @@ class Runner:
                             "state": "listening",
                             "connected": False,
                             "listen": listen_endpoint,
-                            "peer": p.get("peer"),
+                            "peer": RunnerMuxAggregate._peer_label_for_ui(p.get("peer")),
                             "rtt_est_ms": p.get("rtt_est_ms", listener_metrics.rtt_est_ms),
                             "transmit_delay_sample_ms": p.get("transmit_delay_sample_ms", listener_metrics.transmit_delay_sample_ms),
                             "transmit_delay_est_ms": p.get("transmit_delay_est_ms", listener_metrics.transmit_delay_est_ms),
@@ -1016,7 +1032,7 @@ class Runner:
                         "state": row_state,
                         "connected": row_connected,
                         "listen": listen_endpoint,
-                        "peer": p.get("peer"),
+                        "peer": RunnerMuxAggregate._peer_label_for_ui(p.get("peer")),
                         "rtt_est_ms": p.get("rtt_est_ms", row_metrics.rtt_est_ms),
                         "transmit_delay_sample_ms": p.get("transmit_delay_sample_ms", row_metrics.transmit_delay_sample_ms),
                         "transmit_delay_est_ms": p.get("transmit_delay_est_ms", row_metrics.transmit_delay_est_ms),

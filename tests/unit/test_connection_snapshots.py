@@ -505,12 +505,40 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(peer["id"], f"0:{peer_row['peer_id']}")
         self.assertFalse(peer["connected"])
         self.assertEqual(peer["state"], "connecting")
-        self.assertEqual(peer["peer"], _peer_endpoint("38.180.143.5", 50227))
+        self.assertEqual(peer["peer"], "38.180.143.5:50227")
         self.assertIsNotNone(peer["last_incoming_age_seconds"])
         self.assertGreaterEqual(peer["last_incoming_age_seconds"], 0)
         self.assertEqual(peer["decode_errors"], 1)
         self.assertEqual(peer["open_connections"]["udp"], 0)
         self.assertEqual(peer["open_connections"]["tcp"], 0)
+
+    def test_peer_snapshot_formats_structured_peer_endpoint_for_webadmin(self):
+        class _StructuredPeerSession:
+            def get_metrics(self):
+                return SessionMetrics(inflight=0)
+
+            def is_connected(self):
+                return True
+
+            def get_overlay_peers_snapshot(self):
+                return [
+                    {
+                        "peer_id": 1,
+                        "connected": True,
+                        "peer": {"host": "198.51.100.1", "port": 4433},
+                        "mux_chans": [101],
+                    },
+                ]
+
+        args = argparse.Namespace(no_dashboard=True, overlay_transport="tcp")
+        runner = Runner(args)
+        runner._sessions = [_StructuredPeerSession()]
+        runner._muxes = []
+        runner._session_labels = ["tcp"]
+
+        out = runner.get_peer_connections_snapshot()
+        self.assertEqual(len(out["peers"]), 1)
+        self.assertEqual(out["peers"][0]["peer"], "198.51.100.1:4433")
 
     def test_listener_peer_snapshot_uses_child_myudp_session_stats(self):
         class _InnerStats:
