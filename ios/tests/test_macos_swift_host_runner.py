@@ -1165,6 +1165,8 @@ def test_macos_swift_host_runner_myudp_remote_tcp_admin_web_handles_multiple_con
         encoding="utf-8",
     )
 
+    python_peer.start()
+    _wait_http_json(f"http://127.0.0.1:{python_peer_admin_port}/api/status", timeout_sec=20.0)
     process = subprocess.Popen(
         [
             str(binary_path),
@@ -1178,7 +1180,6 @@ def test_macos_swift_host_runner_myudp_remote_tcp_admin_web_handles_multiple_con
         text=True,
     )
     try:
-        python_peer.start()
         _wait_http_json(f"http://127.0.0.1:{hostrunner_admin_port}/api/status", timeout_sec=20.0)
         _wait_http_condition(
             f"http://127.0.0.1:{hostrunner_admin_port}/api/peers",
@@ -3465,6 +3466,7 @@ def test_macos_swift_host_runner_remote_tcp_admin_web_handles_multiple_connectio
                 "compress_layer_level": 5,
                 "compress_layer_min_bytes": 64,
                 "compress_layer_types": "data",
+                "overlay_reconnect_retry_delay_ms": 250,
                 "admin_web": True,
                 "admin_web_bind": "127.0.0.1",
                 "admin_web_port": hostrunner_admin_port,
@@ -3491,6 +3493,8 @@ def test_macos_swift_host_runner_remote_tcp_admin_web_handles_multiple_connectio
         encoding="utf-8",
     )
 
+    python_peer.start()
+    _wait_http_json(f"http://127.0.0.1:{python_peer_admin_port}/api/status", timeout_sec=20.0)
     process = subprocess.Popen(
         [
             str(binary_path),
@@ -3504,7 +3508,6 @@ def test_macos_swift_host_runner_remote_tcp_admin_web_handles_multiple_connectio
         text=True,
     )
     try:
-        python_peer.start()
         _wait_http_json(f"http://127.0.0.1:{hostrunner_admin_port}/api/status", timeout_sec=20.0)
         _wait_http_condition(
             f"http://127.0.0.1:{hostrunner_admin_port}/api/peers",
