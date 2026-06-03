@@ -336,7 +336,7 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
         packetMissed: [Int],
         sendPortPresent: Bool
     ) throws -> InboundControlSnapshot {
-        updateInboundHeartbeat(nowNS: nowNS, txNS: txNS, echoNS: echoNS)
+        updateInboundHeartbeat(nowNS: nowNS, txNS: txNS, echoNS: echoNS, fromIdle: false)
         let snapshot = try ObstacleBridgeUdpOverlaySessionCodec.handleInboundControlPacket(
             nowNS: nowNS,
             packetLastInOrder: packetLastInOrder,
@@ -404,7 +404,7 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
         echoNS: UInt64,
         sendPortPresent: Bool
     ) throws -> InboundIdleSnapshot {
-        updateInboundHeartbeat(nowNS: nowNS, txNS: txNS, echoNS: echoNS)
+        updateInboundHeartbeat(nowNS: nowNS, txNS: txNS, echoNS: echoNS, fromIdle: true)
 
         let reflected = echoNS == 0 && sendPortPresent
         let reflectedFrame: Data?
@@ -441,7 +441,7 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
         guard let packet = ObstacleBridgeUdpOverlayCodec.parseDataFrame(frame) else {
             return nil
         }
-        updateInboundHeartbeat(nowNS: nowNS, txNS: txNS, echoNS: echoNS)
+        updateInboundHeartbeat(nowNS: nowNS, txNS: txNS, echoNS: echoNS, fromIdle: false)
 
         let previousMissing = receiveState.missing
         let result = receiveState.process(packet)
@@ -492,7 +492,7 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
         ]
     }
 
-    private func updateInboundHeartbeat(nowNS: UInt64, txNS: UInt64, echoNS: UInt64) {
+    private func updateInboundHeartbeat(nowNS: UInt64, txNS: UInt64, echoNS: UInt64, fromIdle: Bool) {
         lastRxTxNS = txNS
         lastRxWallNS = nowNS
 
@@ -507,7 +507,7 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
         } else {
             rttEstMS = (1.0 - 0.125) * rttEstMS + (0.125 * sample)
         }
-        if rttEstMS > 0 {
+        if fromIdle, rttEstMS > 0 {
             transmitDelayEstMS = 0.5 * rttEstMS
         }
         if establishedNS == 0 {

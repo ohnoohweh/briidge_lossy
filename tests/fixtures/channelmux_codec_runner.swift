@@ -1626,6 +1626,8 @@ private func handle(_ request: [String: Any]) throws -> Any {
             else {
                 throw ChannelMuxCodecRunnerError.invalidRequest
             }
+            let txNS = (object["tx_ns"] as? NSNumber)?.uint64Value ?? 0
+            let echoNS = (object["echo_ns"] as? NSNumber)?.uint64Value ?? 0
             let packetMissed = try jsonArray(packetMissedRaw).map { raw -> Int in
                 guard let value = raw as? NSNumber else {
                     throw ChannelMuxCodecRunnerError.invalidRequest
@@ -1634,6 +1636,8 @@ private func handle(_ request: [String: Any]) throws -> Any {
             }
             let snapshot = try runtime.handleInboundControlPacket(
                 nowNS: nowNS.uint64Value,
+                txNS: txNS,
+                echoNS: echoNS,
                 packetLastInOrder: packetLastInOrder.intValue,
                 packetHighest: packetHighest.intValue,
                 packetMissed: packetMissed,

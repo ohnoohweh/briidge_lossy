@@ -100,6 +100,12 @@ def _unused_tcp_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _unused_udp_port() -> int:
+    with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as sock:
+        sock.bind(("::1", 0))
+        return int(sock.getsockname()[1])
+
+
 def _compile_mac_host_runner(binary_path: Path) -> None:
     swiftc = require_swift_modules(
         "CryptoKit",
@@ -1750,13 +1756,14 @@ def test_macos_swift_host_runner_accepts_python_invite_tokens_without_app_path_l
     _compile_mac_host_runner(binary_path)
 
     status_port = _unused_tcp_port()
+    udp_port = _unused_udp_port()
     runtime_config_path = tmp_path / "runtime.json"
     runtime_config_path.write_text(
         json.dumps(
             {
                 "overlay_transport": "myudp",
                 "udp_bind": "::",
-                "udp_own_port": 4433,
+                "udp_own_port": udp_port,
                 "admin_web": True,
                 "admin_web_bind": "127.0.0.1",
                 "admin_web_port": status_port,
@@ -2087,13 +2094,14 @@ def test_macos_swift_host_runner_rejects_legacy_encrypted_invite_psk(tmp_path: P
     _compile_mac_host_runner(binary_path)
 
     status_port = _unused_tcp_port()
+    udp_port = _unused_udp_port()
     runtime_config_path = tmp_path / "runtime.json"
     runtime_config_path.write_text(
         json.dumps(
             {
                 "overlay_transport": "myudp",
                 "udp_bind": "::",
-                "udp_own_port": 4433,
+                "udp_own_port": udp_port,
                 "admin_web": True,
                 "admin_web_bind": "127.0.0.1",
                 "admin_web_port": status_port,
