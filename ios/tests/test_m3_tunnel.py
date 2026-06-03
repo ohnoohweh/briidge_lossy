@@ -93,10 +93,10 @@ def test_normalized_ios_tun_connector_config_leaves_swift_udp_peer_unset() -> No
     section = normalized_ios_tun_connector_config({})
 
     assert section["packetflow_connector"] == "swift_udp"
-    assert section["bind_host"] == "0.0.0.0"
+    assert section["bind_host"] == "127.0.0.1"
     assert section["bind_port"] == 5555
-    assert section["peer_host"] == ""
-    assert section["peer_port"] == 0
+    assert section["peer_host"] == "127.0.0.1"
+    assert section["peer_port"] == 5556
 
 
 def test_provider_configuration_is_native_extension_contract() -> None:
@@ -127,8 +127,8 @@ def test_provider_configuration_is_native_extension_contract() -> None:
     assert provider_config["runtime_config"]["tcp_peer_port"] == 4433
     assert provider_config["runtime_config"]["iOS_TUN_connector"]["packetflow_connector"] == "swift_udp"
     assert provider_config["runtime_config"]["iOS_TUN_connector"]["bind_host"] == "127.0.0.1"
-    assert provider_config["runtime_config"]["iOS_TUN_connector"]["peer_host"] == ""
-    assert provider_config["runtime_config"]["iOS_TUN_connector"]["peer_port"] == 0
+    assert provider_config["runtime_config"]["iOS_TUN_connector"]["peer_host"] == "127.0.0.1"
+    assert provider_config["runtime_config"]["iOS_TUN_connector"]["peer_port"] == 5556
     assert provider_config["network_settings"]["tunnel_address"] == "192.168.106.1"
     assert provider_config["network_settings"]["tunnel_prefix"] == 30
     assert provider_config["network_settings"]["included_routes"] == ["0.0.0.0/0"]

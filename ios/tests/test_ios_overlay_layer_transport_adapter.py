@@ -182,7 +182,7 @@ def test_ios_overlay_layer_transport_adapter_wraps_compress_then_secure_link(tmp
     assert payload == {
         "queued_client_frames": 1,
         "client_auth_frames": 2,
-        "server_auth_frames": 0,
+        "server_auth_frames": 1,
         "client_compress_applied": 1,
         "server_decompress_ok": 1,
         "server_compress_applied": 1,

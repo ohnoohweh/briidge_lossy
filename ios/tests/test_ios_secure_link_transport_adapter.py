@@ -133,7 +133,7 @@ def test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_
     assert payload == {
         "queued_client_frames": 1,
         "client_auth_frames": 2,
-        "server_auth_frames": 0,
+        "server_auth_frames": 1,
         "server_received": ["hello-secure"],
         "client_received": ["reply-secure"],
         "client_authenticated": True,

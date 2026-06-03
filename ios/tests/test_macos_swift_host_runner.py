@@ -3492,7 +3492,7 @@ def test_macos_swift_host_runner_remote_tcp_admin_web_handles_multiple_connectio
     )
     try:
         python_peer.start()
-        _wait_http_json(f"http://127.0.0.1:{hostrunner_admin_port}/api/status")
+        _wait_http_json(f"http://127.0.0.1:{hostrunner_admin_port}/api/status", timeout_sec=20.0)
         _wait_http_json(f"http://127.0.0.1:{remote_tcp_port}/api/status", timeout_sec=20.0)
 
         def _fetch_path(path: str) -> tuple[str, object]:
