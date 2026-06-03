@@ -1634,6 +1634,8 @@ private func handle(_ request: [String: Any]) throws -> Any {
             }
             let snapshot = try runtime.handleInboundControlPacket(
                 nowNS: nowNS.uint64Value,
+                txNS: (object["tx_ns"] as? NSNumber)?.uint64Value ?? 0,
+                echoNS: (object["echo_ns"] as? NSNumber)?.uint64Value ?? 0,
                 packetLastInOrder: packetLastInOrder.intValue,
                 packetHighest: packetHighest.intValue,
                 packetMissed: packetMissed,

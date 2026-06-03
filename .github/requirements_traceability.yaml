@@ -92,6 +92,11 @@ REQ-OVL-007:
 # transport, preserving Python multi-host IPv4/IPv6 preference-plus-fallback
 # coverage, and adding native Swift packet-tunnel probe coverage for candidate
 # selection and idle-time fallback rotation.
+# NOTE: The 2026-06-03 CI follow-up keeps the existing REQ-OVL-001/004/007 and
+# REQ-AUT-001/002/004/006/007/009 mappings intact while restricting the mixed
+# Swift/Python host-runner overlay cases to macOS, fixing the Linux onboarding
+# admin-port host reservation mismatch, and updating the Swift parity fixture to
+# pass the peer-runtime control-packet timestamps expected by the current API.
 # The application-vs-library functional decomposition for REQ-WSP-* is documented in
 # docs/ARCHITECTURE.md under "WebSocket proxy tunneling".
 # The broader separation between user use-cases, external assumptions, and

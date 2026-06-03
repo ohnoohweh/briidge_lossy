@@ -6205,6 +6205,11 @@ def _copy_secure_link_cert_fixture_set(target_dir: Path) -> Path:
     return materialize_secure_link_cert_fixture_set(target_dir)
 
 
+def _require_macos_swift_host_runner() -> None:
+    if sys.platform != 'darwin':
+        pytest.skip('mixed Swift/Python host-runner integration tests require macOS')
+
+
 @pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.parametrize("case_name", BASIC_CASES)
@@ -6223,6 +6228,7 @@ MIXED_RUNTIME_BASIC_CASES = [
 @pytest.mark.parametrize('runtime_mode', ['swift-server-python-client', 'python-server-swift-client'])
 @pytest.mark.parametrize('case_name', MIXED_RUNTIME_BASIC_CASES)
 def test_overlay_e2e_basic_mixed_runtime_myudp(case_name: str, runtime_mode: str, tmp_path: Path) -> None:
+    _require_macos_swift_host_runner()
     case = CASES[case_name]
     if case_name == 'case04_tcp_over_own_udp_clients_ipv4':
         case = replace(case, name='case04_tcp_over_own_udp_clients_ipv4_mixed')
@@ -6244,6 +6250,7 @@ MIXED_RUNTIME_MYUDP_DELAY_LOSS_CASES = [
 @pytest.mark.parametrize('runtime_mode', ['swift-server-python-client', 'python-server-swift-client'])
 @pytest.mark.parametrize('case_name', MIXED_RUNTIME_MYUDP_DELAY_LOSS_CASES)
 def test_overlay_e2e_mixed_runtime_myudp_delay_loss(case_name: str, runtime_mode: str, tmp_path: Path) -> None:
+    _require_macos_swift_host_runner()
     run_case_myudp_delay_loss(
         MYUDP_DELAY_LOSS_CASES[case_name],
         tmp_path,
@@ -6256,6 +6263,7 @@ def test_overlay_e2e_mixed_runtime_myudp_delay_loss(case_name: str, runtime_mode
 @pytest.mark.slow
 @pytest.mark.parametrize('runtime_mode', ['swift-server-python-client', 'python-server-swift-client'])
 def test_overlay_e2e_mixed_runtime_tcp_secure_link_psk_compress_happy_path(tmp_path: Path, runtime_mode: str) -> None:
+    _require_macos_swift_host_runner()
     with secure_link_test_lock():
         case = replace(
             CASES['case04_tcp_over_own_udp_clients_ipv4'],
@@ -6895,7 +6903,7 @@ def test_overlay_e2e_onboarding_invite_api_masks_psk_and_returns_apply_updates(t
 
 @pytest.mark.integration
 def test_overlay_e2e_admin_web_empty_config_serves_onboarding_without_peer(tmp_path: Path) -> None:
-    admin_port = alloc_admin_port(case_index=91)
+    admin_port = alloc_admin_port(case_index=91, host_pair=('127.0.0.1', '::1'))
     config_path = tmp_path / "ObstacleBridge.cfg"
     proc = start_proc(
         'python_empty_onboarding',
@@ -10696,6 +10704,7 @@ def test_overlay_e2e_myudp_secure_link_psk_listener_two_clients_concurrent_udp_t
 @pytest.mark.slow
 @pytest.mark.parametrize('runtime_mode', ['swift-server-python-client', 'python-server-swift-client'])
 def test_overlay_e2e_mixed_runtime_myudp_secure_link_psk_compress_concurrent_tcp(tmp_path: Path, runtime_mode: str) -> None:
+    _require_macos_swift_host_runner()
     with secure_link_test_lock():
         case = replace(
             CASES['case04_tcp_over_own_udp_clients_ipv4'],
