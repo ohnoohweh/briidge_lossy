@@ -1367,7 +1367,7 @@ Optional operations follow-up:
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 - Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `158` integration tests, `263` unit tests, and `67` iOS-focused tests in `ios/tests/` when collected with `PYTHONPATH=src:ios/src`. Latest focused validation for the canonical WebAdmin packaging path used `pytest -q ios/tests/test_m3_native_sources.py tests/unit/test_admin_web_payloads.py` and completed with `30 passed, 4 subtests passed`; this slice guards the repo-top `admin_web/` source, iOS Briefcase source staging, and bundled WebAdmin fallback resolution. The latest iOS tunnel milestone also revalidated the config-derived dual-stack packet-tunnel path with `python3 scripts/check_requirements_guard.py --base-ref origin/main`, `python3 scripts/check_readme_testing_guard.py --base-ref origin/main`, and `./ios/scripts/build_ios_app.sh` before the physical-device run that reached real Safari IPv4/IPv6 tunnel egress. The current PR-220 follow-up adds focused coverage for semantic myudp RX-log replay, Fedora/iPhone UDP epoch matching, and `ios_tunnel_network` overrides through `tests/unit/test_replay_myudp_semantic_log.py`, `tests/unit/test_check_ios_fedora_log_fit.py`, `tests/unit/test_myudp_processing_repro.py`, and `ios/tests/test_m3_tunnel.py`. The latest `myudp` follow-up also adds [docs/MYUDP_DESIGN.md](docs/MYUDP_DESIGN.md) plus focused unit coverage that pins the retransmit-envelope invariant: a resent frame must be rebuilt with fresh protocol timestamps, the sender must keep a reported-missing frame on an RTT-paced retry path until cumulative ACK progress clears it, the transport must skip stale raw-frame replay when semantic resend metadata is missing, and the live status/dashboard plus WebAdmin browser surface must publish an EWMA transmit-delay estimate derived from first-send time minus half the current RTT once acknowledged `DATA` frames start flowing. The newest reconnect-recovery follow-up adds a live-backlog outage regression for `myudp` + SecureLink PSK through `tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly`, plus focused epoch-reset coverage in `tests/unit/test_requirements_unit_gaps.py` and `tests/unit/test_secure_link_psk.py`; local validation for that slice used `pytest -q tests/unit/test_requirements_unit_gaps.py -k "transport_epoch_reset or peer_protocol_epoch_reset"`, `pytest -q tests/unit/test_secure_link_psk.py -k "transport_epoch_change or explicit_transport_epoch_reset"`, and `pytest -q tests/integration/test_overlay_e2e.py -k myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly` (`1 passed, 143 deselected`). The newest shutdown-diagnostics follow-up adds focused coverage for `.lastsession` log rollover and process/runner/mux stop breadcrumbs through `tests/unit/test_debug_logging_aliases.py` and `tests/unit/test_runner_events.py`; local validation for that slice used `pytest -q tests/unit/test_requirements_unit_gaps.py tests/unit/test_debug_logging_aliases.py tests/unit/test_runner_events.py` and completed with `25 passed`. Earlier focused validation includes unit requirement-gap closure for Admin Web authentication gates, multi-listener peer snapshot identity, IPv4/IPv6 UDP peer labeling, and core `myudp` reliability invariants, plus the iOS Documents-backed WebAdmin/config/log slice, compression/admin/lifecycle, SecureLink PSK, WebSocket SecureLink PSK reconnect stale-buffer recovery, WebSocket listener peer traffic statistics, SecureLink authenticated failure reconnect recovery, SecureLink revocation metadata and myudp stale-row guard fixes, config persistence, peer-traffic/concurrent-listener, TUN WebAdmin/hook, WebAdmin service-editor/service-name, WebAdmin PSK reveal, launcher dependency-assistance, and the embedded iOS restart/AdminWeb shutdown slice documented in [docs/README_TESTING.md](docs/README_TESTING.md).
+Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot across `python`, `macos`, and `ios`.
 The latest architecture follow-up extends [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) with a bounded real-time overload policy for the full data conveyor belt: safe admission-side shedding for `UDP`/`TUN`, ingress backpressure for `TCP`, protected in-pipeline ordering semantics for already-admitted traffic, and explicit component ownership across the reliability, mux, runner, and observability layers. This establishes the implementation checklist for future queue-bound, stale-drop, and backpressure work without yet changing the defending test set.
 
 The latest transport-observability follow-up extends `myudp` with a transmit-delay EWMA shown next to RTT in the runtime status/dashboard surface, backed by the first-attempt timing reference of each acknowledged `DATA` frame: first emitted on-wire `tx_ns` for immediate sends, or local queue-entry time when the in-flight window was saturated, together with the existing delayed/lossy overlay harness. Local validation for that slice used `pytest -q tests/unit/test_requirements_unit_gaps.py -k transmit_delay` (`1 passed, 17 deselected`) and `pytest -q tests/integration/test_overlay_e2e.py -k myudp_delay_loss` (`13 passed, 131 deselected`).
@@ -1377,20 +1377,50 @@ For changes that touch Python runtime files, the most important regression signa
 
 The shared integration harness now generates localhost TLS test certificates in a temporary directory outside the repository and uses availability-aware loopback port allocation when materializing test cases. This keeps private key material out of version control and makes the Linux shared `xdist` run resilient to host services that already occupy uncommon local ports.
 
-### Current requirements coverage
-Current snapshot from `python scripts/report_requirements_coverage.py`:
+### Current coverage snapshot
+Current snapshot from `python3 scripts/report_product_traceability.py`:
 
-- Integration-covered: `81/86 = 94.2%`
-- Unit-covered: `86/86 = 100.0%`
-- Any-test-covered: `86/86 = 100.0%`
-- Tracked in manifest: `86/86 = 100.0%`
-- Requirements without integration coverage: `REQ-ADM-011`, `REQ-ADM-012`, `REQ-LIFE-009`, `REQ-LIFE-010`, `REQ-RUN-001`
+#### Requirement traceability
 
-The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
+| Product | Integration covered | Unit covered | Any covered |
+| --- | ---: | ---: | ---: |
+| Python | `80/88 = 90.9%` | `85/88 = 96.6%` | `85/88 = 96.6%` |
+| macOS | `0/88 = 0.0%` | `2/88 = 2.3%` | `2/88 = 2.3%` |
+| iOS | `7/88 = 8.0%` | `8/88 = 9.1%` | `12/88 = 13.6%` |
 
-The related architecture decomposition is linked to tests through `.github/architecture_traceability.yaml`.
+#### Architecture traceability
 
-This top-level section is a compact coverage snapshot. Update the counts and supporting links here when requirements, implementation, or the test set changes. Keep detailed behavior, rationale, and traceability discussion in `docs/REQUIREMENTS.md`, `docs/ARCHITECTURE.md`, `docs/SYSTEM_BOUNDARY.md`, and `docs/README_TESTING.md`.
+| Product | Integration covered | Unit covered | Any covered |
+| --- | ---: | ---: | ---: |
+| Python | `7/7 = 100.0%` | `7/7 = 100.0%` | `7/7 = 100.0%` |
+| macOS | `0/7 = 0.0%` | `1/7 = 14.3%` | `1/7 = 14.3%` |
+| iOS | `3/7 = 42.9%` | `2/7 = 28.6%` | `4/7 = 57.1%` |
+
+The supporting manifests remain shared:
+
+- product-requirement traceability: [.github/requirements_traceability.yaml](.github/requirements_traceability.yaml)
+- architecture traceability: [.github/architecture_traceability.yaml](.github/architecture_traceability.yaml)
+
+This top-level section is intentionally compact and honest. Keep the detailed behavior, rationale, and scenario-level discussion in [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md), and [docs/README_TESTING.md](docs/README_TESTING.md).
+
+### Python/Swift drift indicator
+Current snapshot from `python3 scripts/report_python_swift_drift.py`:
+
+This section is intentionally narrower than product coverage. It shows the evidence we have that Python and Swift are functionally aligned, not a claim that the two implementations are fully equivalent.
+
+| Evidence lane | Meaning | Integration covered | Unit covered | Any covered |
+| --- | --- | ---: | ---: | ---: |
+| Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `115` | `115` |
+| Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `4` | `0` | `4` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `26` | `0` | `26` |
+| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `17` | `17` |
+| Total parity-oriented evidence | Sum of the lanes above | `30` | `132` | `162` |
+
+Important caveat:
+
+- this is evidence of drift resistance, not proof of full equivalence
+- physical-device iOS behavior is still not covered by a full automated parity lane
+- new Swift-only features still need explicit parity or interop tests before they should be considered aligned by default
 
 ### CI split note
 
