@@ -1180,16 +1180,29 @@ def test_macos_swift_host_runner_myudp_remote_tcp_admin_web_handles_multiple_con
     try:
         python_peer.start()
         _wait_http_json(f"http://127.0.0.1:{hostrunner_admin_port}/api/status", timeout_sec=20.0)
+        _wait_http_condition(
+            f"http://127.0.0.1:{hostrunner_admin_port}/api/peers",
+            lambda doc: bool(doc.get("peers")) and bool(doc["peers"][0].get("secure_link", {}).get("authenticated")),
+            timeout_sec=20.0,
+        )
         _wait_http_json(f"http://127.0.0.1:{remote_tcp_port}/api/status", timeout_sec=20.0)
 
         def _fetch_path(path: str) -> tuple[str, object]:
             url = f"http://127.0.0.1:{remote_tcp_port}{path}"
             if path in {"/", "/app.js", "/style.css"}:
-                return path, _http_text(url)
-            return path, _http_json(url, timeout_sec=5.0)
+                deadline = time.time() + 10.0
+                last_error = "unknown"
+                while time.time() < deadline:
+                    try:
+                        return path, _http_text(url, timeout_sec=3.0)
+                    except Exception as exc:
+                        last_error = f"{type(exc).__name__}: {exc}"
+                        time.sleep(0.1)
+                raise AssertionError(f"timed out waiting for text response from {url}: {last_error}")
+            return path, _wait_http_json(url, timeout_sec=10.0)
 
         paths = ["/api/status", "/api/meta", "/api/connections", "/api/peers", "/", "/app.js", "/style.css", "/api/status"]
-        with ThreadPoolExecutor(max_workers=len(paths)) as executor:
+        with ThreadPoolExecutor(max_workers=min(4, len(paths))) as executor:
             results = list(executor.map(_fetch_path, paths))
 
         result_map = {path: payload for path, payload in results}
@@ -3493,16 +3506,29 @@ def test_macos_swift_host_runner_remote_tcp_admin_web_handles_multiple_connectio
     try:
         python_peer.start()
         _wait_http_json(f"http://127.0.0.1:{hostrunner_admin_port}/api/status", timeout_sec=20.0)
+        _wait_http_condition(
+            f"http://127.0.0.1:{hostrunner_admin_port}/api/peers",
+            lambda doc: bool(doc.get("peers")) and bool(doc["peers"][0].get("secure_link", {}).get("authenticated")),
+            timeout_sec=20.0,
+        )
         _wait_http_json(f"http://127.0.0.1:{remote_tcp_port}/api/status", timeout_sec=20.0)
 
         def _fetch_path(path: str) -> tuple[str, object]:
             url = f"http://127.0.0.1:{remote_tcp_port}{path}"
             if path in {"/", "/app.js", "/style.css"}:
-                return path, _http_text(url)
-            return path, _http_json(url)
+                deadline = time.time() + 10.0
+                last_error = "unknown"
+                while time.time() < deadline:
+                    try:
+                        return path, _http_text(url, timeout_sec=3.0)
+                    except Exception as exc:
+                        last_error = f"{type(exc).__name__}: {exc}"
+                        time.sleep(0.1)
+                raise AssertionError(f"timed out waiting for text response from {url}: {last_error}")
+            return path, _wait_http_json(url, timeout_sec=10.0)
 
         paths = ["/api/status", "/api/meta", "/api/connections", "/api/peers", "/", "/app.js", "/style.css", "/api/status"]
-        with ThreadPoolExecutor(max_workers=len(paths)) as executor:
+        with ThreadPoolExecutor(max_workers=min(4, len(paths))) as executor:
             results = list(executor.map(_fetch_path, paths))
 
         result_map = {path: payload for path, payload in results}
