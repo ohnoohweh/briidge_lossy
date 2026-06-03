@@ -35,6 +35,10 @@
 # reservation mismatch in the shared overlay harness, and updating the Swift
 # parity fixture to supply the control-packet timing fields required by the
 # current peer-runtime API.
+# NOTE: The 2026-06-03 Linux cert-reload timeout follow-up keeps the existing
+# ARC-CMP-004 and ARC-CMP-005 mappings intact while relaxing only the startup
+# timing budget around the authenticated WebAdmin certificate-reload probe in
+# the shared overlay integration harness.
 
 ARC-CMP-001:
   unit_tests:

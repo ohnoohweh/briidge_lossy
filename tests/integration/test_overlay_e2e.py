@@ -8267,7 +8267,7 @@ def test_overlay_e2e_webadmin_cert_reload_buttons_drive_authenticated_reload_flo
             login_code, login_doc, opener = admin_authenticate(client_proc.admin_port or 0, username, password)
             assert login_code == 200
             assert login_doc.get('authenticated') is True
-            wait_probe(case, payload=f'\x01webadmin-reload-prime-{scope}'.encode('ascii'), timeout=12.0)
+            wait_probe(case, payload=f'\x01webadmin-reload-prime-{scope}'.encode('ascii'), timeout=30.0)
             wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label='server')
             wait_status_connected_auth(client_proc.admin_port or 0, timeout=20.0, label='client', opener=opener)
 

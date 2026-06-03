@@ -97,6 +97,10 @@ REQ-OVL-007:
 # Swift/Python host-runner overlay cases to macOS, fixing the Linux onboarding
 # admin-port host reservation mismatch, and updating the Swift parity fixture to
 # pass the peer-runtime control-packet timestamps expected by the current API.
+# NOTE: The 2026-06-03 Linux cert-reload timeout follow-up keeps the existing
+# REQ-AUT-009/010/016 mappings intact while giving the authenticated WebAdmin
+# certificate-reload probe more time to survive slower CI startup on the shared
+# Linux lane.
 # The application-vs-library functional decomposition for REQ-WSP-* is documented in
 # docs/ARCHITECTURE.md under "WebSocket proxy tunneling".
 # The broader separation between user use-cases, external assumptions, and
