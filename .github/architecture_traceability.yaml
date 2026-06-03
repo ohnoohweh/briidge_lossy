@@ -29,6 +29,12 @@
 # existing ARC-CMP-004 runtime/bootstrap mappings intact while renaming
 # resolve-family settings per transport and adding multi-host IPv4/IPv6
 # selection coverage in unit and overlay integration tests.
+# NOTE: The 2026-06-03 CI follow-up keeps the existing ARC-CMP-002/004/005/006
+# mappings intact while moving the mixed Swift/Python host-runner overlay cases
+# behind a macOS-only guard, repairing the Linux onboarding admin-port host
+# reservation mismatch in the shared overlay harness, and updating the Swift
+# parity fixture to supply the control-packet timing fields required by the
+# current peer-runtime API.
 
 ARC-CMP-001:
   unit_tests:
