@@ -83,6 +83,8 @@ def test_ios_secure_link_psk_runtime_probe_authenticates_and_exchanges_data(tmp_
                     let clientAuth = client.handleInboundFrame(serverHelloFrame)
                     let clientProofFrame = clientAuth.emittedFrames.first
                     let serverAuth = clientProofFrame.map { server.handleInboundFrame($0) }
+                    let serverAckFrame = serverAuth?.emittedFrames.first
+                    let clientAck = serverAckFrame.map { client.handleInboundFrame($0) }
 
                     let clientSend = try? client.sendApp(Data("hello-secure".utf8))
                     let clientDataFrame = clientSend?.emittedFrames.first
@@ -94,9 +96,12 @@ def test_ios_secure_link_psk_runtime_probe_authenticates_and_exchanges_data(tmp_
 
                     let payload: [String: Any] = [
                         "client_authenticated": client.statusSnapshot().authenticated,
+                        "client_peer_confirmed_authenticated": client.statusSnapshot().peerConfirmedAuthenticated,
                         "server_authenticated": server.statusSnapshot().authenticated,
+                        "server_peer_confirmed_authenticated": server.statusSnapshot().peerConfirmedAuthenticated,
                         "client_auth_emitted_frames": clientAuth.emittedFrames.count,
                         "server_auth_emitted_frames": serverAuth?.emittedFrames.count ?? -1,
+                        "client_ack_emitted_frames": clientAck?.emittedFrames.count ?? -1,
                         "server_received": serverData?.deliveredPayloads.map { String(data: $0, encoding: .utf8) ?? "" } ?? [],
                         "client_received": clientData?.deliveredPayloads.map { String(data: $0, encoding: .utf8) ?? "" } ?? [],
                         "client_tx_counter": String(client.statusSnapshot().txCounter),
@@ -122,13 +127,16 @@ def test_ios_secure_link_psk_runtime_probe_authenticates_and_exchanges_data(tmp_
 
     assert payload == {
         "client_authenticated": True,
+        "client_peer_confirmed_authenticated": True,
         "server_authenticated": True,
+        "server_peer_confirmed_authenticated": True,
         "client_auth_emitted_frames": 1,
-        "server_auth_emitted_frames": 0,
+        "server_auth_emitted_frames": 1,
+        "client_ack_emitted_frames": 0,
         "server_received": ["hello-secure"],
         "client_received": ["reply-secure"],
         "client_tx_counter": "3",
-        "server_tx_counter": "2",
+        "server_tx_counter": "3",
         "client_session_id": "72623859790382856",
         "server_session_id": "72623859790382856",
     }

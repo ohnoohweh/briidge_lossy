@@ -42,6 +42,14 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
                 sessionID: status.sessionID
             )
         }
+        if status.sessionID != 0, status.authFailCode == 0 {
+            return OutboundSnapshot(
+                emittedFrames: [],
+                queuedPayloads: pendingPayloads.count,
+                authenticated: status.authenticated,
+                sessionID: status.sessionID
+            )
+        }
 
         let handshake = try runtime.beginClientHandshake()
         let emittedFrames = handshake.emittedFrames

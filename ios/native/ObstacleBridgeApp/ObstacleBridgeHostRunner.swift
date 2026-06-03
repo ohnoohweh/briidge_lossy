@@ -606,10 +606,11 @@ final class ObstacleBridgeHostRunner {
         }
 
         let snapshot = adapter.statusSnapshot()
+        let displayAuthenticated = snapshot.peerConfirmedAuthenticated
         let state: String
         let lastEvent: String
         let disconnectReason: String
-        if snapshot.authenticated {
+        if displayAuthenticated {
             state = "authenticated"
             lastEvent = "authenticated"
             disconnectReason = ""
@@ -631,14 +632,14 @@ final class ObstacleBridgeHostRunner {
             "enabled": true,
             "mode": mode,
             "state": state,
-            "authenticated": snapshot.authenticated,
+            "authenticated": displayAuthenticated,
             "session_id": snapshot.sessionID == 0 ? NSNull() : snapshot.sessionID,
             "rekey_in_progress": false,
             "last_event": lastEvent,
             "last_event_unix_ts": NSNull(),
-            "last_authenticated_unix_ts": snapshot.authenticated ? Int(Date().timeIntervalSince1970) : NSNull(),
+            "last_authenticated_unix_ts": displayAuthenticated ? Int(Date().timeIntervalSince1970) : NSNull(),
             "connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : Int(Date().timeIntervalSince1970),
-            "authenticated_sessions_total": snapshot.authenticated ? 1 : 0,
+            "authenticated_sessions_total": displayAuthenticated ? 1 : 0,
             "rekeys_completed_total": 0,
             "peer_subject_id": "",
             "peer_subject_name": "",
@@ -646,7 +647,7 @@ final class ObstacleBridgeHostRunner {
             "peer_deployment_id": "",
             "peer_serial": "",
             "issuer_id": "",
-            "trust_validation_state": snapshot.authenticated ? "validated" : "n/a",
+            "trust_validation_state": displayAuthenticated ? "validated" : "n/a",
             "trust_failure_reason": snapshot.authFailCode == 0 ? "" : "psk_auth_failed",
             "trust_failure_detail": snapshot.authFailCode == 0 ? "" : "code=\(snapshot.authFailCode)",
             "active_material_generation": snapshot.sessionID == 0 ? 0 : 1,

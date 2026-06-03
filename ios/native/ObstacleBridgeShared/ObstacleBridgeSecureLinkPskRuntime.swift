@@ -45,6 +45,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     struct StatusSnapshot {
         var clientMode: Bool
         var authenticated: Bool
+        var peerConfirmedAuthenticated: Bool
         var sessionID: UInt64
         var txCounter: UInt64
         var rxCounter: UInt64
@@ -58,6 +59,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
 
     private var sessionID: UInt64 = 0
     private var authenticated = false
+    private var peerConfirmedAuthenticated = false
     private var clientNonce = Data()
     private var serverNonce = Data()
     private var c2sKey: Data?
@@ -95,6 +97,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         StatusSnapshot(
             clientMode: clientMode,
             authenticated: authenticated,
+            peerConfirmedAuthenticated: peerConfirmedAuthenticated,
             sessionID: sessionID,
             txCounter: txCounter,
             rxCounter: rxCounter,
@@ -170,6 +173,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
             let code = frame.payload.first.map(Int.init) ?? Self.authFailDecode
             lastAuthFailCode = code
             authenticated = false
+            peerConfirmedAuthenticated = false
             return InboundSnapshot(
                 emittedFrames: [],
                 deliveredPayloads: [],
@@ -259,6 +263,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         c2sKey = keys.0
         s2cKey = keys.1
         authenticated = true
+        peerConfirmedAuthenticated = false
         lastAuthFailCode = 0
         do {
             let proofFrame = try buildClientHandshakeProofFrame()
@@ -295,12 +300,30 @@ final class ObstacleBridgeSecureLinkPskRuntime {
             return fail(sessionID: sessionID, code: Self.authFailBadPSK)
         }
         rxCounter = counter
+        var emittedFrames: [Data] = []
         if !authenticated {
             authenticated = true
             lastAuthFailCode = 0
+            if !clientMode, let outboundKey = s2cKey {
+                do {
+                    let ackAAD = ObstacleBridgeSecureLinkPskCodec.headerBytes(
+                        slType: Self.typeData,
+                        sessionID: sessionID,
+                        counter: txCounter
+                    )
+                    let ackCiphertext = try seal(payload: Data(), key: outboundKey, counter: txCounter, aad: ackAAD)
+                    emittedFrames.append(ackAAD + ackCiphertext)
+                    txCounter &+= 1
+                } catch {
+                    return fail(sessionID: sessionID, code: Self.authFailLifecycle)
+                }
+            }
+        }
+        if !peerConfirmedAuthenticated {
+            peerConfirmedAuthenticated = true
         }
         return InboundSnapshot(
-            emittedFrames: [],
+            emittedFrames: emittedFrames,
             deliveredPayloads: plaintext.isEmpty ? [] : [plaintext],
             authenticated: authenticated,
             sessionID: self.sessionID,
@@ -334,6 +357,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     private func fail(sessionID: UInt64, code: Int) -> InboundSnapshot {
         lastAuthFailCode = code
         authenticated = false
+        peerConfirmedAuthenticated = false
         let frame = ObstacleBridgeSecureLinkPskCodec.buildFrame(
             slType: Self.typeAuthFail,
             sessionID: sessionID,
@@ -355,6 +379,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
             sessionID = 0
         }
         authenticated = false
+        peerConfirmedAuthenticated = false
         clientNonce = Data()
         serverNonce = Data()
         c2sKey = nil

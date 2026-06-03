@@ -1669,6 +1669,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
 
         let snapshot = adapter.statusSnapshot()
         let nowUnixTS = Int(Date().timeIntervalSince1970)
+        let displayAuthenticated = snapshot.peerConfirmedAuthenticated
         let previousSessionID = secureLinkLastSessionID
         if snapshot.sessionID == 0 {
             secureLinkConnectedSinceUnixTS = nil
@@ -1679,7 +1680,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             }
             secureLinkLastSessionID = snapshot.sessionID
         }
-        if snapshot.authenticated {
+        if displayAuthenticated {
             if secureLinkLastAuthenticatedUnixTS == nil || previousSessionID != snapshot.sessionID {
                 secureLinkLastAuthenticatedUnixTS = nowUnixTS
             }
@@ -1689,7 +1690,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         let secureState: String
         let lastEvent: String
         let disconnectReason: String
-        if snapshot.authenticated {
+        if displayAuthenticated {
             secureState = "authenticated"
             lastEvent = "authenticated"
             disconnectReason = ""
@@ -1711,14 +1712,14 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "enabled": true,
             "mode": mode,
             "state": secureState,
-            "authenticated": snapshot.authenticated,
+            "authenticated": displayAuthenticated,
             "session_id": snapshot.sessionID == 0 ? NSNull() : snapshot.sessionID,
             "rekey_in_progress": false,
             "last_event": lastEvent,
             "last_event_unix_ts": NSNull(),
-            "last_authenticated_unix_ts": snapshot.authenticated ? (secureLinkLastAuthenticatedUnixTS ?? nowUnixTS) : NSNull(),
+            "last_authenticated_unix_ts": displayAuthenticated ? (secureLinkLastAuthenticatedUnixTS ?? nowUnixTS) : NSNull(),
             "connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTS ?? nowUnixTS),
-            "authenticated_sessions_total": snapshot.authenticated ? 1 : 0,
+            "authenticated_sessions_total": displayAuthenticated ? 1 : 0,
             "rekeys_completed_total": 0,
             "peer_subject_id": "",
             "peer_subject_name": "",
@@ -1726,7 +1727,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "peer_deployment_id": "",
             "peer_serial": "",
             "issuer_id": "",
-            "trust_validation_state": snapshot.authenticated ? "validated" : "n/a",
+            "trust_validation_state": displayAuthenticated ? "validated" : "n/a",
             "trust_failure_reason": snapshot.authFailCode == 0 ? "" : "psk_auth_failed",
             "trust_failure_detail": snapshot.authFailCode == 0 ? "" : "code=\(snapshot.authFailCode)",
             "active_material_generation": snapshot.sessionID == 0 ? 0 : 1,

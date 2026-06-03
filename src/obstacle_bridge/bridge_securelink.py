@@ -2893,6 +2893,7 @@ class SecureLinkPskSession(ISession):
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_BAD_PSK)
             return
         state.rx_counter = counter
+        newly_authenticated = False
         if not state.authenticated:
             self._record_authenticated_session(
                 state,
@@ -2902,6 +2903,9 @@ class SecureLinkPskSession(ISession):
                 rekey_completed=False,
             )
             self._refresh_connected_state()
+            newly_authenticated = True
+        if newly_authenticated and not self._client_mode:
+            self._send_server_handshake_ack(state, peer_id=peer_id)
         if not plaintext:
             return
         if not self._client_mode and peer_id is not None:
@@ -3022,6 +3026,23 @@ class SecureLinkPskSession(ISession):
         if sent:
             state.tx_counter += 1
             state.client_handshake_proof_sent = True
+
+    def _send_server_handshake_ack(self, state: Optional[_SecureLinkPeerState], *, peer_id: Optional[int]) -> None:
+        if self._client_mode or state is None or not state.authenticated:
+            return
+        outbound_key = state.s2c_key
+        if not outbound_key:
+            return
+        counter = int(state.tx_counter or 0)
+        if counter < self._SL_FIRST_DATA_COUNTER or counter > self._SL_MAX_DATA_COUNTER:
+            self._send_auth_fail(peer_id, int(state.session_id or 0), self._SL_AUTH_FAIL_LIFECYCLE)
+            return
+        aad = self._hdr_bytes(self._SL_TYPE_DATA, state.session_id, counter)
+        ciphertext = ChaCha20Poly1305(outbound_key).encrypt(self._nonce(counter), b"", aad)
+        wire = aad + ciphertext
+        sent = self._inner.send_app(wire, peer_id=peer_id)
+        if sent:
+            state.tx_counter += 1
 
     def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
         if self._client_mode and self._client_rekey_hold_after_commit:

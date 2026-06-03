@@ -636,7 +636,7 @@ class _WrappedTCPOverlayPeer(_TCPOverlayPeer):
         return _pack_mux_frame(chan_id, proto, counter, mtype - 0x80, zlib.decompress(body))
 
     def _send_server_data(self, conn: socket.socket, payload: bytes) -> None:
-        wrapped = self._compress_mux_if_profitable(payload)
+        wrapped = self._compress_mux_if_profitable(payload) if payload else b""
         frame = self._seal_secure(4, self._session_id, self._server_tx_counter, wrapped, self._s2c_key)
         self._server_tx_counter += 1
         conn.sendall(_pack_tcp_overlay_payload(frame))
@@ -662,6 +662,7 @@ class _WrappedTCPOverlayPeer(_TCPOverlayPeer):
             if not self._authenticated:
                 self._authenticated = True
                 if not plaintext:
+                    self._send_server_data(conn, b"")
                     continue
             if not plaintext:
                 continue
@@ -700,6 +701,10 @@ class _WrappedTCPOverlayPeer(_TCPOverlayPeer):
             if not self._authenticated:
                 self._authenticated = True
                 if not plaintext:
+                    try:
+                        self._send_server_data(conn, b"")
+                    except OSError:
+                        return
                     continue
             if not plaintext:
                 continue
