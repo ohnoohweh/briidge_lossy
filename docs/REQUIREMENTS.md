@@ -189,6 +189,8 @@ Implementation note: the delivered `REQ-MUX-009` hook-context path now prefers t
 
 Implementation note: the current `REQ-MUX-011` runtime now keeps stable service-scoped throttle windows for the baseline direct 1:1 TUN path and route-scoped throttle windows for shared-TUN delivery paths. When shared-TUN routing selects one peer/channel set, that route gets its own byte budget and throttle-drop counter, so one backed-up peer path does not consume the budget for another healthy peer path. Shared broadcast delivery also runs in its own throttle scope rather than sharing a unicast peer's budget. Shared-TUN snapshots now expose those throttle scopes and per-peer counters for the dedicated TUN/routing admin surface, and a `CryptoKit`-free Swift/Python ChannelMux component parity runner now compares the same multi-scope throttling decisions as the Python runtime.
 
+Implementation note: the current Python integration harness now also carries a focused two-client `myudp` listener restart regression for remote TCP reoffer behavior. After one client's remote TCP service is already in use, the listener server may go away and later return on the same overlay port; the server-side peer view must recover to two active peers again, and fresh TCP connects to the same reoffered remote-service ports must succeed without requiring a full manual teardown of the listener process.
+
 Implementation note: the live-config derivation for `REQ-MUX-010` now also includes a dedicated `ios_tunnel_network` override block so packet-tunnel route sets, DNS servers, MTU, and dual-stack tunnel identities can be overridden from runtime config without forking app-side constants.
 
 ## Loss and delay requirements

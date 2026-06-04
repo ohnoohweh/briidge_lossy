@@ -1567,6 +1567,36 @@ Recommended in-depth Swift-with-Python-server recipe:
   one real Swift-peer-versus-Python-server run has passed after the component
   parity checks
 
+macOS/iOS TODO checklist for this recipe:
+
+- run the native Swift peer against the Linux/Python server for both:
+  - macOS HostRunner
+  - iOS PacketTunnelProvider
+- collect and archive:
+  - Swift-side native logs
+  - Linux server `/api/tun-routing/status` snapshots before, during, and after
+    restart/rebind
+  - packet capture on the Swift host where practical
+- verify the dedicated `TUN / Routing` page from the Swift-admin side while the
+  shared-TUN tests are live
+- verify spoof rejection from the Swift peer using a forged source address from
+  another owned client
+- verify shared-drop counters and recent-drop visibility after:
+  - spoof rejection
+  - unknown-destination drop
+  - scoped throttle drop
+- verify restart/rebind from the Swift side:
+  - stop the Swift peer
+  - confirm Linux server active bindings shrink
+  - restart the Swift peer
+  - confirm the same peer ref rebinds without stale ownership blocking traffic
+- verify broadcast scope isolation with one Swift peer and one Python peer:
+  - congest a broadcast path
+  - confirm a healthy unicast path still carries traffic
+- if any Swift-side fix changes the shared-TUN switching contract, add or
+  update Linux-runnable component parity first, then re-run the real macOS/iOS
+  recipe
+
 The feature should not be considered done until all of the following are true:
 
 - configuration rejects ambiguous ownership

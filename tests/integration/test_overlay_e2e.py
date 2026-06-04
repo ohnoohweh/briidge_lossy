@@ -5023,6 +5023,193 @@ def run_case_server_restart_closes_tcp_preserves_udp(case: Case, log_dir: Path, 
         bounce.stop()
 
 
+def run_case_myudp_listener_two_clients_server_restart_reoffers_remote_tcp(
+    case: Case,
+    log_dir: Path,
+    case_index: int,
+    settle_s: Optional[float] = None,
+    outage_s: float = 8.0,
+) -> None:
+    case = materialize_case_ports(case, case_index)
+    if case.name != 'case15_overlay_listener_myudp_two_clients_concurrent_udp_tcp':
+        raise RuntimeError(f'Unsupported multi-client myudp restart case: {case.name}')
+
+    base_tcp_port = case.bounce_port
+    loopback_v4, _loopback_v6 = _loopback_hosts_for_case(case_index)
+    udp_peer_host = _connect_host_for_bind(_listener_overlay_bind_host(case, 'myudp'), case_index)
+    udp_peer_port = _listener_overlay_port(case, 'myudp')
+    server_admin, client1_admin = alloc_admin_ports(case_index)
+    client2_admin = alloc_admin_port({server_admin, client1_admin}, case_index=case_index + 2)
+    server_proc: Optional[Proc] = None
+    client1_proc: Optional[Proc] = None
+    client2_proc: Optional[Proc] = None
+    held_tcp_sock: Optional[socket.socket] = None
+    missing_cfg = str(log_dir / f'{case.name}_restart_missing.cfg')
+    server_runtime, client_runtime = _bridge_runtime_sides('python-python')
+
+    own_udp_bounces = [
+        BounceBackServer(name=f'{case.name}_restart_own_udp_1', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 20, log_path=log_dir / f'{case.name}_restart_own_udp_1.log'),
+        BounceBackServer(name=f'{case.name}_restart_own_udp_2', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 21, log_path=log_dir / f'{case.name}_restart_own_udp_2.log'),
+        BounceBackServer(name=f'{case.name}_restart_own_udp_3', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 22, log_path=log_dir / f'{case.name}_restart_own_udp_3.log'),
+        BounceBackServer(name=f'{case.name}_restart_own_udp_4', proto='udp', bind_host=case.bounce_bind, port=base_tcp_port + 23, log_path=log_dir / f'{case.name}_restart_own_udp_4.log'),
+    ]
+    tcp_bounces = [
+        BounceBackServer(name=f'{case.name}_restart_tcp_{idx + 1}', proto='tcp', bind_host=case.bounce_bind, port=base_tcp_port + idx, log_path=log_dir / f'{case.name}_restart_tcp_{idx + 1}.log')
+        for idx in range(8)
+    ]
+
+    server_args = list(case.bridge_server_args)
+    server_args += ['--config', missing_cfg, '--admin-web-port', '0']
+    server_args += admin_args(server_admin)
+    server_cmd = build_bridge_command(
+        server_runtime,
+        case_name=case.name,
+        side='bridge_server',
+        bridge_args=server_args,
+        log_dir=log_dir,
+        admin_port=server_admin,
+    )
+
+    client1_args = [
+        '--overlay-transport', 'myudp',
+        '--udp-peer', udp_peer_host, '--udp-peer-port', str(udp_peer_port), '--udp-bind', loopback_v4, '--udp-own-port', '0',
+        '--own-servers',
+        f'udp,{base_tcp_port + 30},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 20}',
+        f'udp,{base_tcp_port + 31},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 21}',
+        f'tcp,{base_tcp_port + 32},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 0}',
+        f'tcp,{base_tcp_port + 33},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 1}',
+        '--remote-servers',
+        f'tcp,{base_tcp_port + 40},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 2}',
+        f'tcp,{base_tcp_port + 41},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 3}',
+        '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
+        '--log-file', str(log_dir / f'{case.name}_bridge_client_1_{case.name}_restart_bridge_client_1.txt'),
+        '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
+    ]
+    client1_args += admin_args(client1_admin)
+    client1_cmd = build_bridge_command(
+        client_runtime,
+        case_name=case.name,
+        side='bridge_client_1',
+        bridge_args=client1_args,
+        log_dir=log_dir,
+        admin_port=client1_admin,
+    )
+
+    client2_args = [
+        '--overlay-transport', 'myudp',
+        '--udp-peer', udp_peer_host, '--udp-peer-port', str(udp_peer_port), '--udp-bind', loopback_v4, '--udp-own-port', '0',
+        '--own-servers',
+        f'udp,{base_tcp_port + 34},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 22}',
+        f'udp,{base_tcp_port + 35},{loopback_v4},udp,{case.bounce_bind},{base_tcp_port + 23}',
+        f'tcp,{base_tcp_port + 36},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 4}',
+        f'tcp,{base_tcp_port + 37},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 5}',
+        '--remote-servers',
+        f'tcp,{base_tcp_port + 44},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 6}',
+        f'tcp,{base_tcp_port + 45},{loopback_v4},tcp,{case.bounce_bind},{base_tcp_port + 7}',
+        '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
+        '--log-file', str(log_dir / f'{case.name}_bridge_client_2_{case.name}_restart_bridge_client_2.txt'),
+        '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
+    ]
+    client2_args += admin_args(client2_admin)
+    client2_cmd = build_bridge_command(
+        client_runtime,
+        case_name=case.name,
+        side='bridge_client_2',
+        bridge_args=client2_args,
+        log_dir=log_dir,
+        admin_port=client2_admin,
+    )
+
+    def start_server() -> Proc:
+        nonlocal server_proc
+        server_proc = start_proc(f'{case.name}_restart_bridge_server', server_cmd, log_dir, env_extra=case.server_env, admin_port=server_admin)
+        time.sleep(0.5)
+        assert_running(server_proc)
+        wait_admin_up(server_admin, timeout=10.0)
+        return server_proc
+
+    try:
+        phase('1. Start UDP/TCP bounce-back services')
+        for bounce in own_udp_bounces + tcp_bounces:
+            bounce.start()
+
+        phase('2. Start bridge listener and two myudp peer clients')
+        start_server()
+        client1_proc = start_proc(f'{case.name}_restart_bridge_client_1', client1_cmd, log_dir, env_extra=case.client_env, admin_port=client1_admin)
+        client2_proc = start_proc(f'{case.name}_restart_bridge_client_2', client2_cmd, log_dir, env_extra=case.client_env, admin_port=client2_admin)
+        time.sleep(0.8)
+        assert_running(client1_proc)
+        assert_running(client2_proc)
+        wait_admin_up(client1_admin, timeout=10.0)
+        wait_admin_up(client2_admin, timeout=10.0)
+        client1_proc = ensure_proc_up(client1_proc, log_dir)
+        client2_proc = ensure_proc_up(client2_proc, log_dir)
+        server_proc = ensure_proc_up(server_proc, log_dir)
+        time.sleep(case.settle_seconds if settle_s is None else settle_s)
+
+        phase('3. Verify both myudp clients are attached and open one live remote TCP channel')
+        wait_status_connected(client1_admin, timeout=20.0, label='client1')
+        wait_status_connected(client2_admin, timeout=20.0, label='client2')
+        wait_peers_count(server_admin, minimum_count=2, timeout=12.0, label='server')
+        wait_listener_peer_rows_zeroed(server_admin, timeout=12.0, label='server')
+        wait_distinct_peer_endpoints(server_admin, transport='myudp', minimum_count=2, timeout=12.0, label='server')
+        wait_tcp_listen(case.probe_host, base_tcp_port + 40, timeout=8.0)
+        wait_tcp_listen(case.probe_host, base_tcp_port + 44, timeout=8.0)
+
+        tcp_family = socket.AF_INET6 if ':' in case.probe_host else socket.AF_INET
+        held_tcp_sock = socket.socket(tcp_family, socket.SOCK_STREAM)
+        if case.probe_bind is not None:
+            held_tcp_sock.bind((case.probe_bind, 0))
+        held_tcp_sock.settimeout(3.0)
+        held_tcp_sock.connect((case.probe_host, base_tcp_port + 40))
+        held_tcp_sock.sendall(b'\x01client1-remote-before-restart')
+        held_reply = held_tcp_sock.recv(4096)
+        if held_reply != b'\x02client1-remote-before-restart':
+            raise RuntimeError(f'Unexpected held TCP reply before restart: {held_reply!r}')
+        client2_probe_before = probe_tcp(case.probe_host, base_tcp_port + 44, case.probe_bind, b'\x01client2-remote-before-restart', timeout=4.0)
+        if client2_probe_before != b'\x02client2-remote-before-restart':
+            raise RuntimeError(f'Unexpected client2 remote TCP reply before restart: {client2_probe_before!r}')
+
+        phase('4. Stop the listener, wait through an outage, then require both peers to reconnect')
+        assert server_proc is not None
+        stop_proc(server_proc)
+        wait_status_not_connected(client1_admin, timeout=30.0, label='client1')
+        wait_status_not_connected(client2_admin, timeout=30.0, label='client2')
+        wait_tcp_socket_closed(held_tcp_sock, timeout=8.0)
+        time.sleep(outage_s)
+
+        start_server()
+        client1_proc = ensure_proc_up(client1_proc, log_dir, admin_timeout=10.0)
+        client2_proc = ensure_proc_up(client2_proc, log_dir, admin_timeout=10.0)
+        server_proc = ensure_proc_up(server_proc, log_dir, admin_timeout=10.0)
+        wait_peers_count(server_admin, minimum_count=2, timeout=35.0, label='server')
+        wait_distinct_peer_endpoints(server_admin, transport='myudp', minimum_count=2, timeout=35.0, label='server')
+
+        phase('5. Verify fresh TCP connects succeed again on the same reoffered server ports')
+        wait_tcp_listen(case.probe_host, base_tcp_port + 40, timeout=12.0)
+        wait_tcp_listen(case.probe_host, base_tcp_port + 44, timeout=12.0)
+        client1_probe_after = probe_tcp(case.probe_host, base_tcp_port + 40, case.probe_bind, b'\x01client1-remote-after-restart', timeout=8.0)
+        if client1_probe_after != b'\x02client1-remote-after-restart':
+            raise RuntimeError(f'Unexpected client1 remote TCP reply after restart: {client1_probe_after!r}')
+        client2_probe_after = probe_tcp(case.probe_host, base_tcp_port + 44, case.probe_bind, b'\x01client2-remote-after-restart', timeout=8.0)
+        if client2_probe_after != b'\x02client2-remote-after-restart':
+            raise RuntimeError(f'Unexpected client2 remote TCP reply after restart: {client2_probe_after!r}')
+    finally:
+        if held_tcp_sock is not None:
+            try:
+                held_tcp_sock.close()
+            except Exception:
+                pass
+        if client2_proc is not None:
+            stop_proc(client2_proc)
+        if client1_proc is not None:
+            stop_proc(client1_proc)
+        if server_proc is not None:
+            stop_proc(server_proc)
+        for bounce in own_udp_bounces + tcp_bounces:
+            bounce.stop()
+
+
 def run_case_mixed_overlay_two_clients_concurrent_udp_tcp(
     case: Case,
     log_dir: Path,
@@ -10706,6 +10893,16 @@ def test_overlay_e2e_myudp_secure_link_psk_listener_two_clients_concurrent_udp_t
             client1_extra_args=secure_args,
             client2_extra_args=secure_args,
         )
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_listener_myudp_two_clients_server_restart_reoffers_remote_tcp(tmp_path: Path) -> None:
+    run_case_myudp_listener_two_clients_server_restart_reoffers_remote_tcp(
+        CASES['case15_overlay_listener_myudp_two_clients_concurrent_udp_tcp'],
+        tmp_path,
+        case_index=283,
+    )
 
 
 @pytest.mark.integration

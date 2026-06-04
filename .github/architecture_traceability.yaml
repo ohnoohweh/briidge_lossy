@@ -158,6 +158,7 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_drop_snapshot_tracks_reasons_and_bounds_recent_entries
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_allows_rebind_after_peer_disconnect
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_scoped_tun_throttle_sequence_preserves_unrelated_scope_budget
+    - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_scope_ids_preserve_broadcast_unicast_isolation
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_applies_tun_routing_override
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
   integration_tests:
@@ -169,6 +170,7 @@ ARC-CMP-003:
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_over_ws_secure_link_fragments
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_two_clients_routes_and_rejects_spoof
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_disconnect_cleanup_rebinds_peer
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_myudp_two_clients_server_restart_reoffers_remote_tcp
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_keepalive_same_connection_with_secure_link_myudp_peer_on_mixed_listener
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener
 

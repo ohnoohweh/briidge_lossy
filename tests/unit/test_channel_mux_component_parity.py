@@ -661,6 +661,49 @@ def test_swift_component_scoped_tun_throttle_sequence_preserves_unrelated_scope_
     assert swift["snapshots"] == python
 
 
+def test_swift_component_shared_tun_scope_ids_preserve_broadcast_unicast_isolation(
+    swift_channelmux_component_runner: Path,
+) -> None:
+    sequence = [
+        {
+            "scope_id": "shared:local:0:5:broadcast:peers=77,88:chans=11,22",
+            "packet_bytes": 120,
+            "buffered_frames": 0,
+            "now_ns": 0,
+        },
+        {
+            "scope_id": "shared:local:0:5:broadcast:peers=77,88:chans=11,22",
+            "packet_bytes": 120,
+            "buffered_frames": 1,
+            "now_ns": 100_000_000,
+        },
+        {
+            "scope_id": "shared:local:0:5:unicast:peers=77:chans=11",
+            "packet_bytes": 120,
+            "buffered_frames": 0,
+            "now_ns": 200_000_000,
+        },
+        {
+            "scope_id": "shared:local:0:5:unicast:peers=77:chans=11",
+            "packet_bytes": 100,
+            "buffered_frames": 1,
+            "now_ns": 300_000_000,
+        },
+    ]
+    python = _python_scoped_tun_throttle_sequence_summary(sequence)
+    swift = _run_swift_component(
+        swift_channelmux_component_runner,
+        {
+            "action": "drive_channelmux_scoped_tun_throttle_sequence",
+            "scope_ids": [str(step["scope_id"]) for step in sequence],
+            "packet_bytes_sequence": [int(step["packet_bytes"]) for step in sequence],
+            "buffered_frames_sequence": [int(step["buffered_frames"]) for step in sequence],
+            "now_ns_sequence": [int(step["now_ns"]) for step in sequence],
+        },
+    )
+    assert swift["snapshots"] == python
+
+
 def test_swift_component_shared_tun_outbound_route_unmapped_destination_matches_python(
     swift_channelmux_component_runner: Path,
 ) -> None:
