@@ -1,6 +1,8 @@
 import Foundation
 
 final class ObstacleBridgeQuicOverlayRuntime {
+    private static let lenFieldSize = 4
+    private static let kindApp: UInt8 = 0x00
     struct SendSnapshot {
         var txBytes: Int
         var peerTxNotifications: [Int]
@@ -143,19 +145,27 @@ final class ObstacleBridgeQuicOverlayRuntime {
 
     func handleInboundBytes(_ buffer: Data) -> ReceiveSnapshot {
         var completedPayloads: [Data] = []
+        let bytes = Array(buffer)
         var cursor = 0
-        while (buffer.count - cursor) >= 5 {
-            let length = Self.readUInt32(buffer, offset: cursor)
-            guard length > 0 else {
+        while (bytes.count - cursor) >= Self.lenFieldSize {
+            let length = Self.readUInt32(bytes, offset: cursor)
+            if length == 0 {
+                cursor += Self.lenFieldSize
+                continue
+            }
+            let totalLength = Self.lenFieldSize + Int(length)
+            guard totalLength >= (Self.lenFieldSize + 1) else {
+                cursor += Self.lenFieldSize
+                continue
+            }
+            guard (bytes.count - cursor) >= totalLength else {
                 break
             }
-            let totalLength = 4 + Int(length)
-            guard (buffer.count - cursor) >= totalLength else {
-                break
-            }
-            let marker = buffer[cursor + 4]
-            if marker == 0x00 {
-                completedPayloads.append(buffer.subdata(in: (cursor + 5)..<(cursor + totalLength)))
+            let marker = bytes[cursor + Self.lenFieldSize]
+            if marker == Self.kindApp {
+                let payloadStart = cursor + Self.lenFieldSize + 1
+                let payloadEnd = cursor + totalLength
+                completedPayloads.append(Data(bytes[payloadStart..<payloadEnd]))
             }
             cursor += totalLength
         }
@@ -289,11 +299,13 @@ final class ObstacleBridgeQuicOverlayRuntime {
         return data
     }
 
-    private static func readUInt32(_ data: Data, offset: Int) -> UInt32 {
-        let start = data.startIndex + offset
-        let end = start + 4
-        return data[start..<end].reduce(UInt32(0)) { partial, byte in
-            (partial << 8) | UInt32(byte)
+    private static func readUInt32(_ bytes: [UInt8], offset: Int) -> UInt32 {
+        guard offset >= 0, (bytes.count - offset) >= lenFieldSize else {
+            return 0
         }
+        return (UInt32(bytes[offset]) << 24)
+            | (UInt32(bytes[offset + 1]) << 16)
+            | (UInt32(bytes[offset + 2]) << 8)
+            | UInt32(bytes[offset + 3])
     }
 }

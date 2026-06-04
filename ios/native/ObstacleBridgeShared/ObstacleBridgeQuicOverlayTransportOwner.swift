@@ -30,6 +30,8 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     private var overlayConnection: NWConnection?
     private var overlayConnected = false
     private var receiveBuffer = Data()
+    private var pendingOutboundWires: [Data] = []
+    private var outboundSendInFlight = false
     private var started = false
     private var reconnectAttempts = 0
     private var reconnectScheduled = false
@@ -140,6 +142,8 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         activeTunChanIDs.removeAll()
         tunStats = ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
         receiveBuffer.removeAll(keepingCapacity: false)
+        pendingOutboundWires.removeAll(keepingCapacity: false)
+        outboundSendInFlight = false
         startupMuxFramesSent = false
     }
 
@@ -386,6 +390,8 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         overlayConnection?.cancel()
         overlayConnection = nil
         receiveBuffer.removeAll(keepingCapacity: false)
+        pendingOutboundWires.removeAll(keepingCapacity: false)
+        outboundSendInFlight = false
         if let adapter = overlayLayerTransportAdapter {
             adapter.handleTransportDisconnected()
         }
@@ -570,14 +576,40 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         for frame in frames {
             let snapshot = overlayRuntime.sendApp(payload: frame, writerPresent: overlayConnection != nil, peerConfigured: !peerHost.isEmpty)
             for wire in snapshot.writtenBuffers {
-                overlayConnection?.send(
-                    content: wire,
-                    contentContext: .defaultStream,
-                    isComplete: false,
-                    completion: .contentProcessed({ _ in })
-                )
+                enqueueOutboundWire(wire)
             }
         }
+    }
+
+    private func enqueueOutboundWire(_ wire: Data) {
+        guard !wire.isEmpty else { return }
+        pendingOutboundWires.append(wire)
+        flushNextOutboundWireIfNeeded()
+    }
+
+    private func flushNextOutboundWireIfNeeded() {
+        guard !outboundSendInFlight, let connection = overlayConnection, !pendingOutboundWires.isEmpty else {
+            return
+        }
+        outboundSendInFlight = true
+        let wire = pendingOutboundWires.removeFirst()
+        connection.send(
+            content: wire,
+            contentContext: .defaultStream,
+            isComplete: false,
+            completion: .contentProcessed { [weak self] error in
+                guard let self else { return }
+                self.queue.async {
+                    self.outboundSendInFlight = false
+                    if let error {
+                        self.eventSink?("quic_overlay_send_failed", ["error": error.localizedDescription])
+                        self.pendingOutboundWires.removeAll(keepingCapacity: false)
+                        return
+                    }
+                    self.flushNextOutboundWireIfNeeded()
+                }
+            }
+        )
     }
 
     private func sendPayload(_ payload: Data) {

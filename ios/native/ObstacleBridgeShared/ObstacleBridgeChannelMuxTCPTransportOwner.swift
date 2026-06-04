@@ -31,6 +31,8 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
     private let openChunkReassembler = ObstacleBridgeChannelMuxCodec.ControlChunkReassembler()
 
     private var serverConnections: [Int: NWConnection] = [:]
+    private var pendingServerOpenFrames: [Int: [Data]] = [:]
+    private var startedServerChannels: Set<Int> = []
     private var clientConnections: [Int: NWConnection] = [:]
     private var activatedClientChannels: Set<Int> = []
     private var active = true
@@ -79,6 +81,8 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
             cancelConnection(connection)
         }
         serverConnections.removeAll()
+        pendingServerOpenFrames.removeAll()
+        startedServerChannels.removeAll()
         clientConnections.removeAll()
         activatedClientChannels.removeAll()
     }
@@ -109,8 +113,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
                 }
             }
             connection.start(queue: queue)
-            muxFrameSink(acceptSnapshot.frames)
-            receiveFromServerConnection(chanID: chanID)
+            pendingServerOpenFrames[chanID] = acceptSnapshot.frames
             return chanID
         } catch {
             eventSink?("\(eventPrefix)_tcp_accept_failed", ["service_id": spec.svcID, "error": error.localizedDescription])
@@ -174,6 +177,14 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
     private func handleServerConnectionState(_ state: NWConnection.State, chanID: Int) {
         switch state {
         case .ready:
+            eventSink?("\(eventPrefix)_tcp_server_connection_ready", ["chan_id": chanID])
+            if !startedServerChannels.contains(chanID) {
+                startedServerChannels.insert(chanID)
+                receiveFromServerConnection(chanID: chanID)
+                if let frames = pendingServerOpenFrames.removeValue(forKey: chanID) {
+                    muxFrameSink(frames)
+                }
+            }
             transportEventSink?(.serverConnected(chanID: chanID))
         case .failed(let error):
             eventSink?("\(eventPrefix)_tcp_server_connection_failed", ["chan_id": chanID, "error": error.localizedDescription])
@@ -193,12 +204,14 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
             self?.queue.async {
                 guard let self, self.active else { return }
                 if let data, !data.isEmpty {
+                    self.eventSink?("\(self.eventPrefix)_tcp_server_data_read", ["chan_id": chanID, "bytes": data.count])
                     do {
                         let snapshot = try self.runtime.handleLocalServerData(
                             chanID: chanID,
                             payload: data,
                             overlayConnected: self.overlayConnectedProvider()
                         )
+                        self.eventSink?("\(self.eventPrefix)_tcp_server_data_mux", ["chan_id": chanID, "bytes": data.count, "frames": snapshot.frames.count, "sent": snapshot.sent])
                         self.muxFrameSink(snapshot.frames)
                         self.transportEventSink?(.serverOutbound(chanID: chanID, bytes: data.count))
                     } catch {
@@ -206,6 +219,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
                     }
                 }
                 if isComplete || error != nil {
+                    self.eventSink?("\(self.eventPrefix)_tcp_server_receive_done", ["chan_id": chanID, "is_complete": isComplete, "has_error": error != nil])
                     self.closeServerConnection(chanID: chanID)
                     return
                 }
@@ -216,6 +230,8 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
 
     private func closeServerConnection(chanID: Int) {
         let connection = serverConnections.removeValue(forKey: chanID)
+        pendingServerOpenFrames.removeValue(forKey: chanID)
+        startedServerChannels.remove(chanID)
         do {
             let snapshot = try runtime.handleLocalServerEOF(chanID: chanID, overlayConnected: overlayConnectedProvider())
             muxFrameSink(snapshot.frames)
