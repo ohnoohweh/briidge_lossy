@@ -920,6 +920,13 @@ class ChannelMux:
         if svc_key is not None:
             catalog = "own_servers" if str(svc_key[0]) == "local" else "remote_servers"
         overlay_peer_host, overlay_peer_port = self._current_overlay_peer_endpoint()
+        ifname = str(spec.l_bind) if str(spec.l_proto) == "tun" else ""
+        if str(spec.l_proto) == "tun" and svc_key is not None:
+            dev = self._svc_tun_devices.get(svc_key)
+            if dev is not None:
+                realized_ifname = str(getattr(dev, "ifname", "") or "").strip()
+                if realized_ifname:
+                    ifname = realized_ifname
         return {
             "service_id": int(spec.svc_id),
             "service_name": str(spec.name or f"svc-{spec.svc_id}"),
@@ -931,7 +938,7 @@ class ChannelMux:
             "listen_port": int(spec.l_port),
             "target_host": str(spec.r_host),
             "target_port": int(spec.r_port),
-            "ifname": str(spec.l_bind) if str(spec.l_proto) == "tun" else "",
+            "ifname": ifname,
             "peer_id": "" if peer_id is None else int(peer_id),
             "peer_endpoint": "",
             "overlay_transport": str(self._overlay_transport or ""),

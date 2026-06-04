@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ._bridge_import import export_bridge_globals
 import contextlib as _process_contextlib
+import shutil
 import signal as _process_signal
 from typing import Mapping
 
@@ -2227,9 +2228,76 @@ def _restore_process_signal_handlers(installed: list[tuple[int, object]]) -> Non
             _process_signal.signal(signum, previous)
 
 
+def _configured_local_tun_services(args: argparse.Namespace) -> list[Any]:
+    raw_specs = getattr(args, "own_servers", None)
+    try:
+        specs = ChannelMux._parse_own_servers(raw_specs)
+    except Exception:
+        return []
+    return [spec for spec in specs if str(getattr(spec, "l_proto", "") or "").strip().lower() == "tun"]
+
+
+def _configured_packetflow_connector_mode(args: argparse.Namespace) -> str:
+    return str(getattr(args, "packetflow_connector", "") or "").strip().lower()
+
+
+def _needs_macos_tun_elevation(args: argparse.Namespace) -> bool:
+    if not sys.platform.startswith("darwin"):
+        return False
+    geteuid = getattr(os, "geteuid", None)
+    if not callable(geteuid):
+        return False
+    if int(geteuid()) == 0:
+        return False
+    if str(os.environ.get("OBSTACLEBRIDGE_MACOS_TUN_ELEVATED", "") or "").strip():
+        return False
+    if not _configured_local_tun_services(args):
+        return False
+    if _configured_packetflow_connector_mode(args):
+        return False
+    return True
+
+
+def _macos_tun_elevation_exec_argv(argv: Optional[List[str]] = None) -> list[str]:
+    runtime_argv = list(argv) if argv is not None else list(sys.argv[1:])
+    return [
+        "sudo",
+        "-E",
+        sys.executable,
+        "-m",
+        "obstacle_bridge.bridge_runner",
+        *runtime_argv,
+    ]
+
+
+def _maybe_reexec_with_macos_tun_privileges(
+    args: argparse.Namespace,
+    *,
+    argv: Optional[List[str]],
+    log: logging.Logger,
+) -> None:
+    if not _needs_macos_tun_elevation(args):
+        return
+    sudo_path = shutil.which("sudo")
+    if not sudo_path:
+        raise RuntimeError(
+            "macOS local TUN services require elevated privileges, but sudo is not available. "
+            "Install sudo or run the runtime as root."
+        )
+    cmd = _macos_tun_elevation_exec_argv(argv)
+    env = dict(os.environ)
+    env["OBSTACLEBRIDGE_MACOS_TUN_ELEVATED"] = "1"
+    log.warning(
+        "[RUNNER] re-executing with elevated privileges for macOS local TUN service(s); "
+        "this keeps the Python TUN lifecycle aligned with the Linux route/interface model"
+    )
+    os.execvpe(sudo_path, cmd, env)
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     args = parse_runtime_args(argv, apply_logging=True)
     log = logging.getLogger("runner")
+    _maybe_reexec_with_macos_tun_privileges(args, argv=argv, log=log)
     r = Runner(args)
     installed_signal_handlers = _install_process_signal_handlers(r, log)
     log.info("[RUNNER] process start pid=%s argv=%r", os.getpid(), list(argv) if argv is not None else sys.argv[1:])

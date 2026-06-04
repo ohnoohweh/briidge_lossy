@@ -1462,6 +1462,56 @@ The following delivery rules still apply to all future work on this feature:
 - Python and Swift admin surfaces expose the same shared-TUN observability
   contract, with component-level parity coverage for payload derivation
 
+### macOS and iOS parity status
+
+- Swift overlay owners for `tcp`, `myudp`, `ws`, and `quic` now all accept the
+  full structured `tun -> tun` service specification rather than reconstructing
+  a lossy local-only TUN description
+- the same production shared-TUN runtime path is now integrated into the Swift
+  overlay owners on both:
+  - macOS `ObstacleBridgeHostRunner`
+  - iOS `PacketTunnelProvider`
+- Swift admin snapshots for both macOS and iOS expose runtime-shaped
+  `shared_tun_ownership` on TUN listening rows, including:
+  - `active_peer_bindings`
+  - `throttle_scopes`
+  - `drop_counters`
+  - `recent_drops`
+- macOS Swift/Python mixed-process coverage now proves the shared-TUN
+  control-plane and row-shape contract across:
+  - `tcp`
+  - `myudp`
+  - `ws`
+  - `quic`
+- the macOS Swift-backed subprocess lane now reuses the prebuilt HostRunner
+  artifact from `ios/scripts/build_macos_app.sh` rather than compiling a fresh
+  Swift binary per test case
+- iOS probe coverage now proves the same transport-matrix contract across:
+  - `tcp`
+  - `myudp`
+  - `ws`
+  - `quic`
+- Swift component parity also covers:
+  - ownership snapshot derivation
+  - guarded inbound decision paths
+  - route planning
+  - disconnect cleanup / rebind cleanup
+  - scoped throttling behavior
+
+### macOS host support status
+
+- Python now has a native macOS `utun` backend in
+  [bridge_tun_macos.py](../src/obstacle_bridge/bridge_tun_macos.py)
+- macOS-specific lifecycle hooks exist for Python-driven TUN setup:
+  - [client-tun-hook-macos.sh](../scripts/client-tun-hook-macos.sh)
+  - [server-tun-hook-macos.sh](../scripts/server-tun-hook-macos.sh)
+- Swift now has a native macOS `utun` adapter in
+  [ObstacleBridgeMacOSTunAdapter.swift](../ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift)
+- those additions mean both the Python and Swift stacks can now own real macOS
+  TUN interfaces rather than only simulating the control plane
+- the remaining gap is not basic device access anymore; it is stronger
+  end-to-end proof of shared-TUN runtime behavior under live packet carriage
+
 ### Verified host coverage
 
 - Linux elevated coverage proves a server-owned shared TUN with multiple peers
@@ -1471,39 +1521,48 @@ The following delivery rules still apply to all future work on this feature:
 - the baseline 1:1 TUN path remains part of the acceptance target for the same
   feature family
 
-## Next phases
+## Further steps
 
-### Phase 7: robustness hardening
+### Shared-TUN runtime proof on Swift peers
 
 Deliverables:
 
-- bounded logging/counters for drops
-- reconnect race hardening
-- optional escalation policy for repeated spoof attempts
-- documentation and traceability completion
+- prove active shared-TUN peer bindings from real Swift peers rather than only
+  from component logic and admin-row contract tests
+- prove spoof rejection from a real Swift peer using another peer's source
+  address
+- prove restart/rebind behavior from real Swift peers against the Python/Linux
+  server
+- prove broadcast-scope and throttle-scope isolation under live Swift traffic
+- prove elevated real TUN packet carriage for the Swift/macOS path now that a
+  native `utun` adapter exists
 
 Testing:
 
-- regression tests for reconnect storms
-- regression tests for stale ownership after rapid disconnect/reconnect
-- regression tests for duplicate claims under concurrent peer activity
-- regression tests for shared-TUN throttling under broadcast, relay, and
-  elevated multi-peer load
-- long-running elevated soak coverage where practical
+- mixed Swift/Python subprocess tests that move beyond control-plane visibility
+  and confirm live runtime state mutation
+- macOS/iOS Swift peer tests against the Linux/Python server for:
+  - active binding creation
+  - spoof drop visibility
+  - disconnect cleanup and rebind
+  - peer-to-peer relay
+  - scoped throttle isolation
+- elevated macOS Python and Swift TUN carriage tests where host permissions
+  make that practical
 - parity regression tests that compare Python and Swift behavior on reconnect,
   stale cleanup, spoof rejection, peer-to-peer relay, and scoped throttling
 
 Operational target:
 
-- robustness hardening must never be allowed to become Python-only
+- shared-TUN runtime hardening must never be allowed to become Python-only
 - any bug fix in one runtime that affects the shared TUN switching contract
   must add or update parity coverage for the other runtime as part of the same
   change
 
 Exit criteria:
 
-- the feature is not only functionally correct but resilient to the failure
-  modes that would otherwise turn it into a prototype
+- the feature is not only functionally correct at the control-plane and
+  component level, but also resilient under real Swift peer runtime behavior
 
 ## Test strategy summary
 
@@ -1520,6 +1579,7 @@ Recommended test pyramid:
   - epoch-reset cleanup
 - subprocess integration tests for:
   - control-plane install and snapshot visibility
+  - runtime-shaped shared-TUN observability on listening rows
   - peer-scoped routing decisions without privileged host networking where
     possible
 - elevated integration tests for:
@@ -1537,6 +1597,9 @@ Recommended in-depth Swift-with-Python-server recipe:
 - keep the server on Linux/Python and run the peer on macOS or iOS using the
   native Swift runtime; this proves the real cross-runtime contract rather than
   only same-runtime behavior
+- on macOS, prefer the already-built HostRunner artifact and reuse it across
+  the subprocess suite; only add one explicit failure-injection build variant
+  if a deeper runtime seam is truly required
 - start with baseline 1:1 TUN carriage before enabling shared-TUN ownership
   so any failure can be isolated to the shared-switch layer
 - then run one server-owned shared TUN with at least:
@@ -1567,7 +1630,23 @@ Recommended in-depth Swift-with-Python-server recipe:
   one real Swift-peer-versus-Python-server run has passed after the component
   parity checks
 
-macOS/iOS TODO checklist for this recipe:
+Current Swift parity status for this recipe:
+
+- completed:
+  - component parity for shared-TUN ownership, route planning, guarded inbound
+    decisions, disconnect cleanup, and scoped throttling
+  - macOS mixed-process control-plane visibility across `tcp`, `myudp`, `ws`,
+    and `quic`
+  - iOS probe visibility across `tcp`, `myudp`, `ws`, and `quic`
+  - native macOS TUN device support on both Python and Swift sides
+- not yet fully proven:
+  - active binding mutation from live Swift peers
+  - real Swift-peer spoof rejection
+  - restart/rebind after live Swift peer restart
+  - broadcast-scope and throttle-scope isolation under live Swift traffic
+  - elevated real TUN packet carriage for the Swift/macOS path
+
+macOS/iOS further-step checklist for this recipe:
 
 - run the native Swift peer against the Linux/Python server for both:
   - macOS HostRunner
