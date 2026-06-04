@@ -47,6 +47,10 @@
 # same ARC-CMP-004 and ARC-CMP-005 mappings intact while requiring that the
 # forwarded TCP probe listener itself be accepting connections before the first
 # authenticated WebAdmin certificate-reload prime probe is sent.
+# NOTE: The 2026-06-04 Linux full-reload admin-recovery follow-up keeps the
+# same ARC-CMP-004 and ARC-CMP-005 mappings intact while making the full-
+# material certificate reload integration case wait for admin-surface recovery
+# and CONNECTED runtime state before checking post-reload authenticated peers.
 # NOTE: The 2026-06-04 shared-TUN Phase 1 follow-up keeps the existing
 # ARC-CMP-003 mapping intact while adding validated structured ownership
 # metadata for tun->tun services and defending that metadata with Swift/Python

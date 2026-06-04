@@ -94,6 +94,10 @@ REQ-OVL-007:
 # gate before the first authenticated TCP probe: the forwarded probe listener
 # itself must be accepting connections, not just the admin session and secure-
 # link peer row.
+# NOTE: The 2026-06-04 full-material cert-reload Linux shared follow-up keeps
+# the same REQ-AUT-015/017/019 mappings intact while making the integration
+# harness wait for the client admin endpoint and CONNECTED runtime state to
+# recover before asserting post-reload authenticated peer state.
 # NOTE: The 2026-05-31 transport-scoped peer-resolution follow-up keeps the
 # REQ-OVL-007 mapping aligned while renaming resolve-family settings per
 # transport, preserving Python multi-host IPv4/IPv6 preference-plus-fallback

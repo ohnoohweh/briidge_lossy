@@ -8816,6 +8816,8 @@ def test_overlay_e2e_tcp_secure_link_cert_full_reload_applies_atomically(tmp_pat
             assert body.get('ok') is True
             assert body.get('scope') == 'all'
             assert int(body.get('dropped') or 0) >= 1
+            wait_admin_up(client_proc.admin_port or 0, timeout=12.0)
+            client_proc = wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label='client')
             client_doc = wait_peer_secure_link_state(client_proc.admin_port or 0, expected_state='authenticated', timeout=12.0, label='client', transport='tcp', authenticated=True)
             secure = dict((first_active_secure_link_row(client_doc, transport='tcp').get('secure_link') or {}))
             assert secure.get('last_material_reload_scope') == 'all'
