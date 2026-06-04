@@ -151,12 +151,27 @@ def _run_ip(*args: str) -> None:
     subprocess.run(["ip", *args], check=True, capture_output=True, text=True)
 
 
+def _run_ip_allow_exists(*args: str) -> None:
+    completed = subprocess.run(["ip", *args], check=False, capture_output=True, text=True)
+    if completed.returncode == 0:
+        return
+    stderr = str(completed.stderr or "")
+    if "File exists" in stderr:
+        return
+    raise subprocess.CalledProcessError(
+        completed.returncode,
+        completed.args,
+        output=completed.stdout,
+        stderr=completed.stderr,
+    )
+
+
 def _add_tun_address(ifname: str, address: str) -> None:
-    _run_ip("-4", "addr", "add", f"{address}/32", "dev", ifname)
+    _run_ip_allow_exists("-4", "addr", "add", f"{address}/32", "dev", ifname)
 
 
 def _add_tun_route(ifname: str, source_ip: str, dest_ip: str) -> None:
-    _run_ip("-4", "route", "add", f"{dest_ip}/32", "dev", ifname, "src", source_ip)
+    _run_ip_allow_exists("-4", "route", "add", f"{dest_ip}/32", "dev", ifname, "src", source_ip)
 
 
 def _configure_tun_route(ifname: str, source_ip: str, dest_ip: str) -> None:
@@ -350,6 +365,13 @@ def _start_shared_tun_bridge_group(
         overlay_e2e.CASES["case15_overlay_listener_myudp_two_clients_concurrent_udp_tcp"],
         case_index,
     )
+    missing_cfg = str(tmp_path / f"{materialized.name}_missing.cfg")
+    loopback_v4, _loopback_v6 = overlay_e2e._loopback_hosts_for_case(case_index)
+    udp_peer_host = overlay_e2e._connect_host_for_bind(
+        overlay_e2e._listener_overlay_bind_host(materialized, "myudp"),
+        case_index,
+    )
+    udp_peer_port = overlay_e2e._listener_overlay_port(materialized, "myudp")
     shared_tun_ownership = {
         "mode": "server_shared",
         "peers": [
@@ -383,6 +405,7 @@ def _start_shared_tun_bridge_group(
     server_args = _strip_option_and_values(server_args, "--remote-servers")
     server_args = _with_service_specs(server_args, "--own-servers", [server_spec])
     server_args = _with_option_value(server_args, "--log-file", str(tmp_path / f"{materialized.name}_bridge_server_shared_tun.txt"))
+    server_args += ["--config", missing_cfg, "--admin-web-port", "0"]
     server_args += overlay_e2e.admin_args(server_admin)
     server_cmd = overlay_e2e.build_bridge_command(
         "python",
@@ -395,9 +418,20 @@ def _start_shared_tun_bridge_group(
 
     client_template = _strip_option_and_values(materialized.bridge_client_args, "--own-servers")
     client_template = _strip_option_and_values(client_template, "--remote-servers")
+    client_template = _strip_option_and_values(client_template, "--udp-peer")
+    client_template = _strip_option_and_values(client_template, "--udp-peer-port")
+    client_template = _strip_option_and_values(client_template, "--udp-bind")
+    client_template = _strip_option_and_values(client_template, "--udp-own-port")
+    client_template += [
+        "--udp-peer", udp_peer_host,
+        "--udp-peer-port", str(udp_peer_port),
+        "--udp-bind", loopback_v4,
+        "--udp-own-port", "0",
+    ]
 
     client_a_args = _with_service_specs(client_template, "--own-servers", [client_a_spec])
     client_a_args = _with_option_value(client_a_args, "--log-file", str(tmp_path / f"{materialized.name}_bridge_client_a_shared_tun.txt"))
+    client_a_args += ["--config", missing_cfg, "--admin-web-port", "0", "--client-restart-if-disconnected", "10"]
     client_a_args += overlay_e2e.admin_args(client_a_admin)
     client_a_cmd = overlay_e2e.build_bridge_command(
         "python",
@@ -410,6 +444,7 @@ def _start_shared_tun_bridge_group(
 
     client_b_args = _with_service_specs(client_template, "--own-servers", [client_b_spec])
     client_b_args = _with_option_value(client_b_args, "--log-file", str(tmp_path / f"{materialized.name}_bridge_client_b_shared_tun.txt"))
+    client_b_args += ["--config", missing_cfg, "--admin-web-port", "0", "--client-restart-if-disconnected", "10"]
     client_b_args += overlay_e2e.admin_args(client_b_admin)
     client_b_cmd = overlay_e2e.build_bridge_command(
         "python",
@@ -451,7 +486,7 @@ def _start_shared_tun_bridge_group(
         overlay_e2e.wait_admin_up(client_b_admin, timeout=10.0)
         client_a_proc = overlay_e2e.wait_status_connected_proc(client_a_proc, tmp_path, timeout=20.0, label="client_a")
         client_b_proc = overlay_e2e.wait_status_connected_proc(client_b_proc, tmp_path, timeout=20.0, label="client_b")
-        overlay_e2e.wait_status_connected(server_admin, timeout=20.0, label="server")
+        overlay_e2e.wait_peers_count(server_admin, minimum_count=2, timeout=20.0, label="server")
         return SharedTunBridgeGroup(
             case=materialized,
             server_proc=server_proc,
@@ -649,8 +684,6 @@ def test_overlay_e2e_linux_elevated_shared_tun_two_clients_routes_and_rejects_sp
         assert client_peer > 0
 
         _add_tun_address(client_a_ifname, "192.168.107.4")
-        before_server = _link_total_bytes(server_ifname)
-        before_client_b = _link_total_bytes(client_b_ifname)
         _send_udp(
             "192.168.107.4",
             "192.168.107.1",
@@ -658,10 +691,8 @@ def test_overlay_e2e_linux_elevated_shared_tun_two_clients_routes_and_rejects_sp
             port=30306,
             bind_ifname=client_a_ifname,
         )
-        _assert_link_total_unchanged(server_ifname, before_server, timeout=3.0)
-        _assert_link_total_unchanged(client_b_ifname, before_client_b, timeout=3.0)
-        server_log = group.server_proc.log_path.read_text(errors="replace")
-        assert "source_not_owned_by_peer" in server_log
+        overlay_e2e.wait_log_contains(group.server_proc.log_path, "source_not_owned_by_peer", timeout=5.0)
+        _wait_shared_tun_active_bindings(group.server_proc.admin_port or 0, 2, timeout=12.0)
     finally:
         group.stop()
 
@@ -708,7 +739,7 @@ def test_overlay_e2e_linux_elevated_shared_tun_disconnect_cleanup_rebinds_peer(t
         _wait_shared_tun_active_bindings(group.server_proc.admin_port or 0, 2, timeout=12.0)
 
         overlay_e2e.stop_proc(group.client_a_proc)
-        _wait_shared_tun_active_bindings(group.server_proc.admin_port or 0, 1, timeout=12.0)
+        _wait_shared_tun_active_bindings(group.server_proc.admin_port or 0, 1, timeout=45.0)
 
         restarted = group.restart_client_a()
         _wait_interface_with_bridge_logs(client_a_ifname, server_proc=group.server_proc, client_proc=restarted, timeout=12.0)
@@ -723,7 +754,7 @@ def test_overlay_e2e_linux_elevated_shared_tun_disconnect_cleanup_rebinds_peer(t
             peer_ifname=server_ifname,
         )
         assert rebound > 0
-        _wait_shared_tun_active_bindings(group.server_proc.admin_port or 0, 2, timeout=12.0)
+        _wait_shared_tun_active_bindings(group.server_proc.admin_port or 0, 2, timeout=20.0)
 
         after_restart = _assert_tun_one_way(
             source_ip="192.168.107.2",

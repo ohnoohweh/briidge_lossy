@@ -416,6 +416,53 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
                 7,
             )
 
+    def test_listener_mode_retains_prestarted_server_owned_shared_tun_service(self):
+        args = argparse.Namespace(
+            own_servers=[
+                '{"name":"shared-tun","listen":{"protocol":"tun","ifname":"obtun0","mtu":1400},'
+                '"target":{"protocol":"tun","ifname":"obtun0","mtu":1400},'
+                '"options":{"shared_tun_ownership":{"mode":"server_shared","peers":['
+                '{"peer_ref":"linux-client","ipv4":["192.168.107.2"]}]}}}'
+            ],
+            remote_servers=None,
+            overlay_transport="myudp",
+            udp_bind="0.0.0.0",
+            udp_own_port=4433,
+            udp_peer="",
+            udp_peer_port=None,
+            mux_tcp_bp_threshold=1,
+            mux_tcp_bp_latency_ms=300,
+            mux_tcp_bp_poll_interval_ms=50,
+        )
+        mux = ChannelMux.from_args(_FakeSession(connected=False), asyncio.new_event_loop(), args)
+        try:
+            self.assertIn(("local", 0, 1), mux._local_services)
+            self.assertTrue(ChannelMux._is_server_shared_tun_service(mux._local_services[("local", 0, 1)]))
+        finally:
+            mux.loop.close()
+
+    def test_listener_mode_still_ignores_ambiguous_non_shared_own_services(self):
+        args = argparse.Namespace(
+            own_servers=[
+                '{"listen":{"protocol":"udp","bind":"127.0.0.1","port":10001},'
+                '"target":{"protocol":"udp","host":"127.0.0.1","port":10002}}'
+            ],
+            remote_servers=None,
+            overlay_transport="myudp",
+            udp_bind="0.0.0.0",
+            udp_own_port=4433,
+            udp_peer="",
+            udp_peer_port=None,
+            mux_tcp_bp_threshold=1,
+            mux_tcp_bp_latency_ms=300,
+            mux_tcp_bp_poll_interval_ms=50,
+        )
+        mux = ChannelMux.from_args(_FakeSession(connected=False), asyncio.new_event_loop(), args)
+        try:
+            self.assertEqual(mux._local_services, {})
+        finally:
+            mux.loop.close()
+
     def test_open_payload_roundtrip_preserves_hook_metadata(self):
         mux = ChannelMux(_FakeSession(), asyncio.new_event_loop())
         try:
@@ -830,6 +877,38 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         start_all.assert_awaited_once()
         send_catalog.assert_called_once()
         schedule_hook.assert_any_call(spec, svc_key, 'listener', 'on_created')
+
+    async def test_start_prestarts_listener_shared_tun_service_while_overlay_disconnected(self):
+        spec = ChannelMux.ServiceSpec(
+            svc_id=9,
+            l_proto='tun',
+            l_bind='obtun0',
+            l_port=1400,
+            r_proto='tun',
+            r_host='obtun0',
+            r_port=1400,
+            options={
+                'shared_tun_ownership': {
+                    'mode': 'server_shared',
+                    'peers': [
+                        {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                    ],
+                }
+            },
+        )
+        svc_key = ('local', 0, 9)
+        self.mux._local_services[svc_key] = spec
+        self.mux._overlay_connected = False
+        self.mux._accepting_enabled = False
+
+        with patch.object(self.mux, '_start_tun_server_for', new=AsyncMock()) as start_tun, \
+             patch.object(self.mux, '_start_all_services', new=AsyncMock()) as start_all, \
+             patch.object(self.mux, '_send_remote_services_catalog_if_any') as send_catalog:
+            await self.mux.start()
+
+        start_tun.assert_awaited_once_with(spec, svc_key)
+        start_all.assert_not_awaited()
+        send_catalog.assert_not_called()
 
     async def test_receiver_starts_udp_and_tcp_listeners_from_remote_catalog(self):
         udp_spec = ChannelMux.ServiceSpec(1, 'udp', '127.0.0.1', 10001, 'udp', '127.0.0.1', 20001)

@@ -215,12 +215,20 @@ class ChannelMux:
         mux._next_udp_id = mux._chan_id_start
         mux._next_tcp_id = mux._chan_id_start
         if listener_mode and services:
-            mux.log.info(
-                "[MUX] listener mode detected: ignoring %d --own-servers entries; "
-                "the listening peer must not expose ambiguous local services when multiple overlay peers connect",
-                len(services),
-            )
-            services = []
+            retained_services = [s for s in services if ChannelMux._is_server_shared_tun_service(s)]
+            ignored_count = len(services) - len(retained_services)
+            if ignored_count:
+                mux.log.info(
+                    "[MUX] listener mode detected: ignoring %d --own-servers entries; "
+                    "the listening peer must not expose ambiguous local services when multiple overlay peers connect",
+                    ignored_count,
+                )
+            if retained_services:
+                mux.log.info(
+                    "[MUX] listener mode retaining %d prestarted server-owned shared TUN service(s)",
+                    len(retained_services),
+                )
+            services = retained_services
         if listener_mode and remote_services:
             mux.log.info(
                 "[MUX] listener mode detected: ignoring %d --remote-servers entries; "
@@ -524,6 +532,14 @@ class ChannelMux:
                 if isinstance(entry, dict)
             ]
         return snapshot
+
+    @staticmethod
+    def _is_server_shared_tun_service(spec: "ChannelMux.ServiceSpec") -> bool:
+        if str(getattr(spec, "l_proto", "") or "").lower() != "tun":
+            return False
+        if str(getattr(spec, "r_proto", "") or "").lower() != "tun":
+            return False
+        return ChannelMux._shared_tun_ownership_snapshot_for_spec(spec) is not None
 
     @staticmethod
     def _parse_structured_service_spec(item: dict, arg_name: str, sid: int) -> "ChannelMux.ServiceSpec":
@@ -1475,6 +1491,7 @@ class ChannelMux:
         else:
             self.log.info("[MUX] services: (none)")
         self.log.info("[MUX] start; overlay_connected=%s accepting=%s", self._overlay_connected, self._accepting_enabled)
+        await self._start_prestaged_listener_shared_tun_services()
         if self._overlay_connected and self._accepting_enabled:
             await self._start_all_services()
             self._send_remote_services_catalog_if_any()
@@ -1528,6 +1545,22 @@ class ChannelMux:
             if self._hook_command_spec_for(spec, "listener", "on_created") is None:
                 continue
             self._schedule_service_hook(spec, svc_key, "listener", "on_created")
+
+    async def _start_prestaged_listener_shared_tun_services(self) -> None:
+        for svc_key, spec in self._local_services.items():
+            if svc_key in self._svc_tun_devices:
+                continue
+            if not self._is_server_shared_tun_service(spec):
+                continue
+            try:
+                await self._start_tun_server_for(spec, svc_key)
+            except Exception as e:
+                self.log.warning(
+                    "[MUX] prestarted shared TUN service %s:%s start failed: %r",
+                    svc_key[0],
+                    spec.svc_id,
+                    e,
+                )
 
     def on_overlay_peer_set(self, host: str, port: int) -> None:
         self._overlay_peer_host = str(host or self._overlay_peer_host or "")

@@ -1589,6 +1589,10 @@ Delivered slice:
 
 - Linux elevated coverage now includes one server-owned shared TUN listener plus
   two real myudp-connected client TUN peers under `/dev/net/tun`
+- the delivered elevated slice also forced the runtime to honor the server-owned
+  startup model in passive listener mode: explicit `server_shared` `tun -> tun`
+  `own_servers` entries are now retained on a listener and prestarted before
+  any peer is connected
 - the delivered elevated slice proves server <-> client A, server <-> client B,
   and client A -> client B carriage through the shared server switch using real
   host packet I/O
