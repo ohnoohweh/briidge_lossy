@@ -215,8 +215,12 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
                         "peer_id": 7,
                         "preferred_chan_id": 301,
                         "bound_chan_ids": [301],
+                        "throttle_prev_window_bytes": 0,
+                        "throttle_curr_window_bytes": 0,
+                        "throttle_drop_count": 0,
                     }
                 ],
+                "throttle_scopes": [],
             },
         )
 

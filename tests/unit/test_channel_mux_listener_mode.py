@@ -1668,6 +1668,92 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
         finally:
             mux.loop.close()
 
+    def test_local_tun_packet_shared_throttle_is_scoped_per_peer_channel(self):
+        session = _FakeSession(connected=True, waiting_count=0)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._overlay_connected = True
+            mux._accepting_enabled = True
+            spec = ChannelMux.ServiceSpec(
+                5,
+                'tun',
+                'obtun0',
+                1500,
+                'tun',
+                'obtun1',
+                1500,
+                options={
+                    'shared_tun_ownership': {
+                        'mode': 'server_shared',
+                        'peers': [
+                            {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                            {'peer_ref': 'ios-client', 'ipv4': ['192.168.107.4']},
+                        ],
+                    }
+                },
+            )
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+            mux._install_shared_tun_ownership_for_service(svc_key, spec)
+
+            mux._chan_owner_peer_id[11] = 77
+            mux._bind_tun_channel(11, dev)
+            mux._chan_owner_peer_id[22] = 88
+            mux._bind_tun_channel(22, dev)
+            mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=11,
+                packet=_ipv4_packet('192.168.107.2', '192.168.107.1'),
+            )
+            mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=22,
+                packet=_ipv4_packet('192.168.107.4', '192.168.107.1'),
+            )
+            packet_a = _ipv4_packet('192.168.107.1', '192.168.107.2', b'a' * 100)
+            packet_b_seed = _ipv4_packet('192.168.107.1', '192.168.107.4', b'b' * 100)
+            packet_a_budget = _ipv4_packet('192.168.107.1', '192.168.107.2', b'c' * 80)
+            packet_a_over = _ipv4_packet('192.168.107.1', '192.168.107.2', b'd' * 20)
+            packet_b_budget = _ipv4_packet('192.168.107.1', '192.168.107.4', b'e' * 80)
+
+            with patch("obstacle_bridge.bridge_channelmux.time.monotonic_ns", side_effect=[0, 0, 100_000_000, 100_000_000, 100_000_000]), patch.object(mux, '_send_mux') as send_mux:
+                mux._on_local_tun_packet(dev, packet_a)
+                mux._on_local_tun_packet(dev, packet_b_seed)
+                session._metrics.waiting_count = 1
+                mux._on_local_tun_packet(dev, packet_a_budget)
+                mux._on_local_tun_packet(dev, packet_a_over)
+                mux._on_local_tun_packet(dev, packet_b_budget)
+
+            self.assertEqual(
+                send_mux.call_args_list,
+                [
+                    unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet_a),
+                    unittest.mock.call(22, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet_b_seed),
+                    unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet_a_budget),
+                    unittest.mock.call(22, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet_b_budget),
+                ],
+            )
+            snapshot = mux._shared_tun_runtime_snapshot_for_service(svc_key)
+            assert snapshot is not None
+            scopes = {entry["scope_id"]: entry for entry in snapshot["throttle_scopes"]}
+            linux_scope = next(entry for entry in scopes.values() if entry["selected_peer_ids"] == [77])
+            ios_scope = next(entry for entry in scopes.values() if entry["selected_peer_ids"] == [88])
+            self.assertEqual(linux_scope["throttle_drop_count"], 1)
+            self.assertEqual(linux_scope["prev_window_bytes"], len(packet_a))
+            self.assertEqual(ios_scope["throttle_drop_count"], 0)
+            self.assertEqual(
+                [entry for entry in snapshot["active_peer_bindings"] if entry["peer_id"] == 77][0]["throttle_drop_count"],
+                1,
+            )
+            self.assertEqual(
+                [entry for entry in snapshot["active_peer_bindings"] if entry["peer_id"] == 88][0]["throttle_drop_count"],
+                0,
+            )
+        finally:
+            mux.loop.close()
+
     def test_local_tun_packet_drops_shared_unknown_destination(self):
         session = _FakeSession(connected=True)
         mux = ChannelMux(session, asyncio.new_event_loop())

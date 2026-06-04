@@ -73,6 +73,14 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         var dropReason: String?
     }
 
+    struct ScopedTunThrottleSnapshot {
+        var scopeID: String
+        var allowed: Bool
+        var prevWindowBytes: Int
+        var currWindowBytes: Int
+        var throttleDropCount: Int
+    }
+
     struct InboundTunFragmentSnapshot {
         var delivered: Bool
         var packet: Data?
@@ -99,6 +107,13 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         var receivedBytes: Int
     }
 
+    private struct TunInflowScopeState {
+        var windowStartNS: UInt64?
+        var previousBytes: Int
+        var currentBytes: Int
+        var throttleDropCount: Int
+    }
+
     private let instanceID: UInt64
     private let connectionSeq: UInt32
     private let chanIDStart: Int
@@ -112,9 +127,7 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     private var boundTunChanIDs: Set<Int>
     private var preferredTunChanID: Int?
     private var fragmentStates: [FragmentKey: FragmentState]
-    private var tunInflowWindowStartNS: UInt64?
-    private var tunInflowPreviousBytes: Int
-    private var tunInflowCurrentBytes: Int
+    private var tunInflowScopeStates: [String: TunInflowScopeState]
     private let controlChunkReassembler: ObstacleBridgeChannelMuxCodec.ControlChunkReassembler
 
     init(
@@ -139,9 +152,7 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         self.boundTunChanIDs = []
         self.preferredTunChanID = nil
         self.fragmentStates = [:]
-        self.tunInflowWindowStartNS = nil
-        self.tunInflowPreviousBytes = 0
-        self.tunInflowCurrentBytes = 0
+        self.tunInflowScopeStates = [:]
         self.controlChunkReassembler = ObstacleBridgeChannelMuxCodec.ControlChunkReassembler()
     }
 
@@ -162,7 +173,8 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             return nil
         }
         let sendNowNS = nowNS ?? DispatchTime.now().uptimeNanoseconds
-        guard localTunSendAllowed(packetBytes: packet.count, bufferedFrames: bufferedFrames, nowNS: sendNowNS) else {
+        let defaultScopeID = "direct:\(spec.svcID)"
+        guard localTunSendAllowed(packetBytes: packet.count, bufferedFrames: bufferedFrames, nowNS: sendNowNS, scopeID: defaultScopeID) else {
             return nil
         }
 
@@ -185,7 +197,7 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             return nil
         }
         frames.append(contentsOf: dataFrames)
-        recordLocalTunForward(packetBytes: packet.count, nowNS: sendNowNS)
+        recordLocalTunForward(packetBytes: packet.count, nowNS: sendNowNS, scopeID: defaultScopeID)
         return LocalTunSendSnapshot(
             chanID: chanID,
             allocatedChannel: allocatedChannel,
@@ -195,40 +207,73 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         )
     }
 
-    private func advanceTunInflowWindow(nowNS: UInt64) {
-        guard let startNS = tunInflowWindowStartNS else {
-            tunInflowWindowStartNS = nowNS
-            return
+    private func advanceTunInflowWindow(scopeID: String, nowNS: UInt64) -> TunInflowScopeState {
+        var state = tunInflowScopeStates[scopeID] ?? TunInflowScopeState(
+            windowStartNS: nil,
+            previousBytes: 0,
+            currentBytes: 0,
+            throttleDropCount: 0
+        )
+        guard let startNS = state.windowStartNS else {
+            state.windowStartNS = nowNS
+            tunInflowScopeStates[scopeID] = state
+            return state
         }
         let elapsed = nowNS &- startNS
         guard elapsed >= Self.tunInflowThrottleWindowNS else {
-            return
+            return state
         }
         let windows = elapsed / Self.tunInflowThrottleWindowNS
         if windows == 1 {
-            tunInflowPreviousBytes = tunInflowCurrentBytes
+            state.previousBytes = state.currentBytes
         } else {
-            tunInflowPreviousBytes = 0
+            state.previousBytes = 0
         }
-        tunInflowCurrentBytes = 0
-        tunInflowWindowStartNS = startNS &+ windows &* Self.tunInflowThrottleWindowNS
+        state.currentBytes = 0
+        state.windowStartNS = startNS &+ windows &* Self.tunInflowThrottleWindowNS
+        tunInflowScopeStates[scopeID] = state
+        return state
     }
 
-    private func localTunSendAllowed(packetBytes: Int, bufferedFrames: Int, nowNS: UInt64) -> Bool {
-        advanceTunInflowWindow(nowNS: nowNS)
+    private func localTunSendAllowed(packetBytes: Int, bufferedFrames: Int, nowNS: UInt64, scopeID: String) -> Bool {
+        let state = advanceTunInflowWindow(scopeID: scopeID, nowNS: nowNS)
         guard bufferedFrames > 0 else {
             return true
         }
-        let allowanceBytes = Int(Double(tunInflowPreviousBytes) * Self.tunInflowThrottleRatio)
+        let allowanceBytes = Int(Double(state.previousBytes) * Self.tunInflowThrottleRatio)
         guard allowanceBytes > 0 else {
             return false
         }
-        return (tunInflowCurrentBytes + max(0, packetBytes)) <= allowanceBytes
+        return (state.currentBytes + max(0, packetBytes)) <= allowanceBytes
     }
 
-    private func recordLocalTunForward(packetBytes: Int, nowNS: UInt64) {
-        advanceTunInflowWindow(nowNS: nowNS)
-        tunInflowCurrentBytes += max(0, packetBytes)
+    private func recordLocalTunForward(packetBytes: Int, nowNS: UInt64, scopeID: String) {
+        var state = advanceTunInflowWindow(scopeID: scopeID, nowNS: nowNS)
+        state.currentBytes += max(0, packetBytes)
+        tunInflowScopeStates[scopeID] = state
+    }
+
+    func handleScopedTunThrottle(packetBytes: Int, bufferedFrames: Int, nowNS: UInt64, scopeID: String) -> ScopedTunThrottleSnapshot {
+        let allowed = localTunSendAllowed(
+            packetBytes: packetBytes,
+            bufferedFrames: bufferedFrames,
+            nowNS: nowNS,
+            scopeID: scopeID
+        )
+        var state = advanceTunInflowWindow(scopeID: scopeID, nowNS: nowNS)
+        if allowed {
+            state.currentBytes += max(0, packetBytes)
+        } else {
+            state.throttleDropCount += 1
+        }
+        tunInflowScopeStates[scopeID] = state
+        return ScopedTunThrottleSnapshot(
+            scopeID: scopeID,
+            allowed: allowed,
+            prevWindowBytes: state.previousBytes,
+            currWindowBytes: state.currentBytes,
+            throttleDropCount: state.throttleDropCount
+        )
     }
 
     func handleInboundTunOpen(chanID: Int, payload: Data) -> InboundTunOpenSnapshot {

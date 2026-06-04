@@ -153,6 +153,8 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_ignores_transmit_delay_without_buffered_frames
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_throttles_when_buffered_frames_exceed_recent_budget
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_local_tun_throttle_sequence_matches_python
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_shared_throttle_is_scoped_per_peer_channel
+    - tests/unit/test_channel_mux_component_parity.py::test_swift_component_scoped_tun_throttle_sequence_preserves_unrelated_scope_budget
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_applies_tun_routing_override
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
   integration_tests:

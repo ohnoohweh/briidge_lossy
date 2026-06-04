@@ -497,6 +497,7 @@ class ChannelMux:
     def _shared_tun_runtime_snapshot(
         ownership: Optional[dict[str, Any]],
         active_peer_bindings: Optional[list[dict[str, Any]]] = None,
+        throttle_scopes: Optional[list[dict[str, Any]]] = None,
     ) -> Optional[dict[str, Any]]:
         if not isinstance(ownership, dict):
             return None
@@ -518,6 +519,7 @@ class ChannelMux:
             "owner_by_ipv4": {str(k): str(v) for k, v in dict(ownership.get("owner_by_ipv4") or {}).items()},
             "owner_by_ipv6": {str(k): str(v) for k, v in dict(ownership.get("owner_by_ipv6") or {}).items()},
             "active_peer_bindings": [],
+            "throttle_scopes": [],
         }
         if isinstance(active_peer_bindings, list):
             snapshot["active_peer_bindings"] = [
@@ -527,8 +529,25 @@ class ChannelMux:
                         None if entry.get("preferred_chan_id") is None else int(entry.get("preferred_chan_id"))
                     ),
                     "bound_chan_ids": [int(v) for v in list(entry.get("bound_chan_ids") or [])],
+                    "throttle_prev_window_bytes": int(entry.get("throttle_prev_window_bytes", 0) or 0),
+                    "throttle_curr_window_bytes": int(entry.get("throttle_curr_window_bytes", 0) or 0),
+                    "throttle_drop_count": int(entry.get("throttle_drop_count", 0) or 0),
                 }
                 for entry in active_peer_bindings
+                if isinstance(entry, dict)
+            ]
+        if isinstance(throttle_scopes, list):
+            snapshot["throttle_scopes"] = [
+                {
+                    "scope_id": str(entry.get("scope_id") or ""),
+                    "route_class": str(entry.get("route_class") or ""),
+                    "selected_peer_ids": [int(v) for v in list(entry.get("selected_peer_ids") or [])],
+                    "selected_chan_ids": [int(v) for v in list(entry.get("selected_chan_ids") or [])],
+                    "prev_window_bytes": int(entry.get("prev_window_bytes", 0) or 0),
+                    "curr_window_bytes": int(entry.get("curr_window_bytes", 0) or 0),
+                    "throttle_drop_count": int(entry.get("throttle_drop_count", 0) or 0),
+                }
+                for entry in throttle_scopes
                 if isinstance(entry, dict)
             ]
         return snapshot
@@ -695,9 +714,7 @@ class ChannelMux:
         self._shared_tun_runtime_by_peer: dict[tuple[ChannelMux.ServiceKey, int], dict[str, Any]] = {}
         self._shared_tun_peer_ref_by_peer: dict[tuple[ChannelMux.ServiceKey, int], str] = {}
         self._shared_tun_peer_id_by_ref: dict[tuple[ChannelMux.ServiceKey, str], int] = {}
-        self._tun_inflow_window_start_ns: Optional[int] = None
-        self._tun_inflow_prev_bytes: int = 0
-        self._tun_inflow_curr_bytes: int = 0
+        self._tun_inflow_scope_state: dict[tuple[Any, ...], dict[str, Any]] = {}
         self._chan_owner_peer_id: dict[int, int] = {}
         self._ctrl_chunk_rx: dict[tuple[int, int, int, int, int], dict[str, Any]] = {}
         self._ctrl_chunk_next_txid: int = 1
@@ -1838,6 +1855,11 @@ class ChannelMux:
             for key, value in self._shared_tun_peer_id_by_ref.items()
             if key[0] != svc_key
         }
+        self._tun_inflow_scope_state = {
+            key: value
+            for key, value in self._tun_inflow_scope_state.items()
+            if not (len(key) >= 3 and key[0] == "shared" and key[1] == svc_key)
+        }
 
     def _drop_shared_tun_state_for_peer(self, peer_id: int) -> None:
         self._shared_tun_runtime_by_peer = {
@@ -1857,6 +1879,11 @@ class ChannelMux:
             ref_key = (key[0], str(peer_ref))
             if self._shared_tun_peer_id_by_ref.get(ref_key) == int(peer_id):
                 self._shared_tun_peer_id_by_ref.pop(ref_key, None)
+        self._tun_inflow_scope_state = {
+            key: value
+            for key, value in self._tun_inflow_scope_state.items()
+            if not (len(key) >= 4 and key[0] == "shared" and int(peer_id) in set(key[3]))
+        }
 
     def _record_shared_tun_peer_binding(
         self,
@@ -1914,12 +1941,91 @@ class ChannelMux:
                 "peer_id": int(key[1]),
                 "preferred_chan_id": state.get("preferred_chan_id"),
                 "bound_chan_ids": [int(v) for v in list(state.get("bound_chan_ids") or [])],
+                "throttle_prev_window_bytes": 0,
+                "throttle_curr_window_bytes": 0,
+                "throttle_drop_count": 0,
             }
             for key, state in self._shared_tun_runtime_by_peer.items()
             if key[0] == svc_key and isinstance(state, dict)
         ]
+        throttle_scopes = self._shared_tun_throttle_scope_snapshots_for_service(svc_key)
+        throttle_by_peer: dict[int, dict[str, Any]] = {}
+        for scope in throttle_scopes:
+            selected_peer_ids = [int(v) for v in list(scope.get("selected_peer_ids") or [])]
+            if len(selected_peer_ids) == 1:
+                throttle_by_peer[int(selected_peer_ids[0])] = scope
+        for entry in active_peer_bindings:
+            scope = throttle_by_peer.get(int(entry.get("peer_id", 0) or 0))
+            if not isinstance(scope, dict):
+                continue
+            entry["throttle_prev_window_bytes"] = int(scope.get("prev_window_bytes", 0) or 0)
+            entry["throttle_curr_window_bytes"] = int(scope.get("curr_window_bytes", 0) or 0)
+            entry["throttle_drop_count"] = int(scope.get("throttle_drop_count", 0) or 0)
         active_peer_bindings.sort(key=lambda entry: int(entry.get("peer_id", 0)))
-        return self._shared_tun_runtime_snapshot(ownership, active_peer_bindings)
+        return self._shared_tun_runtime_snapshot(ownership, active_peer_bindings, throttle_scopes)
+
+    @staticmethod
+    def _direct_tun_inflow_scope_key(
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        chan_id: Optional[int],
+    ) -> tuple[Any, ...]:
+        return ("direct", svc_key)
+
+    @staticmethod
+    def _shared_tun_inflow_scope_key(
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        route: Optional[dict[str, Any]],
+    ) -> Optional[tuple[Any, ...]]:
+        if svc_key is None or not isinstance(route, dict) or not bool(route.get("routed")):
+            return None
+        return (
+            "shared",
+            svc_key,
+            str(route.get("route_class") or ""),
+            tuple(int(v) for v in list(route.get("selected_peer_ids") or [])),
+            tuple(int(v) for v in list(route.get("selected_chan_ids") or [])),
+        )
+
+    @staticmethod
+    def _tun_inflow_scope_id(scope_key: tuple[Any, ...]) -> str:
+        if not scope_key:
+            return ""
+        if scope_key[0] == "shared" and len(scope_key) >= 5:
+            _, svc_key, route_class, peer_ids, chan_ids = scope_key[:5]
+            return (
+                f"shared:{svc_key[0]}:{svc_key[1]}:{svc_key[2]}:{route_class}:"
+                f"peers={','.join(str(int(v)) for v in peer_ids)}:"
+                f"chans={','.join(str(int(v)) for v in chan_ids)}"
+            )
+        if scope_key[0] == "direct" and len(scope_key) >= 3:
+            _, svc_key, chan_id = scope_key[:3]
+            return f"direct:{svc_key}:{'' if chan_id is None else int(chan_id)}"
+        if scope_key[0] == "direct" and len(scope_key) >= 2:
+            _, svc_key = scope_key[:2]
+            return f"direct:{svc_key}"
+        return str(scope_key)
+
+    def _shared_tun_throttle_scope_snapshots_for_service(
+        self,
+        svc_key: "ChannelMux.ServiceKey",
+    ) -> list[dict[str, Any]]:
+        snapshots: list[dict[str, Any]] = []
+        for key, state in self._tun_inflow_scope_state.items():
+            if len(key) < 5 or key[0] != "shared" or key[1] != svc_key or not isinstance(state, dict):
+                continue
+            snapshots.append(
+                {
+                    "scope_id": self._tun_inflow_scope_id(key),
+                    "route_class": str(key[2] or ""),
+                    "selected_peer_ids": [int(v) for v in key[3]],
+                    "selected_chan_ids": [int(v) for v in key[4]],
+                    "prev_window_bytes": int(state.get("prev_bytes", 0) or 0),
+                    "curr_window_bytes": int(state.get("curr_bytes", 0) or 0),
+                    "throttle_drop_count": int(state.get("throttle_drop_count", 0) or 0),
+                }
+            )
+        snapshots.sort(key=lambda entry: str(entry.get("scope_id") or ""))
+        return snapshots
 
     def _shared_tun_bound_peer_ref_for_packet(
         self,
@@ -2777,55 +2883,71 @@ class ChannelMux:
         except (TypeError, ValueError):
             return 0
 
-    def _advance_tun_inflow_window(self, now_ns: int) -> None:
-        start_ns = self._tun_inflow_window_start_ns
+    def _advance_tun_inflow_window(self, scope_key: tuple[Any, ...], now_ns: int) -> dict[str, Any]:
+        state = self._tun_inflow_scope_state.setdefault(
+            tuple(scope_key),
+            {
+                "window_start_ns": None,
+                "prev_bytes": 0,
+                "curr_bytes": 0,
+                "throttle_drop_count": 0,
+            },
+        )
+        start_ns = state.get("window_start_ns")
         if start_ns is None:
-            self._tun_inflow_window_start_ns = int(now_ns)
-            return
+            state["window_start_ns"] = int(now_ns)
+            return state
         elapsed = int(now_ns) - int(start_ns)
         if elapsed < self.TUN_INFLOW_THROTTLE_WINDOW_NS:
-            return
+            return state
         windows = elapsed // self.TUN_INFLOW_THROTTLE_WINDOW_NS
         if windows == 1:
-            self._tun_inflow_prev_bytes = self._tun_inflow_curr_bytes
+            state["prev_bytes"] = int(state.get("curr_bytes", 0) or 0)
         else:
-            self._tun_inflow_prev_bytes = 0
-        self._tun_inflow_curr_bytes = 0
-        self._tun_inflow_window_start_ns = int(start_ns + windows * self.TUN_INFLOW_THROTTLE_WINDOW_NS)
+            state["prev_bytes"] = 0
+        state["curr_bytes"] = 0
+        state["window_start_ns"] = int(start_ns + windows * self.TUN_INFLOW_THROTTLE_WINDOW_NS)
+        return state
 
-    def _local_tun_send_allowed(self, packet_len: int, *, now_ns: int) -> bool:
-        self._advance_tun_inflow_window(now_ns)
+    def _local_tun_send_allowed(self, packet_len: int, *, now_ns: int, scope_key: tuple[Any, ...]) -> bool:
+        state = self._advance_tun_inflow_window(scope_key, now_ns)
         buffered_frames = self._session_buffered_frames()
         if buffered_frames <= 0:
             return True
-        allowance_bytes = int(float(self._tun_inflow_prev_bytes) * self.TUN_INFLOW_THROTTLE_RATIO)
+        allowance_bytes = int(float(int(state.get("prev_bytes", 0) or 0)) * self.TUN_INFLOW_THROTTLE_RATIO)
         if allowance_bytes <= 0:
             return False
-        return (self._tun_inflow_curr_bytes + int(packet_len)) <= allowance_bytes
+        return (int(state.get("curr_bytes", 0) or 0) + int(packet_len)) <= allowance_bytes
 
-    def _record_local_tun_forward(self, packet_len: int, *, now_ns: int) -> None:
-        self._advance_tun_inflow_window(now_ns)
-        self._tun_inflow_curr_bytes += max(0, int(packet_len))
+    def _record_local_tun_forward(self, packet_len: int, *, now_ns: int, scope_key: tuple[Any, ...]) -> None:
+        state = self._advance_tun_inflow_window(scope_key, now_ns)
+        state["curr_bytes"] = int(state.get("curr_bytes", 0) or 0) + max(0, int(packet_len))
 
     def _on_local_tun_packet(self, dev: "ChannelMux.TunDevice", packet: bytes) -> None:
         self._log_tun_packet_debug(stage="from_local_tun", packet=packet, ifname=dev.ifname, chan=dev.chan_id)
         if not (self._overlay_connected and self._accepting_enabled):
             return
-        now_ns = time.monotonic_ns()
-        if not self._local_tun_send_allowed(len(packet), now_ns=now_ns):
-            self.log.debug(
-                "[TUN] if=%s throttle local packet: buffered_frames=%s prev_window_bytes=%s curr_window_bytes=%s packet_bytes=%s",
-                dev.ifname,
-                self._session_buffered_frames(),
-                self._tun_inflow_prev_bytes,
-                self._tun_inflow_curr_bytes,
-                len(packet),
-            )
-            return
         if len(packet) > int(dev.mtu):
             self.log.warning("[TUN] if=%s drop oversize local packet len=%s mtu=%s", dev.ifname, len(packet), dev.mtu)
             return
+        now_ns = time.monotonic_ns()
         shared_route = self._shared_tun_plan_local_delivery(getattr(dev, "service_key", None), packet)
+        scope_key = self._shared_tun_inflow_scope_key(getattr(dev, "service_key", None), shared_route)
+        if scope_key is None:
+            scope_key = self._direct_tun_inflow_scope_key(getattr(dev, "service_key", None), dev.chan_id)
+        if not self._local_tun_send_allowed(len(packet), now_ns=now_ns, scope_key=scope_key):
+            scope_state = self._advance_tun_inflow_window(scope_key, now_ns)
+            scope_state["throttle_drop_count"] = int(scope_state.get("throttle_drop_count", 0) or 0) + 1
+            self.log.debug(
+                "[TUN] if=%s throttle local packet scope=%s buffered_frames=%s prev_window_bytes=%s curr_window_bytes=%s packet_bytes=%s",
+                dev.ifname,
+                self._tun_inflow_scope_id(scope_key),
+                self._session_buffered_frames(),
+                int(scope_state.get("prev_bytes", 0) or 0),
+                int(scope_state.get("curr_bytes", 0) or 0),
+                len(packet),
+            )
+            return
         if shared_route is not None:
             if not bool(shared_route.get("routed")):
                 self.log.debug(
@@ -2842,7 +2964,7 @@ class ChannelMux:
                 ctr.msgs_in += 1
                 ctr.bytes_in += len(packet)
                 self._send_mux(chan, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet)
-            self._record_local_tun_forward(len(packet), now_ns=now_ns)
+            self._record_local_tun_forward(len(packet), now_ns=now_ns, scope_key=scope_key)
             return
         chan = dev.chan_id
         if chan is None:
@@ -2863,7 +2985,7 @@ class ChannelMux:
         ctr.msgs_in += 1
         ctr.bytes_in += len(packet)
         self._send_mux(chan, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet)
-        self._record_local_tun_forward(len(packet), now_ns=now_ns)
+        self._record_local_tun_forward(len(packet), now_ns=now_ns, scope_key=scope_key)
 
     def _rx_tun(self, chan: int, mtype: ChannelMux.MType, data: bytes, peer_id: Optional[int] = None) -> None:
         if mtype == ChannelMux.MType.OPEN:

@@ -161,6 +161,16 @@ private func sharedTunInboundPeerRelaySnapshotObject(_ snapshot: ObstacleBridgeC
     ]
 }
 
+private func scopedTunThrottleSnapshotObject(_ snapshot: ObstacleBridgeChannelMuxTunRuntime.ScopedTunThrottleSnapshot) -> [String: Any] {
+    [
+        "scope_id": snapshot.scopeID,
+        "allowed": snapshot.allowed,
+        "prev_window_bytes": snapshot.prevWindowBytes,
+        "curr_window_bytes": snapshot.currWindowBytes,
+        "throttle_drop_count": snapshot.throttleDropCount,
+    ]
+}
+
 private func closeSnapshotObject(_ snapshot: ObstacleBridgeChannelMuxTunRuntime.CloseSnapshot) -> [String: Any] {
     [
         "closed": snapshot.closed,
@@ -348,6 +358,32 @@ private func run(_ request: [String: Any]) throws -> [String: Any] {
             packet: body
         )
         return ["snapshot": sharedTunInboundPeerRelaySnapshotObject(snapshot)]
+    case "drive_channelmux_scoped_tun_throttle_sequence":
+        guard
+            let scopeIDs = request["scope_ids"] as? [String],
+            let packetBytes = request["packet_bytes_sequence"] as? [NSNumber],
+            let bufferedFrames = request["buffered_frames_sequence"] as? [NSNumber],
+            let nowSequence = request["now_ns_sequence"] as? [NSNumber],
+            scopeIDs.count == packetBytes.count,
+            scopeIDs.count == bufferedFrames.count,
+            scopeIDs.count == nowSequence.count
+        else {
+            throw ChannelMuxComponentRunnerError.invalidRequest
+        }
+        let runtime = ObstacleBridgeChannelMuxTunRuntime(instanceID: 0, connectionSeq: 0)
+        let snapshots = zip(zip(scopeIDs, packetBytes), zip(bufferedFrames, nowSequence)).map { lhs, rhs in
+            let (scopeID, packetBytesValue) = lhs
+            let (bufferedFramesValue, nowValue) = rhs
+            return scopedTunThrottleSnapshotObject(
+                runtime.handleScopedTunThrottle(
+                    packetBytes: packetBytesValue.intValue,
+                    bufferedFrames: bufferedFramesValue.intValue,
+                    nowNS: nowValue.uint64Value,
+                    scopeID: scopeID
+                )
+            )
+        }
+        return ["snapshots": snapshots]
     case "drive_channelmux_tun_close_then_local_packet":
         guard
             let openChanID = request["open_chan_id"] as? NSNumber,

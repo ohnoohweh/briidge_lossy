@@ -177,6 +177,44 @@ def _python_shared_tun_inbound_peer_relay_summary(
     }
 
 
+def _python_scoped_tun_throttle_sequence_summary(
+    sequence: list[dict[str, int | str]],
+) -> list[dict[str, object]]:
+    mux = ChannelMux(_FakeSession(connected=True), asyncio.new_event_loop())
+    try:
+        snapshots: list[dict[str, object]] = []
+        for step in sequence:
+            scope_key = (str(step["scope_id"]),)
+            mux.session._metrics.waiting_count = int(step["buffered_frames"])
+            allowed = mux._local_tun_send_allowed(
+                int(step["packet_bytes"]),
+                now_ns=int(step["now_ns"]),
+                scope_key=scope_key,
+            )
+            state = mux._advance_tun_inflow_window(scope_key, int(step["now_ns"]))
+            if allowed:
+                mux._record_local_tun_forward(
+                    int(step["packet_bytes"]),
+                    now_ns=int(step["now_ns"]),
+                    scope_key=scope_key,
+                )
+                state = mux._advance_tun_inflow_window(scope_key, int(step["now_ns"]))
+            else:
+                state["throttle_drop_count"] = int(state.get("throttle_drop_count", 0) or 0) + 1
+            snapshots.append(
+                {
+                    "scope_id": str(step["scope_id"]),
+                    "allowed": bool(allowed),
+                    "prev_window_bytes": int(state.get("prev_bytes", 0) or 0),
+                    "curr_window_bytes": int(state.get("curr_bytes", 0) or 0),
+                    "throttle_drop_count": int(state.get("throttle_drop_count", 0) or 0),
+                }
+            )
+        return snapshots
+    finally:
+        mux.loop.close()
+
+
 def test_swift_component_shared_tun_ownership_snapshot_matches_python(
     swift_channelmux_component_runner: Path,
 ) -> None:
@@ -597,6 +635,30 @@ def test_swift_component_shared_tun_inbound_peer_relay_avoids_self_loop(
         },
     )
     assert swift["snapshot"] == python
+
+
+def test_swift_component_scoped_tun_throttle_sequence_preserves_unrelated_scope_budget(
+    swift_channelmux_component_runner: Path,
+) -> None:
+    sequence = [
+        {"scope_id": "peer-a", "packet_bytes": 100, "buffered_frames": 0, "now_ns": 0},
+        {"scope_id": "peer-b", "packet_bytes": 90, "buffered_frames": 0, "now_ns": 0},
+        {"scope_id": "peer-a", "packet_bytes": 80, "buffered_frames": 1, "now_ns": 100_000_000},
+        {"scope_id": "peer-a", "packet_bytes": 20, "buffered_frames": 1, "now_ns": 100_000_000},
+        {"scope_id": "peer-b", "packet_bytes": 80, "buffered_frames": 1, "now_ns": 100_000_000},
+    ]
+    python = _python_scoped_tun_throttle_sequence_summary(sequence)
+    swift = _run_swift_component(
+        swift_channelmux_component_runner,
+        {
+            "action": "drive_channelmux_scoped_tun_throttle_sequence",
+            "scope_ids": [str(step["scope_id"]) for step in sequence],
+            "packet_bytes_sequence": [int(step["packet_bytes"]) for step in sequence],
+            "buffered_frames_sequence": [int(step["buffered_frames"]) for step in sequence],
+            "now_ns_sequence": [int(step["now_ns"]) for step in sequence],
+        },
+    )
+    assert swift["snapshots"] == python
 
 
 def test_swift_component_shared_tun_outbound_route_unmapped_destination_matches_python(

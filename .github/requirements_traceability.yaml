@@ -227,6 +227,8 @@ REQ-MUX-011:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_ignores_transmit_delay_without_buffered_frames
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_throttles_when_buffered_frames_exceed_recent_budget
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_local_tun_throttle_sequence_matches_python
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_shared_throttle_is_scoped_per_peer_channel
+    - tests/unit/test_channel_mux_component_parity.py::test_swift_component_scoped_tun_throttle_sequence_preserves_unrelated_scope_budget
 
 REQ-AUT-006:
   integration_tests:

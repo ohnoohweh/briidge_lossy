@@ -1043,13 +1043,13 @@ Allowed long-term options include:
 - peer-advertised addresses that are still validated and committed by the
   server
 
-The recommended first milestone is server-owned static assignment, because it:
+The preferred model is server-owned static assignment, because it:
 
 - makes overlap impossible at configuration load time
 - avoids control-plane races during reconnect
 - is easier to test deterministically
 
-The delivered Phase 1 config contract uses structured `tun -> tun` service
+The shared-TUN configuration contract uses structured `tun -> tun` service
 metadata:
 
 - `own_servers[].options.shared_tun_ownership`
@@ -1137,14 +1137,14 @@ Conceptual role split:
 }
 ```
 
-Phase 1 validation rules are intentionally strict:
+Validation rules are intentionally strict:
 
 - this metadata is accepted only on `tun -> tun` structured services
 - IPv4 ownership must be exact host addresses only
 - IPv6 ownership must be exact host addresses only
 - duplicate ownership claims are rejected at config parse time
-- the metadata is schema-only in Phase 1; packet-switch behavior still arrives
-  in later phases
+- the metadata must be precise enough to support deterministic packet-switch
+  behavior
 
 The design should explicitly avoid "whoever sends first owns the address"
 semantics.
@@ -1152,10 +1152,10 @@ semantics.
 ### Startup and control-plane model
 
 The current `OPEN v4` payload identifies interface names and MTU, but the
-future server-owned shared-TUN model should not depend on client-originated
-`OPEN` messages to create or configure the server-side shared TUN service.
+server-owned shared-TUN model should not depend on client-originated `OPEN`
+messages to create or configure the server-side shared TUN service.
 
-In the intended model:
+In this model:
 
 - the server starts the shared TUN service from its own config at process
   startup
@@ -1170,9 +1170,9 @@ In the intended model:
 Therefore, no client-originated TUN `OPEN` request should be required merely
 to instantiate the shared TUN or the server's Internet-routing posture.
 
-If an additional control-plane message is needed later, it should be limited to
+If an additional control-plane message is needed, it should be limited to
 peer/session binding or capability confirmation rather than ownership
-allocation. Ownership itself should stay server-owned.
+allocation. Ownership itself stays server-owned.
 
 Possible future control message, only if runtime binding metadata is needed:
 
@@ -1242,7 +1242,7 @@ Destination-address note:
   routing-policy concern handled in later phases, not by the source anti-spoof
   gate
 
-The first milestone may choose to:
+The baseline behavior may be:
 
 - drop and log only
 
@@ -1348,288 +1348,125 @@ The first robust version should define explicit behavior for:
 
 The system should fail closed rather than guessing.
 
-## Step-by-step realization plan
+## Implementation posture
 
-The intention is to build this in bounded milestones, each backed by tests.
+This design is implemented incrementally, but the document should describe the
+system in present tense rather than preserve a project diary.
 
-Two delivery rules apply to every phase below:
+The following delivery rules still apply to all future work on this feature:
 
-- the system should remain operational after each phase for the existing 1:1
-  TUN connection model
-- each phase should include Python/Swift parity coverage so the Python runtime
-  and the Swift runtime do not drift semantically
-- requirements and traceability should be updated only for behavior that is
-  delivered in that phase, and must remain current at the end of that phase
+- the system must remain operational for the existing 1:1 TUN connection model
+  while multi-peer shared-TUN support evolves
+- Python and Swift must remain semantically aligned; parity coverage is part of
+  the feature contract, not an optional cleanup step
+- requirements and traceability should only claim behavior that is actually
+  implemented and verified at that point
 
-That means no phase is considered complete if it only advances the multi-client
-server-side switch in Python while leaving Swift behavior undefined or
-untested, and no phase is considered acceptable if it breaks the already-valid
-single-client TUN path while the larger feature is still under construction
-.
+## Current implementation state
 
-It also means the project should not define forward-looking requirement
-expectations for later phases and then leave them intentionally unmet in the
-current implementation. The requirement set should grow step by step with the
-delivered runtime behavior, and the traceability/docs should be brought up to
-date as part of each implementation milestone rather than deferred until the
-end of the whole feature.
+### Configuration model
 
-### Phase 1: design and config contract
+- shared-TUN ownership is configured on structured `tun -> tun` services
+  through `own_servers[].options.shared_tun_ownership`
+- the server is the authority for shared-TUN lifecycle, address ownership, and
+  Internet-facing host routing policy
+- clients only carry their own tunnel addresses and gateway context; they do
+  not request creation of the shared server TUN device through a TUN `OPEN`
+- config validation rejects duplicate ownership, malformed addresses, non-host
+  prefixes, and invalid use of shared-TUN ownership metadata on unrelated
+  service types
 
-Deliverables:
+### Runtime ownership state
 
-- decide the ownership authority model
-- define config shape for server-owned static address assignment
-- document service-scoped ownership semantics in `REQUIREMENTS.md` and
-  traceability docs
+- `ChannelMux` derives per-service ownership state from validated shared-TUN
+  service specs
+- committed ownership and active peer/channel bindings are tracked separately
+- active bindings are removed on disconnect, epoch reset, or TUN teardown so
+  stale ownership does not survive a peer lifecycle change
+- runtime snapshots expose both the committed ownership set and the active
+  binding state for observability
 
-Testing:
+### Inbound peer validation
 
-- config parsing unit tests
-- validation tests for duplicate IPv4/IPv6 ownership rejection
-- snapshot/admin payload tests for ownership visibility
-- Python/Swift parity tests for config interpretation and ownership-shape
-  serialization where Swift consumes the same config or control metadata
-
-Operational target:
-
-- existing 1:1 TUN setup continues to behave exactly as before
-- no multi-client-only config requirement is introduced into the existing 1:1
-  path
-
-Exit criteria:
-
-- one canonical configuration path for ownership exists
-- overlap and malformed-address cases fail deterministically at config load time
-- existing 1:1 TUN config continues to pass its current regression coverage
-
-### Phase 2: server-side ownership tables
-
-Deliverables:
-
-- add peer-scoped ownership tables in `ChannelMux`
-- bind ownership lifecycle to peer epoch reset and disconnect cleanup
-- expose ownership in peer/runtime snapshots
-
-Delivered slice:
-
-- `ChannelMux` now derives shared-TUN ownership state from validated
-  `tun -> tun` service specs
-- runtime peer/channel bindings are tracked for shared-TUN services and removed
-  on TUN teardown or peer disconnect
-- `snapshot_tun_connections()` now exposes the committed ownership set plus any
-  active peer/channel bindings for that TUN service
-- packet forwarding behavior is intentionally unchanged in this phase
-
-Testing:
-
-- unit tests for install, replace, remove, and epoch-reset cleanup
-- unit tests proving stale ownership is removed on disconnect
-- unit tests proving two peers cannot both own the same address
-- parity tests proving the same ownership lifecycle semantics are reflected by
-  Python and Swift-side runtime helpers, snapshots, or codec surfaces
-
-Operational target:
-
-- 1:1 TUN service still opens, carries packets, and survives reconnect exactly
-  as before
-- ownership tables may exist internally even when only one peer is connected,
-  but they must not change the externally visible 1:1 behavior
-
-Exit criteria:
-
-- ownership state is internally coherent even before packet switching is turned
-  on
-- single-peer TUN regression coverage remains green
-
-### Phase 3: inbound peer anti-spoofing gate
-
-Deliverables:
-
-- parse IPv4/IPv6 source and destination on peer-to-server TUN packets
-- reject packets whose source address is not owned by the sending peer
-- add spoof-drop diagnostics and counters
-- accept valid broadcast-destination packets when the source address is owned
-  by the sending peer
-
-Delivered slice:
-
-- when shared-TUN ownership policy is active for a TUN service, inbound
-  peer-to-server TUN packets are now parsed as IPv4/IPv6 before local delivery
-- malformed or unsupported IP headers are now dropped in that shared-policy
-  path
-- source addresses are now checked against the sending peer's committed
-  ownership set in the delivered single-owner case
-- broadcast destinations remain valid in this phase as long as source ownership
-  succeeds
-- baseline 1:1 TUN behavior remains unchanged when shared ownership policy is
+- when shared-TUN ownership policy is active, inbound peer TUN packets are
+  parsed as IPv4 or IPv6 before delivery
+- malformed or unsupported IP packets are dropped in that guarded path
+- source ownership is enforced against the sending peer's committed address set
+- destination ownership is not part of anti-spoof validation; broadcast
+  destinations remain valid as long as the source address is owned by the
+  sending peer
+- the baseline 1:1 TUN path remains unchanged when shared ownership policy is
   not active
 
-Testing:
+### Server-side switching behavior
 
-- unit tests for valid owned-source acceptance
-- unit tests for invalid source rejection
-- unit tests for malformed packet rejection
-- unit tests proving broadcast destinations are not rejected by the anti-spoof
-  gate when the source is owned
-- unit tests for IPv4 and IPv6 parity
-- parity tests proving identical source-ownership acceptance/rejection rules in
-  Python and Swift runtimes
+- packets read from the server-owned shared TUN device are routed by
+  destination address ownership
+- unicast traffic leaves only on the designated active peer channel for the
+  destination owner
+- unknown, inactive, or unmapped unicast destinations are dropped
+  deterministically rather than forwarded on an arbitrary channel
+- IPv4 limited broadcast is treated as an explicit replication decision and is
+  emitted only on the selected active peer channels
+- outbound frames leave only on the peer channel or channels selected by the
+  server; an unrelated peer channel must never receive the packet
 
-Operational target:
+### Throttling behavior
 
-- valid 1:1 TUN traffic keeps working without configuration changes
-- anti-spoofing logic must not reject legitimate packets from the existing
-  single-peer tunnel path
+- local TUN inflow throttling follows `REQ-MUX-011` and activates only while
+  the transport reports active backlog
+- successful local-TUN forwarding volume is measured over `100ms` windows, and
+  the next backed-up window is limited to `90%` of the previous delivered byte
+  volume
+- direct 1:1 TUN traffic uses a stable service-scoped throttle bucket so the
+  limiter does not change behavior when a local channel is first allocated
+- shared-TUN traffic uses route-scoped throttle buckets derived from the
+  selected peer/channel set, so one congested peer path does not consume the
+  budget of an unrelated healthy peer path
+- shared-TUN runtime snapshots expose throttle scopes and per-peer throttle
+  counters so the dedicated `TUN / Routing` surface can explain which path is
+  being gated
+- current proof covers direct-path throttling, shared-route fairness behavior,
+  snapshot visibility, and Swift/Python component parity for scoped throttle
+  decisions
 
-Exit criteria:
+### Peer-to-peer relay behavior
 
-- no peer can impersonate another peer's tunnel IP through the server
-- 1:1 elevated TUN coverage remains green after the anti-spoofing gate lands
+- when a peer packet targets an address owned by another active peer, the
+  server relays the packet directly to that peer channel
+- packets do not self-loop back to the sender when the destination still
+  belongs to the sending peer
+- packets with unknown or inactive destinations continue to follow the
+  deterministic drop or local-delivery rules for that service
+- the topology remains server-mediated rather than mesh-based
 
-### Phase 4: server TUN to peer switching
+### Listener-mode startup model
 
-Deliverables:
+- explicit `server_shared` `tun -> tun` services are retained in passive
+  listener mode
+- the listener prestarts those shared-TUN services before any client connects
+- a peer-side TUN `OPEN` binds only to a preconfigured and prestarted
+  server-owned shared-TUN service rather than creating one on demand
 
-- parse destination IP on packets read from the shared server TUN device
-- forward packets to the owning peer channel
-- drop unknown destinations deterministically
-- treat broadcast destinations as a distinct routing class rather than an
-  ownership miss
+### Observability and admin surfaces
 
-Delivered slice:
+- detailed shared-TUN ownership, active bindings, routing-relevant state, and
+  related counters live on a dedicated `TUN / Routing` admin page
+- the generic status page remains focused on overall runtime state rather than
+  detailed TUN ownership tables
+- Python and Swift admin surfaces expose the same shared-TUN observability
+  contract, with component-level parity coverage for payload derivation
 
-- when `shared_tun_ownership` is active for a TUN service, `ChannelMux` now
-  parses the destination IP on packets read from the local/server TUN device
-- unicast packets now leave only on the designated active peer channel that
-  matches the destination address ownership map
-- IPv4 limited broadcast (`255.255.255.255`) now becomes an explicit
-  replication decision and is forwarded only to the active peer channels
-  selected by the shared-TUN binding state
-- unknown destinations, known-but-unmapped owners, and known-but-inactive
-  owners are now dropped deterministically instead of falling back to an
-  arbitrary legacy channel
-- the existing 1:1 TUN path remains unchanged when shared ownership policy is
-  not configured for that service
+### Verified host coverage
 
-Testing:
+- Linux elevated coverage proves a server-owned shared TUN with multiple peers
+  under real host packet I/O
+- that coverage includes server-to-client carriage, client-to-client relay,
+  spoof rejection, and disconnect cleanup/rebind behavior
+- the baseline 1:1 TUN path remains part of the acceptance target for the same
+  feature family
 
-- unit tests for IPv4 destination lookup
-- unit tests for IPv6 destination lookup
-- unit tests for unknown-destination drop behavior
-- unit tests for service-scoped routing isolation
-- parity tests proving identical destination-lookup and unknown-destination
-  behavior in Python and Swift runtimes or helper layers
-
-Operational target:
-
-- existing 1:1 TUN forwarding remains the default successful case
-- when exactly one peer owns the destination address, the new switch path must
-  behave equivalently to the existing single-peer forwarding path
-
-Exit criteria:
-
-- the server can deliver packets from its shared TUN device to the correct peer
-  channel based only on ownership maps
-- 1:1 TUN elevated regression remains green after routing lookup is introduced
-
-### Phase 5: peer-to-peer relay through server
-
-Deliverables:
-
-- when a peer packet's destination belongs to another connected peer, forward
-  directly to that peer channel
-- keep accounting and diagnostics peer-scoped
-
-Delivered slice:
-
-- when a shared-TUN peer packet's unicast destination belongs to another active
-  connected peer, `ChannelMux` now relays that packet directly to the owning
-  peer channel instead of forcing a local/server TUN write first
-- packets whose destination is unknown, mapped-but-inactive, or still owned by
-  the sending peer do not self-loop and continue to fall back to the existing
-  local/server TUN delivery path
-- the existing 1:1 tunnel and server-uplink cases remain unchanged because the
-  relay decision only activates for the shared-TUN unicast case with a distinct
-  active destination owner
-- the same relay decision now exists in the Swift component runtime helper so
-  Swift/Python parity covers the direct peer-relay decision surface as well
-
-Testing:
-
-- unit tests for A -> B relay via server
-- unit tests for A -> B rejection when B ownership is missing
-- unit tests proving no self-loop or wrong-peer delivery
-- integration tests with two clients and one server using one shared TUN
-  service
-- parity tests proving the same relay-routing semantics and drop behavior for
-  Python and Swift peer endpoints
-
-Operational target:
-
-- the old 1:1 tunnel case remains valid and unchanged
-- multi-client relay adds capability without making single-peer routing more
-  fragile or dependent on multi-client-only control state
-
-Exit criteria:
-
-- client-to-client tunnel traffic works through the server without requiring a
-  mesh topology
-- 1:1 and 1:N paths both pass before this phase is considered complete
-
-### Phase 6: end-to-end elevated host coverage
-
-Deliverables:
-
-- Linux elevated integration coverage for one server shared TUN plus multiple
-  clients
-- later parity coverage for macOS/iOS peer endpoints where feasible
-
-Delivered slice:
-
-- Linux elevated coverage now includes one server-owned shared TUN listener plus
-  two real myudp-connected client TUN peers under `/dev/net/tun`
-- the delivered elevated slice also forced the runtime to honor the server-owned
-  startup model in passive listener mode: explicit `server_shared` `tun -> tun`
-  `own_servers` entries are now retained on a listener and prestarted before
-  any peer is connected
-- the delivered elevated slice proves server <-> client A, server <-> client B,
-  and client A -> client B carriage through the shared server switch using real
-  host packet I/O
-- the same elevated slice now also proves spoof rejection for a peer that tries
-  to source packets as another owned client address and proves disconnect
-  cleanup by waiting for the active binding set to shrink and rebuild after peer
-  restart
-- host-side macOS/iOS parity coverage for the same elevated behavior is still a
-  later slice and is not claimed as delivered yet
-
-Testing:
-
-- Linux elevated integration:
-  - server <-> client A
-  - server <-> client B
-  - client A <-> client B via server
-  - spoof attempt from client A using client B's source IP must fail
-  - reconnect cleanup must remove stale ownership before reinstallation
-- host-side macOS/iOS parity tests:
-  - ownership visibility and switching behavior for Swift peers against Python
-    server
-- host-side parity tests for ordinary 1:1 TUN carriage as well as the new
-  multi-client switching semantics, so Swift and Python remain aligned at both
-  the baseline and the new feature level
-
-Operational target:
-
-- every newly introduced multi-client elevated test is paired with at least one
-  baseline 1:1 elevated test in the same family
-- the feature is not allowed to regress the already-supported single-peer TUN
-  path on Linux, macOS, or iOS while pursuing multi-client support
-
-Exit criteria:
-
-- real host TUN traffic proves the switch works under actual OS packet I/O
-- real host TUN traffic also proves the original 1:1 path still works after
-  all preceding changes
+## Next phases
 
 ### Phase 7: robustness hardening
 
@@ -1645,9 +1482,11 @@ Testing:
 - regression tests for reconnect storms
 - regression tests for stale ownership after rapid disconnect/reconnect
 - regression tests for duplicate claims under concurrent peer activity
+- regression tests for shared-TUN throttling under broadcast, relay, and
+  elevated multi-peer load
 - long-running elevated soak coverage where practical
 - parity regression tests that compare Python and Swift behavior on reconnect,
-  stale cleanup, spoof rejection, and peer-to-peer relay
+  stale cleanup, spoof rejection, peer-to-peer relay, and scoped throttling
 
 Operational target:
 
