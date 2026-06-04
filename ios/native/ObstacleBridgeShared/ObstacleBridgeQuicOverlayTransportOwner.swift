@@ -26,12 +26,14 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     private let tunPacketSink: TunPacketSink?
     private let muxInstanceID: UInt64
     private let muxConnectionSeq: UInt32
+    private let outboundWireChunkBytes = 1024
 
     private var overlayConnection: NWConnection?
     private var overlayConnected = false
     private var receiveBuffer = Data()
     private var pendingOutboundWires: [Data] = []
     private var outboundSendInFlight = false
+    private var outboundContextSeq: UInt64 = 0
     private var started = false
     private var reconnectAttempts = 0
     private var reconnectScheduled = false
@@ -144,6 +146,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         receiveBuffer.removeAll(keepingCapacity: false)
         pendingOutboundWires.removeAll(keepingCapacity: false)
         outboundSendInFlight = false
+        outboundContextSeq = 0
         startupMuxFramesSent = false
     }
 
@@ -583,7 +586,16 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
 
     private func enqueueOutboundWire(_ wire: Data) {
         guard !wire.isEmpty else { return }
-        pendingOutboundWires.append(wire)
+        if wire.count <= outboundWireChunkBytes {
+            pendingOutboundWires.append(wire)
+        } else {
+            var offset = 0
+            while offset < wire.count {
+                let next = min(wire.count, offset + outboundWireChunkBytes)
+                pendingOutboundWires.append(wire.subdata(in: offset..<next))
+                offset = next
+            }
+        }
         flushNextOutboundWireIfNeeded()
     }
 
@@ -593,10 +605,15 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         }
         outboundSendInFlight = true
         let wire = pendingOutboundWires.removeFirst()
+        outboundContextSeq &+= 1
+        let context = NWConnection.ContentContext(
+            identifier: "quic-wire-\(outboundContextSeq)",
+            metadata: []
+        )
         connection.send(
             content: wire,
-            contentContext: .defaultStream,
-            isComplete: false,
+            contentContext: context,
+            isComplete: true,
             completion: .contentProcessed { [weak self] error in
                 guard let self else { return }
                 self.queue.async {

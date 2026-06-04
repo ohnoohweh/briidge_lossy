@@ -1105,14 +1105,14 @@ def test_ios_extension_shim_swift_udp_tcp_service_reaches_python_peer_for_ws_and
             swift_bind_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=6, base=IOS_E2E_UDP_PORT_BASE)
             swift_peer_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=7, base=IOS_E2E_UDP_PORT_BASE)
             probe_payloads = [
-                b"\x01ios-extension-tcp-client1\n",
-                b"\x01ios-extension-tcp-client2-xxxxxxxxxxxxxxxx\n",
-                b"\x01ios-extension-tcp-client3-yyyyyyyyyyyyyyyyyyyyyyyy\n",
+                b"\x01ios-extension-tcp-client1-" + (b"x" * 2048) + b"\n",
+                b"\x01ios-extension-tcp-client2-" + (b"y" * 3072) + b"\n",
+                b"\x01ios-extension-tcp-client3-" + (b"z" * 4096) + b"\n",
             ]
             expected_responses = [
-                b"\x02ios-extension-tcp-client1\n",
-                b"\x02ios-extension-tcp-client2-xxxxxxxxxxxxxxxx\n",
-                b"\x02ios-extension-tcp-client3-yyyyyyyyyyyyyyyyyyyyyyyy\n",
+                b"\x02ios-extension-tcp-client1-" + (b"x" * 2048) + b"\n",
+                b"\x02ios-extension-tcp-client2-" + (b"y" * 3072) + b"\n",
+                b"\x02ios-extension-tcp-client3-" + (b"z" * 4096) + b"\n",
             ]
             cert_dir = (
                 materialize_localhost_tls_fixture_set(tmp_path / f"{transport}-ios-tcp-localhost-fixtures")

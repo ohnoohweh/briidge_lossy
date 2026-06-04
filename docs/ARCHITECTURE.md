@@ -175,6 +175,13 @@ The important point is that large TCP application traffic is handled by chunking
 
 The current QUIC session uses the same internal `LEN(4) + KIND(1) + BYTES...` stream framing model as `TcpStreamSession`, but exposes a configurable upper-layer cap through `quic_max_size`.
 
+Implementation boundary note:
+
+- Python QUIC is implemented with `aioquic`
+- native Swift QUIC on macOS/iOS is implemented with Network.framework
+
+So parity for QUIC has to be established at the observable behavior level rather than assumed from one shared transport implementation.
+
 That means:
 
 - the QUIC session budget is explicit and configurable
@@ -182,6 +189,12 @@ That means:
 - QUIC send-side code also rejects application payloads above `quic_max_size`
 
 So QUIC is conceptually aligned with TCP stream processing, but with an explicit knob rather than a hard-coded `65535` software budget.
+
+Practical Swift note:
+
+- mixed Swift/Python validation found a native Swift QUIC large-write boundary issue on the macOS host-runner service path
+- the current Swift workaround splits larger outbound QUIC wires into smaller stream writes before handing them to Network.framework
+- the detailed rationale and validation evidence live in [QUIC_DESIGN.md](./QUIC_DESIGN.md)
 
 #### WebSocket
 

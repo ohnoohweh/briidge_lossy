@@ -3678,13 +3678,7 @@ def test_macos_swift_host_runner_remote_tcp_admin_web_handles_multiple_connectio
     "transport",
     [
         "ws",
-        pytest.param(
-            "quic",
-            marks=pytest.mark.xfail(
-                reason="macOS Swift QUIC overlay connects but mixed Python-peer TCP own-service forwarding still stalls",
-                strict=True,
-            ),
-        ),
+        "quic",
     ],
 )
 def test_macos_swift_host_runner_tcp_ownserver_proxies_mixed_python_peer_for_ws_and_quic(

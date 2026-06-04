@@ -1385,7 +1385,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
 | Python | `80/88 = 90.9%` | `85/88 = 96.6%` | `85/88 = 96.6%` |
-| macOS | `0/88 = 0.0%` | `2/88 = 2.3%` | `2/88 = 2.3%` |
+| macOS | `2/88 = 2.3%` | `4/88 = 4.5%` | `6/88 = 6.8%` |
 | iOS | `8/88 = 9.1%` | `8/88 = 9.1%` | `13/88 = 14.8%` |
 
 #### Architecture traceability
@@ -1393,7 +1393,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
 | Python | `7/7 = 100.0%` | `7/7 = 100.0%` | `7/7 = 100.0%` |
-| macOS | `0/7 = 0.0%` | `1/7 = 14.3%` | `1/7 = 14.3%` |
+| macOS | `1/7 = 14.3%` | `3/7 = 42.9%` | `3/7 = 42.9%` |
 | iOS | `4/7 = 57.1%` | `2/7 = 28.6%` | `4/7 = 57.1%` |
 
 The supporting manifests remain shared:
