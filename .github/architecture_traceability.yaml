@@ -116,11 +116,20 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_rejects_unowned_ipv4_source
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_accepts_owned_ipv6_source
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_rejects_malformed_packet
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_binds_peer_ref_and_rejects_second_owner_claim
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_routes_shared_unicast_only_to_designated_peer_channel
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_routes_shared_broadcast_only_to_active_peer_channels
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_drops_shared_unknown_destination
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_guarded_inbound_tun_data_accepts_owned_ipv4
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_guarded_inbound_tun_data_accepts_broadcast_destination
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_guarded_inbound_tun_data_rejects_spoofed_ipv4
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_guarded_inbound_tun_data_accepts_owned_ipv6
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_guarded_inbound_tun_data_rejects_malformed_packet
+    - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_outbound_route_unicast_matches_python
+    - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_outbound_route_broadcast_matches_python
+    - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_outbound_route_unknown_destination_matches_python
+    - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_outbound_route_inactive_destination_matches_python
+    - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_outbound_route_unmapped_destination_matches_python
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_active_tun_channel_as_open

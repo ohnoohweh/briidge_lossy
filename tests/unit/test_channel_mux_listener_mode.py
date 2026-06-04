@@ -1178,6 +1178,58 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(parsed)
         self.assertEqual(reason, 'ipv4_too_short')
 
+    def test_shared_tun_guard_binds_peer_ref_and_rejects_second_owner_claim(self):
+        spec = ChannelMux.ServiceSpec(
+            2,
+            'tun',
+            'obtun1',
+            1500,
+            'tun',
+            'obtun0',
+            1500,
+            options={
+                'shared_tun_ownership': {
+                    'mode': 'server_shared',
+                    'peers': [
+                        {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                        {'peer_ref': 'ios-client', 'ipv4': ['192.168.107.4']},
+                    ],
+                }
+            },
+        )
+        svc_key = ('peer', 77, 2)
+        dev = ChannelMux.TunDevice(fd=44, ifname='obtun1', mtu=1500, service_key=svc_key)
+        self.mux._install_shared_tun_ownership_for_service(svc_key, spec)
+        self.mux._chan_owner_peer_id[1] = 77
+
+        allowed, parsed, reason = self.mux._shared_tun_guard_inbound_packet(
+            dev=dev,
+            chan=1,
+            packet=_ipv4_packet('192.168.107.2', '192.168.107.1'),
+        )
+
+        self.assertTrue(allowed)
+        self.assertEqual(parsed["source_ip"], '192.168.107.2')
+        self.assertIsNone(reason)
+        self.assertEqual(
+            self.mux._shared_tun_peer_ref_by_peer[(svc_key, 77)],
+            'linux-client',
+        )
+        self.assertEqual(
+            self.mux._shared_tun_peer_id_by_ref[(svc_key, 'linux-client')],
+            77,
+        )
+
+        allowed, parsed, reason = self.mux._shared_tun_guard_inbound_packet(
+            dev=dev,
+            chan=1,
+            packet=_ipv4_packet('192.168.107.4', '192.168.107.1'),
+        )
+
+        self.assertFalse(allowed)
+        self.assertEqual(parsed["source_ip"], '192.168.107.4')
+        self.assertEqual(reason, 'source_not_owned_by_peer')
+
     async def test_remote_catalog_replacement_adds_and_removes_services(self):
         svc1 = ChannelMux.ServiceSpec(1, 'udp', '127.0.0.1', 10001, 'udp', '127.0.0.1', 20001)
         svc2 = ChannelMux.ServiceSpec(2, 'tcp', '127.0.0.1', 10002, 'tcp', '127.0.0.1', 20002)
@@ -1368,6 +1420,159 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
             self.assertEqual(second[3], ChannelMux.MType.DATA)
             self.assertEqual(bytes(second[4]), b'\x45hello')
             self.assertIsNotNone(dev.chan_id)
+        finally:
+            mux.loop.close()
+
+    def test_local_tun_packet_routes_shared_unicast_only_to_designated_peer_channel(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._overlay_connected = True
+            mux._accepting_enabled = True
+            spec = ChannelMux.ServiceSpec(
+                5,
+                'tun',
+                'obtun0',
+                1500,
+                'tun',
+                'obtun1',
+                1500,
+                options={
+                    'shared_tun_ownership': {
+                        'mode': 'server_shared',
+                        'peers': [
+                            {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                            {'peer_ref': 'ios-client', 'ipv4': ['192.168.107.4']},
+                        ],
+                    }
+                },
+            )
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+            mux._install_shared_tun_ownership_for_service(svc_key, spec)
+
+            mux._chan_owner_peer_id[11] = 77
+            mux._bind_tun_channel(11, dev)
+            mux._chan_owner_peer_id[22] = 88
+            mux._bind_tun_channel(22, dev)
+            mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=11,
+                packet=_ipv4_packet('192.168.107.2', '192.168.107.1'),
+            )
+            mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=22,
+                packet=_ipv4_packet('192.168.107.4', '192.168.107.1'),
+            )
+
+            with patch.object(mux, '_send_mux') as send_mux:
+                mux._on_local_tun_packet(dev, _ipv4_packet('192.168.107.1', '192.168.107.4'))
+
+            send_mux.assert_called_once_with(22, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, _ipv4_packet('192.168.107.1', '192.168.107.4'))
+        finally:
+            mux.loop.close()
+
+    def test_local_tun_packet_routes_shared_broadcast_only_to_active_peer_channels(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._overlay_connected = True
+            mux._accepting_enabled = True
+            spec = ChannelMux.ServiceSpec(
+                5,
+                'tun',
+                'obtun0',
+                1500,
+                'tun',
+                'obtun1',
+                1500,
+                options={
+                    'shared_tun_ownership': {
+                        'mode': 'server_shared',
+                        'peers': [
+                            {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                            {'peer_ref': 'ios-client', 'ipv4': ['192.168.107.4']},
+                        ],
+                    }
+                },
+            )
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+            mux._install_shared_tun_ownership_for_service(svc_key, spec)
+
+            mux._chan_owner_peer_id[11] = 77
+            mux._bind_tun_channel(11, dev)
+            mux._chan_owner_peer_id[22] = 88
+            mux._bind_tun_channel(22, dev)
+            mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=11,
+                packet=_ipv4_packet('192.168.107.2', '192.168.107.1'),
+            )
+            mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=22,
+                packet=_ipv4_packet('192.168.107.4', '192.168.107.1'),
+            )
+
+            with patch.object(mux, '_send_mux') as send_mux:
+                mux._on_local_tun_packet(dev, _ipv4_packet('192.168.107.1', '255.255.255.255'))
+
+            self.assertEqual(
+                send_mux.call_args_list,
+                [
+                    unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, _ipv4_packet('192.168.107.1', '255.255.255.255')),
+                    unittest.mock.call(22, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, _ipv4_packet('192.168.107.1', '255.255.255.255')),
+                ],
+            )
+        finally:
+            mux.loop.close()
+
+    def test_local_tun_packet_drops_shared_unknown_destination(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._overlay_connected = True
+            mux._accepting_enabled = True
+            spec = ChannelMux.ServiceSpec(
+                5,
+                'tun',
+                'obtun0',
+                1500,
+                'tun',
+                'obtun1',
+                1500,
+                options={
+                    'shared_tun_ownership': {
+                        'mode': 'server_shared',
+                        'peers': [
+                            {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                        ],
+                    }
+                },
+            )
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+            mux._install_shared_tun_ownership_for_service(svc_key, spec)
+            mux._chan_owner_peer_id[11] = 77
+            mux._bind_tun_channel(11, dev)
+            mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=11,
+                packet=_ipv4_packet('192.168.107.2', '192.168.107.1'),
+            )
+
+            with patch.object(mux, '_send_mux') as send_mux:
+                mux._on_local_tun_packet(dev, _ipv4_packet('192.168.107.1', '192.168.107.9'))
+
+            send_mux.assert_not_called()
         finally:
             mux.loop.close()
 

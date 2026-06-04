@@ -677,6 +677,8 @@ class ChannelMux:
         self._tun_frag_rx: dict[tuple[int, int], dict[str, Any]] = {}
         self._shared_tun_ownership_by_service: dict[ChannelMux.ServiceKey, dict[str, Any]] = {}
         self._shared_tun_runtime_by_peer: dict[tuple[ChannelMux.ServiceKey, int], dict[str, Any]] = {}
+        self._shared_tun_peer_ref_by_peer: dict[tuple[ChannelMux.ServiceKey, int], str] = {}
+        self._shared_tun_peer_id_by_ref: dict[tuple[ChannelMux.ServiceKey, str], int] = {}
         self._tun_inflow_window_start_ns: Optional[int] = None
         self._tun_inflow_prev_bytes: int = 0
         self._tun_inflow_curr_bytes: int = 0
@@ -1793,6 +1795,16 @@ class ChannelMux:
             for key, value in self._shared_tun_runtime_by_peer.items()
             if key[0] != svc_key
         }
+        self._shared_tun_peer_ref_by_peer = {
+            key: value
+            for key, value in self._shared_tun_peer_ref_by_peer.items()
+            if key[0] != svc_key
+        }
+        self._shared_tun_peer_id_by_ref = {
+            key: value
+            for key, value in self._shared_tun_peer_id_by_ref.items()
+            if key[0] != svc_key
+        }
 
     def _drop_shared_tun_state_for_peer(self, peer_id: int) -> None:
         self._shared_tun_runtime_by_peer = {
@@ -1800,6 +1812,18 @@ class ChannelMux:
             for key, value in self._shared_tun_runtime_by_peer.items()
             if int(key[1]) != int(peer_id)
         }
+        removed = [
+            key
+            for key in self._shared_tun_peer_ref_by_peer
+            if int(key[1]) == int(peer_id)
+        ]
+        for key in removed:
+            peer_ref = self._shared_tun_peer_ref_by_peer.pop(key, None)
+            if peer_ref is None:
+                continue
+            ref_key = (key[0], str(peer_ref))
+            if self._shared_tun_peer_id_by_ref.get(ref_key) == int(peer_id):
+                self._shared_tun_peer_id_by_ref.pop(ref_key, None)
 
     def _record_shared_tun_peer_binding(
         self,
@@ -1863,6 +1887,145 @@ class ChannelMux:
         ]
         active_peer_bindings.sort(key=lambda entry: int(entry.get("peer_id", 0)))
         return self._shared_tun_runtime_snapshot(ownership, active_peer_bindings)
+
+    def _shared_tun_bound_peer_ref_for_packet(
+        self,
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        peer_id: Optional[int],
+        source_ip: str,
+    ) -> Optional[str]:
+        if svc_key is None or peer_id is None or not source_ip:
+            return None
+        ownership = self._shared_tun_ownership_by_service.get(svc_key)
+        if not isinstance(ownership, dict):
+            return None
+        owner_by_ipv4 = dict(ownership.get("owner_by_ipv4") or {})
+        owner_by_ipv6 = dict(ownership.get("owner_by_ipv6") or {})
+        owner_ref = owner_by_ipv4.get(str(source_ip)) or owner_by_ipv6.get(str(source_ip))
+        if not owner_ref:
+            return None
+        peer_key = (svc_key, int(peer_id))
+        existing_ref = self._shared_tun_peer_ref_by_peer.get(peer_key)
+        if existing_ref is not None:
+            if str(existing_ref) != str(owner_ref):
+                return None
+            return str(existing_ref)
+        self._shared_tun_peer_ref_by_peer[peer_key] = str(owner_ref)
+        self._shared_tun_peer_id_by_ref[(svc_key, str(owner_ref))] = int(peer_id)
+        return str(owner_ref)
+
+    @staticmethod
+    def _shared_tun_plan_outbound_route(
+        ownership: dict[str, Any],
+        peer_id_by_ref: dict[str, int],
+        active_peer_bindings: list[dict[str, Any]],
+        packet: bytes,
+    ) -> dict[str, Any]:
+        parsed, parse_error = ChannelMux._parse_tun_packet_endpoints(packet)
+        if parse_error is not None:
+            return {
+                "routed": False,
+                "route_class": None,
+                "selected_peer_ids": [],
+                "selected_chan_ids": [],
+                "ip_version": None,
+                "destination_ip": None,
+                "drop_reason": parse_error,
+            }
+        destination_ip = str(parsed.get("destination_ip") or "")
+        active_by_peer_id: dict[int, dict[str, Any]] = {
+            int(entry.get("peer_id", 0)): entry
+            for entry in active_peer_bindings
+            if isinstance(entry, dict)
+        }
+        if int(parsed.get("ip_version", 0) or 0) == 4 and destination_ip == "255.255.255.255":
+            selected = [
+                entry
+                for entry in active_peer_bindings
+                if entry.get("preferred_chan_id") is not None
+            ]
+            selected.sort(key=lambda entry: int(entry.get("peer_id", 0) or 0))
+            return {
+                "routed": bool(selected),
+                "route_class": "broadcast",
+                "selected_peer_ids": [int(entry.get("peer_id", 0) or 0) for entry in selected],
+                "selected_chan_ids": [int(entry.get("preferred_chan_id")) for entry in selected],
+                "ip_version": int(parsed.get("ip_version", 0) or 0),
+                "destination_ip": destination_ip,
+                "drop_reason": None if selected else "broadcast_no_active_peers",
+            }
+        owner_ref = (
+            dict(ownership.get("owner_by_ipv4") or {}).get(destination_ip)
+            or dict(ownership.get("owner_by_ipv6") or {}).get(destination_ip)
+        )
+        if not owner_ref:
+            return {
+                "routed": False,
+                "route_class": "unicast",
+                "selected_peer_ids": [],
+                "selected_chan_ids": [],
+                "ip_version": int(parsed.get("ip_version", 0) or 0),
+                "destination_ip": destination_ip,
+                "drop_reason": "unknown_destination",
+            }
+        peer_id = peer_id_by_ref.get(str(owner_ref))
+        if peer_id is None:
+            return {
+                "routed": False,
+                "route_class": "unicast",
+                "selected_peer_ids": [],
+                "selected_chan_ids": [],
+                "ip_version": int(parsed.get("ip_version", 0) or 0),
+                "destination_ip": destination_ip,
+                "drop_reason": "destination_peer_unmapped",
+            }
+        binding = active_by_peer_id.get(int(peer_id))
+        preferred_chan_id = None if binding is None else binding.get("preferred_chan_id")
+        if preferred_chan_id is None:
+            return {
+                "routed": False,
+                "route_class": "unicast",
+                "selected_peer_ids": [int(peer_id)],
+                "selected_chan_ids": [],
+                "ip_version": int(parsed.get("ip_version", 0) or 0),
+                "destination_ip": destination_ip,
+                "drop_reason": "destination_peer_inactive",
+            }
+        return {
+            "routed": True,
+            "route_class": "unicast",
+            "selected_peer_ids": [int(peer_id)],
+            "selected_chan_ids": [int(preferred_chan_id)],
+            "ip_version": int(parsed.get("ip_version", 0) or 0),
+            "destination_ip": destination_ip,
+            "drop_reason": None,
+        }
+
+    def _shared_tun_plan_local_delivery(
+        self,
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        packet: bytes,
+    ) -> Optional[dict[str, Any]]:
+        if svc_key is None:
+            return None
+        ownership = self._shared_tun_ownership_by_service.get(svc_key)
+        if not isinstance(ownership, dict):
+            return None
+        peer_id_by_ref = {
+            str(peer_ref): int(peer_id)
+            for (mapped_svc_key, peer_ref), peer_id in self._shared_tun_peer_id_by_ref.items()
+            if mapped_svc_key == svc_key
+        }
+        active_peer_bindings = [
+            {
+                "peer_id": int(key[1]),
+                "preferred_chan_id": state.get("preferred_chan_id"),
+                "bound_chan_ids": [int(v) for v in list(state.get("bound_chan_ids") or [])],
+            }
+            for key, state in self._shared_tun_runtime_by_peer.items()
+            if key[0] == svc_key and isinstance(state, dict)
+        ]
+        return self._shared_tun_plan_outbound_route(ownership, peer_id_by_ref, active_peer_bindings, packet)
 
     @staticmethod
     def _parse_tun_packet_endpoints(packet: bytes) -> tuple[Optional[dict[str, Any]], Optional[str]]:
@@ -1932,11 +2095,9 @@ class ChannelMux:
         if parse_error is not None:
             return False, None, parse_error
         peer_id = self._chan_owner_peer_id.get(int(chan))
-        allowed = self._shared_tun_allowed_source_ips_for_peer(svc_key, peer_id)
-        if not allowed:
-            return True, parsed, None
         source_ip = str(parsed.get("source_ip") or "")
-        if source_ip not in allowed:
+        bound_peer_ref = self._shared_tun_bound_peer_ref_for_packet(svc_key, peer_id, source_ip)
+        if bound_peer_ref is None:
             return False, parsed, "source_not_owned_by_peer"
         return True, parsed, None
 
@@ -2605,6 +2766,25 @@ class ChannelMux:
             return
         if len(packet) > int(dev.mtu):
             self.log.warning("[TUN] if=%s drop oversize local packet len=%s mtu=%s", dev.ifname, len(packet), dev.mtu)
+            return
+        shared_route = self._shared_tun_plan_local_delivery(getattr(dev, "service_key", None), packet)
+        if shared_route is not None:
+            if not bool(shared_route.get("routed")):
+                self.log.debug(
+                    "[TUN] if=%s drop shared route class=%s dst=%s reason=%s",
+                    dev.ifname,
+                    shared_route.get("route_class"),
+                    shared_route.get("destination_ip"),
+                    shared_route.get("drop_reason"),
+                )
+                return
+            selected_chan_ids = [int(v) for v in list(shared_route.get("selected_chan_ids") or [])]
+            for chan in selected_chan_ids:
+                ctr = self._ctr(ChannelMux.Proto.TUN, chan)
+                ctr.msgs_in += 1
+                ctr.bytes_in += len(packet)
+                self._send_mux(chan, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet)
+            self._record_local_tun_forward(len(packet), now_ns=now_ns)
             return
         chan = dev.chan_id
         if chan is None:

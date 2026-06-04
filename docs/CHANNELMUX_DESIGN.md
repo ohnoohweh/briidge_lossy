@@ -1428,6 +1428,21 @@ Deliverables:
 - treat broadcast destinations as a distinct routing class rather than an
   ownership miss
 
+Delivered slice:
+
+- when `shared_tun_ownership` is active for a TUN service, `ChannelMux` now
+  parses the destination IP on packets read from the local/server TUN device
+- unicast packets now leave only on the designated active peer channel that
+  matches the destination address ownership map
+- IPv4 limited broadcast (`255.255.255.255`) now becomes an explicit
+  replication decision and is forwarded only to the active peer channels
+  selected by the shared-TUN binding state
+- unknown destinations, known-but-unmapped owners, and known-but-inactive
+  owners are now dropped deterministically instead of falling back to an
+  arbitrary legacy channel
+- the existing 1:1 TUN path remains unchanged when shared ownership policy is
+  not configured for that service
+
 Testing:
 
 - unit tests for IPv4 destination lookup

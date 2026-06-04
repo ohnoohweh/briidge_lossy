@@ -47,6 +47,21 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         var dropReason: String?
     }
 
+    struct SharedTunActivePeerBinding {
+        var peerID: Int
+        var preferredChanID: Int?
+    }
+
+    struct SharedTunOutboundRouteSnapshot {
+        var routed: Bool
+        var routeClass: String?
+        var selectedPeerIDs: [Int]
+        var selectedChanIDs: [Int]
+        var ipVersion: Int?
+        var destinationIP: String?
+        var dropReason: String?
+    }
+
     struct InboundTunFragmentSnapshot {
         var delivered: Bool
         var packet: Data?
@@ -330,6 +345,84 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             packet: body,
             ipVersion: parsed.ipVersion,
             sourceIP: parsed.sourceIP,
+            destinationIP: parsed.destinationIP,
+            dropReason: nil
+        )
+    }
+
+    static func planSharedTunOutboundRoute(
+        ownerByIPv4: [String: String],
+        ownerByIPv6: [String: String],
+        peerIDByRef: [String: Int],
+        activePeerBindings: [SharedTunActivePeerBinding],
+        packet: Data
+    ) -> SharedTunOutboundRouteSnapshot {
+        guard let parsed = parsePacketEndpoints(packet) else {
+            return SharedTunOutboundRouteSnapshot(
+                routed: false,
+                routeClass: nil,
+                selectedPeerIDs: [],
+                selectedChanIDs: [],
+                ipVersion: nil,
+                destinationIP: nil,
+                dropReason: parsePacketDropReason(packet)
+            )
+        }
+        if parsed.ipVersion == 4, parsed.destinationIP == "255.255.255.255" {
+            let selected = activePeerBindings
+                .filter { $0.preferredChanID != nil }
+                .sorted { lhs, rhs in lhs.peerID < rhs.peerID }
+            return SharedTunOutboundRouteSnapshot(
+                routed: !selected.isEmpty,
+                routeClass: "broadcast",
+                selectedPeerIDs: selected.map(\.peerID),
+                selectedChanIDs: selected.compactMap(\.preferredChanID),
+                ipVersion: parsed.ipVersion,
+                destinationIP: parsed.destinationIP,
+                dropReason: selected.isEmpty ? "broadcast_no_active_peers" : nil
+            )
+        }
+        let ownerRef = ownerByIPv4[parsed.destinationIP] ?? ownerByIPv6[parsed.destinationIP]
+        guard let ownerRef else {
+            return SharedTunOutboundRouteSnapshot(
+                routed: false,
+                routeClass: "unicast",
+                selectedPeerIDs: [],
+                selectedChanIDs: [],
+                ipVersion: parsed.ipVersion,
+                destinationIP: parsed.destinationIP,
+                dropReason: "unknown_destination"
+            )
+        }
+        guard let peerID = peerIDByRef[ownerRef] else {
+            return SharedTunOutboundRouteSnapshot(
+                routed: false,
+                routeClass: "unicast",
+                selectedPeerIDs: [],
+                selectedChanIDs: [],
+                ipVersion: parsed.ipVersion,
+                destinationIP: parsed.destinationIP,
+                dropReason: "destination_peer_unmapped"
+            )
+        }
+        let selectedBinding = activePeerBindings.first { $0.peerID == peerID }
+        guard let selectedBinding, let preferredChanID = selectedBinding.preferredChanID else {
+            return SharedTunOutboundRouteSnapshot(
+                routed: false,
+                routeClass: "unicast",
+                selectedPeerIDs: [peerID],
+                selectedChanIDs: [],
+                ipVersion: parsed.ipVersion,
+                destinationIP: parsed.destinationIP,
+                dropReason: "destination_peer_inactive"
+            )
+        }
+        return SharedTunOutboundRouteSnapshot(
+            routed: true,
+            routeClass: "unicast",
+            selectedPeerIDs: [peerID],
+            selectedChanIDs: [preferredChanID],
+            ipVersion: parsed.ipVersion,
             destinationIP: parsed.destinationIP,
             dropReason: nil
         )
