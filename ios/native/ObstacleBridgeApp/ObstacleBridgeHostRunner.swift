@@ -124,6 +124,7 @@ final class ObstacleBridgeHostRunner {
     private var sharedWebSocketOverlayRuntime: ObstacleBridgeWebSocketOverlayRuntime?
     private var sharedTcpOverlayRuntime: ObstacleBridgeTcpOverlayRuntime?
     private var sharedQuicOverlayRuntime: ObstacleBridgeQuicOverlayRuntime?
+    private var sharedWebSocketOverlayTransportOwner: ObstacleBridgeWebSocketOverlayTransportOwner?
     private var sharedTcpOverlayTransportOwner: ObstacleBridgeTcpOverlayTransportOwner?
     private var sharedQuicOverlayTransportOwner: ObstacleBridgeQuicOverlayTransportOwner?
     private var sharedUdpOverlayTransportOwner: ObstacleBridgeUdpOverlayTransportOwner?
@@ -257,6 +258,7 @@ final class ObstacleBridgeHostRunner {
         stopOwnServers()
         prepareSharedOverlayBootstrap()
         try startOwnServers()
+        startSharedWebSocketOverlayTransportOwnerIfNeeded()
         startSharedTCPOverlayTransportOwnerIfNeeded()
         startSharedQUICOverlayTransportOwnerIfNeeded()
         try startSharedUDPOverlayTransportOwnerIfNeeded()
@@ -266,6 +268,7 @@ final class ObstacleBridgeHostRunner {
     func start() throws {
         prepareSharedOverlayBootstrap()
         try startOwnServers()
+        startSharedWebSocketOverlayTransportOwnerIfNeeded()
         startSharedTCPOverlayTransportOwnerIfNeeded()
         startSharedQUICOverlayTransportOwnerIfNeeded()
         try startSharedUDPOverlayTransportOwnerIfNeeded()
@@ -308,6 +311,8 @@ final class ObstacleBridgeHostRunner {
     func stop() {
         clientRestartWatchdog?.cancel()
         clientRestartWatchdog = nil
+        sharedWebSocketOverlayTransportOwner?.stop()
+        sharedWebSocketOverlayTransportOwner = nil
         sharedTcpOverlayTransportOwner?.stop()
         sharedTcpOverlayTransportOwner = nil
         sharedQuicOverlayTransportOwner?.stop()
@@ -513,7 +518,7 @@ final class ObstacleBridgeHostRunner {
             wsSubprotocol: subprotocol,
             proxyActive: proxyActive
         )
-        return [
+        var snapshot: [String: Any] = [
             "payload_mode": bootstrapState["ws_payload_mode"] ?? (Self.stringValue(from: runtimeConfig["ws_payload_mode"]) ?? "binary"),
             "uri": plan.uri,
             "host": host,
@@ -530,6 +535,12 @@ final class ObstacleBridgeHostRunner {
             "keep_alive_enabled": socketConfig.keepAliveEnabled,
             "tcp_user_timeout_ms": socketConfig.tcpUserTimeoutMS ?? NSNull(),
         ]
+        if let ownerSnapshot = serviceStateQueue.sync(execute: { sharedWebSocketOverlayTransportOwner?.transportSnapshot() }) {
+            for (key, value) in ownerSnapshot {
+                snapshot[key] = value
+            }
+        }
+        return snapshot
     }
 
     private func tcpRuntimeSnapshot() -> [String: Any]? {
@@ -821,6 +832,18 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func acceptUDPConnection(_ connection: NWConnection, spec: ObstacleBridgeNativeServiceSpec) {
+        if let owner = sharedWebSocketOverlayTransportOwner,
+           (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "").lowercased() == "ws" {
+            if owner.acceptLocalUDPConnection(
+                connection,
+                spec: spec.toChannelMuxServiceSpec(),
+                listenerHost: spec.listenBind,
+                listenerPort: spec.listenPort,
+                serviceKey: "svc-\(spec.svcID)"
+            ) {
+                return
+            }
+        }
         if let owner = sharedTcpOverlayTransportOwner,
            (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "").lowercased() == "tcp" {
             if owner.acceptLocalUDPConnection(
@@ -911,6 +934,17 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func acceptTCPConnection(_ connection: NWConnection, spec: ObstacleBridgeNativeServiceSpec) {
+        if let owner = sharedWebSocketOverlayTransportOwner,
+           (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "").lowercased() == "ws" {
+            if owner.acceptLocalTCPConnection(
+                connection,
+                spec: spec.toChannelMuxServiceSpec(),
+                listenerHost: spec.listenBind,
+                listenerPort: spec.listenPort
+            ) {
+                return
+            }
+        }
         if let owner = sharedTcpOverlayTransportOwner,
            (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "").lowercased() == "tcp" {
             if owner.acceptLocalTCPConnection(
@@ -985,6 +1019,7 @@ final class ObstacleBridgeHostRunner {
 
     private func connectionsSnapshot() -> [String: Any] {
         withServiceStateQueue {
+            let wsOverlayRows = sharedWebSocketOverlayTransportOwner?.connectionRows()
             let tcpOverlayRows = sharedTcpOverlayTransportOwner?.connectionRows()
             let quicOverlayRows = sharedQuicOverlayTransportOwner?.connectionRows()
             let udpOverlayRows = sharedUdpOverlayTransportOwner?.connectionRows()
@@ -1022,8 +1057,8 @@ final class ObstacleBridgeHostRunner {
                         "stats": ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0],
                     ] as [String: Any]
                 }
-            let udpConnectedRows = udpConnectionStates.values.map { $0 } + (tcpOverlayRows?.udp ?? []) + (quicOverlayRows?.udp ?? []) + (udpOverlayRows?.udp ?? [])
-            let tcpConnectedRows = tcpConnectionStates.values.map { $0 } + (tcpOverlayRows?.tcp ?? []) + (quicOverlayRows?.tcp ?? []) + (udpOverlayRows?.tcp ?? [])
+            let udpConnectedRows = udpConnectionStates.values.map { $0 } + (wsOverlayRows?.udp ?? []) + (tcpOverlayRows?.udp ?? []) + (quicOverlayRows?.udp ?? []) + (udpOverlayRows?.udp ?? [])
+            let tcpConnectedRows = tcpConnectionStates.values.map { $0 } + (wsOverlayRows?.tcp ?? []) + (tcpOverlayRows?.tcp ?? []) + (quicOverlayRows?.tcp ?? []) + (udpOverlayRows?.tcp ?? [])
             let tunListeningRows = ownServerSpecs
                 .filter { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
                 .map { spec in
@@ -1043,7 +1078,7 @@ final class ObstacleBridgeHostRunner {
                         "shared_tun_ownership": sharedTunOwnership.map(ObstacleBridgeChannelMuxCodec.foundationObject(from:)) ?? NSNull(),
                     ] as [String: Any]
                 }
-            let tunConnectedRows = (tcpOverlayRows?.tun ?? []) + (quicOverlayRows?.tun ?? []) + (udpOverlayRows?.tun ?? [])
+            let tunConnectedRows = (wsOverlayRows?.tun ?? []) + (tcpOverlayRows?.tun ?? []) + (quicOverlayRows?.tun ?? []) + (udpOverlayRows?.tun ?? [])
             let udpRows = (udpConnectedRows + udpListeningRows).sorted { lhs, rhs in
                 let leftListening = String(describing: lhs["state"] ?? "") == "listening"
                 let rightListening = String(describing: rhs["state"] ?? "") == "listening"
@@ -1267,6 +1302,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func prepareSharedOverlayBootstrap() {
+        sharedWebSocketOverlayTransportOwner?.stop()
         sharedTcpOverlayTransportOwner?.stop()
         sharedQuicOverlayTransportOwner?.stop()
         sharedUdpOverlayTransportOwner?.stop()
@@ -1276,6 +1312,7 @@ final class ObstacleBridgeHostRunner {
         sharedWebSocketOverlayRuntime = nil
         sharedTcpOverlayRuntime = nil
         sharedQuicOverlayRuntime = nil
+        sharedWebSocketOverlayTransportOwner = nil
         sharedTcpOverlayTransportOwner = nil
         sharedQuicOverlayTransportOwner = nil
         sharedUdpOverlayTransportOwner = nil
@@ -1389,6 +1426,48 @@ final class ObstacleBridgeHostRunner {
 
     private static func peerHost(for transport: String, payload: [String: Any]) -> String? {
         ObstacleBridgeRuntimeConfig.peerHost(for: transport, payload: payload)
+    }
+
+    private func startSharedWebSocketOverlayTransportOwnerIfNeeded() {
+        guard let runtime = sharedWebSocketOverlayRuntime,
+              (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "").lowercased() == "ws"
+        else {
+            return
+        }
+        let peerHost = Self.stringValue(from: runtimeConfig["ws_peer"]) ?? ""
+        let peerPort = Self.intValue(from: runtimeConfig["ws_peer_port"]) ?? 0
+        guard !peerHost.isEmpty, peerPort > 0 else {
+            return
+        }
+        let useTLS = Self.boolValue(from: runtimeConfig["ws_tls"]) ?? false
+        let wsPath = Self.stringValue(from: runtimeConfig["ws_path"]) ?? "/"
+        let wsSubprotocol = Self.stringValue(from: runtimeConfig["ws_subprotocol"])
+        let tunService = ownServerSpecs.first { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
+        let muxInstanceID = UInt64.random(in: 1...UInt64.max)
+        let muxConnectionSeq = UInt32.random(in: 1...UInt32.max)
+        let owner = ObstacleBridgeWebSocketOverlayTransportOwner(
+            peerHost: peerHost,
+            peerPort: peerPort,
+            useTLS: useTLS,
+            wsPath: wsPath,
+            wsSubprotocol: wsSubprotocol,
+            overlayRuntime: runtime,
+            reconnectRetryDelayMS: Self.intValue(from: runtimeConfig["overlay_reconnect_retry_delay_ms"]) ?? 30000,
+            sessionMaxAppPayload: ObstacleBridgeRuntimeConfig.overlaySessionMaxAppPayload(from: runtimeConfig),
+            overlayLayerTransportAdapter: sharedOverlayLayerTransportAdapter,
+            startupMuxFrames: remoteServiceCatalogMuxFrames(
+                instanceID: muxInstanceID,
+                connectionSeq: muxConnectionSeq
+            ),
+            queue: serviceStateQueue,
+            serviceNameByID: Dictionary(uniqueKeysWithValues: ownServerSpecs.map { ($0.svcID, $0.name ?? "") }),
+            tunIfname: tunService?.listenBind,
+            tunMTU: tunService?.listenPort ?? 0,
+            muxInstanceID: muxInstanceID,
+            muxConnectionSeq: muxConnectionSeq
+        )
+        sharedWebSocketOverlayTransportOwner = owner
+        owner.start()
     }
 
     private func startSharedTCPOverlayTransportOwnerIfNeeded() {
@@ -1542,6 +1621,9 @@ final class ObstacleBridgeHostRunner {
 
     private func overlayCurrentlyConnected() -> Bool? {
         let transport = (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp").lowercased()
+        if transport == "ws" {
+            return sharedWebSocketOverlayTransportOwner?.transportSnapshot()["overlay_connected"] as? Bool
+        }
         if transport == "tcp" {
             return sharedTcpOverlayTransportOwner?.transportSnapshot()["overlay_connected"] as? Bool
         }

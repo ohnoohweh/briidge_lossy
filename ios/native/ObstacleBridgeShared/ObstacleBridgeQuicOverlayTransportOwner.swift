@@ -365,7 +365,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
             do {
                 if let adapter = overlayLayerTransportAdapter {
                     let adapterSnapshot = try adapter.handleTransportConnected()
-                    sendFrames(adapterSnapshot.emittedFrames)
+                    sendTransportFrames(adapterSnapshot.emittedFrames)
                 }
                 flushStartupMuxFramesIfNeeded()
             } catch {
@@ -434,7 +434,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
             let snapshot = adapter.handleInboundFrame(payload)
             inboundPayloads = snapshot.deliveredPayloads
             if !snapshot.emittedFrames.isEmpty {
-                sendFrames(snapshot.emittedFrames)
+                sendTransportFrames(snapshot.emittedFrames)
             }
         } else {
             inboundPayloads = [payload]
@@ -565,6 +565,21 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         }
     }
 
+    private func sendTransportFrames(_ frames: [Data]) {
+        guard !frames.isEmpty else { return }
+        for frame in frames {
+            let snapshot = overlayRuntime.sendApp(payload: frame, writerPresent: overlayConnection != nil, peerConfigured: !peerHost.isEmpty)
+            for wire in snapshot.writtenBuffers {
+                overlayConnection?.send(
+                    content: wire,
+                    contentContext: .defaultStream,
+                    isComplete: false,
+                    completion: .contentProcessed({ _ in })
+                )
+            }
+        }
+    }
+
     private func sendPayload(_ payload: Data) {
         let outboundFrames: [Data]
         if let adapter = overlayLayerTransportAdapter {
@@ -577,17 +592,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         } else {
             outboundFrames = [payload]
         }
-        for frame in outboundFrames {
-            let snapshot = overlayRuntime.sendApp(payload: frame, writerPresent: overlayConnection != nil, peerConfigured: !peerHost.isEmpty)
-            for wire in snapshot.writtenBuffers {
-                overlayConnection?.send(
-                    content: wire,
-                    contentContext: .defaultStream,
-                    isComplete: false,
-                    completion: .contentProcessed({ _ in })
-                )
-            }
-        }
+        sendTransportFrames(outboundFrames)
     }
 
     private func flushStartupMuxFramesIfNeeded() {

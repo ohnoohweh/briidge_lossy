@@ -1386,7 +1386,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python | `80/88 = 90.9%` | `85/88 = 96.6%` | `85/88 = 96.6%` |
 | macOS | `0/88 = 0.0%` | `2/88 = 2.3%` | `2/88 = 2.3%` |
-| iOS | `7/88 = 8.0%` | `8/88 = 9.1%` | `12/88 = 13.6%` |
+| iOS | `8/88 = 9.1%` | `8/88 = 9.1%` | `13/88 = 14.8%` |
 
 #### Architecture traceability
 
@@ -1394,7 +1394,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python | `7/7 = 100.0%` | `7/7 = 100.0%` | `7/7 = 100.0%` |
 | macOS | `0/7 = 0.0%` | `1/7 = 14.3%` | `1/7 = 14.3%` |
-| iOS | `3/7 = 42.9%` | `2/7 = 28.6%` | `4/7 = 57.1%` |
+| iOS | `4/7 = 57.1%` | `2/7 = 28.6%` | `4/7 = 57.1%` |
 
 The supporting manifests remain shared:
 
@@ -1410,11 +1410,11 @@ This section is intentionally narrower than product coverage. It shows the evide
 
 | Evidence lane | Meaning | Integration covered | Unit covered | Any covered |
 | --- | --- | ---: | ---: | ---: |
-| Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `116` | `116` |
+| Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `117` | `117` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `4` | `0` | `4` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `27` | `0` | `27` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `28` | `0` | `28` |
 | Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `18` | `18` |
-| Total parity-oriented evidence | Sum of the lanes above | `31` | `134` | `165` |
+| Total parity-oriented evidence | Sum of the lanes above | `32` | `135` | `167` |
 
 Important caveat:
 

@@ -29,6 +29,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from obstacle_bridge.bridge import AdminWebUI, CONFIG_SECRET_PREFIX, _decrypt_config_secret, _encrypt_config_secret
 from obstacle_bridge.core import ObstacleBridgeClient
 from obstacle_bridge.onboarding import decode_invite_token, encode_invite_token
+from tests.fixtures.localhost_tls import materialize_localhost_tls_fixture_set
 
 TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
@@ -102,6 +103,168 @@ def _unused_udp_port() -> int:
     with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as sock:
         sock.bind(("::1", 0))
         return int(sock.getsockname()[1])
+
+
+def _mixed_overlay_python_peer_config(
+    *,
+    transport: str,
+    overlay_port: int,
+    admin_port: int,
+    cert_dir: Path | None = None,
+    wrapped: bool = True,
+) -> dict:
+    config: dict[str, object] = {
+        "overlay_transport": transport,
+        "admin_web": True,
+        "admin_web_bind": "127.0.0.1",
+        "admin_web_port": admin_port,
+        "admin_web_auth_disable": True,
+        "status": False,
+    }
+    if wrapped:
+        config.update({
+            "secure_link": True,
+            "secure_link_mode": "psk",
+            "secure_link_psk": f"remote-admin-{transport}-burst-psk",
+            "compress_layer": True,
+            "compress_layer_algo": "zlib",
+            "compress_layer_level": 5,
+            "compress_layer_min_bytes": 64,
+            "compress_layer_types": "data",
+        })
+    if transport == "tcp":
+        config.update({
+            "tcp_bind": "127.0.0.1",
+            "tcp_own_port": overlay_port,
+        })
+    elif transport == "ws":
+        config.update({
+            "ws_bind": "127.0.0.1",
+            "ws_own_port": overlay_port,
+            "ws_path": "/",
+            "ws_tls": False,
+        })
+    elif transport == "quic":
+        assert cert_dir is not None
+        config.update({
+            "quic_bind": "127.0.0.1",
+            "quic_own_port": overlay_port,
+            "quic_cert": str(cert_dir / "cert.pem"),
+            "quic_key": str(cert_dir / "key.pem"),
+            "quic_alpn": "hq-29",
+        })
+    else:
+        raise ValueError(f"unsupported transport {transport}")
+    return config
+
+
+def _mixed_overlay_hostrunner_runtime_config(
+    *,
+    transport: str,
+    overlay_port: int,
+    admin_port: int,
+    remote_tcp_port: int | None = None,
+    own_servers: list[dict[str, object]] | None = None,
+    remote_servers: list[dict[str, object]] | None = None,
+    wrapped: bool = True,
+) -> dict:
+    config: dict[str, object] = {
+        "overlay_transport": transport,
+        "overlay_reconnect_retry_delay_ms": 250,
+        "admin_web": True,
+        "admin_web_bind": "127.0.0.1",
+        "admin_web_port": admin_port,
+        "admin_web_dir": str((ROOT / "admin_web").resolve()),
+        "admin_web_auth_disable": True,
+    }
+    if wrapped:
+        config.update({
+            "secure_link": True,
+            "secure_link_mode": "psk",
+            "secure_link_psk": f"remote-admin-{transport}-burst-psk",
+            "compress_layer": True,
+            "compress_layer_algo": "zlib",
+            "compress_layer_level": 5,
+            "compress_layer_min_bytes": 64,
+            "compress_layer_types": "data",
+        })
+    if own_servers is not None:
+        config["own_servers"] = own_servers
+    if remote_servers is not None:
+        config["remote_servers"] = remote_servers
+    elif remote_tcp_port is not None:
+        config["remote_servers"] = [
+            {
+                "name": f"Remote Admin Burst {transport}",
+                "listen": {
+                    "protocol": "tcp",
+                    "bind": "127.0.0.1",
+                    "port": remote_tcp_port,
+                },
+                "target": {
+                    "protocol": "tcp",
+                    "host": "127.0.0.1",
+                    "port": admin_port,
+                },
+            }
+        ]
+    if transport == "tcp":
+        config.update({
+            "tcp_peer": "127.0.0.1",
+            "tcp_peer_port": overlay_port,
+        })
+    elif transport == "ws":
+        config.update({
+            "ws_peer": "127.0.0.1",
+            "ws_peer_port": overlay_port,
+            "ws_bind": "127.0.0.1",
+            "ws_own_port": 0,
+            "ws_tls": False,
+            "ws_path": "/",
+        })
+    elif transport == "quic":
+        config.update({
+            "quic_peer": "127.0.0.1",
+            "quic_peer_port": overlay_port,
+            "quic_bind": "127.0.0.1",
+            "quic_own_port": 0,
+            "quic_alpn": "hq-29",
+            "quic_insecure": True,
+        })
+    else:
+        raise ValueError(f"unsupported transport {transport}")
+    return config
+
+
+def _start_python_bridge_process(
+    *,
+    name: str,
+    config: dict,
+    tmp_path: Path,
+    env_extra: dict[str, str] | None = None,
+) -> tuple[subprocess.Popen[str], Path, object]:
+    config_path = tmp_path / f"{name}.json"
+    config_path.write_text(json.dumps(config, sort_keys=True), encoding="utf-8")
+    log_path = tmp_path / f"{name}.log"
+    log_fp = log_path.open("w", encoding="utf-8")
+    env = dict(os.environ)
+    env["PYTHONUNBUFFERED"] = "1"
+    if env_extra:
+        env.update(env_extra)
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(ROOT / "ObstacleBridge.py"),
+            "--config",
+            str(config_path),
+        ],
+        cwd=str(ROOT),
+        stdout=log_fp,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=env,
+    )
+    return process, log_path, log_fp
 
 
 def _compile_swift_runtime_probe(source_path: Path, binary_path: Path) -> None:
@@ -861,6 +1024,7 @@ class _TCPEchoServer:
     def __init__(self, host: str, port: int) -> None:
         self.host = host
         self.port = port
+        self.received: list[bytes] = []
         self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server.bind((host, port))
@@ -886,11 +1050,11 @@ class _TCPEchoServer:
                 conn, _addr = self._server.accept()
             except (TimeoutError, socket.timeout, OSError):
                 continue
-            thread = threading.Thread(target=self._handle_client, args=(conn,), daemon=True)
+            thread = threading.Thread(target=self._handle_client, args=(conn, self.received), daemon=True)
             thread.start()
 
     @staticmethod
-    def _handle_client(conn: socket.socket) -> None:
+    def _handle_client(conn: socket.socket, received: list[bytes]) -> None:
         with conn:
             while True:
                 try:
@@ -899,6 +1063,7 @@ class _TCPEchoServer:
                     return
                 if not data:
                     return
+                received.append(data)
                 try:
                     conn.sendall(data)
                 except OSError:
@@ -951,6 +1116,19 @@ def _wait_http_condition(url: str, predicate, *, timeout_sec: float = 10.0) -> d
             last_error = exc
         time.sleep(0.1)
     raise AssertionError(f"timed out waiting for condition on {url}: last_doc={last_doc!r} last_error={last_error!r}")
+
+
+def _wait_tcp_port_ready(host: str, port: int, *, timeout_sec: float = 10.0) -> None:
+    deadline = time.time() + timeout_sec
+    last_error = None
+    while time.time() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                return
+        except OSError as exc:
+            last_error = exc
+            time.sleep(0.1)
+    raise AssertionError(f"timed out waiting for tcp port {host}:{port}: {last_error!r}")
 
 
 def test_macos_swift_host_runner_reports_python_style_build_payload(tmp_path: Path) -> None:
@@ -3494,6 +3672,175 @@ def test_macos_swift_host_runner_remote_tcp_admin_web_handles_multiple_connectio
             raise AssertionError(
                 f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
             )
+
+
+@pytest.mark.parametrize(
+    "transport",
+    [
+        "ws",
+        pytest.param(
+            "quic",
+            marks=pytest.mark.xfail(
+                reason="macOS Swift QUIC overlay connects but mixed Python-peer TCP own-service forwarding still stalls",
+                strict=True,
+            ),
+        ),
+    ],
+)
+def test_macos_swift_host_runner_tcp_ownserver_proxies_mixed_python_peer_for_ws_and_quic(
+    tmp_path: Path,
+    transport: str,
+) -> None:
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
+
+    overlay_port = _unused_tcp_port() if transport == "ws" else _unused_udp_port()
+    hostrunner_admin_port = _unused_tcp_port()
+    python_peer_admin_port = _unused_tcp_port()
+    listen_port = _unused_tcp_port()
+    target_port = _unused_tcp_port()
+    cert_dir = materialize_localhost_tls_fixture_set(tmp_path / f"{transport}-localhost-fixtures") if transport == "quic" else None
+
+    python_peer_config = _mixed_overlay_python_peer_config(
+        transport=transport,
+        overlay_port=overlay_port,
+        admin_port=python_peer_admin_port,
+        cert_dir=cert_dir,
+        wrapped=False,
+    )
+    python_peer_env = {}
+    if transport == "ws":
+        python_peer_env = {
+            "NO_PROXY": "127.0.0.1,localhost,::1",
+            "no_proxy": "127.0.0.1,localhost,::1",
+        }
+
+    runtime_config_path = tmp_path / f"runtime_remote_admin_burst_{transport}.json"
+    runtime_config_path.write_text(
+        json.dumps(
+            _mixed_overlay_hostrunner_runtime_config(
+                transport=transport,
+                overlay_port=overlay_port,
+                admin_port=hostrunner_admin_port,
+                wrapped=False,
+                own_servers=[
+                    {
+                        "name": f"Mixed TCP Echo {transport}",
+                        "listen": {
+                            "protocol": "tcp",
+                            "bind": "127.0.0.1",
+                            "port": listen_port,
+                        },
+                        "target": {
+                            "protocol": "tcp",
+                            "host": "127.0.0.1",
+                            "port": target_port,
+                        },
+                    }
+                ],
+            ),
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    python_peer_proc, python_peer_log_path, python_peer_log_fp = _start_python_bridge_process(
+        name=f"python_peer_remote_admin_burst_{transport}",
+        config=python_peer_config,
+        tmp_path=tmp_path,
+        env_extra=python_peer_env,
+    )
+    _wait_http_json(f"http://127.0.0.1:{python_peer_admin_port}/api/status", timeout_sec=20.0)
+    process = subprocess.Popen(
+        [
+            str(binary_path),
+            "--runtime-config",
+            str(runtime_config_path),
+            "--hold-sec",
+            "20",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    target_server: _TCPEchoServer | None = None
+    clients: list[socket.socket] = []
+    try:
+        _wait_http_json(f"http://127.0.0.1:{hostrunner_admin_port}/api/status", timeout_sec=20.0)
+        _wait_http_condition(
+            f"http://127.0.0.1:{hostrunner_admin_port}/api/peers",
+            lambda doc: bool(doc.get("peers")) and str(doc["peers"][0].get("state") or "").strip().lower() == "connected",
+            timeout_sec=20.0,
+        )
+        target_server = _TCPEchoServer("127.0.0.1", target_port)
+        target_server.start()
+        _wait_tcp_port_ready("127.0.0.1", listen_port)
+
+        payloads = [
+            b"\x01mixed-wsquic-tcp-" + transport.encode("utf-8") + b"-client1-" + (b"A" * 2048) + b"\n",
+            b"\x01mixed-wsquic-tcp-" + transport.encode("utf-8") + b"-client2-" + (b"B" * 3072) + b"\n",
+            b"\x01mixed-wsquic-tcp-" + transport.encode("utf-8") + b"-client3-" + (b"C" * 4096) + b"\n",
+        ]
+        echoed_payloads: list[bytes] = []
+        for payload in payloads:
+            client = socket.create_connection(("127.0.0.1", listen_port), timeout=5.0)
+            clients.append(client)
+            client.sendall(payload)
+        for client, payload in zip(clients, payloads):
+            client.settimeout(5.0)
+            chunks = bytearray()
+            while len(chunks) < len(payload):
+                chunk = client.recv(len(payload) - len(chunks))
+                if not chunk:
+                    break
+                chunks.extend(chunk)
+            echoed_payloads.append(bytes(chunks))
+
+        connections = _wait_http_condition(
+            f"http://127.0.0.1:{hostrunner_admin_port}/api/connections",
+            lambda doc: int(doc["counts"].get("tcp", 0)) >= 3,
+            timeout_sec=20.0,
+        )
+        peers = _http_json(f"http://127.0.0.1:{hostrunner_admin_port}/api/peers")
+        meta = _http_json(f"http://127.0.0.1:{hostrunner_admin_port}/api/meta")
+
+        assert echoed_payloads == payloads
+        assert sorted(target_server.received) == sorted(payloads)
+        assert isinstance(connections, dict) and "counts" in connections
+        assert isinstance(peers, dict) and "peers" in peers
+        peer_row = peers["peers"][0]
+        assert peer_row["transport"] == transport
+        assert peer_row["runtime"]["kind"] == transport
+        assert peer_row["peer"]["host"] == "127.0.0.1"
+        assert int(peer_row["open_connections"]["tcp"]) >= 3
+        assert meta["transport_runtime"]["kind"] == transport
+    finally:
+        for client in clients:
+            with contextlib.suppress(OSError):
+                client.close()
+        if target_server is not None:
+            target_server.stop()
+        if python_peer_proc.poll() is None:
+            python_peer_proc.terminate()
+        python_peer_proc.wait(timeout=10.0)
+        python_peer_log_fp.close()
+        if process.poll() is None:
+            process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5.0)
+        if python_peer_proc.returncode not in (0, -15, 143):
+            raise AssertionError(
+                f"Python bridge peer exited unexpectedly with code {python_peer_proc.returncode}. "
+                f"Log file: {python_peer_log_path}\n{python_peer_log_path.read_text(encoding='utf-8', errors='replace')}"
+            )
+        if process.returncode not in (0, -15):
+            raise AssertionError(
+                f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            )
+
 
 
 def test_macos_swift_host_runner_bootstraps_quic_stack_and_serves_status(tmp_path: Path) -> None:
