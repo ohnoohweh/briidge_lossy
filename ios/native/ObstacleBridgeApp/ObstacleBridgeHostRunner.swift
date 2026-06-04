@@ -1063,7 +1063,7 @@ final class ObstacleBridgeHostRunner {
                 .filter { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
                 .map { spec in
                     let sharedTunOwnership = ObstacleBridgeChannelMuxCodec.sharedTunOwnershipSnapshot(for: spec.toChannelMuxServiceSpec())
-                    [
+                    return [
                         "protocol": "tun",
                         "role": "server",
                         "state": "listening",
