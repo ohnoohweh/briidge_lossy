@@ -266,6 +266,11 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
 
             self.assertEqual(local_env["TUN_ADDR"], "192.168.107.1/30")
             self.assertEqual(local_env["TUN_GW"], "192.168.107.2")
+            self.assertEqual(local_env["PEER_ADDR"], "192.168.107.2")
+            self.assertEqual(local_env["TUN_SUBNET"], "192.168.107.0/30")
+            self.assertEqual(local_env["TUN_ADDR6"], "fd20:107::1/126")
+            self.assertEqual(local_env["PEER_ADDR6"], "fd20:107::2")
+            self.assertEqual(local_env["TUN_SUBNET6"], "fd20:107::/126")
             self.assertEqual(local_env["DNS1"], "9.9.9.9")
             self.assertEqual(remote_env["TUN_ADDR"], "192.168.107.2/30")
             self.assertEqual(remote_env["PEER_ADDR"], "192.168.107.1")

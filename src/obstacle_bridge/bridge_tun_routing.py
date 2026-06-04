@@ -137,11 +137,19 @@ class TunRoutingSettings:
         gateway4 = self._local_gateway4()
         if gateway4:
             env["TUN_GW"] = gateway4
+            env["PEER_ADDR"] = gateway4
+        subnet4 = self._subnet4()
+        if subnet4:
+            env["TUN_SUBNET"] = subnet4
         if self.tunnel_address6:
             env["TUN_ADDR6"] = f"{self.tunnel_address6}/{int(self.tunnel_prefix6)}"
         gateway6 = self._local_gateway6()
         if gateway6:
             env["TUN_GW6"] = gateway6
+            env["PEER_ADDR6"] = gateway6
+        subnet6 = self._subnet6()
+        if subnet6:
+            env["TUN_SUBNET6"] = subnet6
         if self.dns_servers:
             env["DNS1"] = str(self.dns_servers[0])
         if len(self.dns_servers) > 1:
