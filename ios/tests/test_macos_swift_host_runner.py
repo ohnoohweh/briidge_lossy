@@ -137,6 +137,11 @@ def _mixed_overlay_python_peer_config(
             "tcp_bind": "127.0.0.1",
             "tcp_own_port": overlay_port,
         })
+    elif transport == "myudp":
+        config.update({
+            "udp_bind": "127.0.0.1",
+            "udp_own_port": overlay_port,
+        })
     elif transport == "ws":
         config.update({
             "ws_bind": "127.0.0.1",
@@ -212,6 +217,13 @@ def _mixed_overlay_hostrunner_runtime_config(
         config.update({
             "tcp_peer": "127.0.0.1",
             "tcp_peer_port": overlay_port,
+        })
+    elif transport == "myudp":
+        config.update({
+            "udp_bind": "127.0.0.1",
+            "udp_own_port": 0,
+            "udp_peer": "127.0.0.1",
+            "udp_peer_port": overlay_port,
         })
     elif transport == "ws":
         config.update({
@@ -297,6 +309,22 @@ def _compile_swift_udp_overlay_peer_probe(source_path: Path, binary_path: Path) 
         str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlaySessionCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift"),
+        str(source_path),
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        raise AssertionError(f"swiftc failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}")
+
+
+def _compile_swift_macos_tun_probe(source_path: Path, binary_path: Path) -> None:
+    swiftc = shutil.which("swiftc")
+    if not swiftc:
+        pytest.skip("swiftc is required for macOS utun adapter tests")
+    command = [
+        swiftc,
+        "-o",
+        str(binary_path),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunAdapter.swift"),
         str(source_path),
     ]
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
@@ -1018,6 +1046,46 @@ def test_shared_udp_overlay_peer_runtime_recent_inbound_keeps_connected_state(tm
     assert payload["connected"] is True
     assert int(payload["last_rx_wall_ns"]) > 0
     assert int(payload["last_rtt_ok_ns"]) == 0
+
+
+def test_macos_utun_adapter_frame_codec_probe(tmp_path: Path) -> None:
+    source_path = tmp_path / "MacOSTunAdapterProbe.swift"
+    binary_path = tmp_path / "macos-utun-adapter-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            @main
+            struct MacOSTunAdapterProbeMain {
+                static func main() throws {
+                    let ipv4Packet = Data([0x45, 0x00, 0x00, 0x14] + Array(repeating: 0, count: 16))
+                    let ipv6Packet = Data([0x60, 0x00, 0x00, 0x00] + Array(repeating: 0, count: 36))
+                    let ipv4Frame = try ObstacleBridgeMacOSTunAdapter.utunFrame(for: ipv4Packet)
+                    let ipv6Frame = try ObstacleBridgeMacOSTunAdapter.utunFrame(for: ipv6Packet)
+                    let decoded4 = ObstacleBridgeMacOSTunAdapter.packet(fromUTUNFrame: ipv4Frame) ?? Data()
+                    let decoded6 = ObstacleBridgeMacOSTunAdapter.packet(fromUTUNFrame: ipv6Frame) ?? Data()
+                    let payload: [String: Any] = [
+                        "ipv4_frame_prefix": Array(ipv4Frame.prefix(4)),
+                        "ipv6_frame_prefix": Array(ipv6Frame.prefix(4)),
+                        "ipv4_roundtrip": decoded4 == ipv4Packet,
+                        "ipv6_roundtrip": decoded6 == ipv6Packet,
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_macos_tun_probe(source_path, binary_path)
+    completed = subprocess.run([str(binary_path)], capture_output=True, text=True, check=True)
+    payload = json.loads(completed.stdout)
+    assert payload["ipv4_frame_prefix"] == [0, 0, 0, 2]
+    assert payload["ipv6_frame_prefix"] == [0, 0, 0, 30]
+    assert payload["ipv4_roundtrip"] is True
+    assert payload["ipv6_roundtrip"] is True
 
 
 class _TCPEchoServer:
@@ -3835,6 +3903,146 @@ def test_macos_swift_host_runner_tcp_ownserver_proxies_mixed_python_peer_for_ws_
                 f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
             )
 
+
+@pytest.mark.parametrize("transport", ["tcp", "myudp", "ws", "quic"])
+def test_macos_swift_host_runner_exposes_shared_tun_control_plane_against_python_peer(
+    tmp_path: Path,
+    transport: str,
+) -> None:
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
+
+    overlay_port = _unused_udp_port() if transport in {"myudp", "quic"} else _unused_tcp_port()
+    hostrunner_admin_port = _unused_tcp_port()
+    python_peer_admin_port = _unused_tcp_port()
+    cert_dir = materialize_localhost_tls_fixture_set(tmp_path / f"shared-tun-{transport}-certs") if transport == "quic" else None
+
+    python_peer_config = _mixed_overlay_python_peer_config(
+        transport=transport,
+        overlay_port=overlay_port,
+        admin_port=python_peer_admin_port,
+        cert_dir=cert_dir,
+        wrapped=False,
+    )
+
+    runtime_config_path = tmp_path / f"runtime_shared_tun_control_plane_{transport}.json"
+    runtime_config_path.write_text(
+        json.dumps(
+            _mixed_overlay_hostrunner_runtime_config(
+                transport=transport,
+                overlay_port=overlay_port,
+                admin_port=hostrunner_admin_port,
+                wrapped=False,
+                own_servers=[
+                    {
+                        "name": "Shared TUN Control Plane",
+                        "listen": {
+                            "protocol": "tun",
+                            "ifname": "obtun0",
+                            "mtu": 1500,
+                        },
+                        "target": {
+                            "protocol": "tun",
+                            "ifname": "obtun1",
+                            "mtu": 1500,
+                        },
+                        "options": {
+                            "shared_tun_ownership": {
+                                "mode": "server_shared",
+                                "peers": [
+                                    {
+                                        "peer_ref": "linux-client",
+                                        "ipv4": ["192.168.107.2"],
+                                        "ipv6": ["fd20:107::2"],
+                                    }
+                                ],
+                            }
+                        },
+                    }
+                ],
+            ),
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    python_peer_proc, python_peer_log_path, python_peer_log_fp = _start_python_bridge_process(
+        name=f"python_peer_shared_tun_control_plane_{transport}",
+        config=python_peer_config,
+        tmp_path=tmp_path,
+    )
+    _wait_http_json(f"http://127.0.0.1:{python_peer_admin_port}/api/status", timeout_sec=20.0)
+    process = subprocess.Popen(
+        [
+            str(binary_path),
+            "--runtime-config",
+            str(runtime_config_path),
+            "--hold-sec",
+            "20",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        _wait_http_json(f"http://127.0.0.1:{hostrunner_admin_port}/api/status", timeout_sec=20.0)
+        _wait_http_condition(
+            f"http://127.0.0.1:{hostrunner_admin_port}/api/peers",
+            lambda doc: bool(doc.get("peers")) and str(doc["peers"][0].get("state") or "").strip().lower() == "connected",
+            timeout_sec=20.0,
+        )
+        tun_status = _wait_http_condition(
+            f"http://127.0.0.1:{hostrunner_admin_port}/api/tun-routing/status",
+            lambda doc: int(((doc.get("summary") or {}).get("shared_services") or 0)) >= 1,
+            timeout_sec=20.0,
+        )
+        connections = _http_json(f"http://127.0.0.1:{hostrunner_admin_port}/api/connections")
+
+        assert tun_status["summary"]["shared_services"] == 1
+        assert tun_status["summary"]["tun_listening"] >= 1
+        assert tun_status["summary"]["shared_active_peer_bindings"] == 0
+        assert len(tun_status["shared_tun"]) == 1
+        shared_row = tun_status["shared_tun"][0]
+        ownership = shared_row["shared_tun_ownership"]
+        assert shared_row["state"] == "listening"
+        assert shared_row["service_name"] == "Shared TUN Control Plane"
+        assert ownership["mode"] == "server_shared"
+        assert ownership["peer_refs"] == ["linux-client"]
+        assert ownership["owner_by_ipv4"] == {"192.168.107.2": "linux-client"}
+        assert ownership["owner_by_ipv6"] == {"fd20:107::2": "linux-client"}
+        assert ownership["active_peer_bindings"] == []
+        assert ownership["throttle_scopes"] == []
+        assert ownership["drop_counters"] == {"total": 0, "by_reason": {}}
+        assert ownership["recent_drops"] == []
+
+        assert connections["counts"]["tun_listening"] >= 1
+        tun_rows = connections["tun"]
+        assert any(
+            row.get("service_name") == "Shared TUN Control Plane"
+            and isinstance(row.get("shared_tun_ownership"), dict)
+            for row in tun_rows
+        )
+    finally:
+        if python_peer_proc.poll() is None:
+            python_peer_proc.terminate()
+        python_peer_proc.wait(timeout=10.0)
+        python_peer_log_fp.close()
+        if process.poll() is None:
+            process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5.0)
+        if python_peer_proc.returncode not in (0, -15, 143):
+            raise AssertionError(
+                f"Python bridge peer exited unexpectedly with code {python_peer_proc.returncode}. "
+                f"Log file: {python_peer_log_path}\n{python_peer_log_path.read_text(encoding='utf-8', errors='replace')}"
+            )
+        if process.returncode not in (0, -15):
+            raise AssertionError(
+                f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            )
 
 
 def test_macos_swift_host_runner_bootstraps_quic_stack_and_serves_status(tmp_path: Path) -> None:

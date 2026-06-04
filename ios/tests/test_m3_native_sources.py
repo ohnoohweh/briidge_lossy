@@ -382,6 +382,7 @@ def test_macos_app_main_source_exists() -> None:
     build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
     control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
     runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    macos_tun = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunAdapter.swift").read_text(encoding="utf-8")
 
     assert "@main" in app_main
     assert "WKWebView" in app_main
@@ -396,6 +397,7 @@ def test_macos_app_main_source_exists() -> None:
     assert 'ObstacleBridgeHostRunnerError.unreadableRuntimeConfig("Documents")' in runner
     assert "ObstacleBridge.app" in build_script
     assert "ObstacleBridgeMacAppMain.swift" in build_script
+    assert "ObstacleBridgeMacOSTunAdapter.swift" in build_script
     assert "codesign" in build_script
     assert 'APP_ENTITLEMENTS="${OBSTACLEBRIDGE_CODESIGN_ENTITLEMENTS:-}"' in build_script
     assert 'BUILD_VARIANT="${OBSTACLEBRIDGE_MACOS_BUILD_VARIANT:-normal}"' in build_script
@@ -731,7 +733,14 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert '"confirmed_total": protocolStats["confirmed_total"] ?? 0' in host_runner
     assert "let tunService = ownServerSpecs.first { $0.listenProtocol == \"tun\" && $0.targetProtocol == \"tun\" }" in host_runner
     assert "tunIfname: tunService?.listenBind" in host_runner
+    assert "tunPacketSink: { [weak self] packet in" in host_runner
+    assert "ensureSharedMacOSTunAdapter(for: tunService)" in host_runner
+    assert "deliverLocalTunPacketToActiveOverlay" in host_runner
+    assert "deliverRemoteTunPacketToLocalAdapter" in host_runner
     assert '"tun": tunRows' in host_runner
+    assert "final class ObstacleBridgeMacOSTunAdapter" in macos_tun
+    assert "packet(fromUTUNFrame:" in macos_tun
+    assert "utunFrame(for:" in macos_tun
 
 
 def test_ios_packet_tunnel_provider_owns_restart_without_app_process() -> None:

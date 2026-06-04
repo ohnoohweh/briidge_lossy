@@ -1051,32 +1051,38 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0)
             self.mux._rx_tun_open(1, open_payload, peer_id=77)
 
+        snapshot = self.mux._shared_tun_runtime_snapshot_for_service(svc_key)
+        self.assertEqual(snapshot["mode"], "server_shared")
+        self.assertEqual(snapshot["peer_count"], 1)
+        self.assertEqual(snapshot["address_count"], 2)
+        self.assertEqual(snapshot["peer_refs"], ["linux-client"])
         self.assertEqual(
-            self.mux._shared_tun_runtime_snapshot_for_service(svc_key),
-            {
-                'mode': 'server_shared',
-                'peer_count': 1,
-                'address_count': 2,
-                'peer_refs': ['linux-client'],
-                'peers': [
-                    {
-                        'peer_ref': 'linux-client',
-                        'ipv4': ['192.168.107.2'],
-                        'ipv6': ['fd20:107::2'],
-                        'address_count': 2,
-                    }
-                ],
-                'owner_by_ipv4': {'192.168.107.2': 'linux-client'},
-                'owner_by_ipv6': {'fd20:107::2': 'linux-client'},
-                'active_peer_bindings': [
-                    {
-                        'peer_id': 77,
-                        'preferred_chan_id': 1,
-                        'bound_chan_ids': [1],
-                    }
-                ],
-            },
+            snapshot["peers"],
+            [
+                {
+                    'peer_ref': 'linux-client',
+                    'ipv4': ['192.168.107.2'],
+                    'ipv6': ['fd20:107::2'],
+                    'address_count': 2,
+                }
+            ],
         )
+        self.assertEqual(snapshot["owner_by_ipv4"], {'192.168.107.2': 'linux-client'})
+        self.assertEqual(snapshot["owner_by_ipv6"], {'fd20:107::2': 'linux-client'})
+        self.assertEqual(
+            snapshot["active_peer_bindings"],
+            [
+                {
+                    'peer_id': 77,
+                    'preferred_chan_id': 1,
+                    'bound_chan_ids': [1],
+                    'throttle_prev_window_bytes': 0,
+                    'throttle_curr_window_bytes': 0,
+                    'throttle_drop_count': 0,
+                }
+            ],
+        )
+        self.assertEqual(snapshot["throttle_scopes"], [])
 
         with patch.object(self.mux, '_stop_listener_for_service_id', new=AsyncMock()) as stop_listener:
             self.mux.on_peer_disconnected(77)

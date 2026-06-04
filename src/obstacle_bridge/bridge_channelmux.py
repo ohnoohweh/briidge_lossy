@@ -8,6 +8,8 @@ if sys.platform.startswith("linux"):
     from . import bridge_tun_linux as _bridge_tun_platform
 elif sys.platform.startswith("win"):
     from . import bridge_tun_windows as _bridge_tun_platform
+elif sys.platform.startswith("darwin"):
+    from . import bridge_tun_macos as _bridge_tun_platform
 elif sys.platform == "ios":
     from . import bridge_tun_ios as _bridge_tun_platform
 else:
@@ -2757,7 +2759,7 @@ class ChannelMux:
     @classmethod
     def _require_tun_support(cls) -> None:
         if _bridge_tun_platform is None:
-            raise RuntimeError("TUN services are supported only on Linux, Windows and iOS")
+            raise RuntimeError("TUN services are supported only on Linux, macOS, Windows and iOS")
         _bridge_tun_platform.require_tun_support(cls)
 
     def _open_tun_device(self, ifname: str, mtu: int, svc_key: Optional["ChannelMux.ServiceKey"] = None) -> "ChannelMux.TunDevice":

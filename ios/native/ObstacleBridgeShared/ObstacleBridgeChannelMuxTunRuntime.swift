@@ -52,6 +52,18 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         var preferredChanID: Int?
     }
 
+    struct SharedTunPeerBindingState {
+        var peerID: Int
+        var preferredChanID: Int?
+        var boundChanIDs: [Int]
+    }
+
+    struct SharedTunDisconnectCleanupSnapshot {
+        var activePeerBindings: [SharedTunPeerBindingState]
+        var peerRefByPeer: [Int: String]
+        var peerIDByRef: [String: Int]
+    }
+
     struct SharedTunOutboundRouteSnapshot {
         var routed: Bool
         var routeClass: String?
@@ -114,12 +126,19 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         var throttleDropCount: Int
     }
 
+    private struct SharedTunScopeMetadata {
+        var routeClass: String
+        var selectedPeerIDs: [Int]
+        var selectedChanIDs: [Int]
+    }
+
     private let instanceID: UInt64
     private let connectionSeq: UInt32
     private let chanIDStart: Int
     private let chanIDStride: Int
     private let sessionMaxAppPayload: Int
     private let localSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec?
+    private let sharedTunOwnership: [String: Any]?
     private var nextTunID: Int
     private var nextFragmentDatagramID: UInt32
     private var controlChunkNextTxID: UInt32
@@ -128,6 +147,13 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     private var preferredTunChanID: Int?
     private var fragmentStates: [FragmentKey: FragmentState]
     private var tunInflowScopeStates: [String: TunInflowScopeState]
+    private var sharedTunScopeMetadata: [String: SharedTunScopeMetadata]
+    private var sharedTunRuntimeByPeer: [Int: SharedTunPeerBindingState]
+    private var sharedTunPeerRefByPeer: [Int: String]
+    private var sharedTunPeerIDByRef: [String: Int]
+    private var sharedTunDropTotal: Int
+    private var sharedTunDropByReason: [String: Int]
+    private var sharedTunRecentDrops: [[String: Any]]
     private let controlChunkReassembler: ObstacleBridgeChannelMuxCodec.ControlChunkReassembler
 
     init(
@@ -146,6 +172,13 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         self.nextTunID = nextTunID
         self.sessionMaxAppPayload = sessionMaxAppPayload
         self.localSpec = localSpec
+        if let localSpec,
+           let ownershipValue = ObstacleBridgeChannelMuxCodec.sharedTunOwnershipSnapshot(for: localSpec),
+           let ownership = ObstacleBridgeChannelMuxCodec.foundationObject(from: ownershipValue) as? [String: Any] {
+            self.sharedTunOwnership = ownership
+        } else {
+            self.sharedTunOwnership = nil
+        }
         self.nextFragmentDatagramID = 1
         self.controlChunkNextTxID = 1
         self.counters = [:]
@@ -153,7 +186,55 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         self.preferredTunChanID = nil
         self.fragmentStates = [:]
         self.tunInflowScopeStates = [:]
+        self.sharedTunScopeMetadata = [:]
+        self.sharedTunRuntimeByPeer = [:]
+        self.sharedTunPeerRefByPeer = [:]
+        self.sharedTunPeerIDByRef = [:]
+        self.sharedTunDropTotal = 0
+        self.sharedTunDropByReason = [:]
+        self.sharedTunRecentDrops = []
         self.controlChunkReassembler = ObstacleBridgeChannelMuxCodec.ControlChunkReassembler()
+    }
+
+    func sharedTunRuntimeSnapshot() -> [String: Any]? {
+        guard var snapshot = sharedTunOwnership else {
+            return nil
+        }
+        let throttleScopes = sharedTunThrottleScopeSnapshots()
+        var throttleByPeer: [Int: [String: Any]] = [:]
+        for scope in throttleScopes {
+            let selectedPeerIDs = scope["selected_peer_ids"] as? [Int] ?? []
+            if selectedPeerIDs.count == 1 {
+                throttleByPeer[selectedPeerIDs[0]] = scope
+            }
+        }
+        var activeBindings: [[String: Any]] = sharedTunRuntimeByPeer.values
+            .sorted { $0.peerID < $1.peerID }
+            .map { state in
+                var entry: [String: Any] = [
+                    "peer_id": state.peerID,
+                    "preferred_chan_id": state.preferredChanID as Any,
+                    "bound_chan_ids": state.boundChanIDs.sorted(),
+                    "throttle_prev_window_bytes": 0,
+                    "throttle_curr_window_bytes": 0,
+                    "throttle_drop_count": 0,
+                ]
+                if let scope = throttleByPeer[state.peerID] {
+                    entry["throttle_prev_window_bytes"] = scope["prev_window_bytes"] as? Int ?? 0
+                    entry["throttle_curr_window_bytes"] = scope["curr_window_bytes"] as? Int ?? 0
+                    entry["throttle_drop_count"] = scope["throttle_drop_count"] as? Int ?? 0
+                }
+                return entry
+            }
+        activeBindings.sort { ($0["peer_id"] as? Int ?? 0) < ($1["peer_id"] as? Int ?? 0) }
+        snapshot["active_peer_bindings"] = activeBindings
+        snapshot["throttle_scopes"] = throttleScopes
+        snapshot["drop_counters"] = [
+            "total": sharedTunDropTotal,
+            "by_reason": sharedTunDropByReason,
+        ]
+        snapshot["recent_drops"] = sharedTunRecentDrops
+        return snapshot
     }
 
     func handleLocalTunPacket(
@@ -164,7 +245,9 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         overlayConnected: Bool,
         acceptingEnabled: Bool,
         bufferedFrames: Int = 0,
-        nowNS: UInt64? = nil
+        nowNS: UInt64? = nil,
+        recordInflow: Bool = true,
+        scopeID: String? = nil
     ) throws -> LocalTunSendSnapshot? {
         guard overlayConnected, acceptingEnabled else {
             return nil
@@ -173,8 +256,8 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             return nil
         }
         let sendNowNS = nowNS ?? DispatchTime.now().uptimeNanoseconds
-        let defaultScopeID = "direct:\(spec.svcID)"
-        guard localTunSendAllowed(packetBytes: packet.count, bufferedFrames: bufferedFrames, nowNS: sendNowNS, scopeID: defaultScopeID) else {
+        let appliedScopeID = scopeID ?? "direct:\(spec.svcID)"
+        guard localTunSendAllowed(packetBytes: packet.count, bufferedFrames: bufferedFrames, nowNS: sendNowNS, scopeID: appliedScopeID) else {
             return nil
         }
 
@@ -197,7 +280,9 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             return nil
         }
         frames.append(contentsOf: dataFrames)
-        recordLocalTunForward(packetBytes: packet.count, nowNS: sendNowNS, scopeID: defaultScopeID)
+        if recordInflow {
+            recordLocalTunForward(packetBytes: packet.count, nowNS: sendNowNS, scopeID: appliedScopeID)
+        }
         return LocalTunSendSnapshot(
             chanID: chanID,
             allocatedChannel: allocatedChannel,
@@ -251,6 +336,94 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         var state = advanceTunInflowWindow(scopeID: scopeID, nowNS: nowNS)
         state.currentBytes += max(0, packetBytes)
         tunInflowScopeStates[scopeID] = state
+    }
+
+    private func sharedTunThrottleScopeSnapshots() -> [[String: Any]] {
+        var snapshots: [[String: Any]] = []
+        for (scopeID, metadata) in sharedTunScopeMetadata {
+            guard let state = tunInflowScopeStates[scopeID] else {
+                continue
+            }
+            snapshots.append([
+                "scope_id": scopeID,
+                "route_class": metadata.routeClass,
+                "selected_peer_ids": metadata.selectedPeerIDs,
+                "selected_chan_ids": metadata.selectedChanIDs,
+                "prev_window_bytes": state.previousBytes,
+                "curr_window_bytes": state.currentBytes,
+                "throttle_drop_count": state.throttleDropCount,
+            ])
+        }
+        snapshots.sort { String(describing: $0["scope_id"] ?? "") < String(describing: $1["scope_id"] ?? "") }
+        return snapshots
+    }
+
+    private func directTunScopeID() -> String {
+        "direct:\(localSpec?.svcID ?? 0)"
+    }
+
+    private func sharedTunInflowScopeID(route: SharedTunOutboundRouteSnapshot) -> String? {
+        guard route.routed else {
+            return nil
+        }
+        let routeClass = route.routeClass ?? ""
+        let peerIDs = route.selectedPeerIDs.map(String.init).joined(separator: ",")
+        let chanIDs = route.selectedChanIDs.map(String.init).joined(separator: ",")
+        let scopeID = "shared:\(localSpec?.svcID ?? 0):\(routeClass):peers=\(peerIDs):chans=\(chanIDs)"
+        sharedTunScopeMetadata[scopeID] = SharedTunScopeMetadata(
+            routeClass: routeClass,
+            selectedPeerIDs: route.selectedPeerIDs,
+            selectedChanIDs: route.selectedChanIDs
+        )
+        return scopeID
+    }
+
+    func scopedTunThrottle(
+        packetBytes: Int,
+        bufferedFrames: Int,
+        nowNS: UInt64,
+        route: SharedTunOutboundRouteSnapshot?
+    ) -> ScopedTunThrottleSnapshot {
+        let scopeID = sharedTunInflowScopeID(route: route ?? SharedTunOutboundRouteSnapshot(
+            routed: false,
+            routeClass: nil,
+            selectedPeerIDs: [],
+            selectedChanIDs: [],
+            ipVersion: nil,
+            destinationIP: nil,
+            dropReason: nil
+        )) ?? directTunScopeID()
+        return handleScopedTunThrottle(
+            packetBytes: packetBytes,
+            bufferedFrames: bufferedFrames,
+            nowNS: nowNS,
+            scopeID: scopeID
+        )
+    }
+
+    func scopeID(for route: SharedTunOutboundRouteSnapshot?) -> String {
+        sharedTunInflowScopeID(route: route ?? SharedTunOutboundRouteSnapshot(
+            routed: false,
+            routeClass: nil,
+            selectedPeerIDs: [],
+            selectedChanIDs: [],
+            ipVersion: nil,
+            destinationIP: nil,
+            dropReason: nil
+        )) ?? directTunScopeID()
+    }
+
+    func recordLocalTunForward(packetBytes: Int, nowNS: UInt64, route: SharedTunOutboundRouteSnapshot?) {
+        let scopeID = sharedTunInflowScopeID(route: route ?? SharedTunOutboundRouteSnapshot(
+            routed: false,
+            routeClass: nil,
+            selectedPeerIDs: [],
+            selectedChanIDs: [],
+            ipVersion: nil,
+            destinationIP: nil,
+            dropReason: nil
+        )) ?? directTunScopeID()
+        recordLocalTunForward(packetBytes: packetBytes, nowNS: nowNS, scopeID: scopeID)
     }
 
     func handleScopedTunThrottle(packetBytes: Int, bufferedFrames: Int, nowNS: UInt64, scopeID: String) -> ScopedTunThrottleSnapshot {
@@ -308,6 +481,50 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             preferredChanID: preferredTunChanID,
             remoteSpec: parsed.spec
         )
+    }
+
+    func recordSharedTunPeerBinding(peerID: Int?, chanID: Int) {
+        guard sharedTunOwnership != nil, let peerID else {
+            return
+        }
+        let uniqueBound = Array(Set((sharedTunRuntimeByPeer[peerID]?.boundChanIDs ?? []) + [chanID])).sorted()
+        let preferredChanID = uniqueBound.contains(sharedTunRuntimeByPeer[peerID]?.preferredChanID ?? -1)
+            ? sharedTunRuntimeByPeer[peerID]?.preferredChanID
+            : uniqueBound.first
+        sharedTunRuntimeByPeer[peerID] = SharedTunPeerBindingState(
+            peerID: peerID,
+            preferredChanID: preferredChanID,
+            boundChanIDs: uniqueBound
+        )
+    }
+
+    func dropSharedTunPeerBinding(peerID: Int?, chanID: Int) {
+        guard sharedTunOwnership != nil, let peerID, var state = sharedTunRuntimeByPeer[peerID] else {
+            return
+        }
+        let remaining = state.boundChanIDs.filter { $0 != chanID }
+        if remaining.isEmpty {
+            sharedTunRuntimeByPeer.removeValue(forKey: peerID)
+            return
+        }
+        state.boundChanIDs = remaining
+        if !remaining.contains(state.preferredChanID ?? -1) {
+            state.preferredChanID = remaining.first
+        }
+        sharedTunRuntimeByPeer[peerID] = state
+    }
+
+    func cleanupSharedTunPeerStateOnDisconnect(peerID: Int?) {
+        guard sharedTunOwnership != nil, let peerID else {
+            return
+        }
+        sharedTunRuntimeByPeer.removeValue(forKey: peerID)
+        if let peerRef = sharedTunPeerRefByPeer.removeValue(forKey: peerID),
+           sharedTunPeerIDByRef[peerRef] == peerID {
+            sharedTunPeerIDByRef.removeValue(forKey: peerRef)
+        }
+        sharedTunScopeMetadata = sharedTunScopeMetadata.filter { !$0.value.selectedPeerIDs.contains(peerID) }
+        tunInflowScopeStates = tunInflowScopeStates.filter { !($0.key.contains("peers=\(peerID)")) }
     }
 
     func handleInboundTunOpenChunk(
@@ -406,6 +623,53 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         )
     }
 
+    private func sharedTunBoundPeerRef(forPeerID peerID: Int, sourceIP: String) -> String? {
+        guard
+            let ownership = sharedTunOwnership,
+            !sourceIP.isEmpty
+        else {
+            return nil
+        }
+        let ownerByIPv4 = ownership["owner_by_ipv4"] as? [String: String] ?? [:]
+        let ownerByIPv6 = ownership["owner_by_ipv6"] as? [String: String] ?? [:]
+        guard let ownerRef = ownerByIPv4[sourceIP] ?? ownerByIPv6[sourceIP] else {
+            return nil
+        }
+        if let existing = sharedTunPeerRefByPeer[peerID] {
+            return existing == ownerRef ? existing : nil
+        }
+        sharedTunPeerRefByPeer[peerID] = ownerRef
+        sharedTunPeerIDByRef[ownerRef] = peerID
+        return ownerRef
+    }
+
+    func handleInboundTunDataSharedGuarded(
+        peerID: Int?,
+        chanID: Int,
+        body: Data,
+        mtu: Int,
+        boundChanID: Int? = nil
+    ) -> GuardedInboundTunDataSnapshot {
+        guard sharedTunOwnership != nil else {
+            return handleInboundTunDataGuarded(chanID: chanID, body: body, mtu: mtu, boundChanID: boundChanID)
+        }
+        let base = handleInboundTunDataGuarded(chanID: chanID, body: body, mtu: mtu, boundChanID: boundChanID)
+        guard base.delivered, let peerID, let sourceIP = base.sourceIP else {
+            return base
+        }
+        guard sharedTunBoundPeerRef(forPeerID: peerID, sourceIP: sourceIP) != nil else {
+            return GuardedInboundTunDataSnapshot(
+                delivered: false,
+                packet: nil,
+                ipVersion: base.ipVersion,
+                sourceIP: base.sourceIP,
+                destinationIP: base.destinationIP,
+                dropReason: "source_not_owned_by_peer"
+            )
+        }
+        return base
+    }
+
     static func planSharedTunOutboundRoute(
         ownerByIPv4: [String: String],
         ownerByIPv6: [String: String],
@@ -484,6 +748,26 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         )
     }
 
+    func planSharedTunOutboundRoute(packet: Data) -> SharedTunOutboundRouteSnapshot? {
+        guard
+            let ownership = sharedTunOwnership
+        else {
+            return nil
+        }
+        let ownerByIPv4 = ownership["owner_by_ipv4"] as? [String: String] ?? [:]
+        let ownerByIPv6 = ownership["owner_by_ipv6"] as? [String: String] ?? [:]
+        let active = sharedTunRuntimeByPeer.values
+            .sorted { $0.peerID < $1.peerID }
+            .map { SharedTunActivePeerBinding(peerID: $0.peerID, preferredChanID: $0.preferredChanID) }
+        return Self.planSharedTunOutboundRoute(
+            ownerByIPv4: ownerByIPv4,
+            ownerByIPv6: ownerByIPv6,
+            peerIDByRef: sharedTunPeerIDByRef,
+            activePeerBindings: active,
+            packet: packet
+        )
+    }
+
     static func planSharedTunInboundPeerRelay(
         ownerByIPv4: [String: String],
         ownerByIPv6: [String: String],
@@ -523,6 +807,133 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             ipVersion: route.ipVersion,
             destinationIP: route.destinationIP,
             dropReason: route.dropReason
+        )
+    }
+
+    func planSharedTunInboundPeerRelay(sourcePeerID: Int?, packet: Data) -> SharedTunInboundPeerRelaySnapshot? {
+        guard
+            let sharedTunOwnership,
+            let sourcePeerID
+        else {
+            return nil
+        }
+        let ownerByIPv4 = sharedTunOwnership["owner_by_ipv4"] as? [String: String] ?? [:]
+        let ownerByIPv6 = sharedTunOwnership["owner_by_ipv6"] as? [String: String] ?? [:]
+        let active = sharedTunRuntimeByPeer.values
+            .sorted { $0.peerID < $1.peerID }
+            .map { SharedTunActivePeerBinding(peerID: $0.peerID, preferredChanID: $0.preferredChanID) }
+        return Self.planSharedTunInboundPeerRelay(
+            ownerByIPv4: ownerByIPv4,
+            ownerByIPv6: ownerByIPv6,
+            peerIDByRef: sharedTunPeerIDByRef,
+            activePeerBindings: active,
+            sourcePeerID: sourcePeerID,
+            packet: packet
+        )
+    }
+
+    func recordSharedTunDrop(
+        reason: String,
+        direction: String,
+        peerID: Int? = nil,
+        chanID: Int? = nil,
+        ipVersion: Int? = nil,
+        sourceIP: String? = nil,
+        destinationIP: String? = nil,
+        routeClass: String? = nil,
+        packetBytes: Int? = nil
+    ) {
+        guard sharedTunOwnership != nil else {
+            return
+        }
+        let reasonKey = reason.isEmpty ? "unknown" : reason
+        sharedTunDropTotal += 1
+        sharedTunDropByReason[reasonKey, default: 0] += 1
+        var entry: [String: Any] = [
+            "reason": reasonKey,
+            "direction": direction,
+        ]
+        if let peerID { entry["peer_id"] = peerID }
+        if let chanID { entry["chan_id"] = chanID }
+        if let ipVersion { entry["ip_version"] = ipVersion }
+        if let sourceIP { entry["source_ip"] = sourceIP }
+        if let destinationIP { entry["destination_ip"] = destinationIP }
+        if let routeClass { entry["route_class"] = routeClass }
+        if let packetBytes { entry["packet_bytes"] = packetBytes }
+        sharedTunRecentDrops.append(entry)
+        if sharedTunRecentDrops.count > 64 {
+            sharedTunRecentDrops = Array(sharedTunRecentDrops.suffix(64))
+        }
+    }
+
+    static func applySharedTunPeerBindingSequence(
+        initialBindings: [SharedTunPeerBindingState],
+        operations: [(peerID: Int, chanID: Int, drop: Bool)]
+    ) -> [SharedTunPeerBindingState] {
+        var states: [Int: SharedTunPeerBindingState] = [:]
+        for binding in initialBindings {
+            let uniqueBound = Array(Set(binding.boundChanIDs)).sorted()
+            let preferredChanID = uniqueBound.contains(binding.preferredChanID ?? -1)
+                ? binding.preferredChanID
+                : uniqueBound.first
+            states[binding.peerID] = SharedTunPeerBindingState(
+                peerID: binding.peerID,
+                preferredChanID: preferredChanID,
+                boundChanIDs: uniqueBound
+            )
+        }
+        for operation in operations {
+            if operation.drop {
+                guard var state = states[operation.peerID] else {
+                    continue
+                }
+                let remaining = state.boundChanIDs.filter { $0 != operation.chanID }
+                if remaining.isEmpty {
+                    states.removeValue(forKey: operation.peerID)
+                    continue
+                }
+                state.boundChanIDs = remaining
+                if !remaining.contains(state.preferredChanID ?? -1) {
+                    state.preferredChanID = remaining.first
+                }
+                states[operation.peerID] = state
+                continue
+            }
+            var state = states[operation.peerID] ?? SharedTunPeerBindingState(
+                peerID: operation.peerID,
+                preferredChanID: nil,
+                boundChanIDs: []
+            )
+            let merged = Array(Set(state.boundChanIDs + [operation.chanID])).sorted()
+            state.boundChanIDs = merged
+            if state.preferredChanID == nil || !merged.contains(state.preferredChanID ?? -1) {
+                state.preferredChanID = merged.first
+            }
+            states[operation.peerID] = state
+        }
+        return states.values.sorted { lhs, rhs in lhs.peerID < rhs.peerID }
+    }
+
+    static func cleanupSharedTunPeerStateOnDisconnect(
+        activePeerBindings: [SharedTunPeerBindingState],
+        peerRefByPeer: [Int: String],
+        peerIDByRef: [String: Int],
+        disconnectedPeerID: Int
+    ) -> SharedTunDisconnectCleanupSnapshot {
+        let remainingBindings = activePeerBindings
+            .filter { $0.peerID != disconnectedPeerID }
+            .sorted { lhs, rhs in lhs.peerID < rhs.peerID }
+        let remainingPeerRefByPeer = peerRefByPeer.filter { $0.key != disconnectedPeerID }
+        var remainingPeerIDByRef = peerIDByRef
+        for (peerID, peerRef) in peerRefByPeer where peerID == disconnectedPeerID {
+            if remainingPeerIDByRef[peerRef] == disconnectedPeerID {
+                remainingPeerIDByRef.removeValue(forKey: peerRef)
+            }
+        }
+        return SharedTunDisconnectCleanupSnapshot(
+            activePeerBindings: remainingBindings,
+            peerRefByPeer: remainingPeerRefByPeer,
+            peerIDByRef: remainingPeerIDByRef
         )
     }
 

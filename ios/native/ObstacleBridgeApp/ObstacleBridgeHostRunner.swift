@@ -128,6 +128,7 @@ final class ObstacleBridgeHostRunner {
     private var sharedTcpOverlayTransportOwner: ObstacleBridgeTcpOverlayTransportOwner?
     private var sharedQuicOverlayTransportOwner: ObstacleBridgeQuicOverlayTransportOwner?
     private var sharedUdpOverlayTransportOwner: ObstacleBridgeUdpOverlayTransportOwner?
+    private var sharedMacOSTunAdapter: ObstacleBridgeMacOSTunAdapter?
     private var clientRestartWatchdog: DispatchSourceTimer?
     private var overlayDisconnectedAt: TimeInterval?
     private lazy var adminAuth = ObstacleBridgeAdminAuth(
@@ -311,6 +312,8 @@ final class ObstacleBridgeHostRunner {
     func stop() {
         clientRestartWatchdog?.cancel()
         clientRestartWatchdog = nil
+        sharedMacOSTunAdapter?.stop()
+        sharedMacOSTunAdapter = nil
         sharedWebSocketOverlayTransportOwner?.stop()
         sharedWebSocketOverlayTransportOwner = nil
         sharedTcpOverlayTransportOwner?.stop()
@@ -1078,8 +1081,7 @@ final class ObstacleBridgeHostRunner {
             "stats": ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0],
         ]
         if protocolName == "tun" {
-            let sharedTunOwnership = ObstacleBridgeChannelMuxCodec.sharedTunOwnershipSnapshot(for: spec.toChannelMuxServiceSpec())
-            row["shared_tun_ownership"] = sharedTunOwnership.map(ObstacleBridgeChannelMuxCodec.foundationObject(from:)) ?? NSNull()
+            row["shared_tun_ownership"] = sharedTunRuntimeOwnershipSnapshot(for: spec) ?? NSNull()
         }
         return row
     }
@@ -1108,6 +1110,21 @@ final class ObstacleBridgeHostRunner {
             let rightChan = rhs["chan_id"] as? Int ?? -1
             return leftChan < rightChan
         }
+    }
+
+    private func sharedTunRuntimeOwnershipSnapshot(for spec: ObstacleBridgeNativeServiceSpec) -> [String: Any]? {
+        guard
+            let ownershipValue = ObstacleBridgeChannelMuxCodec.sharedTunOwnershipSnapshot(for: spec.toChannelMuxServiceSpec()),
+            let ownership = ObstacleBridgeChannelMuxCodec.foundationObject(from: ownershipValue) as? [String: Any]
+        else {
+            return nil
+        }
+        var runtime = ownership
+        runtime["active_peer_bindings"] = []
+        runtime["throttle_scopes"] = []
+        runtime["drop_counters"] = ["total": 0, "by_reason": [:] as [String: Int]]
+        runtime["recent_drops"] = []
+        return runtime
     }
 
     private func withServiceStateQueue<T>(_ body: () -> T) -> T {
@@ -1287,6 +1304,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func prepareSharedOverlayBootstrap() {
+        sharedMacOSTunAdapter?.stop()
         sharedWebSocketOverlayTransportOwner?.stop()
         sharedTcpOverlayTransportOwner?.stop()
         sharedQuicOverlayTransportOwner?.stop()
@@ -1301,6 +1319,7 @@ final class ObstacleBridgeHostRunner {
         sharedTcpOverlayTransportOwner = nil
         sharedQuicOverlayTransportOwner = nil
         sharedUdpOverlayTransportOwner = nil
+        sharedMacOSTunAdapter = nil
         bootstrapState = [:]
 
         do {
@@ -1428,6 +1447,7 @@ final class ObstacleBridgeHostRunner {
         let wsPath = Self.stringValue(from: runtimeConfig["ws_path"]) ?? "/"
         let wsSubprotocol = Self.stringValue(from: runtimeConfig["ws_subprotocol"])
         let tunService = ownServerSpecs.first { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
+        ensureSharedMacOSTunAdapter(for: tunService)
         let muxInstanceID = UInt64.random(in: 1...UInt64.max)
         let muxConnectionSeq = UInt32.random(in: 1...UInt32.max)
         let owner = ObstacleBridgeWebSocketOverlayTransportOwner(
@@ -1448,6 +1468,9 @@ final class ObstacleBridgeHostRunner {
             serviceNameByID: Dictionary(uniqueKeysWithValues: ownServerSpecs.map { ($0.svcID, $0.name ?? "") }),
             tunIfname: tunService?.listenBind,
             tunMTU: tunService?.listenPort ?? 0,
+            tunPacketSink: { [weak self] packet in
+                self?.deliverRemoteTunPacketToLocalAdapter(packet)
+            },
             muxInstanceID: muxInstanceID,
             muxConnectionSeq: muxConnectionSeq
         )
@@ -1468,6 +1491,8 @@ final class ObstacleBridgeHostRunner {
         guard (!peerHost.isEmpty && peerPort > 0) || bindPort > 0 else {
             return
         }
+        let tunService = ownServerSpecs.first { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
+        ensureSharedMacOSTunAdapter(for: tunService)
         let muxInstanceID = UInt64.random(in: 1...UInt64.max)
         let muxConnectionSeq = UInt32.random(in: 1...UInt32.max)
         let owner = ObstacleBridgeTcpOverlayTransportOwner(
@@ -1485,6 +1510,12 @@ final class ObstacleBridgeHostRunner {
             ),
             queue: serviceStateQueue,
             serviceNameByID: Dictionary(uniqueKeysWithValues: ownServerSpecs.map { ($0.svcID, $0.name ?? "") }),
+            tunServiceSpec: tunService?.toChannelMuxServiceSpec(),
+            tunIfname: tunService?.listenBind,
+            tunMTU: tunService?.listenPort ?? 0,
+            tunPacketSink: { [weak self] packet in
+                self?.deliverRemoteTunPacketToLocalAdapter(packet)
+            },
             muxInstanceID: muxInstanceID,
             muxConnectionSeq: muxConnectionSeq
         )
@@ -1508,6 +1539,8 @@ final class ObstacleBridgeHostRunner {
         let peerResolveFamily = Self.stringValue(from: runtimeConfig["quic_peer_resolve_family"]) ?? "prefer-ipv6"
         let alpn = Self.stringValue(from: runtimeConfig["quic_alpn"]) ?? "hq-29"
         let insecure = Self.boolValue(from: runtimeConfig["quic_insecure"]) ?? false
+        let tunService = ownServerSpecs.first { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
+        ensureSharedMacOSTunAdapter(for: tunService)
         let muxInstanceID = UInt64.random(in: 1...UInt64.max)
         let muxConnectionSeq = UInt32.random(in: 1...UInt32.max)
         let owner = ObstacleBridgeQuicOverlayTransportOwner(
@@ -1528,6 +1561,11 @@ final class ObstacleBridgeHostRunner {
             ),
             queue: serviceStateQueue,
             serviceNameByID: Dictionary(uniqueKeysWithValues: ownServerSpecs.map { ($0.svcID, $0.name ?? "") }),
+            tunIfname: tunService?.listenBind,
+            tunMTU: tunService?.listenPort ?? 0,
+            tunPacketSink: { [weak self] packet in
+                self?.deliverRemoteTunPacketToLocalAdapter(packet)
+            },
             muxInstanceID: muxInstanceID,
             muxConnectionSeq: muxConnectionSeq
         )
@@ -1548,6 +1586,7 @@ final class ObstacleBridgeHostRunner {
         let peerPort = Self.intValue(from: runtimeConfig["udp_peer_port"])
         let peerResolveFamily = Self.stringValue(from: runtimeConfig["udp_peer_resolve_family"]) ?? "prefer-ipv6"
         let tunService = ownServerSpecs.first { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
+        ensureSharedMacOSTunAdapter(for: tunService)
         let muxInstanceID = UInt64.random(in: 1...UInt64.max)
         let muxConnectionSeq = UInt32.random(in: 1...UInt32.max)
         let owner = ObstacleBridgeUdpOverlayTransportOwner(
@@ -1566,11 +1605,86 @@ final class ObstacleBridgeHostRunner {
             serviceNameByID: Dictionary(uniqueKeysWithValues: ownServerSpecs.map { ($0.svcID, $0.name ?? "") }),
             tunIfname: tunService?.listenBind,
             tunMTU: tunService?.listenPort ?? 0,
+            tunPacketSink: { [weak self] packet in
+                self?.deliverRemoteTunPacketToLocalAdapter(packet)
+            },
             muxInstanceID: muxInstanceID,
             muxConnectionSeq: muxConnectionSeq
         )
         sharedUdpOverlayTransportOwner = owner
         try owner.start()
+    }
+
+    private func ensureSharedMacOSTunAdapter(for tunService: ObstacleBridgeNativeServiceSpec?) {
+        let trimmedIfname = tunService?.listenBind.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard let tunService,
+              tunService.listenProtocol == "tun",
+              tunService.targetProtocol == "tun",
+              !trimmedIfname.isEmpty
+        else {
+            sharedMacOSTunAdapter?.stop()
+            sharedMacOSTunAdapter = nil
+            return
+        }
+        let ifname = trimmedIfname
+        let mtu = max(68, tunService.listenPort)
+        if let existing = sharedMacOSTunAdapter,
+           existing.requestedIfname == ifname,
+           existing.mtu == mtu {
+            return
+        }
+        sharedMacOSTunAdapter?.stop()
+        let adapter = ObstacleBridgeMacOSTunAdapter(
+            ifname: ifname,
+            mtu: mtu,
+            queue: serviceStateQueue,
+            packetSink: { [weak self] packet in
+                self?.deliverLocalTunPacketToActiveOverlay(packet)
+            },
+            eventSink: { event, fields in
+                NSLog("[ObstacleBridgeHostRunner][%@] %@", event, String(describing: fields))
+            }
+        )
+        do {
+            try adapter.start()
+            sharedMacOSTunAdapter = adapter
+        } catch {
+            NSLog(
+                "[ObstacleBridgeHostRunner][macos_utun_start_failed] ifname=%@ mtu=%d error=%@",
+                ifname,
+                mtu,
+                error.localizedDescription
+            )
+            sharedMacOSTunAdapter = nil
+        }
+    }
+
+    private func deliverLocalTunPacketToActiveOverlay(_ packet: Data) {
+        let transport = (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp").lowercased()
+        switch transport {
+        case "ws":
+            sharedWebSocketOverlayTransportOwner?.sendLocalTunPacket(packet)
+        case "tcp":
+            sharedTcpOverlayTransportOwner?.sendLocalTunPacket(packet)
+        case "quic":
+            sharedQuicOverlayTransportOwner?.sendLocalTunPacket(packet)
+        default:
+            sharedUdpOverlayTransportOwner?.sendLocalTunPacket(packet)
+        }
+    }
+
+    private func deliverRemoteTunPacketToLocalAdapter(_ packet: Data) {
+        guard let adapter = sharedMacOSTunAdapter else { return }
+        do {
+            try adapter.write(packet: packet)
+        } catch {
+            NSLog(
+                "[ObstacleBridgeHostRunner][macos_utun_write_failed] ifname=%@ packet_bytes=%d error=%@",
+                adapter.actualIfname,
+                packet.count,
+                error.localizedDescription
+            )
+        }
     }
 
     private func remoteServiceCatalogMuxFrames(

@@ -1033,6 +1033,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         guard let config = ObstacleBridgeRuntimeConfig.swiftUDPPeerConfig(from: payload, defaultMTU: defaultMTU) else {
             return nil
         }
+        let tunServiceSpec = ObstacleBridgeRuntimeConfig.ownServerSpecs(from: payload, preserveInputIndices: true)
+            .first(where: { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" })?
+            .toChannelMuxServiceSpec()
         return SwiftSimpleUDPPeerSettings(
             runtimeMode: config.runtimeMode,
             bindHost: config.bindHost,
@@ -1043,6 +1046,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             peerResolveFamily: config.peerResolveFamily,
             mtu: config.mtu,
             tunIfname: config.tunIfname,
+            tunServiceSpec: tunServiceSpec,
             runtimeConfig: payload
         )
     }
@@ -1845,7 +1849,7 @@ private enum PacketTunnelProviderAdminSnapshotBuilder {
             "rx_bytes": 0,
         ]
     ) -> [String: Any] {
-        [
+        var row: [String: Any] = [
             "svc_id": spec.svcID,
             "service_name": spec.name ?? "svc_\(spec.svcID)",
             "state": state,
@@ -1858,6 +1862,18 @@ private enum PacketTunnelProviderAdminSnapshotBuilder {
             ],
             "stats": stats,
         ]
+        if spec.listenProtocol == "tun",
+           spec.targetProtocol == "tun",
+           let ownershipValue = ObstacleBridgeChannelMuxCodec.sharedTunOwnershipSnapshot(for: spec.toChannelMuxServiceSpec()),
+           let ownership = ObstacleBridgeChannelMuxCodec.foundationObject(from: ownershipValue) as? [String: Any] {
+            var runtime = ownership
+            runtime["active_peer_bindings"] = []
+            runtime["throttle_scopes"] = []
+            runtime["drop_counters"] = ["total": 0, "by_reason": [:] as [String: Int]]
+            runtime["recent_drops"] = []
+            row["shared_tun_ownership"] = runtime
+        }
+        return row
     }
 
     private static func intValue(_ value: Any?) -> Int {
@@ -2008,6 +2024,7 @@ private struct SwiftSimpleUDPPeerSettings {
     let peerResolveFamily: String
     let mtu: Int
     let tunIfname: String
+    let tunServiceSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec?
     let runtimeConfig: [String: Any]
 }
 
@@ -2104,6 +2121,7 @@ private final class SwiftSimpleUDPPeerBridge {
                     startupMuxFrames: startupMuxFrames,
                     queue: queue,
                     serviceNameByID: Dictionary(uniqueKeysWithValues: tcpServiceSpecs.map { ($0.svcID, $0.name ?? "") }),
+                    tunServiceSpec: settings.tunServiceSpec,
                     tunIfname: settings.tunIfname,
                     tunMTU: settings.mtu,
                     tunPacketSink: { [weak self] packet in self?.deliverPacketToSystem(packet) },
@@ -2139,6 +2157,7 @@ private final class SwiftSimpleUDPPeerBridge {
                     startupMuxFrames: startupMuxFrames,
                     queue: queue,
                     serviceNameByID: Dictionary(uniqueKeysWithValues: tcpServiceSpecs.map { ($0.svcID, $0.name ?? "") }),
+                    tunServiceSpec: settings.tunServiceSpec,
                     tunIfname: settings.tunIfname,
                     tunMTU: settings.mtu,
                     tunPacketSink: { [weak self] packet in self?.deliverPacketToSystem(packet) },
@@ -2165,6 +2184,7 @@ private final class SwiftSimpleUDPPeerBridge {
                         startupMuxFrames: startupMuxFrames,
                         queue: queue,
                         serviceNameByID: Dictionary(uniqueKeysWithValues: tcpServiceSpecs.map { ($0.svcID, $0.name ?? "") }),
+                        tunServiceSpec: settings.tunServiceSpec,
                         tunIfname: settings.tunIfname,
                         tunMTU: settings.mtu,
                         tunPacketSink: { [weak self] packet in self?.deliverPacketToSystem(packet) },
@@ -2196,6 +2216,7 @@ private final class SwiftSimpleUDPPeerBridge {
                     startupMuxFrames: startupMuxFrames,
                     queue: queue,
                     serviceNameByID: Dictionary(uniqueKeysWithValues: tcpServiceSpecs.map { ($0.svcID, $0.name ?? "") }),
+                    tunServiceSpec: settings.tunServiceSpec,
                     tunIfname: settings.tunIfname,
                     tunMTU: settings.mtu,
                     tunPacketSink: { [weak self] packet in
@@ -2421,6 +2442,29 @@ private final class SwiftSimpleUDPPeerBridge {
                 return (quicOverlayTransportOwner.transportSnapshot()["overlay_connected"] as? Bool) ?? false
             }
             return false
+        }
+    }
+
+    func sendTunPacketForProbe(_ packet: Data) {
+        withState {
+            guard started else {
+                return
+            }
+            if let udpOverlayTransportOwner {
+                udpOverlayTransportOwner.sendLocalTunPacket(packet)
+                return
+            }
+            if let tcpOverlayTransportOwner {
+                tcpOverlayTransportOwner.sendLocalTunPacket(packet)
+                return
+            }
+            if let wsOverlayTransportOwner {
+                wsOverlayTransportOwner.sendLocalTunPacket(packet)
+                return
+            }
+            if #available(iOS 15.0, *), let quicOverlayTransportOwner {
+                quicOverlayTransportOwner.sendLocalTunPacket(packet)
+            }
         }
     }
 
@@ -2965,6 +3009,10 @@ extension PacketTunnelProvider {
         for (key, value) in runtimeConfigOverrides {
             runtimeConfig[key] = value
         }
+        let flattenedRuntimeConfig = ObstacleBridgeRuntimeConfig.flatten(runtimeConfig)
+        let tunOwnServerSpec = ObstacleBridgeRuntimeConfig.ownServerSpecs(from: flattenedRuntimeConfig, preserveInputIndices: true)
+            .first(where: { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" })
+        let tunServiceSpec = tunOwnServerSpec?.toChannelMuxServiceSpec()
         let settings = SwiftSimpleUDPPeerSettings(
             runtimeMode: runtimeMode,
             bindHost: bindHost,
@@ -2975,7 +3023,8 @@ extension PacketTunnelProvider {
             peerResolveFamily: peerResolveFamily,
             mtu: mtu,
             tunIfname: tunIfname,
-            runtimeConfig: runtimeConfig
+            tunServiceSpec: tunServiceSpec,
+            runtimeConfig: flattenedRuntimeConfig
         )
         let bridge = try SwiftSimpleUDPPeerBridge(
             provider: nil,
@@ -3046,6 +3095,10 @@ final class PacketTunnelProviderSwiftUDPBridgeProbe {
 
     func overlayEstablished() -> Bool {
         bridge.overlayEstablishedForProbe()
+    }
+
+    func sendTunPacket(_ packet: Data) {
+        bridge.sendTunPacketForProbe(packet)
     }
 
     func bridgeSnapshot() -> [String: Any] {

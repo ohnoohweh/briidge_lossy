@@ -74,6 +74,7 @@ APP_SHARED_SWIFT_SOURCES = [
     ("71C610000000000000000002", "71C610000000000000000102", "ObstacleBridgeSecureLinkPskRuntime.swift"),
     ("71C610000000000000000003", "71C610000000000000000103", "ObstacleBridgeSecureLinkPskTransportAdapter.swift"),
     ("71C610000000000000000004", "71C610000000000000000104", "ObstacleBridgeOverlayLayerTransportAdapter.swift"),
+    ("71C610000000000000000022", "71C610000000000000000122", "ObstacleBridgeMacOSTunAdapter.swift"),
     ("71C61000000000000000001A", "71C61000000000000000011A", "ObstacleBridgeNativeServiceSpec.swift"),
     ("71C61000000000000000001B", "71C61000000000000000011B", "ObstacleBridgeNativeProxyConnections.swift"),
     ("71C61000000000000000001C", "71C61000000000000000011C", "ObstacleBridgeOverlayConnectionSupport.swift"),

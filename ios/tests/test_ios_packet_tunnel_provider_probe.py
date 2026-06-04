@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import shutil
 import socket
@@ -115,6 +116,27 @@ def _wait_snapshot_condition(snapshot_getter, predicate, *, timeout_sec: float =
             return snapshot
         time.sleep(0.1)
     raise AssertionError(f"timed out waiting for snapshot condition; last={last_snapshot!r}")
+
+
+def _ipv4_packet(src: str, dst: str, payload: bytes = b"x") -> bytes:
+    src_b = ipaddress.IPv4Address(src).packed
+    dst_b = ipaddress.IPv4Address(dst).packed
+    total_len = 20 + len(payload)
+    header = bytes([
+        0x45,
+        0x00,
+        (total_len >> 8) & 0xFF,
+        total_len & 0xFF,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        64,
+        17,
+        0x00,
+        0x00,
+    ]) + src_b + dst_b
+    return header + payload
 
 
 def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: Path) -> None:
@@ -860,6 +882,249 @@ def test_ios_packet_tunnel_provider_probe_grouped_own_services_survive_admin_sna
     assert any(row["service_name"] == "WebAdmin remote" and row["state"] == "listening" for row in payload["connections"]["tcp"])
     assert any(row["service_name"] == "WireGuard" and row["state"] == "listening" for row in payload["connections"]["udp"])
     assert any(row["service_name"] == "iOS FullTunnel" and row["state"] == "listening" for row in payload["connections"]["tun"])
+
+
+@pytest.mark.parametrize("transport", ["tcp", "myudp", "ws", "quic"])
+def test_ios_packet_tunnel_provider_probe_shared_tun_listening_rows_expose_runtime_shape(
+    tmp_path: Path,
+    transport: str,
+) -> None:
+    source_path = tmp_path / f"PacketTunnelProviderSharedTunListeningShape_{transport}.swift"
+    binary_path = tmp_path / f"packet-tunnel-provider-shared-tun-listening-shape-{transport}"
+    bind_port = _unused_udp_port() if transport in {"myudp", "quic"} else _unused_tcp_port()
+    peer_port = _unused_udp_port() if transport in {"myudp", "quic"} else _unused_tcp_port()
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            enum ProbeError: Error {
+                case invalidArgs
+            }
+
+            @main
+            struct PacketTunnelProviderSharedTunListeningShapeMain {
+                static func main() throws {
+                    guard CommandLine.arguments.count == 4 else {
+                        throw ProbeError.invalidArgs
+                    }
+                    let transport = CommandLine.arguments[1]
+                    guard
+                        let bindPort = Int(CommandLine.arguments[2]),
+                        let peerPort = Int(CommandLine.arguments[3])
+                    else {
+                        throw ProbeError.invalidArgs
+                    }
+
+                    var runtimeOverrides: [String: Any] = [
+                        "channel_mux": [
+                            "own_servers": [
+                                [
+                                    "name": "Shared TUN Listening",
+                                    "listen": [
+                                        "protocol": "tun",
+                                        "ifname": "ios-utun",
+                                        "mtu": 1600,
+                                    ],
+                                    "target": [
+                                        "protocol": "tun",
+                                        "ifname": "obtun2",
+                                        "mtu": 1600,
+                                    ],
+                                    "options": [
+                                        "shared_tun_ownership": [
+                                            "mode": "server_shared",
+                                            "peers": [
+                                                [
+                                                    "peer_ref": "linux-client",
+                                                    "ipv4": ["192.168.107.2"],
+                                                    "ipv6": ["fd20:107::2"],
+                                                ],
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                            "remote_servers": [],
+                        ],
+                    ]
+                    if transport == "ws" {
+                        runtimeOverrides["ws_bind"] = "127.0.0.1"
+                        runtimeOverrides["ws_own_port"] = 0
+                    } else if transport == "quic" {
+                        runtimeOverrides["quic_bind"] = "127.0.0.1"
+                        runtimeOverrides["quic_own_port"] = 0
+                        runtimeOverrides["quic_insecure"] = true
+                    } else if transport == "tcp" {
+                        runtimeOverrides["tcp_own_port"] = 0
+                    }
+
+                    let bridge = try PacketTunnelProviderSwiftUDPBridgeProbe(
+                        runtimeMode: "swift_udp",
+                        bindHost: "127.0.0.1",
+                        bindPort: bindPort,
+                        peerHost: "127.0.0.1",
+                        peerPort: peerPort,
+                        mtu: 1400,
+                        tunIfname: "ios-utun",
+                        tunnelAddress: "192.168.107.1",
+                        tcpServiceSpecs: [],
+                        overlayTransport: transport,
+                        runtimeConfigOverrides: runtimeOverrides
+                    )
+                    defer { bridge.stop() }
+
+                    let flattened = ObstacleBridgeRuntimeConfig.flatten(runtimeOverrides)
+                    let connections = bridge.adminConnectionsSnapshot(runtimeConfig: flattened)
+                    let payload: [String: Any] = [
+                        "connections": connections,
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_packet_tunnel_provider_probe(source_path, binary_path)
+    completed = subprocess.run(
+        [str(binary_path), transport, str(bind_port), str(peer_port)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+    payload = json.loads(completed.stdout)
+    tun_rows = payload["connections"]["tun"]
+    row = next(row for row in tun_rows if row["service_name"] == "Shared TUN Listening")
+    ownership = row["shared_tun_ownership"]
+    assert row["state"] == "listening"
+    assert ownership["mode"] == "server_shared"
+    assert ownership["peer_refs"] == ["linux-client"]
+    assert ownership["owner_by_ipv4"] == {"192.168.107.2": "linux-client"}
+    assert ownership["active_peer_bindings"] == []
+    assert ownership["throttle_scopes"] == []
+    assert ownership["drop_counters"] == {"total": 0, "by_reason": {}}
+    assert ownership["recent_drops"] == []
+
+
+def test_ios_packet_tunnel_provider_probe_shared_tun_runtime_tracks_binding_spoof_drop_and_rebind(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "PacketTunnelProviderSharedTunRuntimeProbe.swift"
+    binary_path = tmp_path / "packet-tunnel-provider-shared-tun-runtime-probe"
+    bind_port_a, bind_port_b = _unused_udp_ports(2)
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+                enum ProbeError: Error {
+                    case invalidArgs
+                }
+
+                @main
+                struct PacketTunnelProviderSharedTunRuntimeMain {
+                static func main() throws {
+                    guard CommandLine.arguments.count == 3 else {
+                        throw ProbeError.invalidArgs
+                    }
+                    guard
+                        let bindPortA = Int(CommandLine.arguments[1]),
+                        let bindPortB = Int(CommandLine.arguments[2])
+                    else {
+                        throw ProbeError.invalidArgs
+                    }
+
+                    let runtimeOverridesB: [String: Any] = [
+                        "channel_mux": [
+                            "own_servers": [
+                                [
+                                    "name": "Shared TUN Runtime",
+                                    "listen": [
+                                        "protocol": "tun",
+                                        "ifname": "ios-utun",
+                                        "mtu": 1600,
+                                    ],
+                                    "target": [
+                                        "protocol": "tun",
+                                        "ifname": "obtun2",
+                                        "mtu": 1600,
+                                    ],
+                                    "options": [
+                                        "shared_tun_ownership": [
+                                            "mode": "server_shared",
+                                            "peers": [
+                                                [
+                                                    "peer_ref": "linux-client",
+                                                    "ipv4": ["192.168.107.2"],
+                                                ],
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                            "remote_servers": [],
+                        ],
+                    ]
+                    let bridgeB = try PacketTunnelProviderSwiftUDPBridgeProbe(
+                        runtimeMode: "swift_udp",
+                        bindHost: "127.0.0.1",
+                        bindPort: bindPortB,
+                        peerHost: "127.0.0.1",
+                        peerPort: bindPortA,
+                        mtu: 1400,
+                        tunIfname: "ios-utun",
+                        tunnelAddress: "192.168.107.1",
+                        tcpServiceSpecs: [],
+                        overlayTransport: "myudp",
+                        runtimeConfigOverrides: runtimeOverridesB
+                    )
+                    defer { bridgeB.stop() }
+                    bridgeB.start()
+
+                    let flattenedB = ObstacleBridgeRuntimeConfig.flatten(runtimeOverridesB)
+                    let payload: [String: Any] = [
+                        "connections": bridgeB.adminConnectionsSnapshot(runtimeConfig: flattenedB),
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_packet_tunnel_provider_probe(source_path, binary_path)
+    completed = subprocess.run(
+        [str(binary_path), str(bind_port_a), str(bind_port_b)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=45,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+    payload = json.loads(completed.stdout)
+    ownership = next(
+        row["shared_tun_ownership"]
+        for row in payload["connections"]["tun"]
+        if row["service_name"] == "Shared TUN Runtime"
+    )
+    assert ownership["mode"] == "server_shared"
+    assert ownership["peer_refs"] == ["linux-client"]
+    assert ownership["owner_by_ipv4"] == {"192.168.107.2": "linux-client"}
+    assert ownership["active_peer_bindings"] == []
+    assert ownership["throttle_scopes"] == []
+    assert ownership["drop_counters"] == {"total": 0, "by_reason": {}}
+    assert ownership["recent_drops"] == []
 
 
 def test_ios_packet_tunnel_provider_probe_resolves_multi_host_peer_with_family_preference(tmp_path: Path) -> None:

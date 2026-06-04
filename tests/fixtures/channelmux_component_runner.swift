@@ -171,6 +171,25 @@ private func scopedTunThrottleSnapshotObject(_ snapshot: ObstacleBridgeChannelMu
     ]
 }
 
+private func sharedTunPeerBindingStateObject(_ snapshot: ObstacleBridgeChannelMuxTunRuntime.SharedTunPeerBindingState) -> [String: Any] {
+    [
+        "peer_id": snapshot.peerID,
+        "preferred_chan_id": snapshot.preferredChanID ?? NSNull(),
+        "bound_chan_ids": snapshot.boundChanIDs,
+    ]
+}
+
+private func sharedTunDisconnectCleanupSnapshotObject(_ snapshot: ObstacleBridgeChannelMuxTunRuntime.SharedTunDisconnectCleanupSnapshot) -> [String: Any] {
+    let peerRefByPeer = Dictionary(uniqueKeysWithValues: snapshot.peerRefByPeer
+        .sorted { $0.key < $1.key }
+        .map { (String($0.key), $0.value) })
+    return [
+        "active_peer_bindings": snapshot.activePeerBindings.map(sharedTunPeerBindingStateObject),
+        "peer_ref_by_peer": peerRefByPeer,
+        "peer_id_by_ref": Dictionary(uniqueKeysWithValues: snapshot.peerIDByRef.sorted { $0.key < $1.key }),
+    ]
+}
+
 private func closeSnapshotObject(_ snapshot: ObstacleBridgeChannelMuxTunRuntime.CloseSnapshot) -> [String: Any] {
     [
         "closed": snapshot.closed,
@@ -384,6 +403,68 @@ private func run(_ request: [String: Any]) throws -> [String: Any] {
             )
         }
         return ["snapshots": snapshots]
+    case "apply_shared_tun_peer_binding_sequence":
+        guard
+            let operationsRaw = request["operations"] as? [[String: Any]]
+        else {
+            throw ChannelMuxComponentRunnerError.invalidRequest
+        }
+        let initialBindings = ((request["initial_bindings"] as? [[String: Any]]) ?? []).map {
+            ObstacleBridgeChannelMuxTunRuntime.SharedTunPeerBindingState(
+                peerID: ($0["peer_id"] as? NSNumber)?.intValue ?? 0,
+                preferredChanID: ($0["preferred_chan_id"] as? NSNumber)?.intValue,
+                boundChanIDs: (($0["bound_chan_ids"] as? [NSNumber]) ?? []).map(\.intValue)
+            )
+        }
+        let operations = operationsRaw.map {
+            (
+                peerID: (($0["peer_id"] as? NSNumber)?.intValue ?? 0),
+                chanID: (($0["chan_id"] as? NSNumber)?.intValue ?? 0),
+                drop: (($0["drop"] as? Bool) ?? false)
+            )
+        }
+        let snapshots = ObstacleBridgeChannelMuxTunRuntime.applySharedTunPeerBindingSequence(
+            initialBindings: initialBindings,
+            operations: operations
+        )
+        return ["snapshots": snapshots.map(sharedTunPeerBindingStateObject)]
+    case "cleanup_shared_tun_peer_state_on_disconnect":
+        guard
+            let activePeerBindingsRaw = request["active_peer_bindings"] as? [[String: Any]],
+            let peerRefByPeerRaw = request["peer_ref_by_peer"] as? [String: String],
+            let peerIDByRefRaw = request["peer_id_by_ref"] as? [String: Any],
+            let disconnectedPeerID = request["disconnected_peer_id"] as? NSNumber
+        else {
+            throw ChannelMuxComponentRunnerError.invalidRequest
+        }
+        let activePeerBindings = activePeerBindingsRaw.map {
+            ObstacleBridgeChannelMuxTunRuntime.SharedTunPeerBindingState(
+                peerID: ($0["peer_id"] as? NSNumber)?.intValue ?? 0,
+                preferredChanID: ($0["preferred_chan_id"] as? NSNumber)?.intValue,
+                boundChanIDs: (($0["bound_chan_ids"] as? [NSNumber]) ?? []).map(\.intValue)
+            )
+        }
+        var peerRefByPeer: [Int: String] = [:]
+        for (peerIDRaw, peerRef) in peerRefByPeerRaw {
+            guard let peerID = Int(peerIDRaw) else {
+                throw ChannelMuxComponentRunnerError.invalidRequest
+            }
+            peerRefByPeer[peerID] = peerRef
+        }
+        var peerIDByRef: [String: Int] = [:]
+        for (peerRef, value) in peerIDByRefRaw {
+            guard let number = value as? NSNumber else {
+                throw ChannelMuxComponentRunnerError.invalidRequest
+            }
+            peerIDByRef[peerRef] = number.intValue
+        }
+        let snapshot = ObstacleBridgeChannelMuxTunRuntime.cleanupSharedTunPeerStateOnDisconnect(
+            activePeerBindings: activePeerBindings,
+            peerRefByPeer: peerRefByPeer,
+            peerIDByRef: peerIDByRef,
+            disconnectedPeerID: disconnectedPeerID.intValue
+        )
+        return ["snapshot": sharedTunDisconnectCleanupSnapshotObject(snapshot)]
     case "drive_channelmux_tun_close_then_local_packet":
         guard
             let openChanID = request["open_chan_id"] as? NSNumber,

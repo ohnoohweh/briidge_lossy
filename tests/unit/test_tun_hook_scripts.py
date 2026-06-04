@@ -40,3 +40,20 @@ def test_client_tun_hook_normalizes_ipv4_mapped_ipv6_peer_for_route_programming(
     assert '^::ffff:([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)$' in script
     assert 'normalized_ip="$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")"' in script
     assert 'printf \x27%s/32\x27 "$normalized_ip"' in script or "printf '%s/32' \"$normalized_ip\"" in script
+
+
+def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route() -> None:
+    script = (ROOT / "scripts" / "client-tun-hook-macos.sh").read_text(encoding="utf-8")
+
+    assert 'ifconfig "$IFNAME" inet "$TUN_ADDR_IP" "$TUN_GW" up' in script
+    assert 'route -n get default' in script
+    assert 'route -n add default "$TUN_GW"' in script
+    assert 'normalize_overlay_peer_ip() {' in script
+    assert 'route -n add -host "$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")" "$local_underlay_gw"' in script
+
+
+def test_macos_server_tun_hook_brings_utun_up_with_peer_identity() -> None:
+    script = (ROOT / "scripts" / "server-tun-hook-macos.sh").read_text(encoding="utf-8")
+
+    assert 'ifconfig "$IFNAME" inet "$TUN_ADDR_IP" "$PEER_ADDR" up' in script
+    assert 'ifconfig "$IFNAME" down' in script

@@ -215,6 +215,101 @@ def _python_scoped_tun_throttle_sequence_summary(
         mux.loop.close()
 
 
+def _shared_tun_test_spec() -> ChannelMux.ServiceSpec:
+    return ChannelMux.ServiceSpec(
+        2,
+        "tun",
+        "obtun1",
+        1500,
+        "tun",
+        "obtun0",
+        1500,
+        options={
+            "shared_tun_ownership": {
+                "mode": "server_shared",
+                "peers": [
+                    {"peer_ref": "linux-client", "ipv4": ["192.168.107.2"], "ipv6": ["fd20:107::2"]},
+                    {"peer_ref": "ios-client", "ipv4": ["192.168.107.4"], "ipv6": ["fd20:107::4"]},
+                ],
+            }
+        },
+    )
+
+
+def _python_shared_tun_peer_binding_sequence_summary() -> list[dict[str, object]]:
+    mux = ChannelMux(_FakeSession(), asyncio.new_event_loop())
+    try:
+        svc_key = ("peer", 77, 2)
+        mux._install_shared_tun_ownership_for_service(svc_key, _shared_tun_test_spec())
+        mux._record_shared_tun_peer_binding(svc_key, 77, 11)
+        mux._record_shared_tun_peer_binding(svc_key, 88, 22)
+        mux._record_shared_tun_peer_binding(svc_key, 77, 13)
+        mux._drop_shared_tun_peer_binding(svc_key, 77, 11)
+        return [
+            {
+                "peer_id": int(key[1]),
+                "preferred_chan_id": value.get("preferred_chan_id"),
+                "bound_chan_ids": [int(v) for v in list(value.get("bound_chan_ids") or [])],
+            }
+            for key, value in sorted(mux._shared_tun_runtime_by_peer.items(), key=lambda item: int(item[0][1]))
+        ]
+    finally:
+        mux.loop.close()
+
+
+def _python_shared_tun_disconnect_cleanup_summary() -> dict[str, object]:
+    mux = ChannelMux(_FakeSession(), asyncio.new_event_loop())
+    try:
+        svc_key = ("peer", 77, 2)
+        spec = _shared_tun_test_spec()
+        dev = ChannelMux.TunDevice(fd=44, ifname="obtun1", mtu=1500, service_key=svc_key)
+        mux._install_shared_tun_ownership_for_service(svc_key, spec)
+        mux._chan_owner_peer_id[11] = 77
+        mux._chan_owner_peer_id[22] = 88
+        mux._record_shared_tun_peer_binding(svc_key, 77, 11)
+        mux._record_shared_tun_peer_binding(svc_key, 88, 22)
+        allowed, _, reason = mux._shared_tun_guard_inbound_packet(
+            dev=dev,
+            chan=11,
+            packet=_ipv4_packet("192.168.107.2", "192.168.107.1"),
+        )
+        assert allowed and reason is None
+        allowed, _, reason = mux._shared_tun_guard_inbound_packet(
+            dev=dev,
+            chan=22,
+            packet=_ipv4_packet("192.168.107.4", "192.168.107.1"),
+        )
+        assert allowed and reason is None
+        mux.on_peer_disconnected(77)
+        mux.loop.run_until_complete(asyncio.sleep(0))
+        active_peer_bindings = [
+            {
+                "peer_id": int(key[1]),
+                "preferred_chan_id": value.get("preferred_chan_id"),
+                "bound_chan_ids": [int(v) for v in list(value.get("bound_chan_ids") or [])],
+            }
+            for key, value in sorted(mux._shared_tun_runtime_by_peer.items(), key=lambda item: int(item[0][1]))
+            if key[0] == svc_key
+        ]
+        peer_ref_by_peer = {
+            str(key[1]): value
+            for key, value in sorted(mux._shared_tun_peer_ref_by_peer.items(), key=lambda item: int(item[0][1]))
+            if key[0] == svc_key
+        }
+        peer_id_by_ref = {
+            str(key[1]): int(value)
+            for key, value in sorted(mux._shared_tun_peer_id_by_ref.items(), key=lambda item: str(item[0][1]))
+            if key[0] == svc_key
+        }
+        return {
+            "active_peer_bindings": active_peer_bindings,
+            "peer_ref_by_peer": peer_ref_by_peer,
+            "peer_id_by_ref": peer_id_by_ref,
+        }
+    finally:
+        mux.loop.close()
+
+
 def test_swift_component_shared_tun_ownership_snapshot_matches_python(
     swift_channelmux_component_runner: Path,
 ) -> None:
@@ -724,6 +819,45 @@ def test_swift_component_shared_tun_outbound_route_unmapped_destination_matches_
             "owner_by_ipv6": {},
             "peer_id_by_ref": {},
             "active_peer_bindings": [],
+        },
+    )
+    assert swift["snapshot"] == python
+
+
+def test_swift_component_shared_tun_peer_binding_sequence_matches_python(
+    swift_channelmux_component_runner: Path,
+) -> None:
+    python = _python_shared_tun_peer_binding_sequence_summary()
+    swift = _run_swift_component(
+        swift_channelmux_component_runner,
+        {
+            "action": "apply_shared_tun_peer_binding_sequence",
+            "operations": [
+                {"peer_id": 77, "chan_id": 11, "drop": False},
+                {"peer_id": 88, "chan_id": 22, "drop": False},
+                {"peer_id": 77, "chan_id": 13, "drop": False},
+                {"peer_id": 77, "chan_id": 11, "drop": True},
+            ],
+        },
+    )
+    assert swift["snapshots"] == python
+
+
+def test_swift_component_shared_tun_disconnect_cleanup_matches_python(
+    swift_channelmux_component_runner: Path,
+) -> None:
+    python = _python_shared_tun_disconnect_cleanup_summary()
+    swift = _run_swift_component(
+        swift_channelmux_component_runner,
+        {
+            "action": "cleanup_shared_tun_peer_state_on_disconnect",
+            "active_peer_bindings": [
+                {"peer_id": 77, "preferred_chan_id": 11, "bound_chan_ids": [11]},
+                {"peer_id": 88, "preferred_chan_id": 22, "bound_chan_ids": [22]},
+            ],
+            "peer_ref_by_peer": {"77": "linux-client", "88": "ios-client"},
+            "peer_id_by_ref": {"linux-client": 77, "ios-client": 88},
+            "disconnected_peer_id": 77,
         },
     )
     assert swift["snapshot"] == python
