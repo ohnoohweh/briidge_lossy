@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 final class ObstacleBridgeChannelMuxTunRuntime {
     private static let tunFragmentHeaderSize = 8
@@ -31,6 +36,15 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     struct InboundTunDataSnapshot {
         var delivered: Bool
         var packet: Data?
+    }
+
+    struct GuardedInboundTunDataSnapshot {
+        var delivered: Bool
+        var packet: Data?
+        var ipVersion: Int?
+        var sourceIP: String?
+        var destinationIP: String?
+        var dropReason: String?
     }
 
     struct InboundTunFragmentSnapshot {
@@ -271,6 +285,54 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             return InboundTunDataSnapshot(delivered: false, packet: nil)
         }
         return InboundTunDataSnapshot(delivered: true, packet: body)
+    }
+
+    func handleInboundTunDataGuarded(
+        chanID: Int,
+        body: Data,
+        mtu: Int,
+        boundChanID: Int? = nil,
+        allowedSourceIPs: Set<String>? = nil
+    ) -> GuardedInboundTunDataSnapshot {
+        let base = handleInboundTunData(chanID: chanID, body: body, mtu: mtu, boundChanID: boundChanID)
+        guard base.delivered else {
+            return GuardedInboundTunDataSnapshot(
+                delivered: false,
+                packet: nil,
+                ipVersion: nil,
+                sourceIP: nil,
+                destinationIP: nil,
+                dropReason: nil
+            )
+        }
+        guard let parsed = Self.parsePacketEndpoints(body) else {
+            return GuardedInboundTunDataSnapshot(
+                delivered: false,
+                packet: nil,
+                ipVersion: nil,
+                sourceIP: nil,
+                destinationIP: nil,
+                dropReason: Self.parsePacketDropReason(body)
+            )
+        }
+        if let allowedSourceIPs, !allowedSourceIPs.isEmpty, !allowedSourceIPs.contains(parsed.sourceIP) {
+            return GuardedInboundTunDataSnapshot(
+                delivered: false,
+                packet: nil,
+                ipVersion: parsed.ipVersion,
+                sourceIP: parsed.sourceIP,
+                destinationIP: parsed.destinationIP,
+                dropReason: "source_not_owned_by_peer"
+            )
+        }
+        return GuardedInboundTunDataSnapshot(
+            delivered: true,
+            packet: body,
+            ipVersion: parsed.ipVersion,
+            sourceIP: parsed.sourceIP,
+            destinationIP: parsed.destinationIP,
+            dropReason: nil
+        )
     }
 
     func handleInboundTunFragment(
@@ -530,5 +592,75 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             (UInt32(bytes[1]) << 16) |
             (UInt32(bytes[2]) << 8) |
             UInt32(bytes[3])
+    }
+
+    private static func parsePacketDropReason(_ packet: Data) -> String {
+        guard !packet.isEmpty else {
+            return "empty"
+        }
+        let version = Int((packet[packet.startIndex] >> 4) & 0x0F)
+        switch version {
+        case 4:
+            if packet.count < 20 {
+                return "ipv4_too_short"
+            }
+            let ihl = Int(packet[packet.startIndex] & 0x0F) * 4
+            if ihl < 20 || packet.count < ihl {
+                return "ipv4_header_truncated"
+            }
+            return "unknown"
+        case 6:
+            return packet.count < 40 ? "ipv6_too_short" : "unknown"
+        default:
+            return "unsupported_ip_version"
+        }
+    }
+
+    private static func parsePacketEndpoints(_ packet: Data) -> (ipVersion: Int, sourceIP: String, destinationIP: String)? {
+        guard !packet.isEmpty else {
+            return nil
+        }
+        let version = Int((packet[packet.startIndex] >> 4) & 0x0F)
+        switch version {
+        case 4:
+            guard packet.count >= 20 else {
+                return nil
+            }
+            let ihl = Int(packet[packet.startIndex] & 0x0F) * 4
+            guard ihl >= 20, packet.count >= ihl else {
+                return nil
+            }
+            let source = packet.subdata(in: 12..<16).map(String.init).joined(separator: ".")
+            let destination = packet.subdata(in: 16..<20).map(String.init).joined(separator: ".")
+            return (4, source, destination)
+        case 6:
+            guard packet.count >= 40 else {
+                return nil
+            }
+            return (
+                6,
+                ipv6String(from: packet.subdata(in: 8..<24)),
+                ipv6String(from: packet.subdata(in: 24..<40))
+            )
+        default:
+            return nil
+        }
+    }
+
+    private static func ipv6String(from data: Data) -> String {
+        var bytes = [UInt8](data)
+        var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+        let rendered = bytes.withUnsafeMutableBytes { srcPtr in
+            buffer.withUnsafeMutableBufferPointer { dstPtr in
+                inet_ntop(AF_INET6, srcPtr.baseAddress, dstPtr.baseAddress, socklen_t(INET6_ADDRSTRLEN))
+            }
+        }
+        if rendered != nil {
+            return String(cString: buffer)
+        }
+        let groups = stride(from: 0, to: bytes.count, by: 2).map { idx in
+            String(format: "%x", Int((UInt16(bytes[idx]) << 8) | UInt16(bytes[idx + 1])))
+        }
+        return groups.joined(separator: ":")
     }
 }

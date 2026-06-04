@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import shutil
 import subprocess
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from obstacle_bridge.bridge import ChannelMux
+from tests.unit.test_channel_mux_listener_mode import _FakeSession, _ipv4_packet, _ipv6_packet
 from tests.unit.test_channel_mux_swift_parity import (
     ROOT,
     SWIFT_CODEC_SOURCE,
@@ -58,6 +60,55 @@ def _run_swift_component(binary: Path, request: dict[str, object]) -> dict[str, 
             f"Swift component runner failed\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
         )
     return json.loads(completed.stdout)
+
+
+def _python_guarded_inbound_tun_data_summary(
+    *,
+    packet: bytes,
+    allowed_source_ips: set[str] | None,
+) -> dict[str, object]:
+    mux = ChannelMux(_FakeSession(), asyncio.new_event_loop())
+    try:
+        svc_key = ("peer", 77, 2)
+        dev = ChannelMux.TunDevice(fd=44, ifname="obtun1", mtu=1500, service_key=svc_key)
+        mux._tun_by_chan[7] = dev
+        mux._chan_owner_peer_id[7] = 77
+        if allowed_source_ips:
+            ipv4 = sorted(addr for addr in allowed_source_ips if ":" not in addr)
+            ipv6 = sorted(addr for addr in allowed_source_ips if ":" in addr)
+            spec = ChannelMux.ServiceSpec(
+                2,
+                "tun",
+                "obtun1",
+                1500,
+                "tun",
+                "obtun0",
+                1500,
+                options={
+                    "shared_tun_ownership": {
+                        "mode": "server_shared",
+                        "peers": [
+                            {
+                                "peer_ref": "linux-client",
+                                "ipv4": ipv4,
+                                "ipv6": ipv6,
+                            }
+                        ],
+                    }
+                },
+            )
+            mux._install_shared_tun_ownership_for_service(svc_key, spec)
+        allowed, parsed, reason = mux._shared_tun_guard_inbound_packet(dev=dev, chan=7, packet=packet)
+        return {
+            "delivered": bool(allowed),
+            "packet_hex": packet.hex() if allowed else None,
+            "ip_version": None if parsed is None else parsed.get("ip_version"),
+            "source_ip": None if parsed is None else parsed.get("source_ip"),
+            "destination_ip": None if parsed is None else parsed.get("destination_ip"),
+            "drop_reason": reason,
+        }
+    finally:
+        mux.loop.close()
 
 
 def test_swift_component_shared_tun_ownership_snapshot_matches_python(
@@ -192,3 +243,113 @@ def test_swift_component_tun_close_then_local_packet_matches_python(
     python.pop("local_spec")
     python.pop("open_payload_hex")
     assert swift == python
+
+
+def test_swift_component_guarded_inbound_tun_data_accepts_owned_ipv4(
+    swift_channelmux_component_runner: Path,
+) -> None:
+    packet = _ipv4_packet("192.168.107.2", "192.168.107.1")
+    python = _python_guarded_inbound_tun_data_summary(
+        packet=packet,
+        allowed_source_ips={"192.168.107.2", "fd20:107::2"},
+    )
+    swift = _run_swift_component(
+        swift_channelmux_component_runner,
+        {
+            "action": "drive_channelmux_inbound_tun_data_guarded",
+            "chan_id": 7,
+            "body_hex": packet.hex(),
+            "mtu": 1500,
+            "bound_chan_id": 7,
+            "allowed_source_ips": ["192.168.107.2", "fd20:107::2"],
+        },
+    )
+    assert swift["snapshot"] == python
+
+
+def test_swift_component_guarded_inbound_tun_data_rejects_spoofed_ipv4(
+    swift_channelmux_component_runner: Path,
+) -> None:
+    packet = _ipv4_packet("192.168.107.9", "192.168.107.1")
+    python = _python_guarded_inbound_tun_data_summary(
+        packet=packet,
+        allowed_source_ips={"192.168.107.2", "fd20:107::2"},
+    )
+    swift = _run_swift_component(
+        swift_channelmux_component_runner,
+        {
+            "action": "drive_channelmux_inbound_tun_data_guarded",
+            "chan_id": 7,
+            "body_hex": packet.hex(),
+            "mtu": 1500,
+            "bound_chan_id": 7,
+            "allowed_source_ips": ["192.168.107.2", "fd20:107::2"],
+        },
+    )
+    assert swift["snapshot"] == python
+
+
+def test_swift_component_guarded_inbound_tun_data_accepts_broadcast_destination(
+    swift_channelmux_component_runner: Path,
+) -> None:
+    packet = _ipv4_packet("192.168.107.2", "255.255.255.255")
+    python = _python_guarded_inbound_tun_data_summary(
+        packet=packet,
+        allowed_source_ips={"192.168.107.2", "fd20:107::2"},
+    )
+    swift = _run_swift_component(
+        swift_channelmux_component_runner,
+        {
+            "action": "drive_channelmux_inbound_tun_data_guarded",
+            "chan_id": 7,
+            "body_hex": packet.hex(),
+            "mtu": 1500,
+            "bound_chan_id": 7,
+            "allowed_source_ips": ["192.168.107.2", "fd20:107::2"],
+        },
+    )
+    assert swift["snapshot"] == python
+
+
+def test_swift_component_guarded_inbound_tun_data_accepts_owned_ipv6(
+    swift_channelmux_component_runner: Path,
+) -> None:
+    packet = _ipv6_packet("fd20:107::2", "fd20:107::1")
+    python = _python_guarded_inbound_tun_data_summary(
+        packet=packet,
+        allowed_source_ips={"192.168.107.2", "fd20:107::2"},
+    )
+    swift = _run_swift_component(
+        swift_channelmux_component_runner,
+        {
+            "action": "drive_channelmux_inbound_tun_data_guarded",
+            "chan_id": 7,
+            "body_hex": packet.hex(),
+            "mtu": 1500,
+            "bound_chan_id": 7,
+            "allowed_source_ips": ["192.168.107.2", "fd20:107::2"],
+        },
+    )
+    assert swift["snapshot"] == python
+
+
+def test_swift_component_guarded_inbound_tun_data_rejects_malformed_packet(
+    swift_channelmux_component_runner: Path,
+) -> None:
+    packet = b"\x45\x00"
+    python = _python_guarded_inbound_tun_data_summary(
+        packet=packet,
+        allowed_source_ips={"192.168.107.2", "fd20:107::2"},
+    )
+    swift = _run_swift_component(
+        swift_channelmux_component_runner,
+        {
+            "action": "drive_channelmux_inbound_tun_data_guarded",
+            "chan_id": 7,
+            "body_hex": packet.hex(),
+            "mtu": 1500,
+            "bound_chan_id": 7,
+            "allowed_source_ips": ["192.168.107.2", "fd20:107::2"],
+        },
+    )
+    assert swift["snapshot"] == python

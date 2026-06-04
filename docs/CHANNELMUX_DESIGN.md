@@ -897,6 +897,8 @@ The shared server-side TUN switch adds one more responsibility to ChannelMux:
 - it must understand which tunnel addresses belong to which connected peer
 - it must route packets from the server-side TUN device into the correct peer
   TUN channel based on destination address
+- it must ensure that every outbound mux frame leaves only on the channel or
+  channels selected for the intended peer scope
 - it must accept packets from a peer TUN channel only when the source address
   is owned by that peer
 
@@ -904,8 +906,12 @@ At a high level:
 
 1. the server receives a packet from its shared TUN device
 2. the server extracts the IP version plus destination address
-3. the server looks up the owning peer for that destination address
-4. the server forwards the packet into that peer's TUN channel
+3. the server classifies the destination as unicast, broadcast, multicast, or
+   local/external
+4. for unicast, the server looks up the owning peer for that destination
+   address
+5. the server forwards the packet only on the channel or channels selected for
+   that destination class
 
 And in the reverse direction:
 
@@ -946,6 +952,10 @@ The implementation must preserve these invariants:
 - a peer may send packets only with source addresses that belong to that peer
 - a packet destined to a client-owned address must be forwarded only to the
   owning peer
+- an outbound mux frame must never leave on a peer channel that was not
+  selected by the server for that packet's destination class
+- broadcast egress is an explicit replication decision by the server, not a
+  fallback leak across arbitrary peer channels
 - peer disconnect must remove that peer's ownership immediately
 - peer reconnect must rebuild ownership from fresh session state only
 - stale ownership from an earlier peer epoch must never survive into a new
@@ -959,11 +969,19 @@ When the server reads a packet from the shared TUN device:
 
 1. parse the packet as IPv4 or IPv6
 2. extract destination address
-3. check the ownership map
-4. if the destination belongs to a connected peer:
-   - forward the packet to that peer's TUN channel
-   - account traffic against that peer's TUN counters
-5. otherwise:
+3. classify the destination:
+   - connected-peer unicast
+   - broadcast
+   - multicast
+   - local/server/external/unknown
+4. if the destination belongs to one connected peer:
+   - forward the packet only to that peer's designated TUN channel
+   - account traffic only against that peer's TUN counters
+5. if the destination is broadcast:
+   - replicate the packet only to the peer channels intentionally selected by
+     the broadcast-routing policy
+   - do not emit the frame on any other peer channel
+6. otherwise:
    - keep existing server-side TUN behavior
    - this may mean local delivery, OS routing, or drop, depending on the
      surrounding runtime setup
@@ -980,7 +998,7 @@ When the server receives a TUN packet from a peer channel:
    - emit a peer-scoped anti-spoofing diagnostic
    - optionally count toward a bounded policy escalation path
 5. if the destination belongs to another connected peer:
-   - forward directly to that destination peer's TUN channel
+   - forward directly only to that destination peer's designated TUN channel
    - do not bounce the packet through host OS routing first
 6. otherwise:
    - inject the packet into the server-side TUN device for normal host routing
@@ -988,6 +1006,14 @@ When the server receives a TUN packet from a peer channel:
 The direct server-side peer-to-peer forwarding rule is important. It prevents
 unnecessary hairpin dependence on host routing when both the source and
 destination tunnel IPs are already known to ChannelMux.
+
+For outgoing mux emission, the same scoping rule applies uniformly:
+
+- explicit unicast traffic leaves only on the one designated peer channel
+- broadcast traffic leaves only on the set of peer channels explicitly chosen
+  by the server's broadcast policy
+- no packet is allowed to "spill" onto unrelated peer channels merely because
+  the server has multiple connected clients
 
 ### IPv6 handling
 
@@ -1135,6 +1161,17 @@ Minimum anti-spoofing rules:
   that TUN service
 - log drops with peer id, service id, IP version, source, destination, and
   reason
+
+Destination-address note:
+
+- anti-spoofing is a source-ownership check, not a destination-ownership check
+- IPv4 limited broadcast (`255.255.255.255`) and valid subnet-directed
+  broadcast traffic must not be rejected merely because the destination is not
+  owned by one peer
+- the sending peer must still own the packet source address
+- destination-side handling for broadcast, multicast, and unknown unicast is a
+  routing-policy concern handled in later phases, not by the source anti-spoof
+  gate
 
 The first milestone may choose to:
 
@@ -1343,12 +1380,29 @@ Deliverables:
 - parse IPv4/IPv6 source and destination on peer-to-server TUN packets
 - reject packets whose source address is not owned by the sending peer
 - add spoof-drop diagnostics and counters
+- accept valid broadcast-destination packets when the source address is owned
+  by the sending peer
+
+Delivered slice:
+
+- when shared-TUN ownership policy is active for a TUN service, inbound
+  peer-to-server TUN packets are now parsed as IPv4/IPv6 before local delivery
+- malformed or unsupported IP headers are now dropped in that shared-policy
+  path
+- source addresses are now checked against the sending peer's committed
+  ownership set in the delivered single-owner case
+- broadcast destinations remain valid in this phase as long as source ownership
+  succeeds
+- baseline 1:1 TUN behavior remains unchanged when shared ownership policy is
+  not active
 
 Testing:
 
 - unit tests for valid owned-source acceptance
 - unit tests for invalid source rejection
 - unit tests for malformed packet rejection
+- unit tests proving broadcast destinations are not rejected by the anti-spoof
+  gate when the source is owned
 - unit tests for IPv4 and IPv6 parity
 - parity tests proving identical source-ownership acceptance/rejection rules in
   Python and Swift runtimes
@@ -1371,6 +1425,8 @@ Deliverables:
 - parse destination IP on packets read from the shared server TUN device
 - forward packets to the owning peer channel
 - drop unknown destinations deterministically
+- treat broadcast destinations as a distinct routing class rather than an
+  ownership miss
 
 Testing:
 

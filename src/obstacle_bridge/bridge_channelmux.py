@@ -1864,6 +1864,82 @@ class ChannelMux:
         active_peer_bindings.sort(key=lambda entry: int(entry.get("peer_id", 0)))
         return self._shared_tun_runtime_snapshot(ownership, active_peer_bindings)
 
+    @staticmethod
+    def _parse_tun_packet_endpoints(packet: bytes) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+        payload = bytes(packet or b"")
+        if not payload:
+            return None, "empty"
+        version = (payload[0] >> 4) & 0x0F
+        if version == 4:
+            if len(payload) < 20:
+                return None, "ipv4_too_short"
+            ihl = (payload[0] & 0x0F) * 4
+            if ihl < 20 or len(payload) < ihl:
+                return None, "ipv4_header_truncated"
+            return (
+                {
+                    "ip_version": 4,
+                    "source_ip": str(ipaddress.IPv4Address(payload[12:16])),
+                    "destination_ip": str(ipaddress.IPv4Address(payload[16:20])),
+                },
+                None,
+            )
+        if version == 6:
+            if len(payload) < 40:
+                return None, "ipv6_too_short"
+            return (
+                {
+                    "ip_version": 6,
+                    "source_ip": str(ipaddress.IPv6Address(payload[8:24])),
+                    "destination_ip": str(ipaddress.IPv6Address(payload[24:40])),
+                },
+                None,
+            )
+        return None, "unsupported_ip_version"
+
+    def _shared_tun_allowed_source_ips_for_peer(
+        self,
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        peer_id: Optional[int],
+    ) -> Optional[set[str]]:
+        if svc_key is None or peer_id is None:
+            return None
+        ownership = self._shared_tun_ownership_by_service.get(svc_key)
+        if not isinstance(ownership, dict):
+            return None
+        peers = [entry for entry in list(ownership.get("peers") or []) if isinstance(entry, dict)]
+        if len(peers) != 1:
+            return None
+        entry = peers[0]
+        return {
+            str(addr)
+            for addr in list(entry.get("ipv4") or []) + list(entry.get("ipv6") or [])
+            if str(addr)
+        }
+
+    def _shared_tun_guard_inbound_packet(
+        self,
+        *,
+        dev: "ChannelMux.TunDevice",
+        chan: int,
+        packet: bytes,
+    ) -> tuple[bool, Optional[dict[str, Any]], Optional[str]]:
+        svc_key = getattr(dev, "service_key", None)
+        ownership = self._shared_tun_ownership_by_service.get(svc_key) if svc_key is not None else None
+        if not isinstance(ownership, dict):
+            return True, None, None
+        parsed, parse_error = self._parse_tun_packet_endpoints(packet)
+        if parse_error is not None:
+            return False, None, parse_error
+        peer_id = self._chan_owner_peer_id.get(int(chan))
+        allowed = self._shared_tun_allowed_source_ips_for_peer(svc_key, peer_id)
+        if not allowed:
+            return True, parsed, None
+        source_ip = str(parsed.get("source_ip") or "")
+        if source_ip not in allowed:
+            return False, parsed, "source_not_owned_by_peer"
+        return True, parsed, None
+
     def _next_ctrl_chunk_txid(self) -> int:
         txid = int(self._ctrl_chunk_next_txid) & 0xFFFFFFFF
         if txid <= 0:
@@ -2646,6 +2722,17 @@ class ChannelMux:
         dev = self._tun_by_chan.get(chan)
         if dev is None:
             self.log.warning("[TUN] chan=%s DATA not routed yet (no device)", chan)
+            return
+        allowed, parsed, drop_reason = self._shared_tun_guard_inbound_packet(dev=dev, chan=chan, packet=data)
+        if not allowed:
+            self.log.warning(
+                "[TUN] chan=%s drop inbound packet if=%s reason=%s src=%s dst=%s",
+                chan,
+                dev.ifname,
+                drop_reason,
+                None if parsed is None else parsed.get("source_ip"),
+                None if parsed is None else parsed.get("destination_ip"),
+            )
             return
         self._log_tun_packet_debug(stage="to_local_tun", packet=data, ifname=dev.ifname, chan=chan)
         ctr = self._ctr(ChannelMux.Proto.TUN, chan)

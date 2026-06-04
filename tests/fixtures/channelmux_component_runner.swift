@@ -125,6 +125,17 @@ private func inboundTunFragmentSnapshotObject(_ snapshot: ObstacleBridgeChannelM
     ]
 }
 
+private func guardedInboundTunDataSnapshotObject(_ snapshot: ObstacleBridgeChannelMuxTunRuntime.GuardedInboundTunDataSnapshot) -> [String: Any] {
+    [
+        "delivered": snapshot.delivered,
+        "packet_hex": snapshot.packet.map(hexFromData) ?? NSNull(),
+        "ip_version": snapshot.ipVersion ?? NSNull(),
+        "source_ip": snapshot.sourceIP ?? NSNull(),
+        "destination_ip": snapshot.destinationIP ?? NSNull(),
+        "drop_reason": snapshot.dropReason ?? NSNull(),
+    ]
+}
+
 private func closeSnapshotObject(_ snapshot: ObstacleBridgeChannelMuxTunRuntime.CloseSnapshot) -> [String: Any] {
     [
         "closed": snapshot.closed,
@@ -230,6 +241,25 @@ private func run(_ request: [String: Any]) throws -> [String: Any] {
             )
         }
         return ["snapshots": snapshots]
+    case "drive_channelmux_inbound_tun_data_guarded":
+        guard
+            let chanID = request["chan_id"] as? NSNumber,
+            let bodyHex = request["body_hex"] as? String,
+            let body = dataFromHex(bodyHex),
+            let mtu = request["mtu"] as? NSNumber
+        else {
+            throw ChannelMuxComponentRunnerError.invalidRequest
+        }
+        let runtime = ObstacleBridgeChannelMuxTunRuntime(instanceID: 0, connectionSeq: 0)
+        let allowedSourceIPs = Set((request["allowed_source_ips"] as? [String]) ?? [])
+        let snapshot = runtime.handleInboundTunDataGuarded(
+            chanID: chanID.intValue,
+            body: body,
+            mtu: mtu.intValue,
+            boundChanID: (request["bound_chan_id"] as? NSNumber)?.intValue,
+            allowedSourceIPs: allowedSourceIPs.isEmpty ? nil : allowedSourceIPs
+        )
+        return ["snapshot": guardedInboundTunDataSnapshotObject(snapshot)]
     case "drive_channelmux_tun_close_then_local_packet":
         guard
             let openChanID = request["open_chan_id"] as? NSNumber,
