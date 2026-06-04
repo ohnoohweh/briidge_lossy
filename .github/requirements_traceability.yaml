@@ -749,6 +749,11 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_outbound_route_unknown_destination_matches_python
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_outbound_route_inactive_destination_matches_python
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_outbound_route_unmapped_destination_matches_python
+    - tests/unit/test_channel_mux_listener_mode.py::test_inbound_shared_tun_packet_relays_to_other_owned_peer_channel
+    - tests/unit/test_channel_mux_listener_mode.py::test_inbound_shared_tun_packet_unknown_destination_still_writes_local_tun
+    - tests/unit/test_channel_mux_listener_mode.py::test_inbound_shared_tun_packet_sender_owned_destination_does_not_self_loop
+    - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_inbound_peer_relay_matches_python
+    - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_inbound_peer_relay_avoids_self_loop
     - ios/tests/test_m3_native_sources.py::test_macos_swift_host_runner_source_exists
 
 REQ-MUX-010:

@@ -1632,6 +1632,145 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
         finally:
             mux.loop.close()
 
+    def test_inbound_shared_tun_packet_relays_to_other_owned_peer_channel(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            spec = ChannelMux.ServiceSpec(
+                5,
+                'tun',
+                'obtun0',
+                1500,
+                'tun',
+                'obtun1',
+                1500,
+                options={
+                    'shared_tun_ownership': {
+                        'mode': 'server_shared',
+                        'peers': [
+                            {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                            {'peer_ref': 'ios-client', 'ipv4': ['192.168.107.4']},
+                        ],
+                    }
+                },
+            )
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+            mux._install_shared_tun_ownership_for_service(svc_key, spec)
+
+            mux._chan_owner_peer_id[11] = 77
+            mux._bind_tun_channel(11, dev)
+            mux._chan_owner_peer_id[22] = 88
+            mux._bind_tun_channel(22, dev)
+            mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=11,
+                packet=_ipv4_packet('192.168.107.2', '192.168.107.1'),
+            )
+            mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=22,
+                packet=_ipv4_packet('192.168.107.4', '192.168.107.1'),
+            )
+
+            with patch.object(mux, '_send_mux') as send_mux, patch.object(mux, '_write_tun_packet') as write_tun:
+                mux._rx_tun_data(11, _ipv4_packet('192.168.107.2', '192.168.107.4'))
+
+            send_mux.assert_called_once_with(22, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, _ipv4_packet('192.168.107.2', '192.168.107.4'))
+            write_tun.assert_not_called()
+        finally:
+            mux.loop.close()
+
+    def test_inbound_shared_tun_packet_unknown_destination_still_writes_local_tun(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            spec = ChannelMux.ServiceSpec(
+                5,
+                'tun',
+                'obtun0',
+                1500,
+                'tun',
+                'obtun1',
+                1500,
+                options={
+                    'shared_tun_ownership': {
+                        'mode': 'server_shared',
+                        'peers': [
+                            {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                            {'peer_ref': 'ios-client', 'ipv4': ['192.168.107.4']},
+                        ],
+                    }
+                },
+            )
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+            mux._install_shared_tun_ownership_for_service(svc_key, spec)
+
+            mux._chan_owner_peer_id[11] = 77
+            mux._bind_tun_channel(11, dev)
+            mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=11,
+                packet=_ipv4_packet('192.168.107.2', '192.168.107.1'),
+            )
+
+            with patch.object(mux, '_send_mux') as send_mux, patch.object(mux, '_write_tun_packet') as write_tun:
+                mux._rx_tun_data(11, _ipv4_packet('192.168.107.2', '8.8.8.8'))
+
+            send_mux.assert_not_called()
+            write_tun.assert_called_once_with(dev, _ipv4_packet('192.168.107.2', '8.8.8.8'))
+        finally:
+            mux.loop.close()
+
+    def test_inbound_shared_tun_packet_sender_owned_destination_does_not_self_loop(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            spec = ChannelMux.ServiceSpec(
+                5,
+                'tun',
+                'obtun0',
+                1500,
+                'tun',
+                'obtun1',
+                1500,
+                options={
+                    'shared_tun_ownership': {
+                        'mode': 'server_shared',
+                        'peers': [
+                            {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                            {'peer_ref': 'ios-client', 'ipv4': ['192.168.107.4']},
+                        ],
+                    }
+                },
+            )
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+            mux._install_shared_tun_ownership_for_service(svc_key, spec)
+
+            mux._chan_owner_peer_id[11] = 77
+            mux._bind_tun_channel(11, dev)
+            mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=11,
+                packet=_ipv4_packet('192.168.107.2', '192.168.107.1'),
+            )
+
+            with patch.object(mux, '_send_mux') as send_mux, patch.object(mux, '_write_tun_packet') as write_tun:
+                mux._rx_tun_data(11, _ipv4_packet('192.168.107.2', '192.168.107.2'))
+
+            send_mux.assert_not_called()
+            write_tun.assert_called_once_with(dev, _ipv4_packet('192.168.107.2', '192.168.107.2'))
+        finally:
+            mux.loop.close()
+
     def test_local_tun_packet_ignores_transmit_delay_without_buffered_frames(self):
         session = _FakeSession(connected=True, transmit_delay_est_ms=3000.0, waiting_count=0)
         mux = ChannelMux(session, asyncio.new_event_loop())

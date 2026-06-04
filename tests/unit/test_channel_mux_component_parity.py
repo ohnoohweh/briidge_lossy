@@ -130,6 +130,53 @@ def _python_shared_tun_outbound_route_summary(
     )
 
 
+def _python_shared_tun_inbound_peer_relay_summary(
+    *,
+    packet: bytes,
+    owner_by_ipv4: dict[str, str],
+    owner_by_ipv6: dict[str, str],
+    peer_id_by_ref: dict[str, int],
+    active_peer_bindings: list[dict[str, object]],
+    source_peer_id: int,
+) -> dict[str, object]:
+    route = ChannelMux._shared_tun_plan_outbound_route(
+        {
+            "owner_by_ipv4": owner_by_ipv4,
+            "owner_by_ipv6": owner_by_ipv6,
+        },
+        peer_id_by_ref,
+        active_peer_bindings,
+        packet,
+    )
+    selected_peer_ids = [int(v) for v in list(route.get("selected_peer_ids") or [])]
+    if (
+        str(route.get("route_class") or "") == "unicast"
+        and bool(route.get("routed"))
+        and selected_peer_ids
+        and int(selected_peer_ids[0]) != int(source_peer_id)
+    ):
+        return {
+            "relay_to_peer": True,
+            "deliver_local": False,
+            "route_class": route.get("route_class"),
+            "selected_peer_ids": [int(v) for v in list(route.get("selected_peer_ids") or [])],
+            "selected_chan_ids": [int(v) for v in list(route.get("selected_chan_ids") or [])],
+            "ip_version": route.get("ip_version"),
+            "destination_ip": route.get("destination_ip"),
+            "drop_reason": route.get("drop_reason"),
+        }
+    return {
+        "relay_to_peer": False,
+        "deliver_local": True,
+        "route_class": route.get("route_class"),
+        "selected_peer_ids": [int(v) for v in list(route.get("selected_peer_ids") or [])],
+        "selected_chan_ids": [int(v) for v in list(route.get("selected_chan_ids") or [])],
+        "ip_version": route.get("ip_version"),
+        "destination_ip": route.get("destination_ip"),
+        "drop_reason": route.get("drop_reason"),
+    }
+
+
 def test_swift_component_shared_tun_ownership_snapshot_matches_python(
     swift_channelmux_component_runner: Path,
 ) -> None:
@@ -481,6 +528,72 @@ def test_swift_component_shared_tun_outbound_route_inactive_destination_matches_
             "owner_by_ipv6": {},
             "peer_id_by_ref": {"linux-client": 77},
             "active_peer_bindings": [{"peer_id": 77, "preferred_chan_id": None}],
+        },
+    )
+    assert swift["snapshot"] == python
+
+
+def test_swift_component_shared_tun_inbound_peer_relay_matches_python(
+    swift_channelmux_component_runner: Path,
+) -> None:
+    packet = _ipv4_packet("192.168.107.2", "192.168.107.4")
+    python = _python_shared_tun_inbound_peer_relay_summary(
+        packet=packet,
+        owner_by_ipv4={"192.168.107.2": "linux-client", "192.168.107.4": "ios-client"},
+        owner_by_ipv6={},
+        peer_id_by_ref={"linux-client": 77, "ios-client": 88},
+        active_peer_bindings=[
+            {"peer_id": 77, "preferred_chan_id": 11},
+            {"peer_id": 88, "preferred_chan_id": 22},
+        ],
+        source_peer_id=77,
+    )
+    swift = _run_swift_component(
+        swift_channelmux_component_runner,
+        {
+            "action": "plan_shared_tun_inbound_peer_relay",
+            "body_hex": packet.hex(),
+            "owner_by_ipv4": {"192.168.107.2": "linux-client", "192.168.107.4": "ios-client"},
+            "owner_by_ipv6": {},
+            "peer_id_by_ref": {"linux-client": 77, "ios-client": 88},
+            "active_peer_bindings": [
+                {"peer_id": 77, "preferred_chan_id": 11},
+                {"peer_id": 88, "preferred_chan_id": 22},
+            ],
+            "source_peer_id": 77,
+        },
+    )
+    assert swift["snapshot"] == python
+
+
+def test_swift_component_shared_tun_inbound_peer_relay_avoids_self_loop(
+    swift_channelmux_component_runner: Path,
+) -> None:
+    packet = _ipv4_packet("192.168.107.2", "192.168.107.2")
+    python = _python_shared_tun_inbound_peer_relay_summary(
+        packet=packet,
+        owner_by_ipv4={"192.168.107.2": "linux-client", "192.168.107.4": "ios-client"},
+        owner_by_ipv6={},
+        peer_id_by_ref={"linux-client": 77, "ios-client": 88},
+        active_peer_bindings=[
+            {"peer_id": 77, "preferred_chan_id": 11},
+            {"peer_id": 88, "preferred_chan_id": 22},
+        ],
+        source_peer_id=77,
+    )
+    swift = _run_swift_component(
+        swift_channelmux_component_runner,
+        {
+            "action": "plan_shared_tun_inbound_peer_relay",
+            "body_hex": packet.hex(),
+            "owner_by_ipv4": {"192.168.107.2": "linux-client", "192.168.107.4": "ios-client"},
+            "owner_by_ipv6": {},
+            "peer_id_by_ref": {"linux-client": 77, "ios-client": 88},
+            "active_peer_bindings": [
+                {"peer_id": 77, "preferred_chan_id": 11},
+                {"peer_id": 88, "preferred_chan_id": 22},
+            ],
+            "source_peer_id": 77,
         },
     )
     assert swift["snapshot"] == python

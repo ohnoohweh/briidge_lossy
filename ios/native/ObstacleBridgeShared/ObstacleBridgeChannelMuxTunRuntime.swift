@@ -62,6 +62,17 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         var dropReason: String?
     }
 
+    struct SharedTunInboundPeerRelaySnapshot {
+        var relayToPeer: Bool
+        var deliverLocal: Bool
+        var routeClass: String?
+        var selectedPeerIDs: [Int]
+        var selectedChanIDs: [Int]
+        var ipVersion: Int?
+        var destinationIP: String?
+        var dropReason: String?
+    }
+
     struct InboundTunFragmentSnapshot {
         var delivered: Bool
         var packet: Data?
@@ -425,6 +436,48 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             ipVersion: parsed.ipVersion,
             destinationIP: parsed.destinationIP,
             dropReason: nil
+        )
+    }
+
+    static func planSharedTunInboundPeerRelay(
+        ownerByIPv4: [String: String],
+        ownerByIPv6: [String: String],
+        peerIDByRef: [String: Int],
+        activePeerBindings: [SharedTunActivePeerBinding],
+        sourcePeerID: Int,
+        packet: Data
+    ) -> SharedTunInboundPeerRelaySnapshot {
+        let route = planSharedTunOutboundRoute(
+            ownerByIPv4: ownerByIPv4,
+            ownerByIPv6: ownerByIPv6,
+            peerIDByRef: peerIDByRef,
+            activePeerBindings: activePeerBindings,
+            packet: packet
+        )
+        if route.routed,
+           route.routeClass == "unicast",
+           let selectedPeerID = route.selectedPeerIDs.first,
+           selectedPeerID != sourcePeerID {
+            return SharedTunInboundPeerRelaySnapshot(
+                relayToPeer: true,
+                deliverLocal: false,
+                routeClass: route.routeClass,
+                selectedPeerIDs: route.selectedPeerIDs,
+                selectedChanIDs: route.selectedChanIDs,
+                ipVersion: route.ipVersion,
+                destinationIP: route.destinationIP,
+                dropReason: route.dropReason
+            )
+        }
+        return SharedTunInboundPeerRelaySnapshot(
+            relayToPeer: false,
+            deliverLocal: true,
+            routeClass: route.routeClass,
+            selectedPeerIDs: route.selectedPeerIDs,
+            selectedChanIDs: route.selectedChanIDs,
+            ipVersion: route.ipVersion,
+            destinationIP: route.destinationIP,
+            dropReason: route.dropReason
         )
     }
 

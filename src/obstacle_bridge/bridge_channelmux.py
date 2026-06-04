@@ -2027,6 +2027,31 @@ class ChannelMux:
         ]
         return self._shared_tun_plan_outbound_route(ownership, peer_id_by_ref, active_peer_bindings, packet)
 
+    def _shared_tun_plan_inbound_peer_relay(
+        self,
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        source_peer_id: Optional[int],
+        packet: bytes,
+    ) -> Optional[dict[str, Any]]:
+        route = self._shared_tun_plan_local_delivery(svc_key, packet)
+        if route is None:
+            return None
+        route = dict(route)
+        selected_peer_ids = [int(v) for v in list(route.get("selected_peer_ids") or [])]
+        if (
+            str(route.get("route_class") or "") == "unicast"
+            and bool(route.get("routed"))
+            and selected_peer_ids
+            and source_peer_id is not None
+            and int(selected_peer_ids[0]) != int(source_peer_id)
+        ):
+            route["relay_to_peer"] = True
+            route["deliver_local"] = False
+            return route
+        route["relay_to_peer"] = False
+        route["deliver_local"] = True
+        return route
+
     @staticmethod
     def _parse_tun_packet_endpoints(packet: bytes) -> tuple[Optional[dict[str, Any]], Optional[str]]:
         payload = bytes(packet or b"")
@@ -2930,6 +2955,27 @@ class ChannelMux:
         ctr.bytes_in += len(data)
         if len(data) > int(dev.mtu):
             self.log.warning("[TUN] chan=%s drop oversize packet len=%s mtu=%s", chan, len(data), dev.mtu)
+            return
+        shared_relay = self._shared_tun_plan_inbound_peer_relay(
+            getattr(dev, "service_key", None),
+            self._chan_owner_peer_id.get(int(chan)),
+            data,
+        )
+        if shared_relay is not None and bool(shared_relay.get("relay_to_peer")):
+            selected_chan_ids = [int(v) for v in list(shared_relay.get("selected_chan_ids") or [])]
+            for selected_chan in selected_chan_ids:
+                target_ctr = self._ctr(ChannelMux.Proto.TUN, selected_chan)
+                target_ctr.msgs_in += 1
+                target_ctr.bytes_in += len(data)
+                self._send_mux(selected_chan, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, data)
+            self.log.debug(
+                "[TUN] chan=%s relay shared peer packet if=%s dst=%s relay_peers=%s relay_chans=%s",
+                chan,
+                dev.ifname,
+                shared_relay.get("destination_ip"),
+                shared_relay.get("selected_peer_ids"),
+                shared_relay.get("selected_chan_ids"),
+            )
             return
         try:
             self._write_tun_packet(dev, data)

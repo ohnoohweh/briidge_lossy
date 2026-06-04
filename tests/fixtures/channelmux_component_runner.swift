@@ -148,6 +148,19 @@ private func sharedTunOutboundRouteSnapshotObject(_ snapshot: ObstacleBridgeChan
     ]
 }
 
+private func sharedTunInboundPeerRelaySnapshotObject(_ snapshot: ObstacleBridgeChannelMuxTunRuntime.SharedTunInboundPeerRelaySnapshot) -> [String: Any] {
+    [
+        "relay_to_peer": snapshot.relayToPeer,
+        "deliver_local": snapshot.deliverLocal,
+        "route_class": snapshot.routeClass ?? NSNull(),
+        "selected_peer_ids": snapshot.selectedPeerIDs,
+        "selected_chan_ids": snapshot.selectedChanIDs,
+        "ip_version": snapshot.ipVersion ?? NSNull(),
+        "destination_ip": snapshot.destinationIP ?? NSNull(),
+        "drop_reason": snapshot.dropReason ?? NSNull(),
+    ]
+}
+
 private func closeSnapshotObject(_ snapshot: ObstacleBridgeChannelMuxTunRuntime.CloseSnapshot) -> [String: Any] {
     [
         "closed": snapshot.closed,
@@ -308,6 +321,33 @@ private func run(_ request: [String: Any]) throws -> [String: Any] {
             packet: body
         )
         return ["snapshot": sharedTunOutboundRouteSnapshotObject(snapshot)]
+    case "plan_shared_tun_inbound_peer_relay":
+        guard
+            let bodyHex = request["body_hex"] as? String,
+            let body = dataFromHex(bodyHex),
+            let ownerByIPv4 = request["owner_by_ipv4"] as? [String: String],
+            let ownerByIPv6 = request["owner_by_ipv6"] as? [String: String],
+            let peerIDByRef = request["peer_id_by_ref"] as? [String: Int],
+            let activePeerBindingsRaw = request["active_peer_bindings"] as? [[String: Any]],
+            let sourcePeerID = request["source_peer_id"] as? NSNumber
+        else {
+            throw ChannelMuxComponentRunnerError.invalidRequest
+        }
+        let activePeerBindings = activePeerBindingsRaw.map {
+            ObstacleBridgeChannelMuxTunRuntime.SharedTunActivePeerBinding(
+                peerID: ($0["peer_id"] as? NSNumber)?.intValue ?? 0,
+                preferredChanID: ($0["preferred_chan_id"] as? NSNumber)?.intValue
+            )
+        }
+        let snapshot = ObstacleBridgeChannelMuxTunRuntime.planSharedTunInboundPeerRelay(
+            ownerByIPv4: ownerByIPv4,
+            ownerByIPv6: ownerByIPv6,
+            peerIDByRef: peerIDByRef,
+            activePeerBindings: activePeerBindings,
+            sourcePeerID: sourcePeerID.intValue,
+            packet: body
+        )
+        return ["snapshot": sharedTunInboundPeerRelaySnapshotObject(snapshot)]
     case "drive_channelmux_tun_close_then_local_packet":
         guard
             let openChanID = request["open_chan_id"] as? NSNumber,

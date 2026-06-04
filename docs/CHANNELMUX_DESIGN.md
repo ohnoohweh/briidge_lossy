@@ -1541,6 +1541,20 @@ Deliverables:
   directly to that peer channel
 - keep accounting and diagnostics peer-scoped
 
+Delivered slice:
+
+- when a shared-TUN peer packet's unicast destination belongs to another active
+  connected peer, `ChannelMux` now relays that packet directly to the owning
+  peer channel instead of forcing a local/server TUN write first
+- packets whose destination is unknown, mapped-but-inactive, or still owned by
+  the sending peer do not self-loop and continue to fall back to the existing
+  local/server TUN delivery path
+- the existing 1:1 tunnel and server-uplink cases remain unchanged because the
+  relay decision only activates for the shared-TUN unicast case with a distinct
+  active destination owner
+- the same relay decision now exists in the Swift component runtime helper so
+  Swift/Python parity covers the direct peer-relay decision surface as well
+
 Testing:
 
 - unit tests for A -> B relay via server
