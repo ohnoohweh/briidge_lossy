@@ -376,6 +376,16 @@ enum ObstacleBridgeRuntimeConfig {
                 schemaItem(key: "tcp_peer_resolve_family", description: "TCP peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.", defaultValue: "prefer-ipv6", choices: ["prefer-ipv6", "ipv4", "ipv6"]),
                 schemaItem(key: "tcp_bp_wbuf_threshold", description: "TCP backpressure write-buffer threshold", defaultValue: 128 * 1024),
             ],
+            "quic_session": [
+                schemaItem(key: "quic_bind", description: "QUIC overlay bind address", defaultValue: "::"),
+                schemaItem(key: "quic_own_port", description: "QUIC overlay own port", defaultValue: 443),
+                schemaItem(key: "quic_peer", description: "QUIC peer IP/FQDN", defaultValue: NSNull()),
+                schemaItem(key: "quic_peer_port", description: "QUIC peer overlay port", defaultValue: 443),
+                schemaItem(key: "quic_peer_resolve_family", description: "QUIC peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.", defaultValue: "prefer-ipv6", choices: ["prefer-ipv6", "ipv4", "ipv6"]),
+                schemaItem(key: "quic_alpn", description: "QUIC ALPN identifier", defaultValue: "hq-29"),
+                schemaItem(key: "quic_insecure", description: "Disable QUIC certificate verification for local/lab peers", defaultValue: false),
+                schemaItem(key: "quic_max_size", description: "Maximum QUIC app payload size", defaultValue: 65535),
+            ],
             "ws_session": [
                 schemaItem(key: "ws_peer", description: "Remote WebSocket peer host", defaultValue: "bridge.example.com"),
                 schemaItem(key: "ws_peer_port", description: "Remote WebSocket peer port", defaultValue: 443),
@@ -1168,7 +1178,15 @@ enum ObstacleBridgeRuntimeConfig {
         guard peerPort > 0 else {
             return nil
         }
-        let peerResolveFamily = peerResolveFamilyValue(from: experiment["udp_peer_resolve_family"]) ?? "prefer-ipv6"
+        let peerResolveFamily: String
+        switch selectedTransport {
+        case "tcp":
+            peerResolveFamily = peerResolveFamilyValue(from: payload["tcp_peer_resolve_family"]) ?? "prefer-ipv6"
+        case "quic":
+            peerResolveFamily = peerResolveFamilyValue(from: payload["quic_peer_resolve_family"]) ?? "prefer-ipv6"
+        default:
+            peerResolveFamily = peerResolveFamilyValue(from: experiment["udp_peer_resolve_family"]) ?? "prefer-ipv6"
+        }
         let mtu = intValue(from: experiment["mtu"]) ?? defaultMTU
         let tunIfname = stringValue(from: experiment["ifname"]) ?? "ios-utun"
         return ObstacleBridgeSwiftUDPPeerConfig(

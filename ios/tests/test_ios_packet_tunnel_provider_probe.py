@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import textwrap
+import threading
+import time
 from pathlib import Path
 
 import pytest
+from obstacle_bridge.core import ObstacleBridgeClient
+from tests.fixtures.localhost_tls import materialize_localhost_tls_fixture_set
 
 TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
@@ -20,6 +26,55 @@ from swift_test_support import require_swift_modules
 ROOT = Path(__file__).resolve().parents[2]
 SHARED_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeShared"
 IPSERVER_NATIVE_DIR = ROOT / "ios" / "native" / "IPServer"
+
+
+class _AsyncBridgeClientThread:
+    def __init__(self, config: dict) -> None:
+        self.client = ObstacleBridgeClient(config)
+        self._thread: threading.Thread | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._ready = threading.Event()
+
+    def _thread_main(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self._loop = loop
+        self._ready.set()
+        loop.run_forever()
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.close()
+
+    def start(self) -> None:
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._thread_main, daemon=True, name="ios-packet-tunnel-probe-peer")
+            self._thread.start()
+            self._ready.wait(timeout=5.0)
+        self._submit(self.client.start()).result(timeout=20.0)
+
+    def stop(self) -> None:
+        if self._loop is None:
+            return
+        try:
+            self._submit(self.client.stop()).result(timeout=10.0)
+        finally:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            if self._thread is not None:
+                self._thread.join(timeout=5.0)
+            self._thread = None
+            self._loop = None
+            self._ready.clear()
+
+    def snapshot(self) -> dict:
+        return dict(self.client.snapshot() or {})
+
+    def _submit(self, coro):
+        if self._loop is None:
+            raise RuntimeError("bridge client loop not started")
+        return asyncio.run_coroutine_threadsafe(coro, self._loop)
 
 
 def _unused_tcp_port() -> int:
@@ -48,6 +103,18 @@ def _unused_udp_ports(count: int) -> list[int]:
     finally:
         for sock in sockets:
             sock.close()
+
+
+def _wait_snapshot_condition(snapshot_getter, predicate, *, timeout_sec: float = 12.0):
+    deadline = time.time() + timeout_sec
+    last_snapshot = None
+    while time.time() < deadline:
+        snapshot = snapshot_getter()
+        last_snapshot = snapshot
+        if predicate(snapshot):
+            return snapshot
+        time.sleep(0.1)
+    raise AssertionError(f"timed out waiting for snapshot condition; last={last_snapshot!r}")
 
 
 def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: Path) -> None:
@@ -96,7 +163,11 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebAdminServer.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketPayloadCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayRuntime.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeQuicOverlayRuntime.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeQuicOverlayTransportOwner.swift"),
         str(IPSERVER_NATIVE_DIR / "ObstacleBridgePacketFlowBridge.swift"),
         str(IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift"),
         str(source_path),
@@ -106,6 +177,46 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         raise AssertionError(
             f"swiftc failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
         )
+
+
+def _overlay_secure_link_server_config(
+    *,
+    transport: str,
+    peer_port: int,
+    admin_port: int,
+    cert_dir: Path | None = None,
+) -> dict:
+    config: dict = {
+        "overlay_transport": transport,
+        "secure_link": True,
+        "secure_link_mode": "psk",
+        "secure_link_psk": "probe-own-server-psk",
+        "admin_web": True,
+        "admin_web_bind": "127.0.0.1",
+        "admin_web_port": int(admin_port),
+        "admin_web_auth_disable": True,
+        "status": False,
+    }
+    if transport == "ws":
+        config.update(
+            {
+                "ws_bind": "127.0.0.1",
+                "ws_own_port": int(peer_port),
+            }
+        )
+    elif transport == "quic":
+        assert cert_dir is not None
+        config.update(
+            {
+                "quic_bind": "127.0.0.1",
+                "quic_own_port": int(peer_port),
+                "quic_cert": str(cert_dir / "cert.pem"),
+                "quic_key": str(cert_dir / "key.pem"),
+            }
+        )
+    else:
+        raise AssertionError(f"unsupported transport: {transport}")
+    return config
 
 
 def test_ios_packet_tunnel_provider_probe_remote_service_catalog_uses_runtime_epoch(tmp_path: Path) -> None:
@@ -1771,3 +1882,167 @@ def test_ios_packet_tunnel_provider_probe_secure_link_tcp_own_server_roundtrips_
         (row.get("stats", {}).get("rx_bytes", 0) > 0 and row.get("stats", {}).get("tx_bytes", 0) > 0)
         for row in payload["bridge_a_connections"]["tcp"]
     )
+
+
+@pytest.mark.parametrize(
+    ("transport", "case_index"),
+    [
+        ("ws", 210),
+        ("quic", 211),
+    ],
+)
+def test_ios_packet_tunnel_provider_probe_secure_link_overlay_runtime_bootstraps(
+    tmp_path: Path,
+    transport: str,
+    case_index: int,
+) -> None:
+    source_path = tmp_path / f"PacketTunnelProvider{transport.upper()}RuntimeProbe.swift"
+    binary_path = tmp_path / f"packet-tunnel-provider-{transport}-runtime-probe"
+    overlay_port = _unused_tcp_port()
+    admin_port = _unused_tcp_port()
+    cert_dir: Path | None = None
+    if transport == "quic":
+        cert_dir = materialize_localhost_tls_fixture_set(Path(tempfile.mkdtemp(prefix="ios-quic-probe-cert-")))
+
+    python_peer = _AsyncBridgeClientThread(
+        _overlay_secure_link_server_config(
+            transport=transport,
+            peer_port=overlay_port,
+            admin_port=admin_port,
+            cert_dir=cert_dir,
+        )
+    )
+    python_peer.start()
+    try:
+        expected_transport = transport
+        time.sleep(0.5)
+
+        source_path.write_text(
+            textwrap.dedent(
+                f"""
+                import Foundation
+                import Darwin
+
+                    enum ProbeError: Error {{
+                        case invalidArgs
+                        case timeout(String)
+                    }}
+
+                private func waitForCondition(timeout: Double, intervalMicros: useconds_t = 20_000, _ condition: () -> Bool) -> Bool {{
+                    let deadline = Date().timeIntervalSince1970 + timeout
+                    while Date().timeIntervalSince1970 < deadline {{
+                        if condition() {{
+                            return true
+                        }}
+                        usleep(intervalMicros)
+                    }}
+                    return condition()
+                }}
+
+                    @main
+                    struct PacketTunnelProviderRuntimeProbeMain {{
+                        static func main() throws {{
+                            guard CommandLine.arguments.count == 2 else {{
+                                throw ProbeError.invalidArgs
+                            }}
+                            guard let overlayPort = Int(CommandLine.arguments[1]) else {{
+                                throw ProbeError.invalidArgs
+                            }}
+
+                            let psk = "probe-own-server-psk"
+                            let adapter = ObstacleBridgeOverlayLayerTransportAdapter(
+                            secureLinkAdapter: ObstacleBridgeSecureLinkPskTransportAdapter(
+                                runtime: ObstacleBridgeSecureLinkPskRuntime(clientMode: true, psk: psk)
+                            )
+                        )
+
+                            var runtimeOverrides: [String: Any] = [:]
+                            runtimeOverrides["overlay_transport"] = "{transport}"
+                """
+            )
+            + (
+                textwrap.dedent(
+                    """
+                        runtimeOverrides["ws_tls"] = false
+                        runtimeOverrides["ws_path"] = "/"
+                    """
+                )
+                if transport == "ws"
+                else textwrap.dedent(
+                    """
+                        runtimeOverrides["quic_bind"] = "127.0.0.1"
+                        runtimeOverrides["quic_own_port"] = 0
+                        runtimeOverrides["quic_insecure"] = true
+                        runtimeOverrides["quic_alpn"] = "hq-29"
+                    """
+                )
+            )
+            + textwrap.dedent(
+                f"""
+
+                        let bridge = try PacketTunnelProviderSwiftUDPBridgeProbe(
+                            runtimeMode: "swift_udp",
+                            bindHost: "127.0.0.1",
+                            bindPort: 0,
+                            peerHost: "127.0.0.1",
+                                peerPort: overlayPort,
+                                mtu: 1400,
+                                tunIfname: "ios-utun",
+                                tunnelAddress: "192.168.106.1",
+                                tcpServiceSpecs: [],
+                                overlayTransport: "{transport}",
+                                runtimeConfigOverrides: runtimeOverrides,
+                                overlayLayerTransportAdapter: adapter
+                            )
+                            defer {{ bridge.stop() }}
+
+                        bridge.start()
+
+                            guard waitForCondition(timeout: 8.0, {{
+                                bridge.overlayEstablished()
+                            }}) else {{
+                                throw ProbeError.timeout("overlay_established")
+                            }}
+
+                            let snapshot = bridge.bridgeSnapshot()
+                            let secureLink = bridge.secureLinkStatus()
+                            let connections = bridge.adminConnectionsSnapshot(runtimeConfig: runtimeOverrides)
+                            let payload: [String: Any] = [
+                                "bridge_snapshot": snapshot,
+                                "secure_link": secureLink,
+                                "connections": connections,
+                            ]
+                        let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                        FileHandle.standardOutput.write(data)
+                    }}
+                }}
+                    """
+                ),
+            encoding="utf-8",
+        )
+        _compile_swift_packet_tunnel_provider_probe(source_path, binary_path)
+        completed = subprocess.run(
+            [str(binary_path), str(overlay_port)],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=40,
+        )
+        if completed.returncode != 0:
+            raise AssertionError(
+                f"{transport} runtime probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+            )
+        payload = json.loads(completed.stdout)
+        transport_runtime = payload["bridge_snapshot"]["transport_runtime"]
+        assert transport_runtime["overlay_connected"] is True
+        if expected_transport == "ws":
+            assert transport_runtime["ws_path"] == "/"
+            assert transport_runtime["ws_tls"] is False
+        else:
+            assert transport_runtime["overlay_alpn"] == "hq-29"
+            assert transport_runtime["overlay_insecure"] is True
+        assert payload["secure_link"]["configured"] is True
+        assert payload["secure_link"]["auth_fail_code"] == 0
+        assert payload["connections"]["counts"]["tcp"] == 0
+    finally:
+        python_peer.stop()

@@ -45,6 +45,9 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "task_vm_info_kern_return" in provider
     assert "SwiftSimpleUDPPeerBridge" in provider
     assert "ObstacleBridgeUdpOverlayTransportOwner" in provider
+    assert "ObstacleBridgeTcpOverlayTransportOwner" in provider
+    assert "ObstacleBridgeWebSocketOverlayTransportOwner" in provider
+    assert "ObstacleBridgeQuicOverlayTransportOwner" in provider
     assert "swift_simple_udp" in provider
     assert "swift_udp" in provider
     assert "packetflow_connector_mode_selected" in provider
@@ -81,7 +84,9 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "private static func decodedProviderRuntimeConfig" in provider
     assert "ObstacleBridgeConfigSecretCodec.decryptPayload(runtimeConfig)" in provider
     assert "if let runtimeConfig = Self.decodedProviderRuntimeConfig(providerConfiguration)" in provider
-    assert '"myudp_runtime": myudpRuntime' in provider
+    assert '"myudp_runtime": selectedTransport == "myudp" ? selectedRuntime : [:]' in provider
+    assert 'summary["websocket_runtime"] = "ready"' in provider
+    assert 'summary["quic_runtime"] = "ready"' in provider
     assert "ObstacleBridgeAdminSnapshotSupport.transportRuntimeEnvelope(" in provider
     assert "provider?.recordPacketBridgeEvent(" in provider
     assert "private var peerTrafficRateState:" in provider
@@ -379,6 +384,9 @@ def test_macos_app_main_source_exists() -> None:
     assert "ObstacleBridgeMacAppMain.swift" in build_script
     assert "codesign" in build_script
     assert 'APP_ENTITLEMENTS="${OBSTACLEBRIDGE_CODESIGN_ENTITLEMENTS:-}"' in build_script
+    assert 'BUILD_VARIANT="${OBSTACLEBRIDGE_MACOS_BUILD_VARIANT:-normal}"' in build_script
+    assert 'OBSTACLEBRIDGE_SWIFT_FAILURE_INJECTION' in build_script
+    assert 'SWIFT_EXTRA_FLAGS+=("-DOBSTACLEBRIDGE_FAILURE_INJECTION")' in build_script
 
 
 def test_websocket_payload_codec_source_exists() -> None:
@@ -408,6 +416,16 @@ def test_websocket_overlay_runtime_source_exists() -> None:
     assert "validateHTTPPreflight(" in runtime
     assert "parseProxySpec(" in runtime
     assert "buildProxyConnectRequest(" in runtime
+
+
+def test_websocket_overlay_transport_owner_source_exists() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "final class ObstacleBridgeWebSocketOverlayTransportOwner" in runtime
+    assert "URLSessionWebSocketTask" in runtime
+    assert "handleInboundTCPMuxFrame(" in runtime
+    assert "handleInboundUDPMuxFrame(" in runtime
+    assert "sendMuxFrames(" in runtime
 
 
 def test_tcp_overlay_runtime_source_exists() -> None:

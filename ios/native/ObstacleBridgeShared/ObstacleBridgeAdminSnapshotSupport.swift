@@ -72,6 +72,7 @@ enum ObstacleBridgeAdminSnapshotSupport {
         status: Any,
         myudp: [String: Any]? = nil,
         tcp: [String: Any]? = nil,
+        quic: [String: Any]? = nil,
         websocket: [String: Any]? = nil,
         extra: [String: Any] = [:]
     ) -> [String: Any] {
@@ -84,6 +85,9 @@ enum ObstacleBridgeAdminSnapshotSupport {
         }
         if let tcp {
             snapshot["tcp"] = tcp
+        }
+        if let quic {
+            snapshot["quic"] = quic
         }
         if let myudp {
             snapshot["myudp"] = myudp

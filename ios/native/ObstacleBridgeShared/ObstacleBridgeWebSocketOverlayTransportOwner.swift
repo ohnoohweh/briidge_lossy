@@ -1,15 +1,16 @@
 import Foundation
 import Network
 
-final class ObstacleBridgeTcpOverlayTransportOwner {
+final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWebSocketDelegate, URLSessionTaskDelegate {
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
 
     private let peerHost: String
     private let peerPort: Int
-    private let bindHost: String
-    private let bindPort: Int
-    private let overlayRuntime: ObstacleBridgeTcpOverlayRuntime
+    private let useTLS: Bool
+    private let wsPath: String
+    private let wsSubprotocol: String?
+    private let overlayRuntime: ObstacleBridgeWebSocketOverlayRuntime
     private let overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
     private let startupMuxFrames: [Data]
     private let reconnectRetryDelayMS: Int
@@ -25,11 +26,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
 
     private var udpRuntime: ObstacleBridgeChannelMuxUdpRuntime
     private var tunRuntime: ObstacleBridgeChannelMuxTunRuntime?
-    private var overlayListener: NWListener?
-    private var overlayConnection: NWConnection?
-    private var overlayPeerID: Int?
+    private var websocketSession: URLSession?
+    private var websocketTask: URLSessionWebSocketTask?
     private var overlayConnected = false
-    private var receiveBuffer = Data()
     private var udpServerConnections: [Int: NWConnection] = [:]
     private var udpClientConnections: [Int: NWConnection] = [:]
     private var udpClientDrivers: [Int: ObstacleBridgeUDPClientConnectionDriver] = [:]
@@ -44,6 +43,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private var reconnectWorkItem: DispatchWorkItem?
     private var secureLinkHandshakePrimed = false
     private var startupMuxFramesSent = false
+    private var connectedURI = ""
     private lazy var tcpTransportOwner = ObstacleBridgeChannelMuxTCPTransportOwner(
         runtime: ObstacleBridgeChannelMuxTcpRuntime(
             instanceID: muxInstanceID,
@@ -52,7 +52,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         ),
         sessionMaxAppPayload: sessionMaxAppPayload,
         queue: queue,
-        eventPrefix: "tcp_overlay",
+        eventPrefix: "ws_overlay",
         eventSink: { [weak self] event, fields in
             self?.eventSink?(event, fields)
         },
@@ -71,14 +71,15 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     init(
         peerHost: String,
         peerPort: Int,
-        bindHost: String = "0.0.0.0",
-        bindPort: Int = 0,
-        overlayRuntime: ObstacleBridgeTcpOverlayRuntime,
+        useTLS: Bool = false,
+        wsPath: String = "/",
+        wsSubprotocol: String? = nil,
+        overlayRuntime: ObstacleBridgeWebSocketOverlayRuntime,
         reconnectRetryDelayMS: Int = 30000,
         sessionMaxAppPayload: Int = 65535,
         overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter? = nil,
         startupMuxFrames: [Data] = [],
-        queue: DispatchQueue = DispatchQueue(label: "ObstacleBridgeTcpOverlayTransportOwner"),
+        queue: DispatchQueue = DispatchQueue(label: "ObstacleBridgeWebSocketOverlayTransportOwner"),
         serviceNameByID: [Int: String] = [:],
         tunIfname: String? = nil,
         tunMTU: Int = 0,
@@ -89,8 +90,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     ) {
         self.peerHost = peerHost
         self.peerPort = peerPort
-        self.bindHost = bindHost
-        self.bindPort = max(0, bindPort)
+        self.useTLS = useTLS
+        self.wsPath = wsPath.isEmpty ? "/" : wsPath
+        self.wsSubprotocol = wsSubprotocol?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.overlayRuntime = overlayRuntime
         self.reconnectRetryDelayMS = max(0, reconnectRetryDelayMS)
         self.sessionMaxAppPayload = max(0, sessionMaxAppPayload)
@@ -118,42 +120,27 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     func start() {
-        guard !started else {
-            return
-        }
-        guard (!peerHost.isEmpty && peerPort > 0) || bindPort > 0 else {
-            return
-        }
+        guard !started else { return }
+        guard !peerHost.isEmpty, peerPort > 0 else { return }
         started = true
-        if !peerHost.isEmpty, peerPort > 0 {
-            connectOverlay()
-            return
-        }
-        startOverlayListener()
+        connectOverlay()
     }
 
     func stop() {
-        guard started else {
-            return
-        }
+        guard started else { return }
         started = false
         overlayConnected = false
         reconnectScheduled = false
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
-        overlayListener?.cancel()
-        overlayListener = nil
-        overlayConnection?.cancel()
-        overlayConnection = nil
-        overlayPeerID = nil
+        websocketTask?.cancel(with: .goingAway, reason: nil)
+        websocketTask = nil
+        websocketSession?.invalidateAndCancel()
+        websocketSession = nil
         tcpTransportOwner.stop()
-        for connection in udpServerConnections.values {
-            connection.cancel()
-        }
+        for connection in udpServerConnections.values { connection.cancel() }
         udpServerDrivers.removeAll()
-        for connection in udpClientConnections.values {
-            connection.cancel()
-        }
+        for connection in udpClientConnections.values { connection.cancel() }
         udpClientDrivers.removeAll()
         udpServerConnections.removeAll()
         udpClientConnections.removeAll()
@@ -161,9 +148,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         udpConnectionStates.removeAll()
         activeTunChanIDs.removeAll()
         tunStats = ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
-        receiveBuffer.removeAll(keepingCapacity: false)
         secureLinkHandshakePrimed = false
         startupMuxFramesSent = false
+        connectedURI = ""
     }
 
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]]) {
@@ -201,10 +188,12 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     func transportSnapshot() -> [String: Any] {
         [
             "overlay_connected": overlayConnected,
-            "overlay_bind_host": bindHost,
-            "overlay_bind_port": bindPort,
             "overlay_host": peerHost,
             "overlay_port": peerPort,
+            "uri": connectedURI,
+            "payload_mode": overlayRuntime.configuredPayloadMode,
+            "ws_path": wsPath,
+            "ws_tls": useTLS,
             "reconnect_retry_delay_ms": reconnectRetryDelayMS,
             "reconnect_attempts": reconnectAttempts,
             "reconnect_scheduled": reconnectScheduled,
@@ -220,9 +209,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     func sendLocalTunPacket(_ packet: Data) {
-        guard started, let tunRuntime, let tunIfname, tunMTU > 0 else {
-            return
-        }
+        guard started, let tunRuntime, let tunIfname, tunMTU > 0 else { return }
         do {
             guard let localSnapshot = try tunRuntime.handleLocalTunPacket(
                 packet: packet,
@@ -238,7 +225,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             tunStats["tx_bytes", default: 0] += packet.count
             sendMuxFrames(localSnapshot.frames)
         } catch {
-            eventSink?("tcp_overlay_tun_send_failed", [
+            eventSink?("ws_overlay_tun_send_failed", [
                 "error": error.localizedDescription,
                 "packet_bytes": packet.count,
             ])
@@ -332,170 +319,88 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         return true
     }
 
+    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
+        queue.async {
+            guard self.started, self.websocketTask === webSocketTask else { return }
+            self.overlayConnected = true
+            self.reconnectScheduled = false
+            self.maybePrimeSecureLinkHandshake()
+            self.maybeSendStartupMuxFrames()
+            self.receiveFromOverlay()
+        }
+    }
+
+    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        queue.async {
+            guard self.websocketTask === webSocketTask else { return }
+            self.overlayConnected = false
+            self.websocketTask = nil
+            self.websocketSession = nil
+            self.secureLinkHandshakePrimed = false
+            self.startupMuxFramesSent = false
+            self.scheduleReconnect()
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        queue.async {
+            guard self.websocketTask === task as? URLSessionWebSocketTask else { return }
+            self.overlayConnected = false
+            self.websocketTask = nil
+            self.websocketSession = nil
+            self.secureLinkHandshakePrimed = false
+            self.startupMuxFramesSent = false
+            if let error {
+                self.eventSink?("ws_overlay_connection_failed", ["error": error.localizedDescription])
+            }
+            self.scheduleReconnect()
+        }
+    }
+
     private func connectOverlay() {
-        guard started else {
-            return
-        }
-        guard let port = NWEndpoint.Port(rawValue: UInt16(peerPort)) else {
-            eventSink?("tcp_overlay_invalid_peer_port", ["port": peerPort])
-            return
-        }
+        guard started else { return }
         reconnectScheduled = false
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
         reconnectAttempts += 1
-        let connection = NWConnection(host: NWEndpoint.Host(peerHost), port: port, using: .tcp)
-        overlayConnection = connection
-        connection.stateUpdateHandler = { [weak self] state in
-            self?.queue.async {
-                self?.handleOverlayState(state)
-            }
-        }
-        connection.start(queue: queue)
-    }
-
-    private func startOverlayListener() {
-        guard started, bindPort > 0, let port = NWEndpoint.Port(rawValue: UInt16(bindPort)) else {
-            return
-        }
-        let params = NWParameters.tcp
-        params.allowLocalEndpointReuse = true
-        params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(bindHost), port: port)
         do {
-            let listener = try NWListener(using: params)
-            listener.stateUpdateHandler = { [weak self] state in
-                self?.queue.async {
-                    self?.handleOverlayListenerState(state)
-                }
+            let plan = overlayRuntime.buildConnectPlan(
+                host: peerHost,
+                port: peerPort,
+                peerNameHost: nil,
+                peerNamePort: nil,
+                useTLS: useTLS,
+                wsPath: wsPath,
+                wsSubprotocol: wsSubprotocol,
+                proxyActive: false
+            )
+            connectedURI = plan.uri
+            guard let url = URL(string: plan.uri) else {
+                throw URLError(.badURL)
             }
-            listener.newConnectionHandler = { [weak self] connection in
-                self?.queue.async {
-                    self?.acceptOverlayConnection(connection)
-                }
+            var request = URLRequest(url: url)
+            for (key, value) in plan.upgradeHeaders {
+                request.setValue(value, forHTTPHeaderField: key)
             }
-            overlayListener = listener
-            listener.start(queue: queue)
+            if let subprotocols = plan.subprotocols, !subprotocols.isEmpty {
+                request.setValue(subprotocols.joined(separator: ", "), forHTTPHeaderField: "Sec-WebSocket-Protocol")
+            }
+            let session = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: nil)
+            let task = session.webSocketTask(with: request)
+            websocketSession = session
+            websocketTask = task
+            task.resume()
         } catch {
-            eventSink?("tcp_overlay_listener_failed", ["error": error.localizedDescription, "host": bindHost, "port": bindPort])
-        }
-    }
-
-    private func handleOverlayListenerState(_ state: NWListener.State) {
-        if case .failed(let error) = state {
-            eventSink?("tcp_overlay_listener_failed", ["error": error.localizedDescription, "host": bindHost, "port": bindPort])
-        }
-    }
-
-    private func acceptOverlayConnection(_ connection: NWConnection) {
-        guard started else {
-            connection.cancel()
-            return
-        }
-        if let existing = overlayConnection {
-            if let peerID = overlayPeerID {
-                let snapshot = overlayRuntime.closeServerPeer(peerID: peerID)
-                overlayConnected = snapshot.overlayConnected
-                overlayPeerID = nil
-            }
-            existing.cancel()
-        }
-        overlayConnection = connection
-        connection.stateUpdateHandler = { [weak self, weak connection] state in
-            guard let self, let connection else {
-                return
-            }
-            self.queue.async {
-                self.handleAcceptedOverlayState(state, connection: connection)
-            }
-        }
-        connection.start(queue: queue)
-    }
-
-    private func handleAcceptedOverlayState(_ state: NWConnection.State, connection: NWConnection) {
-        guard overlayConnection === connection else {
-            return
-        }
-        switch state {
-        case .ready:
-            let endpoint = ObstacleBridgeOverlayConnectionSupport.endpointDescription(connection.endpoint)
-            let snapshot = overlayRuntime.acceptServerPeer(peerHost: endpoint.host, peerPort: endpoint.port, socketPresent: true)
-            overlayPeerID = snapshot.peerID
-            overlayConnected = snapshot.overlayConnected
-            maybePrimeSecureLinkHandshake()
-            receiveFromOverlay()
-        case .failed(let error):
-            eventSink?("tcp_overlay_server_connection_failed", ["error": error.localizedDescription])
-            closeAcceptedOverlayConnection(connection)
-        case .cancelled:
-            closeAcceptedOverlayConnection(connection)
-        default:
-            break
-        }
-    }
-
-    private func closeAcceptedOverlayConnection(_ connection: NWConnection) {
-        guard overlayConnection === connection else {
-            return
-        }
-        overlayConnection = nil
-        connection.cancel()
-        if let peerID = overlayPeerID {
-            let snapshot = overlayRuntime.closeServerPeer(peerID: peerID)
-            overlayConnected = snapshot.overlayConnected
-            overlayPeerID = nil
-        } else {
-            overlayConnected = false
-        }
-        secureLinkHandshakePrimed = false
-        startupMuxFramesSent = false
-    }
-
-    private func handleOverlayState(_ state: NWConnection.State) {
-        switch state {
-        case .ready:
-            overlayConnected = true
-            reconnectScheduled = false
-            let snapshot = overlayRuntime.connect(host: peerHost, port: peerPort, socketPresent: true)
-            for payload in snapshot.flushedBuffers {
-                sendRawOverlayWire(payload)
-            }
-            maybePrimeSecureLinkHandshake()
-            maybeSendStartupMuxFrames()
-            receiveFromOverlay()
-        case .failed(let error):
-            overlayConnected = false
-            overlayConnection = nil
-            secureLinkHandshakePrimed = false
-            startupMuxFramesSent = false
-            eventSink?("tcp_overlay_connection_failed", ["error": error.localizedDescription])
+            eventSink?("ws_overlay_connect_failed", ["error": error.localizedDescription])
             scheduleReconnect()
-        case .waiting(let error):
-            overlayConnected = false
-            overlayConnection = nil
-            secureLinkHandshakePrimed = false
-            startupMuxFramesSent = false
-            eventSink?("tcp_overlay_connection_waiting", ["error": error.localizedDescription])
-            scheduleReconnect()
-        case .cancelled:
-            overlayConnected = false
-            overlayConnection = nil
-            secureLinkHandshakePrimed = false
-            startupMuxFramesSent = false
-            scheduleReconnect()
-        default:
-            break
         }
     }
 
     private func scheduleReconnect() {
-        guard started, !peerHost.isEmpty, peerPort > 0 else {
-            return
-        }
+        guard started, !peerHost.isEmpty, peerPort > 0 else { return }
         reconnectWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
-            guard let self else {
-                return
-            }
+            guard let self else { return }
             self.reconnectScheduled = false
             self.reconnectWorkItem = nil
             self.connectOverlay()
@@ -506,32 +411,29 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     private func receiveFromOverlay() {
-        guard started, let connection = overlayConnection else {
-            return
-        }
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
+        guard started, let task = websocketTask else { return }
+        task.receive { [weak self] result in
             self?.queue.async {
-                guard let self, self.started else { return }
-                guard self.overlayConnection === connection else { return }
-                if let data, !data.isEmpty {
-                    self.receiveBuffer.append(data)
-                    let snapshot = self.overlayRuntime.handleInboundBytes(self.receiveBuffer)
-                    if snapshot.consumedBytes > 0 {
-                        self.receiveBuffer.removeSubrange(0..<snapshot.consumedBytes)
-                    }
-                    for payload in snapshot.completedPayloads {
+                guard let self, self.started, self.websocketTask === task else { return }
+                switch result {
+                case .success(let message):
+                    do {
+                        let payload = try self.overlayRuntime.decodeClientMessage(message)
                         self.handleOverlayTransportPayload(payload)
+                        self.receiveFromOverlay()
+                    } catch {
+                        self.eventSink?("ws_overlay_decode_failed", ["error": error.localizedDescription])
+                        self.receiveFromOverlay()
                     }
+                case .failure(let error):
+                    self.overlayConnected = false
+                    self.websocketTask = nil
+                    self.websocketSession = nil
+                    self.secureLinkHandshakePrimed = false
+                    self.startupMuxFramesSent = false
+                    self.eventSink?("ws_overlay_receive_failed", ["error": error.localizedDescription])
+                    self.scheduleReconnect()
                 }
-                if isComplete || error != nil {
-                    if self.peerHost.isEmpty {
-                        self.closeAcceptedOverlayConnection(connection)
-                    } else {
-                        self.overlayConnected = false
-                    }
-                    return
-                }
-                self.receiveFromOverlay()
             }
         }
     }
@@ -551,9 +453,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     private func maybePrimeSecureLinkHandshake() {
-        guard overlayConnected, !secureLinkHandshakePrimed, let adapter = overlayLayerTransportAdapter else {
-            return
-        }
+        guard overlayConnected, !secureLinkHandshakePrimed, let adapter = overlayLayerTransportAdapter else { return }
         do {
             let snapshot = try adapter.handleTransportConnected()
             secureLinkHandshakePrimed = true
@@ -561,16 +461,53 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
                 sendOverlayTransportPayload(frame)
             }
         } catch {
-            eventSink?("tcp_overlay_secure_link_prime_failed", ["error": error.localizedDescription])
+            eventSink?("ws_overlay_secure_link_prime_failed", ["error": error.localizedDescription])
         }
     }
 
     private func maybeSendStartupMuxFrames() {
-        guard overlayConnected, !startupMuxFramesSent, !startupMuxFrames.isEmpty else {
-            return
-        }
+        guard overlayConnected, !startupMuxFramesSent else { return }
         startupMuxFramesSent = true
         sendMuxFrames(startupMuxFrames)
+    }
+
+    private func sendMuxFrames(_ frames: [Data]) {
+        guard !frames.isEmpty else { return }
+        for frame in frames {
+            sendOverlayTransportPayload(frame)
+        }
+    }
+
+    private func sendOverlayTransportPayload(_ payload: Data) {
+        if let adapter = overlayLayerTransportAdapter {
+            do {
+                let snapshot = try adapter.handleOutboundPayload(payload)
+                for frame in snapshot.emittedFrames {
+                    sendRawOverlayWire(frame)
+                }
+            } catch {
+                eventSink?("ws_overlay_outbound_wrap_failed", ["error": error.localizedDescription])
+            }
+            return
+        }
+        sendRawOverlayWire(payload)
+    }
+
+    private func sendRawOverlayWire(_ wire: Data) {
+        guard started, overlayConnected, let task = websocketTask else { return }
+        do {
+            let message = try overlayRuntime.encodeClientWire(wire)
+            task.send(message) { [weak self] error in
+                self?.queue.async {
+                    guard let self else { return }
+                    if let error {
+                        self.eventSink?("ws_overlay_send_failed", ["error": error.localizedDescription])
+                    }
+                }
+            }
+        } catch {
+            eventSink?("ws_overlay_encode_failed", ["error": error.localizedDescription])
+        }
     }
 
     private func handleOverlayPayload(_ payload: Data) {
@@ -589,41 +526,6 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
 
     private func handleInboundTCPMuxFrame(_ frame: ObstacleBridgeChannelMuxCodec.MuxFrame) {
         tcpTransportOwner.handleInboundMuxFrame(frame)
-    }
-
-    private func handleInboundTunMuxFrame(_ frame: ObstacleBridgeChannelMuxCodec.MuxFrame) {
-        guard let tunRuntime, tunMTU > 0 else {
-            return
-        }
-        switch frame.mtype {
-        case .open:
-            let snapshot = tunRuntime.handleInboundTunOpen(chanID: frame.chanID, payload: frame.body)
-            if snapshot.accepted { activeTunChanIDs.insert(frame.chanID) }
-        case .openChunk:
-            let snapshot = tunRuntime.handleInboundTunOpenChunk(chanID: frame.chanID, payload: frame.body)
-            if snapshot.accepted { activeTunChanIDs.insert(frame.chanID) }
-        case .data:
-            let snapshot = tunRuntime.handleInboundTunData(chanID: frame.chanID, body: frame.body, mtu: tunMTU)
-            if let packet = snapshot.packet, snapshot.delivered {
-                activeTunChanIDs.insert(frame.chanID)
-                tunStats["rx_msgs", default: 0] += 1
-                tunStats["rx_bytes", default: 0] += packet.count
-                tunPacketSink?(packet)
-            }
-        case .dataFrag:
-            let snapshot = tunRuntime.handleInboundTunFragment(chanID: frame.chanID, payload: frame.body, mtu: tunMTU)
-            if let packet = snapshot.packet, snapshot.delivered {
-                activeTunChanIDs.insert(frame.chanID)
-                tunStats["rx_msgs", default: 0] += 1
-                tunStats["rx_bytes", default: 0] += packet.count
-                tunPacketSink?(packet)
-            }
-        case .close:
-            let snapshot = tunRuntime.handleInboundTunClose(chanID: frame.chanID)
-            if snapshot.closed { activeTunChanIDs.remove(frame.chanID) }
-        default:
-            break
-        }
     }
 
     private func handleInboundUDPMuxFrame(_ frame: ObstacleBridgeChannelMuxCodec.MuxFrame) {
@@ -677,6 +579,41 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             if snapshot.closed {
                 closeUDPClientConnection(chanID: frame.chanID)
             }
+        default:
+            break
+        }
+    }
+
+    private func handleInboundTunMuxFrame(_ frame: ObstacleBridgeChannelMuxCodec.MuxFrame) {
+        guard let tunRuntime, tunMTU > 0 else {
+            return
+        }
+        switch frame.mtype {
+        case .open:
+            let snapshot = tunRuntime.handleInboundTunOpen(chanID: frame.chanID, payload: frame.body)
+            if snapshot.accepted { activeTunChanIDs.insert(frame.chanID) }
+        case .openChunk:
+            let snapshot = tunRuntime.handleInboundTunOpenChunk(chanID: frame.chanID, payload: frame.body)
+            if snapshot.accepted { activeTunChanIDs.insert(frame.chanID) }
+        case .data:
+            let snapshot = tunRuntime.handleInboundTunData(chanID: frame.chanID, body: frame.body, mtu: tunMTU)
+            if let packet = snapshot.packet, snapshot.delivered {
+                activeTunChanIDs.insert(frame.chanID)
+                tunStats["rx_msgs", default: 0] += 1
+                tunStats["rx_bytes", default: 0] += packet.count
+                tunPacketSink?(packet)
+            }
+        case .dataFrag:
+            let snapshot = tunRuntime.handleInboundTunFragment(chanID: frame.chanID, payload: frame.body, mtu: tunMTU)
+            if let packet = snapshot.packet, snapshot.delivered {
+                activeTunChanIDs.insert(frame.chanID)
+                tunStats["rx_msgs", default: 0] += 1
+                tunStats["rx_bytes", default: 0] += packet.count
+                tunPacketSink?(packet)
+            }
+        case .close:
+            let snapshot = tunRuntime.handleInboundTunClose(chanID: frame.chanID)
+            if snapshot.closed { activeTunChanIDs.remove(frame.chanID) }
         default:
             break
         }
@@ -743,7 +680,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             eventSink: { [weak self] event, fields in
                 self?.eventSink?(event, fields)
             },
-            failureEvent: "tcp_overlay_udp_client_failed",
+            failureEvent: "ws_overlay_udp_client_failed",
             handleClosed: { [weak self] in
                 self?.closeUDPClientConnection(chanID: chanID)
             }
@@ -752,61 +689,52 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         driver.start()
     }
 
-    private func closeUDPClientConnection(chanID: Int) {
-        let driver = udpClientDrivers.removeValue(forKey: chanID)
-        driver?.stop()
-        let connection = udpClientConnections.removeValue(forKey: chanID)
-        connection?.stateUpdateHandler = nil
-        connection?.cancel()
-        udpConnectionStates.removeValue(forKey: chanID)
-    }
-
-    private func sendMuxFrames(_ muxFrames: [Data]) {
-        for frame in muxFrames {
-            if let adapter = overlayLayerTransportAdapter {
-                do {
-                    let snapshot = try adapter.handleOutboundPayload(frame)
-                    for secureFrame in snapshot.emittedFrames {
-                        sendOverlayTransportPayload(secureFrame)
-                    }
-                } catch {
-                    eventSink?("tcp_overlay_overlay_layer_send_failed", ["error": error.localizedDescription, "packet_bytes": frame.count])
-                }
-            } else {
-                sendOverlayTransportPayload(frame)
-            }
+    private func handleTCPTransportEvent(_ event: ObstacleBridgeChannelMuxTCPTransportOwner.TransportEvent) {
+        switch event {
+        case .clientAccepted(let chanID, let spec, let connected):
+            tcpConnectionStates[chanID] = ObstacleBridgeOverlayConnectionSupport.makeState(
+                proto: "tcp",
+                role: "client",
+                chanID: chanID,
+                spec: spec,
+                serviceName: serviceName(spec),
+                state: connected ? "connected" : "connecting",
+                localHost: nil,
+                localPort: nil
+            )
+        case .clientConnected(let chanID, let localHost, let localPort):
+            ObstacleBridgeOverlayConnectionSupport.updateConnectedState(
+                states: &tcpConnectionStates,
+                proto: "tcp",
+                chanID: chanID,
+                localHost: localHost,
+                localPort: localPort
+            )
+        case .clientInbound(let chanID, let bytes), .serverInbound(let chanID, let bytes):
+            recordInbound(proto: "tcp", chanID: chanID, bytes: bytes)
+        case .clientOutbound(let chanID, let bytes), .serverOutbound(let chanID, let bytes):
+            recordOutbound(proto: "tcp", chanID: chanID, bytes: bytes)
+        case .clientClosed(let chanID), .serverClosed(let chanID):
+            tcpConnectionStates.removeValue(forKey: chanID)
+        case .serverConnected(let chanID):
+            ObstacleBridgeOverlayConnectionSupport.updateConnectedState(
+                states: &tcpConnectionStates,
+                proto: "tcp",
+                chanID: chanID,
+                localHost: nil,
+                localPort: nil
+            )
         }
-    }
-
-    private func sendOverlayTransportPayload(_ payload: Data) {
-        let snapshot = overlayRuntime.sendApp(
-            payload: payload,
-            writerPresent: overlayConnected && overlayConnection != nil,
-            peerConfigured: !peerHost.isEmpty && peerPort > 0,
-            now: Date().timeIntervalSince1970
-        )
-        for wire in snapshot.writtenBuffers {
-            sendRawOverlayWire(wire)
-        }
-    }
-
-    private func sendRawOverlayWire(_ payload: Data) {
-        overlayConnection?.send(content: payload, completion: .contentProcessed { _ in })
-    }
-
-    private func sendOnUDPConnection(_ connection: NWConnection, payload: Data, chanID: Int) {
-        connection.send(content: payload, completion: .contentProcessed { [weak self] error in
-            guard let self, let error else { return }
-            self.queue.async {
-                self.eventSink?("tcp_overlay_udp_client_write_failed", ["chan_id": chanID, "error": error.localizedDescription])
-            }
-        })
     }
 
     private func handleUDPServerConnectionState(_ state: NWConnection.State) {
         if case .failed(let error) = state {
-            eventSink?("tcp_overlay_udp_server_connection_failed", ["error": error.localizedDescription])
+            eventSink?("ws_overlay_udp_server_connection_failed", ["error": error.localizedDescription])
         }
+    }
+
+    private func handleUDPClientConnectionState(_ state: NWConnection.State) {
+        if case .failed = state { }
     }
 
     private func recordInbound(proto: String, chanID: Int, bytes: Int) {
@@ -831,42 +759,25 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         }
     }
 
-    private func serviceName(_ spec: ObstacleBridgeChannelMuxCodec.ServiceSpec) -> String {
-        if let name = serviceNameByID[spec.svcID], !name.isEmpty {
-            return name
-        }
-        return spec.name ?? ""
+    private func closeUDPClientConnection(chanID: Int) {
+        let driver = udpClientDrivers.removeValue(forKey: chanID)
+        driver?.stop()
+        let connection = udpClientConnections.removeValue(forKey: chanID)
+        connection?.stateUpdateHandler = nil
+        connection?.cancel()
+        udpConnectionStates.removeValue(forKey: chanID)
     }
 
-    private func handleTCPTransportEvent(_ event: ObstacleBridgeChannelMuxTCPTransportOwner.TransportEvent) {
-        switch event {
-        case .clientAccepted(let chanID, let spec, let connected):
-            tcpConnectionStates[chanID] = ObstacleBridgeOverlayConnectionSupport.makeState(
-                proto: "tcp",
-                role: "client",
-                chanID: chanID,
-                spec: spec,
-                serviceName: serviceName(spec),
-                state: connected ? "connected" : "connecting",
-                localHost: nil,
-                localPort: nil
-            )
-        case .clientConnected(let chanID, let localHost, let localPort):
-            ObstacleBridgeOverlayConnectionSupport.updateConnectedState(states: &tcpConnectionStates, proto: "tcp", chanID: chanID, localHost: localHost, localPort: localPort)
-        case .clientInbound(let chanID, let bytes):
-            recordInbound(proto: "tcp", chanID: chanID, bytes: bytes)
-        case .clientOutbound(let chanID, let bytes):
-            recordOutbound(proto: "tcp", chanID: chanID, bytes: bytes)
-        case .clientClosed(let chanID):
-            tcpConnectionStates.removeValue(forKey: chanID)
-        case .serverConnected(let chanID):
-            ObstacleBridgeOverlayConnectionSupport.updateConnectedState(states: &tcpConnectionStates, proto: "tcp", chanID: chanID, localHost: nil, localPort: nil)
-        case .serverInbound(let chanID, let bytes):
-            recordInbound(proto: "tcp", chanID: chanID, bytes: bytes)
-        case .serverOutbound(let chanID, let bytes):
-            recordOutbound(proto: "tcp", chanID: chanID, bytes: bytes)
-        case .serverClosed(let chanID):
-            tcpConnectionStates.removeValue(forKey: chanID)
-        }
+    private func sendOnUDPConnection(_ connection: NWConnection, payload: Data, chanID: Int) {
+        connection.send(content: payload, completion: .contentProcessed { [weak self] error in
+            guard let self, let error else { return }
+            self.queue.async {
+                self.eventSink?("ws_overlay_udp_client_write_failed", ["chan_id": chanID, "error": error.localizedDescription])
+            }
+        })
+    }
+
+    private func serviceName(_ spec: ObstacleBridgeChannelMuxCodec.ServiceSpec) -> String {
+        serviceNameByID[spec.svcID] ?? spec.name ?? spec.lProto.uppercased()
     }
 }

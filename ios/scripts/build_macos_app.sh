@@ -4,7 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 IOS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${IOS_DIR}/.." && pwd)"
-BUILD_DIR="${IOS_DIR}/build/macos"
+BUILD_VARIANT="${OBSTACLEBRIDGE_MACOS_BUILD_VARIANT:-normal}"
+if [ "${BUILD_VARIANT}" = "normal" ]; then
+  BUILD_DIR="${IOS_DIR}/build/macos"
+else
+  BUILD_DIR="${IOS_DIR}/build/macos-${BUILD_VARIANT}"
+fi
 GENERATED_SWIFT_DIR="${IOS_DIR}/build/generated"
 GENERATED_BUILD_STAMP_SWIFT="${GENERATED_SWIFT_DIR}/ObstacleBridgeGeneratedBuildStamp.swift"
 BINARY_PATH="${BUILD_DIR}/ObstacleBridgeHostRunner"
@@ -86,6 +91,11 @@ if [ -z "${SWIFTC_CMD}" ]; then
   exit 1
 fi
 
+SWIFT_EXTRA_FLAGS=()
+if [ "${OBSTACLEBRIDGE_SWIFT_FAILURE_INJECTION:-0}" = "1" ]; then
+  SWIFT_EXTRA_FLAGS+=("-DOBSTACLEBRIDGE_FAILURE_INJECTION")
+fi
+
 if [ -x "${REPO_ROOT}/.venv/bin/python" ]; then
   PYTHON_CMD="${REPO_ROOT}/.venv/bin/python"
 else
@@ -99,6 +109,7 @@ echo "[build_macos_app] refreshing embedded build metadata"
 
 echo "[build_macos_app] compiling macOS Swift host runner"
 "${SWIFTC_CMD}" \
+  "${SWIFT_EXTRA_FLAGS[@]}" \
   -o "${BINARY_PATH}" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAPI.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAuth.swift" \
@@ -132,8 +143,11 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayStackPlanner.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketPayloadCodec.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayRuntime.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayRuntime.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayRuntime.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunnerMain.swift"
 
@@ -146,6 +160,7 @@ build_macos_app_icon
 
 echo "[build_macos_app] compiling macOS app executable"
 "${SWIFTC_CMD}" \
+  "${SWIFT_EXTRA_FLAGS[@]}" \
   -o "${APP_EXECUTABLE}" \
   "${GENERATED_BUILD_STAMP_SWIFT}" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAPI.swift" \
@@ -180,8 +195,11 @@ echo "[build_macos_app] compiling macOS app executable"
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayStackPlanner.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketPayloadCodec.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayRuntime.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayRuntime.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayRuntime.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeApp/ObstacleBridgeTunnelControl.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeApp/ObstacleBridgeMacAppMain.swift"

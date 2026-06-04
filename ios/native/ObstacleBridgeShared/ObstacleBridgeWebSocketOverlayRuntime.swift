@@ -2,10 +2,13 @@ import Foundation
 
 enum ObstacleBridgeWebSocketOverlayRuntimeError: Error, LocalizedError {
     case httpPreflightFailed(String)
+    case invalidPayload(String)
 
     var errorDescription: String? {
         switch self {
         case .httpPreflightFailed(let detail):
+            return detail
+        case .invalidPayload(let detail):
             return detail
         }
     }
@@ -68,6 +71,8 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
     private var txBytes = 0
     private var disconnectScheduled = false
     private var overlayConnected = false
+
+    var configuredPayloadMode: String { payloadMode }
 
     init(
         payloadMode: String,
@@ -177,6 +182,31 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
             closeCalls: closeCalls,
             earlyBufBytes: earlyBufBytes
         )
+    }
+
+    func encodeClientWire(_ wire: Data) throws -> URLSessionWebSocketTask.Message {
+        let encoded = try payloadCodec.encode(wire)
+        if let data = encoded as? Data {
+            return .data(data)
+        }
+        return .string(encoded as? String ?? "")
+    }
+
+    func decodeClientMessage(_ message: URLSessionWebSocketTask.Message) throws -> Data {
+        switch message {
+        case .data(let data):
+            guard let decoded = try payloadCodec.decode(data) else {
+                throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("unable to decode websocket binary payload")
+            }
+            return decoded
+        case .string(let text):
+            guard let decoded = try payloadCodec.decode(text) else {
+                throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("unable to decode websocket text payload")
+            }
+            return decoded
+        @unknown default:
+            return Data()
+        }
     }
 
     func socketConfigSnapshot(socketPresent: Bool, tcpUserTimeoutAvailable: Bool) -> SocketConfigSnapshot {

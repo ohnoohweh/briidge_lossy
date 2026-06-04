@@ -911,6 +911,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 summary["tcp_bp_wbuf_threshold"] = threshold
             }
 
+            if settings.transport == "quic" {
+                summary["quic_runtime"] = "ready"
+                summary["quic_alpn"] = ObstacleBridgeRuntimeConfig.stringValue(from: payload["quic_alpn"]) ?? "hq-29"
+                summary["quic_insecure"] = ObstacleBridgeRuntimeConfig.boolValue(from: payload["quic_insecure"]) ?? false
+            }
+
             sharedOverlayBootstrapState = summary
             recordNativeEvent("shared_overlay_runtime_prepared", fields: summary)
         } catch {
@@ -1128,7 +1134,12 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         guard adminBoolValue(bridgeSnapshot["active"]) else {
             return false
         }
-        let myudpRuntime = bridgeSnapshot["myudp_runtime"] as? [String: Any] ?? [:]
+        let transport = ObstacleBridgeRuntimeConfig.stringValue(from: adminRuntimeConfigPayload()?["overlay_transport"]) ?? "myudp"
+        let transportRuntime = bridgeSnapshot["transport_runtime"] as? [String: Any] ?? [:]
+        if transport != "myudp" {
+            return adminBoolValue(transportRuntime["overlay_connected"])
+        }
+        let myudpRuntime = bridgeSnapshot["myudp_runtime"] as? [String: Any] ?? transportRuntime
         return ObstacleBridgeAdminSnapshotSupport.transportConnected(
             lastRttOKNSValue: myudpRuntime["last_rtt_ok_ns"],
             lastRxWallNSValue: myudpRuntime["last_rx_wall_ns"],
@@ -1460,17 +1471,26 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
 
     private func adminTransportRuntimeSnapshot(bridgeSnapshot: [String: Any]) -> [String: Any] {
         let overlayConnected = adminTransportConnectedState(bridgeSnapshot: bridgeSnapshot)
-        let myudpRuntime = bridgeSnapshot["myudp_runtime"] as? [String: Any] ?? [:]
-        return ObstacleBridgeAdminSnapshotSupport.transportRuntimeEnvelope(
-            kind: ObstacleBridgeRuntimeConfig.stringValue(from: adminRuntimeConfigPayload()?["overlay_transport"]) ?? "myudp",
-            status: sharedOverlayBootstrapState["status"] ?? "unknown",
-            myudp: myudpRuntime,
-            tcp: [
+        let transport = ObstacleBridgeRuntimeConfig.stringValue(from: adminRuntimeConfigPayload()?["overlay_transport"]) ?? "myudp"
+        let transportRuntime = bridgeSnapshot["transport_runtime"] as? [String: Any] ?? [:]
+        let myudpRuntime = bridgeSnapshot["myudp_runtime"] as? [String: Any] ?? (transport == "myudp" ? transportRuntime : [:])
+        let tcpRuntime: [String: Any]? = transport == "tcp"
+            ? transportRuntime
+            : [
                 "overlay_connected": overlayConnected,
                 "listener_count": adminIntValue(bridgeSnapshot["tcp_listener_count"]),
                 "server_connection_count": adminIntValue(bridgeSnapshot["tcp_server_connection_count"]),
                 "client_connection_count": adminIntValue(bridgeSnapshot["tcp_client_connection_count"]),
-            ],
+            ]
+        let websocketRuntime: [String: Any]? = transport == "ws" ? transportRuntime : nil
+        let quicRuntime: [String: Any]? = transport == "quic" ? transportRuntime : nil
+        return ObstacleBridgeAdminSnapshotSupport.transportRuntimeEnvelope(
+            kind: transport,
+            status: sharedOverlayBootstrapState["status"] ?? "unknown",
+            myudp: myudpRuntime,
+            tcp: tcpRuntime,
+            quic: quicRuntime,
+            websocket: websocketRuntime,
             extra: [
                 "packetflow_bridge": ObstacleBridgePacketFlowBridge.bridgeStateSnapshot(),
                 "swift_udp_bridge_state": bridgeSnapshot,
@@ -1515,11 +1535,11 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
     }
 
     private func adminOpenConnections(bridgeSnapshot: [String: Any]) -> [String: Any] {
-        let myudpRuntime = bridgeSnapshot["myudp_runtime"] as? [String: Any] ?? [:]
+        let transportRuntime = bridgeSnapshot["transport_runtime"] as? [String: Any] ?? [:]
         return [
             "udp": 0,
             "tcp": adminIntValue(bridgeSnapshot["tcp_server_connection_count"]) + adminIntValue(bridgeSnapshot["tcp_client_connection_count"]),
-            "tun": max(packetPumpRunning ? 1 : 0, adminIntValue(myudpRuntime["tun_channels"])),
+            "tun": max(packetPumpRunning ? 1 : 0, adminIntValue(transportRuntime["tun_channels"])),
         ]
     }
 
@@ -1992,6 +2012,7 @@ private final class SwiftSimpleUDPPeerBridge {
     private static let peerFallbackIdleNS: UInt64 = 3_000_000_000
     private weak var provider: PacketTunnelProvider?
     private let settings: SwiftSimpleUDPPeerSettings
+    private let selectedTransport: String
     private let tunnelAddress: String
     private let tcpServiceSpecs: [ObstacleBridgeChannelMuxCodec.ServiceSpec]
     private let startupMuxFrames: [Data]
@@ -1999,9 +2020,12 @@ private final class SwiftSimpleUDPPeerBridge {
     private let muxConnectionSeq: UInt32
     private let queue = DispatchQueue(label: "com.obstaclebridge.ipserver.swift-simple-udp-peer")
     private var udpOverlayTransportOwner: ObstacleBridgeUdpOverlayTransportOwner?
+    private var tcpOverlayTransportOwner: ObstacleBridgeTcpOverlayTransportOwner?
+    private var wsOverlayTransportOwner: ObstacleBridgeWebSocketOverlayTransportOwner?
+    private var quicOverlayTransportOwnerBox: AnyObject?
     private var socketFD: Int32 = -1
-    private let socketFamily: Int32
-    private let peerCandidates: [ResolvedAddress]
+    private var socketFamily: Int32
+    private var peerCandidates: [ResolvedAddress]
     private var peerCandidateIndex = 0
     private var peerAddress: ResolvedAddress
     private var overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
@@ -2025,6 +2049,12 @@ private final class SwiftSimpleUDPPeerBridge {
     private var lastToSystemAt = 0.0
     private var tcpListenerFailures = 0
 
+    @available(iOS 15.0, *)
+    private var quicOverlayTransportOwner: ObstacleBridgeQuicOverlayTransportOwner? {
+        get { quicOverlayTransportOwnerBox as? ObstacleBridgeQuicOverlayTransportOwner }
+        set { quicOverlayTransportOwnerBox = newValue }
+    }
+
     init(
         provider: PacketTunnelProvider? = nil,
         settings: SwiftSimpleUDPPeerSettings,
@@ -2037,6 +2067,11 @@ private final class SwiftSimpleUDPPeerBridge {
     ) throws {
         self.provider = provider
         self.settings = settings
+        let configuredTransport = ObstacleBridgeRuntimeConfig.stringValue(from: settings.runtimeConfig["overlay_transport"]) ?? "myudp"
+        self.selectedTransport = configuredTransport
+            .split(separator: ",")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .first(where: { !$0.isEmpty }) ?? "myudp"
         self.tunnelAddress = tunnelAddress
         self.tcpServiceSpecs = tcpServiceSpecs
         self.startupMuxFrames = startupMuxFrames
@@ -2046,38 +2081,129 @@ private final class SwiftSimpleUDPPeerBridge {
         let sessionMaxAppPayload = ObstacleBridgeRuntimeConfig.overlaySessionMaxAppPayload(from: settings.runtimeConfig)
         self.queue.setSpecific(key: Self.queueKey, value: 1)
         if settings.runtimeMode == "swift_udp" {
-            let resolvedPeers = try Self.resolvePeerCandidates(
-                bindHost: settings.overlayBindHost,
-                peerHost: settings.peerHost,
-                peerPort: settings.peerPort,
-                peerResolveFamily: settings.peerResolveFamily
-            )
             self.socketFD = -1
-            self.socketFamily = resolvedPeers.socketFamily
-            self.peerCandidates = resolvedPeers.peerCandidates
-            self.peerAddress = resolvedPeers.peerAddress
-            self.udpOverlayTransportOwner = ObstacleBridgeUdpOverlayTransportOwner(
-                bindHost: settings.overlayBindHost,
-                bindPort: settings.bindPort,
-                peerHost: settings.peerHost,
-                peerPort: settings.peerPort,
-                peerResolveFamily: settings.peerResolveFamily,
-                sessionMaxAppPayload: sessionMaxAppPayload,
-                overlayLayerTransportAdapter: overlayLayerTransportAdapter,
-                startupMuxFrames: startupMuxFrames,
-                queue: queue,
-                serviceNameByID: Dictionary(uniqueKeysWithValues: tcpServiceSpecs.map { ($0.svcID, $0.name ?? "") }),
-                tunIfname: settings.tunIfname,
-                tunMTU: settings.mtu,
-                tunPacketSink: { [weak self] packet in
-                    self?.deliverPacketToSystem(packet)
-                },
-                muxInstanceID: muxInstanceID,
-                muxConnectionSeq: muxConnectionSeq,
-                eventSink: { [weak self] event, fields in
-                    self?.provider?.recordPacketBridgeEvent(event, fields: fields)
+            self.socketFamily = AF_INET
+            self.peerCandidates = []
+            self.peerAddress = try Self.placeholderResolvedAddress()
+            if selectedTransport == "tcp" {
+                let threshold = ObstacleBridgeRuntimeConfig.intValue(from: settings.runtimeConfig["tcp_bp_wbuf_threshold"]) ?? 128 * 1024
+                let runtime = ObstacleBridgeTcpOverlayRuntime(wbufThreshold: threshold)
+                self.tcpOverlayTransportOwner = ObstacleBridgeTcpOverlayTransportOwner(
+                    peerHost: settings.peerHost,
+                    peerPort: settings.peerPort,
+                    bindHost: ObstacleBridgeRuntimeConfig.stringValue(from: settings.runtimeConfig["tcp_bind"]) ?? "0.0.0.0",
+                    bindPort: ObstacleBridgeRuntimeConfig.intValue(from: settings.runtimeConfig["tcp_own_port"]) ?? 0,
+                    overlayRuntime: runtime,
+                    reconnectRetryDelayMS: ObstacleBridgeRuntimeConfig.intValue(from: settings.runtimeConfig["overlay_reconnect_retry_delay_ms"]) ?? 30000,
+                    sessionMaxAppPayload: sessionMaxAppPayload,
+                    overlayLayerTransportAdapter: overlayLayerTransportAdapter,
+                    startupMuxFrames: startupMuxFrames,
+                    queue: queue,
+                    serviceNameByID: Dictionary(uniqueKeysWithValues: tcpServiceSpecs.map { ($0.svcID, $0.name ?? "") }),
+                    tunIfname: settings.tunIfname,
+                    tunMTU: settings.mtu,
+                    tunPacketSink: { [weak self] packet in self?.deliverPacketToSystem(packet) },
+                    muxInstanceID: muxInstanceID,
+                    muxConnectionSeq: muxConnectionSeq,
+                    eventSink: { [weak self] event, fields in
+                        self?.provider?.recordPacketBridgeEvent(event, fields: fields)
+                    }
+                )
+            } else if selectedTransport == "ws" {
+                let payloadMode = ObstacleBridgeRuntimeConfig.stringValue(from: settings.runtimeConfig["ws_payload_mode"]) ?? "binary"
+                let maxSize = ObstacleBridgeRuntimeConfig.intValue(from: settings.runtimeConfig["ws_max_size"]) ?? 65535
+                let sendTimeout = ObstacleBridgeRuntimeConfig.doubleValue(from: settings.runtimeConfig["ws_send_timeout"]) ?? 3.0
+                let tcpUserTimeout = ObstacleBridgeRuntimeConfig.intValue(from: settings.runtimeConfig["ws_tcp_user_timeout_ms"]) ?? 10000
+                let reconnectGrace = ObstacleBridgeRuntimeConfig.doubleValue(from: settings.runtimeConfig["ws_reconnect_grace"]) ?? 3.0
+                let runtime = try ObstacleBridgeWebSocketOverlayRuntime(
+                    payloadMode: payloadMode,
+                    wsMaxSize: maxSize,
+                    sendTimeoutS: sendTimeout,
+                    tcpUserTimeoutMS: tcpUserTimeout,
+                    reconnectGraceS: reconnectGrace
+                )
+                self.wsOverlayTransportOwner = ObstacleBridgeWebSocketOverlayTransportOwner(
+                    peerHost: settings.peerHost,
+                    peerPort: settings.peerPort,
+                    useTLS: ObstacleBridgeRuntimeConfig.boolValue(from: settings.runtimeConfig["ws_tls"]) ?? (settings.peerPort == 443),
+                    wsPath: ObstacleBridgeRuntimeConfig.stringValue(from: settings.runtimeConfig["ws_path"]) ?? "/",
+                    wsSubprotocol: ObstacleBridgeRuntimeConfig.stringValue(from: settings.runtimeConfig["ws_subprotocol"]),
+                    overlayRuntime: runtime,
+                    reconnectRetryDelayMS: ObstacleBridgeRuntimeConfig.intValue(from: settings.runtimeConfig["overlay_reconnect_retry_delay_ms"]) ?? 30000,
+                    sessionMaxAppPayload: sessionMaxAppPayload,
+                    overlayLayerTransportAdapter: overlayLayerTransportAdapter,
+                    startupMuxFrames: startupMuxFrames,
+                    queue: queue,
+                    serviceNameByID: Dictionary(uniqueKeysWithValues: tcpServiceSpecs.map { ($0.svcID, $0.name ?? "") }),
+                    tunIfname: settings.tunIfname,
+                    tunMTU: settings.mtu,
+                    tunPacketSink: { [weak self] packet in self?.deliverPacketToSystem(packet) },
+                    muxInstanceID: muxInstanceID,
+                    muxConnectionSeq: muxConnectionSeq,
+                    eventSink: { [weak self] event, fields in
+                        self?.provider?.recordPacketBridgeEvent(event, fields: fields)
+                    }
+                )
+            } else if selectedTransport == "quic" {
+                if #available(iOS 15.0, *) {
+                    self.quicOverlayTransportOwner = ObstacleBridgeQuicOverlayTransportOwner(
+                        peerHost: settings.peerHost,
+                        peerPort: settings.peerPort,
+                        bindHost: ObstacleBridgeRuntimeConfig.stringValue(from: settings.runtimeConfig["quic_bind"]) ?? "::",
+                        bindPort: ObstacleBridgeRuntimeConfig.intValue(from: settings.runtimeConfig["quic_own_port"]) ?? 0,
+                        peerResolveFamily: settings.peerResolveFamily,
+                        alpn: ObstacleBridgeRuntimeConfig.stringValue(from: settings.runtimeConfig["quic_alpn"]) ?? "hq-29",
+                        insecure: ObstacleBridgeRuntimeConfig.boolValue(from: settings.runtimeConfig["quic_insecure"]) ?? false,
+                        overlayRuntime: ObstacleBridgeQuicOverlayRuntime(wbufThreshold: 128 * 1024),
+                        reconnectRetryDelayMS: ObstacleBridgeRuntimeConfig.intValue(from: settings.runtimeConfig["overlay_reconnect_retry_delay_ms"]) ?? 30000,
+                        sessionMaxAppPayload: sessionMaxAppPayload,
+                        overlayLayerTransportAdapter: overlayLayerTransportAdapter,
+                        startupMuxFrames: startupMuxFrames,
+                        queue: queue,
+                        serviceNameByID: Dictionary(uniqueKeysWithValues: tcpServiceSpecs.map { ($0.svcID, $0.name ?? "") }),
+                        tunIfname: settings.tunIfname,
+                        tunMTU: settings.mtu,
+                        tunPacketSink: { [weak self] packet in self?.deliverPacketToSystem(packet) },
+                        muxInstanceID: muxInstanceID,
+                        muxConnectionSeq: muxConnectionSeq,
+                        eventSink: { [weak self] event, fields in
+                            self?.provider?.recordPacketBridgeEvent(event, fields: fields)
+                        }
+                    )
                 }
-            )
+            } else {
+                let resolvedPeers = try Self.resolvePeerCandidates(
+                    bindHost: settings.overlayBindHost,
+                    peerHost: settings.peerHost,
+                    peerPort: settings.peerPort,
+                    peerResolveFamily: settings.peerResolveFamily
+                )
+                self.socketFamily = resolvedPeers.socketFamily
+                self.peerCandidates = resolvedPeers.peerCandidates
+                self.peerAddress = resolvedPeers.peerAddress
+                self.udpOverlayTransportOwner = ObstacleBridgeUdpOverlayTransportOwner(
+                    bindHost: settings.overlayBindHost,
+                    bindPort: settings.bindPort,
+                    peerHost: settings.peerHost,
+                    peerPort: settings.peerPort,
+                    peerResolveFamily: settings.peerResolveFamily,
+                    sessionMaxAppPayload: sessionMaxAppPayload,
+                    overlayLayerTransportAdapter: overlayLayerTransportAdapter,
+                    startupMuxFrames: startupMuxFrames,
+                    queue: queue,
+                    serviceNameByID: Dictionary(uniqueKeysWithValues: tcpServiceSpecs.map { ($0.svcID, $0.name ?? "") }),
+                    tunIfname: settings.tunIfname,
+                    tunMTU: settings.mtu,
+                    tunPacketSink: { [weak self] packet in
+                        self?.deliverPacketToSystem(packet)
+                    },
+                    muxInstanceID: muxInstanceID,
+                    muxConnectionSeq: muxConnectionSeq,
+                    eventSink: { [weak self] event, fields in
+                        self?.provider?.recordPacketBridgeEvent(event, fields: fields)
+                    }
+                )
+            }
         } else {
             let boundSocket = try Self.makeBoundSocket(
                 bindHost: settings.bindHost,
@@ -2106,6 +2232,11 @@ private final class SwiftSimpleUDPPeerBridge {
 
         if settings.runtimeMode == "swift_udp" {
             try? udpOverlayTransportOwner?.start()
+            tcpOverlayTransportOwner?.start()
+            wsOverlayTransportOwner?.start()
+            if #available(iOS 15.0, *) {
+                quicOverlayTransportOwner?.start()
+            }
             startTCPServices()
         } else {
             let source = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: queue)
@@ -2143,6 +2274,11 @@ private final class SwiftSimpleUDPPeerBridge {
         if settings.runtimeMode == "swift_udp" {
             do {
                 try udpOverlayTransportOwner?.start()
+                tcpOverlayTransportOwner?.start()
+                wsOverlayTransportOwner?.start()
+                if #available(iOS 15.0, *) {
+                    quicOverlayTransportOwner?.start()
+                }
             } catch {
                 started = false
                 fatalError("swift_udp probe start failed: \(error.localizedDescription)")
@@ -2167,6 +2303,11 @@ private final class SwiftSimpleUDPPeerBridge {
         readSource?.cancel()
         readSource = nil
         udpOverlayTransportOwner?.stop()
+        tcpOverlayTransportOwner?.stop()
+        wsOverlayTransportOwner?.stop()
+        if #available(iOS 15.0, *) {
+            quicOverlayTransportOwner?.stop()
+        }
         stopTCPServices()
         if socketFD >= 0 {
             Darwin.close(socketFD)
@@ -2180,12 +2321,22 @@ private final class SwiftSimpleUDPPeerBridge {
 
     func snapshot() -> [String: Any] {
         withState {
-            let myudpRuntime = udpOverlayTransportOwner?.transportSnapshot() ?? [:]
-            let resolvedPeerHost = Self.runtimeStringValue(myudpRuntime["overlay_peer_host"]) ?? peerAddress.host
-            let resolvedPeerPort = Self.runtimeIntValue(myudpRuntime["overlay_peer_port"]) ?? peerAddress.port
-            let resolvedPeerFamily = Self.runtimeStringValue(myudpRuntime["overlay_peer_family"]) ?? Self.familyName(peerAddress.family)
-            let resolvedPeerIndex = Self.runtimeIntValue(myudpRuntime["overlay_peer_candidate_index"]) ?? peerCandidateIndex
-            let resolvedPeerCandidateCount = Self.runtimeIntValue(myudpRuntime["overlay_peer_candidate_count"]) ?? peerCandidates.count
+            let selectedRuntime =
+                udpOverlayTransportOwner?.transportSnapshot()
+                ?? tcpOverlayTransportOwner?.transportSnapshot()
+                ?? wsOverlayTransportOwner?.transportSnapshot()
+                ?? {
+                    if #available(iOS 15.0, *) {
+                        return quicOverlayTransportOwner?.transportSnapshot()
+                    }
+                    return nil
+                }()
+                ?? [:]
+            let resolvedPeerHost = Self.runtimeStringValue(selectedRuntime["overlay_peer_host"]) ?? peerAddress.host
+            let resolvedPeerPort = Self.runtimeIntValue(selectedRuntime["overlay_peer_port"]) ?? peerAddress.port
+            let resolvedPeerFamily = Self.runtimeStringValue(selectedRuntime["overlay_peer_family"]) ?? Self.familyName(peerAddress.family)
+            let resolvedPeerIndex = Self.runtimeIntValue(selectedRuntime["overlay_peer_candidate_index"]) ?? peerCandidateIndex
+            let resolvedPeerCandidateCount = Self.runtimeIntValue(selectedRuntime["overlay_peer_candidate_count"]) ?? peerCandidates.count
             return [
                 "active": started,
                 "bind_host": settings.bindHost,
@@ -2217,13 +2368,14 @@ private final class SwiftSimpleUDPPeerBridge {
                 "tcp_listener_count": tcpListeners.count,
                 "mux_instance_id": muxInstanceID,
                 "mux_connection_seq": muxConnectionSeq,
-                "tcp_server_connection_count": myudpRuntime["server_tcp_channels"] ?? 0,
-                "tcp_client_connection_count": myudpRuntime["client_tcp_channels"] ?? 0,
+                "tcp_server_connection_count": selectedRuntime["server_tcp_channels"] ?? 0,
+                "tcp_client_connection_count": selectedRuntime["client_tcp_channels"] ?? 0,
                 "tcp_listener_failures": tcpListenerFailures,
                 "last_from_system_at": lastFromSystemAt,
                 "last_to_system_at": lastToSystemAt,
                 "started_at": startedAt,
-                "myudp_runtime": myudpRuntime,
+                "transport_runtime": selectedRuntime,
+                "myudp_runtime": selectedTransport == "myudp" ? selectedRuntime : [:],
             ]
         }
     }
@@ -2234,6 +2386,18 @@ private final class SwiftSimpleUDPPeerBridge {
                 let rows = udpOverlayTransportOwner.connectionRows()
                 return (rows.tcp, rows.udp, rows.tun)
             }
+            if let tcpOverlayTransportOwner {
+                let rows = tcpOverlayTransportOwner.connectionRows()
+                return (rows.tcp, rows.udp, rows.tun)
+            }
+            if let wsOverlayTransportOwner {
+                let rows = wsOverlayTransportOwner.connectionRows()
+                return (rows.tcp, rows.udp, rows.tun)
+            }
+            if #available(iOS 15.0, *), let quicOverlayTransportOwner {
+                let rows = quicOverlayTransportOwner.connectionRows()
+                return (rows.tcp, rows.udp, rows.tun)
+            }
             return ([], [], [])
         }
     }
@@ -2242,6 +2406,15 @@ private final class SwiftSimpleUDPPeerBridge {
         withState {
             if let udpOverlayTransportOwner {
                 return udpOverlayTransportOwner.overlayConnected
+            }
+            if let tcpOverlayTransportOwner {
+                return (tcpOverlayTransportOwner.transportSnapshot()["overlay_connected"] as? Bool) ?? false
+            }
+            if let wsOverlayTransportOwner {
+                return (wsOverlayTransportOwner.transportSnapshot()["overlay_connected"] as? Bool) ?? false
+            }
+            if #available(iOS 15.0, *), let quicOverlayTransportOwner {
+                return (quicOverlayTransportOwner.transportSnapshot()["overlay_connected"] as? Bool) ?? false
             }
             return false
         }
@@ -2310,7 +2483,15 @@ private final class SwiftSimpleUDPPeerBridge {
         var totalBytes = 0
         for packet in packets {
             if settings.runtimeMode == "swift_udp" {
-                udpOverlayTransportOwner?.sendLocalTunPacket(packet)
+                if let udpOverlayTransportOwner {
+                    udpOverlayTransportOwner.sendLocalTunPacket(packet)
+                } else if let tcpOverlayTransportOwner {
+                    tcpOverlayTransportOwner.sendLocalTunPacket(packet)
+                } else if let wsOverlayTransportOwner {
+                    wsOverlayTransportOwner.sendLocalTunPacket(packet)
+                } else if #available(iOS 15.0, *), let quicOverlayTransportOwner {
+                    quicOverlayTransportOwner.sendLocalTunPacket(packet)
+                }
             } else {
                 sendDatagram(packet)
             }
@@ -2545,14 +2726,35 @@ private final class SwiftSimpleUDPPeerBridge {
     }
 
     private func handleAcceptedTCPConnection(_ connection: NWConnection, spec: ObstacleBridgeChannelMuxCodec.ServiceSpec) {
-        guard let owner = udpOverlayTransportOwner else {
-            cancelConnection(connection)
+        if let owner = udpOverlayTransportOwner {
+            guard owner.acceptLocalTCPConnection(connection, spec: spec, listenerHost: spec.lBind, listenerPort: spec.lPort) else {
+                cancelConnection(connection)
+                return
+            }
             return
         }
-        guard owner.acceptLocalTCPConnection(connection, spec: spec, listenerHost: spec.lBind, listenerPort: spec.lPort) else {
-            cancelConnection(connection)
+        if let owner = tcpOverlayTransportOwner {
+            guard owner.acceptLocalTCPConnection(connection, spec: spec, listenerHost: spec.lBind, listenerPort: spec.lPort) else {
+                cancelConnection(connection)
+                return
+            }
             return
         }
+        if let owner = wsOverlayTransportOwner {
+            guard owner.acceptLocalTCPConnection(connection, spec: spec, listenerHost: spec.lBind, listenerPort: spec.lPort) else {
+                cancelConnection(connection)
+                return
+            }
+            return
+        }
+        if #available(iOS 15.0, *), let owner = quicOverlayTransportOwner {
+            guard owner.acceptLocalTCPConnection(connection, spec: spec, listenerHost: spec.lBind, listenerPort: spec.lPort) else {
+                cancelConnection(connection)
+                return
+            }
+            return
+        }
+        cancelConnection(connection)
     }
 
     private func sendDatagram(_ packet: Data) {
@@ -2722,6 +2924,16 @@ private final class SwiftSimpleUDPPeerBridge {
         return (socketFamily, peerCandidates, peer)
     }
 
+    private static func placeholderResolvedAddress() throws -> ResolvedAddress {
+        try ObstacleBridgePeerAddressResolver.resolveAddress(
+            host: "127.0.0.1",
+            port: 0,
+            passive: false,
+            family: AF_INET,
+            errorDomain: "ObstacleBridge.IPServer"
+        )
+    }
+
     private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
 }
 
@@ -2738,8 +2950,17 @@ extension PacketTunnelProvider {
         tunIfname: String,
         tunnelAddress: String,
         tcpServiceSpecs: [ObstacleBridgeChannelMuxCodec.ServiceSpec],
+        overlayTransport: String = "myudp",
+        runtimeConfigOverrides: [String: Any] = [:],
         overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter? = nil
     ) throws -> SwiftSimpleUDPPeerBridge {
+        var runtimeConfig: [String: Any] = [
+            "overlay_transport": overlayTransport,
+            "secure_link": overlayLayerTransportAdapter != nil,
+        ]
+        for (key, value) in runtimeConfigOverrides {
+            runtimeConfig[key] = value
+        }
         let settings = SwiftSimpleUDPPeerSettings(
             runtimeMode: runtimeMode,
             bindHost: bindHost,
@@ -2750,10 +2971,7 @@ extension PacketTunnelProvider {
             peerResolveFamily: peerResolveFamily,
             mtu: mtu,
             tunIfname: tunIfname,
-            runtimeConfig: [
-                "overlay_transport": "myudp",
-                "secure_link": overlayLayerTransportAdapter != nil,
-            ]
+            runtimeConfig: runtimeConfig
         )
         let bridge = try SwiftSimpleUDPPeerBridge(
             provider: nil,
@@ -2792,6 +3010,8 @@ final class PacketTunnelProviderSwiftUDPBridgeProbe {
         tunIfname: String,
         tunnelAddress: String,
         tcpServiceSpecs: [ObstacleBridgeChannelMuxCodec.ServiceSpec],
+        overlayTransport: String = "myudp",
+        runtimeConfigOverrides: [String: Any] = [:],
         overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter? = nil
     ) throws {
         let components = try PacketTunnelProvider.makeSwiftUDPBridgeProbeComponents(
@@ -2805,6 +3025,8 @@ final class PacketTunnelProviderSwiftUDPBridgeProbe {
             tunIfname: tunIfname,
             tunnelAddress: tunnelAddress,
             tcpServiceSpecs: tcpServiceSpecs,
+            overlayTransport: overlayTransport,
+            runtimeConfigOverrides: runtimeConfigOverrides,
             overlayLayerTransportAdapter: overlayLayerTransportAdapter
         )
         self.bridge = components

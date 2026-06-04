@@ -220,6 +220,21 @@ pytest -q ios/tests/test_macos_swift_host_runner.py
 pytest -q ios/tests/test_m3_native_sources.py -k "macos or host_runner"
 ```
 
+macOS Swift-backed rule of thumb:
+
+- treat the host runner and app bundle as built products, not per-test source snippets
+- the primary macOS Swift-backed suite should build the normal host-runner artifact once per test session via [ios/scripts/build_macos_app.sh](../ios/scripts/build_macos_app.sh) and then reuse that binary across test cases
+- if a test truly needs hooks that the normal product build should not carry, add them behind one dedicated `failure-injection` build variant instead of compiling bespoke Swift binaries for each test
+- tiny runtime contract probes can still compile focused one-file helpers when they are explicitly testing a low-level shared runtime in isolation, but the host-runner E2E surface should exercise the built artifact
+
+The build script now supports that split explicitly:
+
+- normal build: default `ios/build/macos`
+- failure-injection build: set `OBSTACLEBRIDGE_MACOS_BUILD_VARIANT=failure-injection`
+- optional Swift define for that build: set `OBSTACLEBRIDGE_SWIFT_FAILURE_INJECTION=1`
+
+This keeps Swift-backed regression time reasonable as we add more macOS/iOS parity cases.
+
 - `ios`
 
 ```bash

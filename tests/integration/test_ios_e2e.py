@@ -31,6 +31,7 @@ from obstacle_bridge_ios.m3_tunnel import (
     m3_vpn_profile_from_profile,
     provider_configuration_from_m3_config,
 )
+from tests.fixtures.localhost_tls import materialize_localhost_tls_fixture_set
 
 
 IOS_REQUEST_PACKET = bytes.fromhex("4500002400004000401100000a4d00020a4d00010035003500100000") + b"ios?"
@@ -694,6 +695,28 @@ def _ws_secure_link_server_config(ws_port: int, *, case_index: int) -> dict:
         "overlay_transport": "ws",
         "ws_bind": "127.0.0.1",
         "ws_own_port": int(ws_port),
+        "secure_link": True,
+        "secure_link_mode": "psk",
+        "secure_link_psk": "ios-e2e-secure-link-psk",
+        "admin_web": True,
+        "admin_web_bind": "127.0.0.1",
+        "admin_web_port": _alloc_local_port(
+            socket.SOCK_STREAM,
+            case_index=case_index,
+            base=IOS_E2E_TCP_PORT_BASE + 1000,
+        ),
+        "admin_web_auth_disable": True,
+        "status": False,
+    }
+
+
+def _quic_secure_link_server_config(quic_port: int, *, case_index: int, cert_dir: Path) -> dict:
+    return {
+        "overlay_transport": "quic",
+        "quic_bind": "127.0.0.1",
+        "quic_own_port": int(quic_port),
+        "quic_cert": str(cert_dir / "cert.pem"),
+        "quic_key": str(cert_dir / "key.pem"),
         "secure_link": True,
         "secure_link_mode": "psk",
         "secure_link_psk": "ios-e2e-secure-link-psk",
@@ -1806,6 +1829,291 @@ def test_ios_extension_shim_swift_udp_ws_secure_link_admin_web_live_ws(
                     expected_state="authenticated",
                     authenticated=True,
                     timeout=12.0,
+                )
+
+                live_socket = _websocket_connect("127.0.0.1", extension_admin_port)
+                first_live = _recv_initial_live_ws_message(live_socket)
+                assert first_live["type"] in {"hello", "status", "connections", "peers", "meta"}
+                _send_ws_json(live_socket, {"request": ["status", "peers"]})
+                live_status = _wait_ws_message(live_socket, lambda message: message.get("type") == "status")
+                live_peers = _wait_ws_message(live_socket, lambda message: message.get("type") == "peers")
+                assert "admin_ui" in live_status["data"]
+                assert "peers" in live_peers["data"]
+            finally:
+                if live_socket is not None:
+                    live_socket.close()
+                if ipserver_extension._CONTROLLER is not None:
+                    stop_result = ipserver_extension.handle_message({"command": "disconnect_profile"})
+                    ipserver_extension._CONTROLLER = None
+                with contextlib.suppress(asyncio.CancelledError):
+                    await bridge_server.stop()
+
+            assert stop_result is not None
+            assert stop_result["ok"] is True, stop_result
+
+        asyncio.run(scenario())
+
+    monkeypatch.setenv("OBSTACLEBRIDGE_IOS_DOCUMENTS_ROOT", str(documents_root))
+    monkeypatch.setenv("HOME", str(home_root))
+    importlib.reload(ios_app)
+    importlib.reload(ipserver_runtime)
+    importlib.reload(ipserver_extension)
+
+
+@pytest.mark.integration
+@pytest.mark.ios
+def test_ios_extension_shim_swift_udp_quic_secure_link_remote_tcp_server_reaches_extension_admin_web(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    documents_root = tmp_path / "ios-documents-quic-remote-tcp"
+    home_root = tmp_path / "home-quic-remote-tcp"
+    documents_root.mkdir(parents=True, exist_ok=True)
+    home_root.mkdir(parents=True, exist_ok=True)
+    cert_dir = materialize_localhost_tls_fixture_set(tmp_path / "quic-localhost-fixtures")
+
+    with monkeypatch.context() as local_mp:
+        local_mp.setenv("OBSTACLEBRIDGE_IOS_DOCUMENTS_ROOT", str(documents_root))
+        local_mp.setenv("HOME", str(home_root))
+
+        ios_app, ipserver_extension, ipserver_runtime = _reload_extension_modules(documents_root, home_root)
+
+        async def scenario() -> None:
+            quic_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=90, base=IOS_E2E_UDP_PORT_BASE)
+            swift_bind_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=91, base=IOS_E2E_UDP_PORT_BASE)
+            swift_peer_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=92, base=IOS_E2E_UDP_PORT_BASE)
+            server_admin_port = _alloc_local_port(socket.SOCK_STREAM, case_index=93, base=IOS_E2E_TCP_PORT_BASE + 1000)
+            extension_admin_port = _alloc_local_port(socket.SOCK_STREAM, case_index=94, base=IOS_E2E_TCP_PORT_BASE + 1200)
+            remote_tcp_port = _alloc_local_port(socket.SOCK_STREAM, case_index=95, base=IOS_E2E_TCP_PORT_BASE + 200)
+            remote_servers = [
+                {
+                    "name": "quic-remote-admin-http",
+                    "listen": {"bind": "127.0.0.1", "port": remote_tcp_port, "protocol": "tcp"},
+                    "target": {"host": "127.0.0.1", "port": extension_admin_port, "protocol": "tcp"},
+                }
+            ]
+
+            bridge_server_config = _quic_secure_link_server_config(quic_port, case_index=96, cert_dir=cert_dir)
+            bridge_server_config["admin_web_port"] = server_admin_port
+            bridge_server = ObstacleBridgeClient(bridge_server_config)
+            provider_configuration = provider_configuration_from_m3_config(
+                M3TunnelConfig(
+                    profile_id="ios-extension-shim-quic-remote-tcp-e2e",
+                    display_name="iOS Extension Shim QUIC Remote TCP E2E",
+                    provider_bundle_identifier="com.obstaclebridge.ObstacleBridge.PacketTunnel",
+                    transport="quic",
+                    peer_host="127.0.0.1",
+                    peer_port=quic_port,
+                    server_address=f"127.0.0.1:{quic_port}",
+                    runtime_config={
+                        "overlay_transport": "quic",
+                        "quic_peer": "127.0.0.1",
+                        "quic_peer_port": quic_port,
+                        "quic_bind": "127.0.0.1",
+                        "quic_own_port": 0,
+                        "quic_insecure": True,
+                        "quic_alpn": "hq-29",
+                        "secure_link": True,
+                        "secure_link_mode": "psk",
+                        "secure_link_psk": "ios-e2e-secure-link-psk",
+                        "compress_layer": True,
+                        "compress_layer_algo": "zlib",
+                        "compress_layer_level": 3,
+                        "compress_layer_min_bytes": 64,
+                        "compress_layer_types": "data,data_frag",
+                        "remote_servers": remote_servers,
+                        "channel_mux": {
+                            "own_servers": [],
+                            "remote_servers": remote_servers,
+                        },
+                        "iOS_TUN_connector": {
+                            "packetflow_connector": "swift_udp",
+                            "bind_host": "127.0.0.1",
+                            "bind_port": swift_bind_port,
+                            "peer_host": "127.0.0.1",
+                            "peer_port": swift_peer_port,
+                            "ifname": "ios-utun",
+                            "mtu": 1400,
+                        },
+                        "admin_web": True,
+                        "admin_web_bind": "127.0.0.1",
+                        "admin_web_port": extension_admin_port,
+                        "admin_web_auth_disable": True,
+                        "status": False,
+                    },
+                    network=M3NetworkSettings(
+                        tunnel_address="192.168.106.34",
+                        tunnel_prefix=30,
+                        included_routes=["192.168.106.32/30"],
+                        excluded_routes=[],
+                        dns_servers=["1.1.1.1"],
+                        mtu=1400,
+                    ),
+                )
+            )
+            start_result: dict[str, object] | None = None
+            stop_result: dict[str, object] | None = None
+            try:
+                await bridge_server.start()
+                start_result = ipserver_extension.handle_message(
+                    {
+                        "command": "start_embedded_webadmin",
+                        "provider_configuration": provider_configuration,
+                    }
+                )
+                assert start_result["ok"] is True, start_result
+
+                await _wait_client_peer_secure_link_state(
+                    bridge_server,
+                    transport="quic",
+                    expected_state="authenticated",
+                    authenticated=True,
+                    timeout=16.0,
+                )
+                await _wait_tcp_listener_ready("127.0.0.1", remote_tcp_port)
+
+                status_code, status_text = await _probe_http_get("127.0.0.1", remote_tcp_port, "/api/status")
+                assert status_code == 200
+                status_doc = json.loads(status_text)
+                assert "admin_ui" in status_doc or "build" in status_doc, status_doc
+
+                root_code, root_html = await _probe_http_get("127.0.0.1", remote_tcp_port, "/")
+                assert root_code == 200
+                assert "ObstacleBridge" in root_html or "Admin Web" in root_html
+
+                burst_results = await asyncio.gather(
+                    _probe_http_get("127.0.0.1", remote_tcp_port, "/api/status"),
+                    _probe_http_get("127.0.0.1", remote_tcp_port, "/api/meta"),
+                    _probe_http_get("127.0.0.1", remote_tcp_port, "/api/connections"),
+                    _probe_http_get("127.0.0.1", remote_tcp_port, "/api/peers"),
+                    _probe_http_get("127.0.0.1", remote_tcp_port, "/"),
+                )
+                for path, (code, text) in zip(
+                    ["/api/status", "/api/meta", "/api/connections", "/api/peers", "/"],
+                    burst_results,
+                    strict=False,
+                ):
+                    assert code == 200, (path, code, text)
+            finally:
+                if ipserver_extension._CONTROLLER is not None:
+                    stop_result = ipserver_extension.handle_message({"command": "disconnect_profile"})
+                    ipserver_extension._CONTROLLER = None
+                with contextlib.suppress(asyncio.CancelledError):
+                    await bridge_server.stop()
+
+            assert stop_result is not None
+            assert stop_result["ok"] is True, stop_result
+
+        asyncio.run(scenario())
+
+    monkeypatch.setenv("OBSTACLEBRIDGE_IOS_DOCUMENTS_ROOT", str(documents_root))
+    monkeypatch.setenv("HOME", str(home_root))
+    importlib.reload(ios_app)
+    importlib.reload(ipserver_runtime)
+    importlib.reload(ipserver_extension)
+
+
+@pytest.mark.integration
+@pytest.mark.ios
+def test_ios_extension_shim_swift_udp_quic_secure_link_admin_web_live_ws(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    documents_root = tmp_path / "ios-documents-quic-admin-live"
+    home_root = tmp_path / "home-quic-admin-live"
+    documents_root.mkdir(parents=True, exist_ok=True)
+    home_root.mkdir(parents=True, exist_ok=True)
+    cert_dir = materialize_localhost_tls_fixture_set(tmp_path / "quic-live-localhost-fixtures")
+
+    with monkeypatch.context() as local_mp:
+        local_mp.setenv("OBSTACLEBRIDGE_IOS_DOCUMENTS_ROOT", str(documents_root))
+        local_mp.setenv("HOME", str(home_root))
+
+        ios_app, ipserver_extension, ipserver_runtime = _reload_extension_modules(documents_root, home_root)
+
+        async def scenario() -> None:
+            quic_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=100, base=IOS_E2E_UDP_PORT_BASE)
+            extension_admin_port = _alloc_local_port(socket.SOCK_STREAM, case_index=101, base=IOS_E2E_TCP_PORT_BASE + 1200)
+            swift_bind_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=102, base=IOS_E2E_UDP_PORT_BASE)
+            swift_peer_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=103, base=IOS_E2E_UDP_PORT_BASE)
+            bridge_server_config = _quic_secure_link_server_config(quic_port, case_index=104, cert_dir=cert_dir)
+            bridge_server_config["admin_web_port"] = _alloc_local_port(socket.SOCK_STREAM, case_index=105, base=IOS_E2E_TCP_PORT_BASE + 1000)
+
+            bridge_server = ObstacleBridgeClient(bridge_server_config)
+            provider_configuration = provider_configuration_from_m3_config(
+                M3TunnelConfig(
+                    profile_id="ios-extension-shim-quic-admin-live",
+                    display_name="iOS Extension Shim QUIC Admin Live",
+                    provider_bundle_identifier="com.obstaclebridge.ObstacleBridge.PacketTunnel",
+                    transport="quic",
+                    peer_host="127.0.0.1",
+                    peer_port=quic_port,
+                    server_address=f"127.0.0.1:{quic_port}",
+                    runtime_config={
+                        "overlay_transport": "quic",
+                        "quic_peer": "127.0.0.1",
+                        "quic_peer_port": quic_port,
+                        "quic_bind": "127.0.0.1",
+                        "quic_own_port": 0,
+                        "quic_insecure": True,
+                        "quic_alpn": "hq-29",
+                        "secure_link": True,
+                        "secure_link_mode": "psk",
+                        "secure_link_psk": "ios-e2e-secure-link-psk",
+                        "channel_mux": {"own_servers": [], "remote_servers": []},
+                        "iOS_TUN_connector": {
+                            "packetflow_connector": "swift_udp",
+                            "bind_host": "127.0.0.1",
+                            "bind_port": swift_bind_port,
+                            "peer_host": "127.0.0.1",
+                            "peer_port": swift_peer_port,
+                            "ifname": "ios-utun",
+                            "mtu": 1400,
+                        },
+                        "admin_web": True,
+                        "admin_web_bind": "127.0.0.1",
+                        "admin_web_port": extension_admin_port,
+                        "admin_web_auth_disable": True,
+                    },
+                    network=M3NetworkSettings(
+                        tunnel_address="192.168.106.38",
+                        tunnel_prefix=30,
+                        included_routes=["192.168.106.36/30"],
+                        excluded_routes=[],
+                        dns_servers=["1.1.1.1"],
+                        mtu=1400,
+                    ),
+                )
+            )
+            start_result: dict[str, object] | None = None
+            stop_result: dict[str, object] | None = None
+            live_socket: socket.socket | None = None
+            try:
+                await bridge_server.start()
+                start_result = ipserver_extension.handle_message(
+                    {"command": "start_embedded_webadmin", "provider_configuration": provider_configuration}
+                )
+                assert start_result["ok"] is True, start_result
+
+                await _wait_client_peer_secure_link_state(
+                    bridge_server,
+                    transport="quic",
+                    expected_state="authenticated",
+                    authenticated=True,
+                    timeout=16.0,
+                )
+                await _wait_tcp_listener_ready("127.0.0.1", extension_admin_port)
+
+                status = _http_request_json(f"http://127.0.0.1:{extension_admin_port}/api/status")
+                meta = _http_request_json(f"http://127.0.0.1:{extension_admin_port}/api/meta")
+                assert "admin_ui" in status
+                assert meta["overlay_transport"] == "quic"
+                _wait_admin_peer_secure_link_state(
+                    extension_admin_port,
+                    transport="quic",
+                    expected_state="authenticated",
+                    authenticated=True,
+                    timeout=16.0,
                 )
 
                 live_socket = _websocket_connect("127.0.0.1", extension_admin_port)

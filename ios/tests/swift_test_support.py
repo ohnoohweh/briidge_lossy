@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import sys
 import tempfile
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -40,3 +43,55 @@ def _swift_module_available(swiftc: str, module_name: str) -> bool:
             check=False,
         )
     return completed.returncode == 0
+
+
+ROOT = Path(__file__).resolve().parents[2]
+IOS_DIR = ROOT / "ios"
+BUILD_MACOS_APP_SCRIPT = IOS_DIR / "scripts" / "build_macos_app.sh"
+
+
+@dataclass(frozen=True)
+class MacOSSwiftArtifact:
+    variant: str
+    build_dir: Path
+    binary_path: Path
+    app_bundle: Path
+    build_info_path: Path
+
+
+@lru_cache(maxsize=None)
+def build_macos_swift_artifact(*, failure_injection: bool = False) -> MacOSSwiftArtifact:
+    if sys.platform != "darwin":
+        pytest.skip("macOS Swift artifacts can only be built on macOS")
+    require_swift_modules(
+        "CryptoKit",
+        "zlib",
+        missing_swiftc_reason="swiftc is required for macOS Swift-backed tests",
+        missing_module_reason="macOS Swift-backed tests require a Swift toolchain with CryptoKit and zlib support",
+    )
+    variant = "failure-injection" if failure_injection else "normal"
+    env = dict(os.environ)
+    env["OBSTACLEBRIDGE_MACOS_BUILD_VARIANT"] = variant
+    if failure_injection:
+        env["OBSTACLEBRIDGE_SWIFT_FAILURE_INJECTION"] = "1"
+    completed = subprocess.run(
+        [str(BUILD_MACOS_APP_SCRIPT)],
+        cwd=str(ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            "build_macos_app.sh failed with exit code "
+            f"{completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+    build_dir = IOS_DIR / "build" / ("macos" if variant == "normal" else f"macos-{variant}")
+    return MacOSSwiftArtifact(
+        variant=variant,
+        build_dir=build_dir,
+        binary_path=build_dir / "ObstacleBridgeHostRunner",
+        app_bundle=build_dir / "ObstacleBridge.app",
+        build_info_path=build_dir / "ObstacleBridgeHostRunner.build-info.json",
+    )

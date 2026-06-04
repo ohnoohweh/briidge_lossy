@@ -34,14 +34,12 @@ TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
-from swift_test_support import require_swift_modules
+from swift_test_support import build_macos_swift_artifact
 
 
 ROOT = Path(__file__).resolve().parents[2]
 SHARED_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeShared"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
-HOST_RUNNER_MAIN_SOURCE = APP_NATIVE_DIR / "ObstacleBridgeHostRunnerMain.swift"
-APP_MAC_RUNNER_SOURCE = APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift"
 
 
 class _AsyncBridgeClientThread:
@@ -104,77 +102,6 @@ def _unused_udp_port() -> int:
     with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as sock:
         sock.bind(("::1", 0))
         return int(sock.getsockname()[1])
-
-
-def _compile_mac_host_runner(binary_path: Path) -> None:
-    swiftc = require_swift_modules(
-        "CryptoKit",
-        "zlib",
-        missing_swiftc_reason="swiftc is required for macOS Swift host runner tests",
-        missing_module_reason="macOS Swift host runner tests require a Swift toolchain with CryptoKit and zlib support",
-    )
-    command = [
-        swiftc,
-        "-o",
-        str(binary_path),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminAPI.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminAuth.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminConfigChallenge.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminConfigSupport.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeConfigSecretCodec.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminSnapshotSupport.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminWebSupport.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeNativeCrypto.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskTransportAdapter.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeNativeServiceSpec.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeNativeProxyConnections.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayConnectionSupport.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressResolver.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeOnboarding.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeWebAdminServer.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxUdpRuntime.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTcpRuntime.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTCPTransportOwner.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayCodec.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlaySessionCodec.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeCompressLayerRuntime.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayStackPlanner.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketPayloadCodec.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayRuntime.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift"),
-        str(APP_MAC_RUNNER_SOURCE),
-        str(HOST_RUNNER_MAIN_SOURCE),
-    ]
-    completed = subprocess.run(command, capture_output=True, text=True, check=False)
-    if completed.returncode != 0:
-        raise AssertionError(f"swiftc failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}")
-
-
-def _write_mac_host_runner_build_info(binary_path: Path, *, commit: str = "cafebabe", diff_sha: str = "feedface", tainted: bool = True) -> None:
-    payload = {
-        "commit": commit,
-        "source": "embedded-build-info",
-        "repo_root": "",
-        "tainted": tainted,
-        "tracked_changes": 0,
-        "untracked_changes": 0,
-        "available": True,
-        "diff_sha": diff_sha,
-        "build_timestamp_utc": "2026-05-31T00:00:00Z",
-    }
-    binary_path.with_name(f"{binary_path.name}.build-info.json").write_text(
-        json.dumps(payload, sort_keys=True),
-        encoding="utf-8",
-    )
 
 
 def _compile_swift_runtime_probe(source_path: Path, binary_path: Path) -> None:
@@ -1027,9 +954,9 @@ def _wait_http_condition(url: str, predicate, *, timeout_sec: float = 10.0) -> d
 
 
 def test_macos_swift_host_runner_reports_python_style_build_payload(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
-    _write_mac_host_runner_build_info(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
+    build_info_payload = json.loads(artifact.build_info_path.read_text(encoding="utf-8"))
 
     status_port = _unused_tcp_port()
     runtime_config_path = tmp_path / "runtime.json"
@@ -1067,14 +994,14 @@ def test_macos_swift_host_runner_reports_python_style_build_payload(tmp_path: Pa
         meta = _http_json(f"http://127.0.0.1:{status_port}/api/meta")
 
         expected_build = {
-            "commit": "cafebabe",
-            "source": "embedded-build-info",
-            "repo_root": "",
-            "tainted": True,
-            "tracked_changes": 0,
-            "untracked_changes": 0,
-            "available": True,
-            "diff_sha": "feedface",
+            "commit": build_info_payload["commit"],
+            "source": build_info_payload["source"],
+            "repo_root": build_info_payload["repo_root"],
+            "tainted": build_info_payload["tainted"],
+            "tracked_changes": build_info_payload["tracked_changes"],
+            "untracked_changes": build_info_payload["untracked_changes"],
+            "available": build_info_payload["available"],
+            "diff_sha": build_info_payload["diff_sha"],
         }
         assert status["build"] == expected_build
         assert meta["build"] == expected_build
@@ -1092,8 +1019,8 @@ def test_macos_swift_host_runner_reports_python_style_build_payload(tmp_path: Pa
 
 
 def test_macos_swift_host_runner_myudp_remote_tcp_admin_web_handles_multiple_connections(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     overlay_port = _unused_tcp_port()
     hostrunner_admin_port = _unused_tcp_port()
@@ -1246,8 +1173,8 @@ def test_macos_swift_host_runner_myudp_remote_tcp_admin_web_handles_multiple_con
 
 
 def test_macos_swift_host_runner_bootstraps_ws_stack_and_serves_status(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     status_port = _unused_tcp_port()
     runtime_config_path = tmp_path / "runtime.json"
@@ -1403,8 +1330,8 @@ def test_macos_swift_host_runner_bootstraps_ws_stack_and_serves_status(tmp_path:
 
 
 def test_macos_swift_host_runner_empty_config_serves_onboarding_without_peer(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     status_port = _unused_tcp_port()
     runtime_config_path = tmp_path / "runtime_empty_onboarding.json"
@@ -1465,9 +1392,8 @@ def test_macos_swift_host_runner_empty_config_serves_onboarding_without_peer(tmp
 
 
 def test_macos_swift_host_runner_restart_reloads_runtime_config_from_disk(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
-    _write_mac_host_runner_build_info(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     status_port = _unused_tcp_port()
     runtime_config_path = tmp_path / "runtime.json"
@@ -1557,8 +1483,8 @@ def test_macos_swift_host_runner_restart_reloads_runtime_config_from_disk(tmp_pa
 
 
 def test_macos_swift_host_runner_requires_admin_auth_when_credentials_configured(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     status_port = _unused_tcp_port()
     runtime_config_path = tmp_path / "runtime.json"
@@ -1644,8 +1570,8 @@ def test_macos_swift_host_runner_requires_admin_auth_when_credentials_configured
 
 
 def test_macos_swift_host_runner_matches_python_admin_web_payloads_and_token_controls(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     status_port = _unused_tcp_port()
     runtime_config = {
@@ -1766,8 +1692,8 @@ def test_macos_swift_host_runner_matches_python_admin_web_payloads_and_token_con
 
 
 def test_macos_swift_host_runner_accepts_python_invite_tokens_without_app_path_leakage(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     status_port = _unused_tcp_port()
     udp_port = _unused_udp_port()
@@ -1880,8 +1806,8 @@ def test_macos_swift_host_runner_accepts_python_invite_tokens_without_app_path_l
 
 
 def test_macos_swift_host_runner_applies_invite_updates_with_tun_routing_section(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     status_port = _unused_tcp_port()
     runtime_config_path = tmp_path / "runtime.json"
@@ -2013,8 +1939,8 @@ def test_macos_swift_host_runner_applies_invite_updates_with_tun_routing_section
 
 
 def test_macos_swift_host_runner_generates_invite_token_with_override_name_and_extended_fields(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     status_port = _unused_tcp_port()
     runtime_config_path = tmp_path / "runtime.json"
@@ -2104,8 +2030,8 @@ def test_macos_swift_host_runner_generates_invite_token_with_override_name_and_e
 
 
 def test_macos_swift_host_runner_rejects_legacy_encrypted_invite_psk(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     status_port = _unused_tcp_port()
     udp_port = _unused_udp_port()
@@ -2181,8 +2107,8 @@ def test_macos_swift_host_runner_rejects_legacy_encrypted_invite_psk(tmp_path: P
 
 
 def test_macos_swift_host_runner_saves_admin_credentials_via_admin_web(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     status_port = _unused_tcp_port()
     runtime_config_path = tmp_path / "runtime.json"
@@ -2334,8 +2260,8 @@ def test_macos_swift_host_runner_saves_admin_credentials_via_admin_web(tmp_path:
 
 
 def test_macos_swift_host_runner_loads_and_persists_encrypted_secure_link_psk(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     status_port = _unused_tcp_port()
     runtime_config_path = tmp_path / "runtime.json"
@@ -2440,8 +2366,8 @@ def test_macos_swift_host_runner_loads_and_persists_encrypted_secure_link_psk(tm
 
 
 def test_macos_swift_host_runner_runner_knobs_drive_tcp_retry_and_restart_watchdog(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     overlay_port = _unused_tcp_port()
     status_port = _unused_tcp_port()
@@ -2514,8 +2440,8 @@ def test_macos_swift_host_runner_runner_knobs_drive_tcp_retry_and_restart_watchd
 
 
 def test_macos_swift_host_runner_live_websocket_requires_auth_when_credentials_configured(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     status_port = _unused_tcp_port()
     runtime_config_path = tmp_path / "runtime.json"
@@ -2587,8 +2513,8 @@ def test_macos_swift_host_runner_live_websocket_requires_auth_when_credentials_c
 
 
 def test_macos_swift_host_runner_accepts_grouped_obstaclebridge_config(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     status_port = _unused_tcp_port()
     documents_root = tmp_path / "documents"
@@ -2701,8 +2627,8 @@ def test_macos_swift_host_runner_accepts_grouped_obstaclebridge_config(tmp_path:
 
 
 def test_macos_swift_host_runner_defaults_to_cwd_obstaclebridge_cfg(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     status_port = _unused_tcp_port()
     runtime_config_path = tmp_path / "ObstacleBridge.cfg"
@@ -2768,8 +2694,8 @@ def test_macos_swift_host_runner_defaults_to_cwd_obstaclebridge_cfg(tmp_path: Pa
 
 
 def test_macos_swift_host_runner_tcp_ownserver_proxies_traffic_and_reports_connections(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     overlay_port = _unused_tcp_port()
     target_port = _unused_tcp_port()
@@ -2875,8 +2801,8 @@ def test_macos_swift_host_runner_tcp_ownserver_proxies_traffic_and_reports_conne
 
 
 def test_macos_swift_host_runner_udp_ownserver_proxies_traffic_and_reports_connections(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     overlay_port = _unused_tcp_port()
     target_port = _unused_tcp_port()
@@ -2982,8 +2908,8 @@ def test_macos_swift_host_runner_udp_ownserver_proxies_traffic_and_reports_conne
 
 
 def test_macos_swift_host_runner_tcp_overlay_owner_forwards_inbound_tcp_and_udp_mux(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     overlay_port = _unused_tcp_port()
     status_port = _unused_tcp_port()
@@ -3091,8 +3017,8 @@ def test_macos_swift_host_runner_tcp_overlay_owner_forwards_inbound_tcp_and_udp_
 
 
 def test_macos_swift_host_runner_tcp_ownserver_proxies_wrapped_overlay_chain(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     overlay_port = _unused_tcp_port()
     target_port = _unused_tcp_port()
@@ -3208,8 +3134,8 @@ def test_macos_swift_host_runner_tcp_ownserver_proxies_wrapped_overlay_chain(tmp
 
 
 def test_macos_swift_host_runner_udp_ownserver_proxies_wrapped_overlay_chain(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     overlay_port = _unused_tcp_port()
     target_port = _unused_tcp_port()
@@ -3327,8 +3253,8 @@ def test_macos_swift_host_runner_udp_ownserver_proxies_wrapped_overlay_chain(tmp
 
 
 def test_macos_swift_host_runner_pushes_remote_service_catalog_after_secure_link_auth(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     overlay_port = _unused_tcp_port()
     status_port = _unused_tcp_port()
@@ -3422,8 +3348,8 @@ def test_macos_swift_host_runner_pushes_remote_service_catalog_after_secure_link
 
 
 def test_macos_swift_host_runner_remote_tcp_admin_web_handles_multiple_connections(tmp_path: Path) -> None:
-    binary_path = tmp_path / "obstaclebridge-mac-host-runner"
-    _compile_mac_host_runner(binary_path)
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
 
     overlay_port = _unused_tcp_port()
     hostrunner_admin_port = _unused_tcp_port()
@@ -3557,6 +3483,91 @@ def test_macos_swift_host_runner_remote_tcp_admin_web_handles_multiple_connectio
         assert isinstance(style_css, str) and "--bg:" in style_css
     finally:
         python_peer.stop()
+        if process.poll() is None:
+            process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5.0)
+        if process.returncode not in (0, -15):
+            raise AssertionError(
+                f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            )
+
+
+def test_macos_swift_host_runner_bootstraps_quic_stack_and_serves_status(tmp_path: Path) -> None:
+    artifact = build_macos_swift_artifact()
+    binary_path = artifact.binary_path
+
+    hostrunner_admin_port = _unused_tcp_port()
+    overlay_port = _unused_udp_port()
+
+    runtime_config_path = tmp_path / "runtime_remote_admin_burst_quic.json"
+    runtime_config_path.write_text(
+        json.dumps(
+            {
+                "overlay_transport": "quic",
+                "quic_peer": "::1",
+                "quic_peer_port": overlay_port,
+                "quic_bind": "::",
+                "quic_own_port": 0,
+                "quic_alpn": "hq-29",
+                "quic_insecure": True,
+                "secure_link": True,
+                "secure_link_mode": "psk",
+                "secure_link_psk": "remote-admin-burst-psk",
+                "compress_layer": True,
+                "compress_layer_algo": "zlib",
+                "compress_layer_level": 5,
+                "compress_layer_min_bytes": 64,
+                "compress_layer_types": "data",
+                "overlay_reconnect_retry_delay_ms": 250,
+                "admin_web": True,
+                "admin_web_bind": "127.0.0.1",
+                "admin_web_port": hostrunner_admin_port,
+                "admin_web_dir": str((ROOT / "admin_web").resolve()),
+                "admin_web_auth_disable": True,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    process = subprocess.Popen(
+        [
+            str(binary_path),
+            "--runtime-config",
+            str(runtime_config_path),
+            "--hold-sec",
+            "20",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        status = _wait_http_json(f"http://127.0.0.1:{hostrunner_admin_port}/api/status", timeout_sec=20.0)
+        meta = _http_json(f"http://127.0.0.1:{hostrunner_admin_port}/api/meta")
+        peers = _http_json(f"http://127.0.0.1:{hostrunner_admin_port}/api/peers")
+        config = _http_json(f"http://127.0.0.1:{hostrunner_admin_port}/api/config")
+        root_html = _http_text(f"http://127.0.0.1:{hostrunner_admin_port}/", timeout_sec=3.0)
+        app_js = _http_text(f"http://127.0.0.1:{hostrunner_admin_port}/app.js", timeout_sec=3.0)
+        style_css = _http_text(f"http://127.0.0.1:{hostrunner_admin_port}/style.css", timeout_sec=3.0)
+
+        peer_row = peers["peers"][0]
+        assert peer_row["transport"] == "quic"
+        assert peer_row["runtime"]["kind"] == "quic"
+        assert peer_row["peer"]["host"] in {"::1", "127.0.0.1"}
+        assert status["transport_runtime"]["kind"] == "quic"
+        assert status["transport_runtime"]["quic"]["overlay_alpn"] == "hq-29"
+        assert meta["transport_runtime"]["quic"]["overlay_insecure"] is True
+        assert config["config"]["overlay_transport"] == "quic"
+        assert "quic_session" in config["schema"]
+        assert isinstance(root_html, str) and ("ObstacleBridge" in root_html or "Admin Web" in root_html)
+        assert isinstance(app_js, str) and "async function loadStatus()" in app_js
+        assert isinstance(style_css, str) and "--bg:" in style_css
+    finally:
         if process.poll() is None:
             process.terminate()
         try:
