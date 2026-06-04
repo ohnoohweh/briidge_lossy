@@ -1054,6 +1054,34 @@ metadata:
 
 - `own_servers[].options.shared_tun_ownership`
 
+Under the intended long-term model for this feature, the server is also the
+authority for Internet-facing TUN lifecycle:
+
+- the server decides whether the shared TUN participates in Internet routing
+- the server creates the shared TUN device during server startup
+- the server configures its host-side routing/NAT/firewall behavior during
+  server startup
+- clients do not request creation of that shared TUN device through a TUN
+  `OPEN`
+- clients do not define the server's Internet connection policy
+
+That means the shared-TUN switch is not a peer-installed listener concept.
+It is a server-owned service that exists because the server config says it
+should exist, before any one client asks for packet carriage.
+
+The client-side configuration responsibility is intentionally narrower:
+
+- each client knows its own tunnel IPv4 and/or IPv6 addresses
+- each client knows the tunnel gateway addresses it should use
+- each client may know local route intent for its own stack
+- clients do not own the server's TUN bring-up or server underlay routing
+  policy
+
+Conceptually, the configuration model is therefore split into:
+
+- server-owned shared-TUN service and host-routing policy
+- client-owned local tunnel identity and gateway settings
+
 Conceptual shape:
 
 ```json
@@ -1076,6 +1104,39 @@ Conceptual shape:
 }
 ```
 
+Conceptual role split:
+
+```json
+{
+  "server_shared_tun": {
+    "ifname": "obtun0",
+    "mtu": 1500,
+    "internet_uplink": true,
+    "shared_tun_ownership": {
+      "mode": "server_shared",
+      "peers": [
+        {
+          "peer_ref": "linux-client",
+          "ipv4": ["192.168.107.2"],
+          "ipv6": ["fd20:107::2"]
+        },
+        {
+          "peer_ref": "ios-client",
+          "ipv4": ["192.168.107.4"],
+          "ipv6": ["fd20:107::4"]
+        }
+      ]
+    }
+  },
+  "client_tunnel_identity": {
+    "ipv4": "192.168.107.4",
+    "ipv6": "fd20:107::4",
+    "gateway_ipv4": "192.168.107.1",
+    "gateway_ipv6": "fd20:107::1"
+  }
+}
+```
+
 Phase 1 validation rules are intentionally strict:
 
 - this metadata is accepted only on `tun -> tun` structured services
@@ -1088,44 +1149,50 @@ Phase 1 validation rules are intentionally strict:
 The design should explicitly avoid "whoever sends first owns the address"
 semantics.
 
-### Protocol extension
+### Startup and control-plane model
 
-The current `OPEN v4` payload identifies interface names and MTU, but it does
-not carry peer-owned tunnel address sets. The shared multi-client TUN switch
-therefore needs a new peer-scoped control-plane message.
+The current `OPEN v4` payload identifies interface names and MTU, but the
+future server-owned shared-TUN model should not depend on client-originated
+`OPEN` messages to create or configure the server-side shared TUN service.
 
-Recommended new control message:
+In the intended model:
 
-- `TUN_PEER_OWNERSHIP_SET_V1`
+- the server starts the shared TUN service from its own config at process
+  startup
+- the server applies host-side routing policy for that TUN during startup
+- a client connection later attaches as a packet-carrying peer for an already
+  existing server-owned shared TUN service
+- the client only needs enough configuration to know its own tunnel addresses
+  and gateway addresses
+- the server already knows which peer ref owns which tunnel addresses from its
+  own static config
+
+Therefore, no client-originated TUN `OPEN` request should be required merely
+to instantiate the shared TUN or the server's Internet-routing posture.
+
+If an additional control-plane message is needed later, it should be limited to
+peer/session binding or capability confirmation rather than ownership
+allocation. Ownership itself should stay server-owned.
+
+Possible future control message, only if runtime binding metadata is needed:
+
+- `TUN_SHARED_PEER_BIND_V1`
 
 Conceptual payload:
 
 - `instance_id`
 - `connection_seq`
 - `svc_id`
-- `generation`
-- `flags`
-- `entry_count`
-- repeated entries:
-  - `family` (`ipv4` or `ipv6`)
-  - `prefix_len`
-  - `address_len`
-  - `address`
-
-For the first milestone, `prefix_len` should be accepted only as a host prefix:
-
-- `/32` for IPv4
-- `/128` for IPv6
-
-That keeps the initial switch precise and simplifies anti-spoofing.
+- `peer_ref`
+- optional flags that identify whether the peer accepted attachment to that
+  shared service
 
 Message semantics:
 
-- the server is the authority for installed ownership
-- a received ownership message is not active until validated and committed
-- a newer `(peer_id, svc_id, generation)` replaces the older committed set for
-  that same peer and service
-- peer epoch reset invalidates all previously committed ownership for that peer
+- the server remains the authority for installed ownership
+- the message does not grant ownership; it only helps bind a live session to a
+  server-known peer identity if the implementation later needs that explicitly
+- peer epoch reset invalidates any prior live binding state for that peer
 
 ### Channel and service binding
 
@@ -1134,12 +1201,14 @@ server-side switch needs one more layer of association:
 
 - one server-side TUN service device
 - multiple connected peers
-- one active TUN channel per peer for that shared service
+- zero or one active packet-carrying TUN channel per peer for that shared
+  service
 - one ownership set per peer for that shared service
 
 Conceptually, the runtime should maintain:
 
 - `svc_key -> shared TUN device`
+- `svc_key -> server-owned routing/uplink policy state`
 - `peer_id -> tun_chan_id for svc_key`
 - `(svc_key, peer_id) -> ownership set`
 - `destination address -> (svc_key, peer_id)`

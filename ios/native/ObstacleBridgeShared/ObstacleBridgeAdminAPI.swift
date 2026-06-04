@@ -3,6 +3,7 @@ import Foundation
 protocol ObstacleBridgeAdminAPIStateProvider: AnyObject {
     func adminStatusSnapshot() -> [String: Any]
     func adminConnectionsSnapshot() -> [String: Any]
+    func adminTunRoutingSnapshot() -> [String: Any]
     func adminPeersSnapshot() -> [[String: Any]]
     func adminMetaSnapshot() -> [String: Any]
     func adminConfigSnapshot() -> [String: Any]
@@ -30,6 +31,10 @@ protocol ObstacleBridgeAdminAPIStateProvider: AnyObject {
 extension ObstacleBridgeAdminAPIStateProvider {
     func adminConnectionsSnapshot() -> [String: Any] {
         ObstacleBridgeAdminAPI.emptyConnectionsSnapshot()
+    }
+
+    func adminTunRoutingSnapshot() -> [String: Any] {
+        ObstacleBridgeAdminAPI.tunRoutingSnapshot(fromConnections: adminConnectionsSnapshot())
     }
 
     func adminPeersSnapshot() -> [[String: Any]] {
@@ -207,6 +212,8 @@ enum ObstacleBridgeAdminAPI {
             return jsonResponse(provider.adminMetaSnapshot())
         case ("GET", "/api/connections"):
             return jsonResponse(provider.adminConnectionsSnapshot())
+        case ("GET", "/api/tun-routing/status"):
+            return jsonResponse(provider.adminTunRoutingSnapshot())
         case ("GET", "/api/peers"):
             return jsonResponse(["peers": provider.adminPeersSnapshot()])
         case ("GET", "/api/config"):
@@ -250,6 +257,8 @@ enum ObstacleBridgeAdminAPI {
             return provider.adminStatusSnapshot()
         case "connections":
             return provider.adminConnectionsSnapshot()
+        case "tun_routing":
+            return provider.adminTunRoutingSnapshot()
         case "peers":
             return ["peers": provider.adminPeersSnapshot()]
         case "meta":
@@ -341,6 +350,63 @@ enum ObstacleBridgeAdminAPI {
             "udp": [],
             "tcp": [],
             "tun": [],
+        ]
+    }
+
+    static func emptyTunRoutingSnapshot() -> [String: Any] {
+        [
+            "tun": [],
+            "shared_tun": [],
+            "summary": [
+                "tun_total": 0,
+                "tun_open": 0,
+                "tun_listening": 0,
+                "shared_services": 0,
+                "shared_active_peer_bindings": 0,
+            ],
+            "app": "udp-bidirectional-mux",
+            "milestone": "C",
+        ]
+    }
+
+    static func tunRoutingSnapshot(fromConnections snapshot: [String: Any]) -> [String: Any] {
+        let tunRows = snapshot["tun"] as? [[String: Any]] ?? []
+        let sharedRows = tunRows.filter { $0["shared_tun_ownership"] is [String: Any] }
+        let tunOpen = tunRows.reduce(into: 0) { partialResult, row in
+            let state = String(describing: row["state"] ?? "connected").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if row["chan_id"] is NSNull {
+                return
+            }
+            if row["chan_id"] == nil {
+                return
+            }
+            if state != "listening" {
+                partialResult += 1
+            }
+        }
+        let tunListening = tunRows.reduce(into: 0) { partialResult, row in
+            let state = String(describing: row["state"] ?? "connected").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if state == "listening" {
+                partialResult += 1
+            }
+        }
+        let activeBindings = sharedRows.reduce(into: 0) { partialResult, row in
+            let ownership = row["shared_tun_ownership"] as? [String: Any] ?? [:]
+            let bindings = ownership["active_peer_bindings"] as? [Any] ?? []
+            partialResult += bindings.count
+        }
+        return [
+            "tun": tunRows,
+            "shared_tun": sharedRows,
+            "summary": [
+                "tun_total": tunRows.count,
+                "tun_open": tunOpen,
+                "tun_listening": tunListening,
+                "shared_services": sharedRows.count,
+                "shared_active_peer_bindings": activeBindings,
+            ],
+            "app": "udp-bidirectional-mux",
+            "milestone": "C",
         ]
     }
 

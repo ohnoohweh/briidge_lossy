@@ -2874,6 +2874,16 @@ class ChannelMux:
         self._schedule_service_hook(peer_spec, None, "client", "before_connect", channel_id=chan, peer_id=peer_id)
         dev = self._find_service_tun_device(str(host), int(r_port))
         if dev is None:
+            shared_tun_requested = self._shared_tun_ownership_snapshot_for_spec(peer_spec) is not None
+            if shared_tun_requested:
+                self.log.info(
+                    "[TUN/CLI] chan=%s shared TUN attach rejected: no prestarted server-owned service if=%s mtu=%s",
+                    chan,
+                    host,
+                    r_port,
+                )
+                self._forget_tun_open_key(chan)
+                return
             try:
                 dev = self._ensure_peer_tun_listener_for_target(peer_key, str(host), int(r_port))
             except Exception as e:

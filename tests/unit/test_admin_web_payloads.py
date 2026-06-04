@@ -145,6 +145,47 @@ class _RunnerStub:
             ],
         }
 
+    def get_connections_snapshot(self):
+        return {
+            "udp": [],
+            "tcp": [],
+            "tun": [
+                {
+                    "peer_id": "0:1",
+                    "protocol": "tun",
+                    "role": "server",
+                    "state": "listening",
+                    "chan_id": None,
+                    "svc_id": 3,
+                    "service_name": "shared-tun",
+                    "local": {"ifname": "obtun0", "mtu": 1500},
+                    "remote_destination": {"ifname": "obtun1", "mtu": 1500},
+                    "stats": {"rx_bytes": 0, "tx_bytes": 0, "rx_msgs": 0, "tx_msgs": 0},
+                    "shared_tun_ownership": {
+                        "mode": "server_shared",
+                        "peer_count": 2,
+                        "address_count": 4,
+                        "peer_refs": ["linux-client", "ios-client"],
+                        "peers": [
+                            {"peer_ref": "linux-client", "ipv4": ["192.168.107.2"], "ipv6": ["fd20:107::2"]},
+                            {"peer_ref": "ios-client", "ipv4": ["192.168.107.4"], "ipv6": ["fd20:107::4"]},
+                        ],
+                        "active_peer_bindings": [
+                            {"peer_id": 7, "preferred_chan_id": 301, "bound_chan_ids": [301]},
+                        ],
+                    },
+                }
+            ],
+            "counts": {
+                "udp": 0,
+                "tcp": 0,
+                "tun": 0,
+                "udp_listening": 0,
+                "tcp_listening": 0,
+                "tun_listening": 1,
+            },
+        }
+
     def _restart_requires_delay(self):
         return True
 
@@ -460,6 +501,33 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertTrue(payload["admin_ui"]["runtime_dependencies"]["ok"])
         self.assertEqual(payload["admin_ui"]["runtime_dependencies"]["install_hint"], "")
 
+    def test_build_tun_routing_payload_exposes_dedicated_shared_tun_view(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+        )
+        ui = AdminWebUI(args, _RunnerStub())
+
+        payload = ui._build_tun_routing_payload()
+
+        self.assertEqual(payload["summary"]["tun_total"], 1)
+        self.assertEqual(payload["summary"]["tun_open"], 0)
+        self.assertEqual(payload["summary"]["tun_listening"], 1)
+        self.assertEqual(payload["summary"]["shared_services"], 1)
+        self.assertEqual(payload["summary"]["shared_active_peer_bindings"], 1)
+        self.assertEqual(len(payload["shared_tun"]), 1)
+        self.assertEqual(payload["shared_tun"][0]["service_name"], "shared-tun")
+        self.assertEqual(payload["shared_tun"][0]["shared_tun_ownership"]["peer_count"], 2)
+
     def test_meta_payload_suppresses_runtime_dependency_warnings_on_ios(self):
         args = argparse.Namespace(
             admin_web=True,
@@ -497,6 +565,21 @@ class AdminWebPayloadTests(unittest.TestCase):
                 text = app_path.read_text(encoding="utf-8")
                 self.assertIn("renderMetric('RTT Est (ms)', fmtNumber(row.rtt_est_ms))", text)
                 self.assertIn("renderMetric('Transmit Delay Est (ms)', fmtNumber(row.transmit_delay_est_ms))", text)
+
+    def test_tun_routing_frontend_uses_dedicated_tab_and_api(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        index_html = (repo_root / "admin_web" / "index.html").read_text(encoding="utf-8")
+        app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('data-tab="tun-routing"', index_html)
+        self.assertIn('id="tab-tun-routing"', index_html)
+        self.assertIn('id="tunRoutingConnectionsBody"', index_html)
+        self.assertIn('id="tunRoutingSharedBody"', index_html)
+        self.assertNotIn('id="tunConnectionsBody"', index_html)
+        self.assertNotIn('id="tunOpen"', index_html)
+        self.assertIn("apiFetch('/api/tun-routing/status'", app_js)
+        self.assertIn("applyTunRoutingDoc(j);", app_js)
+        self.assertIn("topics.push('tun_routing')", app_js)
 
     def test_restart_endpoint_uses_immediate_mode_for_embedded_restart(self):
         args = argparse.Namespace(

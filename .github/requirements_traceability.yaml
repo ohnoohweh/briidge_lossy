@@ -728,6 +728,8 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_accepts_owned_ipv6_source
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_rejects_malformed_packet
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_binds_peer_ref_and_rejects_second_owner_claim
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_open_requires_prestarted_server_owned_service
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_open_binds_to_prestarted_server_owned_service
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_routes_shared_unicast_only_to_designated_peer_channel
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_routes_shared_broadcast_only_to_active_peer_channels
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_drops_shared_unknown_destination
@@ -746,6 +748,7 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_outbound_route_unknown_destination_matches_python
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_outbound_route_inactive_destination_matches_python
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_outbound_route_unmapped_destination_matches_python
+    - ios/tests/test_m3_native_sources.py::test_macos_swift_host_runner_source_exists
 
 REQ-MUX-010:
   integration_tests:
@@ -899,6 +902,14 @@ REQ-ADM-006:
     - tests/unit/test_ws_multi_peer.py::test_server_peer_snapshot_includes_last_incoming_age_seconds
     - tests/unit/test_ws_multi_peer.py::test_client_peer_snapshot_includes_last_incoming_age_seconds
     - tests/unit/test_admin_web_payloads.py::test_meta_payload_suppresses_runtime_dependency_warnings_on_ios
+    - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_dedicated_shared_tun_view
+    - tests/unit/test_admin_web_payloads.py::test_tun_routing_frontend_uses_dedicated_tab_and_api
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_ui_payload_matches_python
+    - tests/unit/test_admin_web_component_parity.py::test_swift_security_advisor_payload_matches_python
+    - tests/unit/test_admin_web_component_parity.py::test_swift_tun_routing_snapshot_matches_python
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_tun_routing_route_matches_python
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_tun_routing_matches_python
+    - ios/tests/test_m3_native_sources.py::test_macos_swift_host_runner_source_exists
 
 REQ-ADM-007:
   integration_tests:

@@ -1230,6 +1230,62 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parsed["source_ip"], '192.168.107.4')
         self.assertEqual(reason, 'source_not_owned_by_peer')
 
+    def test_shared_tun_open_requires_prestarted_server_owned_service(self):
+        spec = ChannelMux.ServiceSpec(
+            2,
+            'tun',
+            'obtun1',
+            1500,
+            'tun',
+            'obtun0',
+            1500,
+            options={
+                'shared_tun_ownership': {
+                    'mode': 'server_shared',
+                    'peers': [
+                        {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                    ],
+                }
+            },
+        )
+        open_payload = self.mux._build_open_v4(spec)
+        with patch.object(self.mux, '_ensure_peer_tun_listener_for_target') as ensure_peer_listener:
+            self.mux._rx_tun_open(1, open_payload, peer_id=77)
+
+        ensure_peer_listener.assert_not_called()
+        self.assertNotIn(1, self.mux._tun_by_chan)
+
+    def test_shared_tun_open_binds_to_prestarted_server_owned_service(self):
+        spec = ChannelMux.ServiceSpec(
+            2,
+            'tun',
+            'obtun1',
+            1500,
+            'tun',
+            'obtun0',
+            1500,
+            options={
+                'shared_tun_ownership': {
+                    'mode': 'server_shared',
+                    'peers': [
+                        {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                    ],
+                }
+            },
+        )
+        svc_key = ('local', 0, 2)
+        dev = ChannelMux.TunDevice(fd=55, ifname='obtun0', mtu=1500, service_key=svc_key)
+        self.mux._local_services[svc_key] = spec
+        self.mux._svc_tun_devices[svc_key] = dev
+        self.mux._install_shared_tun_ownership_for_service(svc_key, spec)
+        open_payload = self.mux._build_open_v4(spec)
+
+        with patch.object(self.mux, '_ensure_peer_tun_listener_for_target') as ensure_peer_listener:
+            self.mux._rx_tun_open(1, open_payload, peer_id=77)
+
+        ensure_peer_listener.assert_not_called()
+        self.assertIs(self.mux._tun_by_chan.get(1), dev)
+
     async def test_remote_catalog_replacement_adds_and_removes_services(self):
         svc1 = ChannelMux.ServiceSpec(1, 'udp', '127.0.0.1', 10001, 'udp', '127.0.0.1', 20001)
         svc2 = ChannelMux.ServiceSpec(2, 'tcp', '127.0.0.1', 10002, 'tcp', '127.0.0.1', 20002)

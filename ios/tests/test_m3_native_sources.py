@@ -308,6 +308,7 @@ def test_webadmin_server_source_exists() -> None:
     assert "broadcastLiveTopic(" in runtime
     assert "liveTopicInterval(" in runtime
     assert "type\": \"hello\"" in runtime
+    assert '"tun_routing"' in runtime
 
 
 def test_admin_api_source_exists() -> None:
@@ -319,7 +320,11 @@ def test_admin_api_source_exists() -> None:
     assert "enum ObstacleBridgeAdminAPI" in runtime
     assert '"/api/meta"' in runtime
     assert '"/api/connections"' in runtime
+    assert '"/api/tun-routing/status"' in runtime
     assert '"/api/peers"' in runtime
+    assert '"tun_routing"' in runtime
+    assert "adminTunRoutingSnapshot()" in runtime
+    assert "tunRoutingSnapshot(fromConnections:" in runtime
     assert '"admin_api_request"' in runtime
 
 
@@ -327,6 +332,7 @@ def test_macos_swift_host_runner_source_exists() -> None:
     wrapper = (APP_NATIVE_DIR / "ObstacleBridgeHostRunnerMain.swift").read_text(encoding="utf-8")
     runtime = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     shared_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
+    native_spec = (SHARED_NATIVE_DIR / "ObstacleBridgeNativeServiceSpec.swift").read_text(encoding="utf-8")
 
     assert "@main" in wrapper
     assert "ObstacleBridgeHostRunnerMain" in wrapper
@@ -339,6 +345,8 @@ def test_macos_swift_host_runner_source_exists() -> None:
     assert "dispatchMain()" in runtime
     assert "ObstacleBridgeAdminAPI" in runtime
     assert "ObstacleBridgeWebAdminServer" in runtime
+    assert "sharedTunOwnershipSnapshot(for: spec.toChannelMuxServiceSpec())" in runtime
+    assert '"shared_tun_ownership"' in runtime
     assert "ObstacleBridgeRuntimeConfig.flatten" in runtime
     assert "ObstacleBridgeOverlayBootstrapSettings" in runtime
     assert "ObstacleBridgeCompressLayerRuntime" in runtime
@@ -352,6 +360,12 @@ def test_macos_swift_host_runner_source_exists() -> None:
     assert "tunnel_gateway6" in shared_runtime
     assert "log_TUN_routing" in shared_runtime
     assert '"swift_host_runner"' in runtime
+    assert "let lifecycleHooks: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?" in native_spec
+    assert "let options: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?" in native_spec
+    assert "self.lifecycleHooks = sharedSpec.lifecycleHooks" in native_spec
+    assert "self.options = sharedSpec.options" in native_spec
+    assert "lifecycleHooks: lifecycleHooks" in native_spec
+    assert "options: options" in native_spec
 
 
 def test_shared_admin_api_exposes_status_and_bootstrap_routes() -> None:

@@ -9,7 +9,7 @@ class AdminWebUI:
     AUTH_SESSION_TTL_SEC = 8 * 60 * 60
     CONFIG_CHALLENGE_TTL_SEC = 90
     LIVE_WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-    LIVE_TOPICS = ("status", "connections", "peers", "meta")
+    LIVE_TOPICS = ("status", "connections", "peers", "tun_routing", "meta")
     ONBOARDING_TOKEN_PREFIX = "ob1."
 
     @staticmethod
@@ -341,6 +341,10 @@ class AdminWebUI:
                 await self._handle_connections(writer)
                 return
 
+            if path == "/api/tun-routing/status":
+                await self._handle_tun_routing_status(writer)
+                return
+
             if path == "/api/onboarding/connection-profiles":
                 await self._handle_onboarding_connection_profiles(writer, method)
                 return
@@ -390,6 +394,41 @@ class AdminWebUI:
     async def _handle_connections(self, writer):
         payload = self._build_connections_payload()
         self._log_api_response("/api/connections", 200, payload)
+        await self._send_json(writer, 200, payload)
+
+    def _build_tun_routing_payload(self) -> dict:
+        snapshot = self.runner.get_connections_snapshot() or {}
+        tun_rows = list(snapshot.get("tun") or [])
+        shared_rows = [dict(row) for row in tun_rows if isinstance(row.get("shared_tun_ownership"), dict)]
+        active_bindings_total = 0
+        for row in shared_rows:
+            active_bindings = list((row.get("shared_tun_ownership") or {}).get("active_peer_bindings") or [])
+            active_bindings_total += len(active_bindings)
+        payload = {
+            "tun": tun_rows,
+            "shared_tun": shared_rows,
+            "summary": {
+                "tun_total": len(tun_rows),
+                "tun_open": sum(
+                    1 for row in tun_rows
+                    if row.get("chan_id") is not None
+                    and str(row.get("state", "connected")).lower() != "listening"
+                ),
+                "tun_listening": sum(
+                    1 for row in tun_rows
+                    if str(row.get("state", "connected")).lower() == "listening"
+                ),
+                "shared_services": len(shared_rows),
+                "shared_active_peer_bindings": int(active_bindings_total),
+            },
+            "app": "udp-bidirectional-mux",
+            "milestone": "C",
+        }
+        return payload
+
+    async def _handle_tun_routing_status(self, writer):
+        payload = self._build_tun_routing_payload()
+        self._log_api_response("/api/tun-routing/status", 200, payload)
         await self._send_json(writer, 200, payload)
 
     @staticmethod
@@ -1621,6 +1660,8 @@ class AdminWebUI:
             return self._build_status_payload()
         if t == "connections":
             return self._build_connections_payload()
+        if t == "tun_routing":
+            return self._build_tun_routing_payload()
         if t == "peers":
             return self._build_peers_payload()
         if t == "meta":
@@ -1693,6 +1734,8 @@ class AdminWebUI:
                     next_topics: Set[str] = {"status"}
                     if "status" in active_tabs:
                         next_topics.update({"connections", "peers"})
+                    if "tun-routing" in active_tabs:
+                        next_topics.add("tun_routing")
                     if "misc" in active_tabs:
                         next_topics.add("meta")
                     topics = next_topics

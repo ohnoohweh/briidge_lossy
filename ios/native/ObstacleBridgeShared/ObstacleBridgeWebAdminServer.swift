@@ -32,7 +32,7 @@ final class ObstacleBridgeWebAdminServer {
         let consumed: Int
     }
 
-    private static let liveTopics = ["status", "connections", "peers", "meta"]
+    private static let liveTopics = ["status", "connections", "peers", "tun_routing", "meta"]
     private static let liveWebSocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
     private let listener: NWListener
@@ -290,7 +290,7 @@ final class ObstacleBridgeWebAdminServer {
         switch topic {
         case "meta":
             return 5.0
-        case "status", "connections", "peers":
+        case "status", "connections", "peers", "tun_routing":
             return 1.0
         default:
             return 1.0

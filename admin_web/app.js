@@ -1141,6 +1141,90 @@ function renderTunConnectionTable(tbodyId, rows) {
   }).join('');
 }
 
+function summarizeSharedTunOwnership(shared) {
+  if (!shared || typeof shared !== 'object') return 'no';
+  return `yes · ${fmtInteger(shared.peer_count ?? 0)} peers · ${fmtInteger(shared.address_count ?? 0)} addresses`;
+}
+
+function renderTunRoutingConnectionTable(tbodyId, rows) {
+  const tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+
+  if (!rows || rows.length === 0) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="14">No TUN interfaces</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = rows.map((row) => {
+    const rxBytes = row.stats?.rx_bytes ?? 0;
+    const txBytes = row.stats?.tx_bytes ?? 0;
+    const rxMsgs = row.stats?.rx_msgs ?? 0;
+    const txMsgs = row.stats?.tx_msgs ?? 0;
+    const state = String(row.state || 'connected').toLowerCase();
+    const isListening = state === 'listening';
+    const local = row.local || {};
+    const remote = row.remote_destination || {};
+    const chanText = Array.isArray(row.channel_aliases) && row.channel_aliases.length > 1
+      ? row.channel_aliases.map((v) => fmtChan(v)).join(', ')
+      : fmtChan(row.chan_id);
+    return `
+      <tr>
+        <td class="mono">${escapeHtml(fmtConnectionId(row.peer_id))}</td>
+        <td class="mono">${escapeHtml(chanText)}</td>
+        <td class="mono">${escapeHtml(fmtInteger(row.svc_id))}</td>
+        <td class="mono">${escapeHtml(fmtText(row.service_name || ''))}</td>
+        <td><span class="${isListening ? 'role-pill role-unknown' : 'role-pill role-client'}">${escapeHtml(state)}</span></td>
+        <td><span class="${roleClass(row.role)}">${escapeHtml(row.role || 'unknown')}</span></td>
+        <td class="mono">${escapeHtml(fmtText(local.ifname))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(local.mtu))}</td>
+        <td class="mono">${escapeHtml(fmtEndpoint(remote))}</td>
+        <td class="mono">${escapeHtml(summarizeSharedTunOwnership(row.shared_tun_ownership))}</td>
+        <td class="mono">${escapeHtml(fmtBytes(rxBytes))}</td>
+        <td class="mono">${escapeHtml(fmtBytes(txBytes))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(rxMsgs))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(txMsgs))}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderTunRoutingSharedTable(tbodyId, rows) {
+  const tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+
+  if (!rows || rows.length === 0) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No shared TUN routing state</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = rows.map((row) => {
+    const shared = row.shared_tun_ownership || {};
+    const ownershipText = Array.isArray(shared.peers) && shared.peers.length
+      ? shared.peers.map((peer) => {
+          const parts = [];
+          if (Array.isArray(peer.ipv4) && peer.ipv4.length) parts.push(`IPv4 ${peer.ipv4.join(', ')}`);
+          if (Array.isArray(peer.ipv6) && peer.ipv6.length) parts.push(`IPv6 ${peer.ipv6.join(', ')}`);
+          return `${peer.peer_ref}: ${parts.join(' · ') || 'no addresses'}`;
+        }).join('\n')
+      : 'n/a';
+    const bindingText = Array.isArray(shared.active_peer_bindings) && shared.active_peer_bindings.length
+      ? shared.active_peer_bindings.map((binding) => {
+          const bound = Array.isArray(binding.bound_chan_ids) ? binding.bound_chan_ids.join(', ') : '';
+          return `peer ${fmtInteger(binding.peer_id)} -> preferred ${fmtChan(binding.preferred_chan_id)}${bound ? ` · bound ${bound}` : ''}`;
+        }).join('\n')
+      : 'none';
+    return `
+      <tr>
+        <td class="mono">${escapeHtml(fmtInteger(row.svc_id))}</td>
+        <td class="mono">${escapeHtml(fmtText(row.service_name || ''))}</td>
+        <td class="mono">${escapeHtml(fmtText(row.local?.ifname))}</td>
+        <td class="mono" style="white-space:pre-wrap;">${escapeHtml(ownershipText)}</td>
+        <td class="mono" style="white-space:pre-wrap;">${escapeHtml(bindingText)}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
 function detailPillClass(value) {
   const normalized = String(value || '').toLowerCase();
   if (
@@ -2528,6 +2612,17 @@ async function loadPeers() {
   }
 }
 
+async function loadTunRouting() {
+  try {
+    const r = await apiFetch('/api/tun-routing/status', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    applyTunRoutingDoc(j);
+  } catch (e) {
+    console.error('tun routing load failed', e);
+  }
+}
+
 function applyMetaDoc(j) {
   if (j.runtime_dependencies) {
     uiState.runtimeDependencies = j.runtime_dependencies;
@@ -2586,6 +2681,15 @@ function applyConnectionsDoc(j) {
 
 function applyPeersDoc(j) {
   renderPeerTable(j.peers || []);
+}
+
+function applyTunRoutingDoc(j) {
+  renderTunRoutingConnectionTable('tunRoutingConnectionsBody', j.tun || []);
+  renderTunRoutingSharedTable('tunRoutingSharedBody', j.shared_tun || []);
+  setText('tunRoutingOpen', fmtInteger(j.summary?.tun_open ?? 0));
+  setText('tunRoutingListening', fmtInteger(j.summary?.tun_listening ?? 0));
+  setText('tunRoutingSharedServices', fmtInteger(j.summary?.shared_services ?? 0));
+  setText('tunRoutingActiveBindings', fmtInteger(j.summary?.shared_active_peer_bindings ?? 0));
 }
 
 async function loadConfig() {
@@ -3724,6 +3828,9 @@ function initTabs() {
         loadConnections();
         loadPeers();
       }
+      if (target === 'tun-routing' && !liveState.connected) {
+        loadTunRouting();
+      }
       if (target === 'misc' && !liveState.connected) {
         loadMeta();
       }
@@ -3741,6 +3848,9 @@ function currentLiveTopics() {
   if (isTabActive('status')) {
     topics.push('connections', 'peers');
   }
+  if (isTabActive('tun-routing')) {
+    topics.push('tun_routing');
+  }
   if (isTabActive('misc')) {
     topics.push('meta');
   }
@@ -3757,6 +3867,7 @@ function updateLiveSubscriptions() {
   if (!liveState.connected) return;
   const activeTabs = [];
   if (isTabActive('status')) activeTabs.push('status');
+  if (isTabActive('tun-routing')) activeTabs.push('tun-routing');
   if (isTabActive('misc')) activeTabs.push('misc');
   sendLiveMessage({
     subscribe: currentLiveTopics(),
@@ -3791,6 +3902,10 @@ function startHttpPollingFallback() {
       await loadPeers();
     }, 1000),
     startPolling(async () => {
+      if (!isTabActive('tun-routing')) return;
+      await loadTunRouting();
+    }, 1000),
+    startPolling(async () => {
       if (!isTabActive('misc')) return;
       await loadMeta();
     }, 5000),
@@ -3823,6 +3938,10 @@ function handleLiveMessage(event) {
   }
   if (msg.type === 'peers') {
     applyPeersDoc(msg.data || {});
+    return;
+  }
+  if (msg.type === 'tun_routing') {
+    applyTunRoutingDoc(msg.data || {});
     return;
   }
   if (msg.type === 'meta') {
@@ -3946,6 +4065,7 @@ async function startAdminApp() {
     loadStatus();
     loadConnections();
     loadPeers();
+    loadTunRouting();
     loadMeta();
     loadConfig();
     startHttpPollingFallback();
@@ -3959,6 +4079,10 @@ async function startAdminApp() {
       await loadConnections();
       await loadPeers();
     }
+    return;
+  }
+  if (isTabActive('tun-routing') && !liveState.connected) {
+    await loadTunRouting();
     return;
   }
   if (isTabActive('configuration')) {
@@ -4215,6 +4339,10 @@ document.body?.addEventListener('click', (event) => {
     loadStatus();
     loadConnections();
     loadPeers();
+    return;
+  }
+  if (tabName === 'tun-routing' && !liveState.connected) {
+    loadTunRouting();
     return;
   }
   if (tabName === 'misc' && !liveState.connected) {

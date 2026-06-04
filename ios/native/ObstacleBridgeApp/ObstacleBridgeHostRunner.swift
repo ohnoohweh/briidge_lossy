@@ -1027,6 +1027,7 @@ final class ObstacleBridgeHostRunner {
             let tunListeningRows = ownServerSpecs
                 .filter { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
                 .map { spec in
+                    let sharedTunOwnership = ObstacleBridgeChannelMuxCodec.sharedTunOwnershipSnapshot(for: spec.toChannelMuxServiceSpec())
                     [
                         "protocol": "tun",
                         "role": "server",
@@ -1039,6 +1040,7 @@ final class ObstacleBridgeHostRunner {
                         "local_port": spec.listenPort,
                         "remote_destination": ["host": spec.targetHost, "port": spec.targetPort],
                         "stats": ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0],
+                        "shared_tun_ownership": sharedTunOwnership.map(ObstacleBridgeChannelMuxCodec.foundationObject(from:)) ?? NSNull(),
                     ] as [String: Any]
                 }
             let tunConnectedRows = (tcpOverlayRows?.tun ?? []) + (quicOverlayRows?.tun ?? []) + (udpOverlayRows?.tun ?? [])

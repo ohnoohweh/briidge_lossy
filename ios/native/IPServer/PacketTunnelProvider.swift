@@ -1093,6 +1093,10 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         )
     }
 
+    func adminTunRoutingSnapshot() -> [String: Any] {
+        ObstacleBridgeAdminAPI.tunRoutingSnapshot(fromConnections: adminConnectionsSnapshot())
+    }
+
     func adminPeersSnapshot() -> [[String: Any]] {
         let bridgeSnapshot = adminBridgeSnapshot()
         let traffic = adminPeerTraffic(bridgeSnapshot: bridgeSnapshot)

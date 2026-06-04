@@ -9,6 +9,8 @@ struct ObstacleBridgeNativeServiceSpec {
     let targetProtocol: String
     let targetHost: String
     let targetPort: Int
+    let lifecycleHooks: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?
+    let options: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?
 
     init(sharedSpec: ObstacleBridgeRuntimeServiceSpec) {
         self.svcID = sharedSpec.svcID
@@ -19,6 +21,8 @@ struct ObstacleBridgeNativeServiceSpec {
         self.targetProtocol = sharedSpec.targetProtocol
         self.targetHost = sharedSpec.targetHost
         self.targetPort = sharedSpec.targetPort
+        self.lifecycleHooks = sharedSpec.lifecycleHooks
+        self.options = sharedSpec.options
     }
 
     func toChannelMuxServiceSpec() -> ObstacleBridgeChannelMuxCodec.ServiceSpec {
@@ -31,8 +35,8 @@ struct ObstacleBridgeNativeServiceSpec {
             rHost: targetHost,
             rPort: targetPort,
             name: name,
-            lifecycleHooks: nil,
-            options: nil
+            lifecycleHooks: lifecycleHooks,
+            options: options
         )
     }
 }
