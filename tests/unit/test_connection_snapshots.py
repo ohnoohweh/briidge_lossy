@@ -125,6 +125,7 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         self.assertEqual(row["service_name"], "lab-tun")
         self.assertEqual(row["local"]["ifname"], "obtun0")
         self.assertEqual(row["remote_destination"]["ifname"], "obtun1")
+        self.assertIsNone(row["shared_tun_ownership"])
 
     def test_snapshot_counts_active_tun_channel_as_open(self):
         dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1400, service_key=self.tun_key)
@@ -148,6 +149,76 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         self.assertEqual(row["service_name"], "lab-tun")
         self.assertEqual(row["stats"]["rx_msgs"], 2)
         self.assertEqual(row["stats"]["tx_msgs"], 3)
+        self.assertIsNone(row["shared_tun_ownership"])
+
+    def test_snapshot_exposes_shared_tun_ownership_and_active_binding(self):
+        self.tun_spec = ChannelMux.ServiceSpec(
+            3,
+            "tun",
+            "obtun0",
+            1400,
+            "tun",
+            "obtun1",
+            1400,
+            name="lab-tun",
+            options={
+                "shared_tun_ownership": {
+                    "mode": "server_shared",
+                    "peers": [
+                        {"peer_ref": "linux-client", "ipv4": ["192.168.107.2"], "ipv6": ["fd20:107::2"]},
+                        {"peer_ref": "ios-client", "ipv4": ["192.168.107.4"], "ipv6": ["fd20:107::4"]},
+                    ],
+                }
+            },
+        )
+        self.mux._local_services[self.tun_key] = self.tun_spec
+        self.mux._install_shared_tun_ownership_for_service(self.tun_key, self.tun_spec)
+        dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1400, service_key=self.tun_key)
+        self.mux._svc_tun_devices[self.tun_key] = dev
+        self.mux._chan_owner_peer_id[301] = 7
+        self.mux._bind_tun_channel(301, dev)
+
+        snap = self.mux.snapshot_connections()
+
+        row = snap["tun"][0]
+        self.assertEqual(
+            row["shared_tun_ownership"],
+            {
+                "mode": "server_shared",
+                "peer_count": 2,
+                "address_count": 4,
+                "peer_refs": ["linux-client", "ios-client"],
+                "peers": [
+                    {
+                        "peer_ref": "linux-client",
+                        "ipv4": ["192.168.107.2"],
+                        "ipv6": ["fd20:107::2"],
+                        "address_count": 2,
+                    },
+                    {
+                        "peer_ref": "ios-client",
+                        "ipv4": ["192.168.107.4"],
+                        "ipv6": ["fd20:107::4"],
+                        "address_count": 2,
+                    },
+                ],
+                "owner_by_ipv4": {
+                    "192.168.107.2": "linux-client",
+                    "192.168.107.4": "ios-client",
+                },
+                "owner_by_ipv6": {
+                    "fd20:107::2": "linux-client",
+                    "fd20:107::4": "ios-client",
+                },
+                "active_peer_bindings": [
+                    {
+                        "peer_id": 7,
+                        "preferred_chan_id": 301,
+                        "bound_chan_ids": [301],
+                    }
+                ],
+            },
+        )
 
     def test_snapshot_collapses_tun_channel_aliases_into_one_logical_connection(self):
         dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1400, service_key=self.tun_key)

@@ -260,6 +260,65 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
             "linux-client",
         )
 
+    def test_shared_tun_ownership_snapshot_normalizes_host_addresses(self):
+        spec = ChannelMux.ServiceSpec(
+            7,
+            "tun",
+            "obtun0",
+            1500,
+            "tun",
+            "obtun1",
+            1500,
+            name="shared-tun",
+            options={
+                "shared_tun_ownership": {
+                    "mode": "server_shared",
+                    "peers": [
+                        {"peer_ref": "linux-client", "ipv4": ["192.168.107.2/32"], "ipv6": ["fd20:107::2/128"]},
+                        {"peer_ref": "ios-client", "ipv4": ["192.168.107.4"], "ipv6": ["fd20:107::4"]},
+                    ],
+                }
+            },
+        )
+
+        snapshot = ChannelMux._shared_tun_ownership_snapshot_for_spec(spec)
+
+        self.assertEqual(
+            snapshot,
+            {
+                "mode": "server_shared",
+                "peer_count": 2,
+                "address_count": 4,
+                "peer_refs": ["linux-client", "ios-client"],
+                "peers": [
+                    {
+                        "peer_ref": "linux-client",
+                        "ipv4": ["192.168.107.2"],
+                        "ipv6": ["fd20:107::2"],
+                        "address_count": 2,
+                    },
+                    {
+                        "peer_ref": "ios-client",
+                        "ipv4": ["192.168.107.4"],
+                        "ipv6": ["fd20:107::4"],
+                        "address_count": 2,
+                    },
+                ],
+                "owner_by_ipv4": {
+                    "192.168.107.2": "linux-client",
+                    "192.168.107.4": "ios-client",
+                },
+                "owner_by_ipv6": {
+                    "fd20:107::2": "linux-client",
+                    "fd20:107::4": "ios-client",
+                },
+            },
+        )
+
+    def test_shared_tun_ownership_snapshot_returns_none_without_option(self):
+        spec = ChannelMux.ServiceSpec(7, "tun", "obtun0", 1500, "tun", "obtun1", 1500)
+        self.assertIsNone(ChannelMux._shared_tun_ownership_snapshot_for_spec(spec))
+
     def test_parse_structured_tun_service_rejects_duplicate_shared_tun_owned_address(self):
         with self.assertRaisesRegex(ValueError, "IPv4 addresses must be unique"):
             ChannelMux._parse_structured_service_spec(
@@ -833,6 +892,83 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(svc_key, self.mux._peer_installed_services)
         self.assertIs(self.mux._tun_by_chan[1], self.mux._svc_tun_devices[svc_key])
         schedule_hook.assert_any_call(remote_tun, svc_key, 'listener', 'on_created')
+
+    async def test_shared_tun_runtime_binding_tracks_open_and_disconnect_cleanup(self):
+        remote_tun = ChannelMux.ServiceSpec(
+            2,
+            'tun',
+            'obtun1',
+            1500,
+            'tun',
+            'obtun0',
+            1500,
+            options={
+                'shared_tun_ownership': {
+                    'mode': 'server_shared',
+                    'peers': [
+                        {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2'], 'ipv6': ['fd20:107::2']},
+                    ],
+                }
+            },
+        )
+        catalog_payload = self.mux._encode_remote_services_set_v2([remote_tun])
+        catalog_frame = self.mux._pack_mux(
+            0,
+            ChannelMux.Proto.UDP,
+            0,
+            ChannelMux.MType.REMOTE_SERVICES_SET_V2,
+            catalog_payload,
+        )
+        local_tun = ChannelMux.ServiceSpec(5, 'tun', 'obtun0', 1500, 'tun', 'obtun1', 1500)
+        open_payload = self.mux._build_open_v4(local_tun)
+        svc_key = ('peer', 77, 2)
+
+        def open_tun(ifname, mtu, svc_key=None):
+            return ChannelMux.TunDevice(fd=44, ifname=ifname, mtu=mtu, service_key=svc_key)
+
+        with patch.object(self.mux, '_open_tun_device', side_effect=open_tun), \
+             patch.object(self.mux, '_register_tun_reader'), \
+             patch.object(self.mux, '_schedule_service_hook'):
+            self.assertTrue(self.mux.on_app_payload_from_peer(catalog_frame, peer_id=77))
+            await asyncio.sleep(0)
+            self.mux._rx_tun_open(1, open_payload, peer_id=77)
+
+        self.assertEqual(
+            self.mux._shared_tun_runtime_snapshot_for_service(svc_key),
+            {
+                'mode': 'server_shared',
+                'peer_count': 1,
+                'address_count': 2,
+                'peer_refs': ['linux-client'],
+                'peers': [
+                    {
+                        'peer_ref': 'linux-client',
+                        'ipv4': ['192.168.107.2'],
+                        'ipv6': ['fd20:107::2'],
+                        'address_count': 2,
+                    }
+                ],
+                'owner_by_ipv4': {'192.168.107.2': 'linux-client'},
+                'owner_by_ipv6': {'fd20:107::2': 'linux-client'},
+                'active_peer_bindings': [
+                    {
+                        'peer_id': 77,
+                        'preferred_chan_id': 1,
+                        'bound_chan_ids': [1],
+                    }
+                ],
+            },
+        )
+
+        with patch.object(self.mux, '_stop_listener_for_service_id', new=AsyncMock()) as stop_listener:
+            self.mux.on_peer_disconnected(77)
+            await asyncio.sleep(0)
+
+        stop_listener.assert_awaited_once_with(svc_key, 'tun', spec=remote_tun)
+        self.assertEqual(
+            self.mux._shared_tun_runtime_snapshot_for_service(svc_key)["active_peer_bindings"],
+            [],
+        )
 
     async def test_remote_catalog_replacement_adds_and_removes_services(self):
         svc1 = ChannelMux.ServiceSpec(1, 'udp', '127.0.0.1', 10001, 'udp', '127.0.0.1', 20001)

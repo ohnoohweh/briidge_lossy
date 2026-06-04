@@ -720,9 +720,13 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_parse_structured_tun_service_rejects_duplicate_shared_tun_owned_address
     - tests/unit/test_channel_mux_listener_mode.py::test_parse_structured_tun_service_rejects_non_host_prefix_in_shared_tun_ownership
     - tests/unit/test_channel_mux_listener_mode.py::test_parse_structured_non_tun_service_rejects_shared_tun_ownership_option
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_ownership_snapshot_normalizes_host_addresses
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_runtime_binding_tracks_open_and_disconnect_cleanup
+    - tests/unit/test_connection_snapshots.py::test_snapshot_exposes_shared_tun_ownership_and_active_binding
     - tests/unit/test_channel_mux_listener_mode.py::test_chunked_remote_services_transfer_reassembles_metadata
     - tests/unit/test_channel_mux_listener_mode.py::test_chunked_open_transfer_reassembles_metadata
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_shared_tun_ownership_metadata_roundtrip_matches_python
+    - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_ownership_snapshot_matches_python
 
 REQ-MUX-010:
   integration_tests:

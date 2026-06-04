@@ -1305,6 +1305,16 @@ Deliverables:
 - bind ownership lifecycle to peer epoch reset and disconnect cleanup
 - expose ownership in peer/runtime snapshots
 
+Delivered slice:
+
+- `ChannelMux` now derives shared-TUN ownership state from validated
+  `tun -> tun` service specs
+- runtime peer/channel bindings are tracked for shared-TUN services and removed
+  on TUN teardown or peer disconnect
+- `snapshot_tun_connections()` now exposes the committed ownership set plus any
+  active peer/channel bindings for that TUN service
+- packet forwarding behavior is intentionally unchanged in this phase
+
 Testing:
 
 - unit tests for install, replace, remove, and epoch-reset cleanup

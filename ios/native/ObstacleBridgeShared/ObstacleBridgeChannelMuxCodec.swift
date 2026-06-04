@@ -590,6 +590,80 @@ struct ObstacleBridgeChannelMuxCodec {
         ])
     }
 
+    static func sharedTunOwnershipSnapshot(for spec: ServiceSpec) -> JSONValue? {
+        guard
+            let options = spec.options,
+            let shared = options["shared_tun_ownership"]?.objectValue,
+            let peerValues = shared["peers"]?.arrayValue,
+            !peerValues.isEmpty
+        else {
+            return nil
+        }
+
+        var peerRefs: [JSONValue] = []
+        var peerObjects: [JSONValue] = []
+        var ownerByIPv4: [String: JSONValue] = [:]
+        var ownerByIPv6: [String: JSONValue] = [:]
+        var addressCount = 0
+
+        for peerValue in peerValues {
+            guard let peerObject = peerValue.objectValue else {
+                continue
+            }
+            let peerRef = peerObject["peer_ref"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !peerRef.isEmpty else {
+                continue
+            }
+            let ipv4 = normalizedSharedTunAddressArray(peerObject["ipv4"]?.arrayValue, suffix: "/32")
+            let ipv6 = normalizedSharedTunAddressArray(peerObject["ipv6"]?.arrayValue, suffix: "/128")
+            for address in ipv4 {
+                ownerByIPv4[address] = .string(peerRef)
+            }
+            for address in ipv6 {
+                ownerByIPv6[address] = .string(peerRef)
+            }
+            let peerAddressCount = ipv4.count + ipv6.count
+            addressCount += peerAddressCount
+            peerRefs.append(.string(peerRef))
+            peerObjects.append(
+                .object([
+                    "peer_ref": .string(peerRef),
+                    "ipv4": .array(ipv4.map(JSONValue.string)),
+                    "ipv6": .array(ipv6.map(JSONValue.string)),
+                    "address_count": .integer(Int64(peerAddressCount)),
+                ])
+            )
+        }
+
+        guard !peerObjects.isEmpty else {
+            return nil
+        }
+        return .object([
+            "mode": .string(shared["mode"]?.stringValue ?? "server_shared"),
+            "peer_count": .integer(Int64(peerObjects.count)),
+            "address_count": .integer(Int64(addressCount)),
+            "peer_refs": .array(peerRefs),
+            "peers": .array(peerObjects),
+            "owner_by_ipv4": .object(ownerByIPv4),
+            "owner_by_ipv6": .object(ownerByIPv6),
+        ])
+    }
+
+    private static func normalizedSharedTunAddressArray(
+        _ rawValues: [JSONValue]?,
+        suffix: String
+    ) -> [String] {
+        return (rawValues ?? []).compactMap { value in
+            guard let raw = value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+                return nil
+            }
+            if raw.hasSuffix(suffix) {
+                return String(raw.dropLast(suffix.count))
+            }
+            return raw
+        }
+    }
+
     private static func serviceSpec(from object: [String: JSONValue]) -> ServiceSpec? {
         guard
             let svcID = object["svc_id"]?.intValue,

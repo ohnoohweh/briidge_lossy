@@ -420,6 +420,112 @@ class ChannelMux:
                 seen_ipv6.add(normalized)
 
     @staticmethod
+    def _shared_tun_ownership_snapshot_for_spec(spec: "ChannelMux.ServiceSpec") -> Optional[dict[str, Any]]:
+        options = spec.options if isinstance(spec.options, dict) else None
+        shared = options.get("shared_tun_ownership") if isinstance(options, dict) else None
+        if not isinstance(shared, dict):
+            return None
+        peers_raw = shared.get("peers")
+        if not isinstance(peers_raw, list) or not peers_raw:
+            return None
+
+        peers: list[dict[str, Any]] = []
+        owner_by_ipv4: dict[str, str] = {}
+        owner_by_ipv6: dict[str, str] = {}
+        address_count = 0
+
+        for entry in peers_raw:
+            if not isinstance(entry, dict):
+                continue
+            peer_ref = str(entry.get("peer_ref") or "").strip()
+            if not peer_ref:
+                continue
+            ipv4_values: list[str] = []
+            ipv6_values: list[str] = []
+            for raw_addr in list(entry.get("ipv4") or []):
+                normalized, family = ChannelMux._normalize_shared_tun_owned_ip(
+                    raw_addr,
+                    token=str(spec.name or spec.svc_id),
+                    arg_name="shared_tun_ownership",
+                    field_name="shared_tun_ownership.ipv4",
+                )
+                if family == "ipv4":
+                    ipv4_values.append(normalized)
+                    owner_by_ipv4[normalized] = peer_ref
+            for raw_addr in list(entry.get("ipv6") or []):
+                normalized, family = ChannelMux._normalize_shared_tun_owned_ip(
+                    raw_addr,
+                    token=str(spec.name or spec.svc_id),
+                    arg_name="shared_tun_ownership",
+                    field_name="shared_tun_ownership.ipv6",
+                )
+                if family == "ipv6":
+                    ipv6_values.append(normalized)
+                    owner_by_ipv6[normalized] = peer_ref
+            peer_address_count = len(ipv4_values) + len(ipv6_values)
+            address_count += peer_address_count
+            peers.append(
+                {
+                    "peer_ref": peer_ref,
+                    "ipv4": ipv4_values,
+                    "ipv6": ipv6_values,
+                    "address_count": peer_address_count,
+                }
+            )
+
+        if not peers:
+            return None
+        return {
+            "mode": str(shared.get("mode") or "server_shared"),
+            "peer_count": len(peers),
+            "address_count": address_count,
+            "peer_refs": [str(entry["peer_ref"]) for entry in peers],
+            "peers": peers,
+            "owner_by_ipv4": owner_by_ipv4,
+            "owner_by_ipv6": owner_by_ipv6,
+        }
+
+    @staticmethod
+    def _shared_tun_runtime_snapshot(
+        ownership: Optional[dict[str, Any]],
+        active_peer_bindings: Optional[list[dict[str, Any]]] = None,
+    ) -> Optional[dict[str, Any]]:
+        if not isinstance(ownership, dict):
+            return None
+        snapshot = {
+            "mode": str(ownership.get("mode") or "server_shared"),
+            "peer_count": int(ownership.get("peer_count", 0) or 0),
+            "address_count": int(ownership.get("address_count", 0) or 0),
+            "peer_refs": [str(v) for v in list(ownership.get("peer_refs") or [])],
+            "peers": [
+                {
+                    "peer_ref": str(entry.get("peer_ref") or ""),
+                    "ipv4": [str(v) for v in list(entry.get("ipv4") or [])],
+                    "ipv6": [str(v) for v in list(entry.get("ipv6") or [])],
+                    "address_count": int(entry.get("address_count", 0) or 0),
+                }
+                for entry in list(ownership.get("peers") or [])
+                if isinstance(entry, dict)
+            ],
+            "owner_by_ipv4": {str(k): str(v) for k, v in dict(ownership.get("owner_by_ipv4") or {}).items()},
+            "owner_by_ipv6": {str(k): str(v) for k, v in dict(ownership.get("owner_by_ipv6") or {}).items()},
+            "active_peer_bindings": [],
+        }
+        if isinstance(active_peer_bindings, list):
+            snapshot["active_peer_bindings"] = [
+                {
+                    "peer_id": int(entry.get("peer_id", 0) or 0),
+                    "preferred_chan_id": (
+                        None if entry.get("preferred_chan_id") is None else int(entry.get("preferred_chan_id"))
+                    ),
+                    "bound_chan_ids": [int(v) for v in list(entry.get("bound_chan_ids") or [])],
+                }
+                for entry in active_peer_bindings
+                if isinstance(entry, dict)
+            ]
+        return snapshot
+
+    @staticmethod
     def _parse_structured_service_spec(item: dict, arg_name: str, sid: int) -> "ChannelMux.ServiceSpec":
         token = json.dumps(item, sort_keys=True, ensure_ascii=False)
         listen = item.get("listen")
@@ -569,6 +675,8 @@ class ChannelMux:
         self._tun_by_chan: dict[int, ChannelMux.TunDevice] = {}
         self._tun_chan_by_service: dict[ChannelMux.ServiceKey, int] = {}
         self._tun_frag_rx: dict[tuple[int, int], dict[str, Any]] = {}
+        self._shared_tun_ownership_by_service: dict[ChannelMux.ServiceKey, dict[str, Any]] = {}
+        self._shared_tun_runtime_by_peer: dict[tuple[ChannelMux.ServiceKey, int], dict[str, Any]] = {}
         self._tun_inflow_window_start_ns: Optional[int] = None
         self._tun_inflow_prev_bytes: int = 0
         self._tun_inflow_curr_bytes: int = 0
@@ -1665,6 +1773,97 @@ class ChannelMux:
         out.update(self._peer_installed_services)
         return out
 
+    def _install_shared_tun_ownership_for_service(
+        self,
+        svc_key: "ChannelMux.ServiceKey",
+        spec: "ChannelMux.ServiceSpec",
+    ) -> None:
+        self._drop_shared_tun_state_for_service(svc_key)
+        if str(spec.l_proto) != "tun" or str(spec.r_proto) != "tun":
+            return
+        snapshot = self._shared_tun_ownership_snapshot_for_spec(spec)
+        if snapshot is None:
+            return
+        self._shared_tun_ownership_by_service[svc_key] = snapshot
+
+    def _drop_shared_tun_state_for_service(self, svc_key: "ChannelMux.ServiceKey") -> None:
+        self._shared_tun_ownership_by_service.pop(svc_key, None)
+        self._shared_tun_runtime_by_peer = {
+            key: value
+            for key, value in self._shared_tun_runtime_by_peer.items()
+            if key[0] != svc_key
+        }
+
+    def _drop_shared_tun_state_for_peer(self, peer_id: int) -> None:
+        self._shared_tun_runtime_by_peer = {
+            key: value
+            for key, value in self._shared_tun_runtime_by_peer.items()
+            if int(key[1]) != int(peer_id)
+        }
+
+    def _record_shared_tun_peer_binding(
+        self,
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        peer_id: Optional[int],
+        chan_id: int,
+    ) -> None:
+        if svc_key is None or peer_id is None:
+            return
+        if svc_key not in self._shared_tun_ownership_by_service:
+            return
+        key = (svc_key, int(peer_id))
+        state = self._shared_tun_runtime_by_peer.setdefault(
+            key,
+            {"preferred_chan_id": None, "bound_chan_ids": []},
+        )
+        bound_chan_ids = [int(v) for v in list(state.get("bound_chan_ids") or []) if int(v) != int(chan_id)]
+        bound_chan_ids.append(int(chan_id))
+        bound_chan_ids.sort()
+        state["bound_chan_ids"] = bound_chan_ids
+        preferred = state.get("preferred_chan_id")
+        state["preferred_chan_id"] = int(preferred) if preferred in bound_chan_ids else bound_chan_ids[0]
+
+    def _drop_shared_tun_peer_binding(
+        self,
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        peer_id: Optional[int],
+        chan_id: int,
+    ) -> None:
+        if svc_key is None or peer_id is None:
+            return
+        key = (svc_key, int(peer_id))
+        state = self._shared_tun_runtime_by_peer.get(key)
+        if not isinstance(state, dict):
+            return
+        bound_chan_ids = [int(v) for v in list(state.get("bound_chan_ids") or []) if int(v) != int(chan_id)]
+        if not bound_chan_ids:
+            self._shared_tun_runtime_by_peer.pop(key, None)
+            return
+        state["bound_chan_ids"] = bound_chan_ids
+        preferred = state.get("preferred_chan_id")
+        state["preferred_chan_id"] = int(preferred) if preferred in bound_chan_ids else bound_chan_ids[0]
+
+    def _shared_tun_runtime_snapshot_for_service(
+        self,
+        svc_key: Optional["ChannelMux.ServiceKey"],
+    ) -> Optional[dict[str, Any]]:
+        if svc_key is None:
+            return None
+        ownership = self._shared_tun_ownership_by_service.get(svc_key)
+        if not isinstance(ownership, dict):
+            return None
+        active_peer_bindings = [
+            {
+                "peer_id": int(key[1]),
+                "preferred_chan_id": state.get("preferred_chan_id"),
+                "bound_chan_ids": [int(v) for v in list(state.get("bound_chan_ids") or [])],
+            }
+            for key, state in self._shared_tun_runtime_by_peer.items()
+            if key[0] == svc_key and isinstance(state, dict)
+        ]
+        active_peer_bindings.sort(key=lambda entry: int(entry.get("peer_id", 0)))
+        return self._shared_tun_runtime_snapshot(ownership, active_peer_bindings)
+
     def _next_ctrl_chunk_txid(self) -> int:
         txid = int(self._ctrl_chunk_next_txid) & 0xFFFFFFFF
         if txid <= 0:
@@ -1838,6 +2037,7 @@ class ChannelMux:
             if dev is not None:
                 self._unbind_all_tun_channels_for_device(dev)
                 self._close_tun_device(dev)
+            self._drop_shared_tun_state_for_service(svc_key)
             return
         srv = self._svc_tcp_servers.pop(svc_key, None)
         if srv:
@@ -1910,6 +2110,7 @@ class ChannelMux:
         self._pending_peer_service_catalogs.pop(int(peer_id), None)
         self._peer_mux_epochs.pop(int(peer_id), None)
         self._reset_peer_open_channels(int(peer_id))
+        self._drop_shared_tun_state_for_peer(int(peer_id))
         try:
             self.loop.create_task(self._drop_peer_installed_services(peer_id=peer_id))
         except Exception as e:
@@ -2141,6 +2342,7 @@ class ChannelMux:
         mtu = max(68, int(spec.l_port or self.TUN_DEFAULT_MTU))
         dev = self._open_tun_device(spec.l_bind, mtu, svc_key=svc_key)
         self._svc_tun_devices[svc_key] = dev
+        self._install_shared_tun_ownership_for_service(svc_key, spec)
         self._register_tun_reader(dev)
         self.log.info("[TUN/SRV] service=%s:%s opened if=%s mtu=%s", svc_key[0], spec.svc_id, dev.ifname, dev.mtu)
         self._schedule_service_hook(spec, svc_key, "listener", "on_created")
@@ -2172,6 +2374,11 @@ class ChannelMux:
         # peers. Keep every inbound channel routable; dev.chan_id is only the
         # preferred outbound channel for locally-read packets.
         self._tun_by_chan[chan] = dev
+        self._record_shared_tun_peer_binding(
+            getattr(dev, "service_key", None),
+            self._chan_owner_peer_id.get(int(chan)),
+            int(chan),
+        )
         if dev.chan_id is None:
             dev.chan_id = chan
         if dev.service_key is not None:
@@ -2184,6 +2391,11 @@ class ChannelMux:
         dev = self._tun_by_chan.pop(chan, None)
         if dev is None:
             return None
+        self._drop_shared_tun_peer_binding(
+            getattr(dev, "service_key", None),
+            self._chan_owner_peer_id.get(int(chan)),
+            int(chan),
+        )
         remaining = self._tun_channels_for_device(dev)
         if dev.chan_id == chan:
             dev.chan_id = remaining[0] if remaining else None
@@ -2197,6 +2409,11 @@ class ChannelMux:
     def _unbind_all_tun_channels_for_device(self, dev: "ChannelMux.TunDevice") -> None:
         for chan in list(self._tun_by_chan.keys()):
             if self._tun_by_chan.get(chan) is dev:
+                self._drop_shared_tun_peer_binding(
+                    getattr(dev, "service_key", None),
+                    self._chan_owner_peer_id.get(int(chan)),
+                    int(chan),
+                )
                 self._tun_by_chan.pop(chan, None)
                 self._tun_frag_rx = {key: state for key, state in self._tun_frag_rx.items() if key[0] != chan}
                 self._forget_tun_open_key(chan)
@@ -4187,6 +4404,7 @@ class ChannelMux:
                     {"ifname": str(spec.r_host), "mtu": int(spec.r_port)} if spec else
                     {"ifname": str(getattr(dev, "ifname", "") or ""), "mtu": int(getattr(dev, "mtu", 0) or 0)}
                 ),
+                "shared_tun_ownership": self._shared_tun_runtime_snapshot_for_service(svc_key),
                 "stats": stats,
             })
 
@@ -4218,6 +4436,7 @@ class ChannelMux:
                 "remote_destination": (
                     {"ifname": str(spec.r_host), "mtu": int(spec.r_port)} if spec else local
                 ),
+                "shared_tun_ownership": self._shared_tun_runtime_snapshot_for_service(svc_key),
                 "stats": {
                     "rx_msgs": 0,
                     "tx_msgs": 0,
