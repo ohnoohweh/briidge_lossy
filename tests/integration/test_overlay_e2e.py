@@ -8464,6 +8464,8 @@ def test_overlay_e2e_webadmin_cert_reload_buttons_drive_authenticated_reload_flo
                 transport='tcp',
                 authenticated=True,
             )
+            if case.probe_proto == 'tcp':
+                wait_tcp_listen(case.probe_host, case.probe_port, timeout=10.0)
             wait_probe(case, payload=f'\x01webadmin-reload-prime-{scope}'.encode('ascii'), timeout=30.0)
 
             index_code, index_headers, index_html = fetch_http_text(
