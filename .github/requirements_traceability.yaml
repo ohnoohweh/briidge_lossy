@@ -105,6 +105,10 @@ REQ-OVL-007:
 # REQ-AUT-009/010/016 mappings intact while requiring the authenticated client
 # admin session to expose connected status and an authenticated cert-mode peer
 # row before the browser-path reload test sends its first prime probe.
+# NOTE: The 2026-06-04 shared-TUN Phase 1 follow-up keeps the existing
+# REQ-MUX-009 mapping intact while adding a validated structured config contract
+# for `options.shared_tun_ownership` on tun->tun services and defending that
+# metadata with Python parsing plus Swift codec parity tests.
 # The application-vs-library functional decomposition for REQ-WSP-* is documented in
 # docs/ARCHITECTURE.md under "WebSocket proxy tunneling".
 # The broader separation between user use-cases, external assumptions, and
@@ -712,8 +716,13 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_open_uses_pending_peer_listener_before_async_catalog_start
     - tests/unit/test_channel_mux_listener_mode.py::test_open_payload_roundtrip_preserves_hook_metadata
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_services_roundtrip_preserves_hook_metadata
+    - tests/unit/test_channel_mux_listener_mode.py::test_parse_structured_tun_service_accepts_shared_tun_ownership_options
+    - tests/unit/test_channel_mux_listener_mode.py::test_parse_structured_tun_service_rejects_duplicate_shared_tun_owned_address
+    - tests/unit/test_channel_mux_listener_mode.py::test_parse_structured_tun_service_rejects_non_host_prefix_in_shared_tun_ownership
+    - tests/unit/test_channel_mux_listener_mode.py::test_parse_structured_non_tun_service_rejects_shared_tun_ownership_option
     - tests/unit/test_channel_mux_listener_mode.py::test_chunked_remote_services_transfer_reassembles_metadata
     - tests/unit/test_channel_mux_listener_mode.py::test_chunked_open_transfer_reassembles_metadata
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_shared_tun_ownership_metadata_roundtrip_matches_python
 
 REQ-MUX-010:
   integration_tests:

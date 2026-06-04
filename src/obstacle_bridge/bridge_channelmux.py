@@ -310,6 +310,116 @@ class ChannelMux:
         return port
 
     @staticmethod
+    def _normalize_shared_tun_owned_ip(raw: Any, *, token: str, arg_name: str, field_name: str) -> tuple[str, str]:
+        text = str(raw or "").strip()
+        if not text:
+            raise ValueError(f"{arg_name} {field_name} address entries must be non-empty: {token}")
+        try:
+            if "/" in text:
+                iface = ipaddress.ip_interface(text)
+                if iface.version == 4 and int(iface.network.prefixlen) != 32:
+                    raise ValueError
+                if iface.version == 6 and int(iface.network.prefixlen) != 128:
+                    raise ValueError
+                return str(iface.ip), f"ipv{iface.version}"
+            addr = ipaddress.ip_address(text)
+            return str(addr), f"ipv{addr.version}"
+        except Exception:
+            raise ValueError(
+                f"{arg_name} {field_name} addresses must be exact host IPv4/IPv6 values "
+                f"(optionally /32 or /128 only): {token}"
+            )
+
+    @staticmethod
+    def _validate_shared_tun_ownership_options(options: dict, arg_name: str, token: str) -> None:
+        shared = options.get("shared_tun_ownership")
+        if shared is None:
+            return
+        if not isinstance(shared, dict):
+            raise ValueError(f"{arg_name} structured tun option shared_tun_ownership must be an object: {token}")
+
+        mode = str(shared.get("mode") or "").strip().lower()
+        if mode != "server_shared":
+            raise ValueError(
+                f"{arg_name} structured tun option shared_tun_ownership.mode must be server_shared: {token}"
+            )
+
+        peers = shared.get("peers")
+        if not isinstance(peers, list) or not peers:
+            raise ValueError(
+                f"{arg_name} structured tun option shared_tun_ownership.peers must be a non-empty array: {token}"
+            )
+
+        seen_peer_refs: set[str] = set()
+        seen_ipv4: set[str] = set()
+        seen_ipv6: set[str] = set()
+
+        for entry in peers:
+            if not isinstance(entry, dict):
+                raise ValueError(
+                    f"{arg_name} structured tun option shared_tun_ownership.peers entries must be objects: {token}"
+                )
+            peer_ref = str(entry.get("peer_ref") or "").strip()
+            if not peer_ref:
+                raise ValueError(
+                    f"{arg_name} structured tun option shared_tun_ownership peer_ref must be non-empty: {token}"
+                )
+            if peer_ref in seen_peer_refs:
+                raise ValueError(
+                    f"{arg_name} structured tun option shared_tun_ownership peer_ref values must be unique: {token}"
+                )
+            seen_peer_refs.add(peer_ref)
+
+            ipv4_values = entry.get("ipv4", [])
+            ipv6_values = entry.get("ipv6", [])
+            if ipv4_values is None:
+                ipv4_values = []
+            if ipv6_values is None:
+                ipv6_values = []
+            if not isinstance(ipv4_values, list) or not isinstance(ipv6_values, list):
+                raise ValueError(
+                    f"{arg_name} structured tun option shared_tun_ownership ipv4/ipv6 values must be arrays: {token}"
+                )
+            if not ipv4_values and not ipv6_values:
+                raise ValueError(
+                    f"{arg_name} structured tun option shared_tun_ownership each peer must own at least one address: {token}"
+                )
+
+            for raw_addr in ipv4_values:
+                normalized, family = ChannelMux._normalize_shared_tun_owned_ip(
+                    raw_addr,
+                    token=token,
+                    arg_name=arg_name,
+                    field_name="shared_tun_ownership.ipv4",
+                )
+                if family != "ipv4":
+                    raise ValueError(
+                        f"{arg_name} structured tun option shared_tun_ownership.ipv4 accepts only IPv4 addresses: {token}"
+                    )
+                if normalized in seen_ipv4:
+                    raise ValueError(
+                        f"{arg_name} structured tun option shared_tun_ownership IPv4 addresses must be unique: {token}"
+                    )
+                seen_ipv4.add(normalized)
+
+            for raw_addr in ipv6_values:
+                normalized, family = ChannelMux._normalize_shared_tun_owned_ip(
+                    raw_addr,
+                    token=token,
+                    arg_name=arg_name,
+                    field_name="shared_tun_ownership.ipv6",
+                )
+                if family != "ipv6":
+                    raise ValueError(
+                        f"{arg_name} structured tun option shared_tun_ownership.ipv6 accepts only IPv6 addresses: {token}"
+                    )
+                if normalized in seen_ipv6:
+                    raise ValueError(
+                        f"{arg_name} structured tun option shared_tun_ownership IPv6 addresses must be unique: {token}"
+                    )
+                seen_ipv6.add(normalized)
+
+    @staticmethod
     def _parse_structured_service_spec(item: dict, arg_name: str, sid: int) -> "ChannelMux.ServiceSpec":
         token = json.dumps(item, sort_keys=True, ensure_ascii=False)
         listen = item.get("listen")
@@ -349,6 +459,13 @@ class ChannelMux:
         options = item.get("options")
         if options is not None and not isinstance(options, dict):
             raise ValueError(f"{arg_name} structured item options must be an object when provided: {token}")
+        if isinstance(options, dict):
+            if "shared_tun_ownership" in options and not (l_proto == "tun" and r_proto == "tun"):
+                raise ValueError(
+                    f"{arg_name} structured item option shared_tun_ownership is supported only on tun->tun services: {token}"
+                )
+            if l_proto == "tun" and r_proto == "tun":
+                ChannelMux._validate_shared_tun_ownership_options(options, arg_name, token)
 
         return ChannelMux.ServiceSpec(
             svc_id=sid,

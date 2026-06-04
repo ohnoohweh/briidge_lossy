@@ -234,6 +234,90 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         finally:
             mux.loop.close()
 
+    def test_parse_structured_tun_service_accepts_shared_tun_ownership_options(self):
+        spec = ChannelMux._parse_structured_service_spec(
+            {
+                "name": "shared-tun",
+                "listen": {"protocol": "tun", "ifname": "obtun0", "mtu": 1500},
+                "target": {"protocol": "tun", "ifname": "obtun1", "mtu": 1500},
+                "options": {
+                    "shared_tun_ownership": {
+                        "mode": "server_shared",
+                        "peers": [
+                            {"peer_ref": "linux-client", "ipv4": ["192.168.107.2"], "ipv6": ["fd20:107::2"]},
+                            {"peer_ref": "ios-client", "ipv4": ["192.168.107.4/32"], "ipv6": ["fd20:107::4/128"]},
+                        ],
+                    }
+                },
+            },
+            "--own-servers",
+            7,
+        )
+        self.assertEqual(spec.l_proto, "tun")
+        self.assertEqual(spec.r_proto, "tun")
+        self.assertEqual(
+            spec.options["shared_tun_ownership"]["peers"][0]["peer_ref"],
+            "linux-client",
+        )
+
+    def test_parse_structured_tun_service_rejects_duplicate_shared_tun_owned_address(self):
+        with self.assertRaisesRegex(ValueError, "IPv4 addresses must be unique"):
+            ChannelMux._parse_structured_service_spec(
+                {
+                    "listen": {"protocol": "tun", "ifname": "obtun0", "mtu": 1500},
+                    "target": {"protocol": "tun", "ifname": "obtun1", "mtu": 1500},
+                    "options": {
+                        "shared_tun_ownership": {
+                            "mode": "server_shared",
+                            "peers": [
+                                {"peer_ref": "linux-client", "ipv4": ["192.168.107.2"]},
+                                {"peer_ref": "ios-client", "ipv4": ["192.168.107.2/32"]},
+                            ],
+                        }
+                    },
+                },
+                "--own-servers",
+                7,
+            )
+
+    def test_parse_structured_tun_service_rejects_non_host_prefix_in_shared_tun_ownership(self):
+        with self.assertRaisesRegex(ValueError, "optionally /32 or /128 only"):
+            ChannelMux._parse_structured_service_spec(
+                {
+                    "listen": {"protocol": "tun", "ifname": "obtun0", "mtu": 1500},
+                    "target": {"protocol": "tun", "ifname": "obtun1", "mtu": 1500},
+                    "options": {
+                        "shared_tun_ownership": {
+                            "mode": "server_shared",
+                            "peers": [
+                                {"peer_ref": "linux-client", "ipv4": ["192.168.107.0/30"]},
+                            ],
+                        }
+                    },
+                },
+                "--own-servers",
+                7,
+            )
+
+    def test_parse_structured_non_tun_service_rejects_shared_tun_ownership_option(self):
+        with self.assertRaisesRegex(ValueError, "supported only on tun->tun services"):
+            ChannelMux._parse_structured_service_spec(
+                {
+                    "listen": {"protocol": "tcp", "bind": "127.0.0.1", "port": 8080},
+                    "target": {"protocol": "tcp", "host": "127.0.0.1", "port": 80},
+                    "options": {
+                        "shared_tun_ownership": {
+                            "mode": "server_shared",
+                            "peers": [
+                                {"peer_ref": "linux-client", "ipv4": ["192.168.107.2"]},
+                            ],
+                        }
+                    },
+                },
+                "--own-servers",
+                7,
+            )
+
     def test_open_payload_roundtrip_preserves_hook_metadata(self):
         mux = ChannelMux(_FakeSession(), asyncio.new_event_loop())
         try:

@@ -5142,6 +5142,47 @@ def test_swift_remote_services_roundtrip_matches_python_with_metadata(swift_chan
         _close_mux(mux)
 
 
+def test_swift_shared_tun_ownership_metadata_roundtrip_matches_python(swift_channelmux_runner: Path) -> None:
+    mux = _make_mux()
+    try:
+        spec = ChannelMux.ServiceSpec(
+            svc_id=3,
+            l_proto="tun",
+            l_bind="obtun0",
+            l_port=1500,
+            r_proto="tun",
+            r_host="obtun1",
+            r_port=1500,
+            name="shared-server-tun",
+            options={
+                "shared_tun_ownership": {
+                    "mode": "server_shared",
+                    "peers": [
+                        {"peer_ref": "linux-client", "ipv4": ["192.168.107.2"], "ipv6": ["fd20:107::2"]},
+                        {"peer_ref": "ios-client", "ipv4": ["192.168.107.4"], "ipv6": ["fd20:107::4"]},
+                    ],
+                }
+            },
+        )
+        python_payload = mux._encode_remote_services_set_v2([spec])
+        python_decoded = mux._decode_remote_services_set_v2(python_payload)
+        assert python_decoded is not None
+        swift = _run_swift(
+            swift_channelmux_runner,
+            {
+                "action": "decode_remote_services",
+                "payload_hex": python_payload.hex(),
+            },
+        )
+        assert swift["remote_services"] == {
+            "instance_id": str(python_decoded[0]),
+            "connection_seq": python_decoded[1],
+            "services": [_service_spec_payload(spec) for spec in python_decoded[2]],
+        }
+    finally:
+        _close_mux(mux)
+
+
 def test_swift_securelink_frame_exact_bytes(swift_channelmux_runner: Path) -> None:
     from obstacle_bridge.bridge import SecureLinkPskSession
 

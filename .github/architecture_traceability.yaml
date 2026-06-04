@@ -43,6 +43,10 @@
 # ARC-CMP-004 and ARC-CMP-005 mappings intact while making the browser-path
 # certificate-reload test wait for authenticated client status and peer-ready
 # secure-link observability before the first prime probe.
+# NOTE: The 2026-06-04 shared-TUN Phase 1 follow-up keeps the existing
+# ARC-CMP-003 mapping intact while adding validated structured ownership
+# metadata for tun->tun services and defending that metadata with Swift/Python
+# codec parity.
 
 ARC-CMP-001:
   unit_tests:
