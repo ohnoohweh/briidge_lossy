@@ -173,6 +173,26 @@ class _RunnerStub:
                         "active_peer_bindings": [
                             {"peer_id": 7, "preferred_chan_id": 301, "bound_chan_ids": [301]},
                         ],
+                        "drop_counters": {
+                            "total": 3,
+                            "by_reason": {
+                                "unknown_destination": 2,
+                                "source_not_owned_by_peer": 1,
+                            },
+                        },
+                        "recent_drops": [
+                            {
+                                "reason": "unknown_destination",
+                                "direction": "local_to_peer",
+                                "peer_id": None,
+                                "chan_id": None,
+                                "ip_version": 4,
+                                "source_ip": None,
+                                "destination_ip": "192.168.107.9",
+                                "route_class": "unicast",
+                                "packet_bytes": 21,
+                            }
+                        ],
                     },
                 }
             ],
@@ -524,9 +544,11 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["tun_listening"], 1)
         self.assertEqual(payload["summary"]["shared_services"], 1)
         self.assertEqual(payload["summary"]["shared_active_peer_bindings"], 1)
+        self.assertEqual(payload["summary"]["shared_drop_total"], 3)
         self.assertEqual(len(payload["shared_tun"]), 1)
         self.assertEqual(payload["shared_tun"][0]["service_name"], "shared-tun")
         self.assertEqual(payload["shared_tun"][0]["shared_tun_ownership"]["peer_count"], 2)
+        self.assertEqual(payload["shared_tun"][0]["shared_tun_ownership"]["drop_counters"]["by_reason"]["unknown_destination"], 2)
 
     def test_meta_payload_suppresses_runtime_dependency_warnings_on_ios(self):
         args = argparse.Namespace(

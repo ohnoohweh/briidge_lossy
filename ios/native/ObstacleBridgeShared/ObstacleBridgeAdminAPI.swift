@@ -395,6 +395,11 @@ enum ObstacleBridgeAdminAPI {
             let bindings = ownership["active_peer_bindings"] as? [Any] ?? []
             partialResult += bindings.count
         }
+        let sharedDropTotal = sharedRows.reduce(into: 0) { partialResult, row in
+            let ownership = row["shared_tun_ownership"] as? [String: Any] ?? [:]
+            let dropCounters = ownership["drop_counters"] as? [String: Any] ?? [:]
+            partialResult += (dropCounters["total"] as? Int) ?? (dropCounters["total"] as? NSNumber)?.intValue ?? 0
+        }
         return [
             "tun": tunRows,
             "shared_tun": sharedRows,
@@ -404,6 +409,7 @@ enum ObstacleBridgeAdminAPI {
                 "tun_listening": tunListening,
                 "shared_services": sharedRows.count,
                 "shared_active_peer_bindings": activeBindings,
+                "shared_drop_total": sharedDropTotal,
             ],
             "app": "udp-bidirectional-mux",
             "milestone": "C",

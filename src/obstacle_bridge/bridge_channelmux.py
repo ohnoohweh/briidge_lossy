@@ -116,6 +116,7 @@ class ChannelMux:
     CTRL_CHUNK_MAX_INFLIGHT = 512
     TUN_INFLOW_THROTTLE_WINDOW_NS = 100_000_000
     TUN_INFLOW_THROTTLE_RATIO = 0.9
+    SHARED_TUN_RECENT_DROP_LIMIT = 16
 
     @staticmethod
     def _proto_name_to_code(name: "ChannelMux.ProtoName") -> int:
@@ -498,6 +499,7 @@ class ChannelMux:
         ownership: Optional[dict[str, Any]],
         active_peer_bindings: Optional[list[dict[str, Any]]] = None,
         throttle_scopes: Optional[list[dict[str, Any]]] = None,
+        drop_state: Optional[dict[str, Any]] = None,
     ) -> Optional[dict[str, Any]]:
         if not isinstance(ownership, dict):
             return None
@@ -520,6 +522,8 @@ class ChannelMux:
             "owner_by_ipv6": {str(k): str(v) for k, v in dict(ownership.get("owner_by_ipv6") or {}).items()},
             "active_peer_bindings": [],
             "throttle_scopes": [],
+            "drop_counters": {"total": 0, "by_reason": {}},
+            "recent_drops": [],
         }
         if isinstance(active_peer_bindings, list):
             snapshot["active_peer_bindings"] = [
@@ -548,6 +552,29 @@ class ChannelMux:
                     "throttle_drop_count": int(entry.get("throttle_drop_count", 0) or 0),
                 }
                 for entry in throttle_scopes
+                if isinstance(entry, dict)
+            ]
+        if isinstance(drop_state, dict):
+            snapshot["drop_counters"] = {
+                "total": int(drop_state.get("total", 0) or 0),
+                "by_reason": {
+                    str(k): int(v or 0)
+                    for k, v in dict(drop_state.get("by_reason") or {}).items()
+                },
+            }
+            snapshot["recent_drops"] = [
+                {
+                    "reason": str(entry.get("reason") or ""),
+                    "direction": str(entry.get("direction") or ""),
+                    "peer_id": None if entry.get("peer_id") is None else int(entry.get("peer_id")),
+                    "chan_id": None if entry.get("chan_id") is None else int(entry.get("chan_id")),
+                    "ip_version": None if entry.get("ip_version") is None else int(entry.get("ip_version")),
+                    "source_ip": None if entry.get("source_ip") is None else str(entry.get("source_ip")),
+                    "destination_ip": None if entry.get("destination_ip") is None else str(entry.get("destination_ip")),
+                    "route_class": None if entry.get("route_class") is None else str(entry.get("route_class")),
+                    "packet_bytes": None if entry.get("packet_bytes") is None else int(entry.get("packet_bytes")),
+                }
+                for entry in list(drop_state.get("recent_drops") or [])
                 if isinstance(entry, dict)
             ]
         return snapshot
@@ -714,6 +741,7 @@ class ChannelMux:
         self._shared_tun_runtime_by_peer: dict[tuple[ChannelMux.ServiceKey, int], dict[str, Any]] = {}
         self._shared_tun_peer_ref_by_peer: dict[tuple[ChannelMux.ServiceKey, int], str] = {}
         self._shared_tun_peer_id_by_ref: dict[tuple[ChannelMux.ServiceKey, str], int] = {}
+        self._shared_tun_drop_state_by_service: dict[ChannelMux.ServiceKey, dict[str, Any]] = {}
         self._tun_inflow_scope_state: dict[tuple[Any, ...], dict[str, Any]] = {}
         self._chan_owner_peer_id: dict[int, int] = {}
         self._ctrl_chunk_rx: dict[tuple[int, int, int, int, int], dict[str, Any]] = {}
@@ -1840,6 +1868,7 @@ class ChannelMux:
 
     def _drop_shared_tun_state_for_service(self, svc_key: "ChannelMux.ServiceKey") -> None:
         self._shared_tun_ownership_by_service.pop(svc_key, None)
+        self._shared_tun_drop_state_by_service.pop(svc_key, None)
         self._shared_tun_runtime_by_peer = {
             key: value
             for key, value in self._shared_tun_runtime_by_peer.items()
@@ -1962,7 +1991,51 @@ class ChannelMux:
             entry["throttle_curr_window_bytes"] = int(scope.get("curr_window_bytes", 0) or 0)
             entry["throttle_drop_count"] = int(scope.get("throttle_drop_count", 0) or 0)
         active_peer_bindings.sort(key=lambda entry: int(entry.get("peer_id", 0)))
-        return self._shared_tun_runtime_snapshot(ownership, active_peer_bindings, throttle_scopes)
+        drop_state = self._shared_tun_drop_state_by_service.get(svc_key)
+        return self._shared_tun_runtime_snapshot(ownership, active_peer_bindings, throttle_scopes, drop_state)
+
+    def _record_shared_tun_drop(
+        self,
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        *,
+        reason: str,
+        direction: str,
+        peer_id: Optional[int] = None,
+        chan_id: Optional[int] = None,
+        ip_version: Optional[int] = None,
+        source_ip: Optional[str] = None,
+        destination_ip: Optional[str] = None,
+        route_class: Optional[str] = None,
+        packet_bytes: Optional[int] = None,
+    ) -> None:
+        if svc_key is None or svc_key not in self._shared_tun_ownership_by_service:
+            return
+        state = self._shared_tun_drop_state_by_service.setdefault(
+            svc_key,
+            {"total": 0, "by_reason": {}, "recent_drops": []},
+        )
+        reason_key = str(reason or "unknown")
+        state["total"] = int(state.get("total", 0) or 0) + 1
+        by_reason = dict(state.get("by_reason") or {})
+        by_reason[reason_key] = int(by_reason.get(reason_key, 0) or 0) + 1
+        state["by_reason"] = by_reason
+        recent = list(state.get("recent_drops") or [])
+        recent.append(
+            {
+                "reason": reason_key,
+                "direction": str(direction or ""),
+                "peer_id": None if peer_id is None else int(peer_id),
+                "chan_id": None if chan_id is None else int(chan_id),
+                "ip_version": None if ip_version is None else int(ip_version),
+                "source_ip": None if source_ip is None else str(source_ip),
+                "destination_ip": None if destination_ip is None else str(destination_ip),
+                "route_class": None if route_class is None else str(route_class),
+                "packet_bytes": None if packet_bytes is None else int(packet_bytes),
+            }
+        )
+        if len(recent) > self.SHARED_TUN_RECENT_DROP_LIMIT:
+            recent = recent[-self.SHARED_TUN_RECENT_DROP_LIMIT :]
+        state["recent_drops"] = recent
 
     @staticmethod
     def _direct_tun_inflow_scope_key(
@@ -2929,6 +3002,13 @@ class ChannelMux:
             return
         if len(packet) > int(dev.mtu):
             self.log.warning("[TUN] if=%s drop oversize local packet len=%s mtu=%s", dev.ifname, len(packet), dev.mtu)
+            self._record_shared_tun_drop(
+                getattr(dev, "service_key", None),
+                reason="oversize_local_packet",
+                direction="local_to_peer",
+                chan_id=dev.chan_id,
+                packet_bytes=len(packet),
+            )
             return
         now_ns = time.monotonic_ns()
         shared_route = self._shared_tun_plan_local_delivery(getattr(dev, "service_key", None), packet)
@@ -2938,6 +3018,15 @@ class ChannelMux:
         if not self._local_tun_send_allowed(len(packet), now_ns=now_ns, scope_key=scope_key):
             scope_state = self._advance_tun_inflow_window(scope_key, now_ns)
             scope_state["throttle_drop_count"] = int(scope_state.get("throttle_drop_count", 0) or 0) + 1
+            self._record_shared_tun_drop(
+                getattr(dev, "service_key", None),
+                reason="throttled_local_tun",
+                direction="local_to_peer",
+                chan_id=dev.chan_id,
+                route_class=None if shared_route is None else str(shared_route.get("route_class") or ""),
+                destination_ip=None if shared_route is None else shared_route.get("destination_ip"),
+                packet_bytes=len(packet),
+            )
             self.log.debug(
                 "[TUN] if=%s throttle local packet scope=%s buffered_frames=%s prev_window_bytes=%s curr_window_bytes=%s packet_bytes=%s",
                 dev.ifname,
@@ -2950,6 +3039,16 @@ class ChannelMux:
             return
         if shared_route is not None:
             if not bool(shared_route.get("routed")):
+                self._record_shared_tun_drop(
+                    getattr(dev, "service_key", None),
+                    reason=str(shared_route.get("drop_reason") or "shared_route_drop"),
+                    direction="local_to_peer",
+                    chan_id=dev.chan_id,
+                    ip_version=shared_route.get("ip_version"),
+                    destination_ip=shared_route.get("destination_ip"),
+                    route_class=shared_route.get("route_class"),
+                    packet_bytes=len(packet),
+                )
                 self.log.debug(
                     "[TUN] if=%s drop shared route class=%s dst=%s reason=%s",
                     dev.ifname,
@@ -3095,6 +3194,17 @@ class ChannelMux:
             return
         allowed, parsed, drop_reason = self._shared_tun_guard_inbound_packet(dev=dev, chan=chan, packet=data)
         if not allowed:
+            self._record_shared_tun_drop(
+                getattr(dev, "service_key", None),
+                reason=str(drop_reason or "inbound_guard_drop"),
+                direction="peer_to_local",
+                peer_id=self._chan_owner_peer_id.get(int(chan)),
+                chan_id=chan,
+                ip_version=None if parsed is None else parsed.get("ip_version"),
+                source_ip=None if parsed is None else parsed.get("source_ip"),
+                destination_ip=None if parsed is None else parsed.get("destination_ip"),
+                packet_bytes=len(data),
+            )
             self.log.warning(
                 "[TUN] chan=%s drop inbound packet if=%s reason=%s src=%s dst=%s",
                 chan,
@@ -3110,6 +3220,17 @@ class ChannelMux:
         ctr.bytes_in += len(data)
         if len(data) > int(dev.mtu):
             self.log.warning("[TUN] chan=%s drop oversize packet len=%s mtu=%s", chan, len(data), dev.mtu)
+            self._record_shared_tun_drop(
+                getattr(dev, "service_key", None),
+                reason="oversize_inbound_packet",
+                direction="peer_to_local",
+                peer_id=self._chan_owner_peer_id.get(int(chan)),
+                chan_id=chan,
+                ip_version=None if parsed is None else parsed.get("ip_version"),
+                source_ip=None if parsed is None else parsed.get("source_ip"),
+                destination_ip=None if parsed is None else parsed.get("destination_ip"),
+                packet_bytes=len(data),
+            )
             return
         shared_relay = self._shared_tun_plan_inbound_peer_relay(
             getattr(dev, "service_key", None),

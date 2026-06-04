@@ -401,9 +401,13 @@ class AdminWebUI:
         tun_rows = list(snapshot.get("tun") or [])
         shared_rows = [dict(row) for row in tun_rows if isinstance(row.get("shared_tun_ownership"), dict)]
         active_bindings_total = 0
+        shared_drop_total = 0
         for row in shared_rows:
-            active_bindings = list((row.get("shared_tun_ownership") or {}).get("active_peer_bindings") or [])
+            ownership = dict(row.get("shared_tun_ownership") or {})
+            active_bindings = list(ownership.get("active_peer_bindings") or [])
             active_bindings_total += len(active_bindings)
+            drop_counters = dict(ownership.get("drop_counters") or {})
+            shared_drop_total += int(drop_counters.get("total", 0) or 0)
         payload = {
             "tun": tun_rows,
             "shared_tun": shared_rows,
@@ -420,6 +424,7 @@ class AdminWebUI:
                 ),
                 "shared_services": len(shared_rows),
                 "shared_active_peer_bindings": int(active_bindings_total),
+                "shared_drop_total": int(shared_drop_total),
             },
             "app": "udp-bidirectional-mux",
             "milestone": "C",

@@ -1423,6 +1423,8 @@ The following delivery rules still apply to all future work on this feature:
 - shared-TUN traffic uses route-scoped throttle buckets derived from the
   selected peer/channel set, so one congested peer path does not consume the
   budget of an unrelated healthy peer path
+- shared broadcast delivery is throttled in its own scope, separate from
+  per-peer unicast delivery scopes
 - shared-TUN runtime snapshots expose throttle scopes and per-peer throttle
   counters so the dedicated `TUN / Routing` surface can explain which path is
   being gated
@@ -1452,6 +1454,9 @@ The following delivery rules still apply to all future work on this feature:
 
 - detailed shared-TUN ownership, active bindings, routing-relevant state, and
   related counters live on a dedicated `TUN / Routing` admin page
+- shared-TUN snapshots also carry bounded drop counters and a bounded recent
+  drop buffer so operators can see repeated spoof, routing, throttling, and
+  oversize failures without relying only on scrolling logs
 - the generic status page remains focused on overall runtime state rather than
   detailed TUN ownership tables
 - Python and Swift admin surfaces expose the same shared-TUN observability
@@ -1526,6 +1531,41 @@ Recommended test pyramid:
   - peer-to-server and peer-to-peer switching semantics
   - reconnect cleanup parity on macOS and iOS peers
   - baseline 1:1 TUN behavior parity after every shared-routing milestone
+
+Recommended in-depth Swift-with-Python-server recipe:
+
+- keep the server on Linux/Python and run the peer on macOS or iOS using the
+  native Swift runtime; this proves the real cross-runtime contract rather than
+  only same-runtime behavior
+- start with baseline 1:1 TUN carriage before enabling shared-TUN ownership
+  so any failure can be isolated to the shared-switch layer
+- then run one server-owned shared TUN with at least:
+  - one Swift peer
+  - one Python peer
+  - one server-local probe path
+- verify, in order:
+  - server -> Swift peer unicast
+  - server -> Python peer unicast
+  - Swift peer -> server
+  - Swift peer -> Python peer relay through the server
+  - Python peer -> Swift peer relay through the server
+  - spoof rejection from the Swift peer using another peer's source address
+  - disconnect cleanup and rebind after restarting the Swift peer
+  - scoped throttling isolation, including one congested Swift route that does
+    not suppress a healthy Python route
+  - broadcast delivery and broadcast-throttle isolation
+- capture evidence from both sides:
+  - Linux server `/api/tun-routing/status`
+  - Linux server logs
+  - Swift-side native logs
+  - packet capture where practical
+- the preferred sequence is:
+  - component parity first
+  - subprocess/integration parity second
+  - elevated host proof last
+- no Swift implementation change should be considered complete until at least
+  one real Swift-peer-versus-Python-server run has passed after the component
+  parity checks
 
 The feature should not be considered done until all of the following are true:
 

@@ -107,6 +107,22 @@ Recent test/content updates:
   plus [tests/fixtures/channelmux_component_runner.swift](../tests/fixtures/channelmux_component_runner.swift)
   for `CryptoKit`-free Swift/Python scoped-throttle parity.
 
+- 2026-06-04: Shared-TUN robustness now includes bounded drop observability for
+  the dedicated TUN/routing surface. [src/obstacle_bridge/bridge_channelmux.py](../src/obstacle_bridge/bridge_channelmux.py)
+  now keeps per-service shared-TUN drop counters and a bounded recent-drop
+  buffer covering spoof rejection, shared-route drops, throttled local TUN
+  packets, and oversize shared-TUN packet failures. [src/obstacle_bridge/bridge_webadmin.py](../src/obstacle_bridge/bridge_webadmin.py)
+  and [ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAPI.swift](../ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAPI.swift)
+  now aggregate `shared_drop_total` in the TUN/routing summary. Focused
+  coverage now includes
+  [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py)
+  for bounded recent-drop behavior and broadcast-vs-unicast throttle-scope
+  isolation,
+  [tests/unit/test_admin_web_payloads.py](../tests/unit/test_admin_web_payloads.py)
+  for Python payload shape, and
+  [tests/unit/test_admin_web_component_parity.py](../tests/unit/test_admin_web_component_parity.py)
+  for Swift/Python TUN-routing payload parity.
+
 - 2026-05-28: `myudp` transport status now exposes an effective transmit-delay EWMA alongside RTT, using the first-send timestamp of each acknowledged `DATA` frame and subtracting half of the current RTT estimate at ACK time. Focused unit coverage in [tests/unit/test_requirements_unit_gaps.py](../tests/unit/test_requirements_unit_gaps.py) now pins that sampling rule directly, the existing lossy/delayed overlay harness case in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py) now waits for the live `/api/status` transport snapshot to publish a non-zero `transmit_delay_est_ms` during real `myudp` traffic, and [tests/unit/test_admin_web_payloads.py](../tests/unit/test_admin_web_payloads.py) now guards the WebAdmin page so the browser surface renders transmit-delay next to RTT. Local validation for this slice used `pytest -q tests/unit/test_requirements_unit_gaps.py -k transmit_delay` (`1 passed, 17 deselected`), `pytest -q tests/integration/test_overlay_e2e.py -k myudp_delay_loss` (`13 passed, 131 deselected`), `pytest -q tests/unit/test_admin_web_payloads.py -k transmit_delay_next_to_rtt` (`1 passed, 23 deselected, 1 subtests passed`), `python3 scripts/check_requirements_guard.py --staged`, and `python3 scripts/check_readme_testing_guard.py --staged`.
 
 - 2026-05-28: `myudp`/SecureLink reconnect recovery now has a dedicated live-backlog outage regression in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py) plus focused epoch-reset unit coverage in [tests/unit/test_requirements_unit_gaps.py](../tests/unit/test_requirements_unit_gaps.py) and [tests/unit/test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py). The integration case intentionally forces a `myudp` transport outage while TCP data is still flowing, waits for disconnect, restores the path, and fails unless both sides publish a fresh authenticated SecureLink session. The unit follow-up now verifies that reconnect resets clear `myudp` RX gap/control state and that SecureLink forwards transport-epoch reset down to the wrapped inner session. Local validation for this slice used `pytest -q tests/unit/test_requirements_unit_gaps.py -k "transport_epoch_reset or peer_protocol_epoch_reset"`, `pytest -q tests/unit/test_secure_link_psk.py -k "transport_epoch_change or explicit_transport_epoch_reset"`, and `pytest -q tests/integration/test_overlay_e2e.py -k myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly` (`1 passed, 143 deselected`).

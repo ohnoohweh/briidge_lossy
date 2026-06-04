@@ -222,6 +222,26 @@ def test_swift_tun_routing_snapshot_matches_python(swift_admin_web_component_run
                     "active_peer_bindings": [
                         {"peer_id": 7, "preferred_chan_id": 301, "bound_chan_ids": [301]},
                     ],
+                    "drop_counters": {
+                        "total": 3,
+                        "by_reason": {
+                            "unknown_destination": 2,
+                            "source_not_owned_by_peer": 1,
+                        },
+                    },
+                    "recent_drops": [
+                        {
+                            "reason": "unknown_destination",
+                            "direction": "local_to_peer",
+                            "peer_id": None,
+                            "chan_id": None,
+                            "ip_version": 4,
+                            "source_ip": None,
+                            "destination_ip": "192.168.107.9",
+                            "route_class": "unicast",
+                            "packet_bytes": 21,
+                        }
+                    ],
                 },
             },
             {

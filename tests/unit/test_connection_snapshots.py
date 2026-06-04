@@ -221,6 +221,11 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
                     }
                 ],
                 "throttle_scopes": [],
+                "drop_counters": {
+                    "total": 0,
+                    "by_reason": {},
+                },
+                "recent_drops": [],
             },
         )
 
