@@ -632,6 +632,7 @@ def test_ipserver_extension_sources_are_swift_only() -> None:
 
 def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread() -> None:
     control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
+    macos_tun = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunAdapter.swift").read_text(encoding="utf-8")
 
     assert "ObstacleBridgeTunnelControl" in control
     assert "ObstacleBridgeWebAdminServer" in control

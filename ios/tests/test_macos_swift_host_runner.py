@@ -1515,7 +1515,7 @@ def test_macos_swift_host_runner_bootstraps_ws_stack_and_serves_status(tmp_path:
         assert meta["transport_runtime"]["websocket"]["uri"] == "ws://bridge.example.net:8443/"
         assert meta["compress_layer"]["level"] == 5
         assert hello["type"] == "hello"
-        assert sorted(hello["topics"]) == ["connections", "meta", "peers", "status"]
+        assert sorted(hello["topics"]) == ["connections", "meta", "peers", "status", "tun_routing"]
         assert live_status["data"]["mode"] == "swift_host_runner"
         assert live_connections["data"]["counts"]["tcp"] == 0
         assert peers["peers"][0]["transport"] == "ws"
@@ -2744,7 +2744,7 @@ def test_macos_swift_host_runner_live_websocket_requires_auth_when_credentials_c
         ) as live_socket:
             hello = _recv_ws_json(live_socket)
             assert hello["type"] == "hello"
-            assert sorted(hello["topics"]) == ["connections", "meta", "peers", "status"]
+            assert sorted(hello["topics"]) == ["connections", "meta", "peers", "status", "tun_routing"]
     finally:
         process.terminate()
         try:

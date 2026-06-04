@@ -281,14 +281,14 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
         let decoded: Data?
         do {
             if let wire = try codec.decode(inboundMessage) {
-                decoded = try? decodeAppWire(wire)
+                decoded = wire
             } else {
                 decoded = nil
             }
         } catch {
             decoded = nil
         }
-        let encoded = try codec.encode(buildAppWire(outgoingWire))
+        let encoded = try codec.encode(outgoingWire)
         if let data = encoded as? Data {
             return ListenerPeerSnapshot(
                 payloadMode: resolvedMode,
