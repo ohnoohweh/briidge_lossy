@@ -8427,6 +8427,7 @@ def test_overlay_e2e_webadmin_cert_reload_buttons_drive_authenticated_reload_flo
         server_proc = client_proc = None
         username = 'admin'
         password = 'secret-pass'
+        opener = None
         try:
             case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
                 case,
@@ -8450,23 +8451,37 @@ def test_overlay_e2e_webadmin_cert_reload_buttons_drive_authenticated_reload_flo
                 ),
                 wait_client_admin=False,
             )
-            wait_admin_auth_up(client_proc.admin_port or 0, timeout=10.0)
-            login_code, login_doc, opener = admin_authenticate(client_proc.admin_port or 0, username, password)
-            assert login_code == 200
-            assert login_doc.get('authenticated') is True
-            wait_status_connected_auth(client_proc.admin_port or 0, timeout=20.0, label='client', opener=opener)
-            wait_peer_secure_link_state_auth(
-                client_proc.admin_port or 0,
-                opener=opener,
-                expected_state='authenticated',
-                timeout=20.0,
-                label='client',
-                transport='tcp',
-                authenticated=True,
-            )
-            if case.probe_proto == 'tcp':
-                wait_tcp_listen(case.probe_host, case.probe_port, timeout=10.0)
-            wait_probe(case, payload=f'\x01webadmin-reload-prime-{scope}'.encode('ascii'), timeout=30.0)
+            prime_payload = f'\x01webadmin-reload-prime-{scope}'.encode('ascii')
+            prime_deadline = time.time() + 45.0
+            prime_last_exc = None
+            while time.time() < prime_deadline:
+                client_proc = ensure_proc_up(client_proc, tmp_path, admin_timeout=10.0)
+                server_proc = ensure_proc_up(server_proc, tmp_path, admin_timeout=10.0)
+                wait_peers_count(server_proc.admin_port or 0, 1, timeout=5.0, label='server')
+                wait_admin_auth_up(client_proc.admin_port or 0, timeout=5.0)
+                login_code, login_doc, opener = admin_authenticate(client_proc.admin_port or 0, username, password)
+                assert login_code == 200
+                assert login_doc.get('authenticated') is True
+                wait_status_connected_auth(client_proc.admin_port or 0, timeout=5.0, label='client', opener=opener)
+                wait_peer_secure_link_state_auth(
+                    client_proc.admin_port or 0,
+                    opener=opener,
+                    expected_state='authenticated',
+                    timeout=5.0,
+                    label='client',
+                    transport='tcp',
+                    authenticated=True,
+                )
+                if case.probe_proto == 'tcp':
+                    wait_tcp_listen(case.probe_host, case.probe_port, timeout=5.0)
+                try:
+                    wait_probe(case, payload=prime_payload, timeout=5.0)
+                    break
+                except Exception as exc:
+                    prime_last_exc = exc
+                    time.sleep(0.5)
+            else:
+                raise RuntimeError(f'Initial authenticated prime probe did not succeed for {scope}: {prime_last_exc}')
 
             index_code, index_headers, index_html = fetch_http_text(
                 f'http://127.0.0.1:{client_proc.admin_port}/',

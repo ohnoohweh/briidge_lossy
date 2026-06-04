@@ -51,6 +51,10 @@
 # same ARC-CMP-004 and ARC-CMP-005 mappings intact while making the full-
 # material certificate reload integration case wait for admin-surface recovery
 # and CONNECTED runtime state before checking post-reload authenticated peers.
+# NOTE: The 2026-06-05 Linux cert-reload readiness follow-up keeps the same
+# ARC-CMP-004 and ARC-CMP-005 mappings intact while turning the first
+# authenticated WebAdmin prime probe into a bounded readiness phase that can
+# survive self-restarting clients and delayed cert-session bring-up.
 # NOTE: The 2026-06-04 local-TUN hook-env follow-up keeps the existing
 # ARC-CMP-003 and ARC-CMP-004 mappings intact while extending local TUN hook
 # defaults with peer/subnet metadata required by server-owned shared-TUN hook

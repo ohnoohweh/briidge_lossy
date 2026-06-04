@@ -1,3 +1,7 @@
+# NOTE: The 2026-06-05 Linux cert-reload readiness follow-up keeps the
+# existing REQ-AUT-015/017/019 mappings intact while hardening the first
+# authenticated WebAdmin prime probe against self-restart and delayed
+# cert-session readiness in the shared overlay integration harness.
 REQ-OVL-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic
