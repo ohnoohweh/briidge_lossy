@@ -101,6 +101,10 @@ REQ-OVL-007:
 # REQ-AUT-009/010/016 mappings intact while giving the authenticated WebAdmin
 # certificate-reload probe more time to survive slower CI startup on the shared
 # Linux lane.
+# NOTE: The 2026-06-04 Linux cert-reload readiness follow-up keeps the existing
+# REQ-AUT-009/010/016 mappings intact while requiring the authenticated client
+# admin session to expose connected status and an authenticated cert-mode peer
+# row before the browser-path reload test sends its first prime probe.
 # The application-vs-library functional decomposition for REQ-WSP-* is documented in
 # docs/ARCHITECTURE.md under "WebSocket proxy tunneling".
 # The broader separation between user use-cases, external assumptions, and

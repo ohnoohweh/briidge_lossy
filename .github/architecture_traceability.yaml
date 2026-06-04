@@ -39,6 +39,10 @@
 # ARC-CMP-004 and ARC-CMP-005 mappings intact while relaxing only the startup
 # timing budget around the authenticated WebAdmin certificate-reload probe in
 # the shared overlay integration harness.
+# NOTE: The 2026-06-04 Linux cert-reload readiness follow-up keeps the existing
+# ARC-CMP-004 and ARC-CMP-005 mappings intact while making the browser-path
+# certificate-reload test wait for authenticated client status and peer-ready
+# secure-link observability before the first prime probe.
 
 ARC-CMP-001:
   unit_tests:
