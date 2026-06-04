@@ -1786,10 +1786,58 @@ private func handle(_ request: [String: Any]) throws -> Any {
             existingChanID: (request["existing_chan_id"] as? NSNumber)?.intValue,
             spec: try parseServiceSpec(specObject),
             overlayConnected: overlayConnected,
-            acceptingEnabled: acceptingEnabled
+            acceptingEnabled: acceptingEnabled,
+            bufferedFrames: (request["buffered_frames"] as? NSNumber)?.intValue ?? 0,
+            nowNS: (request["now_ns"] as? NSNumber)?.uint64Value
         )
         let payload: Any = snapshot.map(localTunSendSnapshotObject) ?? NSNull()
         return ["snapshot": payload]
+    case "drive_channelmux_local_tun_packet_sequence":
+        guard
+            let packetsHex = request["packets_hex"] as? [String],
+            let mtu = request["mtu"] as? NSNumber,
+            let overlayConnected = request["overlay_connected"] as? Bool,
+            let acceptingEnabled = request["accepting_enabled"] as? Bool,
+            let instanceID = request["instance_id"] as? NSNumber,
+            let connectionSeq = request["connection_seq"] as? NSNumber,
+            let nextTunID = request["next_tun_id"] as? NSNumber,
+            let specObject = request["spec"]
+        else {
+            throw ChannelMuxCodecRunnerError.invalidRequest
+        }
+        let bufferedFrames = (request["buffered_frames_sequence"] as? [NSNumber])?.map(\.intValue) ?? []
+        let nowNSValues = (request["now_ns_sequence"] as? [NSNumber])?.map(\.uint64Value) ?? []
+        let runtime = ObstacleBridgeChannelMuxTunRuntime(
+            instanceID: instanceID.uint64Value,
+            connectionSeq: connectionSeq.uint32Value,
+            nextTunID: nextTunID.intValue,
+            sessionMaxAppPayload: (request["session_max_app_payload"] as? NSNumber)?.intValue ?? 65535
+        )
+        let spec = try parseServiceSpec(specObject)
+        var existingChanID: Int?
+        var snapshots: [Any] = []
+        for (index, packetHex) in packetsHex.enumerated() {
+            guard let packet = dataFromHex(packetHex) else {
+                throw ChannelMuxCodecRunnerError.invalidRequest
+            }
+            let snapshot = try runtime.handleLocalTunPacket(
+                packet: packet,
+                mtu: mtu.intValue,
+                existingChanID: existingChanID,
+                spec: spec,
+                overlayConnected: overlayConnected,
+                acceptingEnabled: acceptingEnabled,
+                bufferedFrames: index < bufferedFrames.count ? bufferedFrames[index] : 0,
+                nowNS: index < nowNSValues.count ? nowNSValues[index] : nil
+            )
+            if let snapshot {
+                existingChanID = snapshot.chanID
+                snapshots.append(localTunSendSnapshotObject(snapshot))
+            } else {
+                snapshots.append(NSNull())
+            }
+        }
+        return ["snapshots": snapshots]
     case "drive_channelmux_tun_open_then_local_packet":
         guard
             let openChanID = request["open_chan_id"] as? NSNumber,
@@ -1823,7 +1871,9 @@ private func handle(_ request: [String: Any]) throws -> Any {
             mtu: mtu.intValue,
             spec: localSpec,
             overlayConnected: overlayConnected,
-            acceptingEnabled: acceptingEnabled
+            acceptingEnabled: acceptingEnabled,
+            bufferedFrames: (request["buffered_frames"] as? NSNumber)?.intValue ?? 0,
+            nowNS: (request["now_ns"] as? NSNumber)?.uint64Value
         )
         return [
             "open_snapshot": inboundTunOpenSnapshotObject(openSnapshot),

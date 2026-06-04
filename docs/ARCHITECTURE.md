@@ -517,6 +517,16 @@ The observability surface should eventually expose overload indicators in additi
 
 These signals are needed so rising `transmit_delay_ms` can be interpreted correctly: the operator should be able to tell whether the runtime is still carrying fresh traffic, is beginning to saturate, or is already discarding stale backlog by design.
 
+At present, the implemented TUN-pressure response is intentionally simpler than
+full traffic-class shedding: when the active overlay reports backlog
+(`buffered_frames > 0` or the transport's equivalent waiting-count signal),
+ChannelMux limits new local TUN inflow using a rolling `100ms` byte budget. The
+next `100ms` window may admit only `90%` of the TUN bytes that were actually
+forwarded in the previous `100ms` window. When backlog disappears, this
+TUN-specific throttle is disabled and local TUN ingress returns to unrestricted
+operation. This keeps fresh TUN traffic from overwhelming an already-backed-up
+transport without depending on a single fixed transmit-delay threshold.
+
 #### Component implementation checklist
 
 The architecture implies the following implementation checklist across the main components.

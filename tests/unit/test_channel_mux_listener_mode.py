@@ -9,13 +9,23 @@ from obstacle_bridge.bridge_tun_routing import TunRoutingSettings
 
 
 class _FakeSession:
-    def __init__(self, *, connected=False, max_app_payload_size=65535, transmit_delay_est_ms=None):
+    def __init__(
+        self,
+        *,
+        connected=False,
+        max_app_payload_size=65535,
+        transmit_delay_est_ms=None,
+        waiting_count=0,
+    ):
         self.app_cb = None
         self.peer_disconnect_cb = None
         self.sent = []
         self.connected = connected
         self.max_app_payload_size = max_app_payload_size
-        self._metrics = SessionMetrics(transmit_delay_est_ms=transmit_delay_est_ms)
+        self._metrics = SessionMetrics(
+            transmit_delay_est_ms=transmit_delay_est_ms,
+            waiting_count=waiting_count,
+        )
 
     def is_connected(self):
         return self.connected
@@ -933,8 +943,8 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
         finally:
             mux.loop.close()
 
-    def test_local_tun_packet_drops_when_transmit_delay_est_too_high(self):
-        session = _FakeSession(connected=True, transmit_delay_est_ms=3000.0)
+    def test_local_tun_packet_ignores_transmit_delay_without_buffered_frames(self):
+        session = _FakeSession(connected=True, transmit_delay_est_ms=3000.0, waiting_count=0)
         mux = ChannelMux(session, asyncio.new_event_loop())
         try:
             mux._overlay_connected = True
@@ -947,8 +957,36 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
 
             mux._on_local_tun_packet(dev, b'\x45hello')
 
-            self.assertEqual(session.sent, [])
-            self.assertIsNone(dev.chan_id)
+            self.assertEqual(len(session.sent), 2)
+            self.assertIsNotNone(dev.chan_id)
+        finally:
+            mux.loop.close()
+
+    def test_local_tun_packet_throttles_when_buffered_frames_exceed_recent_budget(self):
+        session = _FakeSession(connected=True, waiting_count=0)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._overlay_connected = True
+            mux._accepting_enabled = True
+            spec = ChannelMux.ServiceSpec(5, 'tun', 'obtun0', 1500, 'tun', 'obtun1', 1500)
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+
+            with patch("obstacle_bridge.bridge_channelmux.time.monotonic_ns", side_effect=[0, 100_000_000, 100_000_000]):
+                mux._on_local_tun_packet(dev, b'a' * 100)
+                session._metrics.waiting_count = 1
+                mux._on_local_tun_packet(dev, b'b' * 80)
+                mux._on_local_tun_packet(dev, b'c' * 20)
+
+            self.assertEqual(len(session.sent), 3)
+            data_frames = [mux._unpack_mux(frame) for frame in session.sent]
+            self.assertEqual(data_frames[0][3], ChannelMux.MType.OPEN)
+            self.assertEqual(data_frames[1][3], ChannelMux.MType.DATA)
+            self.assertEqual(bytes(data_frames[1][4]), b'a' * 100)
+            self.assertEqual(data_frames[2][3], ChannelMux.MType.DATA)
+            self.assertEqual(bytes(data_frames[2][4]), b'b' * 80)
         finally:
             mux.loop.close()
 

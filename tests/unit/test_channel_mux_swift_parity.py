@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from obstacle_bridge.bridge import ChannelMux
+from obstacle_bridge.bridge import ChannelMux, SessionMetrics
 from obstacle_bridge.bridge import BaseFrameV2, ControlPacket, DataPacket, Protocol, Session
 from obstacle_bridge.bridge import FRAME_CONT, FRAME_FIRST
 from obstacle_bridge.bridge import Runner, TcpStreamSession, UdpSession, QuicSession, WebSocketSession, SecureLinkPskSession
@@ -39,12 +39,19 @@ SWIFT_RUNNER_SOURCE = ROOT / "tests" / "fixtures" / "channelmux_codec_runner.swi
 
 
 class _FakeSession:
-    def __init__(self, *, connected: bool = False, max_app_payload_size: int = 65535) -> None:
+    def __init__(
+        self,
+        *,
+        connected: bool = False,
+        max_app_payload_size: int = 65535,
+        waiting_count: int = 0,
+    ) -> None:
         self.app_cb = None
         self.peer_disconnect_cb = None
         self.connected = connected
         self.max_app_payload_size = max_app_payload_size
         self.sent: list[bytes] = []
+        self._metrics = SessionMetrics(waiting_count=waiting_count)
 
     def is_connected(self):
         return self.connected
@@ -61,6 +68,9 @@ class _FakeSession:
     def send_app(self, payload, *args, **kwargs):
         self.sent.append(bytes(payload))
         return len(payload)
+
+    def get_metrics(self):
+        return self._metrics
 
 
 class _FakeCompressInnerSession:
@@ -1967,6 +1977,59 @@ def _python_channelmux_local_tun_chunked_open_summary() -> dict[str, object]:
             "frames_hex": [frame.hex() for frame in mux.session.sent],
             "next_tun_id": mux._next_tun_id,
             "next_counter": mux._mux_counters[(dev.chan_id, ChannelMux.Proto.TUN)],
+            "spec": _service_spec_payload(spec),
+        }
+    finally:
+        _close_mux(mux)
+
+
+def _python_channelmux_local_tun_throttle_sequence_summary() -> dict[str, object]:
+    mux = _make_mux(connected=True)
+    try:
+        mux._overlay_connected = True
+        mux._accepting_enabled = True
+        spec = ChannelMux.ServiceSpec(3, "tun", "obtun0", 1500, "tun", "obtun1", 1500)
+        svc_key = ("local", 0, 3)
+        mux._local_services[svc_key] = spec
+        dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1500, service_key=svc_key)
+        snapshots: list[object] = []
+        mux.session._metrics.waiting_count = 0
+        with mock.patch("obstacle_bridge.bridge_channelmux.time.monotonic_ns", side_effect=[0, 100_000_000, 100_000_000]):
+            mux._on_local_tun_packet(dev, b"a" * 100)
+            snapshots.append(
+                {
+                    "chan_id": dev.chan_id,
+                    "allocated_channel": True,
+                    "frames_hex": [frame.hex() for frame in mux.session.sent],
+                    "next_tun_id": mux._next_tun_id,
+                    "next_counter": mux._mux_counters[(dev.chan_id, ChannelMux.Proto.TUN)],
+                }
+            )
+            mux.session._metrics.waiting_count = 1
+            before_second = len(mux.session.sent)
+            mux._on_local_tun_packet(dev, b"b" * 80)
+            snapshots.append(
+                {
+                    "chan_id": dev.chan_id,
+                    "allocated_channel": False,
+                    "frames_hex": [frame.hex() for frame in mux.session.sent[before_second:]],
+                    "next_tun_id": mux._next_tun_id,
+                    "next_counter": mux._mux_counters[(dev.chan_id, ChannelMux.Proto.TUN)],
+                }
+            )
+            before_third = len(mux.session.sent)
+            mux._on_local_tun_packet(dev, b"c" * 20)
+            snapshots.append(
+                None if len(mux.session.sent) == before_third else {
+                    "chan_id": dev.chan_id,
+                    "allocated_channel": False,
+                    "frames_hex": [frame.hex() for frame in mux.session.sent[before_third:]],
+                    "next_tun_id": mux._next_tun_id,
+                    "next_counter": mux._mux_counters[(dev.chan_id, ChannelMux.Proto.TUN)],
+                }
+            )
+        return {
+            "snapshots": snapshots,
             "spec": _service_spec_payload(spec),
         }
     finally:
@@ -4417,6 +4480,34 @@ def test_swift_channelmux_local_tun_chunked_open_matches_python(
     )
     python.pop("spec")
     assert swift["snapshot"] == python
+
+
+def test_swift_channelmux_local_tun_throttle_sequence_matches_python(
+    swift_channelmux_runner: Path,
+) -> None:
+    python = _python_channelmux_local_tun_throttle_sequence_summary()
+    swift = _run_swift(
+        swift_channelmux_runner,
+        {
+            "action": "drive_channelmux_local_tun_packet_sequence",
+            "packets_hex": [
+                (b"a" * 100).hex(),
+                (b"b" * 80).hex(),
+                (b"c" * 20).hex(),
+            ],
+            "mtu": 1500,
+            "overlay_connected": True,
+            "accepting_enabled": True,
+            "instance_id": 0x1122334455667788,
+            "connection_seq": 0x10203040,
+            "next_tun_id": 1,
+            "buffered_frames_sequence": [0, 1, 1],
+            "now_ns_sequence": [0, 100_000_000, 100_000_000],
+            "spec": python["spec"],
+        },
+    )
+    python.pop("spec")
+    assert swift["snapshots"] == python["snapshots"]
 
 
 def test_swift_channelmux_inbound_tun_fragment_sequence_matches_python(

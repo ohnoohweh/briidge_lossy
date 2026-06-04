@@ -211,11 +211,14 @@ REQ-MUX-005:
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
     - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_state_is_scoped_by_peer_id
-    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_drops_when_transmit_delay_est_too_high
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_ignores_transmit_delay_without_buffered_frames
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_throttles_when_buffered_frames_exceed_recent_budget
 
 REQ-MUX-011:
   unit_tests:
-    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_drops_when_transmit_delay_est_too_high
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_ignores_transmit_delay_without_buffered_frames
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_throttles_when_buffered_frames_exceed_recent_budget
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_local_tun_throttle_sequence_matches_python
 
 REQ-AUT-006:
   integration_tests:

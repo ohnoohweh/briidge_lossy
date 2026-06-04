@@ -2,6 +2,8 @@ import Foundation
 
 final class ObstacleBridgeChannelMuxTunRuntime {
     private static let tunFragmentHeaderSize = 8
+    private static let tunInflowThrottleWindowNS: UInt64 = 100_000_000
+    private static let tunInflowThrottleRatio = 0.9
 
     struct LocalTunSendSnapshot {
         var chanID: Int
@@ -70,6 +72,9 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     private var boundTunChanIDs: Set<Int>
     private var preferredTunChanID: Int?
     private var fragmentStates: [FragmentKey: FragmentState]
+    private var tunInflowWindowStartNS: UInt64?
+    private var tunInflowPreviousBytes: Int
+    private var tunInflowCurrentBytes: Int
     private let controlChunkReassembler: ObstacleBridgeChannelMuxCodec.ControlChunkReassembler
 
     init(
@@ -94,6 +99,9 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         self.boundTunChanIDs = []
         self.preferredTunChanID = nil
         self.fragmentStates = [:]
+        self.tunInflowWindowStartNS = nil
+        self.tunInflowPreviousBytes = 0
+        self.tunInflowCurrentBytes = 0
         self.controlChunkReassembler = ObstacleBridgeChannelMuxCodec.ControlChunkReassembler()
     }
 
@@ -103,12 +111,18 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         existingChanID: Int? = nil,
         spec: ObstacleBridgeChannelMuxCodec.ServiceSpec,
         overlayConnected: Bool,
-        acceptingEnabled: Bool
+        acceptingEnabled: Bool,
+        bufferedFrames: Int = 0,
+        nowNS: UInt64? = nil
     ) throws -> LocalTunSendSnapshot? {
         guard overlayConnected, acceptingEnabled else {
             return nil
         }
         guard packet.count <= mtu else {
+            return nil
+        }
+        let sendNowNS = nowNS ?? DispatchTime.now().uptimeNanoseconds
+        guard localTunSendAllowed(packetBytes: packet.count, bufferedFrames: bufferedFrames, nowNS: sendNowNS) else {
             return nil
         }
 
@@ -131,6 +145,7 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             return nil
         }
         frames.append(contentsOf: dataFrames)
+        recordLocalTunForward(packetBytes: packet.count, nowNS: sendNowNS)
         return LocalTunSendSnapshot(
             chanID: chanID,
             allocatedChannel: allocatedChannel,
@@ -138,6 +153,42 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             nextTunID: nextTunID,
             nextCounter: counters[chanID] ?? 0
         )
+    }
+
+    private func advanceTunInflowWindow(nowNS: UInt64) {
+        guard let startNS = tunInflowWindowStartNS else {
+            tunInflowWindowStartNS = nowNS
+            return
+        }
+        let elapsed = nowNS &- startNS
+        guard elapsed >= Self.tunInflowThrottleWindowNS else {
+            return
+        }
+        let windows = elapsed / Self.tunInflowThrottleWindowNS
+        if windows == 1 {
+            tunInflowPreviousBytes = tunInflowCurrentBytes
+        } else {
+            tunInflowPreviousBytes = 0
+        }
+        tunInflowCurrentBytes = 0
+        tunInflowWindowStartNS = startNS &+ windows &* Self.tunInflowThrottleWindowNS
+    }
+
+    private func localTunSendAllowed(packetBytes: Int, bufferedFrames: Int, nowNS: UInt64) -> Bool {
+        advanceTunInflowWindow(nowNS: nowNS)
+        guard bufferedFrames > 0 else {
+            return true
+        }
+        let allowanceBytes = Int(Double(tunInflowPreviousBytes) * Self.tunInflowThrottleRatio)
+        guard allowanceBytes > 0 else {
+            return false
+        }
+        return (tunInflowCurrentBytes + max(0, packetBytes)) <= allowanceBytes
+    }
+
+    private func recordLocalTunForward(packetBytes: Int, nowNS: UInt64) {
+        advanceTunInflowWindow(nowNS: nowNS)
+        tunInflowCurrentBytes += max(0, packetBytes)
     }
 
     func handleInboundTunOpen(chanID: Int, payload: Data) -> InboundTunOpenSnapshot {

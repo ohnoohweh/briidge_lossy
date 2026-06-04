@@ -114,7 +114,8 @@ class ChannelMux:
     CTRL_CHUNK_MAGIC = b"CKV1"
     CTRL_CHUNK_REASSEMBLY_TTL_S = 20.0
     CTRL_CHUNK_MAX_INFLIGHT = 512
-    TUN_TRANSMIT_DELAY_EST_MAX_MS = 3000.0
+    TUN_INFLOW_THROTTLE_WINDOW_NS = 100_000_000
+    TUN_INFLOW_THROTTLE_RATIO = 0.9
 
     @staticmethod
     def _proto_name_to_code(name: "ChannelMux.ProtoName") -> int:
@@ -451,6 +452,9 @@ class ChannelMux:
         self._tun_by_chan: dict[int, ChannelMux.TunDevice] = {}
         self._tun_chan_by_service: dict[ChannelMux.ServiceKey, int] = {}
         self._tun_frag_rx: dict[tuple[int, int], dict[str, Any]] = {}
+        self._tun_inflow_window_start_ns: Optional[int] = None
+        self._tun_inflow_prev_bytes: int = 0
+        self._tun_inflow_curr_bytes: int = 0
         self._chan_owner_peer_id: dict[int, int] = {}
         self._ctrl_chunk_rx: dict[tuple[int, int, int, int, int], dict[str, Any]] = {}
         self._ctrl_chunk_next_txid: int = 1
@@ -2130,32 +2134,63 @@ class ChannelMux:
             return dev
         return self._start_tun_server_for_sync(spec, svc_key)
 
-    def _local_tun_send_allowed(self) -> bool:
+    def _session_buffered_frames(self) -> int:
         getter = getattr(self.session, "get_metrics", None)
         if not callable(getter):
-            return True
+            return 0
         try:
             metrics = getter()
         except Exception:
-            return True
-        est_ms = getattr(metrics, "transmit_delay_est_ms", None)
+            return 0
+        waiting_count = getattr(metrics, "waiting_count", None)
         try:
-            est_val = float(est_ms)
+            return max(0, int(waiting_count or 0))
         except (TypeError, ValueError):
+            return 0
+
+    def _advance_tun_inflow_window(self, now_ns: int) -> None:
+        start_ns = self._tun_inflow_window_start_ns
+        if start_ns is None:
+            self._tun_inflow_window_start_ns = int(now_ns)
+            return
+        elapsed = int(now_ns) - int(start_ns)
+        if elapsed < self.TUN_INFLOW_THROTTLE_WINDOW_NS:
+            return
+        windows = elapsed // self.TUN_INFLOW_THROTTLE_WINDOW_NS
+        if windows == 1:
+            self._tun_inflow_prev_bytes = self._tun_inflow_curr_bytes
+        else:
+            self._tun_inflow_prev_bytes = 0
+        self._tun_inflow_curr_bytes = 0
+        self._tun_inflow_window_start_ns = int(start_ns + windows * self.TUN_INFLOW_THROTTLE_WINDOW_NS)
+
+    def _local_tun_send_allowed(self, packet_len: int, *, now_ns: int) -> bool:
+        self._advance_tun_inflow_window(now_ns)
+        buffered_frames = self._session_buffered_frames()
+        if buffered_frames <= 0:
             return True
-        if est_val <= 0.0:
-            return True
-        return est_val < self.TUN_TRANSMIT_DELAY_EST_MAX_MS
+        allowance_bytes = int(float(self._tun_inflow_prev_bytes) * self.TUN_INFLOW_THROTTLE_RATIO)
+        if allowance_bytes <= 0:
+            return False
+        return (self._tun_inflow_curr_bytes + int(packet_len)) <= allowance_bytes
+
+    def _record_local_tun_forward(self, packet_len: int, *, now_ns: int) -> None:
+        self._advance_tun_inflow_window(now_ns)
+        self._tun_inflow_curr_bytes += max(0, int(packet_len))
 
     def _on_local_tun_packet(self, dev: "ChannelMux.TunDevice", packet: bytes) -> None:
         self._log_tun_packet_debug(stage="from_local_tun", packet=packet, ifname=dev.ifname, chan=dev.chan_id)
         if not (self._overlay_connected and self._accepting_enabled):
             return
-        if not self._local_tun_send_allowed():
+        now_ns = time.monotonic_ns()
+        if not self._local_tun_send_allowed(len(packet), now_ns=now_ns):
             self.log.debug(
-                "[TUN] if=%s drop local packet: active transport transmit_delay_est_ms >= %.1f",
+                "[TUN] if=%s throttle local packet: buffered_frames=%s prev_window_bytes=%s curr_window_bytes=%s packet_bytes=%s",
                 dev.ifname,
-                self.TUN_TRANSMIT_DELAY_EST_MAX_MS,
+                self._session_buffered_frames(),
+                self._tun_inflow_prev_bytes,
+                self._tun_inflow_curr_bytes,
+                len(packet),
             )
             return
         if len(packet) > int(dev.mtu):
@@ -2180,6 +2215,7 @@ class ChannelMux:
         ctr.msgs_in += 1
         ctr.bytes_in += len(packet)
         self._send_mux(chan, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet)
+        self._record_local_tun_forward(len(packet), now_ns=now_ns)
 
     def _rx_tun(self, chan: int, mtype: ChannelMux.MType, data: bytes, peer_id: Optional[int] = None) -> None:
         if mtype == ChannelMux.MType.OPEN:

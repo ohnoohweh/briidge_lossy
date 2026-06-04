@@ -286,7 +286,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 mtu: tunMTU,
                 spec: ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: tunIfname, mtu: tunMTU),
                 overlayConnected: overlayConnected,
-                acceptingEnabled: true
+                acceptingEnabled: true,
+                bufferedFrames: Int(overlayRuntime.protocolStatsSnapshot()["buffered_frames"] as? Int ?? 0),
+                nowNS: DispatchTime.now().uptimeNanoseconds
             ) else {
                 return
             }

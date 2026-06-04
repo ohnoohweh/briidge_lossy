@@ -62,10 +62,17 @@ Recent test/content updates:
   lingering indefinitely during idle periods. Focused regression coverage added
   in [tests/unit/test_requirements_unit_gaps.py](../tests/unit/test_requirements_unit_gaps.py).
 
-- 2026-05-29: ChannelMux now gates local TUN injection when the active session's
-  `transmit_delay_est_ms` is high (>= 3000ms) to avoid injecting packets into
-  severely delayed transports. Focused unit coverage added in
-  [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py).
+- 2026-06-04: ChannelMux TUN ingress no longer uses a hard
+  `transmit_delay_est_ms >= 3000ms` cutoff. Instead, local TUN inflow is
+  throttled only when the active transport reports backlog
+  (`buffered_frames > 0` / `waiting_count > 0`). While backlog exists, the
+  runtime measures how many TUN bytes were actually forwarded in the previous
+  `100ms` window and allows only `90%` of that byte volume into the next
+  `100ms` window; otherwise no throttle is applied. Focused unit and Swift
+  parity coverage now live in
+  [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py)
+  and
+  [tests/unit/test_channel_mux_swift_parity.py](../tests/unit/test_channel_mux_swift_parity.py).
 
 - 2026-05-28: `myudp` transport status now exposes an effective transmit-delay EWMA alongside RTT, using the first-send timestamp of each acknowledged `DATA` frame and subtracting half of the current RTT estimate at ACK time. Focused unit coverage in [tests/unit/test_requirements_unit_gaps.py](../tests/unit/test_requirements_unit_gaps.py) now pins that sampling rule directly, the existing lossy/delayed overlay harness case in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py) now waits for the live `/api/status` transport snapshot to publish a non-zero `transmit_delay_est_ms` during real `myudp` traffic, and [tests/unit/test_admin_web_payloads.py](../tests/unit/test_admin_web_payloads.py) now guards the WebAdmin page so the browser surface renders transmit-delay next to RTT. Local validation for this slice used `pytest -q tests/unit/test_requirements_unit_gaps.py -k transmit_delay` (`1 passed, 17 deselected`), `pytest -q tests/integration/test_overlay_e2e.py -k myudp_delay_loss` (`13 passed, 131 deselected`), `pytest -q tests/unit/test_admin_web_payloads.py -k transmit_delay_next_to_rtt` (`1 passed, 23 deselected, 1 subtests passed`), `python3 scripts/check_requirements_guard.py --staged`, and `python3 scripts/check_readme_testing_guard.py --staged`.
 
