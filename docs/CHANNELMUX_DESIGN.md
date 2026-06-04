@@ -1585,6 +1585,20 @@ Deliverables:
   clients
 - later parity coverage for macOS/iOS peer endpoints where feasible
 
+Delivered slice:
+
+- Linux elevated coverage now includes one server-owned shared TUN listener plus
+  two real myudp-connected client TUN peers under `/dev/net/tun`
+- the delivered elevated slice proves server <-> client A, server <-> client B,
+  and client A -> client B carriage through the shared server switch using real
+  host packet I/O
+- the same elevated slice now also proves spoof rejection for a peer that tries
+  to source packets as another owned client address and proves disconnect
+  cleanup by waiting for the active binding set to shrink and rebuild after peer
+  restart
+- host-side macOS/iOS parity coverage for the same elevated behavior is still a
+  later slice and is not claimed as delivered yet
+
 Testing:
 
 - Linux elevated integration:

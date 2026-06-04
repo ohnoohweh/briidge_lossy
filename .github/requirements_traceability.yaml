@@ -667,6 +667,8 @@ REQ-MUX-006:
   integration_tests:
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_over_myudp_packet_carry
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_over_ws_secure_link_fragments
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_two_clients_routes_and_rejects_spoof
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_disconnect_cleanup_rebinds_peer
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_myudp_channel_open
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_ws_secure_link_channel_open
   unit_tests:
@@ -680,6 +682,8 @@ REQ-MUX-006:
 REQ-MUX-007:
   integration_tests:
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_over_myudp_packet_carry
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_two_clients_routes_and_rejects_spoof
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_disconnect_cleanup_rebinds_peer
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_myudp_channel_open
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_ws_secure_link_channel_open
   unit_tests:
@@ -703,6 +707,8 @@ REQ-MUX-009:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_structured_own_servers_lifecycle_hooks_execute
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_structured_remote_servers_udp_forwarding
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_two_clients_routes_and_rejects_spoof
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_disconnect_cleanup_rebinds_peer
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_parse_remote_servers_accepts_structured_specs
     - tests/unit/test_channel_mux_listener_mode.py::test_select_hook_argv_uses_platform_specific_mapping
