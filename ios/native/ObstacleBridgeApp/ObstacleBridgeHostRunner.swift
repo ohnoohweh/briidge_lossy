@@ -1023,92 +1023,24 @@ final class ObstacleBridgeHostRunner {
             let tcpOverlayRows = sharedTcpOverlayTransportOwner?.connectionRows()
             let quicOverlayRows = sharedQuicOverlayTransportOwner?.connectionRows()
             let udpOverlayRows = sharedUdpOverlayTransportOwner?.connectionRows()
-            let tcpListeningRows = ownServerSpecs
-                .filter { $0.listenProtocol == "tcp" && $0.targetProtocol == "tcp" }
-                .map { spec in
-                    [
-                        "protocol": "tcp",
-                        "role": "server",
-                        "state": "listening",
-                        "chan_id": NSNull(),
-                        "svc_id": spec.svcID,
-                        "service_name": spec.name ?? "",
-                        "source": NSNull(),
-                        "local": ["host": spec.listenBind, "port": spec.listenPort],
-                        "local_port": spec.listenPort,
-                        "remote_destination": ["host": spec.targetHost, "port": spec.targetPort],
-                        "stats": ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0],
-                    ] as [String: Any]
-                }
-            let udpListeningRows = ownServerSpecs
-                .filter { $0.listenProtocol == "udp" && $0.targetProtocol == "udp" }
-                .map { spec in
-                    [
-                        "protocol": "udp",
-                        "role": "server",
-                        "state": "listening",
-                        "chan_id": NSNull(),
-                        "svc_id": spec.svcID,
-                        "service_name": spec.name ?? "",
-                        "source": NSNull(),
-                        "local": ["host": spec.listenBind, "port": spec.listenPort],
-                        "local_port": spec.listenPort,
-                        "remote_destination": ["host": spec.targetHost, "port": spec.targetPort],
-                        "stats": ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0],
-                    ] as [String: Any]
-                }
-            let udpConnectedRows = udpConnectionStates.values.map { $0 } + (wsOverlayRows?.udp ?? []) + (tcpOverlayRows?.udp ?? []) + (quicOverlayRows?.udp ?? []) + (udpOverlayRows?.udp ?? [])
-            let tcpConnectedRows = tcpConnectionStates.values.map { $0 } + (wsOverlayRows?.tcp ?? []) + (tcpOverlayRows?.tcp ?? []) + (quicOverlayRows?.tcp ?? []) + (udpOverlayRows?.tcp ?? [])
-            let tunListeningRows = ownServerSpecs
-                .filter { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
-                .map { spec in
-                    let sharedTunOwnership = ObstacleBridgeChannelMuxCodec.sharedTunOwnershipSnapshot(for: spec.toChannelMuxServiceSpec())
-                    return [
-                        "protocol": "tun",
-                        "role": "server",
-                        "state": "listening",
-                        "chan_id": NSNull(),
-                        "svc_id": spec.svcID,
-                        "service_name": spec.name ?? "",
-                        "source": NSNull(),
-                        "local": ["host": spec.listenBind, "port": spec.listenPort],
-                        "local_port": spec.listenPort,
-                        "remote_destination": ["host": spec.targetHost, "port": spec.targetPort],
-                        "stats": ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0],
-                        "shared_tun_ownership": sharedTunOwnership.map(ObstacleBridgeChannelMuxCodec.foundationObject(from:)) ?? NSNull(),
-                    ] as [String: Any]
-                }
-            let tunConnectedRows = (wsOverlayRows?.tun ?? []) + (tcpOverlayRows?.tun ?? []) + (quicOverlayRows?.tun ?? []) + (udpOverlayRows?.tun ?? [])
-            let udpRows = (udpConnectedRows + udpListeningRows).sorted { lhs, rhs in
-                let leftListening = String(describing: lhs["state"] ?? "") == "listening"
-                let rightListening = String(describing: rhs["state"] ?? "") == "listening"
-                if leftListening != rightListening {
-                    return !leftListening && rightListening
-                }
-                let leftChan = lhs["chan_id"] as? Int ?? -1
-                let rightChan = rhs["chan_id"] as? Int ?? -1
-                return leftChan < rightChan
-            }
-            let tcpRows = (tcpConnectedRows + tcpListeningRows).sorted { lhs, rhs in
-                let leftListening = String(describing: lhs["state"] ?? "") == "listening"
-                let rightListening = String(describing: rhs["state"] ?? "") == "listening"
-                if leftListening != rightListening {
-                    return !leftListening && rightListening
-                }
-                let leftChan = lhs["chan_id"] as? Int ?? -1
-                let rightChan = rhs["chan_id"] as? Int ?? -1
-                return leftChan < rightChan
-            }
-            let tunRows = (tunConnectedRows + tunListeningRows).sorted { lhs, rhs in
-                let leftListening = String(describing: lhs["state"] ?? "") == "listening"
-                let rightListening = String(describing: rhs["state"] ?? "") == "listening"
-                if leftListening != rightListening {
-                    return !leftListening && rightListening
-                }
-                let leftChan = lhs["chan_id"] as? Int ?? -1
-                let rightChan = rhs["chan_id"] as? Int ?? -1
-                return leftChan < rightChan
-            }
+            let tcpListeningRows = listeningRows(protocol: "tcp")
+            let udpListeningRows = listeningRows(protocol: "udp")
+            let tunListeningRows = listeningRows(protocol: "tun")
+            let udpConnectedRows = mergedConnectionRows(
+                localRows: Array(udpConnectionStates.values),
+                overlayRows: [wsOverlayRows?.udp, tcpOverlayRows?.udp, quicOverlayRows?.udp, udpOverlayRows?.udp]
+            )
+            let tcpConnectedRows = mergedConnectionRows(
+                localRows: Array(tcpConnectionStates.values),
+                overlayRows: [wsOverlayRows?.tcp, tcpOverlayRows?.tcp, quicOverlayRows?.tcp, udpOverlayRows?.tcp]
+            )
+            let tunConnectedRows = mergedConnectionRows(
+                localRows: [],
+                overlayRows: [wsOverlayRows?.tun, tcpOverlayRows?.tun, quicOverlayRows?.tun, udpOverlayRows?.tun]
+            )
+            let udpRows = sortedConnectionRows(udpConnectedRows + udpListeningRows)
+            let tcpRows = sortedConnectionRows(tcpConnectedRows + tcpListeningRows)
+            let tunRows = sortedConnectionRows(tunConnectedRows + tunListeningRows)
             return [
                 "udp": udpRows,
                 "tcp": tcpRows,
@@ -1122,6 +1054,59 @@ final class ObstacleBridgeHostRunner {
                     "tun_listening": tunListeningRows.count,
                 ],
             ]
+        }
+    }
+
+    private func listeningRows(protocol protocolName: String) -> [[String: Any]] {
+        ownServerSpecs
+            .filter { $0.listenProtocol == protocolName && $0.targetProtocol == protocolName }
+            .map { listeningRow(for: $0, protocol: protocolName) }
+    }
+
+    private func listeningRow(for spec: ObstacleBridgeNativeServiceSpec, protocol protocolName: String) -> [String: Any] {
+        var row: [String: Any] = [
+            "protocol": protocolName,
+            "role": "server",
+            "state": "listening",
+            "chan_id": NSNull(),
+            "svc_id": spec.svcID,
+            "service_name": spec.name ?? "",
+            "source": NSNull(),
+            "local": ["host": spec.listenBind, "port": spec.listenPort],
+            "local_port": spec.listenPort,
+            "remote_destination": ["host": spec.targetHost, "port": spec.targetPort],
+            "stats": ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0],
+        ]
+        if protocolName == "tun" {
+            let sharedTunOwnership = ObstacleBridgeChannelMuxCodec.sharedTunOwnershipSnapshot(for: spec.toChannelMuxServiceSpec())
+            row["shared_tun_ownership"] = sharedTunOwnership.map(ObstacleBridgeChannelMuxCodec.foundationObject(from:)) ?? NSNull()
+        }
+        return row
+    }
+
+    private func mergedConnectionRows(
+        localRows: [[String: Any]],
+        overlayRows: [[[String: Any]]?]
+    ) -> [[String: Any]] {
+        var rows = localRows
+        for overlay in overlayRows {
+            if let overlay {
+                rows.append(contentsOf: overlay)
+            }
+        }
+        return rows
+    }
+
+    private func sortedConnectionRows(_ rows: [[String: Any]]) -> [[String: Any]] {
+        rows.sorted { lhs, rhs in
+            let leftListening = String(describing: lhs["state"] ?? "") == "listening"
+            let rightListening = String(describing: rhs["state"] ?? "") == "listening"
+            if leftListening != rightListening {
+                return !leftListening && rightListening
+            }
+            let leftChan = lhs["chan_id"] as? Int ?? -1
+            let rightChan = rhs["chan_id"] as? Int ?? -1
+            return leftChan < rightChan
         }
     }
 
