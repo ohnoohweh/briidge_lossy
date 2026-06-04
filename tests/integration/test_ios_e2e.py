@@ -732,6 +732,18 @@ def _quic_secure_link_server_config(quic_port: int, *, case_index: int, cert_dir
     }
 
 
+def _quic_bridge_server_config(quic_port: int, *, cert_dir: Path) -> dict:
+    return {
+        "overlay_transport": "quic",
+        "quic_bind": "127.0.0.1",
+        "quic_own_port": int(quic_port),
+        "quic_cert": str(cert_dir / "cert.pem"),
+        "quic_key": str(cert_dir / "key.pem"),
+        "admin_web": False,
+        "status": False,
+    }
+
+
 def _myudp_secure_link_compress_server_config(udp_port: int, *, admin_port: int) -> dict:
     return {
         "overlay_transport": "myudp",
@@ -1059,7 +1071,12 @@ def test_ios_e2e_app_ws_secure_link_probe_authenticates_against_host_peer(tmp_pa
 
 @pytest.mark.integration
 @pytest.mark.ios
-def test_ios_extension_shim_swift_udp_ws_tcp_service_reaches_host_peer_on_macos(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("transport", ["ws", "quic"])
+def test_ios_extension_shim_swift_udp_tcp_service_reaches_python_peer_for_ws_and_quic(
+    tmp_path: Path,
+    monkeypatch,
+    transport: str,
+) -> None:
     documents_root = tmp_path / "ios-documents"
     home_root = tmp_path / "home"
     documents_root.mkdir(parents=True, exist_ok=True)
@@ -1078,31 +1095,64 @@ def test_ios_extension_shim_swift_udp_ws_tcp_service_reaches_host_peer_on_macos(
         importlib.reload(ipserver_extension)
 
         async def scenario() -> None:
-            ws_port = _alloc_local_port(socket.SOCK_STREAM, case_index=3, base=IOS_E2E_TCP_PORT_BASE)
+            overlay_port = _alloc_local_port(
+                socket.SOCK_STREAM if transport == "ws" else socket.SOCK_DGRAM,
+                case_index=3 if transport == "ws" else 4,
+                base=IOS_E2E_TCP_PORT_BASE if transport == "ws" else IOS_E2E_UDP_PORT_BASE,
+            )
             local_tcp_port = _alloc_local_port(socket.SOCK_STREAM, case_index=4, base=IOS_E2E_TCP_PORT_BASE)
             target_tcp_port = _alloc_local_port(socket.SOCK_STREAM, case_index=5, base=IOS_E2E_TCP_PORT_BASE)
             swift_bind_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=6, base=IOS_E2E_UDP_PORT_BASE)
             swift_peer_port = _alloc_local_port(socket.SOCK_DGRAM, case_index=7, base=IOS_E2E_UDP_PORT_BASE)
-            probe_payload = b"\x01ios-extension-tcp\n"
-            expected_response = b"\x02ios-extension-tcp\n"
+            probe_payloads = [
+                b"\x01ios-extension-tcp-client1\n",
+                b"\x01ios-extension-tcp-client2-xxxxxxxxxxxxxxxx\n",
+                b"\x01ios-extension-tcp-client3-yyyyyyyyyyyyyyyyyyyyyyyy\n",
+            ]
+            expected_responses = [
+                b"\x02ios-extension-tcp-client1\n",
+                b"\x02ios-extension-tcp-client2-xxxxxxxxxxxxxxxx\n",
+                b"\x02ios-extension-tcp-client3-yyyyyyyyyyyyyyyyyyyyyyyy\n",
+            ]
+            cert_dir = (
+                materialize_localhost_tls_fixture_set(tmp_path / f"{transport}-ios-tcp-localhost-fixtures")
+                if transport == "quic"
+                else None
+            )
 
             tcp_server, tcp_received = await _start_tcp_line_bounce_server("127.0.0.1", target_tcp_port)
-            bridge_server = ObstacleBridgeClient(_ws_bridge_server_config(ws_port))
+            if transport == "ws":
+                bridge_server = ObstacleBridgeClient(_ws_bridge_server_config(overlay_port))
+                runtime_transport_config: dict[str, Any] = {
+                    "overlay_transport": "ws",
+                    "ws_peer": "127.0.0.1",
+                    "ws_peer_port": overlay_port,
+                    "ws_bind": "127.0.0.1",
+                    "ws_own_port": 0,
+                }
+            else:
+                assert cert_dir is not None
+                bridge_server = ObstacleBridgeClient(_quic_bridge_server_config(overlay_port, cert_dir=cert_dir))
+                runtime_transport_config = {
+                    "overlay_transport": "quic",
+                    "quic_peer": "127.0.0.1",
+                    "quic_peer_port": overlay_port,
+                    "quic_bind": "127.0.0.1",
+                    "quic_own_port": 0,
+                    "quic_alpn": "hq-29",
+                    "quic_insecure": True,
+                }
             provider_configuration = provider_configuration_from_m3_config(
                 M3TunnelConfig(
-                    profile_id="ios-extension-shim-e2e",
-                    display_name="iOS Extension Shim E2E",
+                    profile_id=f"ios-extension-shim-{transport}-e2e",
+                    display_name=f"iOS Extension Shim {transport.upper()} E2E",
                     provider_bundle_identifier="com.obstaclebridge.ObstacleBridge.PacketTunnel",
-                    transport="ws",
+                    transport=transport,
                     peer_host="127.0.0.1",
-                    peer_port=ws_port,
-                    server_address=f"127.0.0.1:{ws_port}",
+                    peer_port=overlay_port,
+                    server_address=f"127.0.0.1:{overlay_port}",
                     runtime_config={
-                        "overlay_transport": "ws",
-                        "ws_peer": "127.0.0.1",
-                        "ws_peer_port": ws_port,
-                        "ws_bind": "127.0.0.1",
-                        "ws_own_port": 0,
+                        **runtime_transport_config,
                         "channel_mux": {
                             "own_servers": [
                                 {
@@ -1143,21 +1193,6 @@ def test_ios_extension_shim_swift_udp_ws_tcp_service_reaches_host_peer_on_macos(
             stop_result: dict[str, object] | None = None
             try:
                 await bridge_server.start()
-                direct_admin_doc: dict[str, Any] | None = None
-                direct_admin_deadline = time.time() + 12.0
-                while time.time() < direct_admin_deadline:
-                    try:
-                        _direct_status_code, direct_admin_doc = _fetch_json(
-                            f"http://127.0.0.1:{admin_port}/api/status",
-                            timeout=1.0,
-                        )
-                        if direct_admin_doc.get("ok") is True:
-                            break
-                    except Exception:
-                        pass
-                    await asyncio.sleep(0.25)
-                assert direct_admin_doc is not None and direct_admin_doc.get("ok") is True, direct_admin_doc
-
                 start_result = ipserver_extension.handle_message(
                     {
                         "command": "start_embedded_webadmin",
@@ -1168,12 +1203,17 @@ def test_ios_extension_shim_swift_udp_ws_tcp_service_reaches_host_peer_on_macos(
                 snapshot = start_result["result"]
                 assert isinstance(snapshot, dict)
                 config = snapshot["config"]
-                assert config["overlay_transport"] == "ws"
+                assert config["overlay_transport"] == transport
                 assert os.environ.get("OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR") == "swift_udp"
 
-                response = await _probe_tcp_line_roundtrip("127.0.0.1", local_tcp_port, probe_payload)
-                assert response == expected_response
-                assert tcp_received == [probe_payload]
+                responses = await asyncio.gather(
+                    *[
+                        _probe_tcp_line_roundtrip("127.0.0.1", local_tcp_port, payload)
+                        for payload in probe_payloads
+                    ]
+                )
+                assert responses == expected_responses
+                assert sorted(tcp_received) == sorted(probe_payloads)
 
                 snapshot_result = ipserver_extension.handle_message({"command": "snapshot"})
                 assert snapshot_result["ok"] is True, snapshot_result

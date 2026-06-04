@@ -205,6 +205,7 @@ ARC-CMP-004:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_secure_link_cert_happy_path_transports
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_revocation_reload_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_local_identity_reload_happy_path
+    - tests/integration/test_ios_e2e.py::test_ios_extension_shim_swift_udp_tcp_service_reaches_python_peer_for_ws_and_quic
 
 ARC-CMP-005:
   unit_tests:

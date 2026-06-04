@@ -638,6 +638,7 @@ REQ-MUX-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_server_restart_closes_tcp_preserves_udp
+    - tests/integration/test_ios_e2e.py::test_ios_extension_shim_swift_udp_tcp_service_reaches_python_peer_for_ws_and_quic
   unit_tests:
     - tests/unit/test_ws_multi_peer.py::test_inbound_mux_rewrite_allocates_distinct_server_channels_per_peer
 

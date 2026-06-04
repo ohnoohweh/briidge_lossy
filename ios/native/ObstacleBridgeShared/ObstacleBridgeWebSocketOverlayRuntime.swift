@@ -15,6 +15,8 @@ enum ObstacleBridgeWebSocketOverlayRuntimeError: Error, LocalizedError {
 }
 
 final class ObstacleBridgeWebSocketOverlayRuntime {
+    private static let appKind: UInt8 = 0x00
+
     struct ConnectPlan {
         var uri: String
         var host: String?
@@ -185,7 +187,7 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
     }
 
     func encodeClientWire(_ wire: Data) throws -> URLSessionWebSocketTask.Message {
-        let encoded = try payloadCodec.encode(wire)
+        let encoded = try payloadCodec.encode(buildAppWire(wire))
         if let data = encoded as? Data {
             return .data(data)
         }
@@ -193,20 +195,22 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
     }
 
     func decodeClientMessage(_ message: URLSessionWebSocketTask.Message) throws -> Data {
+        let decodedWire: Data
         switch message {
         case .data(let data):
             guard let decoded = try payloadCodec.decode(data) else {
                 throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("unable to decode websocket binary payload")
             }
-            return decoded
+            decodedWire = decoded
         case .string(let text):
             guard let decoded = try payloadCodec.decode(text) else {
                 throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("unable to decode websocket text payload")
             }
-            return decoded
+            decodedWire = decoded
         @unknown default:
             return Data()
         }
+        return try decodeAppWire(decodedWire)
     }
 
     func socketConfigSnapshot(socketPresent: Bool, tcpUserTimeoutAvailable: Bool) -> SocketConfigSnapshot {
@@ -276,11 +280,15 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
         let codec = try ObstacleBridgeWebSocketPayloadCodecFactory.build(mode: resolvedMode)
         let decoded: Data?
         do {
-            decoded = try codec.decode(inboundMessage)
+            if let wire = try codec.decode(inboundMessage) {
+                decoded = try? decodeAppWire(wire)
+            } else {
+                decoded = nil
+            }
         } catch {
             decoded = nil
         }
-        let encoded = try codec.encode(outgoingWire)
+        let encoded = try codec.encode(buildAppWire(outgoingWire))
         if let data = encoded as? Data {
             return ListenerPeerSnapshot(
                 payloadMode: resolvedMode,
@@ -348,6 +356,23 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
         default:
             return payloadMode
         }
+    }
+
+    private func buildAppWire(_ payload: Data) -> Data {
+        var wire = Data(capacity: payload.count + 1)
+        wire.append(Self.appKind)
+        wire.append(payload)
+        return wire
+    }
+
+    private func decodeAppWire(_ wire: Data) throws -> Data {
+        guard let kind = wire.first else {
+            throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("empty websocket overlay wire")
+        }
+        guard kind == Self.appKind else {
+            throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("unsupported websocket overlay kind \(kind)")
+        }
+        return Data(wire.dropFirst())
     }
 
     private func parseProxyAuthority(_ text: String) -> (host: String, port: Int)? {

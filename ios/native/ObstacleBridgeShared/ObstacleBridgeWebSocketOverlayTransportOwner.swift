@@ -44,6 +44,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private var secureLinkHandshakePrimed = false
     private var startupMuxFramesSent = false
     private var connectedURI = ""
+    private var pendingOutboundMessages: [URLSessionWebSocketTask.Message] = []
+    private var outboundSendInFlight = false
     private lazy var tcpTransportOwner = ObstacleBridgeChannelMuxTCPTransportOwner(
         runtime: ObstacleBridgeChannelMuxTcpRuntime(
             instanceID: muxInstanceID,
@@ -151,6 +153,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         secureLinkHandshakePrimed = false
         startupMuxFramesSent = false
         connectedURI = ""
+        pendingOutboundMessages.removeAll(keepingCapacity: false)
+        outboundSendInFlight = false
     }
 
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]]) {
@@ -324,6 +328,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             guard self.started, self.websocketTask === webSocketTask else { return }
             self.overlayConnected = true
             self.reconnectScheduled = false
+            self.pendingOutboundMessages.removeAll(keepingCapacity: false)
+            self.outboundSendInFlight = false
             self.maybePrimeSecureLinkHandshake()
             self.maybeSendStartupMuxFrames()
             self.receiveFromOverlay()
@@ -338,6 +344,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             self.websocketSession = nil
             self.secureLinkHandshakePrimed = false
             self.startupMuxFramesSent = false
+            self.pendingOutboundMessages.removeAll(keepingCapacity: false)
+            self.outboundSendInFlight = false
             self.scheduleReconnect()
         }
     }
@@ -350,6 +358,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             self.websocketSession = nil
             self.secureLinkHandshakePrimed = false
             self.startupMuxFramesSent = false
+            self.pendingOutboundMessages.removeAll(keepingCapacity: false)
+            self.outboundSendInFlight = false
             if let error {
                 self.eventSink?("ws_overlay_connection_failed", ["error": error.localizedDescription])
             }
@@ -442,7 +452,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         if let adapter = overlayLayerTransportAdapter {
             let snapshot = adapter.handleInboundFrame(payload)
             for frame in snapshot.emittedFrames {
-                sendOverlayTransportPayload(frame)
+                sendRawOverlayWire(frame)
             }
             for delivered in snapshot.deliveredPayloads {
                 handleOverlayPayload(delivered)
@@ -458,7 +468,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             let snapshot = try adapter.handleTransportConnected()
             secureLinkHandshakePrimed = true
             for frame in snapshot.emittedFrames {
-                sendOverlayTransportPayload(frame)
+                sendRawOverlayWire(frame)
             }
         } catch {
             eventSink?("ws_overlay_secure_link_prime_failed", ["error": error.localizedDescription])
@@ -497,16 +507,30 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         guard started, overlayConnected, let task = websocketTask else { return }
         do {
             let message = try overlayRuntime.encodeClientWire(wire)
-            task.send(message) { [weak self] error in
-                self?.queue.async {
-                    guard let self else { return }
-                    if let error {
-                        self.eventSink?("ws_overlay_send_failed", ["error": error.localizedDescription])
-                    }
-                }
-            }
+            pendingOutboundMessages.append(message)
+            flushNextOutboundMessageIfNeeded(task: task)
         } catch {
             eventSink?("ws_overlay_encode_failed", ["error": error.localizedDescription])
+        }
+    }
+
+    private func flushNextOutboundMessageIfNeeded(task: URLSessionWebSocketTask) {
+        guard started, overlayConnected, websocketTask === task, !outboundSendInFlight, !pendingOutboundMessages.isEmpty else {
+            return
+        }
+        outboundSendInFlight = true
+        let message = pendingOutboundMessages.removeFirst()
+        task.send(message) { [weak self] error in
+            self?.queue.async {
+                guard let self else { return }
+                self.outboundSendInFlight = false
+                if let error {
+                    self.eventSink?("ws_overlay_send_failed", ["error": error.localizedDescription])
+                    self.pendingOutboundMessages.removeAll(keepingCapacity: false)
+                    return
+                }
+                self.flushNextOutboundMessageIfNeeded(task: task)
+            }
         }
     }
 
