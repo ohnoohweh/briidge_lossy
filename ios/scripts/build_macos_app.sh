@@ -95,6 +95,7 @@ SWIFT_EXTRA_FLAGS=()
 if [ "${OBSTACLEBRIDGE_SWIFT_FAILURE_INJECTION:-0}" = "1" ]; then
   SWIFT_EXTRA_FLAGS+=("-DOBSTACLEBRIDGE_FAILURE_INJECTION")
 fi
+SWIFT_EXTRA_FLAGS_EXPANDED=("${SWIFT_EXTRA_FLAGS[@]-}")
 
 if [ -x "${REPO_ROOT}/.venv/bin/python" ]; then
   PYTHON_CMD="${REPO_ROOT}/.venv/bin/python"
@@ -109,7 +110,7 @@ echo "[build_macos_app] refreshing embedded build metadata"
 
 echo "[build_macos_app] compiling macOS Swift host runner"
 "${SWIFTC_CMD}" \
-  "${SWIFT_EXTRA_FLAGS[@]}" \
+  "${SWIFT_EXTRA_FLAGS_EXPANDED[@]}" \
   -o "${BINARY_PATH}" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAPI.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAuth.swift" \
@@ -160,7 +161,7 @@ build_macos_app_icon
 
 echo "[build_macos_app] compiling macOS app executable"
 "${SWIFTC_CMD}" \
-  "${SWIFT_EXTRA_FLAGS[@]}" \
+  "${SWIFT_EXTRA_FLAGS_EXPANDED[@]}" \
   -o "${APP_EXECUTABLE}" \
   "${GENERATED_BUILD_STAMP_SWIFT}" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAPI.swift" \
