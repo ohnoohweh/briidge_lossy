@@ -5,6 +5,7 @@ import Darwin
 final class ObstacleBridgeUdpOverlayTransportOwner {
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
+    private static let queueSpecificKey = DispatchSpecificKey<Int>()
 
     private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
     private static let peerFallbackIdleNS: UInt64 = 3_000_000_000
@@ -120,6 +121,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         self.muxInstanceID = muxInstanceID
         self.muxConnectionSeq = muxConnectionSeq
         self.eventSink = eventSink
+        self.queue.setSpecific(key: Self.queueSpecificKey, value: 1)
         self.udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(
             instanceID: muxInstanceID,
             connectionSeq: muxConnectionSeq
@@ -221,66 +223,77 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]]) {
-        let tcpRows = ObstacleBridgeOverlayConnectionSupport.connectionRows(from: tcpConnectionStates)
-        let udpRows = ObstacleBridgeOverlayConnectionSupport.connectionRows(from: udpConnectionStates)
-        let tunRows: [[String: Any]]
-        if activeTunChanIDs.isEmpty, (tunStats["rx_bytes"] ?? 0) == 0, (tunStats["tx_bytes"] ?? 0) == 0 {
-            tunRows = []
-        } else {
-            let ifname = tunIfname ?? "tun"
-            let mtu = tunMTU
-            let spec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: ifname, mtu: mtu)
-            let stats = tunStats
-            tunRows = activeTunChanIDs.sorted().map { chanID in
-                var row = ObstacleBridgeNativeConnectionSnapshot.make(
-                    proto: "tun",
-                    role: "server",
-                    state: "connected",
-                    chanID: chanID,
-                    svcID: spec.svcID,
-                    serviceName: "TUN",
-                    sourceHost: nil,
-                    sourcePort: nil,
-                    localHost: ifname,
-                    localPort: mtu,
-                    remoteHost: spec.rHost,
-                    remotePort: spec.rPort,
-                    stats: stats
-                )
-                row["shared_tun_ownership"] = tunRuntime?.sharedTunRuntimeSnapshot() ?? NSNull()
-                return row
+        withOwnerQueue {
+            let tcpRows = ObstacleBridgeOverlayConnectionSupport.connectionRows(from: tcpConnectionStates)
+            let udpRows = ObstacleBridgeOverlayConnectionSupport.connectionRows(from: udpConnectionStates)
+            let tunRows: [[String: Any]]
+            if activeTunChanIDs.isEmpty, (tunStats["rx_bytes"] ?? 0) == 0, (tunStats["tx_bytes"] ?? 0) == 0 {
+                tunRows = []
+            } else {
+                let ifname = tunIfname ?? "tun"
+                let mtu = tunMTU
+                let spec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: ifname, mtu: mtu)
+                let stats = tunStats
+                tunRows = activeTunChanIDs.sorted().map { chanID in
+                    var row = ObstacleBridgeNativeConnectionSnapshot.make(
+                        proto: "tun",
+                        role: "server",
+                        state: "connected",
+                        chanID: chanID,
+                        svcID: spec.svcID,
+                        serviceName: "TUN",
+                        sourceHost: nil,
+                        sourcePort: nil,
+                        localHost: ifname,
+                        localPort: mtu,
+                        remoteHost: spec.rHost,
+                        remotePort: spec.rPort,
+                        stats: stats
+                    )
+                    row["shared_tun_ownership"] = tunRuntime?.sharedTunRuntimeSnapshot() ?? NSNull()
+                    return row
+                }
             }
+            return (tcpRows, udpRows, tunRows)
         }
-        return (tcpRows, udpRows, tunRows)
     }
 
     func transportSnapshot() -> [String: Any] {
-        [
-            "overlay_connected": overlayConnected,
-            "overlay_bind_host": bindHost,
-            "overlay_bind_port": bindPort,
-            "overlay_peer_host": currentPeerAddress?.host ?? NSNull(),
-            "overlay_peer_port": currentPeerAddress?.port ?? NSNull(),
-            "overlay_peer_family": currentPeerAddress.map { ObstacleBridgePeerAddressResolver.familyName($0.family) } ?? NSNull(),
-            "overlay_peer_candidate_index": peerCandidateIndex,
-            "overlay_peer_candidate_count": peerCandidates.count,
-            "fixed_peer_host": configuredPeerHost ?? NSNull(),
-            "fixed_peer_port": configuredPeerPort ?? NSNull(),
-            "mux_instance_id": muxInstanceID,
-            "mux_connection_seq": muxConnectionSeq,
-            "server_tcp_channels": tcpTransportOwner.serverConnectionCount,
-            "client_tcp_channels": tcpConnectionStates.count,
-            "server_udp_channels": udpServerConnections.count,
-            "client_udp_channels": udpConnectionStates.count,
-            "tun_channels": activeTunChanIDs.count,
-            "tun_stats": tunStats,
-            "established_ns": overlayRuntime.establishedNS,
-            "last_rx_wall_ns": overlayRuntime.lastRxWallNS,
-            "last_rtt_ok_ns": overlayRuntime.lastRttOkNS,
-            "rtt_est_ms": overlayRuntime.rttEstMS,
-            "transmit_delay_est_ms": overlayRuntime.transmitDelayEstMS,
-            "protocol_stats": overlayRuntime.protocolStatsSnapshot(),
-        ]
+        withOwnerQueue {
+            [
+                "overlay_connected": overlayConnected,
+                "overlay_bind_host": bindHost,
+                "overlay_bind_port": bindPort,
+                "overlay_peer_host": currentPeerAddress?.host ?? NSNull(),
+                "overlay_peer_port": currentPeerAddress?.port ?? NSNull(),
+                "overlay_peer_family": currentPeerAddress.map { ObstacleBridgePeerAddressResolver.familyName($0.family) } ?? NSNull(),
+                "overlay_peer_candidate_index": peerCandidateIndex,
+                "overlay_peer_candidate_count": peerCandidates.count,
+                "fixed_peer_host": configuredPeerHost ?? NSNull(),
+                "fixed_peer_port": configuredPeerPort ?? NSNull(),
+                "mux_instance_id": muxInstanceID,
+                "mux_connection_seq": muxConnectionSeq,
+                "server_tcp_channels": tcpTransportOwner.serverConnectionCount,
+                "client_tcp_channels": tcpConnectionStates.count,
+                "server_udp_channels": udpServerConnections.count,
+                "client_udp_channels": udpConnectionStates.count,
+                "tun_channels": activeTunChanIDs.count,
+                "tun_stats": tunStats,
+                "established_ns": overlayRuntime.establishedNS,
+                "last_rx_wall_ns": overlayRuntime.lastRxWallNS,
+                "last_rtt_ok_ns": overlayRuntime.lastRttOkNS,
+                "rtt_est_ms": overlayRuntime.rttEstMS,
+                "transmit_delay_est_ms": overlayRuntime.transmitDelayEstMS,
+                "protocol_stats": overlayRuntime.protocolStatsSnapshot(),
+            ]
+        }
+    }
+
+    private func withOwnerQueue<T>(_ body: () -> T) -> T {
+        if DispatchQueue.getSpecific(key: Self.queueSpecificKey) != nil {
+            return body()
+        }
+        return queue.sync(execute: body)
     }
 
     func sendLocalTunPacket(_ packet: Data) {

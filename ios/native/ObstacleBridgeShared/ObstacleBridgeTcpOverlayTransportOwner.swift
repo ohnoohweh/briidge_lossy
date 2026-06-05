@@ -4,6 +4,7 @@ import Network
 final class ObstacleBridgeTcpOverlayTransportOwner {
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
+    private static let queueSpecificKey = DispatchSpecificKey<Int>()
 
     private let peerHost: String
     private let peerPort: Int
@@ -107,6 +108,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         self.muxInstanceID = muxInstanceID
         self.muxConnectionSeq = muxConnectionSeq
         self.eventSink = eventSink
+        self.queue.setSpecific(key: Self.queueSpecificKey, value: 1)
         self.udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(
             instanceID: muxInstanceID,
             connectionSeq: muxConnectionSeq
@@ -171,58 +173,69 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]]) {
-        let tcpRows = ObstacleBridgeOverlayConnectionSupport.connectionRows(from: tcpConnectionStates)
-        let udpRows = ObstacleBridgeOverlayConnectionSupport.connectionRows(from: udpConnectionStates)
-        let tunRows: [[String: Any]]
-        if activeTunChanIDs.isEmpty, (tunStats["rx_bytes"] ?? 0) == 0, (tunStats["tx_bytes"] ?? 0) == 0 {
-            tunRows = []
-        } else {
-            let ifname = tunIfname ?? "tun"
-            let mtu = tunMTU
-            let spec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: ifname, mtu: mtu)
-            let stats = tunStats
-            tunRows = activeTunChanIDs.sorted().map { chanID in
-                var row = ObstacleBridgeNativeConnectionSnapshot.make(
-                    proto: "tun",
-                    role: "server",
-                    state: "connected",
-                    chanID: chanID,
-                    svcID: spec.svcID,
-                    serviceName: "TUN",
-                    sourceHost: nil,
-                    sourcePort: nil,
-                    localHost: ifname,
-                    localPort: mtu,
-                    remoteHost: spec.rHost,
-                    remotePort: spec.rPort,
-                    stats: stats
-                )
-                row["shared_tun_ownership"] = tunRuntime?.sharedTunRuntimeSnapshot() ?? NSNull()
-                return row
+        withOwnerQueue {
+            let tcpRows = ObstacleBridgeOverlayConnectionSupport.connectionRows(from: tcpConnectionStates)
+            let udpRows = ObstacleBridgeOverlayConnectionSupport.connectionRows(from: udpConnectionStates)
+            let tunRows: [[String: Any]]
+            if activeTunChanIDs.isEmpty, (tunStats["rx_bytes"] ?? 0) == 0, (tunStats["tx_bytes"] ?? 0) == 0 {
+                tunRows = []
+            } else {
+                let ifname = tunIfname ?? "tun"
+                let mtu = tunMTU
+                let spec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: ifname, mtu: mtu)
+                let stats = tunStats
+                tunRows = activeTunChanIDs.sorted().map { chanID in
+                    var row = ObstacleBridgeNativeConnectionSnapshot.make(
+                        proto: "tun",
+                        role: "server",
+                        state: "connected",
+                        chanID: chanID,
+                        svcID: spec.svcID,
+                        serviceName: "TUN",
+                        sourceHost: nil,
+                        sourcePort: nil,
+                        localHost: ifname,
+                        localPort: mtu,
+                        remoteHost: spec.rHost,
+                        remotePort: spec.rPort,
+                        stats: stats
+                    )
+                    row["shared_tun_ownership"] = tunRuntime?.sharedTunRuntimeSnapshot() ?? NSNull()
+                    return row
+                }
             }
+            return (tcpRows, udpRows, tunRows)
         }
-        return (tcpRows, udpRows, tunRows)
     }
 
     func transportSnapshot() -> [String: Any] {
-        [
-            "overlay_connected": overlayConnected,
-            "overlay_bind_host": bindHost,
-            "overlay_bind_port": bindPort,
-            "overlay_host": peerHost,
-            "overlay_port": peerPort,
-            "reconnect_retry_delay_ms": reconnectRetryDelayMS,
-            "reconnect_attempts": reconnectAttempts,
-            "reconnect_scheduled": reconnectScheduled,
-            "mux_instance_id": muxInstanceID,
-            "mux_connection_seq": muxConnectionSeq,
-            "server_tcp_channels": tcpTransportOwner.serverConnectionCount,
-            "client_tcp_channels": tcpConnectionStates.count,
-            "server_udp_channels": udpServerConnections.count,
-            "client_udp_channels": udpConnectionStates.count,
-            "tun_channels": activeTunChanIDs.count,
-            "tun_stats": tunStats,
-        ]
+        withOwnerQueue {
+            [
+                "overlay_connected": overlayConnected,
+                "overlay_bind_host": bindHost,
+                "overlay_bind_port": bindPort,
+                "overlay_host": peerHost,
+                "overlay_port": peerPort,
+                "reconnect_retry_delay_ms": reconnectRetryDelayMS,
+                "reconnect_attempts": reconnectAttempts,
+                "reconnect_scheduled": reconnectScheduled,
+                "mux_instance_id": muxInstanceID,
+                "mux_connection_seq": muxConnectionSeq,
+                "server_tcp_channels": tcpTransportOwner.serverConnectionCount,
+                "client_tcp_channels": tcpConnectionStates.count,
+                "server_udp_channels": udpServerConnections.count,
+                "client_udp_channels": udpConnectionStates.count,
+                "tun_channels": activeTunChanIDs.count,
+                "tun_stats": tunStats,
+            ]
+        }
+    }
+
+    private func withOwnerQueue<T>(_ body: () -> T) -> T {
+        if DispatchQueue.getSpecific(key: Self.queueSpecificKey) != nil {
+            return body()
+        }
+        return queue.sync(execute: body)
     }
 
     func sendLocalTunPacket(_ packet: Data) {

@@ -5,6 +5,7 @@ import Network
 final class ObstacleBridgeQuicOverlayTransportOwner {
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
+    private static let queueSpecificKey = DispatchSpecificKey<Int>()
 
     private let peerHost: String
     private let peerPort: Int
@@ -27,8 +28,6 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     private let tunPacketSink: TunPacketSink?
     private let muxInstanceID: UInt64
     private let muxConnectionSeq: UInt32
-    private let outboundWireChunkBytes = 1024
-
     private var overlayConnection: NWConnection?
     private var overlayConnected = false
     private var receiveBuffer = Data()
@@ -117,6 +116,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         self.tunPacketSink = tunPacketSink
         self.muxInstanceID = muxInstanceID
         self.muxConnectionSeq = muxConnectionSeq
+        self.queue.setSpecific(key: Self.queueSpecificKey, value: 1)
         if let tunIfname = self.tunIfname, !tunIfname.isEmpty, self.tunMTU > 0 {
             let localTunSpec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: tunIfname, mtu: self.tunMTU)
             self.tunRuntime = ObstacleBridgeChannelMuxTunRuntime(
@@ -156,63 +156,74 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     }
 
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]]) {
-        let tunRows: [[String: Any]]
-        if activeTunChanIDs.isEmpty, (tunStats["rx_bytes"] ?? 0) == 0, (tunStats["tx_bytes"] ?? 0) == 0 {
-            tunRows = []
-        } else {
-            let ifname = tunIfname ?? "tun"
-            let mtu = tunMTU
-            let spec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: ifname, mtu: mtu)
-            let stats = tunStats
-            tunRows = activeTunChanIDs.sorted().map { chanID in
-                var row = ObstacleBridgeNativeConnectionSnapshot.make(
-                    proto: "tun",
-                    role: "server",
-                    state: "connected",
-                    chanID: chanID,
-                    svcID: spec.svcID,
-                    serviceName: "TUN",
-                    sourceHost: nil,
-                    sourcePort: nil,
-                    localHost: ifname,
-                    localPort: mtu,
-                    remoteHost: spec.rHost,
-                    remotePort: spec.rPort,
-                    stats: stats
-                )
-                row["shared_tun_ownership"] = tunRuntime?.sharedTunRuntimeSnapshot() ?? NSNull()
-                return row
+        withOwnerQueue {
+            let tunRows: [[String: Any]]
+            if activeTunChanIDs.isEmpty, (tunStats["rx_bytes"] ?? 0) == 0, (tunStats["tx_bytes"] ?? 0) == 0 {
+                tunRows = []
+            } else {
+                let ifname = tunIfname ?? "tun"
+                let mtu = tunMTU
+                let spec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: ifname, mtu: mtu)
+                let stats = tunStats
+                tunRows = activeTunChanIDs.sorted().map { chanID in
+                    var row = ObstacleBridgeNativeConnectionSnapshot.make(
+                        proto: "tun",
+                        role: "server",
+                        state: "connected",
+                        chanID: chanID,
+                        svcID: spec.svcID,
+                        serviceName: "TUN",
+                        sourceHost: nil,
+                        sourcePort: nil,
+                        localHost: ifname,
+                        localPort: mtu,
+                        remoteHost: spec.rHost,
+                        remotePort: spec.rPort,
+                        stats: stats
+                    )
+                    row["shared_tun_ownership"] = tunRuntime?.sharedTunRuntimeSnapshot() ?? NSNull()
+                    return row
+                }
             }
+            return (ObstacleBridgeOverlayConnectionSupport.connectionRows(from: tcpConnectionStates), [], tunRows)
         }
-        return (ObstacleBridgeOverlayConnectionSupport.connectionRows(from: tcpConnectionStates), [], tunRows)
     }
 
     func transportSnapshot() -> [String: Any] {
-        [
-            "overlay_connected": overlayConnected,
-            "overlay_bind_host": bindHost,
-            "overlay_bind_port": bindPort,
-            "overlay_host": peerHost,
-            "overlay_port": peerPort,
-            "overlay_peer_host": resolvedPeerHost,
-            "overlay_peer_port": resolvedPeerPort,
-            "overlay_peer_family": resolvedPeerFamily,
-            "overlay_peer_candidate_index": resolvedPeerCandidateIndex,
-            "overlay_peer_candidate_count": resolvedPeerCandidateCount,
-            "overlay_alpn": alpn,
-            "overlay_insecure": insecure,
-            "reconnect_retry_delay_ms": reconnectRetryDelayMS,
-            "reconnect_attempts": reconnectAttempts,
-            "reconnect_scheduled": reconnectScheduled,
-            "mux_instance_id": muxInstanceID,
-            "mux_connection_seq": muxConnectionSeq,
-            "server_tcp_channels": tcpTransportOwner.serverConnectionCount,
-            "client_tcp_channels": tcpConnectionStates.count,
-            "server_udp_channels": 0,
-            "client_udp_channels": 0,
-            "tun_channels": activeTunChanIDs.count,
-            "tun_stats": tunStats,
-        ]
+        withOwnerQueue {
+            [
+                "overlay_connected": overlayConnected,
+                "overlay_bind_host": bindHost,
+                "overlay_bind_port": bindPort,
+                "overlay_host": peerHost,
+                "overlay_port": peerPort,
+                "overlay_peer_host": resolvedPeerHost,
+                "overlay_peer_port": resolvedPeerPort,
+                "overlay_peer_family": resolvedPeerFamily,
+                "overlay_peer_candidate_index": resolvedPeerCandidateIndex,
+                "overlay_peer_candidate_count": resolvedPeerCandidateCount,
+                "overlay_alpn": alpn,
+                "overlay_insecure": insecure,
+                "reconnect_retry_delay_ms": reconnectRetryDelayMS,
+                "reconnect_attempts": reconnectAttempts,
+                "reconnect_scheduled": reconnectScheduled,
+                "mux_instance_id": muxInstanceID,
+                "mux_connection_seq": muxConnectionSeq,
+                "server_tcp_channels": tcpTransportOwner.serverConnectionCount,
+                "client_tcp_channels": tcpConnectionStates.count,
+                "server_udp_channels": 0,
+                "client_udp_channels": 0,
+                "tun_channels": activeTunChanIDs.count,
+                "tun_stats": tunStats,
+            ]
+        }
+    }
+
+    private func withOwnerQueue<T>(_ body: () -> T) -> T {
+        if DispatchQueue.getSpecific(key: Self.queueSpecificKey) != nil {
+            return body()
+        }
+        return queue.sync(execute: body)
     }
 
     func sendLocalTunPacket(_ packet: Data) {
@@ -737,16 +748,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
 
     private func enqueueOutboundWire(_ wire: Data) {
         guard !wire.isEmpty else { return }
-        if wire.count <= outboundWireChunkBytes {
-            pendingOutboundWires.append(wire)
-        } else {
-            var offset = 0
-            while offset < wire.count {
-                let next = min(wire.count, offset + outboundWireChunkBytes)
-                pendingOutboundWires.append(wire.subdata(in: offset..<next))
-                offset = next
-            }
-        }
+        pendingOutboundWires.append(wire)
         flushNextOutboundWireIfNeeded()
     }
 
@@ -764,7 +766,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         connection.send(
             content: wire,
             contentContext: context,
-            isComplete: true,
+            isComplete: false,
             completion: .contentProcessed { [weak self] error in
                 guard let self else { return }
                 self.queue.async {
