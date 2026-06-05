@@ -387,22 +387,35 @@ def test_macos_app_main_source_exists() -> None:
     assert "@main" in app_main
     assert "WKWebView" in app_main
     assert "ObstacleBridgeTunnelControl.startIPServerTunnel" in app_main
+    assert "buildMenu()" in app_main
+    assert 'NSButton(title: "Reload"' in app_main
+    assert "@objc\n    private func reloadWebAdmin()" in app_main
+    assert 'appMenu.addItem(withTitle: "Reload", action: #selector(reloadWebAdmin), keyEquivalent: "r")' in app_main
     assert "seedDocumentsSurfaceIfNeeded" in app_main
     assert ".applicationSupportDirectory" in app_main
     assert '.appendingPathComponent("ObstacleBridge"' in app_main
     assert ".applicationSupportDirectory" in control
     assert "let root = base" in control
+    assert "#if os(macOS)" in control
+    assert "return loadSharedRuntimeConfigJSON() ?? [:]" in control
+    assert 'privilegedHostRunnerExecutableName = "ObstacleBridgeHostRunner"' in control
+    assert "do shell script" in control
+    assert "with administrator privileges" in control
+    assert "bundledPrivilegedHostRunnerURL" in control
+    assert "ensurePrivilegedSwiftHostRunnerRunning" in control
     assert ".applicationSupportDirectory" in runner
     assert '.appendingPathComponent("ObstacleBridge"' in runner
     assert 'ObstacleBridgeHostRunnerError.unreadableRuntimeConfig("Documents")' in runner
     assert "ObstacleBridge.app" in build_script
     assert "ObstacleBridgeMacAppMain.swift" in build_script
     assert "ObstacleBridgeMacOSTunAdapter.swift" in build_script
+    assert 'cp "${BINARY_PATH}" "${APP_MACOS_DIR}/ObstacleBridgeHostRunner"' in build_script
     assert "codesign" in build_script
     assert 'APP_ENTITLEMENTS="${OBSTACLEBRIDGE_CODESIGN_ENTITLEMENTS:-}"' in build_script
     assert 'BUILD_VARIANT="${OBSTACLEBRIDGE_MACOS_BUILD_VARIANT:-normal}"' in build_script
     assert 'OBSTACLEBRIDGE_SWIFT_FAILURE_INJECTION' in build_script
     assert 'SWIFT_EXTRA_FLAGS+=("-DOBSTACLEBRIDGE_FAILURE_INJECTION")' in build_script
+    assert "tunServiceSpec: tunService?.toChannelMuxServiceSpec()" in runner
 
 
 def test_websocket_payload_codec_source_exists() -> None:

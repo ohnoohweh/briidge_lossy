@@ -1497,6 +1497,12 @@ The following delivery rules still apply to all future work on this feature:
   - route planning
   - disconnect cleanup / rebind cleanup
   - scoped throttling behavior
+- live macOS Swift-versus-Python shared-TUN runs now prove that the server can
+  promote the macOS Swift peer into the active shared-TUN binding rather than
+  misclassifying it as a separate plain client-side TUN interface
+- the earlier server-side symptom of an extra `ios-utun` row is now closed for
+  the current macOS Swift path; the Swift owner now presents the structured
+  shared-TUN service shape that the Python/Linux server expects
 
 ### macOS host support status
 
@@ -1509,8 +1515,15 @@ The following delivery rules still apply to all future work on this feature:
   [ObstacleBridgeMacOSTunAdapter.swift](../ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift)
 - those additions mean both the Python and Swift stacks can now own real macOS
   TUN interfaces rather than only simulating the control plane
-- the remaining gap is not basic device access anymore; it is stronger
-  end-to-end proof of shared-TUN runtime behavior under live packet carriage
+- the Swift macOS app now proves more than raw device creation:
+  - the privileged helper can launch the HostRunner
+  - the helper can create a real `utun`
+  - hook-driven local tunnel addressing is applied on macOS
+  - route intent follows the configured included-route policy rather than
+    blindly hijacking defaults in every case
+- the remaining gap is no longer basic device access or basic shared-binding
+  promotion; it is stronger end-to-end proof around spoof rejection, restart /
+  rebind, broadcast policy, and elevated packet-carriage regression coverage
 
 ### Verified host coverage
 
@@ -1520,6 +1533,12 @@ The following delivery rules still apply to all future work on this feature:
   spoof rejection, and disconnect cleanup/rebind behavior
 - the baseline 1:1 TUN path remains part of the acceptance target for the same
   feature family
+- macOS Swift host proof now includes:
+  - real `utun` creation through the app-owned privileged helper path
+  - configured local tunnel addressing on the live interface
+  - included-route-driven local route shaping
+  - successful server-side active shared-TUN binding acceptance for the macOS
+    Swift peer
 
 ## Further steps
 
@@ -1527,8 +1546,6 @@ The following delivery rules still apply to all future work on this feature:
 
 Deliverables:
 
-- prove active shared-TUN peer bindings from real Swift peers rather than only
-  from component logic and admin-row contract tests
 - prove spoof rejection from a real Swift peer using another peer's source
   address
 - prove restart/rebind behavior from real Swift peers against the Python/Linux
@@ -1542,7 +1559,6 @@ Testing:
 - mixed Swift/Python subprocess tests that move beyond control-plane visibility
   and confirm live runtime state mutation
 - macOS/iOS Swift peer tests against the Linux/Python server for:
-  - active binding creation
   - spoof drop visibility
   - disconnect cleanup and rebind
   - peer-to-peer relay
@@ -1639,11 +1655,16 @@ Current Swift parity status for this recipe:
     and `quic`
   - iOS probe visibility across `tcp`, `myudp`, `ws`, and `quic`
   - native macOS TUN device support on both Python and Swift sides
+  - live active shared-TUN binding mutation from the macOS Swift peer against
+    the Linux/Python server
+  - removal of the stale extra server-side `ios-utun` client row in that
+    macOS Swift shared-TUN path
 - not yet fully proven:
-  - active binding mutation from live Swift peers
   - real Swift-peer spoof rejection
   - restart/rebind after live Swift peer restart
   - broadcast-scope and throttle-scope isolation under live Swift traffic
+  - equivalent live shared-TUN binding proof from the iOS Swift peer, not only
+    admin/probe contract coverage
   - elevated real TUN packet carriage for the Swift/macOS path
 
 macOS/iOS further-step checklist for this recipe:

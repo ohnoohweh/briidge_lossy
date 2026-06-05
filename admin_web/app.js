@@ -112,6 +112,11 @@ function fmtUptime(sec) {
   return `${r}s`;
 }
 
+function fmtRouteList(routes) {
+  if (!Array.isArray(routes) || routes.length === 0) return 'none';
+  return routes.join(', ');
+}
+
 function fmtAgeSeconds(sec) {
   if (sec == null || Number.isNaN(sec)) return 'n/a';
   return fmtUptime(sec);
@@ -140,6 +145,7 @@ const liveState = {
   connected: false,
   pollingStarted: false,
   pollingStops: [],
+  tunRoutingRefreshStop: null,
 };
 
 const uiState = {
@@ -1526,6 +1532,23 @@ function setActiveTab(tabName) {
   tabs.forEach((tab) => tab.classList.toggle('active', tab.dataset.tab === tabName));
   panels.forEach((panel) => panel.classList.toggle('active', panel.id === `tab-${tabName}`));
   updateLiveSubscriptions();
+  updateTunRoutingRefreshLoop();
+}
+
+function updateTunRoutingRefreshLoop() {
+  if (liveState.tunRoutingRefreshStop) {
+    try {
+      liveState.tunRoutingRefreshStop();
+    } catch (e) {
+      console.error('tun routing refresh stop failed', e);
+    }
+    liveState.tunRoutingRefreshStop = null;
+  }
+  if (!authState.appStarted || !isApiEnabled() || !isTabActive('tun-routing')) return;
+  liveState.tunRoutingRefreshStop = startPolling(async () => {
+    if (!isTabActive('tun-routing')) return;
+    await loadTunRouting();
+  }, 1000);
 }
 
 function advisorSeverityClass(value) {
@@ -2690,6 +2713,15 @@ function applyTunRoutingDoc(j) {
   setText('tunRoutingListening', fmtInteger(j.summary?.tun_listening ?? 0));
   setText('tunRoutingSharedServices', fmtInteger(j.summary?.shared_services ?? 0));
   setText('tunRoutingActiveBindings', fmtInteger(j.summary?.shared_active_peer_bindings ?? 0));
+  applyTunRoutingConfigSummary(configState.config || {});
+}
+
+function applyTunRoutingConfigSummary(config) {
+  const doc = config || {};
+  setText('tunRoutingIncludedRoutes', fmtRouteList(doc.included_routes));
+  setText('tunRoutingExcludedRoutes', fmtRouteList(doc.excluded_routes));
+  setText('tunRoutingIncludedRoutes6', fmtRouteList(doc.included_routes6));
+  setText('tunRoutingExcludedRoutes6', fmtRouteList(doc.excluded_routes6));
 }
 
 async function loadConfig() {
@@ -2703,6 +2735,7 @@ async function loadConfig() {
     };
     applyAdminInstanceName(configState.config.admin_web_name);
     renderConfigSections(configState.schema, configState.config);
+    applyTunRoutingConfigSummary(configState.config);
     if (uiState.onboarding.initialized) {
       if ((uiState.onboarding.ownServersDraft || []).length === 0) {
         uiState.onboarding.ownServersDraft = sanitizeServiceSpecs(configState.config?.own_servers || []);
@@ -3825,8 +3858,10 @@ function initTabs() {
       updateLiveSubscriptions();
       if (!isApiEnabled()) return;
       if (target === 'status' && !liveState.connected) {
-        loadConnections();
         loadPeers();
+      }
+      if (target === 'connections' && !liveState.connected) {
+        loadConnections();
       }
       if (target === 'tun-routing' && !liveState.connected) {
         loadTunRouting();
@@ -3848,6 +3883,9 @@ function currentLiveTopics() {
   if (isTabActive('status')) {
     topics.push('connections', 'peers');
   }
+  if (isTabActive('connections')) {
+    topics.push('connections');
+  }
   if (isTabActive('tun-routing')) {
     topics.push('tun_routing');
   }
@@ -3867,6 +3905,7 @@ function updateLiveSubscriptions() {
   if (!liveState.connected) return;
   const activeTabs = [];
   if (isTabActive('status')) activeTabs.push('status');
+  if (isTabActive('connections')) activeTabs.push('connections');
   if (isTabActive('tun-routing')) activeTabs.push('tun-routing');
   if (isTabActive('misc')) activeTabs.push('misc');
   sendLiveMessage({
@@ -3894,7 +3933,7 @@ function startHttpPollingFallback() {
   liveState.pollingStops = [
     startPolling(loadStatus, 1000),
     startPolling(async () => {
-      if (!isTabActive('status')) return;
+      if (!isTabActive('status') && !isTabActive('connections')) return;
       await loadConnections();
     }, 1000),
     startPolling(async () => {
@@ -4053,6 +4092,7 @@ async function logoutAdmin() {
   }
   liveState.connected = false;
   startHttpPollingFallback();
+  updateTunRoutingRefreshLoop();
   authState.authenticated = false;
   authState.username = '';
   updateAuthUi();
@@ -4070,15 +4110,20 @@ async function startAdminApp() {
     loadConfig();
     startHttpPollingFallback();
     connectLiveUpdates();
+    updateTunRoutingRefreshLoop();
     return;
   }
   connectLiveUpdates();
+  updateTunRoutingRefreshLoop();
   if (isTabActive('status')) {
     await loadStatus();
     if (!liveState.connected) {
-      await loadConnections();
       await loadPeers();
     }
+    return;
+  }
+  if (isTabActive('connections') && !liveState.connected) {
+    await loadConnections();
     return;
   }
   if (isTabActive('tun-routing') && !liveState.connected) {
@@ -4337,8 +4382,11 @@ document.body?.addEventListener('click', (event) => {
   }
   if (tabName === 'status' && !liveState.connected) {
     loadStatus();
-    loadConnections();
     loadPeers();
+    return;
+  }
+  if (tabName === 'connections' && !liveState.connected) {
+    loadConnections();
     return;
   }
   if (tabName === 'tun-routing' && !liveState.connected) {

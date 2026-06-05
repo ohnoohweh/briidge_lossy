@@ -3,12 +3,14 @@ import Foundation
 import WebKit
 
 @main
-final class ObstacleBridgeMacAppMain: NSObject, NSApplicationDelegate {
+final class ObstacleBridgeMacAppMain: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
     private var window: NSWindow?
     private var webView: WKWebView?
     private var statusLabel: NSTextField?
+    private var reloadButton: NSButton?
     private var refreshTimer: Timer?
     private var currentWebAdminURL: URL?
+    private static let webControlMessageHandlerName = "obstacleBridgeControl"
 
     static func main() {
         let app = NSApplication.shared
@@ -19,6 +21,7 @@ final class ObstacleBridgeMacAppMain: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        buildMenu()
         buildWindow()
         do {
             try seedDocumentsSurfaceIfNeeded()
@@ -45,6 +48,24 @@ final class ObstacleBridgeMacAppMain: NSObject, NSApplicationDelegate {
         refreshTimer = nil
     }
 
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == Self.webControlMessageHandlerName else {
+            return
+        }
+        guard let payload = message.body as? [String: Any],
+              let action = payload["action"] as? String else {
+            return
+        }
+        switch action {
+        case "exit":
+            exitProgramFromEmbeddedWebAdmin()
+        case "restart":
+            restartProgramFromEmbeddedWebAdmin()
+        default:
+            break
+        }
+    }
+
     private func buildWindow() {
         let contentRect = NSRect(x: 0, y: 0, width: 1180, height: 820)
         let window = NSWindow(
@@ -60,13 +81,29 @@ final class ObstacleBridgeMacAppMain: NSObject, NSApplicationDelegate {
         container.autoresizingMask = [.width, .height]
 
         let statusLabel = NSTextField(labelWithString: "Preparing runtime...")
-        statusLabel.frame = NSRect(x: 16, y: contentRect.height - 34, width: contentRect.width - 32, height: 18)
+        statusLabel.frame = NSRect(x: 16, y: contentRect.height - 34, width: contentRect.width - 120, height: 18)
         statusLabel.autoresizingMask = [.width, .minYMargin]
         statusLabel.lineBreakMode = .byTruncatingMiddle
         statusLabel.textColor = .secondaryLabelColor
 
+        let reloadButton = NSButton(title: "Reload", target: self, action: #selector(reloadWebAdmin))
+        reloadButton.frame = NSRect(x: contentRect.width - 92, y: contentRect.height - 39, width: 76, height: 26)
+        reloadButton.autoresizingMask = [.minXMargin, .minYMargin]
+        reloadButton.bezelStyle = .rounded
+        reloadButton.toolTip = "Reload WebAdmin"
+
         let webFrame = NSRect(x: 0, y: 0, width: contentRect.width, height: contentRect.height - 44)
-        let webView = WKWebView(frame: webFrame)
+        let webConfig = WKWebViewConfiguration()
+        let userContentController = WKUserContentController()
+        userContentController.add(self, name: Self.webControlMessageHandlerName)
+        let controlInterceptor = WKUserScript(
+            source: Self.embeddedControlInterceptorScript(handlerName: Self.webControlMessageHandlerName),
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: true
+        )
+        userContentController.addUserScript(controlInterceptor)
+        webConfig.userContentController = userContentController
+        let webView = WKWebView(frame: webFrame, configuration: webConfig)
         webView.autoresizingMask = [.width, .height]
         webView.loadHTMLString(
             """
@@ -82,16 +119,133 @@ final class ObstacleBridgeMacAppMain: NSObject, NSApplicationDelegate {
 
         container.addSubview(webView)
         container.addSubview(statusLabel)
+        container.addSubview(reloadButton)
         window.contentView = container
         window.makeKeyAndOrderFront(nil)
 
         self.window = window
         self.webView = webView
         self.statusLabel = statusLabel
+        self.reloadButton = reloadButton
+    }
+
+    private func buildMenu() {
+        let mainMenu = NSMenu()
+
+        let appMenuItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "Reload", action: #selector(reloadWebAdmin), keyEquivalent: "r")
+        appMenu.addItem(NSMenuItem.separator())
+        let quitTitle = "Quit \(ProcessInfo.processInfo.processName)"
+        appMenu.addItem(withTitle: quitTitle, action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenuItem.submenu = appMenu
+        mainMenu.addItem(appMenuItem)
+
+        NSApp.mainMenu = mainMenu
+    }
+
+    private static func embeddedControlInterceptorScript(handlerName: String) -> String {
+        """
+        (function() {
+          function send(action) {
+            try {
+              const bridge = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.\(handlerName);
+              if (bridge) bridge.postMessage({ action: action });
+            } catch (_) {}
+          }
+          document.addEventListener('click', function(event) {
+            const restartButton = event.target && event.target.closest ? event.target.closest('#restartBtn') : null;
+            if (restartButton) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+              send('restart');
+              return;
+            }
+            const exitButton = event.target && event.target.closest ? event.target.closest('#exitBtn') : null;
+            if (exitButton) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+              send('exit');
+            }
+          }, true);
+        })();
+        """
+    }
+
+    private func exitProgramFromEmbeddedWebAdmin() {
+        updateStatus("Stopping ObstacleBridge…")
+        requestControlAction(path: "/api/shutdown") { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                NSApp.terminate(self)
+            }
+        }
+    }
+
+    private func restartProgramFromEmbeddedWebAdmin() {
+        updateStatus("Restarting ObstacleBridge…")
+        webView?.loadHTMLString(
+            """
+            <html>
+              <body style="font-family: -apple-system; color: #334155; padding: 24px;">
+                <h2 style="margin: 0 0 12px 0;">ObstacleBridge</h2>
+                <p style="margin: 0;">Restarting the runtime and waiting for WebAdmin…</p>
+              </body>
+            </html>
+            """,
+            baseURL: nil
+        )
+        requestControlAction(path: "/api/restart") { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                self?.scheduleWebAdminPolling()
+            }
+        }
+    }
+
+    private func requestControlAction(path: String, completion: @escaping () -> Void) {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+
+        guard let url = controlActionURL(path: path) else {
+            completion()
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 2.0
+        URLSession.shared.dataTask(with: request) { _, _, _ in
+            DispatchQueue.main.async {
+                completion()
+            }
+        }.resume()
+    }
+
+    private func controlActionURL(path: String) -> URL? {
+        let base = currentWebAdminURL ?? webAdminURL()
+        guard let base else {
+            return nil
+        }
+        guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        components.path = path
+        components.query = nil
+        components.fragment = nil
+        return components.url
     }
 
     private func updateStatus(_ text: String) {
         statusLabel?.stringValue = text
+    }
+
+    @objc
+    private func reloadWebAdmin() {
+        if currentWebAdminURL != nil {
+            updateStatus("Reloading WebAdmin…")
+            webView?.reload()
+            return
+        }
+        scheduleWebAdminPolling()
     }
 
     private func scheduleWebAdminPolling() {

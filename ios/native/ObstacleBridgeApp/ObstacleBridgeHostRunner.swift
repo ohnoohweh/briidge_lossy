@@ -312,6 +312,9 @@ final class ObstacleBridgeHostRunner {
     func stop() {
         clientRestartWatchdog?.cancel()
         clientRestartWatchdog = nil
+        if let tunService = ownServerSpecs.first(where: { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }) {
+            runMacOSTunLifecycleHook(for: tunService, event: "on_stopped")
+        }
         sharedMacOSTunAdapter?.stop()
         sharedMacOSTunAdapter = nil
         sharedWebSocketOverlayTransportOwner?.stop()
@@ -1466,6 +1469,7 @@ final class ObstacleBridgeHostRunner {
             ),
             queue: serviceStateQueue,
             serviceNameByID: Dictionary(uniqueKeysWithValues: ownServerSpecs.map { ($0.svcID, $0.name ?? "") }),
+            tunServiceSpec: tunService?.toChannelMuxServiceSpec(),
             tunIfname: tunService?.listenBind,
             tunMTU: tunService?.listenPort ?? 0,
             tunPacketSink: { [weak self] packet in
@@ -1561,6 +1565,7 @@ final class ObstacleBridgeHostRunner {
             ),
             queue: serviceStateQueue,
             serviceNameByID: Dictionary(uniqueKeysWithValues: ownServerSpecs.map { ($0.svcID, $0.name ?? "") }),
+            tunServiceSpec: tunService?.toChannelMuxServiceSpec(),
             tunIfname: tunService?.listenBind,
             tunMTU: tunService?.listenPort ?? 0,
             tunPacketSink: { [weak self] packet in
@@ -1603,6 +1608,7 @@ final class ObstacleBridgeHostRunner {
             ),
             queue: serviceStateQueue,
             serviceNameByID: Dictionary(uniqueKeysWithValues: ownServerSpecs.map { ($0.svcID, $0.name ?? "") }),
+            tunServiceSpec: tunService?.toChannelMuxServiceSpec(),
             tunIfname: tunService?.listenBind,
             tunMTU: tunService?.listenPort ?? 0,
             tunPacketSink: { [weak self] packet in
@@ -1622,6 +1628,9 @@ final class ObstacleBridgeHostRunner {
               tunService.targetProtocol == "tun",
               !trimmedIfname.isEmpty
         else {
+            if let existingService = ownServerSpecs.first(where: { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }) {
+                runMacOSTunLifecycleHook(for: existingService, event: "on_stopped")
+            }
             sharedMacOSTunAdapter?.stop()
             sharedMacOSTunAdapter = nil
             return
@@ -1634,6 +1643,7 @@ final class ObstacleBridgeHostRunner {
             return
         }
         sharedMacOSTunAdapter?.stop()
+        runMacOSTunLifecycleHook(for: tunService, event: "on_stopped")
         let adapter = ObstacleBridgeMacOSTunAdapter(
             ifname: ifname,
             mtu: mtu,
@@ -1648,6 +1658,7 @@ final class ObstacleBridgeHostRunner {
         do {
             try adapter.start()
             sharedMacOSTunAdapter = adapter
+            runMacOSTunLifecycleHook(for: tunService, event: "on_created")
         } catch {
             NSLog(
                 "[ObstacleBridgeHostRunner][macos_utun_start_failed] ifname=%@ mtu=%d error=%@",
@@ -1656,6 +1667,265 @@ final class ObstacleBridgeHostRunner {
                 error.localizedDescription
             )
             sharedMacOSTunAdapter = nil
+        }
+    }
+
+    private func macOSTunHookContext(for tunService: ObstacleBridgeNativeServiceSpec, event: String) -> [String: String] {
+        let actualIfname = (sharedMacOSTunAdapter?.actualIfname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            ? sharedMacOSTunAdapter!.actualIfname
+            : tunService.listenBind
+        let overlayTransport = (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp").lowercased()
+        let overlayPeerHost: String
+        let overlayPeerPort: String
+        switch overlayTransport {
+        case "tcp":
+            overlayPeerHost = Self.stringValue(from: runtimeConfig["tcp_peer"]) ?? ""
+            overlayPeerPort = String(Self.intValue(from: runtimeConfig["tcp_peer_port"]) ?? 0)
+        case "ws":
+            overlayPeerHost = Self.stringValue(from: runtimeConfig["ws_peer"]) ?? ""
+            overlayPeerPort = String(Self.intValue(from: runtimeConfig["ws_peer_port"]) ?? 0)
+        case "quic":
+            overlayPeerHost = Self.stringValue(from: runtimeConfig["quic_peer"]) ?? ""
+            overlayPeerPort = String(Self.intValue(from: runtimeConfig["quic_peer_port"]) ?? 0)
+        default:
+            overlayPeerHost = Self.stringValue(from: runtimeConfig["udp_peer"]) ?? ""
+            overlayPeerPort = String(Self.intValue(from: runtimeConfig["udp_peer_port"]) ?? 0)
+        }
+        return [
+            "service_id": String(tunService.svcID),
+            "service_name": tunService.name ?? "svc-\(tunService.svcID)",
+            "catalog": "own_servers",
+            "event": event,
+            "protocol": tunService.listenProtocol,
+            "channel_id": "",
+            "bind": tunService.listenBind,
+            "listen_port": String(tunService.listenPort),
+            "target_host": tunService.targetHost,
+            "target_port": String(tunService.targetPort),
+            "ifname": actualIfname,
+            "peer_id": "",
+            "peer_endpoint": "",
+            "overlay_transport": overlayTransport,
+            "overlay_peer_name": "",
+            "overlay_peer_host": overlayPeerHost,
+            "overlay_peer_port": overlayPeerPort == "0" ? "" : overlayPeerPort,
+            "role": "listener",
+        ]
+    }
+
+    private func renderHookValue(_ value: String, context: [String: String]) -> String {
+        var rendered = value
+        for (key, replacement) in context {
+            rendered = rendered.replacingOccurrences(of: "{\(key)}", with: replacement)
+        }
+        return rendered
+    }
+
+    private func normalizedCIDR(address: String, prefix: Int) -> String? {
+        let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        if prefix >= 0 && prefix <= 32 {
+            var addr = in_addr()
+            guard trimmed.withCString({ inet_pton(AF_INET, $0, &addr) }) == 1 else {
+                return nil
+            }
+            let hostOrder = UInt32(bigEndian: addr.s_addr)
+            let mask: UInt32 = prefix == 0 ? 0 : (UInt32.max << UInt32(32 - prefix))
+            let network = hostOrder & mask
+            var networkAddr = in_addr(s_addr: network.bigEndian)
+            var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+            guard inet_ntop(AF_INET, &networkAddr, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil else {
+                return nil
+            }
+            return "\(String(cString: buffer))/\(prefix)"
+        }
+        if prefix >= 0 && prefix <= 128 {
+            var addr6 = in6_addr()
+            guard trimmed.withCString({ inet_pton(AF_INET6, $0, &addr6) }) == 1 else {
+                return nil
+            }
+            var networkBytes = withUnsafeBytes(of: &addr6) { Array($0) }
+            var remaining = prefix
+            for index in networkBytes.indices {
+                if remaining >= 8 {
+                    remaining -= 8
+                    continue
+                }
+                if remaining <= 0 {
+                    networkBytes[index] = 0
+                } else {
+                    let shift = 8 - remaining
+                    let mask = UInt8(truncatingIfNeeded: 0xFF << shift)
+                    networkBytes[index] &= mask
+                    remaining = 0
+                }
+            }
+            var networkAddr6 = in6_addr()
+            withUnsafeMutableBytes(of: &networkAddr6) { bytes in
+                bytes.copyBytes(from: networkBytes)
+            }
+            var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+            guard inet_ntop(AF_INET6, &networkAddr6, &buffer, socklen_t(INET6_ADDRSTRLEN)) != nil else {
+                return nil
+            }
+            return "\(String(cString: buffer))/\(prefix)"
+        }
+        return nil
+    }
+
+    private func bundledScriptURL(for relativePath: String) -> URL? {
+        let normalized = relativePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
+        let executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+        let resourcesURL = executableURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Resources", isDirectory: true)
+        let scriptName = URL(fileURLWithPath: normalized).lastPathComponent
+        let bundled = resourcesURL.appendingPathComponent("scripts", isDirectory: true).appendingPathComponent(scriptName)
+        if FileManager.default.isExecutableFile(atPath: bundled.path) {
+            return bundled
+        }
+        return nil
+    }
+
+    private func resolveHookExecutablePath(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return raw }
+        if trimmed.hasPrefix("./scripts/") || trimmed.hasPrefix("scripts/") {
+            if let bundled = bundledScriptURL(for: trimmed) {
+                return bundled.path
+            }
+        }
+        if trimmed.hasPrefix("/") {
+            return trimmed
+        }
+        let configBase = URL(fileURLWithPath: runtimeConfigPath).deletingLastPathComponent().deletingLastPathComponent()
+        let candidate = configBase.appendingPathComponent(trimmed).path
+        if FileManager.default.isExecutableFile(atPath: candidate) {
+            return candidate
+        }
+        return trimmed
+    }
+
+    private func runMacOSTunLifecycleHook(for tunService: ObstacleBridgeNativeServiceSpec, event: String) {
+        guard let hooks = tunService.lifecycleHooks,
+              case .object(let listenerHooks)? = hooks["listener"],
+              case .object(let commandObject)? = listenerHooks[event]
+        else {
+            return
+        }
+        guard case .object(let argvContainer)? = commandObject["argv"],
+              case .array(let argvValues)? = argvContainer["darwin"]
+        else {
+            return
+        }
+
+        let context = macOSTunHookContext(for: tunService, event: event)
+        var argv: [String] = argvValues.compactMap { value in
+            if case .string(let raw) = value {
+                return renderHookValue(raw, context: context)
+            }
+            return nil
+        }
+        guard !argv.isEmpty else {
+            return
+        }
+        argv[0] = resolveHookExecutablePath(argv[0])
+
+        var env = ProcessInfo.processInfo.environment
+        env["OB_OVERLAY_TRANSPORT"] = context["overlay_transport"] ?? ""
+        env["OB_OVERLAY_PEER_NAME"] = context["overlay_peer_name"] ?? ""
+        env["OB_OVERLAY_PEER_HOST"] = context["overlay_peer_host"] ?? ""
+        env["OB_OVERLAY_PEER_PORT"] = context["overlay_peer_port"] ?? ""
+
+        if let tunRouting = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig) {
+            let tunnelAddress = (tunRouting.tunnelAddress ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let tunnelPrefix = tunRouting.tunnelPrefix ?? 30
+            let tunnelGateway = (tunRouting.tunnelGateway ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let tunnelAddress6 = (tunRouting.tunnelAddress6 ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let tunnelPrefix6 = tunRouting.tunnelPrefix6 ?? 126
+            let tunnelGateway6 = (tunRouting.tunnelGateway6 ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let dnsServers = tunRouting.dnsServers ?? []
+            let includedRoutes = tunRouting.includedRoutes ?? []
+            let includedRoutes6 = tunRouting.includedRoutes6 ?? []
+
+            if !tunnelAddress.isEmpty {
+                env["TUN_ADDR"] = "\(tunnelAddress)/\(tunnelPrefix)"
+            }
+            if !tunnelGateway.isEmpty {
+                env["TUN_GW"] = tunnelGateway
+                env["PEER_ADDR"] = tunnelGateway
+            }
+            if let subnet = normalizedCIDR(address: tunnelAddress, prefix: tunnelPrefix) {
+                env["TUN_SUBNET"] = subnet
+            }
+            if !tunnelAddress6.isEmpty {
+                env["TUN_ADDR6"] = "\(tunnelAddress6)/\(tunnelPrefix6)"
+            }
+            if !tunnelGateway6.isEmpty {
+                env["TUN_GW6"] = tunnelGateway6
+                env["PEER_ADDR6"] = tunnelGateway6
+            }
+            if let subnet6 = normalizedCIDR(address: tunnelAddress6, prefix: tunnelPrefix6) {
+                env["TUN_SUBNET6"] = subnet6
+            }
+            for (index, dns) in dnsServers.prefix(2).enumerated() {
+                env[index == 0 ? "DNS1" : "DNS2"] = dns
+            }
+            if !includedRoutes.isEmpty {
+                env["INCLUDED_ROUTES"] = includedRoutes.joined(separator: ",")
+            }
+            if !includedRoutes6.isEmpty {
+                env["INCLUDED_ROUTES6"] = includedRoutes6.joined(separator: ",")
+            }
+        }
+
+        if case .object(let envObject)? = commandObject["env"] {
+            for (key, value) in envObject {
+                switch value {
+                case .string(let stringValue):
+                    env[key] = renderHookValue(stringValue, context: context)
+                case .integer(let integerValue):
+                    env[key] = String(integerValue)
+                case .double(let doubleValue):
+                    env[key] = String(doubleValue)
+                case .bool(let boolValue):
+                    env[key] = boolValue ? "true" : "false"
+                default:
+                    break
+                }
+            }
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: argv[0])
+        process.arguments = Array(argv.dropFirst())
+        process.environment = env
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = outputPipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            NSLog(
+                "[ObstacleBridgeHostRunner][macos_tun_hook_%@] argv=%@ status=%d output=%@",
+                event,
+                argv.description,
+                process.terminationStatus,
+                output
+            )
+        } catch {
+            NSLog(
+                "[ObstacleBridgeHostRunner][macos_tun_hook_%@_failed] argv=%@ error=%@",
+                event,
+                argv.description,
+                error.localizedDescription
+            )
         }
     }
 

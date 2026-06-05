@@ -242,11 +242,17 @@ EOF
 
 cp -R "${REPO_ROOT}/admin_web" "${APP_RESOURCES_DIR}/admin_web"
 cp -R "${REPO_ROOT}/web" "${APP_RESOURCES_DIR}/web"
+mkdir -p "${APP_RESOURCES_DIR}/scripts"
+cp "${REPO_ROOT}/scripts/client-tun-hook-macos.sh" "${APP_RESOURCES_DIR}/scripts/client-tun-hook-macos.sh"
+cp "${REPO_ROOT}/scripts/server-tun-hook-macos.sh" "${APP_RESOURCES_DIR}/scripts/server-tun-hook-macos.sh"
+chmod 755 "${APP_RESOURCES_DIR}/scripts/client-tun-hook-macos.sh" "${APP_RESOURCES_DIR}/scripts/server-tun-hook-macos.sh"
 
 echo "[build_macos_app] writing build identification sidecar"
 cp "${REPO_ROOT}/ios/build/generated/obstaclebridge-build-info.json" "${BUILD_INFO_JSON}"
 
 cp "${BUILD_INFO_JSON}" "${APP_RESOURCES_DIR}/ObstacleBridge.build-info.json"
+cp "${BINARY_PATH}" "${APP_MACOS_DIR}/ObstacleBridgeHostRunner"
+chmod 755 "${APP_MACOS_DIR}/ObstacleBridgeHostRunner"
 
 if [ "${APP_CODESIGN_IDENTITY}" != "off" ]; then
   echo "[build_macos_app] codesigning app bundle"

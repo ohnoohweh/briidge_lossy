@@ -83,6 +83,7 @@
         <nav class="nav-tabs" aria-label="Main navigation">
           <button class="nav-tab" data-tab="home" type="button">Home</button>
           <button class="nav-tab active" data-tab="status" type="button">Status</button>
+          <button class="nav-tab" data-tab="connections" type="button">Connections</button>
           <button class="nav-tab" data-tab="tun-routing" type="button">TUN / Routing</button>
           <button class="nav-tab" data-tab="secure-link" type="button">Secure-Link</button>
           <button class="nav-tab" data-tab="configuration" type="button">Configuration</button>
@@ -157,11 +158,29 @@
             </div>
           </section>
 
+        </section>
+
+        <section id="tab-connections" class="tab-panel">
+          <section class="section-block card">
+            <div class="section-header">
+              <div>
+                <h2>Connections</h2>
+                <p>Service-level TCP and UDP mappings separated from peer health and TUN routing state.</p>
+              </div>
+            </div>
+            <div class="kv-list">
+              <div class="kv-row"><span>UDP Open</span><strong id="udpOpen">0</strong></div>
+              <div class="kv-row"><span>UDP Listening</span><strong id="udpListening">0</strong></div>
+              <div class="kv-row"><span>TCP Open</span><strong id="tcpOpen">0</strong></div>
+              <div class="kv-row"><span>TCP Listening</span><strong id="tcpListening">0</strong></div>
+            </div>
+          </section>
+
           <section class="section-block">
             <div class="section-header">
               <div>
                 <h2>UDP Connections</h2>
-                <p>Current UDP mappings and client transports · Open: <strong id="udpOpen">0</strong> · Listening: <strong id="udpListening">0</strong></p>
+                <p>Current UDP mappings and client transports</p>
               </div>
             </div>
             <div class="table-card card">
@@ -198,7 +217,7 @@
             <div class="section-header">
               <div>
                 <h2>TCP Connections</h2>
-                <p>Current TCP mappings and active streams · Open: <strong id="tcpOpen">0</strong> · Listening: <strong id="tcpListening">0</strong></p>
+                <p>Current TCP mappings and active streams</p>
               </div>
             </div>
             <div class="table-card card">
@@ -229,8 +248,7 @@
                 </table>
               </div>
             </div>
-          </section>        
-
+          </section>
         </section>
 
         <section id="tab-tun-routing" class="tab-panel">
@@ -246,6 +264,12 @@
               <div class="kv-row"><span>TUN Listening</span><strong id="tunRoutingListening">0</strong></div>
               <div class="kv-row"><span>Shared Services</span><strong id="tunRoutingSharedServices">0</strong></div>
               <div class="kv-row"><span>Active Peer Bindings</span><strong id="tunRoutingActiveBindings">0</strong></div>
+            </div>
+            <div class="kv-list" style="margin-top:16px;">
+              <div class="kv-row"><span>Included IPv4 routes</span><strong id="tunRoutingIncludedRoutes">n/a</strong></div>
+              <div class="kv-row"><span>Excluded IPv4 routes</span><strong id="tunRoutingExcludedRoutes">n/a</strong></div>
+              <div class="kv-row"><span>Included IPv6 routes</span><strong id="tunRoutingIncludedRoutes6">n/a</strong></div>
+              <div class="kv-row"><span>Excluded IPv6 routes</span><strong id="tunRoutingExcludedRoutes6">n/a</strong></div>
             </div>
           </section>
 

@@ -31,6 +31,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
     private static var adminWebProxy: ObstacleBridgeIOSAppAdminWebProxy?
 #if os(macOS)
     private static var hostRunner: ObstacleBridgeHostRunner?
+    private static let privilegedHostRunnerExecutableName = "ObstacleBridgeHostRunner"
 #endif
 
     private struct DerivedTunnelNetworkSettings {
@@ -630,6 +631,19 @@ final class ObstacleBridgeTunnelControl: NSObject {
     }
 
     private class func loadRuntimeConfigJSON() -> [String: Any] {
+#if os(macOS)
+        guard let root = appRuntimeRootURL() else {
+            return [:]
+        }
+        let configURL = root
+            .appendingPathComponent("config", isDirectory: true)
+            .appendingPathComponent("ObstacleBridge.cfg", isDirectory: false)
+        if let data = try? Data(contentsOf: configURL),
+           let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            return payload
+        }
+        return loadSharedRuntimeConfigJSON() ?? [:]
+#else
         if let sharedPayload = loadSharedRuntimeConfigJSON() {
             return sharedPayload
         }
@@ -641,11 +655,12 @@ final class ObstacleBridgeTunnelControl: NSObject {
             .appendingPathComponent("ObstacleBridge.cfg", isDirectory: false)
         guard
             let data = try? Data(contentsOf: configURL),
-            let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
             return [:]
         }
         return payload
+#endif
     }
 
     private class func loadSharedRuntimeConfigJSON() -> [String: Any]? {
@@ -1585,6 +1600,28 @@ final class ObstacleBridgeTunnelControl: NSObject {
 
     private class func startSwiftHostRunner() {
         let configSync = syncConfigurationFileInternal()
+        if requiresPrivilegedSwiftHostRunner() {
+            do {
+                let snapshot = try ensurePrivilegedSwiftHostRunnerRunning(configSync: configSync)
+                updateStatus(
+                    ok: true,
+                    event: "swift_host_runner_privileged_launch_requested",
+                    extra: snapshot
+                )
+            } catch {
+                updateStatus(
+                    ok: false,
+                    event: "swift_host_runner_privileged_launch_failed",
+                    error: error.localizedDescription,
+                    extra: [
+                        "mode": "swift_host_runner",
+                        "config_sync": configSync,
+                        "launch_style": "bundled_privileged_helper",
+                    ]
+                )
+            }
+            return
+        }
         if let hostRunner {
             updateStatus(
                 ok: true,
@@ -1619,6 +1656,29 @@ final class ObstacleBridgeTunnelControl: NSObject {
     }
 
     private class func refreshSwiftHostRunnerStatus() {
+        if requiresPrivilegedSwiftHostRunner() {
+            if let payload = privilegedHostRunnerStatusSnapshot() {
+                updateStatus(
+                    ok: true,
+                    event: "swift_host_runner_status_refreshed",
+                    extra: payload
+                )
+            } else {
+                updateStatus(
+                    ok: true,
+                    event: "swift_host_runner_status_refreshed",
+                    extra: [
+                        "mode": "swift_host_runner",
+                        "installed": true,
+                        "enabled": true,
+                        "status": "stopped",
+                        "status_raw": 0,
+                        "launch_style": "bundled_privileged_helper",
+                    ]
+                )
+            }
+            return
+        }
         if let hostRunner {
             updateStatus(
                 ok: true,
@@ -1638,6 +1698,130 @@ final class ObstacleBridgeTunnelControl: NSObject {
                 ]
             )
         }
+    }
+
+    private class func requiresPrivilegedSwiftHostRunner() -> Bool {
+        let payload = loadRuntimeConfigJSON()
+        let flattened = ObstacleBridgeRuntimeConfig.flatten(payload)
+        let ownSpecs = ObstacleBridgeRuntimeConfig.ownServerSpecs(from: flattened)
+        return ownSpecs.contains(where: { $0.listenProtocol.lowercased() == "tun" })
+    }
+
+    private class func privilegedHostRunnerStatusURL() -> URL? {
+        let payload = loadRuntimeConfigJSON()
+        let flattened = ObstacleBridgeRuntimeConfig.flatten(payload)
+        let bind = (ObstacleBridgeRuntimeConfig.stringValue(from: flattened["admin_web_bind"]) ?? "127.0.0.1")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let host: String
+        switch bind {
+        case "", "0.0.0.0", "::", "*", "localhost":
+            host = "127.0.0.1"
+        default:
+            host = bind
+        }
+        let port = ObstacleBridgeRuntimeConfig.intValue(from: flattened["admin_web_port"]) ?? webAdminPort
+        return URL(string: "http://\(host):\(port)/api/status")
+    }
+
+    private class func privilegedHostRunnerStatusSnapshot() -> [String: Any]? {
+        guard let url = privilegedHostRunnerStatusURL() else {
+            return nil
+        }
+        let semaphore = DispatchSemaphore(value: 0)
+        var responsePayload: [String: Any]?
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 1.0
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            defer { semaphore.signal() }
+            guard let http = response as? HTTPURLResponse,
+                  (200 ..< 300).contains(http.statusCode),
+                  let data,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else {
+                return
+            }
+            responsePayload = object
+        }.resume()
+        _ = semaphore.wait(timeout: .now() + 2.0)
+        guard var payload = responsePayload else {
+            return nil
+        }
+        payload["launch_style"] = "bundled_privileged_helper"
+        return payload
+    }
+
+    private class func bundledPrivilegedHostRunnerURL() throws -> URL {
+        guard let executable = Bundle.main.executableURL else {
+            throw NSError(domain: "ObstacleBridgeTunnelControl", code: 4001, userInfo: [
+                NSLocalizedDescriptionKey: "App executable URL unavailable",
+            ])
+        }
+        let helperURL = executable.deletingLastPathComponent().appendingPathComponent(privilegedHostRunnerExecutableName)
+        guard FileManager.default.isExecutableFile(atPath: helperURL.path) else {
+            throw NSError(domain: "ObstacleBridgeTunnelControl", code: 4002, userInfo: [
+                NSLocalizedDescriptionKey: "Bundled privileged host runner missing at \(helperURL.path)",
+            ])
+        }
+        return helperURL
+    }
+
+    private class func shellQuote(_ value: String) -> String {
+        return "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+
+    private class func appleScriptQuote(_ value: String) -> String {
+        return value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    private class func ensurePrivilegedSwiftHostRunnerRunning(configSync: [String: Any]) throws -> [String: Any] {
+        if var payload = privilegedHostRunnerStatusSnapshot() {
+            payload["mode"] = "swift_host_runner"
+            payload["config_sync"] = configSync
+            return payload
+        }
+
+        let helperURL = try bundledPrivilegedHostRunnerURL()
+        let configPath = try ObstacleBridgeHostRunner.appScopedRuntimeConfigPath()
+        let logDirectory = try ObstacleBridgeHostRunner.appScopedRootURL().appendingPathComponent("logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
+        let stdoutLog = logDirectory.appendingPathComponent("ObstacleBridgeHostRunner-root.log")
+        let shellCommand = [
+            shellQuote(helperURL.path),
+            "--runtime-config",
+            shellQuote(configPath),
+            ">>",
+            shellQuote(stdoutLog.path),
+            "2>&1",
+            "&",
+        ].joined(separator: " ")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = [
+            "-e",
+            "do shell script \"\(appleScriptQuote(shellCommand))\" with administrator privileges",
+        ]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw NSError(domain: "ObstacleBridgeTunnelControl", code: Int(process.terminationStatus), userInfo: [
+                NSLocalizedDescriptionKey: "Administrator authorization was cancelled or failed",
+            ])
+        }
+
+        let deadline = Date().addingTimeInterval(8.0)
+        while Date() < deadline {
+            if var payload = privilegedHostRunnerStatusSnapshot() {
+                payload["mode"] = "swift_host_runner"
+                payload["config_sync"] = configSync
+                return payload
+            }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        throw NSError(domain: "ObstacleBridgeTunnelControl", code: 4003, userInfo: [
+            NSLocalizedDescriptionKey: "Privileged host runner did not become ready",
+        ])
     }
 #endif
 
