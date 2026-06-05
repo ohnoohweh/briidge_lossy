@@ -197,6 +197,10 @@ class TunRoutingSettings:
             "MTU": str(int(self.mtu)),
             "ENABLE_TCPMSS": "1" if self.enable_tcpmss else "0",
             "ENABLE_TUN_TCPDUMP": "1" if self.enable_tun_tcpdump else "0",
+            "INCLUDED_ROUTES": ",".join(self.included_routes),
+            "EXCLUDED_ROUTES": ",".join(self.excluded_routes),
+            "INCLUDED_ROUTES6": ",".join(self.included_routes6),
+            "EXCLUDED_ROUTES6": ",".join(self.excluded_routes6),
         }
         if self.tun_tcpdump_pcap_path:
             env["TCPDUMP_PCAP_PATH"] = self.tun_tcpdump_pcap_path
@@ -229,6 +233,10 @@ class TunRoutingSettings:
             "MTU": str(int(self.mtu)),
             "ENABLE_TCPMSS": "1" if self.enable_tcpmss else "0",
             "ENABLE_TUN_TCPDUMP": "1" if self.enable_tun_tcpdump else "0",
+            "INCLUDED_ROUTES": ",".join(self.included_routes),
+            "EXCLUDED_ROUTES": ",".join(self.excluded_routes),
+            "INCLUDED_ROUTES6": ",".join(self.included_routes6),
+            "EXCLUDED_ROUTES6": ",".join(self.excluded_routes6),
         }
         if self.tun_tcpdump_pcap_path:
             env["TCPDUMP_PCAP_PATH"] = self.tun_tcpdump_pcap_path
