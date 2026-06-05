@@ -20,6 +20,7 @@ SWIFT_RUNTIME_CONFIG_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" /
 SWIFT_ADMIN_WEB_SUPPORT_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeAdminWebSupport.swift"
 SWIFT_ADMIN_SNAPSHOT_SUPPORT_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeAdminSnapshotSupport.swift"
 SWIFT_ADMIN_API_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeAdminAPI.swift"
+SWIFT_ADMIN_WEBSERVER_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeWebAdminServer.swift"
 SWIFT_ADMIN_COMPONENT_RUNNER_SOURCE = ROOT / "tests" / "fixtures" / "admin_web_component_runner.swift"
 
 
@@ -123,6 +124,7 @@ def swift_admin_web_component_runner(tmp_path_factory: pytest.TempPathFactory) -
         str(SWIFT_ADMIN_WEB_SUPPORT_SOURCE),
         str(SWIFT_ADMIN_SNAPSHOT_SUPPORT_SOURCE),
         str(SWIFT_ADMIN_API_SOURCE),
+        str(SWIFT_ADMIN_WEBSERVER_SOURCE),
         str(SWIFT_ADMIN_COMPONENT_RUNNER_SOURCE),
     ]
     completed = subprocess.run(command, check=False, capture_output=True, text=True)
@@ -327,3 +329,33 @@ def test_swift_admin_api_live_topic_tun_routing_matches_python(swift_admin_web_c
         },
     )
     assert swift["payload"] == tun_routing
+
+
+def test_swift_admin_api_live_topic_status_frame_contains_payload(swift_admin_web_component_runner: Path) -> None:
+    status = {
+        "app": "udp-bidirectional-mux",
+        "overlay_transport": "myudp",
+        "overlay_connected": True,
+        "tun_open": 1,
+    }
+    swift = _run_swift_component(
+        swift_admin_web_component_runner,
+        {
+            "action": "admin_web_live_frame",
+            "topic": "status",
+            "status_snapshot": status,
+        },
+    )
+    assert swift["frame_json"] == {"type": "status", "data": status}
+
+
+def test_swift_admin_web_live_topics_keep_tun_routing_for_tun_tab(swift_admin_web_component_runner: Path) -> None:
+    swift = _run_swift_component(
+        swift_admin_web_component_runner,
+        {
+            "action": "admin_web_live_topics",
+            "subscribe": ["status", "tun_routing"],
+            "active_tabs": ["tun-routing"],
+        },
+    )
+    assert swift["topics"] == ["status", "tun_routing"]

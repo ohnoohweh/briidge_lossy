@@ -297,6 +297,54 @@ final class ObstacleBridgeWebAdminServer {
         }
     }
 
+    static func liveTopicsForControlMessage(
+        subscribe: Any?,
+        activeTabs: [Any]?,
+        currentTopics: Set<String>? = nil
+    ) -> Set<String> {
+        var topics = currentTopics ?? Set(liveTopics)
+        let requested = parseLiveTopics(subscribe)
+        if !requested.isEmpty {
+            topics = requested
+        }
+        if let activeTabs, !activeTabs.isEmpty {
+            var nextTopics: Set<String> = ["status"]
+            let tabs = Set(activeTabs.compactMap { item in
+                let text = String(describing: item).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                return text.isEmpty ? nil : text
+            })
+            if tabs.contains("status") {
+                nextTopics.formUnion(["connections", "peers"])
+            }
+            if tabs.contains("tun-routing") {
+                nextTopics.insert("tun_routing")
+            }
+            if tabs.contains("misc") {
+                nextTopics.insert("meta")
+            }
+            topics = nextTopics
+        }
+        return topics
+    }
+
+    static func parseLiveTopics(_ value: Any?) -> Set<String> {
+        if let value = value as? String {
+            let topic = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return liveTopics.contains(topic) ? [topic] : []
+        }
+        if let sequence = value as? [Any] {
+            var topics: Set<String> = []
+            for item in sequence {
+                let topic = String(describing: item).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if liveTopics.contains(topic) {
+                    topics.insert(topic)
+                }
+            }
+            return topics
+        }
+        return []
+    }
+
     private static let authExemptPaths: Set<String> = [
         "/api/auth/state",
         "/api/auth/challenge",
@@ -509,25 +557,12 @@ final class ObstacleBridgeWebAdminServer {
             else {
                 return
             }
-            let requested = Self.parseLiveTopics(object["subscribe"])
-            if !requested.isEmpty {
-                topics = requested
-            }
-            if let activeTabs = object["active_tabs"] as? [Any], !activeTabs.isEmpty {
-                var nextTopics: Set<String> = ["status"]
-                let tabs = Set(activeTabs.compactMap { item in
-                    let text = String(describing: item).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                    return text.isEmpty ? nil : text
-                })
-                if tabs.contains("status") {
-                    nextTopics.formUnion(["connections", "peers"])
-                }
-                if tabs.contains("misc") {
-                    nextTopics.insert("meta")
-                }
-                topics = nextTopics
-            }
-            let requestTopics = Self.parseLiveTopics(object["request"])
+            topics = ObstacleBridgeWebAdminServer.liveTopicsForControlMessage(
+                subscribe: object["subscribe"],
+                activeTabs: object["active_tabs"] as? [Any],
+                currentTopics: topics
+            )
+            let requestTopics = ObstacleBridgeWebAdminServer.parseLiveTopics(object["request"])
             let now = ProcessInfo.processInfo.systemUptime
             for topic in requestTopics.sorted() {
                 sendTopic(topic, now: now)
@@ -581,25 +616,6 @@ final class ObstacleBridgeWebAdminServer {
                 }
             })
         }
-
-        private static func parseLiveTopics(_ value: Any?) -> Set<String> {
-            if let value = value as? String {
-                let topic = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                return ObstacleBridgeWebAdminServer.liveTopics.contains(topic) ? [topic] : []
-            }
-            if let sequence = value as? [Any] {
-                var topics: Set<String> = []
-                for item in sequence {
-                    let topic = String(describing: item).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                    if ObstacleBridgeWebAdminServer.liveTopics.contains(topic) {
-                        topics.insert(topic)
-                    }
-                }
-                return topics
-            }
-            return []
-        }
-
         private static func parseFrame(from data: Data) -> WebSocketFrame? {
             guard data.count >= 2 else {
                 return nil

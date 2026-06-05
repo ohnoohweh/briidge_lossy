@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Network)
+import Network
+#endif
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
@@ -82,6 +85,51 @@ private final class StubProvider: ObstacleBridgeAdminAPIStateProvider {
     }
 }
 
+private func decodeLiveFramePayload(_ data: Data) throws -> [String: Any] {
+    guard data.count >= 2 else {
+        throw AdminWebComponentRunnerError.invalidRequest
+    }
+    let b2 = data[data.startIndex + 1]
+    var index = 2
+    var payloadLength = Int(b2 & 0x7F)
+    if payloadLength == 126 {
+        guard data.count >= index + 2 else {
+            throw AdminWebComponentRunnerError.invalidRequest
+        }
+        payloadLength = (Int(data[data.startIndex + index]) << 8) | Int(data[data.startIndex + index + 1])
+        index += 2
+    } else if payloadLength == 127 {
+        throw AdminWebComponentRunnerError.invalidRequest
+    }
+    guard data.count >= index + payloadLength else {
+        throw AdminWebComponentRunnerError.invalidRequest
+    }
+    let payload = Data(data[(data.startIndex + index)..<(data.startIndex + index + payloadLength)])
+    guard let object = try JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
+        throw AdminWebComponentRunnerError.invalidRequest
+    }
+    return object
+}
+
+private func websocketTextFrame(_ payload: Data) -> Data {
+    var frame = Data([0x81])
+    if payload.count < 126 {
+        frame.append(UInt8(payload.count))
+    } else if payload.count <= 0xFFFF {
+        frame.append(126)
+        frame.append(UInt8((payload.count >> 8) & 0xFF))
+        frame.append(UInt8(payload.count & 0xFF))
+    } else {
+        let length = UInt64(payload.count)
+        frame.append(127)
+        for shift in stride(from: 56, through: 0, by: -8) {
+            frame.append(UInt8((length >> UInt64(shift)) & 0xFF))
+        }
+    }
+    frame.append(payload)
+    return frame
+}
+
 private func provider(from request: [String: Any]) -> StubProvider {
     let status = request["status_snapshot"] as? [String: Any] ?? [:]
     let connections = request["connections_snapshot"] as? [String: Any] ?? ObstacleBridgeAdminAPI.emptyConnectionsSnapshot()
@@ -153,6 +201,32 @@ private func run(_ request: [String: Any]) throws -> [String: Any] {
                 topic: topic,
                 provider: provider(from: request)
             ) ?? NSNull(),
+        ]
+    case "admin_web_live_topics":
+        return [
+            "topics": Array(
+                ObstacleBridgeWebAdminServer.liveTopicsForControlMessage(
+                    subscribe: request["subscribe"],
+                    activeTabs: request["active_tabs"] as? [Any],
+                    currentTopics: nil
+                )
+            ).sorted(),
+        ]
+    case "admin_web_live_frame":
+        guard let topic = request["topic"] as? String else {
+            throw AdminWebComponentRunnerError.invalidRequest
+        }
+        let payload = ObstacleBridgeAdminAPI.liveTopicPayload(
+            topic: topic,
+            provider: provider(from: request)
+        ) ?? NSNull()
+        let json = try JSONSerialization.data(
+            withJSONObject: ["type": topic, "data": payload],
+            options: [.sortedKeys]
+        )
+        let encoded = websocketTextFrame(json)
+        return [
+            "frame_json": try decodeLiveFramePayload(encoded),
         ]
     default:
         throw AdminWebComponentRunnerError.invalidAction
