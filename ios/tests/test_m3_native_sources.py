@@ -287,6 +287,10 @@ def test_runtime_config_source_exists() -> None:
     assert '"TUN_routing"' in runtime
     assert "tunnel_gateway" in runtime
     assert "tunnel_gateway6" in runtime
+    assert "enableTCPMSS" in runtime
+    assert "enableTunTcpdump" in runtime
+    assert "tunTcpdumpPcapPath" in runtime
+    assert "optionalStringValueAllowEmpty" in runtime
     assert "log_TUN_routing" in runtime
     assert "included_routes6" in runtime
     assert "listenerHookEnvBlocks()" in runtime
@@ -738,6 +742,9 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "applyNetworkOverride(" not in control
     assert "loadRuntimeConfigJSON" in control
     assert "ios-native-tunnel-control.jsonl" in control
+    assert 'tunRouting["enable_tcpmss"] = false' in control
+    assert 'tunRouting["enable_tun_tcpdump"] = false' in control
+    assert 'tunRouting["tun_tcpdump_pcap_path"] = ""' in control
     assert "DispatchSemaphore" in control
     assert "timed out loading VPN preferences" not in control
 

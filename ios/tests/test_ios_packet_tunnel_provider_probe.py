@@ -377,6 +377,9 @@ def test_ios_packet_tunnel_provider_probe_remote_service_catalog_uses_runtime_ep
     assert payload["service_count"] == 2
     assert payload["first_service_bind"] == "0.0.0.0"
     assert payload["first_service_port"] == 14081
+    assert payload["tun_created_env"]["MTU"] == "1600"
+    assert payload["tun_created_env"]["ENABLE_TCPMSS"] == "0"
+    assert payload["tun_created_env"]["ENABLE_TUN_TCPDUMP"] == "0"
     assert payload["tun_created_env"]["TUN_ADDR"] == "192.168.107.2/30"
     assert payload["tun_created_env"]["PEER_ADDR"] == "192.168.107.1"
     assert payload["tun_created_env"]["TUN_SUBNET"] == "192.168.107.0/30"
@@ -427,6 +430,9 @@ def test_ios_packet_tunnel_provider_probe_remote_service_catalog_uses_flattened_
                         "tunnel_address6": "fd20:107::1",
                         "tunnel_prefix6": 126,
                         "tunnel_gateway6": "fd20:107::2",
+                        "enable_tcpmss": true,
+                        "enable_tun_tcpdump": true,
+                        "tun_tcpdump_pcap_path": "/tmp/packet-tunnel-remote-catalog.pcap",
                         "channel_mux": [
                             "remote_servers": [
                                 [
@@ -434,12 +440,10 @@ def test_ios_packet_tunnel_provider_probe_remote_service_catalog_uses_flattened_
                                     "listen": [
                                         "protocol": "tun",
                                         "ifname": "Obtun3",
-                                        "mtu": 1600,
                                     ],
                                     "target": [
                                         "protocol": "tun",
                                         "ifname": "ios-utun",
-                                        "mtu": 1600,
                                     ],
                                     "lifecycle_hooks": [
                                         "listener": [
@@ -494,6 +498,10 @@ def test_ios_packet_tunnel_provider_probe_remote_service_catalog_uses_flattened_
     payload = json.loads(completed.stdout)
     assert payload["instance_id"] == "17"
     assert payload["connection_seq"] == "23"
+    assert payload["tun_created_env"]["MTU"] == "1600"
+    assert payload["tun_created_env"]["ENABLE_TCPMSS"] == "1"
+    assert payload["tun_created_env"]["ENABLE_TUN_TCPDUMP"] == "1"
+    assert payload["tun_created_env"]["TCPDUMP_PCAP_PATH"] == "/tmp/packet-tunnel-remote-catalog.pcap"
     assert payload["tun_created_env"]["TUN_ADDR"] == "192.168.107.2/30"
     assert payload["tun_created_env"]["PEER_ADDR"] == "192.168.107.1"
     assert payload["tun_created_env"]["TUN_SUBNET"] == "192.168.107.0/30"

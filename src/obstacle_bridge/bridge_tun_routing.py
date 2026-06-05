@@ -20,6 +20,9 @@ DEFAULT_EXCLUDED_ROUTES6 = ["::1/128"]
 DEFAULT_DNS_SERVERS = ["1.1.1.1"]
 DEFAULT_TUNNEL_MTU = 1600
 DEFAULT_TUN_ROUTING_LOG = "CRITICAL"
+DEFAULT_ENABLE_TCPMSS = False
+DEFAULT_ENABLE_TUN_TCPDUMP = False
+DEFAULT_TUN_TCPDUMP_PCAP_PATH = ""
 DEFAULT_SHARED_TUN_DISABLE_OUTGOING_NORMALIZATION = False
 DEFAULT_SHARED_TUN_DISABLE_INFLOW_FILTER = False
 DEFAULT_SHARED_TUN_DISABLE_OUTFLOW_FILTER = False
@@ -51,6 +54,24 @@ def _clean_bool(value: Any, *, default: bool) -> bool:
         if text in {"0", "false", "no", "off", ""}:
             return False
     return bool(default)
+
+
+def _mapping_text_value(
+    values: Mapping[str, Any],
+    key: str,
+    default: str,
+    *,
+    allow_empty: bool = False,
+) -> str:
+    if key not in values:
+        return default
+    raw = values.get(key)
+    if raw is None:
+        return default
+    text = str(raw).strip()
+    if text or allow_empty:
+        return text
+    return default
 
 
 def _other_host(address: str, prefix: int) -> str:
@@ -85,6 +106,9 @@ class TunRoutingSettings:
     dns_servers: list[str] = field(default_factory=lambda: list(DEFAULT_DNS_SERVERS))
     mtu: int = DEFAULT_TUNNEL_MTU
     log_TUN_routing: str = DEFAULT_TUN_ROUTING_LOG
+    enable_tcpmss: bool = DEFAULT_ENABLE_TCPMSS
+    enable_tun_tcpdump: bool = DEFAULT_ENABLE_TUN_TCPDUMP
+    tun_tcpdump_pcap_path: str = DEFAULT_TUN_TCPDUMP_PCAP_PATH
     shared_tun_disable_outgoing_normalization: bool = DEFAULT_SHARED_TUN_DISABLE_OUTGOING_NORMALIZATION
     shared_tun_disable_inflow_filter: bool = DEFAULT_SHARED_TUN_DISABLE_INFLOW_FILTER
     shared_tun_disable_outflow_filter: bool = DEFAULT_SHARED_TUN_DISABLE_OUTFLOW_FILTER
@@ -106,6 +130,9 @@ class TunRoutingSettings:
         g.add_argument("--dns-servers", nargs="*", default=list(DEFAULT_DNS_SERVERS), help="DNS servers applied to tunnel routing")
         g.add_argument("--mtu", type=int, default=DEFAULT_TUNNEL_MTU, help="Tunnel MTU")
         g.add_argument("--log-TUN-routing", dest="log_TUN_routing", default=DEFAULT_TUN_ROUTING_LOG, help="Log level for TUN routing hooks and helpers")
+        g.add_argument("--enable-tcpmss", action="store_true", default=DEFAULT_ENABLE_TCPMSS, help="Enable TCPMSS clamp rules in generated TUN hook env")
+        g.add_argument("--enable-tun-tcpdump", action="store_true", default=DEFAULT_ENABLE_TUN_TCPDUMP, help="Enable tcpdump capture in generated TUN hook env")
+        g.add_argument("--tun-tcpdump-pcap-path", default=DEFAULT_TUN_TCPDUMP_PCAP_PATH, help="Optional pcap path for generated TUN tcpdump env")
         g.add_argument("--shared-tun-disable-outgoing-normalization", action="store_true", default=DEFAULT_SHARED_TUN_DISABLE_OUTGOING_NORMALIZATION, help="Disable shared-TUN local packet source normalization (diagnostic)")
         g.add_argument("--shared-tun-disable-inflow-filter", action="store_true", default=DEFAULT_SHARED_TUN_DISABLE_INFLOW_FILTER, help="Disable shared-TUN inbound ownership/source filter (diagnostic)")
         g.add_argument("--shared-tun-disable-outflow-filter", action="store_true", default=DEFAULT_SHARED_TUN_DISABLE_OUTFLOW_FILTER, help="Disable shared-TUN outbound route and relay filtering (diagnostic)")
@@ -123,19 +150,22 @@ class TunRoutingSettings:
         group = source.get(TUN_ROUTING_SECTION) if isinstance(source, Mapping) else None
         values = group if isinstance(group, Mapping) else source
         return cls(
-            tunnel_address=str(values.get("tunnel_address") or current.tunnel_address).strip() or current.tunnel_address,
+            tunnel_address=_mapping_text_value(values, "tunnel_address", current.tunnel_address),
             tunnel_prefix=int(values.get("tunnel_prefix") or current.tunnel_prefix),
-            tunnel_gateway=str(values.get("tunnel_gateway") or current.tunnel_gateway).strip() or current.tunnel_gateway,
+            tunnel_gateway=_mapping_text_value(values, "tunnel_gateway", current.tunnel_gateway, allow_empty=True),
             included_routes=_clean_list(values.get("included_routes"), default=list(current.included_routes)),
             excluded_routes=_clean_list(values.get("excluded_routes"), default=list(current.excluded_routes)),
-            tunnel_address6=str(values.get("tunnel_address6") or current.tunnel_address6).strip() or current.tunnel_address6,
+            tunnel_address6=_mapping_text_value(values, "tunnel_address6", current.tunnel_address6),
             tunnel_prefix6=int(values.get("tunnel_prefix6") or current.tunnel_prefix6),
-            tunnel_gateway6=str(values.get("tunnel_gateway6") or current.tunnel_gateway6).strip() or current.tunnel_gateway6,
+            tunnel_gateway6=_mapping_text_value(values, "tunnel_gateway6", current.tunnel_gateway6, allow_empty=True),
             included_routes6=_clean_list(values.get("included_routes6"), default=list(current.included_routes6)),
             excluded_routes6=_clean_list(values.get("excluded_routes6"), default=list(current.excluded_routes6)),
             dns_servers=_clean_list(values.get("dns_servers"), default=list(current.dns_servers)),
             mtu=int(values.get("mtu") or current.mtu),
-            log_TUN_routing=str(values.get("log_TUN_routing") or current.log_TUN_routing).strip() or current.log_TUN_routing,
+            log_TUN_routing=_mapping_text_value(values, "log_TUN_routing", current.log_TUN_routing),
+            enable_tcpmss=_clean_bool(values.get("enable_tcpmss"), default=current.enable_tcpmss),
+            enable_tun_tcpdump=_clean_bool(values.get("enable_tun_tcpdump"), default=current.enable_tun_tcpdump),
+            tun_tcpdump_pcap_path=_mapping_text_value(values, "tun_tcpdump_pcap_path", current.tun_tcpdump_pcap_path, allow_empty=True),
             shared_tun_disable_outgoing_normalization=_clean_bool(values.get("shared_tun_disable_outgoing_normalization"), default=current.shared_tun_disable_outgoing_normalization),
             shared_tun_disable_inflow_filter=_clean_bool(values.get("shared_tun_disable_inflow_filter"), default=current.shared_tun_disable_inflow_filter),
             shared_tun_disable_outflow_filter=_clean_bool(values.get("shared_tun_disable_outflow_filter"), default=current.shared_tun_disable_outflow_filter),
@@ -163,7 +193,13 @@ class TunRoutingSettings:
             return ""
 
     def local_hook_env(self) -> dict[str, str]:
-        env: dict[str, str] = {}
+        env: dict[str, str] = {
+            "MTU": str(int(self.mtu)),
+            "ENABLE_TCPMSS": "1" if self.enable_tcpmss else "0",
+            "ENABLE_TUN_TCPDUMP": "1" if self.enable_tun_tcpdump else "0",
+        }
+        if self.tun_tcpdump_pcap_path:
+            env["TCPDUMP_PCAP_PATH"] = self.tun_tcpdump_pcap_path
         if self.tunnel_address:
             env["TUN_ADDR"] = f"{self.tunnel_address}/{int(self.tunnel_prefix)}"
         gateway4 = self._local_gateway4()
@@ -189,7 +225,13 @@ class TunRoutingSettings:
         return env
 
     def remote_hook_env(self) -> dict[str, str]:
-        env: dict[str, str] = {}
+        env: dict[str, str] = {
+            "MTU": str(int(self.mtu)),
+            "ENABLE_TCPMSS": "1" if self.enable_tcpmss else "0",
+            "ENABLE_TUN_TCPDUMP": "1" if self.enable_tun_tcpdump else "0",
+        }
+        if self.tun_tcpdump_pcap_path:
+            env["TCPDUMP_PCAP_PATH"] = self.tun_tcpdump_pcap_path
         gateway4 = self._local_gateway4()
         if gateway4:
             env["TUN_ADDR"] = f"{gateway4}/{int(self.tunnel_prefix)}"

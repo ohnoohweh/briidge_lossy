@@ -5,7 +5,6 @@ ACTION="${1:?missing action}"
 IFNAME="${2:?missing ifname}"
 
 : "${TUN_ADDR:?missing TUN_ADDR}"
-: "${PEER_ADDR:?missing PEER_ADDR}"
 : "${WAN_IF:?missing WAN_IF}"
 : "${TUN_SUBNET:?missing TUN_SUBNET}"
 TUN_ADDR6="${TUN_ADDR6:-}"

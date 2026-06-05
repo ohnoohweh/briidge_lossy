@@ -927,6 +927,9 @@ struct RuntimeProbe {
                 "excluded_routes": ["0.0.0.0/0"],
                 "dns_servers": ["9.9.9.9"],
                 "mtu": 1600,
+                "enable_tcpmss": true,
+                "enable_tun_tcpdump": true,
+                "tun_tcpdump_pcap_path": "/tmp/swift-runtime-probe.pcap",
             ]
         ]).map { localDerived?.applying($0) }
         let flattenedOverride = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: [
@@ -935,6 +938,17 @@ struct RuntimeProbe {
             "tunnel_gateway": "192.168.107.2",
             "dns_servers": ["8.8.8.8"],
             "mtu": 1400,
+        ])
+        let flattenedEmptyGateway = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: [
+            "tunnel_gateway": "",
+            "tunnel_gateway6": "",
+        ])
+        let tcpdumpOverride = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: [
+            "TUN_routing": [
+                "enable_tcpmss": true,
+                "enable_tun_tcpdump": true,
+                "tun_tcpdump_pcap_path": "/tmp/swift-runtime-probe.pcap",
+            ]
         ])
         let loopbackTun = ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: "ios-utun", mtu: 1400)
         let result: [String: Any] = [
@@ -956,8 +970,13 @@ struct RuntimeProbe {
             "override_included_routes": overridden??.includedRoutes ?? [],
             "flattened_override_addr": flattenedOverride?.tunnelAddress ?? "",
             "flattened_override_gateway": flattenedOverride?.tunnelGateway ?? "",
+            "flattened_empty_gateway": flattenedEmptyGateway?.tunnelGateway ?? "nil",
+            "flattened_empty_gateway6": flattenedEmptyGateway?.tunnelGateway6 ?? "nil",
             "flattened_override_dns": flattenedOverride?.dnsServers ?? [],
             "flattened_override_mtu": flattenedOverride?.mtu ?? -1,
+            "override_enable_tcpmss": tcpdumpOverride?.enableTCPMSS ?? false,
+            "override_enable_tun_tcpdump": tcpdumpOverride?.enableTunTcpdump ?? false,
+            "override_tun_tcpdump_pcap_path": tcpdumpOverride?.tunTcpdumpPcapPath ?? "",
             "loopback_tun_bind": loopbackTun.lBind,
             "loopback_tun_port": loopbackTun.lPort,
             "loopback_tun_proto": loopbackTun.lProto,
@@ -991,11 +1010,16 @@ struct RuntimeProbe {
         "loopback_tun_proto": "tun",
         "flattened_override_addr": "192.168.107.1",
         "flattened_override_dns": ["8.8.8.8"],
+        "flattened_empty_gateway": "",
+        "flattened_empty_gateway6": "",
         "flattened_override_gateway": "192.168.107.2",
         "flattened_override_mtu": 1400,
+        "override_enable_tcpmss": True,
+        "override_enable_tun_tcpdump": True,
         "override_dns": ["9.9.9.9"],
         "override_included_routes": ["198.18.0.254/32"],
         "override_mtu": 1600,
+        "override_tun_tcpdump_pcap_path": "/tmp/swift-runtime-probe.pcap",
         "remote_count": 1,
         "remote_derived_addr": "192.168.105.1",
         "remote_derived_prefix": 30,

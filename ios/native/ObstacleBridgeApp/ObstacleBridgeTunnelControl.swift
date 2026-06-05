@@ -1148,6 +1148,9 @@ final class ObstacleBridgeTunnelControl: NSObject {
 
         var tunRouting = (grouped["TUN_routing"] as? [String: Any]) ?? [:]
         tunRouting["dns_servers"] = ["1.1.1.1"]
+        tunRouting["enable_tcpmss"] = false
+        tunRouting["enable_tun_tcpdump"] = false
+        tunRouting["tun_tcpdump_pcap_path"] = ""
         grouped["TUN_routing"] = tunRouting
 
         grouped["channel_mux"] = [

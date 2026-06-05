@@ -46,6 +46,9 @@ struct ObstacleBridgeTunnelRoutingOverride {
     let excludedRoutes6: [String]?
     let dnsServers: [String]?
     let mtu: Int?
+    let enableTCPMSS: Bool?
+    let enableTunTcpdump: Bool?
+    let tunTcpdumpPcapPath: String?
     let sharedTunDisableOutgoingNormalization: Bool?
     let sharedTunDisableInflowFilter: Bool?
     let sharedTunDisableOutflowFilter: Bool?
@@ -693,6 +696,9 @@ enum ObstacleBridgeRuntimeConfig {
                 "excluded_routes6",
                 "dns_servers",
                 "mtu",
+                "enable_tcpmss",
+                "enable_tun_tcpdump",
+                "tun_tcpdump_pcap_path",
                 "shared_tun_disable_outgoing_normalization",
                 "shared_tun_disable_inflow_filter",
                 "shared_tun_disable_outflow_filter",
@@ -711,16 +717,19 @@ enum ObstacleBridgeRuntimeConfig {
         return ObstacleBridgeTunnelRoutingOverride(
             tunnelAddress: firstStringValue(from: override["tunnel_address"]),
             tunnelPrefix: intValue(from: override["tunnel_prefix"]),
-            tunnelGateway: firstStringValue(from: override["tunnel_gateway"]),
+            tunnelGateway: optionalStringValueAllowEmpty(from: override["tunnel_gateway"]),
             includedRoutes: override["included_routes"] as? [String],
             excludedRoutes: override["excluded_routes"] as? [String],
             tunnelAddress6: firstStringValue(from: override["tunnel_address6"]),
             tunnelPrefix6: intValue(from: override["tunnel_prefix6"]),
-            tunnelGateway6: firstStringValue(from: override["tunnel_gateway6"]),
+            tunnelGateway6: optionalStringValueAllowEmpty(from: override["tunnel_gateway6"]),
             includedRoutes6: override["included_routes6"] as? [String],
             excludedRoutes6: override["excluded_routes6"] as? [String],
             dnsServers: override["dns_servers"] as? [String],
             mtu: intValue(from: override["mtu"]),
+            enableTCPMSS: boolValue(from: override["enable_tcpmss"]),
+            enableTunTcpdump: boolValue(from: override["enable_tun_tcpdump"]),
+            tunTcpdumpPcapPath: optionalStringValueAllowEmpty(from: override["tun_tcpdump_pcap_path"]),
             sharedTunDisableOutgoingNormalization: boolValue(from: override["shared_tun_disable_outgoing_normalization"]),
             sharedTunDisableInflowFilter: boolValue(from: override["shared_tun_disable_inflow_filter"]),
             sharedTunDisableOutflowFilter: boolValue(from: override["shared_tun_disable_outflow_filter"]),
@@ -730,10 +739,17 @@ enum ObstacleBridgeRuntimeConfig {
 
     private static func tunnelRoutingString(
         _ value: String?,
-        default defaultValue: String
+        default defaultValue: String,
+        allowEmpty: Bool = false
     ) -> String {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? defaultValue : trimmed
+        guard let value else {
+            return defaultValue
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return allowEmpty ? "" : defaultValue
+        }
+        return trimmed
     }
 
     private static func tunnelRoutingInt(
@@ -747,19 +763,30 @@ enum ObstacleBridgeRuntimeConfig {
         let override = tunnelRoutingOverride(from: payload)
         let tunnelAddress = tunnelRoutingString(override?.tunnelAddress, default: "192.168.106.1")
         let tunnelPrefix = tunnelRoutingInt(override?.tunnelPrefix, default: 30)
-        let peerGateway4 = tunnelRoutingString(override?.tunnelGateway, default: "192.168.106.2")
+        let peerGateway4 = tunnelRoutingString(override?.tunnelGateway, default: "192.168.106.2", allowEmpty: true)
         let tunnelAddress6 = tunnelRoutingString(override?.tunnelAddress6, default: "fd20:106::1")
         let tunnelPrefix6 = tunnelRoutingInt(override?.tunnelPrefix6, default: 126)
-        let peerGateway6 = tunnelRoutingString(override?.tunnelGateway6, default: "fd20:106::2")
+        let peerGateway6 = tunnelRoutingString(override?.tunnelGateway6, default: "fd20:106::2", allowEmpty: true)
+        let mtu = tunnelRoutingInt(override?.mtu, default: 1600)
         var env: [String: String] = [
-            "TUN_ADDR": "\(peerGateway4)/\(tunnelPrefix)",
-            "PEER_ADDR": tunnelAddress,
+            "MTU": String(mtu),
+            "ENABLE_TCPMSS": (override?.enableTCPMSS ?? false) ? "1" : "0",
+            "ENABLE_TUN_TCPDUMP": (override?.enableTunTcpdump ?? false) ? "1" : "0",
             "TUN_SUBNET": "\(tunnelAddress)/\(tunnelPrefix)",
         ]
+        if let pcapPath = override?.tunTcpdumpPcapPath, !pcapPath.isEmpty {
+            env["TCPDUMP_PCAP_PATH"] = pcapPath
+        }
+        if !peerGateway4.isEmpty {
+            env["TUN_ADDR"] = "\(peerGateway4)/\(tunnelPrefix)"
+            env["PEER_ADDR"] = tunnelAddress
+        }
         if !tunnelAddress6.isEmpty {
+            env["TUN_SUBNET6"] = "\(tunnelAddress6)/\(tunnelPrefix6)"
+        }
+        if !peerGateway6.isEmpty, !tunnelAddress6.isEmpty {
             env["TUN_ADDR6"] = "\(peerGateway6)/\(tunnelPrefix6)"
             env["PEER_ADDR6"] = tunnelAddress6
-            env["TUN_SUBNET6"] = "\(tunnelAddress6)/\(tunnelPrefix6)"
         }
         if let subnet4 = normalizedCIDR(address: tunnelAddress, prefix: tunnelPrefix) {
             env["TUN_SUBNET"] = subnet4
@@ -1244,11 +1271,12 @@ enum ObstacleBridgeRuntimeConfig {
         guard let rawSpecs = serviceArray(from: payload, key: key) else {
             return []
         }
+        let defaultTunMTU = tunnelRoutingOverride(from: payload)?.mtu ?? 1600
         var specs: [ObstacleBridgeRuntimeServiceSpec] = []
         var nextDenseID = 1
         for (index, item) in rawSpecs.enumerated() {
             let svcID = preserveInputIndices ? (index + 1) : nextDenseID
-            guard let spec = parseOwnServerSpec(item, svcID: svcID) else {
+            guard let spec = parseOwnServerSpec(item, svcID: svcID, defaultTunMTU: defaultTunMTU) else {
                 continue
             }
             specs.append(spec)
@@ -1272,6 +1300,10 @@ enum ObstacleBridgeRuntimeConfig {
     }
 
     private static func parseOwnServerSpec(_ item: Any, svcID: Int) -> ObstacleBridgeRuntimeServiceSpec? {
+        return parseOwnServerSpec(item, svcID: svcID, defaultTunMTU: 1600)
+    }
+
+    private static func parseOwnServerSpec(_ item: Any, svcID: Int, defaultTunMTU: Int) -> ObstacleBridgeRuntimeServiceSpec? {
         guard let dictionary = item as? [String: Any],
               let listen = dictionary["listen"] as? [String: Any],
               let target = dictionary["target"] as? [String: Any],
@@ -1290,7 +1322,7 @@ enum ObstacleBridgeRuntimeConfig {
         let listenPort: Int?
         if listenProtocol == "tun" {
             listenBind = stringValue(from: listen["ifname"])
-            listenPort = intValue(from: listen["mtu"])
+            listenPort = intValue(from: listen["mtu"]) ?? defaultTunMTU
         } else {
             listenBind = stringValue(from: listen["bind"])
             listenPort = intValue(from: listen["port"])
@@ -1300,7 +1332,7 @@ enum ObstacleBridgeRuntimeConfig {
         let targetPort: Int?
         if targetProtocol == "tun" {
             targetHost = stringValue(from: target["ifname"])
-            targetPort = intValue(from: target["mtu"])
+            targetPort = intValue(from: target["mtu"]) ?? defaultTunMTU
         } else {
             targetHost = stringValue(from: target["host"])
             targetPort = intValue(from: target["port"])
@@ -1334,5 +1366,18 @@ enum ObstacleBridgeRuntimeConfig {
             return nil
         }
         return object
+    }
+
+    private static func optionalStringValueAllowEmpty(from value: Any?) -> String? {
+        guard let value else {
+            return nil
+        }
+        if let string = value as? String {
+            return string.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let number = value as? NSNumber {
+            return number.stringValue
+        }
+        return nil
     }
 }

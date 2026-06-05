@@ -188,6 +188,8 @@ class ChannelMux:
         # Parse catalog
         services = ChannelMux._parse_own_servers(getattr(args, 'own_servers', None))
         remote_services = ChannelMux._parse_remote_servers(getattr(args, 'remote_servers', None))
+        services = [mux._service_spec_with_tun_mtu_defaults(s) for s in services]
+        remote_services = [mux._service_spec_with_tun_mtu_defaults(s) for s in remote_services]
         active_transport = str(getattr(args, "overlay_transport", "myudp") or "myudp").split(",", 1)[0].strip().lower()
         mux._overlay_transport = active_transport
         bind_attr, peer_attr, peer_port_attr, _listen_port_attr = _overlay_cli_attrs(active_transport)
@@ -605,7 +607,10 @@ class ChannelMux:
 
         if l_proto == "tun":
             l_bind = str(listen.get("ifname", "") or "").strip()
-            l_port_i = ChannelMux._validate_service_port(listen.get("mtu"), arg_name, token, "listen mtu")
+            if listen.get("mtu") is None:
+                l_port_i = 0
+            else:
+                l_port_i = ChannelMux._validate_service_port(listen.get("mtu"), arg_name, token, "listen mtu")
             if not l_bind:
                 raise ValueError(f"{arg_name} structured tun listen requires ifname: {token}")
         else:
@@ -616,7 +621,10 @@ class ChannelMux:
 
         if r_proto == "tun":
             r_host = str(target.get("ifname", "") or "").strip()
-            r_port_i = ChannelMux._validate_service_port(target.get("mtu"), arg_name, token, "target mtu")
+            if target.get("mtu") is None:
+                r_port_i = 0
+            else:
+                r_port_i = ChannelMux._validate_service_port(target.get("mtu"), arg_name, token, "target mtu")
             if not r_host:
                 raise ValueError(f"{arg_name} structured tun target requires ifname: {token}")
         else:
@@ -969,6 +977,36 @@ class ChannelMux:
             return config.remote_hook_env()
         return {}
 
+    def _service_spec_with_tun_mtu_defaults(
+        self,
+        spec: "ChannelMux.ServiceSpec",
+    ) -> "ChannelMux.ServiceSpec":
+        tun_config = self._tun_routing_config()
+        default_mtu = max(68, int(getattr(tun_config, "mtu", self.TUN_DEFAULT_MTU) or self.TUN_DEFAULT_MTU))
+        l_port = int(spec.l_port)
+        r_port = int(spec.r_port)
+        changed = False
+        if str(spec.l_proto) == "tun" and l_port <= 0:
+            l_port = default_mtu
+            changed = True
+        if str(spec.r_proto) == "tun" and r_port <= 0:
+            r_port = default_mtu
+            changed = True
+        if not changed:
+            return spec
+        return ChannelMux.ServiceSpec(
+            svc_id=int(spec.svc_id),
+            l_proto=str(spec.l_proto),
+            l_bind=str(spec.l_bind),
+            l_port=l_port,
+            r_proto=str(spec.r_proto),
+            r_host=str(spec.r_host),
+            r_port=r_port,
+            name=spec.name,
+            lifecycle_hooks=spec.lifecycle_hooks if isinstance(spec.lifecycle_hooks, dict) else None,
+            options=spec.options if isinstance(spec.options, dict) else None,
+        )
+
     def _tun_routing_config(self) -> TunRoutingSettings:
         if self.args is None:
             return self._tun_routing_settings
@@ -1022,6 +1060,7 @@ class ChannelMux:
             config = TunRoutingSettings.from_mapping(vars(self.args))
         except Exception:
             return spec
+        spec = self._service_spec_with_tun_mtu_defaults(spec)
         env_defaults = config.remote_hook_env() if remote_install else config.local_hook_env()
         lifecycle_hooks = self._merge_hook_env_defaults(spec.lifecycle_hooks, env_defaults)
         if lifecycle_hooks is spec.lifecycle_hooks:
@@ -1591,7 +1630,6 @@ class ChannelMux:
             self._mux_connection_seq = (self._mux_connection_seq + 1) & 0xFFFFFFFF
         self._accepting_enabled = True
         await self._start_all_services()
-        self._replay_tun_listener_created_hooks()
         self._send_remote_services_catalog_if_any()
 
     async def on_transport_epoch_change(self, epoch: int) -> None:
@@ -1600,18 +1638,7 @@ class ChannelMux:
         await self._close_all_channels()
         if self._overlay_connected and self._accepting_enabled:
             await self._start_all_services()
-            self._replay_tun_listener_created_hooks()
         self._send_remote_services_catalog_if_any()
-
-    def _replay_tun_listener_created_hooks(self) -> None:
-        for svc_key, spec in self._effective_services_by_id().items():
-            if str(spec.l_proto) != "tun":
-                continue
-            if svc_key not in self._svc_tun_devices:
-                continue
-            if self._hook_command_spec_for(spec, "listener", "on_created") is None:
-                continue
-            self._schedule_service_hook(spec, svc_key, "listener", "on_created")
 
     async def _start_prestaged_listener_shared_tun_services(self) -> None:
         for svc_key, spec in self._local_services.items():
@@ -1635,8 +1662,6 @@ class ChannelMux:
             self._overlay_peer_port = int(port or self._overlay_peer_port or 0)
         except Exception:
             self._overlay_peer_port = int(self._overlay_peer_port or 0)
-        if self._overlay_connected and self._accepting_enabled:
-            self._replay_tun_listener_created_hooks()
 
     # ---------- service lifecycle ----------
     async def _start_all_services(self):

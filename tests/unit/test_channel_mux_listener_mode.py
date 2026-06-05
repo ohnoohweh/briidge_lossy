@@ -100,6 +100,9 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         self.assertEqual(settings.dns_servers, ["1.1.1.1"])
         self.assertEqual(settings.mtu, 1600)
         self.assertEqual(settings.log_TUN_routing, "CRITICAL")
+        self.assertFalse(settings.enable_tcpmss)
+        self.assertFalse(settings.enable_tun_tcpdump)
+        self.assertEqual(settings.tun_tcpdump_pcap_path, "")
         self.assertFalse(settings.shared_tun_disable_outgoing_normalization)
         self.assertFalse(settings.shared_tun_disable_inflow_filter)
         self.assertFalse(settings.shared_tun_disable_outflow_filter)
@@ -113,13 +116,40 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
                     "shared_tun_disable_inflow_filter": True,
                     "shared_tun_disable_outflow_filter": "1",
                     "shared_tun_disable_scoped_throttle": "yes",
+                    "enable_tcpmss": "true",
+                    "enable_tun_tcpdump": "1",
+                    "tun_tcpdump_pcap_path": "/tmp/shared-tun-test.pcap",
                 }
             }
         )
+        self.assertTrue(settings.enable_tcpmss)
+        self.assertTrue(settings.enable_tun_tcpdump)
+        self.assertEqual(settings.tun_tcpdump_pcap_path, "/tmp/shared-tun-test.pcap")
         self.assertTrue(settings.shared_tun_disable_outgoing_normalization)
         self.assertTrue(settings.shared_tun_disable_inflow_filter)
         self.assertTrue(settings.shared_tun_disable_outflow_filter)
         self.assertTrue(settings.shared_tun_disable_scoped_throttle)
+
+    def test_tun_routing_explicit_empty_gateways_are_preserved(self):
+        settings = TunRoutingSettings.from_mapping(
+            {
+                "TUN_routing": {
+                    "tunnel_address": "192.168.106.1",
+                    "tunnel_prefix": 24,
+                    "tunnel_gateway": "",
+                    "tunnel_address6": "fd20:106::1",
+                    "tunnel_prefix6": 64,
+                    "tunnel_gateway6": "",
+                }
+            }
+        )
+        self.assertEqual(settings.tunnel_gateway, "")
+        self.assertEqual(settings.tunnel_gateway6, "")
+        env = settings.local_hook_env()
+        self.assertNotIn("TUN_GW", env)
+        self.assertNotIn("PEER_ADDR", env)
+        self.assertNotIn("TUN_GW6", env)
+        self.assertNotIn("PEER_ADDR6", env)
 
     def test_shared_tun_disable_inflow_filter_allows_unowned_source(self):
         mux = ChannelMux(_FakeSession(), asyncio.new_event_loop())
@@ -356,6 +386,9 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
             excluded_routes6=["::1/128"],
             dns_servers=["9.9.9.9", "1.1.1.1"],
             mtu=1600,
+            enable_tcpmss=True,
+            enable_tun_tcpdump=True,
+            tun_tcpdump_pcap_path="/tmp/shared-tun-defaults.pcap",
             mux_tcp_bp_threshold=1,
             mux_tcp_bp_latency_ms=300,
             mux_tcp_bp_poll_interval_ms=50,
@@ -370,6 +403,10 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
 
             self.assertEqual(local_env["TUN_ADDR"], "192.168.107.1/30")
             self.assertEqual(local_env["TUN_GW"], "192.168.107.2")
+            self.assertEqual(local_env["MTU"], "1600")
+            self.assertEqual(local_env["ENABLE_TCPMSS"], "1")
+            self.assertEqual(local_env["ENABLE_TUN_TCPDUMP"], "1")
+            self.assertEqual(local_env["TCPDUMP_PCAP_PATH"], "/tmp/shared-tun-defaults.pcap")
             self.assertEqual(local_env["PEER_ADDR"], "192.168.107.2")
             self.assertEqual(local_env["TUN_SUBNET"], "192.168.107.0/30")
             self.assertEqual(local_env["TUN_ADDR6"], "fd20:107::1/126")
@@ -377,6 +414,10 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
             self.assertEqual(local_env["TUN_SUBNET6"], "fd20:107::/126")
             self.assertEqual(local_env["DNS1"], "9.9.9.9")
             self.assertEqual(remote_env["TUN_ADDR"], "192.168.107.2/30")
+            self.assertEqual(remote_env["MTU"], "1600")
+            self.assertEqual(remote_env["ENABLE_TCPMSS"], "1")
+            self.assertEqual(remote_env["ENABLE_TUN_TCPDUMP"], "1")
+            self.assertEqual(remote_env["TCPDUMP_PCAP_PATH"], "/tmp/shared-tun-defaults.pcap")
             self.assertEqual(remote_env["PEER_ADDR"], "192.168.107.1")
             self.assertEqual(remote_env["TUN_SUBNET"], "192.168.107.0/30")
         finally:
@@ -888,6 +929,48 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         self.assertEqual(parsed[1].r_host, 'obtun1')
         self.assertEqual(parsed[1].r_port, 1400)
 
+    def test_parse_structured_tun_service_allows_omitted_mtu(self):
+        spec = ChannelMux._parse_structured_service_spec(
+            {
+                'listen': {'protocol': 'tun', 'ifname': 'obtun0'},
+                'target': {'protocol': 'tun', 'ifname': 'obtun1'},
+            },
+            '--own-servers',
+            1,
+        )
+        self.assertEqual(spec.l_port, 0)
+        self.assertEqual(spec.r_port, 0)
+
+    def test_from_args_defaults_omitted_tun_mtu_from_tun_routing(self):
+        args = argparse.Namespace(
+            peer='127.0.0.1',
+            udp_peer='127.0.0.1',
+            overlay_transport='myudp',
+            own_servers=[{
+                'listen': {'protocol': 'tun', 'ifname': 'obtun0'},
+                'target': {'protocol': 'tun', 'ifname': 'obtun1'},
+            }],
+            remote_servers=[{
+                'listen': {'protocol': 'tun', 'ifname': 'obtun2'},
+                'target': {'protocol': 'tun', 'ifname': 'obtun3'},
+            }],
+            mtu=1420,
+            mux_tcp_bp_threshold=1,
+            mux_tcp_bp_latency_ms=300,
+            mux_tcp_bp_poll_interval_ms=50,
+        )
+
+        mux = ChannelMux.from_args(_FakeSession(), asyncio.new_event_loop(), args)
+        try:
+            local_spec = mux._local_services[('local', 0, 1)]
+            remote_spec = mux._remote_services_requested[0]
+            self.assertEqual(local_spec.l_port, 1420)
+            self.assertEqual(local_spec.r_port, 1420)
+            self.assertEqual(remote_spec.l_port, 1420)
+            self.assertEqual(remote_spec.r_port, 1420)
+        finally:
+            mux.loop.close()
+
     def test_parse_remote_servers_rejects_invalid_specs(self):
         with self.assertRaisesRegex(ValueError, '--remote-servers listen protocol must be udp, tcp or tun'):
             ChannelMux._parse_remote_servers([
@@ -961,7 +1044,7 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mtype, ChannelMux.MType.REMOTE_SERVICES_SET_V2)
         self.assertEqual(self.mux._decode_remote_services_set_v2(payload)[2], [spec])
 
-    async def test_overlay_connect_replays_tun_on_created_hook_for_active_tun_service(self):
+    async def test_overlay_connect_does_not_replay_tun_on_created_hook_for_active_tun_service(self):
         spec = ChannelMux.ServiceSpec(
             svc_id=3,
             l_proto='tun',
@@ -985,7 +1068,7 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
 
         start_all.assert_awaited_once()
         send_catalog.assert_called_once()
-        schedule_hook.assert_any_call(spec, svc_key, 'listener', 'on_created')
+        schedule_hook.assert_not_called()
 
     async def test_start_prestarts_listener_shared_tun_service_while_overlay_disconnected(self):
         spec = ChannelMux.ServiceSpec(

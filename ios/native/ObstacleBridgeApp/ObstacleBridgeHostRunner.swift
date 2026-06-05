@@ -1879,7 +1879,15 @@ final class ObstacleBridgeHostRunner {
             let dnsServers = tunRouting.dnsServers ?? []
             let includedRoutes = tunRouting.includedRoutes ?? []
             let includedRoutes6 = tunRouting.includedRoutes6 ?? []
+            let mtu = tunRouting.mtu ?? 1600
 
+            env["MTU"] = String(mtu)
+            env["ENABLE_TCPMSS"] = (tunRouting.enableTCPMSS ?? false) ? "1" : "0"
+            env["ENABLE_TUN_TCPDUMP"] = (tunRouting.enableTunTcpdump ?? false) ? "1" : "0"
+            if let pcapPath = tunRouting.tunTcpdumpPcapPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !pcapPath.isEmpty {
+                env["TCPDUMP_PCAP_PATH"] = pcapPath
+            }
             if !tunnelAddress.isEmpty {
                 env["TUN_ADDR"] = "\(tunnelAddress)/\(tunnelPrefix)"
             }
