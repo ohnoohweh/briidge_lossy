@@ -1450,6 +1450,7 @@ final class ObstacleBridgeHostRunner {
         let wsPath = Self.stringValue(from: runtimeConfig["ws_path"]) ?? "/"
         let wsSubprotocol = Self.stringValue(from: runtimeConfig["ws_subprotocol"])
         let tunService = ownServerSpecs.first { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
+        let tunnelRouting = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig)
         ensureSharedMacOSTunAdapter(for: tunService)
         let muxInstanceID = UInt64.random(in: 1...UInt64.max)
         let muxConnectionSeq = UInt32.random(in: 1...UInt32.max)
@@ -1472,6 +1473,8 @@ final class ObstacleBridgeHostRunner {
             tunServiceSpec: tunService?.toChannelMuxServiceSpec(),
             tunIfname: tunService?.listenBind,
             tunMTU: tunService?.listenPort ?? 0,
+            tunLocalAddress: tunnelRouting?.tunnelAddress,
+            tunLocalAddress6: tunnelRouting?.tunnelAddress6,
             tunPacketSink: { [weak self] packet in
                 self?.deliverRemoteTunPacketToLocalAdapter(packet)
             },
@@ -1496,6 +1499,7 @@ final class ObstacleBridgeHostRunner {
             return
         }
         let tunService = ownServerSpecs.first { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
+        let tunnelRouting = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig)
         ensureSharedMacOSTunAdapter(for: tunService)
         let muxInstanceID = UInt64.random(in: 1...UInt64.max)
         let muxConnectionSeq = UInt32.random(in: 1...UInt32.max)
@@ -1517,6 +1521,8 @@ final class ObstacleBridgeHostRunner {
             tunServiceSpec: tunService?.toChannelMuxServiceSpec(),
             tunIfname: tunService?.listenBind,
             tunMTU: tunService?.listenPort ?? 0,
+            tunLocalAddress: tunnelRouting?.tunnelAddress,
+            tunLocalAddress6: tunnelRouting?.tunnelAddress6,
             tunPacketSink: { [weak self] packet in
                 self?.deliverRemoteTunPacketToLocalAdapter(packet)
             },
@@ -1544,6 +1550,7 @@ final class ObstacleBridgeHostRunner {
         let alpn = Self.stringValue(from: runtimeConfig["quic_alpn"]) ?? "hq-29"
         let insecure = Self.boolValue(from: runtimeConfig["quic_insecure"]) ?? false
         let tunService = ownServerSpecs.first { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
+        let tunnelRouting = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig)
         ensureSharedMacOSTunAdapter(for: tunService)
         let muxInstanceID = UInt64.random(in: 1...UInt64.max)
         let muxConnectionSeq = UInt32.random(in: 1...UInt32.max)
@@ -1568,6 +1575,8 @@ final class ObstacleBridgeHostRunner {
             tunServiceSpec: tunService?.toChannelMuxServiceSpec(),
             tunIfname: tunService?.listenBind,
             tunMTU: tunService?.listenPort ?? 0,
+            tunLocalAddress: tunnelRouting?.tunnelAddress,
+            tunLocalAddress6: tunnelRouting?.tunnelAddress6,
             tunPacketSink: { [weak self] packet in
                 self?.deliverRemoteTunPacketToLocalAdapter(packet)
             },
@@ -1591,6 +1600,7 @@ final class ObstacleBridgeHostRunner {
         let peerPort = Self.intValue(from: runtimeConfig["udp_peer_port"])
         let peerResolveFamily = Self.stringValue(from: runtimeConfig["udp_peer_resolve_family"]) ?? "prefer-ipv6"
         let tunService = ownServerSpecs.first { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
+        let tunnelRouting = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig)
         ensureSharedMacOSTunAdapter(for: tunService)
         let muxInstanceID = UInt64.random(in: 1...UInt64.max)
         let muxConnectionSeq = UInt32.random(in: 1...UInt32.max)
@@ -1611,6 +1621,8 @@ final class ObstacleBridgeHostRunner {
             tunServiceSpec: tunService?.toChannelMuxServiceSpec(),
             tunIfname: tunService?.listenBind,
             tunMTU: tunService?.listenPort ?? 0,
+            tunLocalAddress: tunnelRouting?.tunnelAddress,
+            tunLocalAddress6: tunnelRouting?.tunnelAddress6,
             tunPacketSink: { [weak self] packet in
                 self?.deliverRemoteTunPacketToLocalAdapter(packet)
             },

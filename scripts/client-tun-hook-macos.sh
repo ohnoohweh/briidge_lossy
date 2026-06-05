@@ -54,6 +54,11 @@ current_default_interface_v6() {
   route -n get -inet6 default 2>/dev/null | awk '/interface:/{print $2; exit}'
 }
 
+has_route_v6_on_if() {
+  local route_spec="$1"
+  netstat -rn -f inet6 2>/dev/null | awk -v route="$route_spec" -v ifname="$IFNAME" '$1==route && $4==ifname {found=1} END{exit(found?0:1)}'
+}
+
 has_default_route_v4_on_if() {
   netstat -rn -f inet 2>/dev/null | awk -v ifname="$IFNAME" '$1=="default" && $4==ifname {found=1} END{exit(found?0:1)}'
 }
@@ -86,18 +91,17 @@ wait_for_default_gateway_v4() {
   default_matches_v4 "$expected_gw"
 }
 
-wait_for_default_gateway_v6() {
-  local expected_gw="$1"
+wait_for_full_tunnel_v6_routes() {
   local attempts="${2:-10}"
   local delay="${3:-0.2}"
   local i
   for ((i=0; i<attempts; i++)); do
-    if default_matches_v6 "$expected_gw"; then
+    if full_tunnel_v6_matches; then
       return 0
     fi
     sleep "$delay"
   done
-  default_matches_v6 "$expected_gw"
+  full_tunnel_v6_matches
 }
 
 ipv4_prefix_to_netmask() {
@@ -125,6 +129,22 @@ csv_to_lines() {
   tr ',' '\n' <<<"${1:-}" | sed '/^[[:space:]]*$/d'
 }
 
+expand_included_routes_v6() {
+  local route_spec
+  while IFS= read -r route_spec; do
+    [[ -z "$route_spec" ]] && continue
+    case "$route_spec" in
+      "::/0"|"default"|"::0/0")
+        printf '%s\n' "::/1"
+        printf '%s\n' "8000::/1"
+        ;;
+      *)
+        printf '%s\n' "$route_spec"
+        ;;
+    esac
+  done < <(csv_to_lines "$INCLUDED_ROUTES6")
+}
+
 should_switch_default_v4() {
   csv_to_lines "$INCLUDED_ROUTES" | grep -qxE '(0\.0\.0\.0/0|default)'
 }
@@ -142,13 +162,15 @@ default_matches_v4() {
     has_default_route_v4_on_if || has_default_route_v4_via_gw "$expected_gw"
 }
 
-default_matches_v6() {
-  local expected_gw="$1"
-  local current_if current_gw
-  current_if="$(current_default_interface_v6 || true)"
-  current_gw="$(current_default_gateway_v6 || true)"
-  [[ "$current_if" == "$IFNAME" || "$current_gw" == "$expected_gw" ]] || \
-    has_default_route_v6_on_if || has_default_route_v6_via_gw "$expected_gw"
+full_tunnel_v6_matches() {
+  local route_spec
+  while IFS= read -r route_spec; do
+    [[ -z "$route_spec" ]] && continue
+    if ! has_route_v6_on_if "$route_spec"; then
+      return 1
+    fi
+  done < <(expand_included_routes_v6)
+  return 0
 }
 
 add_included_routes_v4() {
@@ -168,13 +190,10 @@ add_included_routes_v6() {
   : > "$STATE_ROUTES6"
   while IFS= read -r route_spec; do
     [[ -z "$route_spec" ]] && continue
-    if [[ "$route_spec" == "::/0" || "$route_spec" == "default" || "$route_spec" == "::0/0" ]]; then
-      continue
-    fi
     route -n add -inet6 "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || \
       route -n change -inet6 "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || true
     printf '%s\n' "$route_spec" >> "$STATE_ROUTES6"
-  done < <(csv_to_lines "$INCLUDED_ROUTES6")
+  done < <(expand_included_routes_v6)
 }
 
 delete_included_routes_v4() {
@@ -205,6 +224,7 @@ detect_underlay_gw() {
 }
 
 save_default_routes() {
+  rm -f "$STATE_FILE" "$STATE_FILE6"
   local current_gw
   local current_if
   current_gw="$(current_default_gateway_v4 || true)"
@@ -219,6 +239,17 @@ save_default_routes() {
   current_if6="$(current_default_interface_v6 || true)"
   if [[ -n "$current_gw6" && "$current_if6" != "$IFNAME" && "$current_gw6" != "$TUN_GW6" ]]; then
     printf '%s\n' "$current_gw6" > "$STATE_FILE6"
+  fi
+}
+
+restore_default_route_v6_only() {
+  delete_included_routes_v6
+  route -n delete -inet6 default -interface "$IFNAME" >/dev/null 2>&1 || true
+  if [[ -n "$TUN_GW6" ]]; then
+    route -n delete -inet6 default "$TUN_GW6" >/dev/null 2>&1 || true
+  fi
+  if [[ -s "$STATE_FILE6" ]]; then
+    route -n add -inet6 default "$(cat "$STATE_FILE6")" >/dev/null 2>&1 || true
   fi
 }
 
@@ -244,13 +275,6 @@ set_default_route_v4() {
   route -n delete default >/dev/null 2>&1 || true
   route -n add default -interface "$IFNAME" >/dev/null 2>&1 && return 0
   route -n add default "$TUN_GW" >/dev/null 2>&1
-}
-
-set_default_route_v6() {
-  route -n change -inet6 default -interface "$IFNAME" >/dev/null 2>&1 && return 0
-  route -n delete -inet6 default >/dev/null 2>&1 || true
-  route -n add -inet6 default -interface "$IFNAME" >/dev/null 2>&1 && return 0
-  route -n add -inet6 default "$TUN_GW6" >/dev/null 2>&1
 }
 
 case "$ACTION" in
@@ -280,11 +304,10 @@ case "$ACTION" in
     fi
 
     if [[ -n "$TUN_GW6" ]] && should_switch_default_v6; then
-      set_default_route_v6
-      if ! wait_for_default_gateway_v6 "$TUN_GW6"; then
-        log "failed to switch IPv6 default route to $TUN_GW6; restoring underlay routes"
-        restore_default_routes
-        exit 1
+      add_included_routes_v6
+      if ! wait_for_full_tunnel_v6_routes; then
+        log "failed to install IPv6 split full-tunnel routes via $IFNAME; keeping IPv4 route changes and restoring IPv6 only"
+        restore_default_route_v6_only
       fi
     fi
     log "default routes now ipv4_if=$(current_default_interface_v4 || true) ipv4_gw=$(current_default_gateway_v4 || true) ipv6_if=$(current_default_interface_v6 || true) ipv6_gw=$(current_default_gateway_v6 || true)"

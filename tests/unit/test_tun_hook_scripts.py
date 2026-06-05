@@ -50,11 +50,15 @@ def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route(
     assert 'netstat -rn -f inet' in script
     assert 'netstat -rn -f inet6' in script
     assert 'route -n add default -interface "$IFNAME"' in script
-    assert 'route -n add -inet6 default -interface "$IFNAME"' in script
     assert 'default_matches_v4() {' in script
-    assert 'default_matches_v6() {' in script
+    assert 'expand_included_routes_v6() {' in script
+    assert 'full_tunnel_v6_matches() {' in script
+    assert 'case "$route_spec" in' in script
+    assert '"::/0"|"default"|"::0/0")' in script
+    assert 'printf \'%s\\n\' "::/1"' in script
+    assert 'printf \'%s\\n\' "8000::/1"' in script
     assert 'route -n delete default -interface "$IFNAME"' in script
-    assert 'route -n delete -inet6 default -interface "$IFNAME"' in script
+    assert 'delete_included_routes_v6' in script
     assert 'normalize_overlay_peer_ip() {' in script
     assert 'route -n add -host "$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")" "$local_underlay_gw"' in script
 

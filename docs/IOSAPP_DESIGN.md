@@ -258,6 +258,55 @@ Design impact:
 
 ### Outcome 6: iOS Requires Canonical WebAdmin Asset Staging Into Packaged Builds
 
+### Outcome 7: Swift Packet Adapters Differ From The Python Host-TUN Path
+
+The current product now has a concrete cross-platform lesson from shared-TUN
+testing:
+
+- the Python clients on Linux and macOS behave like host-style TUN adapters
+- the Swift clients on iOS and macOS behave like packet-adapter clients
+
+That distinction matters for shared-TUN ownership enforcement.
+
+Python host-TUN behavior:
+
+- the OS routes traffic onto the local tunnel interface
+- packets that reach the Python ObstacleBridge runtime already line up closely
+  with the tunnel-owned identity expected by shared-TUN ownership
+- the Python mux path therefore did not need an additional explicit local
+  source-address rewrite layer for the tested shared-TUN flows
+
+Swift packet-adapter behavior:
+
+- the iOS packet tunnel provider and the macOS Swift app both deliver packets
+  into the shared Swift runtime through native packet adapters
+- those packets can still carry the device's original source identity when they
+  first arrive at the shared Swift TUN runtime
+- the shared-TUN server, correctly, rejects those packets if they do not use
+  the peer's assigned tunnel-owned address
+
+Observed effect:
+
+- server-side recent drops showed `source_not_owned_by_peer`
+- examples included original device-side source addresses rather than the
+  assigned shared-TUN addresses
+
+Implemented design response:
+
+- the shared Swift TUN runtime now normalizes outbound local packet source
+  identity to the configured tunnel-owned IPv4 or IPv6 address before mux
+  framing
+- transport checksums are recomputed where required
+- this behavior is shared across the Swift macOS app and the iOS packet tunnel
+  path so both Apple-platform clients honor the same server ownership contract
+
+Design consequence:
+
+- the shared-TUN server contract remains strict
+- Python remains the reference host-TUN behavior
+- Swift packet-adapter clients adapt themselves before shared-TUN forwarding so
+  their effective tunnel identity matches the Linux/Python model
+
 The repository now treats top-level `admin_web/` as the canonical source-tree location for WebAdmin assets. iOS packaging must explicitly stage those assets into the built app bundle so the containing app can seed `Documents/ObstacleBridge/admin_web` on first launch.
 
 Design impact:

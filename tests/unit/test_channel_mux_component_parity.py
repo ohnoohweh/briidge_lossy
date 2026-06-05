@@ -376,6 +376,44 @@ def test_swift_component_local_tun_packet_matches_python(
     assert swift["snapshot"] == python
 
 
+def test_swift_component_normalizes_local_shared_tun_ipv4_source(
+    swift_channelmux_component_runner: Path,
+) -> None:
+    packet = _ipv4_packet("172.20.10.4", "1.1.1.1")
+    swift = _run_swift_component(
+        swift_channelmux_component_runner,
+        {
+            "action": "normalize_local_tun_packet_source",
+            "packet_hex": packet.hex(),
+            "instance_id": 0x1122334455667788,
+            "connection_seq": 0x10203040,
+            "local_tunnel_address": "192.168.106.3",
+        },
+    )
+    normalized = bytes.fromhex(swift["normalized_packet_hex"])
+    assert normalized[12:16] == b"\xc0\xa8\x6a\x03"
+    assert normalized[16:20] == b"\x01\x01\x01\x01"
+
+
+def test_swift_component_normalizes_local_shared_tun_ipv6_source(
+    swift_channelmux_component_runner: Path,
+) -> None:
+    packet = _ipv6_packet("2409:1111::4", "2606:4700:4700::1111")
+    swift = _run_swift_component(
+        swift_channelmux_component_runner,
+        {
+            "action": "normalize_local_tun_packet_source",
+            "packet_hex": packet.hex(),
+            "instance_id": 0x1122334455667788,
+            "connection_seq": 0x10203040,
+            "local_tunnel_address6": "fd20:106::3",
+        },
+    )
+    normalized = bytes.fromhex(swift["normalized_packet_hex"])
+    assert normalized[8:24] == bytes.fromhex("fd200106000000000000000000000003")
+    assert normalized[24:40] == bytes.fromhex("26064700470000000000000000001111")
+
+
 def test_swift_component_tun_open_then_local_packet_matches_python(
     swift_channelmux_component_runner: Path,
 ) -> None:

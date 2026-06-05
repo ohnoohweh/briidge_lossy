@@ -1775,6 +1775,80 @@ final class ObstacleBridgeTunnelControl: NSObject {
             .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
+    private class func privilegedHostRunnerProcessPattern(helperURL: URL, configPath: String) -> String {
+        _ = configPath
+        return helperURL.path
+    }
+
+    private class func privilegedHostRunnerProcessIDs(helperURL: URL, configPath: String) -> [Int] {
+        let pattern = privilegedHostRunnerProcessPattern(helperURL: helperURL, configPath: configPath)
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        process.arguments = ["-f", pattern]
+        process.standardOutput = output
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return []
+        }
+        guard process.terminationStatus == 0,
+              let data = try? output.fileHandleForReading.readToEnd(),
+              let text = String(data: data, encoding: .utf8)
+        else {
+            return []
+        }
+        return text
+            .split(whereSeparator: \.isNewline)
+            .compactMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    }
+
+    private class func waitForPrivilegedHostRunnerSnapshot(deadline: Date, configSync: [String: Any]) -> [String: Any]? {
+        while Date() < deadline {
+            if var payload = privilegedHostRunnerStatusSnapshot() {
+                payload["mode"] = "swift_host_runner"
+                payload["config_sync"] = configSync
+                return payload
+            }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        return nil
+    }
+
+    private class func terminatePrivilegedHostRunnerProcesses(helperURL: URL, configPath: String) throws {
+        let pattern = privilegedHostRunnerProcessPattern(helperURL: helperURL, configPath: configPath)
+        let cleanupScript = [
+            "if /usr/bin/pgrep -f \(shellQuote(pattern)) >/dev/null 2>&1; then",
+            "  /usr/bin/pkill -TERM -f \(shellQuote(pattern)) >/dev/null 2>&1 || true",
+            "  i=0;",
+            "  while [ $i -lt 40 ]; do",
+            "    if ! /usr/bin/pgrep -f \(shellQuote(pattern)) >/dev/null 2>&1; then",
+            "      break",
+            "    fi",
+            "    sleep 0.2",
+            "    i=$((i + 1));",
+            "  done",
+            "  /usr/bin/pkill -KILL -f \(shellQuote(pattern)) >/dev/null 2>&1 || true",
+            "  sleep 0.2",
+            "fi",
+        ].joined(separator: " ")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = [
+            "-e",
+            "do shell script \"\(appleScriptQuote(cleanupScript))\" with administrator privileges",
+        ]
+        try process.run()
+        process.waitUntilExit()
+        if !privilegedHostRunnerProcessIDs(helperURL: helperURL, configPath: configPath).isEmpty {
+            throw NSError(domain: "ObstacleBridgeTunnelControl", code: 4004, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to stop stale privileged ObstacleBridge helpers",
+            ])
+        }
+    }
+
     private class func ensurePrivilegedSwiftHostRunnerRunning(configSync: [String: Any]) throws -> [String: Any] {
         if var payload = privilegedHostRunnerStatusSnapshot() {
             payload["mode"] = "swift_host_runner"
@@ -1784,10 +1858,22 @@ final class ObstacleBridgeTunnelControl: NSObject {
 
         let helperURL = try bundledPrivilegedHostRunnerURL()
         let configPath = try ObstacleBridgeHostRunner.appScopedRuntimeConfigPath()
+        if !privilegedHostRunnerProcessIDs(helperURL: helperURL, configPath: configPath).isEmpty {
+            if let payload = waitForPrivilegedHostRunnerSnapshot(deadline: Date().addingTimeInterval(3.0), configSync: configSync) {
+                return payload
+            }
+            try terminatePrivilegedHostRunnerProcesses(helperURL: helperURL, configPath: configPath)
+        }
         let logDirectory = try ObstacleBridgeHostRunner.appScopedRootURL().appendingPathComponent("logs", isDirectory: true)
         try FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
         let stdoutLog = logDirectory.appendingPathComponent("ObstacleBridgeHostRunner-root.log")
+        let processPattern = privilegedHostRunnerProcessPattern(helperURL: helperURL, configPath: configPath)
         let shellCommand = [
+            "if /usr/bin/pgrep -f",
+            shellQuote(processPattern),
+            ">/dev/null 2>&1; then /usr/bin/pkill -TERM -f",
+            shellQuote(processPattern),
+            ">/dev/null 2>&1 || true; sleep 1; fi;",
             shellQuote(helperURL.path),
             "--runtime-config",
             shellQuote(configPath),
@@ -1810,14 +1896,8 @@ final class ObstacleBridgeTunnelControl: NSObject {
             ])
         }
 
-        let deadline = Date().addingTimeInterval(8.0)
-        while Date() < deadline {
-            if var payload = privilegedHostRunnerStatusSnapshot() {
-                payload["mode"] = "swift_host_runner"
-                payload["config_sync"] = configSync
-                return payload
-            }
-            Thread.sleep(forTimeInterval: 0.2)
+        if let payload = waitForPrivilegedHostRunnerSnapshot(deadline: Date().addingTimeInterval(8.0), configSync: configSync) {
+            return payload
         }
         throw NSError(domain: "ObstacleBridgeTunnelControl", code: 4003, userInfo: [
             NSLocalizedDescriptionKey: "Privileged host runner did not become ready",

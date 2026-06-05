@@ -21,6 +21,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private let tunServiceSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec?
     private let tunIfname: String?
     private let tunMTU: Int
+    private let tunLocalAddress: String?
+    private let tunLocalAddress6: String?
     private let tunPacketSink: TunPacketSink?
     private let muxInstanceID: UInt64
     private let muxConnectionSeq: UInt32
@@ -85,6 +87,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         tunServiceSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec? = nil,
         tunIfname: String? = nil,
         tunMTU: Int = 0,
+        tunLocalAddress: String? = nil,
+        tunLocalAddress6: String? = nil,
         tunPacketSink: TunPacketSink? = nil,
         muxInstanceID: UInt64 = UInt64.random(in: 1...UInt64.max),
         muxConnectionSeq: UInt32 = UInt32.random(in: 1...UInt32.max),
@@ -104,6 +108,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         self.tunServiceSpec = tunServiceSpec
         self.tunIfname = tunIfname?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.tunMTU = max(0, tunMTU)
+        self.tunLocalAddress = tunLocalAddress
+        self.tunLocalAddress6 = tunLocalAddress6
         self.tunPacketSink = tunPacketSink
         self.muxInstanceID = muxInstanceID
         self.muxConnectionSeq = muxConnectionSeq
@@ -118,7 +124,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             self.tunRuntime = ObstacleBridgeChannelMuxTunRuntime(
                 instanceID: muxInstanceID,
                 connectionSeq: muxConnectionSeq,
-                localSpec: localTunSpec
+                localSpec: localTunSpec,
+                localTunnelAddress: self.tunLocalAddress,
+                localTunnelAddress6: self.tunLocalAddress6
             )
         }
     }

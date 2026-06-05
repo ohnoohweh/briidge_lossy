@@ -403,6 +403,10 @@ def test_macos_app_main_source_exists() -> None:
     assert "with administrator privileges" in control
     assert "bundledPrivilegedHostRunnerURL" in control
     assert "ensurePrivilegedSwiftHostRunnerRunning" in control
+    assert "privilegedHostRunnerProcessPattern" in control
+    assert 'process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")' in control
+    assert '/usr/bin/pkill -TERM -f' in control
+    assert '/usr/bin/pkill -KILL -f' in control
     assert ".applicationSupportDirectory" in runner
     assert '.appendingPathComponent("ObstacleBridge"' in runner
     assert 'ObstacleBridgeHostRunnerError.unreadableRuntimeConfig("Documents")' in runner
@@ -662,6 +666,8 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "startSwiftHostRunner()" in control
     assert "prepareSwiftHostRunner()" in control
     assert "refreshSwiftHostRunnerStatus()" in control
+    assert "waitForPrivilegedHostRunnerSnapshot" in control
+    assert "terminatePrivilegedHostRunnerProcesses" in control
     assert '"swift_host_runner"' in control
     assert "shared_logs_harvested" in control
     assert "syncConfigurationFileInternal" in control

@@ -389,6 +389,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         provider: self,
                         settings: swiftSettings,
                         tunnelAddress: configuration.tunnelAddress,
+                        tunnelAddress6: configuration.tunnelAddress6,
                         tcpServiceSpecs: tcpServiceSpecs,
                         startupMuxFrames: startupMuxFrames,
                         muxInstanceID: muxInstanceID,
@@ -1047,6 +1048,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             mtu: config.mtu,
             tunIfname: config.tunIfname,
             tunServiceSpec: tunServiceSpec,
+            tunnelAddress6: (ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: payload)?.tunnelAddress6 ?? PacketTunnelProvider.defaultTunnelAddress6),
             runtimeConfig: payload
         )
     }
@@ -2025,6 +2027,7 @@ private struct SwiftSimpleUDPPeerSettings {
     let mtu: Int
     let tunIfname: String
     let tunServiceSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec?
+    let tunnelAddress6: String
     let runtimeConfig: [String: Any]
 }
 
@@ -2035,6 +2038,7 @@ private final class SwiftSimpleUDPPeerBridge {
     private let settings: SwiftSimpleUDPPeerSettings
     private let selectedTransport: String
     private let tunnelAddress: String
+    private let tunnelAddress6: String
     private let tcpServiceSpecs: [ObstacleBridgeChannelMuxCodec.ServiceSpec]
     private let startupMuxFrames: [Data]
     private let muxInstanceID: UInt64
@@ -2080,6 +2084,7 @@ private final class SwiftSimpleUDPPeerBridge {
         provider: PacketTunnelProvider? = nil,
         settings: SwiftSimpleUDPPeerSettings,
         tunnelAddress: String,
+        tunnelAddress6: String,
         tcpServiceSpecs: [ObstacleBridgeChannelMuxCodec.ServiceSpec],
         startupMuxFrames: [Data] = [],
         muxInstanceID: UInt64 = UInt64.random(in: 1...UInt64.max),
@@ -2094,6 +2099,7 @@ private final class SwiftSimpleUDPPeerBridge {
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
             .first(where: { !$0.isEmpty }) ?? "myudp"
         self.tunnelAddress = tunnelAddress
+        self.tunnelAddress6 = tunnelAddress6
         self.tcpServiceSpecs = tcpServiceSpecs
         self.startupMuxFrames = startupMuxFrames
         self.muxInstanceID = muxInstanceID
@@ -2124,6 +2130,8 @@ private final class SwiftSimpleUDPPeerBridge {
                     tunServiceSpec: settings.tunServiceSpec,
                     tunIfname: settings.tunIfname,
                     tunMTU: settings.mtu,
+                    tunLocalAddress: tunnelAddress,
+                    tunLocalAddress6: tunnelAddress6,
                     tunPacketSink: { [weak self] packet in self?.deliverPacketToSystem(packet) },
                     muxInstanceID: muxInstanceID,
                     muxConnectionSeq: muxConnectionSeq,
@@ -2160,6 +2168,8 @@ private final class SwiftSimpleUDPPeerBridge {
                     tunServiceSpec: settings.tunServiceSpec,
                     tunIfname: settings.tunIfname,
                     tunMTU: settings.mtu,
+                    tunLocalAddress: tunnelAddress,
+                    tunLocalAddress6: tunnelAddress6,
                     tunPacketSink: { [weak self] packet in self?.deliverPacketToSystem(packet) },
                     muxInstanceID: muxInstanceID,
                     muxConnectionSeq: muxConnectionSeq,
@@ -2187,6 +2197,8 @@ private final class SwiftSimpleUDPPeerBridge {
                         tunServiceSpec: settings.tunServiceSpec,
                         tunIfname: settings.tunIfname,
                         tunMTU: settings.mtu,
+                        tunLocalAddress: tunnelAddress,
+                        tunLocalAddress6: tunnelAddress6,
                         tunPacketSink: { [weak self] packet in self?.deliverPacketToSystem(packet) },
                         muxInstanceID: muxInstanceID,
                         muxConnectionSeq: muxConnectionSeq,
@@ -2219,6 +2231,8 @@ private final class SwiftSimpleUDPPeerBridge {
                     tunServiceSpec: settings.tunServiceSpec,
                     tunIfname: settings.tunIfname,
                     tunMTU: settings.mtu,
+                    tunLocalAddress: tunnelAddress,
+                    tunLocalAddress6: tunnelAddress6,
                     tunPacketSink: { [weak self] packet in
                         self?.deliverPacketToSystem(packet)
                     },
@@ -3024,12 +3038,14 @@ extension PacketTunnelProvider {
             mtu: mtu,
             tunIfname: tunIfname,
             tunServiceSpec: tunServiceSpec,
+            tunnelAddress6: (ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: flattenedRuntimeConfig)?.tunnelAddress6 ?? PacketTunnelProvider.defaultTunnelAddress6),
             runtimeConfig: flattenedRuntimeConfig
         )
         let bridge = try SwiftSimpleUDPPeerBridge(
             provider: nil,
             settings: settings,
             tunnelAddress: tunnelAddress,
+            tunnelAddress6: settings.tunnelAddress6,
             tcpServiceSpecs: tcpServiceSpecs,
             overlayLayerTransportAdapter: overlayLayerTransportAdapter
         )

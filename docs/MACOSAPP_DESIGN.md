@@ -238,6 +238,80 @@ is:
 - admin state reflects real TUN open/connected behavior instead of only a
   logical listener row
 
+## Observed macOS IPv6 route behavior
+
+Recent live tracing on macOS showed an important difference from the Linux and
+Python-host-TUN path:
+
+- IPv4 default-route takeover onto `utun` can succeed and verify cleanly
+- direct IPv6 `default` replacement on macOS is much less reliable
+- `route -n get -inet6 default` can fail or return unstable results even while
+  the kernel still holds other scoped IPv6 defaults
+- rolling back after that partial IPv6 failure can leave the machine in an
+  awkward split state unless the script is careful
+
+To keep the behavior config-driven while still matching what macOS will accept,
+the client hook now interprets the configured IPv6 full-tunnel intent
+(`included_routes6` containing `::/0`) as two explicit routes:
+
+- `::/1`
+- `8000::/1`
+
+Those two routes together capture the global IPv6 space without requiring the
+script to replace the system's own IPv6 `default` route directly. This is not
+a separate product policy hard-coded outside config; it is the macOS-specific
+realization of the same configured full-tunnel intent.
+
+That gives the project a safer operating model:
+
+- config remains the source of truth
+- macOS-specific route programming happens in the hook
+- IPv4 and IPv6 can now be debugged independently without needlessly tearing
+  down the whole routing session
+
+## Swift Packet Adapter Behavior Versus Python
+
+One subtle but important difference has now been observed between the Python
+TUN clients and the Swift packet-adapter path used by the macOS app.
+
+Python on Linux and Python on macOS use host-style TUN adapters:
+
+- the operating system routes packets onto the local TUN interface
+- the packet source identity seen by ObstacleBridge already aligns with the
+  tunnel-owned address space often enough that shared-TUN ownership checks do
+  not require additional packet rewriting in the mux layer
+
+The Swift macOS app uses a different path:
+
+- a native packet adapter reads packets from the local `utun`
+- those packets can still carry the machine's original local source identity
+  when they first enter the shared Swift runtime
+- shared-TUN ownership on the server is stricter and expects the peer to source
+  packets from its assigned tunnel-owned address, such as `192.168.106.3` or
+  `fd20:106::3`
+
+That means the Swift path needs one explicit normalization step that Python did
+not need in practice:
+
+- before ChannelMux frames a local TUN packet for shared-TUN forwarding, the
+  Swift runtime rewrites the packet source to the configured tunnel-owned IPv4
+  or IPv6 address and updates the affected checksums
+
+This is not treated as a protocol change. It is a parity fix that makes the
+Swift packet-adapter path present the same effective tunnel identity that the
+Python host-TUN path already provides implicitly.
+
+Design consequence:
+
+- shared-TUN server ownership rules stay strict
+- Python behavior stays unchanged
+- Swift packet adapters normalize local source identity before shared-TUN mux
+  forwarding
+
+The same shared Swift runtime is used by both the macOS app and the iOS packet
+tunnel implementation, so this source-normalization behavior is intentionally
+shared across both Apple-platform clients.
+
 That is the standard the Swift app should meet before we call the macOS app TUN
 path complete.
 

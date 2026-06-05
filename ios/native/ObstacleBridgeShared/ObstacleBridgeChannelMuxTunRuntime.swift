@@ -138,6 +138,8 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     private let chanIDStride: Int
     private let sessionMaxAppPayload: Int
     private let localSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec?
+    private let localTunnelAddress: String?
+    private let localTunnelAddress6: String?
     private let sharedTunOwnership: [String: Any]?
     private var nextTunID: Int
     private var nextFragmentDatagramID: UInt32
@@ -163,6 +165,8 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         chanIDStride: Int = 1,
         nextTunID: Int = 1,
         localSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec? = nil,
+        localTunnelAddress: String? = nil,
+        localTunnelAddress6: String? = nil,
         sessionMaxAppPayload: Int = 65535
     ) {
         self.instanceID = instanceID
@@ -172,6 +176,8 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         self.nextTunID = nextTunID
         self.sessionMaxAppPayload = sessionMaxAppPayload
         self.localSpec = localSpec
+        self.localTunnelAddress = Self.normalizedIPAddress(localTunnelAddress, family: AF_INET)
+        self.localTunnelAddress6 = Self.normalizedIPAddress(localTunnelAddress6, family: AF_INET6)
         if let localSpec,
            let ownershipValue = ObstacleBridgeChannelMuxCodec.sharedTunOwnershipSnapshot(for: localSpec),
            let ownership = ObstacleBridgeChannelMuxCodec.foundationObject(from: ownershipValue) as? [String: Any] {
@@ -261,6 +267,12 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             return nil
         }
 
+        let normalizedPacket = Self.normalizeLocalPacketSource(
+            packet,
+            ipv4Source: localTunnelAddress,
+            ipv6Source: localTunnelAddress6
+        ) ?? packet
+
         var frames: [Data] = []
         let preferredChanID = existingChanID ?? preferredTunChanID
         let allocatedChannel = preferredChanID == nil
@@ -276,12 +288,12 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             preferredTunChanID = chanID
         }
 
-        guard let dataFrames = try buildDataFrames(chanID: chanID, packet: packet) else {
+        guard let dataFrames = try buildDataFrames(chanID: chanID, packet: normalizedPacket) else {
             return nil
         }
         frames.append(contentsOf: dataFrames)
         if recordInflow {
-            recordLocalTunForward(packetBytes: packet.count, nowNS: sendNowNS, scopeID: appliedScopeID)
+            recordLocalTunForward(packetBytes: normalizedPacket.count, nowNS: sendNowNS, scopeID: appliedScopeID)
         }
         return LocalTunSendSnapshot(
             chanID: chanID,
@@ -290,6 +302,14 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             nextTunID: nextTunID,
             nextCounter: counters[chanID] ?? 0
         )
+    }
+
+    func normalizedLocalPacketForTunnel(packet: Data) -> Data {
+        Self.normalizeLocalPacketSource(
+            packet,
+            ipv4Source: localTunnelAddress,
+            ipv6Source: localTunnelAddress6
+        ) ?? packet
     }
 
     private func advanceTunInflowWindow(scopeID: String, nowNS: UInt64) -> TunInflowScopeState {
@@ -1264,5 +1284,193 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             String(format: "%x", Int((UInt16(bytes[idx]) << 8) | UInt16(bytes[idx + 1])))
         }
         return groups.joined(separator: ":")
+    }
+
+    private static func normalizedIPAddress(_ value: String?, family: Int32) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        switch family {
+        case AF_INET:
+            var addr = in_addr()
+            guard inet_pton(AF_INET, trimmed, &addr) == 1 else { return nil }
+            return trimmed
+        case AF_INET6:
+            var addr6 = in6_addr()
+            guard inet_pton(AF_INET6, trimmed, &addr6) == 1 else { return nil }
+            return trimmed
+        default:
+            return nil
+        }
+    }
+
+    private static func normalizeLocalPacketSource(_ packet: Data, ipv4Source: String?, ipv6Source: String?) -> Data? {
+        guard !packet.isEmpty else { return nil }
+        let version = Int((packet[packet.startIndex] >> 4) & 0x0F)
+        switch version {
+        case 4:
+            guard let ipv4Source else { return nil }
+            return normalizeIPv4PacketSource(packet, sourceIP: ipv4Source)
+        case 6:
+            guard let ipv6Source else { return nil }
+            return normalizeIPv6PacketSource(packet, sourceIP: ipv6Source)
+        default:
+            return nil
+        }
+    }
+
+    private static func normalizeIPv4PacketSource(_ packet: Data, sourceIP: String) -> Data? {
+        guard packet.count >= 20 else { return nil }
+        let ihl = Int(packet[packet.startIndex] & 0x0F) * 4
+        guard ihl >= 20, packet.count >= ihl else { return nil }
+        guard let sourceBytes = ipv4Bytes(sourceIP) else { return nil }
+        if Array(packet[12..<16]) == sourceBytes {
+            return packet
+        }
+        var bytes = [UInt8](packet)
+        for (index, value) in sourceBytes.enumerated() {
+            bytes[12 + index] = value
+        }
+        bytes[10] = 0
+        bytes[11] = 0
+        let headerChecksum = internetChecksum(bytes, start: 0, count: ihl)
+        bytes[10] = UInt8((headerChecksum >> 8) & 0xFF)
+        bytes[11] = UInt8(headerChecksum & 0xFF)
+
+        let protocolNumber = bytes[9]
+        switch protocolNumber {
+        case 1:
+            let payloadStart = ihl
+            guard bytes.count >= payloadStart + 4 else { break }
+            bytes[payloadStart + 2] = 0
+            bytes[payloadStart + 3] = 0
+            let checksum = internetChecksum(bytes, start: payloadStart, count: bytes.count - payloadStart)
+            bytes[payloadStart + 2] = UInt8((checksum >> 8) & 0xFF)
+            bytes[payloadStart + 3] = UInt8(checksum & 0xFF)
+        case 6:
+            recomputeIPv4TransportChecksum(&bytes, headerLength: ihl, checksumOffset: 16, protocolNumber: protocolNumber)
+        case 17:
+            recomputeIPv4TransportChecksum(&bytes, headerLength: ihl, checksumOffset: 6, protocolNumber: protocolNumber, zeroMeansFFFF: true)
+        default:
+            break
+        }
+        return Data(bytes)
+    }
+
+    private static func normalizeIPv6PacketSource(_ packet: Data, sourceIP: String) -> Data? {
+        guard packet.count >= 40 else { return nil }
+        guard let sourceBytes = ipv6Bytes(sourceIP) else { return nil }
+        if Array(packet[8..<24]) == sourceBytes {
+            return packet
+        }
+        var bytes = [UInt8](packet)
+        for (index, value) in sourceBytes.enumerated() {
+            bytes[8 + index] = value
+        }
+        let nextHeader = bytes[6]
+        let payloadStart = 40
+        switch nextHeader {
+        case 6:
+            recomputeIPv6TransportChecksum(&bytes, payloadStart: payloadStart, checksumOffset: 16, nextHeader: nextHeader)
+        case 17:
+            recomputeIPv6TransportChecksum(&bytes, payloadStart: payloadStart, checksumOffset: 6, nextHeader: nextHeader, zeroMeansFFFF: true)
+        case 58:
+            recomputeIPv6TransportChecksum(&bytes, payloadStart: payloadStart, checksumOffset: 2, nextHeader: nextHeader)
+        default:
+            break
+        }
+        return Data(bytes)
+    }
+
+    private static func ipv4Bytes(_ address: String) -> [UInt8]? {
+        var storage = in_addr()
+        guard inet_pton(AF_INET, address, &storage) == 1 else { return nil }
+        return withUnsafeBytes(of: &storage) { rawBytes in
+            Array(rawBytes.prefix(4))
+        }
+    }
+
+    private static func ipv6Bytes(_ address: String) -> [UInt8]? {
+        var storage = in6_addr()
+        guard inet_pton(AF_INET6, address, &storage) == 1 else { return nil }
+        return withUnsafeBytes(of: &storage) { Array($0) }
+    }
+
+    private static func recomputeIPv4TransportChecksum(
+        _ bytes: inout [UInt8],
+        headerLength: Int,
+        checksumOffset: Int,
+        protocolNumber: UInt8,
+        zeroMeansFFFF: Bool = false
+    ) {
+        let payloadLength = bytes.count - headerLength
+        guard payloadLength > checksumOffset + 1 else { return }
+        let checksumIndex = headerLength + checksumOffset
+        bytes[checksumIndex] = 0
+        bytes[checksumIndex + 1] = 0
+        var pseudoHeader = [UInt8]()
+        pseudoHeader.append(contentsOf: bytes[12..<16])
+        pseudoHeader.append(contentsOf: bytes[16..<20])
+        pseudoHeader.append(0)
+        pseudoHeader.append(protocolNumber)
+        pseudoHeader.append(UInt8((payloadLength >> 8) & 0xFF))
+        pseudoHeader.append(UInt8(payloadLength & 0xFF))
+        pseudoHeader.append(contentsOf: bytes[headerLength...])
+        var checksum = internetChecksum(pseudoHeader, start: 0, count: pseudoHeader.count)
+        if zeroMeansFFFF && checksum == 0 {
+            checksum = 0xFFFF
+        }
+        bytes[checksumIndex] = UInt8((checksum >> 8) & 0xFF)
+        bytes[checksumIndex + 1] = UInt8(checksum & 0xFF)
+    }
+
+    private static func recomputeIPv6TransportChecksum(
+        _ bytes: inout [UInt8],
+        payloadStart: Int,
+        checksumOffset: Int,
+        nextHeader: UInt8,
+        zeroMeansFFFF: Bool = false
+    ) {
+        let payloadLength = bytes.count - payloadStart
+        guard payloadLength > checksumOffset + 1 else { return }
+        let checksumIndex = payloadStart + checksumOffset
+        bytes[checksumIndex] = 0
+        bytes[checksumIndex + 1] = 0
+        var pseudoHeader = [UInt8]()
+        pseudoHeader.append(contentsOf: bytes[8..<24])
+        pseudoHeader.append(contentsOf: bytes[24..<40])
+        pseudoHeader.append(UInt8((payloadLength >> 24) & 0xFF))
+        pseudoHeader.append(UInt8((payloadLength >> 16) & 0xFF))
+        pseudoHeader.append(UInt8((payloadLength >> 8) & 0xFF))
+        pseudoHeader.append(UInt8(payloadLength & 0xFF))
+        pseudoHeader.append(0)
+        pseudoHeader.append(0)
+        pseudoHeader.append(0)
+        pseudoHeader.append(nextHeader)
+        pseudoHeader.append(contentsOf: bytes[payloadStart...])
+        var checksum = internetChecksum(pseudoHeader, start: 0, count: pseudoHeader.count)
+        if zeroMeansFFFF && checksum == 0 {
+            checksum = 0xFFFF
+        }
+        bytes[checksumIndex] = UInt8((checksum >> 8) & 0xFF)
+        bytes[checksumIndex + 1] = UInt8(checksum & 0xFF)
+    }
+
+    private static func internetChecksum(_ bytes: [UInt8], start: Int, count: Int) -> UInt16 {
+        var sum: UInt32 = 0
+        var index = start
+        let end = start + count
+        while index + 1 < end {
+            let word = (UInt32(bytes[index]) << 8) | UInt32(bytes[index + 1])
+            sum &+= word
+            index += 2
+        }
+        if index < end {
+            sum &+= UInt32(bytes[index]) << 8
+        }
+        while (sum >> 16) != 0 {
+            sum = (sum & 0xFFFF) &+ (sum >> 16)
+        }
+        return UInt16(~sum & 0xFFFF)
     }
 }

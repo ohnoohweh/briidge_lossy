@@ -239,6 +239,27 @@ private func run(_ request: [String: Any]) throws -> [String: Any] {
             nowNS: (request["now_ns"] as? NSNumber)?.uint64Value
         )
         return ["snapshot": snapshot.map(localTunSendSnapshotObject) ?? NSNull()]
+    case "normalize_local_tun_packet_source":
+        guard
+            let packetHex = request["packet_hex"] as? String,
+            let packet = dataFromHex(packetHex),
+            let instanceID = request["instance_id"] as? NSNumber,
+            let connectionSeq = request["connection_seq"] as? NSNumber
+        else {
+            throw ChannelMuxComponentRunnerError.invalidRequest
+        }
+        let localSpec = try (request["spec"].map { try parseServiceSpec($0) })
+        let runtime = ObstacleBridgeChannelMuxTunRuntime(
+            instanceID: instanceID.uint64Value,
+            connectionSeq: connectionSeq.uint32Value,
+            localSpec: localSpec,
+            localTunnelAddress: request["local_tunnel_address"] as? String,
+            localTunnelAddress6: request["local_tunnel_address6"] as? String
+        )
+        let normalized = runtime.normalizedLocalPacketForTunnel(packet: packet)
+        return [
+            "normalized_packet_hex": hexFromData(normalized),
+        ]
     case "drive_channelmux_tun_open_then_local_packet":
         guard
             let openChanID = request["open_chan_id"] as? NSNumber,
