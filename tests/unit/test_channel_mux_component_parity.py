@@ -236,6 +236,21 @@ def _shared_tun_test_spec() -> ChannelMux.ServiceSpec:
     )
 
 
+def _service_spec_json(spec: ChannelMux.ServiceSpec) -> dict[str, object]:
+    return {
+        "svc_id": spec.svc_id,
+        "l_proto": spec.l_proto,
+        "l_bind": spec.l_bind,
+        "l_port": spec.l_port,
+        "r_proto": spec.r_proto,
+        "r_host": spec.r_host,
+        "r_port": spec.r_port,
+        "name": spec.name,
+        "lifecycle_hooks": spec.lifecycle_hooks,
+        "options": spec.options,
+    }
+
+
 def _python_shared_tun_peer_binding_sequence_summary() -> list[dict[str, object]]:
     mux = ChannelMux(_FakeSession(), asyncio.new_event_loop())
     try:
@@ -414,6 +429,24 @@ def test_swift_component_normalizes_local_shared_tun_ipv6_source(
     assert normalized[24:40] == bytes.fromhex("26064700470000000000000000001111")
 
 
+def test_swift_component_can_disable_local_shared_tun_normalization(
+    swift_channelmux_component_runner: Path,
+) -> None:
+    packet = _ipv4_packet("172.20.10.4", "1.1.1.1")
+    swift = _run_swift_component(
+        swift_channelmux_component_runner,
+        {
+            "action": "normalize_local_tun_packet_source",
+            "packet_hex": packet.hex(),
+            "instance_id": 0x1122334455667788,
+            "connection_seq": 0x10203040,
+            "local_tunnel_address": "192.168.106.3",
+            "shared_tun_disable_outgoing_normalization": True,
+        },
+    )
+    assert bytes.fromhex(swift["normalized_packet_hex"]) == packet
+
+
 def test_swift_component_tun_open_then_local_packet_matches_python(
     swift_channelmux_component_runner: Path,
 ) -> None:
@@ -524,6 +557,27 @@ def test_swift_component_guarded_inbound_tun_data_rejects_spoofed_ipv4(
         },
     )
     assert swift["snapshot"] == python
+
+
+def test_swift_component_can_disable_shared_tun_inflow_filter(
+    swift_channelmux_component_runner: Path,
+) -> None:
+    packet = _ipv4_packet("172.20.10.4", "192.168.107.1")
+    swift = _run_swift_component(
+        swift_channelmux_component_runner,
+        {
+            "action": "drive_shared_tun_inbound_guard_with_switches",
+            "chan_id": 7,
+            "peer_id": 77,
+            "body_hex": packet.hex(),
+            "mtu": 1500,
+            "shared_tun_disable_inflow_filter": True,
+            "spec": _service_spec_json(_shared_tun_test_spec()),
+        },
+    )
+    assert swift["snapshot"]["delivered"] is True
+    assert swift["snapshot"]["source_ip"] == "172.20.10.4"
+    assert swift["snapshot"]["drop_reason"] is None
 
 
 def test_swift_component_guarded_inbound_tun_data_accepts_broadcast_destination(
@@ -704,6 +758,27 @@ def test_swift_component_shared_tun_outbound_route_inactive_destination_matches_
     assert swift["snapshot"] == python
 
 
+def test_swift_component_can_disable_shared_tun_outflow_filter(
+    swift_channelmux_component_runner: Path,
+) -> None:
+    route_packet = _ipv4_packet("192.168.107.1", "192.168.107.4")
+    ownership_binding_packet = _ipv4_packet("192.168.107.4", "192.168.107.1")
+    swift = _run_swift_component(
+        swift_channelmux_component_runner,
+        {
+            "action": "plan_shared_tun_outbound_route_runtime",
+            "body_hex": route_packet.hex(),
+            "source_body_hex": ownership_binding_packet.hex(),
+            "mtu": 1500,
+            "peer_id": 88,
+            "chan_id": 22,
+            "shared_tun_disable_outflow_filter": True,
+            "spec": _service_spec_json(_shared_tun_test_spec()),
+        },
+    )
+    assert swift["snapshot"] is None
+
+
 def test_swift_component_shared_tun_inbound_peer_relay_matches_python(
     swift_channelmux_component_runner: Path,
 ) -> None:
@@ -835,6 +910,28 @@ def test_swift_component_shared_tun_scope_ids_preserve_broadcast_unicast_isolati
         },
     )
     assert swift["snapshots"] == python
+
+
+def test_swift_component_can_disable_shared_tun_scoped_throttle(
+    swift_channelmux_component_runner: Path,
+) -> None:
+    sequence = [
+        {"scope_id": "peer-a", "packet_bytes": 120, "buffered_frames": 0, "now_ns": 0},
+        {"scope_id": "peer-a", "packet_bytes": 120, "buffered_frames": 1, "now_ns": 100_000_000},
+    ]
+    swift = _run_swift_component(
+        swift_channelmux_component_runner,
+        {
+            "action": "drive_channelmux_scoped_tun_throttle_sequence",
+            "scope_ids": [str(step["scope_id"]) for step in sequence],
+            "packet_bytes_sequence": [int(step["packet_bytes"]) for step in sequence],
+            "buffered_frames_sequence": [int(step["buffered_frames"]) for step in sequence],
+            "now_ns_sequence": [int(step["now_ns"]) for step in sequence],
+            "shared_tun_disable_scoped_throttle": True,
+        },
+    )
+    assert swift["snapshots"][1]["allowed"] is True
+    assert swift["snapshots"][1]["throttle_drop_count"] == 0
 
 
 def test_swift_component_shared_tun_outbound_route_unmapped_destination_matches_python(

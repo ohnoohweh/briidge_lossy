@@ -183,6 +183,8 @@ class ChannelMux:
                   on_local_tx_bytes: Optional[Callable[[int], None]] = None) -> "ChannelMux":
         mux = ChannelMux(session, loop, on_local_rx_bytes, on_local_tx_bytes)
         mux.args = args
+        with contextlib.suppress(Exception):
+            mux._tun_routing_settings = TunRoutingSettings.from_mapping(vars(args))
         # Parse catalog
         services = ChannelMux._parse_own_servers(getattr(args, 'own_servers', None))
         remote_services = ChannelMux._parse_remote_servers(getattr(args, 'remote_servers', None))
@@ -661,6 +663,7 @@ class ChannelMux:
         self._on_local_rx = on_local_rx_bytes  # local->peer (overlay direction) counters hook
         self._on_local_tx = on_local_tx_bytes  # peer->local counters hook
         self.args = None
+        self._tun_routing_settings = TunRoutingSettings()
         self._hook_base_dir = os.getcwd()
         self._overlay_transport = ""
         self._overlay_peer_name = ""
@@ -965,6 +968,16 @@ class ChannelMux:
         if origin == "peer":
             return config.remote_hook_env()
         return {}
+
+    def _tun_routing_config(self) -> TunRoutingSettings:
+        if self.args is None:
+            return self._tun_routing_settings
+        with contextlib.suppress(Exception):
+            self._tun_routing_settings = TunRoutingSettings.from_mapping(
+                vars(self.args),
+                base=self._tun_routing_settings,
+            )
+        return self._tun_routing_settings
 
     @staticmethod
     def _merge_hook_env_defaults(
@@ -2227,6 +2240,8 @@ class ChannelMux:
         svc_key: Optional["ChannelMux.ServiceKey"],
         packet: bytes,
     ) -> Optional[dict[str, Any]]:
+        if self._tun_routing_config().shared_tun_disable_outflow_filter:
+            return None
         if svc_key is None:
             return None
         ownership = self._shared_tun_ownership_by_service.get(svc_key)
@@ -2254,6 +2269,8 @@ class ChannelMux:
         source_peer_id: Optional[int],
         packet: bytes,
     ) -> Optional[dict[str, Any]]:
+        if self._tun_routing_config().shared_tun_disable_outflow_filter:
+            return None
         route = self._shared_tun_plan_local_delivery(svc_key, packet)
         if route is None:
             return None
@@ -2340,6 +2357,8 @@ class ChannelMux:
         parsed, parse_error = self._parse_tun_packet_endpoints(packet)
         if parse_error is not None:
             return False, None, parse_error
+        if self._tun_routing_config().shared_tun_disable_inflow_filter:
+            return True, parsed, None
         peer_id = self._chan_owner_peer_id.get(int(chan))
         source_ip = str(parsed.get("source_ip") or "")
         bound_peer_ref = self._shared_tun_bound_peer_ref_for_packet(svc_key, peer_id, source_ip)
@@ -2992,6 +3011,8 @@ class ChannelMux:
         return state
 
     def _local_tun_send_allowed(self, packet_len: int, *, now_ns: int, scope_key: tuple[Any, ...]) -> bool:
+        if self._tun_routing_config().shared_tun_disable_scoped_throttle:
+            return True
         state = self._advance_tun_inflow_window(scope_key, now_ns)
         buffered_frames = self._session_buffered_frames()
         if buffered_frames <= 0:

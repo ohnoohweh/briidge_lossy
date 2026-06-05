@@ -34,6 +34,26 @@ private func jsonObject(_ value: Any) throws -> [String: Any] {
     return object
 }
 
+private func boolValue(_ value: Any?, default defaultValue: Bool = false) -> Bool {
+    if let value = value as? Bool {
+        return value
+    }
+    if let number = value as? NSNumber {
+        return number.boolValue
+    }
+    if let text = value as? String {
+        switch text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "1", "true", "yes", "on":
+            return true
+        case "0", "false", "no", "off", "":
+            return false
+        default:
+            return defaultValue
+        }
+    }
+    return defaultValue
+}
+
 private func parseJSONDictionary(_ value: Any?) -> [String: ObstacleBridgeChannelMuxCodec.JSONValue]? {
     guard let dict = value as? [String: Any] else {
         return nil
@@ -254,7 +274,8 @@ private func run(_ request: [String: Any]) throws -> [String: Any] {
             connectionSeq: connectionSeq.uint32Value,
             localSpec: localSpec,
             localTunnelAddress: request["local_tunnel_address"] as? String,
-            localTunnelAddress6: request["local_tunnel_address6"] as? String
+            localTunnelAddress6: request["local_tunnel_address6"] as? String,
+            sharedTunDisableOutgoingNormalization: boolValue(request["shared_tun_disable_outgoing_normalization"])
         )
         let normalized = runtime.normalizedLocalPacketForTunnel(packet: packet)
         return [
@@ -410,7 +431,11 @@ private func run(_ request: [String: Any]) throws -> [String: Any] {
         else {
             throw ChannelMuxComponentRunnerError.invalidRequest
         }
-        let runtime = ObstacleBridgeChannelMuxTunRuntime(instanceID: 0, connectionSeq: 0)
+        let runtime = ObstacleBridgeChannelMuxTunRuntime(
+            instanceID: 0,
+            connectionSeq: 0,
+            sharedTunDisableScopedThrottle: boolValue(request["shared_tun_disable_scoped_throttle"])
+        )
         let snapshots = zip(zip(scopeIDs, packetBytes), zip(bufferedFrames, nowSequence)).map { lhs, rhs in
             let (scopeID, packetBytesValue) = lhs
             let (bufferedFramesValue, nowValue) = rhs
@@ -424,6 +449,62 @@ private func run(_ request: [String: Any]) throws -> [String: Any] {
             )
         }
         return ["snapshots": snapshots]
+    case "drive_shared_tun_inbound_guard_with_switches":
+        guard
+            let chanID = request["chan_id"] as? NSNumber,
+            let peerID = request["peer_id"] as? NSNumber,
+            let bodyHex = request["body_hex"] as? String,
+            let body = dataFromHex(bodyHex),
+            let mtu = request["mtu"] as? NSNumber,
+            let specObject = request["spec"]
+        else {
+            throw ChannelMuxComponentRunnerError.invalidRequest
+        }
+        let localSpec = try parseServiceSpec(specObject)
+        let runtime = ObstacleBridgeChannelMuxTunRuntime(
+            instanceID: 0,
+            connectionSeq: 0,
+            localSpec: localSpec,
+            sharedTunDisableInflowFilter: boolValue(request["shared_tun_disable_inflow_filter"])
+        )
+        let snapshot = runtime.handleInboundTunDataSharedGuarded(
+            peerID: peerID.intValue,
+            chanID: chanID.intValue,
+            body: body,
+            mtu: mtu.intValue,
+            boundChanID: (request["bound_chan_id"] as? NSNumber)?.intValue ?? chanID.intValue
+        )
+        return ["snapshot": guardedInboundTunDataSnapshotObject(snapshot)]
+    case "plan_shared_tun_outbound_route_runtime":
+        guard
+            let bodyHex = request["body_hex"] as? String,
+            let body = dataFromHex(bodyHex),
+            let specObject = request["spec"],
+            let peerID = request["peer_id"] as? NSNumber,
+            let chanID = request["chan_id"] as? NSNumber,
+            let sourceBodyHex = request["source_body_hex"] as? String,
+            let sourceBody = dataFromHex(sourceBodyHex),
+            let mtu = request["mtu"] as? NSNumber
+        else {
+            throw ChannelMuxComponentRunnerError.invalidRequest
+        }
+        let localSpec = try parseServiceSpec(specObject)
+        let runtime = ObstacleBridgeChannelMuxTunRuntime(
+            instanceID: 0,
+            connectionSeq: 0,
+            localSpec: localSpec,
+            sharedTunDisableOutflowFilter: boolValue(request["shared_tun_disable_outflow_filter"])
+        )
+        _ = runtime.handleInboundTunDataSharedGuarded(
+            peerID: peerID.intValue,
+            chanID: chanID.intValue,
+            body: sourceBody,
+            mtu: mtu.intValue,
+            boundChanID: chanID.intValue
+        )
+        runtime.recordSharedTunPeerBinding(peerID: peerID.intValue, chanID: chanID.intValue)
+        let snapshot = runtime.planSharedTunOutboundRoute(packet: body)
+        return ["snapshot": snapshot.map(sharedTunOutboundRouteSnapshotObject) ?? NSNull()]
     case "apply_shared_tun_peer_binding_sequence":
         guard
             let operationsRaw = request["operations"] as? [[String: Any]]

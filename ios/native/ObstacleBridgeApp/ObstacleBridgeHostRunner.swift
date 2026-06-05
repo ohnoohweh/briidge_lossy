@@ -1475,6 +1475,10 @@ final class ObstacleBridgeHostRunner {
             tunMTU: tunService?.listenPort ?? 0,
             tunLocalAddress: tunnelRouting?.tunnelAddress,
             tunLocalAddress6: tunnelRouting?.tunnelAddress6,
+            sharedTunDisableOutgoingNormalization: tunnelRouting?.sharedTunDisableOutgoingNormalization ?? false,
+            sharedTunDisableInflowFilter: tunnelRouting?.sharedTunDisableInflowFilter ?? false,
+            sharedTunDisableOutflowFilter: tunnelRouting?.sharedTunDisableOutflowFilter ?? false,
+            sharedTunDisableScopedThrottle: tunnelRouting?.sharedTunDisableScopedThrottle ?? false,
             tunPacketSink: { [weak self] packet in
                 self?.deliverRemoteTunPacketToLocalAdapter(packet)
             },
@@ -1523,6 +1527,10 @@ final class ObstacleBridgeHostRunner {
             tunMTU: tunService?.listenPort ?? 0,
             tunLocalAddress: tunnelRouting?.tunnelAddress,
             tunLocalAddress6: tunnelRouting?.tunnelAddress6,
+            sharedTunDisableOutgoingNormalization: tunnelRouting?.sharedTunDisableOutgoingNormalization ?? false,
+            sharedTunDisableInflowFilter: tunnelRouting?.sharedTunDisableInflowFilter ?? false,
+            sharedTunDisableOutflowFilter: tunnelRouting?.sharedTunDisableOutflowFilter ?? false,
+            sharedTunDisableScopedThrottle: tunnelRouting?.sharedTunDisableScopedThrottle ?? false,
             tunPacketSink: { [weak self] packet in
                 self?.deliverRemoteTunPacketToLocalAdapter(packet)
             },
@@ -1577,6 +1585,10 @@ final class ObstacleBridgeHostRunner {
             tunMTU: tunService?.listenPort ?? 0,
             tunLocalAddress: tunnelRouting?.tunnelAddress,
             tunLocalAddress6: tunnelRouting?.tunnelAddress6,
+            sharedTunDisableOutgoingNormalization: tunnelRouting?.sharedTunDisableOutgoingNormalization ?? false,
+            sharedTunDisableInflowFilter: tunnelRouting?.sharedTunDisableInflowFilter ?? false,
+            sharedTunDisableOutflowFilter: tunnelRouting?.sharedTunDisableOutflowFilter ?? false,
+            sharedTunDisableScopedThrottle: tunnelRouting?.sharedTunDisableScopedThrottle ?? false,
             tunPacketSink: { [weak self] packet in
                 self?.deliverRemoteTunPacketToLocalAdapter(packet)
             },
@@ -1623,6 +1635,10 @@ final class ObstacleBridgeHostRunner {
             tunMTU: tunService?.listenPort ?? 0,
             tunLocalAddress: tunnelRouting?.tunnelAddress,
             tunLocalAddress6: tunnelRouting?.tunnelAddress6,
+            sharedTunDisableOutgoingNormalization: tunnelRouting?.sharedTunDisableOutgoingNormalization ?? false,
+            sharedTunDisableInflowFilter: tunnelRouting?.sharedTunDisableInflowFilter ?? false,
+            sharedTunDisableOutflowFilter: tunnelRouting?.sharedTunDisableOutflowFilter ?? false,
+            sharedTunDisableScopedThrottle: tunnelRouting?.sharedTunDisableScopedThrottle ?? false,
             tunPacketSink: { [weak self] packet in
                 self?.deliverRemoteTunPacketToLocalAdapter(packet)
             },

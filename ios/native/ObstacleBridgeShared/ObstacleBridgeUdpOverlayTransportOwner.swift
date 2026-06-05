@@ -28,6 +28,10 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private let tunMTU: Int
     private let tunLocalAddress: String?
     private let tunLocalAddress6: String?
+    private let sharedTunDisableOutgoingNormalization: Bool
+    private let sharedTunDisableInflowFilter: Bool
+    private let sharedTunDisableOutflowFilter: Bool
+    private let sharedTunDisableScopedThrottle: Bool
     private let tunPacketSink: TunPacketSink?
     private let muxInstanceID: UInt64
     private let muxConnectionSeq: UInt32
@@ -102,6 +106,10 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         tunMTU: Int = 0,
         tunLocalAddress: String? = nil,
         tunLocalAddress6: String? = nil,
+        sharedTunDisableOutgoingNormalization: Bool = false,
+        sharedTunDisableInflowFilter: Bool = false,
+        sharedTunDisableOutflowFilter: Bool = false,
+        sharedTunDisableScopedThrottle: Bool = false,
         tunPacketSink: TunPacketSink? = nil,
         muxInstanceID: UInt64 = UInt64.random(in: 1...UInt64.max),
         muxConnectionSeq: UInt32 = UInt32.random(in: 1...UInt32.max),
@@ -123,6 +131,10 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         self.tunMTU = max(0, tunMTU)
         self.tunLocalAddress = tunLocalAddress
         self.tunLocalAddress6 = tunLocalAddress6
+        self.sharedTunDisableOutgoingNormalization = sharedTunDisableOutgoingNormalization
+        self.sharedTunDisableInflowFilter = sharedTunDisableInflowFilter
+        self.sharedTunDisableOutflowFilter = sharedTunDisableOutflowFilter
+        self.sharedTunDisableScopedThrottle = sharedTunDisableScopedThrottle
         self.tunPacketSink = tunPacketSink
         self.muxInstanceID = muxInstanceID
         self.muxConnectionSeq = muxConnectionSeq
@@ -139,7 +151,11 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 connectionSeq: muxConnectionSeq,
                 localSpec: localTunSpec,
                 localTunnelAddress: self.tunLocalAddress,
-                localTunnelAddress6: self.tunLocalAddress6
+                localTunnelAddress6: self.tunLocalAddress6,
+                sharedTunDisableOutgoingNormalization: self.sharedTunDisableOutgoingNormalization,
+                sharedTunDisableInflowFilter: self.sharedTunDisableInflowFilter,
+                sharedTunDisableOutflowFilter: self.sharedTunDisableOutflowFilter,
+                sharedTunDisableScopedThrottle: self.sharedTunDisableScopedThrottle
             )
         }
     }

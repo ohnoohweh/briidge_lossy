@@ -100,6 +100,110 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         self.assertEqual(settings.dns_servers, ["1.1.1.1"])
         self.assertEqual(settings.mtu, 1600)
         self.assertEqual(settings.log_TUN_routing, "CRITICAL")
+        self.assertFalse(settings.shared_tun_disable_outgoing_normalization)
+        self.assertFalse(settings.shared_tun_disable_inflow_filter)
+        self.assertFalse(settings.shared_tun_disable_outflow_filter)
+        self.assertFalse(settings.shared_tun_disable_scoped_throttle)
+
+    def test_tun_routing_diagnostic_switches_parse_from_mapping(self):
+        settings = TunRoutingSettings.from_mapping(
+            {
+                "TUN_routing": {
+                    "shared_tun_disable_outgoing_normalization": "true",
+                    "shared_tun_disable_inflow_filter": True,
+                    "shared_tun_disable_outflow_filter": "1",
+                    "shared_tun_disable_scoped_throttle": "yes",
+                }
+            }
+        )
+        self.assertTrue(settings.shared_tun_disable_outgoing_normalization)
+        self.assertTrue(settings.shared_tun_disable_inflow_filter)
+        self.assertTrue(settings.shared_tun_disable_outflow_filter)
+        self.assertTrue(settings.shared_tun_disable_scoped_throttle)
+
+    def test_shared_tun_disable_inflow_filter_allows_unowned_source(self):
+        mux = ChannelMux(_FakeSession(), asyncio.new_event_loop())
+        try:
+            mux._tun_routing_settings = TunRoutingSettings(
+                shared_tun_disable_inflow_filter=True,
+            )
+            svc_key = ("peer", 77, 2)
+            dev = ChannelMux.TunDevice(fd=44, ifname="obtun1", mtu=1500, service_key=svc_key)
+            mux._tun_by_chan[7] = dev
+            mux._chan_owner_peer_id[7] = 77
+            spec = ChannelMux.ServiceSpec(
+                2,
+                "tun",
+                "obtun1",
+                1500,
+                "tun",
+                "obtun0",
+                1500,
+                options={
+                    "shared_tun_ownership": {
+                        "mode": "server_shared",
+                        "peers": [
+                            {
+                                "peer_ref": "linux-client",
+                                "ipv4": ["192.168.107.2"],
+                                "ipv6": ["fd20:107::2"],
+                            }
+                        ],
+                    }
+                },
+            )
+            mux._install_shared_tun_ownership_for_service(svc_key, spec)
+            allowed, parsed, reason = mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=7,
+                packet=_ipv4_packet("172.20.10.4", "192.168.107.1"),
+            )
+            self.assertTrue(allowed)
+            self.assertEqual(parsed["source_ip"], "172.20.10.4")
+            self.assertIsNone(reason)
+        finally:
+            mux.loop.close()
+
+    def test_shared_tun_disable_outflow_filter_skips_shared_route_planning(self):
+        mux = ChannelMux(_FakeSession(), asyncio.new_event_loop())
+        try:
+            mux._tun_routing_settings = TunRoutingSettings(
+                shared_tun_disable_outflow_filter=True,
+            )
+            svc_key = ("peer", 77, 2)
+            mux._shared_tun_ownership_by_service[svc_key] = {
+                "owner_by_ipv4": {"192.168.107.4": "ios-client"},
+                "owner_by_ipv6": {},
+            }
+            route = mux._shared_tun_plan_local_delivery(
+                svc_key,
+                _ipv4_packet("192.168.107.1", "192.168.107.4"),
+            )
+            self.assertIsNone(route)
+            relay = mux._shared_tun_plan_inbound_peer_relay(
+                svc_key,
+                77,
+                _ipv4_packet("192.168.107.2", "192.168.107.4"),
+            )
+            self.assertIsNone(relay)
+        finally:
+            mux.loop.close()
+
+    def test_shared_tun_disable_scoped_throttle_allows_buffered_send(self):
+        mux = ChannelMux(_FakeSession(waiting_count=5), asyncio.new_event_loop())
+        try:
+            mux._tun_routing_settings = TunRoutingSettings(
+                shared_tun_disable_scoped_throttle=True,
+            )
+            self.assertTrue(
+                mux._local_tun_send_allowed(
+                    4096,
+                    now_ns=1,
+                    scope_key=("peer", 7),
+                )
+            )
+        finally:
+            mux.loop.close()
 
     def test_select_hook_argv_uses_list_directly(self):
         selected = ChannelMux._select_hook_argv({"argv": ["cmd", "arg1"]}, platform_key="linux")

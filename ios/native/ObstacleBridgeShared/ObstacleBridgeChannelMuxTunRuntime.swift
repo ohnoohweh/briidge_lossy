@@ -140,6 +140,10 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     private let localSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec?
     private let localTunnelAddress: String?
     private let localTunnelAddress6: String?
+    private let sharedTunDisableOutgoingNormalization: Bool
+    private let sharedTunDisableInflowFilter: Bool
+    private let sharedTunDisableOutflowFilter: Bool
+    private let sharedTunDisableScopedThrottle: Bool
     private let sharedTunOwnership: [String: Any]?
     private var nextTunID: Int
     private var nextFragmentDatagramID: UInt32
@@ -167,6 +171,10 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         localSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec? = nil,
         localTunnelAddress: String? = nil,
         localTunnelAddress6: String? = nil,
+        sharedTunDisableOutgoingNormalization: Bool = false,
+        sharedTunDisableInflowFilter: Bool = false,
+        sharedTunDisableOutflowFilter: Bool = false,
+        sharedTunDisableScopedThrottle: Bool = false,
         sessionMaxAppPayload: Int = 65535
     ) {
         self.instanceID = instanceID
@@ -178,6 +186,10 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         self.localSpec = localSpec
         self.localTunnelAddress = Self.normalizedIPAddress(localTunnelAddress, family: AF_INET)
         self.localTunnelAddress6 = Self.normalizedIPAddress(localTunnelAddress6, family: AF_INET6)
+        self.sharedTunDisableOutgoingNormalization = sharedTunDisableOutgoingNormalization
+        self.sharedTunDisableInflowFilter = sharedTunDisableInflowFilter
+        self.sharedTunDisableOutflowFilter = sharedTunDisableOutflowFilter
+        self.sharedTunDisableScopedThrottle = sharedTunDisableScopedThrottle
         if let localSpec,
            let ownershipValue = ObstacleBridgeChannelMuxCodec.sharedTunOwnershipSnapshot(for: localSpec),
            let ownership = ObstacleBridgeChannelMuxCodec.foundationObject(from: ownershipValue) as? [String: Any] {
@@ -267,11 +279,7 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             return nil
         }
 
-        let normalizedPacket = Self.normalizeLocalPacketSource(
-            packet,
-            ipv4Source: localTunnelAddress,
-            ipv6Source: localTunnelAddress6
-        ) ?? packet
+        let normalizedPacket = normalizedLocalPacketForTunnel(packet: packet)
 
         var frames: [Data] = []
         let preferredChanID = existingChanID ?? preferredTunChanID
@@ -305,7 +313,10 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     }
 
     func normalizedLocalPacketForTunnel(packet: Data) -> Data {
-        Self.normalizeLocalPacketSource(
+        if sharedTunDisableOutgoingNormalization {
+            return packet
+        }
+        return Self.normalizeLocalPacketSource(
             packet,
             ipv4Source: localTunnelAddress,
             ipv6Source: localTunnelAddress6
@@ -341,6 +352,9 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     }
 
     private func localTunSendAllowed(packetBytes: Int, bufferedFrames: Int, nowNS: UInt64, scopeID: String) -> Bool {
+        if sharedTunDisableScopedThrottle {
+            return true
+        }
         let state = advanceTunInflowWindow(scopeID: scopeID, nowNS: nowNS)
         guard bufferedFrames > 0 else {
             return true
@@ -677,6 +691,9 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         guard base.delivered, let peerID, let sourceIP = base.sourceIP else {
             return base
         }
+        if sharedTunDisableInflowFilter {
+            return base
+        }
         guard sharedTunBoundPeerRef(forPeerID: peerID, sourceIP: sourceIP) != nil else {
             return GuardedInboundTunDataSnapshot(
                 delivered: false,
@@ -769,6 +786,9 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     }
 
     func planSharedTunOutboundRoute(packet: Data) -> SharedTunOutboundRouteSnapshot? {
+        if sharedTunDisableOutflowFilter {
+            return nil
+        }
         guard
             let ownership = sharedTunOwnership
         else {
@@ -831,6 +851,9 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     }
 
     func planSharedTunInboundPeerRelay(sourcePeerID: Int?, packet: Data) -> SharedTunInboundPeerRelaySnapshot? {
+        if sharedTunDisableOutflowFilter {
+            return nil
+        }
         guard
             let sharedTunOwnership,
             let sourcePeerID

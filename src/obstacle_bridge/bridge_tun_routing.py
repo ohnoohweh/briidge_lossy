@@ -20,6 +20,10 @@ DEFAULT_EXCLUDED_ROUTES6 = ["::1/128"]
 DEFAULT_DNS_SERVERS = ["1.1.1.1"]
 DEFAULT_TUNNEL_MTU = 1600
 DEFAULT_TUN_ROUTING_LOG = "CRITICAL"
+DEFAULT_SHARED_TUN_DISABLE_OUTGOING_NORMALIZATION = False
+DEFAULT_SHARED_TUN_DISABLE_INFLOW_FILTER = False
+DEFAULT_SHARED_TUN_DISABLE_OUTFLOW_FILTER = False
+DEFAULT_SHARED_TUN_DISABLE_SCOPED_THROTTLE = False
 
 
 def _clean_list(value: Any, *, default: list[str]) -> list[str]:
@@ -31,6 +35,22 @@ def _clean_list(value: Any, *, default: list[str]) -> list[str]:
             return list(default)
         return [item.strip() for item in text.split(",") if item.strip()]
     return list(default)
+
+
+def _clean_bool(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off", ""}:
+            return False
+    return bool(default)
 
 
 def _other_host(address: str, prefix: int) -> str:
@@ -65,6 +85,10 @@ class TunRoutingSettings:
     dns_servers: list[str] = field(default_factory=lambda: list(DEFAULT_DNS_SERVERS))
     mtu: int = DEFAULT_TUNNEL_MTU
     log_TUN_routing: str = DEFAULT_TUN_ROUTING_LOG
+    shared_tun_disable_outgoing_normalization: bool = DEFAULT_SHARED_TUN_DISABLE_OUTGOING_NORMALIZATION
+    shared_tun_disable_inflow_filter: bool = DEFAULT_SHARED_TUN_DISABLE_INFLOW_FILTER
+    shared_tun_disable_outflow_filter: bool = DEFAULT_SHARED_TUN_DISABLE_OUTFLOW_FILTER
+    shared_tun_disable_scoped_throttle: bool = DEFAULT_SHARED_TUN_DISABLE_SCOPED_THROTTLE
 
     @staticmethod
     def register_cli(p: argparse.ArgumentParser) -> None:
@@ -82,6 +106,10 @@ class TunRoutingSettings:
         g.add_argument("--dns-servers", nargs="*", default=list(DEFAULT_DNS_SERVERS), help="DNS servers applied to tunnel routing")
         g.add_argument("--mtu", type=int, default=DEFAULT_TUNNEL_MTU, help="Tunnel MTU")
         g.add_argument("--log-TUN-routing", dest="log_TUN_routing", default=DEFAULT_TUN_ROUTING_LOG, help="Log level for TUN routing hooks and helpers")
+        g.add_argument("--shared-tun-disable-outgoing-normalization", action="store_true", default=DEFAULT_SHARED_TUN_DISABLE_OUTGOING_NORMALIZATION, help="Disable shared-TUN local packet source normalization (diagnostic)")
+        g.add_argument("--shared-tun-disable-inflow-filter", action="store_true", default=DEFAULT_SHARED_TUN_DISABLE_INFLOW_FILTER, help="Disable shared-TUN inbound ownership/source filter (diagnostic)")
+        g.add_argument("--shared-tun-disable-outflow-filter", action="store_true", default=DEFAULT_SHARED_TUN_DISABLE_OUTFLOW_FILTER, help="Disable shared-TUN outbound route and relay filtering (diagnostic)")
+        g.add_argument("--shared-tun-disable-scoped-throttle", action="store_true", default=DEFAULT_SHARED_TUN_DISABLE_SCOPED_THROTTLE, help="Disable shared-TUN scoped inflow throttle (diagnostic)")
 
     @classmethod
     def from_mapping(
@@ -108,6 +136,10 @@ class TunRoutingSettings:
             dns_servers=_clean_list(values.get("dns_servers"), default=list(current.dns_servers)),
             mtu=int(values.get("mtu") or current.mtu),
             log_TUN_routing=str(values.get("log_TUN_routing") or current.log_TUN_routing).strip() or current.log_TUN_routing,
+            shared_tun_disable_outgoing_normalization=_clean_bool(values.get("shared_tun_disable_outgoing_normalization"), default=current.shared_tun_disable_outgoing_normalization),
+            shared_tun_disable_inflow_filter=_clean_bool(values.get("shared_tun_disable_inflow_filter"), default=current.shared_tun_disable_inflow_filter),
+            shared_tun_disable_outflow_filter=_clean_bool(values.get("shared_tun_disable_outflow_filter"), default=current.shared_tun_disable_outflow_filter),
+            shared_tun_disable_scoped_throttle=_clean_bool(values.get("shared_tun_disable_scoped_throttle"), default=current.shared_tun_disable_scoped_throttle),
         )
 
     def _local_gateway4(self) -> str:

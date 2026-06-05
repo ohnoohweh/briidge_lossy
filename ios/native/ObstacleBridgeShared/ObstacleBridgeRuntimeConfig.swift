@@ -46,6 +46,10 @@ struct ObstacleBridgeTunnelRoutingOverride {
     let excludedRoutes6: [String]?
     let dnsServers: [String]?
     let mtu: Int?
+    let sharedTunDisableOutgoingNormalization: Bool?
+    let sharedTunDisableInflowFilter: Bool?
+    let sharedTunDisableOutflowFilter: Bool?
+    let sharedTunDisableScopedThrottle: Bool?
 }
 
 struct ObstacleBridgeRuntimeServiceSpec {
@@ -422,6 +426,10 @@ enum ObstacleBridgeRuntimeConfig {
                 schemaItem(key: "dns_servers", description: "DNS servers advertised to the packet tunnel network settings.", defaultValue: ["1.1.1.1"]),
                 schemaItem(key: "mtu", description: "MTU applied to the packet tunnel network settings.", defaultValue: 1600),
                 schemaItem(key: "log_TUN_routing", description: "Log level for TUN routing helpers.", defaultValue: "CRITICAL"),
+                schemaItem(key: "shared_tun_disable_outgoing_normalization", description: "Disable shared-TUN local packet source normalization as a diagnostic isolation switch.", defaultValue: false),
+                schemaItem(key: "shared_tun_disable_inflow_filter", description: "Disable shared-TUN inbound ownership/source filtering as a diagnostic isolation switch.", defaultValue: false),
+                schemaItem(key: "shared_tun_disable_outflow_filter", description: "Disable shared-TUN outbound route and relay filtering as a diagnostic isolation switch.", defaultValue: false),
+                schemaItem(key: "shared_tun_disable_scoped_throttle", description: "Disable shared-TUN scoped inflow throttling as a diagnostic isolation switch.", defaultValue: false),
             ],
             "channel_mux": [
                 schemaItem(key: "own_servers", description: "Service catalog for local listeners in client mode. Use structured service objects with listen/target fields.", defaultValue: []),
@@ -685,6 +693,10 @@ enum ObstacleBridgeRuntimeConfig {
                 "excluded_routes6",
                 "dns_servers",
                 "mtu",
+                "shared_tun_disable_outgoing_normalization",
+                "shared_tun_disable_inflow_filter",
+                "shared_tun_disable_outflow_filter",
+                "shared_tun_disable_scoped_throttle",
             ]
             for key in keys {
                 if let value = payload[key] {
@@ -708,7 +720,11 @@ enum ObstacleBridgeRuntimeConfig {
             includedRoutes6: override["included_routes6"] as? [String],
             excludedRoutes6: override["excluded_routes6"] as? [String],
             dnsServers: override["dns_servers"] as? [String],
-            mtu: intValue(from: override["mtu"])
+            mtu: intValue(from: override["mtu"]),
+            sharedTunDisableOutgoingNormalization: boolValue(from: override["shared_tun_disable_outgoing_normalization"]),
+            sharedTunDisableInflowFilter: boolValue(from: override["shared_tun_disable_inflow_filter"]),
+            sharedTunDisableOutflowFilter: boolValue(from: override["shared_tun_disable_outflow_filter"]),
+            sharedTunDisableScopedThrottle: boolValue(from: override["shared_tun_disable_scoped_throttle"])
         )
     }
 
