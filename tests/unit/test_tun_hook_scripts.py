@@ -45,9 +45,16 @@ def test_client_tun_hook_normalizes_ipv4_mapped_ipv6_peer_for_route_programming(
 def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route() -> None:
     script = (ROOT / "scripts" / "client-tun-hook-macos.sh").read_text(encoding="utf-8")
 
-    assert 'ifconfig "$IFNAME" inet "$TUN_ADDR_IP" "$TUN_GW" up' in script
+    assert 'ifconfig "$IFNAME" inet "$TUN_ADDR_IP" "$TUN_GW" netmask "$(ipv4_prefix_to_netmask "$TUN_ADDR_PREFIX")" up' in script
     assert 'route -n get default' in script
-    assert 'route -n add default "$TUN_GW"' in script
+    assert 'netstat -rn -f inet' in script
+    assert 'netstat -rn -f inet6' in script
+    assert 'route -n add default -interface "$IFNAME"' in script
+    assert 'route -n add -inet6 default -interface "$IFNAME"' in script
+    assert 'default_matches_v4() {' in script
+    assert 'default_matches_v6() {' in script
+    assert 'route -n delete default -interface "$IFNAME"' in script
+    assert 'route -n delete -inet6 default -interface "$IFNAME"' in script
     assert 'normalize_overlay_peer_ip() {' in script
     assert 'route -n add -host "$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")" "$local_underlay_gw"' in script
 
