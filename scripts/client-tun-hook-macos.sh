@@ -374,11 +374,14 @@ case "$ACTION" in
     fi
 
     local_underlay_gw="$(detect_underlay_gw || true)"
+    local_underlay_gw6="$(current_default_gateway_v6 || true)"
     save_default_routes
     snapshot_excluded_routes_v4
     snapshot_excluded_routes_v6
     add_included_routes_v4
     add_included_routes_v6
+    add_excluded_routes_v4 "$local_underlay_gw"
+    add_excluded_routes_v6 "$local_underlay_gw6"
 
     if [[ -n "$OVERLAY_PEER_IP" && -n "$local_underlay_gw" ]]; then
       route -n add -host "$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")" "$local_underlay_gw" >/dev/null 2>&1 || true

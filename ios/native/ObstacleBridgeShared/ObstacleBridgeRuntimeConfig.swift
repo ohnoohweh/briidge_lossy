@@ -1097,6 +1097,130 @@ enum ObstacleBridgeRuntimeConfig {
         }
     }
 
+    private static func bindHost(for transport: String, payload: [String: Any]) -> String {
+        switch transport {
+        case "myudp":
+            return stringValue(from: payload["udp_bind"]) ?? "::"
+        case "tcp":
+            return stringValue(from: payload["tcp_bind"]) ?? "::"
+        case "quic":
+            return stringValue(from: payload["quic_bind"]) ?? "::"
+        case "ws":
+            return stringValue(from: payload["ws_bind"]) ?? "::"
+        default:
+            return "::"
+        }
+    }
+
+    private static func peerResolveFamily(for transport: String, payload: [String: Any]) -> String {
+        switch transport {
+        case "myudp":
+            return stringValue(from: payload["udp_peer_resolve_family"]) ?? "prefer-ipv6"
+        case "tcp":
+            return stringValue(from: payload["tcp_peer_resolve_family"]) ?? "prefer-ipv6"
+        case "quic":
+            return stringValue(from: payload["quic_peer_resolve_family"]) ?? "prefer-ipv6"
+        case "ws":
+            return stringValue(from: payload["ws_peer_resolve_family"]) ?? "prefer-ipv6"
+        default:
+            return "prefer-ipv6"
+        }
+    }
+
+    private static func normalizedRouteCIDR(for host: String) -> String? {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        let normalized: String
+        if trimmed.hasPrefix("::ffff:") {
+            normalized = String(trimmed.dropFirst(7))
+        } else {
+            normalized = trimmed
+        }
+        var ipv4 = in_addr()
+        if normalized.withCString({ inet_pton(AF_INET, $0, &ipv4) }) == 1 {
+            return "\(normalized)/32"
+        }
+        var ipv6 = in6_addr()
+        if normalized.withCString({ inet_pton(AF_INET6, $0, &ipv6) }) == 1 {
+            return "\(normalized)/128"
+        }
+        return nil
+    }
+
+    private static func dedupeRoutes(_ values: [String]) -> [String] {
+        var out: [String] = []
+        var seen: Set<String> = []
+        for raw in values {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !seen.contains(trimmed) else {
+                continue
+            }
+            seen.insert(trimmed)
+            out.append(trimmed)
+        }
+        return out
+    }
+
+    static func overlayPeerExcludedRoutes(from payload: [String: Any]) -> (ipv4: [String], ipv6: [String]) {
+        let flat = flatten(payload)
+        let transport = (stringValue(from: flat["overlay_transport"]) ?? "myudp")
+            .split(separator: ",")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty }) ?? "myudp"
+        guard let host = peerHost(for: transport, payload: flat),
+              !host.isEmpty,
+              let port = peerPort(for: transport, payload: flat),
+              port > 0
+        else {
+            return ([], [])
+        }
+        let resolveMode = ObstacleBridgePeerAddressResolver.ResolveMode(
+            rawValue: peerResolveFamily(for: transport, payload: flat)
+        )
+        let bindHost = bindHost(for: transport, payload: flat)
+        let candidates: [ObstacleBridgeResolvedAddress]
+        do {
+            candidates = try ObstacleBridgePeerAddressResolver.resolvePeerAddresses(
+                host: host,
+                port: port,
+                resolveFamily: {
+                    switch resolveMode {
+                    case .ipv4: return "ipv4"
+                    case .ipv6: return "ipv6"
+                    case .preferIPv6: return "prefer-ipv6"
+                    }
+                }(),
+                bindHost: bindHost,
+                errorDomain: "ObstacleBridge.RuntimeConfig"
+            )
+        } catch {
+            return ([], [])
+        }
+        var routes4: [String] = []
+        var routes6: [String] = []
+        for candidate in candidates {
+            guard let route = normalizedRouteCIDR(for: candidate.host) else {
+                continue
+            }
+            if route.contains(":") {
+                routes6.append(route)
+            } else {
+                routes4.append(route)
+            }
+        }
+        return (dedupeRoutes(routes4), dedupeRoutes(routes6))
+    }
+
+    static func effectiveExcludedRoutes(from payload: [String: Any], baseIPv4: [String], baseIPv6: [String]) -> (ipv4: [String], ipv6: [String]) {
+        let peerRoutes = overlayPeerExcludedRoutes(from: payload)
+        return (
+            dedupeRoutes(baseIPv4 + peerRoutes.ipv4),
+            dedupeRoutes(baseIPv6 + peerRoutes.ipv6)
+        )
+    }
+
     static func adminUIBootstrapState(from payload: [String: Any]) -> ObstacleBridgeAdminUIBootstrapState {
         let flattened = flatten(payload)
         let overlayTransport = stringValue(from: flattened["overlay_transport"]) ?? "myudp"

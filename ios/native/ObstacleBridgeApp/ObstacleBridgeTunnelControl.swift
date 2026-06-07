@@ -612,7 +612,24 @@ final class ObstacleBridgeTunnelControl: NSObject {
             mtu: defaultMTU
         )
         let overridden = routingOverride.map { base.applying($0) } ?? base
-        return DerivedTunnelNetworkSettings(shared: overridden)
+        let effectiveExcluded = ObstacleBridgeRuntimeConfig.effectiveExcludedRoutes(
+            from: flattenedPayload,
+            baseIPv4: overridden.excludedRoutes,
+            baseIPv6: overridden.excludedRoutes6
+        )
+        let effective = ObstacleBridgeDerivedTunnelSettings(
+            tunnelAddress: overridden.tunnelAddress,
+            tunnelPrefix: overridden.tunnelPrefix,
+            includedRoutes: overridden.includedRoutes,
+            excludedRoutes: effectiveExcluded.ipv4,
+            tunnelAddress6: overridden.tunnelAddress6,
+            tunnelPrefix6: overridden.tunnelPrefix6,
+            includedRoutes6: overridden.includedRoutes6,
+            excludedRoutes6: effectiveExcluded.ipv6,
+            dnsServers: overridden.dnsServers,
+            mtu: overridden.mtu
+        )
+        return DerivedTunnelNetworkSettings(shared: effective)
     }
 
     private class func overlayPeerConfigured(payload: [String: Any]) -> Bool {

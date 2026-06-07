@@ -280,6 +280,8 @@ def test_runtime_config_source_exists() -> None:
     assert "static func ownServerSpecs(" in runtime
     assert "static func remoteServerSpecs(" in runtime
     assert "static func tunnelRoutingOverride(" in runtime
+    assert "static func overlayPeerExcludedRoutes(" in runtime
+    assert "static func effectiveExcludedRoutes(" in runtime
     assert "static func localTunServiceSpec(" in runtime
     assert "static func packetflowConnectorSelection(" in runtime
     assert "static func runtimeExecutionMode(" in runtime
@@ -363,6 +365,8 @@ def test_macos_swift_host_runner_source_exists() -> None:
     assert "tunnel_gateway" in shared_runtime
     assert "tunnel_gateway6" in shared_runtime
     assert "log_TUN_routing" in shared_runtime
+    assert 'env["EXCLUDED_ROUTES"]' in runtime
+    assert 'env["EXCLUDED_ROUTES6"]' in runtime
     assert '"swift_host_runner"' in runtime
     assert "let lifecycleHooks: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?" in native_spec
     assert "let options: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?" in native_spec

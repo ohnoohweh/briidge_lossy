@@ -15,7 +15,7 @@ elif sys.platform == "ios":
 else:
     _bridge_tun_platform = None
 
-from .bridge_tun_routing import TunRoutingSettings
+from .bridge_tun_routing import TunRoutingSettings, auto_overlay_peer_excluded_routes
 
 class _ChanCtr:
     msgs_in: int = 0
@@ -972,7 +972,11 @@ class ChannelMux:
             return {}
         origin = "" if svc_key is None else str(svc_key[0])
         if origin == "local":
-            return config.local_hook_env()
+            extra4, extra6 = auto_overlay_peer_excluded_routes(vars(self.args))
+            return config.local_hook_env(
+                extra_excluded_routes=extra4,
+                extra_excluded_routes6=extra6,
+            )
         if origin == "peer":
             return config.remote_hook_env()
         return {}
@@ -1061,7 +1065,14 @@ class ChannelMux:
         except Exception:
             return spec
         spec = self._service_spec_with_tun_mtu_defaults(spec)
-        env_defaults = config.remote_hook_env() if remote_install else config.local_hook_env()
+        if remote_install:
+            env_defaults = config.remote_hook_env()
+        else:
+            extra4, extra6 = auto_overlay_peer_excluded_routes(vars(self.args))
+            env_defaults = config.local_hook_env(
+                extra_excluded_routes=extra4,
+                extra_excluded_routes6=extra6,
+            )
         lifecycle_hooks = self._merge_hook_env_defaults(spec.lifecycle_hooks, env_defaults)
         if lifecycle_hooks is spec.lifecycle_hooks:
             return spec

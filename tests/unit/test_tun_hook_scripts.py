@@ -43,6 +43,17 @@ def test_client_tun_hook_normalizes_ipv4_mapped_ipv6_peer_for_route_programming(
     assert 'printf \x27%s/32\x27 "$normalized_ip"' in script or "printf '%s/32' \"$normalized_ip\"" in script
 
 
+def test_client_tun_hook_supports_excluded_route_programming() -> None:
+    script = (ROOT / "scripts" / "client-tun-hook.sh").read_text(encoding="utf-8")
+
+    assert 'EXCLUDED_ROUTES="${EXCLUDED_ROUTES:-}"' in script
+    assert 'EXCLUDED_ROUTES6="${EXCLUDED_ROUTES6:-}"' in script
+    assert 'add_excluded_routes4() {' in script
+    assert 'add_excluded_routes6() {' in script
+    assert 'delete_excluded_routes4() {' in script
+    assert 'delete_excluded_routes6() {' in script
+
+
 def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route() -> None:
     script = (ROOT / "scripts" / "client-tun-hook-macos.sh").read_text(encoding="utf-8")
 
@@ -74,6 +85,10 @@ def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route(
     assert 'add_excluded_routes_v6' in script
     assert 'normalize_overlay_peer_ip() {' in script
     assert 'route -n add -host "$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")" "$local_underlay_gw"' in script
+    assert 'EXCLUDED_ROUTES="${EXCLUDED_ROUTES:-}"' in script
+    assert 'EXCLUDED_ROUTES6="${EXCLUDED_ROUTES6:-}"' in script
+    assert 'add_excluded_routes_v4' in script
+    assert 'add_excluded_routes_v6' in script
 
 
 def test_macos_server_tun_hook_brings_utun_up_with_peer_identity() -> None:

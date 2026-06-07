@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import ipaddress
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 
 TUN_ROUTING_SECTION = "TUN_routing"
@@ -89,6 +89,96 @@ def _other_host(address: str, prefix: int) -> str:
         if host != iface.ip:
             return str(host)
     return ""
+
+
+def _normalized_route_cidr(host: str) -> str:
+    text = str(host or "").strip()
+    if text.startswith("::ffff:"):
+        mapped = text.split("::ffff:", 1)[1]
+        try:
+            return f"{ipaddress.IPv4Address(mapped)}/32"
+        except ValueError:
+            pass
+    try:
+        addr = ipaddress.ip_address(text)
+    except ValueError:
+        return ""
+    return f"{addr}/{'128' if addr.version == 6 else '32'}"
+
+
+def _dedupe_routes(routes: Sequence[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for route in routes:
+        text = str(route or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
+def auto_overlay_peer_excluded_routes(config: Mapping[str, Any] | None) -> tuple[list[str], list[str]]:
+    source = config or {}
+    transport = str(source.get("overlay_transport", "myudp") or "myudp").split(",", 1)[0].strip().lower()
+    if not transport:
+        transport = "myudp"
+    attr_map = {
+        "myudp": ("udp_peer", "udp_peer_port", "udp_bind", "udp_peer_resolve_family"),
+        "tcp": ("tcp_peer", "tcp_peer_port", "tcp_bind", "tcp_peer_resolve_family"),
+        "quic": ("quic_peer", "quic_peer_port", "quic_bind", "quic_peer_resolve_family"),
+        "ws": ("ws_peer", "ws_peer_port", "ws_bind", "ws_peer_resolve_family"),
+    }
+    peer_attr, port_attr, bind_attr, resolve_attr = attr_map.get(
+        transport,
+        ("udp_peer", "udp_peer_port", "udp_bind", "udp_peer_resolve_family"),
+    )
+    peer_host = str(source.get(peer_attr) or "").strip()
+    if not peer_host:
+        return ([], [])
+    raw_port = source.get(port_attr)
+    try:
+        peer_port = int(raw_port if raw_port is not None else 0)
+    except Exception:
+        peer_port = 0
+    if peer_port <= 0:
+        return ([], [])
+    resolve_mode = str(source.get(resolve_attr, "prefer-ipv6") or "prefer-ipv6").strip().lower()
+    bind_host = str(source.get(bind_attr) or "").strip()
+    try:
+        from .bridge_transport_common import _resolve_peer_candidates
+
+        socktype = 1 if transport in {"tcp", "ws"} else 2  # SOCK_STREAM / SOCK_DGRAM
+        candidates = _resolve_peer_candidates(
+            peer_host,
+            peer_port,
+            resolve_mode=resolve_mode,
+            socktype=socktype,
+            strict_family=False,
+        )
+        if bind_host:
+            import socket
+
+            bind_family = socket.AF_INET6 if ":" in bind_host and bind_host != "::" else (
+                socket.AF_INET if "." in bind_host and bind_host != "0.0.0.0" else socket.AF_UNSPEC
+            )
+            if bind_family != socket.AF_UNSPEC:
+                compatible = [item for item in candidates if int(item[2]) == bind_family]
+                if compatible:
+                    candidates = compatible
+    except Exception:
+        return ([], [])
+    routes4: list[str] = []
+    routes6: list[str] = []
+    for host, _port, _family in candidates:
+        route = _normalized_route_cidr(str(host))
+        if not route:
+            continue
+        if ":" in route:
+            routes6.append(route)
+        else:
+            routes4.append(route)
+    return (_dedupe_routes(routes4), _dedupe_routes(routes6))
 
 
 @dataclass
@@ -192,7 +282,12 @@ class TunRoutingSettings:
         except ValueError:
             return ""
 
-    def local_hook_env(self) -> dict[str, str]:
+    def local_hook_env(
+        self,
+        *,
+        extra_excluded_routes: Optional[Sequence[str]] = None,
+        extra_excluded_routes6: Optional[Sequence[str]] = None,
+    ) -> dict[str, str]:
         env: dict[str, str] = {
             "MTU": str(int(self.mtu)),
             "ENABLE_TCPMSS": "1" if self.enable_tcpmss else "0",
@@ -226,6 +321,16 @@ class TunRoutingSettings:
             env["DNS1"] = str(self.dns_servers[0])
         if len(self.dns_servers) > 1:
             env["DNS2"] = str(self.dns_servers[1])
+        if self.included_routes:
+            env["INCLUDED_ROUTES"] = ",".join(_dedupe_routes(self.included_routes))
+        merged_excluded4 = _dedupe_routes([*self.excluded_routes, *(list(extra_excluded_routes or []))])
+        if merged_excluded4:
+            env["EXCLUDED_ROUTES"] = ",".join(merged_excluded4)
+        if self.included_routes6:
+            env["INCLUDED_ROUTES6"] = ",".join(_dedupe_routes(self.included_routes6))
+        merged_excluded6 = _dedupe_routes([*self.excluded_routes6, *(list(extra_excluded_routes6 or []))])
+        if merged_excluded6:
+            env["EXCLUDED_ROUTES6"] = ",".join(merged_excluded6)
         return env
 
     def remote_hook_env(self) -> dict[str, str]:

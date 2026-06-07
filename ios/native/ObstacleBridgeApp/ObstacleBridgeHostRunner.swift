@@ -1879,6 +1879,11 @@ final class ObstacleBridgeHostRunner {
             let dnsServers = tunRouting.dnsServers ?? []
             let includedRoutes = tunRouting.includedRoutes ?? []
             let includedRoutes6 = tunRouting.includedRoutes6 ?? []
+            let effectiveExcludedRoutes = ObstacleBridgeRuntimeConfig.effectiveExcludedRoutes(
+                from: runtimeConfig,
+                baseIPv4: tunRouting.excludedRoutes ?? [],
+                baseIPv6: tunRouting.excludedRoutes6 ?? []
+            )
             let mtu = tunRouting.mtu ?? 1600
 
             env["MTU"] = String(mtu)
@@ -1914,8 +1919,14 @@ final class ObstacleBridgeHostRunner {
             if !includedRoutes.isEmpty {
                 env["INCLUDED_ROUTES"] = includedRoutes.joined(separator: ",")
             }
+            if !effectiveExcludedRoutes.ipv4.isEmpty {
+                env["EXCLUDED_ROUTES"] = effectiveExcludedRoutes.ipv4.joined(separator: ",")
+            }
             if !includedRoutes6.isEmpty {
                 env["INCLUDED_ROUTES6"] = includedRoutes6.joined(separator: ",")
+            }
+            if !effectiveExcludedRoutes.ipv6.isEmpty {
+                env["EXCLUDED_ROUTES6"] = effectiveExcludedRoutes.ipv6.joined(separator: ",")
             }
         }
 

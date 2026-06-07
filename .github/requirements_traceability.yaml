@@ -746,6 +746,7 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_hook_context_prefers_live_overlay_peer_over_initial_candidate
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_brings_interface_up_before_underlay_route_is_known
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_normalizes_ipv4_mapped_ipv6_peer_for_route_programming
+    - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_supports_excluded_route_programming
     - tests/unit/test_tun_hook_scripts.py::test_server_tun_hook_supports_optional_tcpdump_capture
     - tests/unit/test_runner_ios_status_callbacks.py::test_runner_keeps_status_callbacks_wired_on_ios
     - tests/unit/test_channel_mux_listener_mode.py::test_peer_installed_tun_stop_runs_listener_on_stopped_before_close

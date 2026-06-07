@@ -13,10 +13,16 @@ UNDERLAY_IF="${UNDERLAY_IF:-auto}"
 UNDERLAY_GW="${UNDERLAY_GW:-auto}"
 DNS1="${DNS1:-}"
 DNS2="${DNS2:-}"
+INCLUDED_ROUTES="${INCLUDED_ROUTES:-0.0.0.0/0}"
+INCLUDED_ROUTES6="${INCLUDED_ROUTES6:-::/0}"
+EXCLUDED_ROUTES="${EXCLUDED_ROUTES:-}"
+EXCLUDED_ROUTES6="${EXCLUDED_ROUTES6:-}"
 
 STATE_DIR="/run/obbridge"
 STATE_FILE="${STATE_DIR}/${IFNAME}.default-route"
 STATE_FILE6="${STATE_DIR}/${IFNAME}.default-route6"
+STATE_EXCLUDED4="${STATE_DIR}/${IFNAME}.excluded-routes4"
+STATE_EXCLUDED6="${STATE_DIR}/${IFNAME}.excluded-routes6"
 
 mkdir -p "$STATE_DIR"
 
@@ -63,6 +69,95 @@ detect_underlay() {
     return 1
   fi
   return 0
+}
+
+csv_to_lines() {
+  tr ',' '\n' <<<"${1:-}" | sed '/^[[:space:]]*$/d'
+}
+
+_parse_route_parts() {
+  local route_line="$1"
+  awk '
+    {
+      for (i = 1; i < NF; i++) {
+        if ($i == "via" && gw == "") gw = $(i+1)
+        if ($i == "dev" && dev == "") dev = $(i+1)
+      }
+    }
+    END {
+      printf "gw=%s\n", gw
+      printf "dev=%s\n", dev
+    }
+  ' <<<"$route_line"
+}
+
+_load_saved_route_parts() {
+  local state_file="$1"
+  local command="$2"
+  local route_line=""
+  if [[ -s "$state_file" ]]; then
+    route_line="$(cat "$state_file")"
+  else
+    route_line="$($command | head -n1 || true)"
+  fi
+  [[ -n "$route_line" ]] || return 1
+  _parse_route_parts "$route_line"
+}
+
+add_excluded_routes4() {
+  : > "$STATE_EXCLUDED4"
+  local gw="" dev=""
+  while IFS='=' read -r key value; do
+    [[ "$key" == "gw" ]] && gw="$value"
+    [[ "$key" == "dev" ]] && dev="$value"
+  done < <(_load_saved_route_parts "$STATE_FILE" "ip route show default")
+  [[ -n "$dev" ]] || return 0
+  while IFS= read -r route_spec; do
+    [[ -z "$route_spec" ]] && continue
+    if [[ -n "$gw" ]]; then
+      ip route replace "$route_spec" via "$gw" dev "$dev"
+    else
+      ip route replace "$route_spec" dev "$dev"
+    fi
+    printf '%s\n' "$route_spec" >> "$STATE_EXCLUDED4"
+  done < <(csv_to_lines "$EXCLUDED_ROUTES")
+}
+
+add_excluded_routes6() {
+  : > "$STATE_EXCLUDED6"
+  local gw="" dev=""
+  while IFS='=' read -r key value; do
+    [[ "$key" == "gw" ]] && gw="$value"
+    [[ "$key" == "dev" ]] && dev="$value"
+  done < <(_load_saved_route_parts "$STATE_FILE6" "ip -6 route show default")
+  [[ -n "$dev" ]] || return 0
+  while IFS= read -r route_spec; do
+    [[ -z "$route_spec" ]] && continue
+    if [[ -n "$gw" ]]; then
+      ip -6 route replace "$route_spec" via "$gw" dev "$dev"
+    else
+      ip -6 route replace "$route_spec" dev "$dev"
+    fi
+    printf '%s\n' "$route_spec" >> "$STATE_EXCLUDED6"
+  done < <(csv_to_lines "$EXCLUDED_ROUTES6")
+}
+
+delete_excluded_routes4() {
+  if [[ -s "$STATE_EXCLUDED4" ]]; then
+    while IFS= read -r route_spec; do
+      [[ -z "$route_spec" ]] && continue
+      ip route del "$route_spec" 2>/dev/null || true
+    done < "$STATE_EXCLUDED4"
+  fi
+}
+
+delete_excluded_routes6() {
+  if [[ -s "$STATE_EXCLUDED6" ]]; then
+    while IFS= read -r route_spec; do
+      [[ -z "$route_spec" ]] && continue
+      ip -6 route del "$route_spec" 2>/dev/null || true
+    done < "$STATE_EXCLUDED6"
+  fi
 }
 
 save_default_route() {
@@ -124,6 +219,8 @@ case "$ACTION" in
     fi
 
     save_default_route
+    add_excluded_routes4
+    add_excluded_routes6
 
     if [[ -n "$UNDERLAY_GW" ]]; then
       ip route replace "$(overlay_route_prefix)" via "$UNDERLAY_GW" dev "$UNDERLAY_IF"
@@ -138,6 +235,8 @@ case "$ACTION" in
     set_dns
     ;;
   down)
+    delete_excluded_routes4
+    delete_excluded_routes6
     if detect_underlay; then
       ip route del default via "$TUN_GW" dev "$IFNAME" 2>/dev/null || true
       if [[ -n "$TUN_GW6" ]]; then
