@@ -26,6 +26,20 @@ STATE_EXCLUDED6="${STATE_DIR}/${IFNAME}.excluded-routes6"
 
 mkdir -p "$STATE_DIR"
 
+wait_for_interface() {
+  local attempts="${1:-50}"
+  local sleep_s="${2:-0.1}"
+  local i
+  for ((i=0; i<attempts; i++)); do
+    if ip link show dev "$IFNAME" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep "$sleep_s"
+  done
+  echo "Cannot find device \"$IFNAME\"" >&2
+  return 1
+}
+
 normalize_overlay_peer_ip() {
   local candidate="$1"
   if [[ "$candidate" =~ ^::ffff:([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
@@ -207,6 +221,7 @@ clear_dns() {
 
 case "$ACTION" in
   up)
+    wait_for_interface
     ip addr replace "$TUN_ADDR" dev "$IFNAME"
     if [[ -n "$TUN_ADDR6" ]]; then
       ip -6 addr replace "$TUN_ADDR6" dev "$IFNAME"
@@ -227,14 +242,19 @@ case "$ACTION" in
     else
       ip route replace "$(overlay_route_prefix)" dev "$UNDERLAY_IF"
     fi
-    ip route replace default via "$TUN_GW" dev "$IFNAME"
+    ip route replace default via "$TUN_GW" dev "$IFNAME" onlink
     if [[ -n "$TUN_GW6" ]]; then
-      ip -6 route replace default via "$TUN_GW6" dev "$IFNAME" metric 1
+      ip -6 route replace default via "$TUN_GW6" dev "$IFNAME" metric 1 onlink
     fi
 
     set_dns
     ;;
   down)
+    if ! ip link show dev "$IFNAME" >/dev/null 2>&1; then
+      clear_dns
+      rm -f "$STATE_EXCLUDED4" "$STATE_EXCLUDED6"
+      exit 0
+    fi
     delete_excluded_routes4
     delete_excluded_routes6
     if detect_underlay; then

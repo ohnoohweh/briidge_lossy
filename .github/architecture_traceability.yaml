@@ -59,6 +59,10 @@
 # ARC-CMP-003 and ARC-CMP-004 mappings intact while extending local TUN hook
 # defaults with peer/subnet metadata required by server-owned shared-TUN hook
 # scripts.
+# NOTE: The 2026-06-08 Linux client TUN hook hardening keeps the existing
+# ARC-CMP-003 and ARC-CMP-004 mappings intact while making client-side TUN
+# bring-up wait for device creation and use `onlink` defaults for point-to-
+# point shared-TUN gateways during reconnect churn.
 # NOTE: The 2026-06-04 shared-TUN Phase 1 follow-up keeps the existing
 # ARC-CMP-003 mapping intact while adding validated structured ownership
 # metadata for tun->tun services and defending that metadata with Swift/Python
@@ -143,6 +147,7 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_parse_structured_tun_service_allows_omitted_mtu
     - tests/unit/test_channel_mux_listener_mode.py::test_from_args_defaults_omitted_tun_mtu_from_tun_routing
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_supports_excluded_route_programming
+    - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_waits_for_interface_and_uses_onlink_default_routes
     - tests/unit/test_tun_hook_scripts.py::test_server_tun_hook_supports_optional_tcpdump_capture
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_routes_shared_unicast_only_to_designated_peer_channel
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_routes_shared_broadcast_only_to_active_peer_channels
@@ -228,6 +233,7 @@ ARC-CMP-004:
     - tests/unit/test_channel_mux_listener_mode.py::test_parse_structured_tun_service_allows_omitted_mtu
     - tests/unit/test_channel_mux_listener_mode.py::test_from_args_defaults_omitted_tun_mtu_from_tun_routing
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_supports_excluded_route_programming
+    - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_waits_for_interface_and_uses_onlink_default_routes
     - tests/unit/test_tun_hook_scripts.py::test_server_tun_hook_supports_optional_tcpdump_capture
     - tests/unit/test_runner_ios_status_callbacks.py::test_runner_keeps_status_callbacks_wired_on_ios
     - tests/unit/test_channel_mux_listener_mode.py::test_peer_installed_tun_stop_runs_listener_on_stopped_before_close

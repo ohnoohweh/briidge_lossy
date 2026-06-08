@@ -54,6 +54,16 @@ def test_client_tun_hook_supports_excluded_route_programming() -> None:
     assert 'delete_excluded_routes6() {' in script
 
 
+def test_client_tun_hook_waits_for_interface_and_uses_onlink_default_routes() -> None:
+    script = (ROOT / "scripts" / "client-tun-hook.sh").read_text(encoding="utf-8")
+
+    assert 'wait_for_interface() {' in script
+    assert 'ip link show dev "$IFNAME"' in script
+    assert 'wait_for_interface' in script
+    assert 'ip route replace default via "$TUN_GW" dev "$IFNAME" onlink' in script
+    assert 'ip -6 route replace default via "$TUN_GW6" dev "$IFNAME" metric 1 onlink' in script
+
+
 def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route() -> None:
     script = (ROOT / "scripts" / "client-tun-hook-macos.sh").read_text(encoding="utf-8")
 
@@ -85,8 +95,6 @@ def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route(
     assert 'add_excluded_routes_v6' in script
     assert 'normalize_overlay_peer_ip() {' in script
     assert 'route -n add -host "$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")" "$local_underlay_gw"' in script
-    assert 'EXCLUDED_ROUTES="${EXCLUDED_ROUTES:-}"' in script
-    assert 'EXCLUDED_ROUTES6="${EXCLUDED_ROUTES6:-}"' in script
     assert 'add_excluded_routes_v4' in script
     assert 'add_excluded_routes_v6' in script
 
