@@ -2713,7 +2713,13 @@ function applyTunRoutingDoc(j) {
   setText('tunRoutingListening', fmtInteger(j.summary?.tun_listening ?? 0));
   setText('tunRoutingSharedServices', fmtInteger(j.summary?.shared_services ?? 0));
   setText('tunRoutingActiveBindings', fmtInteger(j.summary?.shared_active_peer_bindings ?? 0));
-  applyTunRoutingConfigSummary(configState.config || {});
+  const runtimeRoutes = (
+    Array.isArray(j?.included_routes) ||
+    Array.isArray(j?.excluded_routes) ||
+    Array.isArray(j?.included_routes6) ||
+    Array.isArray(j?.excluded_routes6)
+  ) ? j : (configState.config || {});
+  applyTunRoutingConfigSummary(runtimeRoutes);
 }
 
 function applyTunRoutingConfigSummary(config) {

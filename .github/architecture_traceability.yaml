@@ -63,6 +63,10 @@
 # ARC-CMP-003 and ARC-CMP-004 mappings intact while making client-side TUN
 # bring-up wait for device creation and use `onlink` defaults for point-to-
 # point shared-TUN gateways during reconnect churn.
+# NOTE: The 2026-06-08 Python TUN-routing admin follow-up keeps the existing
+# ARC-CMP-005 mapping intact while making the browser/admin payload surface
+# report runtime-effective route lists, including auto-appended overlay-peer
+# exclusions, rather than only the static config snapshot.
 # NOTE: The 2026-06-04 shared-TUN Phase 1 follow-up keeps the existing
 # ARC-CMP-003 mapping intact while adding validated structured ownership
 # metadata for tun->tun services and defending that metadata with Swift/Python
@@ -312,6 +316,7 @@ ARC-CMP-005:
     - tests/unit/test_connection_snapshots.py::test_snapshot_mixed_listeners_and_active_connections
     - tests/unit/test_connection_snapshots.py::test_status_snapshot_includes_tun_open_connection_count
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_dedicated_shared_tun_view
+    - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_effective_overlay_peer_excluded_routes
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_frontend_uses_dedicated_tab_and_api
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_ui_payload_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_security_advisor_payload_matches_python

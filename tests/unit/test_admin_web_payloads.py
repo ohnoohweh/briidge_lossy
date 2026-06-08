@@ -550,6 +550,45 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["shared_tun"][0]["shared_tun_ownership"]["peer_count"], 2)
         self.assertEqual(payload["shared_tun"][0]["shared_tun_ownership"]["drop_counters"]["by_reason"]["unknown_destination"], 2)
 
+    def test_build_tun_routing_payload_exposes_effective_overlay_peer_excluded_routes(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="ws",
+            ws_peer="38.180.143.5",
+            ws_peer_port=8080,
+            ws_bind="::",
+            ws_peer_resolve_family="ipv4",
+            dashboard=False,
+            included_routes=["0.0.0.0/0"],
+            excluded_routes=["127.0.0.0/8"],
+            included_routes6=["::/0"],
+            excluded_routes6=["::1/128"],
+            tunnel_address="192.168.106.2",
+            tunnel_prefix=24,
+            tunnel_gateway="192.168.106.1",
+            tunnel_address6="fd20:106::2",
+            tunnel_prefix6=64,
+            tunnel_gateway6="fd20:106::1",
+            dns_servers=["1.1.1.1"],
+            mtu=1600,
+        )
+        ui = AdminWebUI(args, _RunnerStub())
+
+        payload = ui._build_tun_routing_payload()
+
+        self.assertEqual(payload["included_routes"], ["0.0.0.0/0"])
+        self.assertEqual(payload["excluded_routes"], ["127.0.0.0/8", "38.180.143.5/32"])
+        self.assertEqual(payload["included_routes6"], ["::/0"])
+        self.assertEqual(payload["excluded_routes6"], ["::1/128"])
+
     def test_meta_payload_suppresses_runtime_dependency_warnings_on_ios(self):
         args = argparse.Namespace(
             admin_web=True,
@@ -601,6 +640,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertNotIn('id="tunOpen"', index_html)
         self.assertIn("apiFetch('/api/tun-routing/status'", app_js)
         self.assertIn("applyTunRoutingDoc(j);", app_js)
+        self.assertIn("applyTunRoutingConfigSummary(runtimeRoutes);", app_js)
         self.assertIn("topics.push('tun_routing')", app_js)
 
     def test_restart_endpoint_uses_immediate_mode_for_embedded_restart(self):

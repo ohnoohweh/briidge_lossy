@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ._bridge_import import export_bridge_globals
+from .bridge_tun_routing import TunRoutingSettings, auto_overlay_peer_excluded_routes
 
 _bridge = export_bridge_globals(globals())
 
@@ -402,6 +403,16 @@ class AdminWebUI:
         shared_rows = [dict(row) for row in tun_rows if isinstance(row.get("shared_tun_ownership"), dict)]
         active_bindings_total = 0
         shared_drop_total = 0
+        tun_routing_effective = {}
+        with contextlib.suppress(Exception):
+            tun_cfg = TunRoutingSettings.from_mapping(vars(self.args))
+            extra4, extra6 = auto_overlay_peer_excluded_routes(vars(self.args))
+            tun_routing_effective = {
+                "included_routes": list(tun_cfg.included_routes),
+                "excluded_routes": list(dict.fromkeys([*list(tun_cfg.excluded_routes), *list(extra4)])),
+                "included_routes6": list(tun_cfg.included_routes6),
+                "excluded_routes6": list(dict.fromkeys([*list(tun_cfg.excluded_routes6), *list(extra6)])),
+            }
         for row in shared_rows:
             ownership = dict(row.get("shared_tun_ownership") or {})
             active_bindings = list(ownership.get("active_peer_bindings") or [])
@@ -429,6 +440,7 @@ class AdminWebUI:
             "app": "udp-bidirectional-mux",
             "milestone": "C",
         }
+        payload.update(tun_routing_effective)
         return payload
 
     async def _handle_tun_routing_status(self, writer):
