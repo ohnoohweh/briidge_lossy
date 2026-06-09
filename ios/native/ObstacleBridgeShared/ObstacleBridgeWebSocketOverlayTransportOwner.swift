@@ -54,6 +54,11 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private var connectedURI = ""
     private var pendingOutboundMessages: [URLSessionWebSocketTask.Message] = []
     private var outboundSendInFlight = false
+    private var tunDebugLocalForwards = 0
+    private var tunDebugLocalDrops = 0
+    private var tunDebugInboundDelivers = 0
+    private var tunDebugInboundDrops = 0
+    private var tunDebugInboundRelays = 0
     private lazy var tcpTransportOwner = ObstacleBridgeChannelMuxTCPTransportOwner(
         runtime: ObstacleBridgeChannelMuxTcpRuntime(
             instanceID: muxInstanceID,
@@ -181,11 +186,15 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         udpConnectionStates.removeAll()
         activeTunChanIDs.removeAll()
         tunStats = ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
-        secureLinkHandshakePrimed = false
-        startupMuxFramesSent = false
+        resetOverlayTransportEpoch()
         connectedURI = ""
         pendingOutboundMessages.removeAll(keepingCapacity: false)
         outboundSendInFlight = false
+        tunDebugLocalForwards = 0
+        tunDebugLocalDrops = 0
+        tunDebugInboundDelivers = 0
+        tunDebugInboundDrops = 0
+        tunDebugInboundRelays = 0
     }
 
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]]) {
@@ -276,6 +285,12 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                     routeClass: sharedRoute?.routeClass,
                     packetBytes: packet.count
                 )
+                logTunLocalDrop(
+                    reason: "throttled_local_tun",
+                    packet: packet,
+                    sharedRoute: sharedRoute,
+                    tunRuntime: tunRuntime
+                )
                 return
             }
             if let sharedRoute {
@@ -287,6 +302,12 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                         destinationIP: sharedRoute.destinationIP,
                         routeClass: sharedRoute.routeClass,
                         packetBytes: packet.count
+                    )
+                    logTunLocalDrop(
+                        reason: sharedRoute.dropReason ?? "shared_route_drop",
+                        packet: packet,
+                        sharedRoute: sharedRoute,
+                        tunRuntime: tunRuntime
                     )
                     return
                 }
@@ -307,6 +328,13 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                         continue
                     }
                     activeTunChanIDs.insert(localSnapshot.chanID)
+                    logTunLocalForward(
+                        packet: packet,
+                        chanID: localSnapshot.chanID,
+                        allocatedChannel: localSnapshot.allocatedChannel,
+                        sharedRoute: sharedRoute,
+                        tunRuntime: tunRuntime
+                    )
                     sendMuxFrames(localSnapshot.frames)
                 }
                 tunRuntime.recordLocalTunForward(packetBytes: packet.count, nowNS: nowNS, route: sharedRoute)
@@ -326,6 +354,13 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             activeTunChanIDs.insert(localSnapshot.chanID)
             tunStats["tx_msgs", default: 0] += 1
             tunStats["tx_bytes", default: 0] += packet.count
+            logTunLocalForward(
+                packet: packet,
+                chanID: localSnapshot.chanID,
+                allocatedChannel: localSnapshot.allocatedChannel,
+                sharedRoute: nil,
+                tunRuntime: tunRuntime
+            )
             sendMuxFrames(localSnapshot.frames)
         } catch {
             eventSink?("ws_overlay_tun_send_failed", [
@@ -427,6 +462,11 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             guard self.started, self.websocketTask === webSocketTask else { return }
             self.overlayConnected = true
             self.reconnectScheduled = false
+            self.eventSink?("ws_overlay_connected", [
+                "peer_host": self.peerHost,
+                "peer_port": self.peerPort,
+                "uri": self.connectedURI,
+            ])
             self.pendingOutboundMessages.removeAll(keepingCapacity: false)
             self.outboundSendInFlight = false
             self.maybePrimeSecureLinkHandshake()
@@ -442,10 +482,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             self.overlayConnected = false
             self.websocketTask = nil
             self.websocketSession = nil
-            self.secureLinkHandshakePrimed = false
-            self.startupMuxFramesSent = false
-            self.pendingOutboundMessages.removeAll(keepingCapacity: false)
-            self.outboundSendInFlight = false
+            self.resetOverlayTransportEpoch()
             self.scheduleReconnect()
         }
     }
@@ -457,10 +494,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             self.overlayConnected = false
             self.websocketTask = nil
             self.websocketSession = nil
-            self.secureLinkHandshakePrimed = false
-            self.startupMuxFramesSent = false
-            self.pendingOutboundMessages.removeAll(keepingCapacity: false)
-            self.outboundSendInFlight = false
+            self.resetOverlayTransportEpoch()
             if let error {
                 self.eventSink?("ws_overlay_connection_failed", ["error": error.localizedDescription])
             }
@@ -529,8 +563,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 switch result {
                 case .success(let message):
                     do {
-                        let payload = try self.overlayRuntime.decodeClientMessage(message)
-                        self.handleOverlayTransportPayload(payload)
+                        let frame = try self.overlayRuntime.decodeClientFrame(message)
+                        self.handleWebSocketFrame(frame)
                         self.receiveFromOverlay()
                     } catch {
                         self.eventSink?("ws_overlay_decode_failed", ["error": error.localizedDescription])
@@ -541,12 +575,28 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                     self.overlayConnected = false
                     self.websocketTask = nil
                     self.websocketSession = nil
-                    self.secureLinkHandshakePrimed = false
-                    self.startupMuxFramesSent = false
+                    self.resetOverlayTransportEpoch()
                     self.eventSink?("ws_overlay_receive_failed", ["error": error.localizedDescription])
                     self.scheduleReconnect()
                 }
             }
+        }
+    }
+
+    private func handleWebSocketFrame(_ frame: ObstacleBridgeWebSocketOverlayRuntime.InboundFrame) {
+        switch frame {
+        case .app(let payload):
+            handleOverlayTransportPayload(payload)
+        case .ping(let txNS, let echoNS):
+            eventSink?("ws_overlay_ping_received", [
+                "tx_ns": String(txNS),
+                "echo_ns": String(echoNS),
+            ])
+            sendWebSocketControlPong(echoTxNS: txNS)
+        case .pong(let echoTxNS):
+            eventSink?("ws_overlay_pong_received", [
+                "echo_tx_ns": String(echoTxNS),
+            ])
         }
     }
 
@@ -569,12 +619,23 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         do {
             let snapshot = try adapter.handleTransportConnected()
             secureLinkHandshakePrimed = true
+            eventSink?("ws_overlay_secure_link_prime", [
+                "emitted_frames": snapshot.emittedFrames.count,
+            ])
             for frame in snapshot.emittedFrames {
                 sendRawOverlayWire(frame)
             }
         } catch {
             eventSink?("ws_overlay_secure_link_prime_failed", ["error": error.localizedDescription])
         }
+    }
+
+    private func resetOverlayTransportEpoch() {
+        overlayLayerTransportAdapter?.handleTransportDisconnected()
+        secureLinkHandshakePrimed = false
+        startupMuxFramesSent = false
+        pendingOutboundMessages.removeAll(keepingCapacity: false)
+        outboundSendInFlight = false
     }
 
     private func maybeSendStartupMuxFrames() {
@@ -585,6 +646,109 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
 
     private func currentTunPeerID() -> Int? {
         1
+    }
+
+    private func shouldLogTunDebug(counter: Int) -> Bool {
+        counter <= 16 || counter % 100 == 0
+    }
+
+    private func logTunLocalForward(
+        packet: Data,
+        chanID: Int,
+        allocatedChannel: Bool,
+        sharedRoute: ObstacleBridgeChannelMuxTunRuntime.SharedTunOutboundRouteSnapshot?,
+        tunRuntime: ObstacleBridgeChannelMuxTunRuntime
+    ) {
+        tunDebugLocalForwards += 1
+        guard shouldLogTunDebug(counter: tunDebugLocalForwards) else { return }
+        var fields = tunRuntime.packetDebugFields(packet: packet)
+        fields["chan_id"] = chanID
+        fields["allocated_channel"] = allocatedChannel
+        fields["sample"] = tunDebugLocalForwards
+        if let sharedRoute {
+            fields["route_class"] = sharedRoute.routeClass ?? NSNull()
+            fields["selected_peer_ids"] = sharedRoute.selectedPeerIDs
+            fields["selected_chan_ids"] = sharedRoute.selectedChanIDs
+            fields["route_destination_ip"] = sharedRoute.destinationIP ?? NSNull()
+        } else {
+            fields["route_class"] = "direct"
+        }
+        eventSink?("ws_overlay_tun_local_forward", fields)
+    }
+
+    private func logTunLocalDrop(
+        reason: String,
+        packet: Data,
+        sharedRoute: ObstacleBridgeChannelMuxTunRuntime.SharedTunOutboundRouteSnapshot?,
+        tunRuntime: ObstacleBridgeChannelMuxTunRuntime
+    ) {
+        tunDebugLocalDrops += 1
+        guard shouldLogTunDebug(counter: tunDebugLocalDrops) else { return }
+        var fields = tunRuntime.packetDebugFields(packet: packet)
+        fields["reason"] = reason
+        fields["sample"] = tunDebugLocalDrops
+        if let sharedRoute {
+            fields["route_class"] = sharedRoute.routeClass ?? NSNull()
+            fields["selected_peer_ids"] = sharedRoute.selectedPeerIDs
+            fields["selected_chan_ids"] = sharedRoute.selectedChanIDs
+            fields["route_destination_ip"] = sharedRoute.destinationIP ?? NSNull()
+        }
+        eventSink?("ws_overlay_tun_local_drop", fields)
+    }
+
+    private func logTunInboundDeliver(
+        packet: Data,
+        chanID: Int,
+        tunRuntime: ObstacleBridgeChannelMuxTunRuntime
+    ) {
+        tunDebugInboundDelivers += 1
+        guard shouldLogTunDebug(counter: tunDebugInboundDelivers) else { return }
+        var fields = tunRuntime.packetDebugFields(packet: packet)
+        fields["chan_id"] = chanID
+        fields["sample"] = tunDebugInboundDelivers
+        eventSink?("ws_overlay_tun_inbound_deliver", fields)
+    }
+
+    private func logTunInboundDrop(
+        reason: String,
+        peerID: Int?,
+        chanID: Int,
+        ipVersion: Int?,
+        sourceIP: String?,
+        destinationIP: String?,
+        packetBytes: Int
+    ) {
+        tunDebugInboundDrops += 1
+        guard shouldLogTunDebug(counter: tunDebugInboundDrops) else { return }
+        var fields: [String: Any] = [
+            "reason": reason,
+            "chan_id": chanID,
+            "packet_bytes": packetBytes,
+            "sample": tunDebugInboundDrops,
+        ]
+        if let peerID { fields["peer_id"] = peerID }
+        if let ipVersion { fields["ip_version"] = ipVersion }
+        if let sourceIP { fields["source_ip"] = sourceIP }
+        if let destinationIP { fields["destination_ip"] = destinationIP }
+        eventSink?("ws_overlay_tun_inbound_drop", fields)
+    }
+
+    private func logTunInboundRelay(
+        relay: ObstacleBridgeChannelMuxTunRuntime.SharedTunInboundPeerRelaySnapshot,
+        sourceChanID: Int,
+        packet: Data,
+        tunRuntime: ObstacleBridgeChannelMuxTunRuntime
+    ) {
+        tunDebugInboundRelays += 1
+        guard shouldLogTunDebug(counter: tunDebugInboundRelays) else { return }
+        var fields = tunRuntime.packetDebugFields(packet: packet)
+        fields["source_chan_id"] = sourceChanID
+        fields["sample"] = tunDebugInboundRelays
+        fields["route_class"] = relay.routeClass ?? NSNull()
+        fields["selected_peer_ids"] = relay.selectedPeerIDs
+        fields["selected_chan_ids"] = relay.selectedChanIDs
+        fields["route_destination_ip"] = relay.destinationIP ?? NSNull()
+        eventSink?("ws_overlay_tun_inbound_relay", fields)
     }
 
     private func sendMuxFrames(_ frames: [Data]) {
@@ -607,6 +771,29 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             return
         }
         sendRawOverlayWire(payload)
+    }
+
+    private func sendWebSocketControlPong(echoTxNS: UInt64) {
+        guard started, overlayConnected, let task = websocketTask else { return }
+        do {
+            let message = try overlayRuntime.encodeClientPong(echoTxNS: echoTxNS)
+            task.send(message) { [weak self] error in
+                self?.queue.async {
+                    if let error {
+                        self?.eventSink?("ws_overlay_pong_send_failed", [
+                            "echo_tx_ns": String(echoTxNS),
+                            "error": error.localizedDescription,
+                        ])
+                    } else {
+                        self?.eventSink?("ws_overlay_pong_sent", [
+                            "echo_tx_ns": String(echoTxNS),
+                        ])
+                    }
+                }
+            }
+        } catch {
+            eventSink?("ws_overlay_control_encode_failed", ["error": error.localizedDescription])
+        }
     }
 
     private func sendRawOverlayWire(_ wire: Data) {
@@ -751,6 +938,15 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                         destinationIP: snapshot.destinationIP,
                         packetBytes: frame.body.count
                     )
+                    logTunInboundDrop(
+                        reason: reason,
+                        peerID: currentTunPeerID(),
+                        chanID: frame.chanID,
+                        ipVersion: snapshot.ipVersion,
+                        sourceIP: snapshot.sourceIP,
+                        destinationIP: snapshot.destinationIP,
+                        packetBytes: frame.body.count
+                    )
                 }
                 return
             }
@@ -758,6 +954,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 activeTunChanIDs.insert(frame.chanID)
                 if let relay = tunRuntime.planSharedTunInboundPeerRelay(sourcePeerID: currentTunPeerID(), packet: packet),
                    relay.relayToPeer {
+                    logTunInboundRelay(relay: relay, sourceChanID: frame.chanID, packet: packet, tunRuntime: tunRuntime)
                     for chanID in relay.selectedChanIDs where chanID != frame.chanID {
                         if let localSnapshot = try? tunRuntime.handleLocalTunPacket(
                             packet: packet,
@@ -777,6 +974,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 }
                 tunStats["rx_msgs", default: 0] += 1
                 tunStats["rx_bytes", default: 0] += packet.count
+                logTunInboundDeliver(packet: packet, chanID: frame.chanID, tunRuntime: tunRuntime)
                 tunPacketSink?(packet)
             }
         case .dataFrag:
@@ -802,11 +1000,21 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                             destinationIP: guarded.destinationIP,
                             packetBytes: packet.count
                         )
+                        logTunInboundDrop(
+                            reason: reason,
+                            peerID: currentTunPeerID(),
+                            chanID: frame.chanID,
+                            ipVersion: guarded.ipVersion,
+                            sourceIP: guarded.sourceIP,
+                            destinationIP: guarded.destinationIP,
+                            packetBytes: packet.count
+                        )
                     }
                     return
                 }
                 if let relay = tunRuntime.planSharedTunInboundPeerRelay(sourcePeerID: currentTunPeerID(), packet: packet),
                    relay.relayToPeer {
+                    logTunInboundRelay(relay: relay, sourceChanID: frame.chanID, packet: packet, tunRuntime: tunRuntime)
                     for chanID in relay.selectedChanIDs where chanID != frame.chanID {
                         if let localSnapshot = try? tunRuntime.handleLocalTunPacket(
                             packet: packet,
@@ -826,6 +1034,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 }
                 tunStats["rx_msgs", default: 0] += 1
                 tunStats["rx_bytes", default: 0] += packet.count
+                logTunInboundDeliver(packet: packet, chanID: frame.chanID, tunRuntime: tunRuntime)
                 tunPacketSink?(packet)
             }
         case .close:

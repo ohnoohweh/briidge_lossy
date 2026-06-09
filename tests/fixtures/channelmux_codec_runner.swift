@@ -28,6 +28,13 @@ private func hexFromData(_ data: Data) -> String {
     return data.map { String(format: "%02x", $0) }.joined()
 }
 
+private func appendUInt64BE(_ value: UInt64, to data: inout Data) {
+    var bigEndian = value.bigEndian
+    withUnsafeBytes(of: &bigEndian) { rawBuffer in
+        data.append(contentsOf: rawBuffer)
+    }
+}
+
 private func parseIntKeyedUInt64Map(_ raw: Any?) throws -> [Int: UInt64] {
     guard let dict = raw as? [String: Any] else {
         throw ChannelMuxCodecRunnerError.invalidRequest
@@ -2770,6 +2777,58 @@ private func handle(_ request: [String: Any]) throws -> Any {
             "sent_payload_value": snapshot.sentPayloadValues.first as Any,
             "close_calls": snapshot.closeCalls,
             "early_buf_bytes": snapshot.earlyBufBytes,
+        ]
+    case "drive_ws_runtime_control_frames":
+        let runtime = try ObstacleBridgeWebSocketOverlayRuntime(payloadMode: "binary")
+        let txNS: UInt64 = 123456789
+        let echoNS: UInt64 = 987654321
+        var pingWire = Data([0x01])
+        appendUInt64BE(txNS, to: &pingWire)
+        appendUInt64BE(echoNS, to: &pingWire)
+        let pingFrame = try runtime.decodeClientFrame(.data(pingWire))
+        var decodedPing: [String: Any] = [:]
+        switch pingFrame {
+        case .ping(let decodedTxNS, let decodedEchoNS):
+            decodedPing = [
+                "kind": "ping",
+                "tx_ns": Int(decodedTxNS),
+                "echo_ns": Int(decodedEchoNS),
+            ]
+        default:
+            decodedPing = ["kind": "unexpected"]
+        }
+        var pongWire = Data([0x02])
+        appendUInt64BE(txNS, to: &pongWire)
+        let pongFrame = try runtime.decodeClientFrame(.data(pongWire))
+        var decodedPong: [String: Any] = [:]
+        switch pongFrame {
+        case .pong(let decodedEchoTxNS):
+            decodedPong = [
+                "kind": "pong",
+                "echo_tx_ns": Int(decodedEchoTxNS),
+            ]
+        default:
+            decodedPong = ["kind": "unexpected"]
+        }
+        let encodedPong = try runtime.encodeClientPong(echoTxNS: txNS)
+        let encodedPongKind: String
+        let encodedPongValue: String
+        switch encodedPong {
+        case .data(let data):
+            encodedPongKind = "binary"
+            encodedPongValue = hexFromData(data)
+        case .string(let text):
+            encodedPongKind = "text"
+            encodedPongValue = text
+        @unknown default:
+            encodedPongKind = "unknown"
+            encodedPongValue = ""
+        }
+        return [
+            "decoded_ping": decodedPing,
+            "decoded_pong": decodedPong,
+            "encoded_pong_kind": encodedPongKind,
+            "encoded_pong_value": encodedPongValue,
         ]
     case "drive_ws_runtime_socket_config":
         let runtime = try ObstacleBridgeWebSocketOverlayRuntime(payloadMode: "binary")

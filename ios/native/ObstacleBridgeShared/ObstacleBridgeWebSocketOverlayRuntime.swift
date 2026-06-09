@@ -16,6 +16,14 @@ enum ObstacleBridgeWebSocketOverlayRuntimeError: Error, LocalizedError {
 
 final class ObstacleBridgeWebSocketOverlayRuntime {
     private static let appKind: UInt8 = 0x00
+    private static let pingKind: UInt8 = 0x01
+    private static let pongKind: UInt8 = 0x02
+
+    enum InboundFrame {
+        case app(Data)
+        case ping(txNS: UInt64, echoNS: UInt64)
+        case pong(echoTxNS: UInt64)
+    }
 
     struct ConnectPlan {
         var uri: String
@@ -194,7 +202,26 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
         return .string(encoded as? String ?? "")
     }
 
+    func encodeClientPong(echoTxNS: UInt64) throws -> URLSessionWebSocketTask.Message {
+        let encoded = try payloadCodec.encode(buildPongWire(echoTxNS: echoTxNS))
+        if let data = encoded as? Data {
+            return .data(data)
+        }
+        return .string(encoded as? String ?? "")
+    }
+
     func decodeClientMessage(_ message: URLSessionWebSocketTask.Message) throws -> Data {
+        switch try decodeClientFrame(message) {
+        case .app(let payload):
+            return payload
+        case .ping:
+            throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("websocket ping control frame is not app payload")
+        case .pong:
+            throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("websocket pong control frame is not app payload")
+        }
+    }
+
+    func decodeClientFrame(_ message: URLSessionWebSocketTask.Message) throws -> InboundFrame {
         let decodedWire: Data
         switch message {
         case .data(let data):
@@ -208,9 +235,9 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
             }
             decodedWire = decoded
         @unknown default:
-            return Data()
+            return .app(Data())
         }
-        return try decodeAppWire(decodedWire)
+        return try decodeWireFrame(decodedWire)
     }
 
     func socketConfigSnapshot(socketPresent: Bool, tcpUserTimeoutAvailable: Bool) -> SocketConfigSnapshot {
@@ -365,14 +392,48 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
         return wire
     }
 
+    private func buildPongWire(echoTxNS: UInt64) -> Data {
+        var wire = Data(capacity: 9)
+        wire.append(Self.pongKind)
+        appendUInt64BE(echoTxNS, to: &wire)
+        return wire
+    }
+
     private func decodeAppWire(_ wire: Data) throws -> Data {
+        switch try decodeWireFrame(wire) {
+        case .app(let payload):
+            return payload
+        case .ping:
+            throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("websocket ping control frame is not app payload")
+        case .pong:
+            throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("websocket pong control frame is not app payload")
+        }
+    }
+
+    private func decodeWireFrame(_ wire: Data) throws -> InboundFrame {
         guard let kind = wire.first else {
             throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("empty websocket overlay wire")
         }
-        guard kind == Self.appKind else {
+        let payload = Data(wire.dropFirst())
+        switch kind {
+        case Self.appKind:
+            return .app(payload)
+        case Self.pingKind:
+            guard payload.count >= 16 else {
+                throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("malformed websocket ping len \(payload.count)")
+            }
+            return .ping(
+                txNS: readUInt64BE(payload, offset: 0),
+                echoNS: readUInt64BE(payload, offset: 8)
+            )
+        case Self.pongKind:
+            guard payload.count >= 8 else {
+                throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("malformed websocket pong len \(payload.count)")
+            }
+            return .pong(echoTxNS: readUInt64BE(payload, offset: 0))
+        default:
             throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("unsupported websocket overlay kind \(kind)")
         }
-        return Data(wire.dropFirst())
     }
 
     private func parseProxyAuthority(_ text: String) -> (host: String, port: Int)? {
@@ -423,5 +484,24 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
 
     private func hexFromData(_ data: Data) -> String {
         data.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func appendUInt64BE(_ value: UInt64, to data: inout Data) {
+        var bigEndian = value.bigEndian
+        withUnsafeBytes(of: &bigEndian) { rawBuffer in
+            data.append(contentsOf: rawBuffer)
+        }
+    }
+
+    private func readUInt64BE(_ data: Data, offset: Int) -> UInt64 {
+        let bytes = Array(data)
+        guard offset >= 0, bytes.count >= offset + 8 else {
+            return 0
+        }
+        var value: UInt64 = 0
+        for index in 0..<8 {
+            value = (value << 8) | UInt64(bytes[offset + index])
+        }
+        return value
     }
 }

@@ -269,6 +269,86 @@ That gives the project a safer operating model:
 - IPv4 and IPv6 can now be debugged independently without needlessly tearing
   down the whole routing session
 
+## macOS full-tunnel route activation learnings
+
+Recent Swift-app testing narrowed the remaining macOS full-tunnel problem to
+route ordering and underlay preservation, not to `utun` creation itself.
+
+The current observed sequence is:
+
+- the Swift host runner can establish the WebSocket overlay to the peer first
+- the privileged app bundle can create a real local `utun`
+- the hook can configure the TUN address pair, for example
+  `192.168.106.3 -> 192.168.106.1`
+- full-tunnel included routes can be installed as split routes, for example
+  `0.0.0.0/1` and `128.0.0.0/1`
+- if the overlay peer host route is missing or installed too late, macOS can
+  clone the peer route onto `utun` and the WebSocket transport immediately loses
+  its own underlay path
+
+This makes the key rule explicit:
+
+- the physical underlay route to the overlay peer must be captured while the
+  overlay is connected but before the TUN full-tunnel routes are installed
+- the peer bypass route must be installed as a more-specific host route before
+  the split full-tunnel routes are allowed to attract general traffic
+
+For the current server peer this means the healthy route shape is:
+
+- `38.180.143.5/32` stays on the physical interface, currently `en0` via
+  `192.168.179.2`
+- public IPv4 destinations such as `142.251.20.94` move to `utun`
+- the same principle applies to IPv6 peer exclusion, with `/128` host routes
+  used for explicitly excluded IPv6 peers
+
+Several macOS-specific operational details were also proven:
+
+- the configured full-tunnel route `0.0.0.0/0` should be realized on macOS as
+  split routes instead of by deleting/replacing the system default route
+- the hook must treat `/32` and `/128` excludes as host routes, not generic
+  network routes
+- the Swift app passes `./scripts/client-tun-hook-macos.sh`, but the running
+  app resolves that to the bundled copy inside
+  `ObstacleBridge.app/Contents/Resources/scripts`
+- rebuilding the app bundle is therefore required after hook changes
+- the app/helper environment cannot be assumed to have an interactive shell
+  `PATH`; the hook exports `/usr/sbin:/sbin:/usr/bin:/bin` explicitly so tools
+  such as `netstat`, `route`, and `ifconfig` resolve in the privileged context
+- Swift can call `down ios-utun` while the actual realized interface was
+  `utun4`, so teardown must remove route state recorded under any
+  ObstacleBridge-managed interface name, not only the requested symbolic name
+
+The Swift host runner now captures the overlay peer's working IPv4 underlay
+route immediately on overlay-connect and passes that gateway/interface into the
+macOS hook. The hook then installs the peer host route before the split
+full-tunnel routes are installed. The healthy observed route state is:
+
+- `route -n get 38.180.143.5` returns the physical underlay route on `en0`
+- `route -n get <public IPv4>` returns one of the split full-tunnel routes on
+  `utun`
+
+If the peer still lands on `utun`, the next diagnostic should be a route monitor
+redirected to a file across app startup, plus the hook log and the
+`/tmp/obbridge/*.excluded*` state files. The specific failure signature to look
+for is an excluded peer entry such as `38.180.143.5/32||`, which means the hook
+knows the peer should be excluded but did not receive or discover an underlay
+gateway/interface for it.
+
+After IPv4 underlay preservation was proven, the next observed blocker moved up
+to the WebSocket transport layer: the Swift runtime opened the WebSocket and
+entered SecureLink handshaking, but logged repeated
+`unsupported websocket overlay kind 1` failures. Python's WebSocket transport
+uses the following one-byte overlay kinds:
+
+- `0x00`: app payload
+- `0x01`: ping control frame
+- `0x02`: pong control frame
+
+Swift must therefore treat kind `1` and kind `2` as WebSocket overlay control
+frames, not as corrupt app payload. The macOS app now answers kind `1` ping
+frames with kind `2` pong frames before app payload is passed into SecureLink
+and ChannelMux.
+
 ## Swift Packet Adapter Behavior Versus Python
 
 One subtle but important difference has now been observed between the Python
@@ -320,19 +400,21 @@ path complete.
 At the time of writing, the Swift app can still end up in the following state:
 
 - overlay connected
-- local services running
-- TUN service listed as listening
-- no active local `utun` interface
-- no active TUN channel counters
+- local `utun` created and addressed
+- split full-tunnel routes installed
+- the overlay peer route incorrectly cloned onto `utun`
+- WebSocket transport drops and the app remains in "connecting"
 
 This should now be interpreted as:
 
 - config is present
 - ChannelMux/service wiring is present
-- privilege-backed local TUN realization is missing
+- privilege-backed local TUN realization is present
+- route preservation for the overlay peer remains the fragile part
 
-That diagnosis is much better than the earlier uncertainty, because it gives us
-a narrow next step instead of a vague one.
+That diagnosis is much better than the earlier uncertainty, because it gives a
+narrow next step: capture and preserve the overlay peer underlay route before
+the full-tunnel routes are installed.
 
 ## Further steps
 

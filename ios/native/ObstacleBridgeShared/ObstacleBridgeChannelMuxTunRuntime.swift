@@ -323,6 +323,21 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         ) ?? packet
     }
 
+    func packetDebugFields(packet: Data) -> [String: Any] {
+        if let parsed = Self.parsePacketEndpoints(packet) {
+            return [
+                "ip_version": parsed.ipVersion,
+                "source_ip": parsed.sourceIP,
+                "destination_ip": parsed.destinationIP,
+                "packet_bytes": packet.count,
+            ]
+        }
+        return [
+            "packet_bytes": packet.count,
+            "parse_error": Self.parsePacketDropReason(packet),
+        ]
+    }
+
     private func advanceTunInflowWindow(scopeID: String, nowNS: UInt64) -> TunInflowScopeState {
         var state = tunInflowScopeStates[scopeID] ?? TunInflowScopeState(
             windowStartNS: nil,

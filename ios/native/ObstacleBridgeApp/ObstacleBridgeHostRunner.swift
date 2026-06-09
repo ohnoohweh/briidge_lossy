@@ -129,6 +129,9 @@ final class ObstacleBridgeHostRunner {
     private var sharedQuicOverlayTransportOwner: ObstacleBridgeQuicOverlayTransportOwner?
     private var sharedUdpOverlayTransportOwner: ObstacleBridgeUdpOverlayTransportOwner?
     private var sharedMacOSTunAdapter: ObstacleBridgeMacOSTunAdapter?
+    private var macOSTunChannelConnectedHookFired = false
+    private var macOSOverlayUnderlayGatewayV4 = ""
+    private var macOSOverlayUnderlayInterfaceV4 = ""
     private var clientRestartWatchdog: DispatchSourceTimer?
     private var overlayDisconnectedAt: TimeInterval?
     private lazy var adminAuth = ObstacleBridgeAdminAuth(
@@ -266,13 +269,10 @@ final class ObstacleBridgeHostRunner {
         startedAt = Date()
     }
 
-    func start() throws {
-        prepareSharedOverlayBootstrap()
-        try startOwnServers()
-        startSharedWebSocketOverlayTransportOwnerIfNeeded()
-        startSharedTCPOverlayTransportOwnerIfNeeded()
-        startSharedQUICOverlayTransportOwnerIfNeeded()
-        try startSharedUDPOverlayTransportOwnerIfNeeded()
+    private func ensureControlServerStarted() throws {
+        if controlServer != nil {
+            return
+        }
         let controlServer = try ObstacleBridgeWebAdminServer(
             bindHost: bindHost,
             port: statusPort,
@@ -306,6 +306,23 @@ final class ObstacleBridgeHostRunner {
         )
         self.controlServer = controlServer
         controlServer.start()
+    }
+
+    func start() throws {
+        try ensureControlServerStarted()
+        prepareSharedOverlayBootstrap()
+        do {
+            try startOwnServers()
+            startSharedWebSocketOverlayTransportOwnerIfNeeded()
+            startSharedTCPOverlayTransportOwnerIfNeeded()
+            startSharedQUICOverlayTransportOwnerIfNeeded()
+            try startSharedUDPOverlayTransportOwnerIfNeeded()
+            bootstrapState["startup_status"] = "ready"
+        } catch {
+            NSLog("[ObstacleBridgeHostRunner][startup_failed] %@", error.localizedDescription)
+            bootstrapState["startup_status"] = "failed"
+            bootstrapState["startup_error"] = error.localizedDescription
+        }
         startClientRestartWatchdog()
     }
 
@@ -1323,6 +1340,9 @@ final class ObstacleBridgeHostRunner {
         sharedQuicOverlayTransportOwner = nil
         sharedUdpOverlayTransportOwner = nil
         sharedMacOSTunAdapter = nil
+        macOSTunChannelConnectedHookFired = false
+        macOSOverlayUnderlayGatewayV4 = ""
+        macOSOverlayUnderlayInterfaceV4 = ""
         bootstrapState = [:]
 
         do {
@@ -1451,7 +1471,6 @@ final class ObstacleBridgeHostRunner {
         let wsSubprotocol = Self.stringValue(from: runtimeConfig["ws_subprotocol"])
         let tunService = ownServerSpecs.first { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
         let tunnelRouting = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig)
-        ensureSharedMacOSTunAdapter(for: tunService)
         let muxInstanceID = UInt64.random(in: 1...UInt64.max)
         let muxConnectionSeq = UInt32.random(in: 1...UInt32.max)
         let owner = ObstacleBridgeWebSocketOverlayTransportOwner(
@@ -1483,7 +1502,10 @@ final class ObstacleBridgeHostRunner {
                 self?.deliverRemoteTunPacketToLocalAdapter(packet)
             },
             muxInstanceID: muxInstanceID,
-            muxConnectionSeq: muxConnectionSeq
+            muxConnectionSeq: muxConnectionSeq,
+            eventSink: { [weak self] event, fields in
+                self?.handleSharedOverlayOwnerEvent(event: event, fields: fields)
+            }
         )
         sharedWebSocketOverlayTransportOwner = owner
         owner.start()
@@ -1504,7 +1526,6 @@ final class ObstacleBridgeHostRunner {
         }
         let tunService = ownServerSpecs.first { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
         let tunnelRouting = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig)
-        ensureSharedMacOSTunAdapter(for: tunService)
         let muxInstanceID = UInt64.random(in: 1...UInt64.max)
         let muxConnectionSeq = UInt32.random(in: 1...UInt32.max)
         let owner = ObstacleBridgeTcpOverlayTransportOwner(
@@ -1535,7 +1556,10 @@ final class ObstacleBridgeHostRunner {
                 self?.deliverRemoteTunPacketToLocalAdapter(packet)
             },
             muxInstanceID: muxInstanceID,
-            muxConnectionSeq: muxConnectionSeq
+            muxConnectionSeq: muxConnectionSeq,
+            eventSink: { [weak self] event, fields in
+                self?.handleSharedOverlayOwnerEvent(event: event, fields: fields)
+            }
         )
         sharedTcpOverlayTransportOwner = owner
         owner.start()
@@ -1559,7 +1583,6 @@ final class ObstacleBridgeHostRunner {
         let insecure = Self.boolValue(from: runtimeConfig["quic_insecure"]) ?? false
         let tunService = ownServerSpecs.first { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
         let tunnelRouting = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig)
-        ensureSharedMacOSTunAdapter(for: tunService)
         let muxInstanceID = UInt64.random(in: 1...UInt64.max)
         let muxConnectionSeq = UInt32.random(in: 1...UInt32.max)
         let owner = ObstacleBridgeQuicOverlayTransportOwner(
@@ -1593,7 +1616,10 @@ final class ObstacleBridgeHostRunner {
                 self?.deliverRemoteTunPacketToLocalAdapter(packet)
             },
             muxInstanceID: muxInstanceID,
-            muxConnectionSeq: muxConnectionSeq
+            muxConnectionSeq: muxConnectionSeq,
+            eventSink: { [weak self] event, fields in
+                self?.handleSharedOverlayOwnerEvent(event: event, fields: fields)
+            }
         )
         sharedQuicOverlayTransportOwner = owner
         owner.start()
@@ -1613,7 +1639,6 @@ final class ObstacleBridgeHostRunner {
         let peerResolveFamily = Self.stringValue(from: runtimeConfig["udp_peer_resolve_family"]) ?? "prefer-ipv6"
         let tunService = ownServerSpecs.first { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
         let tunnelRouting = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig)
-        ensureSharedMacOSTunAdapter(for: tunService)
         let muxInstanceID = UInt64.random(in: 1...UInt64.max)
         let muxConnectionSeq = UInt32.random(in: 1...UInt32.max)
         let owner = ObstacleBridgeUdpOverlayTransportOwner(
@@ -1643,7 +1668,10 @@ final class ObstacleBridgeHostRunner {
                 self?.deliverRemoteTunPacketToLocalAdapter(packet)
             },
             muxInstanceID: muxInstanceID,
-            muxConnectionSeq: muxConnectionSeq
+            muxConnectionSeq: muxConnectionSeq,
+            eventSink: { [weak self] event, fields in
+                self?.handleSharedOverlayOwnerEvent(event: event, fields: fields)
+            }
         )
         sharedUdpOverlayTransportOwner = owner
         try owner.start()
@@ -1686,6 +1714,7 @@ final class ObstacleBridgeHostRunner {
         do {
             try adapter.start()
             sharedMacOSTunAdapter = adapter
+            macOSTunChannelConnectedHookFired = false
             runMacOSTunLifecycleHook(for: tunService, event: "on_created")
         } catch {
             NSLog(
@@ -1696,6 +1725,28 @@ final class ObstacleBridgeHostRunner {
             )
             sharedMacOSTunAdapter = nil
         }
+    }
+
+    private func handleSharedOverlayOwnerEvent(event: String, fields: [String: Any]) {
+        NSLog("[ObstacleBridgeHostRunner][%@] %@", event, String(describing: fields))
+        guard event == "ws_overlay_connected" || event == "tcp_overlay_connected" || event == "quic_overlay_connected" else {
+            return
+        }
+        guard let tunService = ownServerSpecs.first(where: { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" })
+        else {
+            return
+        }
+        captureMacOSOverlayUnderlayRoute(fields: fields)
+        if sharedMacOSTunAdapter == nil {
+            ensureSharedMacOSTunAdapter(for: tunService)
+        }
+        guard !macOSTunChannelConnectedHookFired,
+              sharedMacOSTunAdapter != nil
+        else {
+            return
+        }
+        macOSTunChannelConnectedHookFired = true
+        runMacOSTunLifecycleHook(for: tunService, event: "on_channel_connected")
     }
 
     private func macOSTunHookContext(for tunService: ObstacleBridgeNativeServiceSpec, event: String) -> [String: String] {
@@ -1719,6 +1770,7 @@ final class ObstacleBridgeHostRunner {
             overlayPeerHost = Self.stringValue(from: runtimeConfig["udp_peer"]) ?? ""
             overlayPeerPort = String(Self.intValue(from: runtimeConfig["udp_peer_port"]) ?? 0)
         }
+        let normalizedOverlayPeerHost = Self.firstConfiguredPeerHost(from: overlayPeerHost)
         return [
             "service_id": String(tunService.svcID),
             "service_name": tunService.name ?? "svc-\(tunService.svcID)",
@@ -1735,10 +1787,105 @@ final class ObstacleBridgeHostRunner {
             "peer_endpoint": "",
             "overlay_transport": overlayTransport,
             "overlay_peer_name": "",
-            "overlay_peer_host": overlayPeerHost,
+            "overlay_peer_host": normalizedOverlayPeerHost,
             "overlay_peer_port": overlayPeerPort == "0" ? "" : overlayPeerPort,
+            "overlay_underlay_gateway": macOSOverlayUnderlayGatewayV4,
+            "overlay_underlay_interface": macOSOverlayUnderlayInterfaceV4,
             "role": "listener",
         ]
+    }
+
+    private struct MacOSRouteSnapshot {
+        let gateway: String
+        let interfaceName: String
+    }
+
+    private func captureMacOSOverlayUnderlayRoute(fields: [String: Any]) {
+        let fieldPeerHost = Self.stringValue(from: fields["peer_host"]) ?? ""
+        let configuredPeerHost = macOSTunHookContextPeerHost()
+        let peerHost = Self.firstConfiguredPeerHost(from: fieldPeerHost.isEmpty ? configuredPeerHost : fieldPeerHost)
+        guard !peerHost.isEmpty,
+              peerHost.contains("."),
+              !peerHost.contains(":")
+        else {
+            return
+        }
+        guard let snapshot = Self.macOSRouteSnapshot(to: peerHost, inet6: false),
+              !snapshot.interfaceName.hasPrefix("utun")
+        else {
+            NSLog("[ObstacleBridgeHostRunner][macos_overlay_underlay_route_missing] peer=%@", peerHost)
+            return
+        }
+        macOSOverlayUnderlayGatewayV4 = snapshot.gateway
+        macOSOverlayUnderlayInterfaceV4 = snapshot.interfaceName
+        NSLog(
+            "[ObstacleBridgeHostRunner][macos_overlay_underlay_route] peer=%@ gateway=%@ interface=%@",
+            peerHost,
+            snapshot.gateway.isEmpty ? "<none>" : snapshot.gateway,
+            snapshot.interfaceName.isEmpty ? "<none>" : snapshot.interfaceName
+        )
+    }
+
+    private func macOSTunHookContextPeerHost() -> String {
+        let overlayTransport = (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp").lowercased()
+        switch overlayTransport {
+        case "tcp":
+            return Self.stringValue(from: runtimeConfig["tcp_peer"]) ?? ""
+        case "ws":
+            return Self.stringValue(from: runtimeConfig["ws_peer"]) ?? ""
+        case "quic":
+            return Self.stringValue(from: runtimeConfig["quic_peer"]) ?? ""
+        default:
+            return Self.stringValue(from: runtimeConfig["udp_peer"]) ?? ""
+        }
+    }
+
+    private static func macOSRouteSnapshot(to host: String, inet6: Bool) -> MacOSRouteSnapshot? {
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedHost.isEmpty else {
+            return nil
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/sbin/route")
+        process.arguments = inet6 ? ["-n", "get", "-inet6", trimmedHost] : ["-n", "get", trimmedHost]
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = outputPipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        let output = String(data: data, encoding: .utf8) ?? ""
+        var gateway = ""
+        var interfaceName = ""
+        for rawLine in output.split(separator: "\n") {
+            let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.hasPrefix("gateway:") {
+                gateway = String(line.dropFirst("gateway:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            } else if line.hasPrefix("interface:") {
+                interfaceName = String(line.dropFirst("interface:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        if gateway.isEmpty && interfaceName.isEmpty {
+            return nil
+        }
+        return MacOSRouteSnapshot(gateway: gateway, interfaceName: interfaceName)
+    }
+
+    private static func firstConfiguredPeerHost(from raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return ""
+        }
+        let replaced = trimmed.replacingOccurrences(of: ";", with: ",")
+        let pieces = replaced
+            .split(separator: ",")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return pieces.first ?? trimmed
     }
 
     private func renderHookValue(_ value: String, context: [String: String]) -> String {
@@ -1868,6 +2015,8 @@ final class ObstacleBridgeHostRunner {
         env["OB_OVERLAY_PEER_NAME"] = context["overlay_peer_name"] ?? ""
         env["OB_OVERLAY_PEER_HOST"] = context["overlay_peer_host"] ?? ""
         env["OB_OVERLAY_PEER_PORT"] = context["overlay_peer_port"] ?? ""
+        env["OB_OVERLAY_UNDERLAY_GW"] = context["overlay_underlay_gateway"] ?? ""
+        env["OB_OVERLAY_UNDERLAY_IF"] = context["overlay_underlay_interface"] ?? ""
 
         if let tunRouting = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig) {
             let tunnelAddress = (tunRouting.tunnelAddress ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

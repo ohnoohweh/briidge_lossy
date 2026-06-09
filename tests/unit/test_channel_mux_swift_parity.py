@@ -5,6 +5,7 @@ import argparse
 import contextlib
 import json
 import shutil
+import struct
 import subprocess
 import zlib
 from unittest import mock
@@ -536,6 +537,27 @@ def _python_ws_runtime_tx_summary(*, timeout: bool = False) -> dict[str, object]
         return snapshot
 
     return asyncio.run(_run())
+
+
+def _python_ws_runtime_control_frame_summary() -> dict[str, object]:
+    session = WebSocketSession(ws_test_fixtures._args("binary"))
+    tx_ns = 123456789
+    echo_ns = 987654321
+    ping_wire = bytes([session._K_PING]) + struct.pack(">QQ", tx_ns, echo_ns)
+    pong_wire = bytes([session._K_PONG]) + struct.pack(">Q", tx_ns)
+    return {
+        "decoded_ping": {
+            "kind": "ping",
+            "tx_ns": struct.unpack(">Q", ping_wire[1:9])[0],
+            "echo_ns": struct.unpack(">Q", ping_wire[9:17])[0],
+        },
+        "decoded_pong": {
+            "kind": "pong",
+            "echo_tx_ns": struct.unpack(">Q", pong_wire[1:9])[0],
+        },
+        "encoded_pong_kind": "binary",
+        "encoded_pong_value": pong_wire.hex(),
+    }
 
 
 def _python_ws_runtime_socket_config_summary() -> dict[str, object]:
@@ -5546,6 +5568,12 @@ def test_swift_ws_runtime_tx_success_matches_python(swift_channelmux_runner: Pat
 def test_swift_ws_runtime_tx_timeout_matches_python(swift_channelmux_runner: Path) -> None:
     python = _python_ws_runtime_tx_summary(timeout=True)
     swift = _run_swift(swift_channelmux_runner, {"action": "drive_ws_runtime_tx", "timeout": True})
+    assert swift == python
+
+
+def test_swift_ws_runtime_control_frames_match_python(swift_channelmux_runner: Path) -> None:
+    python = _python_ws_runtime_control_frame_summary()
+    swift = _run_swift(swift_channelmux_runner, {"action": "drive_ws_runtime_control_frames"})
     assert swift == python
 
 

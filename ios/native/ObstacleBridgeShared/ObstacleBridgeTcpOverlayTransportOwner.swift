@@ -192,8 +192,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         activeTunChanIDs.removeAll()
         tunStats = ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
         receiveBuffer.removeAll(keepingCapacity: false)
-        secureLinkHandshakePrimed = false
-        startupMuxFramesSent = false
+        resetOverlayTransportEpoch()
     }
 
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]]) {
@@ -547,8 +546,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         } else {
             overlayConnected = false
         }
-        secureLinkHandshakePrimed = false
-        startupMuxFramesSent = false
+        resetOverlayTransportEpoch()
     }
 
     private func handleOverlayState(_ state: NWConnection.State) {
@@ -556,6 +554,10 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         case .ready:
             overlayConnected = true
             reconnectScheduled = false
+            eventSink?("tcp_overlay_connected", [
+                "peer_host": peerHost,
+                "peer_port": peerPort,
+            ])
             let snapshot = overlayRuntime.connect(host: peerHost, port: peerPort, socketPresent: true)
             for payload in snapshot.flushedBuffers {
                 sendRawOverlayWire(payload)
@@ -567,24 +569,21 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             overlayConnected = false
             overlayConnection = nil
             tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: overlayPeerID)
-            secureLinkHandshakePrimed = false
-            startupMuxFramesSent = false
+            resetOverlayTransportEpoch()
             eventSink?("tcp_overlay_connection_failed", ["error": error.localizedDescription])
             scheduleReconnect()
         case .waiting(let error):
             overlayConnected = false
             overlayConnection = nil
             tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: overlayPeerID)
-            secureLinkHandshakePrimed = false
-            startupMuxFramesSent = false
+            resetOverlayTransportEpoch()
             eventSink?("tcp_overlay_connection_waiting", ["error": error.localizedDescription])
             scheduleReconnect()
         case .cancelled:
             overlayConnected = false
             overlayConnection = nil
             tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: overlayPeerID)
-            secureLinkHandshakePrimed = false
-            startupMuxFramesSent = false
+            resetOverlayTransportEpoch()
             scheduleReconnect()
         default:
             break
@@ -667,6 +666,12 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         } catch {
             eventSink?("tcp_overlay_secure_link_prime_failed", ["error": error.localizedDescription])
         }
+    }
+
+    private func resetOverlayTransportEpoch() {
+        overlayLayerTransportAdapter?.handleTransportDisconnected()
+        secureLinkHandshakePrimed = false
+        startupMuxFramesSent = false
     }
 
     private func maybeSendStartupMuxFrames() {

@@ -29,6 +29,7 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
     }
 
     func handleTransportDisconnected() {
+        pendingPayloads.removeAll(keepingCapacity: false)
         runtime.handleTransportDisconnected()
     }
 

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export PATH="/usr/sbin:/sbin:/usr/bin:/bin:${PATH:-}"
+
 ACTION="${1:?missing action}"
 IFNAME="${2:?missing ifname}"
 
@@ -13,6 +15,8 @@ EXCLUDED_ROUTES="${EXCLUDED_ROUTES:-127.0.0.0/8}"
 INCLUDED_ROUTES6="${INCLUDED_ROUTES6:-::/0}"
 EXCLUDED_ROUTES6="${EXCLUDED_ROUTES6:-::1/128}"
 OVERLAY_PEER_IP="${OVERLAY_PEER_IP:-${OB_OVERLAY_PEER_HOST:-}}"
+OVERLAY_UNDERLAY_GW="${OB_OVERLAY_UNDERLAY_GW:-}"
+OVERLAY_UNDERLAY_IF="${OB_OVERLAY_UNDERLAY_IF:-}"
 
 STATE_DIR="/tmp/obbridge"
 STATE_FILE="${STATE_DIR}/${IFNAME}.default-route"
@@ -48,6 +52,14 @@ current_default_gateway_v4() {
 
 current_default_interface_v4() {
   route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}'
+}
+
+netstat_default_gateway_v4() {
+  netstat -rn -f inet 2>/dev/null | awk -v ifname="$IFNAME" '$1=="default" && $4!=ifname {print $2; exit}'
+}
+
+netstat_default_interface_v4() {
+  netstat -rn -f inet 2>/dev/null | awk -v ifname="$IFNAME" '$1=="default" && $4!=ifname {print $4; exit}'
 }
 
 current_default_gateway_v6() {
@@ -95,9 +107,22 @@ wait_for_default_gateway_v4() {
   default_matches_v4 "$expected_gw"
 }
 
+wait_for_full_tunnel_v4_routes() {
+  local attempts="${1:-10}"
+  local delay="${2:-0.2}"
+  local i
+  for ((i=0; i<attempts; i++)); do
+    if full_tunnel_v4_matches; then
+      return 0
+    fi
+    sleep "$delay"
+  done
+  full_tunnel_v4_matches
+}
+
 wait_for_full_tunnel_v6_routes() {
-  local attempts="${2:-10}"
-  local delay="${3:-0.2}"
+  local attempts="${1:-10}"
+  local delay="${2:-0.2}"
   local i
   for ((i=0; i<attempts; i++)); do
     if full_tunnel_v6_matches; then
@@ -138,6 +163,52 @@ route_spec_probe_host() {
   printf '%s' "${route_spec%%/*}"
 }
 
+route_spec_addr() {
+  local route_spec="$1"
+  printf '%s' "${route_spec%%/*}"
+}
+
+is_host_route_v4() {
+  local route_spec="$1"
+  [[ "$route_spec" == */32 ]]
+}
+
+is_host_route_v6() {
+  local route_spec="$1"
+  [[ "$route_spec" == */128 ]]
+}
+
+route_spec_probe_host_v4() {
+  local route_spec="$1"
+  case "$route_spec" in
+    "0.0.0.0/1")
+      printf '%s' "1.1.1.1"
+      ;;
+    "128.0.0.0/1")
+      printf '%s' "142.251.20.94"
+      ;;
+    *)
+      route_spec_probe_host "$route_spec"
+      ;;
+  esac
+}
+
+expand_included_routes_v4() {
+  local route_spec
+  while IFS= read -r route_spec; do
+    [[ -z "$route_spec" ]] && continue
+    case "$route_spec" in
+      "0.0.0.0/0"|"default")
+        printf '%s\n' "0.0.0.0/1"
+        printf '%s\n' "128.0.0.0/1"
+        ;;
+      *)
+        printf '%s\n' "$route_spec"
+        ;;
+    esac
+  done < <(csv_to_lines "$INCLUDED_ROUTES")
+}
+
 expand_included_routes_v6() {
   local route_spec
   while IFS= read -r route_spec; do
@@ -171,6 +242,25 @@ default_matches_v4() {
     has_default_route_v4_on_if || has_default_route_v4_via_gw "$expected_gw"
 }
 
+has_route_v4_on_if() {
+  local route_spec="$1"
+  local probe current_if
+  probe="$(route_spec_probe_host_v4 "$route_spec")"
+  current_if="$(route -n get "$probe" 2>/dev/null | awk '/interface:/{print $2; exit}')"
+  [[ "$current_if" == "$IFNAME" ]]
+}
+
+full_tunnel_v4_matches() {
+  local route_spec
+  while IFS= read -r route_spec; do
+    [[ -z "$route_spec" ]] && continue
+    if ! has_route_v4_on_if "$route_spec"; then
+      return 1
+    fi
+  done < <(expand_included_routes_v4)
+  return 0
+}
+
 full_tunnel_v6_matches() {
   local route_spec
   while IFS= read -r route_spec; do
@@ -182,17 +272,102 @@ full_tunnel_v6_matches() {
   return 0
 }
 
+route_add_or_change_v4() {
+  local route_spec="$1"
+  local gateway="$2"
+  local ifname="${3:-}"
+  local route_kind="-net"
+  local route_target="$route_spec"
+  if is_host_route_v4 "$route_spec"; then
+    route_kind="-host"
+    route_target="$(route_spec_addr "$route_spec")"
+  fi
+  if [[ -n "$gateway" ]]; then
+    route -n add "$route_kind" "$route_target" "$gateway" >/dev/null 2>&1 || \
+      route -n change "$route_kind" "$route_target" "$gateway" >/dev/null 2>&1 || \
+      { route -n delete "$route_kind" "$route_target" >/dev/null 2>&1 || true; route -n add "$route_kind" "$route_target" "$gateway" >/dev/null 2>&1 || true; }
+  elif [[ -n "$ifname" ]]; then
+    route -n add "$route_kind" "$route_target" -interface "$ifname" >/dev/null 2>&1 || \
+      route -n change "$route_kind" "$route_target" -interface "$ifname" >/dev/null 2>&1 || \
+      { route -n delete "$route_kind" "$route_target" >/dev/null 2>&1 || true; route -n add "$route_kind" "$route_target" -interface "$ifname" >/dev/null 2>&1 || true; }
+  fi
+}
+
+route_add_or_change_v6() {
+  local route_spec="$1"
+  local gateway="$2"
+  local ifname="${3:-}"
+  local route_kind="-net"
+  local route_target="$route_spec"
+  if is_host_route_v6 "$route_spec"; then
+    route_kind="-host"
+    route_target="$(route_spec_addr "$route_spec")"
+  fi
+  if [[ -n "$gateway" ]]; then
+    route -n add -inet6 "$route_kind" "$route_target" "$gateway" >/dev/null 2>&1 || \
+      route -n change -inet6 "$route_kind" "$route_target" "$gateway" >/dev/null 2>&1 || \
+      { route -n delete -inet6 "$route_kind" "$route_target" >/dev/null 2>&1 || true; route -n add -inet6 "$route_kind" "$route_target" "$gateway" >/dev/null 2>&1 || true; }
+  elif [[ -n "$ifname" ]]; then
+    route -n add -inet6 "$route_kind" "$route_target" -interface "$ifname" >/dev/null 2>&1 || \
+      route -n change -inet6 "$route_kind" "$route_target" -interface "$ifname" >/dev/null 2>&1 || \
+      { route -n delete -inet6 "$route_kind" "$route_target" >/dev/null 2>&1 || true; route -n add -inet6 "$route_kind" "$route_target" -interface "$ifname" >/dev/null 2>&1 || true; }
+  fi
+}
+
+route_delete_v4() {
+  local route_spec="$1"
+  local route_kind="-net"
+  local route_target="$route_spec"
+  if is_host_route_v4 "$route_spec"; then
+    route_kind="-host"
+    route_target="$(route_spec_addr "$route_spec")"
+  fi
+  route -n delete "$route_kind" "$route_target" >/dev/null 2>&1 || true
+}
+
+route_delete_v6() {
+  local route_spec="$1"
+  local route_kind="-net"
+  local route_target="$route_spec"
+  if is_host_route_v6 "$route_spec"; then
+    route_kind="-host"
+    route_target="$(route_spec_addr "$route_spec")"
+  fi
+  route -n delete -inet6 "$route_kind" "$route_target" >/dev/null 2>&1 || true
+}
+
+route_matches_underlay_v4() {
+  local route_spec="$1"
+  local expected_gw="$2"
+  local expected_if="${3:-}"
+  local probe current_gw current_if
+  probe="$(route_spec_probe_host "$route_spec")"
+  current_gw="$(route -n get "$probe" 2>/dev/null | awk '/gateway:/{print $2; exit}')"
+  current_if="$(route -n get "$probe" 2>/dev/null | awk '/interface:/{print $2; exit}')"
+  [[ -n "$expected_gw" && "$current_gw" == "$expected_gw" ]] || \
+    [[ -n "$expected_if" && "$current_if" == "$expected_if" ]]
+}
+
+route_matches_underlay_v6() {
+  local route_spec="$1"
+  local expected_gw="$2"
+  local expected_if="${3:-}"
+  local probe current_gw current_if
+  probe="$(route_spec_probe_host "$route_spec")"
+  current_gw="$(route -n get -inet6 "$probe" 2>/dev/null | awk '/gateway:/{print $2; exit}')"
+  current_if="$(route -n get -inet6 "$probe" 2>/dev/null | awk '/interface:/{print $2; exit}')"
+  [[ -n "$expected_gw" && "$current_gw" == "$expected_gw" ]] || \
+    [[ -n "$expected_if" && "$current_if" == "$expected_if" ]]
+}
+
 add_included_routes_v4() {
   : > "$STATE_ROUTES4"
   while IFS= read -r route_spec; do
     [[ -z "$route_spec" ]] && continue
-    if [[ "$route_spec" == "0.0.0.0/0" || "$route_spec" == "default" ]]; then
-      continue
-    fi
     route -n add -net "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || \
       route -n change -net "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || true
     printf '%s\n' "$route_spec" >> "$STATE_ROUTES4"
-  done < <(csv_to_lines "$INCLUDED_ROUTES")
+  done < <(expand_included_routes_v4)
 }
 
 add_included_routes_v6() {
@@ -206,6 +381,8 @@ add_included_routes_v6() {
 }
 
 snapshot_excluded_routes_v4() {
+  local fallback_gw="${1:-}"
+  local fallback_if="${2:-}"
   : > "$STATE_EXCLUDED4"
   local route_spec probe gateway ifname
   while IFS= read -r route_spec; do
@@ -213,11 +390,17 @@ snapshot_excluded_routes_v4() {
     probe="$(route_spec_probe_host "$route_spec")"
     gateway="$(route -n get "$probe" 2>/dev/null | awk '/gateway:/{print $2; exit}')"
     ifname="$(route -n get "$probe" 2>/dev/null | awk '/interface:/{print $2; exit}')"
+    if [[ -z "$gateway" && -z "$ifname" && -n "$fallback_gw" ]] && is_host_route_v4 "$route_spec"; then
+      gateway="$fallback_gw"
+      ifname="$fallback_if"
+    fi
     printf '%s|%s|%s\n' "$route_spec" "$gateway" "$ifname" >> "$STATE_EXCLUDED4"
   done < <(csv_to_lines "$EXCLUDED_ROUTES")
 }
 
 snapshot_excluded_routes_v6() {
+  local fallback_gw="${1:-}"
+  local fallback_if="${2:-}"
   : > "$STATE_EXCLUDED6"
   local route_spec probe gateway ifname
   while IFS= read -r route_spec; do
@@ -225,6 +408,10 @@ snapshot_excluded_routes_v6() {
     probe="$(route_spec_probe_host "$route_spec")"
     gateway="$(route -n get -inet6 "$probe" 2>/dev/null | awk '/gateway:/{print $2; exit}')"
     ifname="$(route -n get -inet6 "$probe" 2>/dev/null | awk '/interface:/{print $2; exit}')"
+    if [[ -z "$gateway" && -z "$ifname" && -n "$fallback_gw" ]] && is_host_route_v6 "$route_spec"; then
+      gateway="$fallback_gw"
+      ifname="$fallback_if"
+    fi
     printf '%s|%s|%s\n' "$route_spec" "$gateway" "$ifname" >> "$STATE_EXCLUDED6"
   done < <(csv_to_lines "$EXCLUDED_ROUTES6")
 }
@@ -233,15 +420,20 @@ add_excluded_routes_v4() {
   if [[ ! -s "$STATE_EXCLUDED4" ]]; then
     return 0
   fi
+  local fallback_gw="${1:-}"
+  local fallback_if="${2:-}"
   local route_spec underlay_gw underlay_if
   while IFS='|' read -r route_spec underlay_gw underlay_if; do
     [[ -z "$route_spec" ]] && continue
-    if [[ -n "$underlay_gw" ]]; then
-      route -n add -net "$route_spec" "$underlay_gw" >/dev/null 2>&1 || \
-        route -n change -net "$route_spec" "$underlay_gw" >/dev/null 2>&1 || true
-    elif [[ -n "$underlay_if" ]]; then
-      route -n add -net "$route_spec" -interface "$underlay_if" >/dev/null 2>&1 || \
-        route -n change -net "$route_spec" -interface "$underlay_if" >/dev/null 2>&1 || true
+    if [[ -z "$underlay_gw" && -z "$underlay_if" ]] && is_host_route_v4 "$route_spec"; then
+      underlay_gw="$fallback_gw"
+      underlay_if="$fallback_if"
+    fi
+    if [[ -n "$underlay_gw" || -n "$underlay_if" ]]; then
+      route_add_or_change_v4 "$route_spec" "$underlay_gw" "$underlay_if"
+      if ! route_matches_underlay_v4 "$route_spec" "$underlay_gw" "$underlay_if"; then
+        log "warning: excluded IPv4 route $route_spec did not resolve via underlay gw=${underlay_gw:-<none>} if=${underlay_if:-<none>}"
+      fi
     fi
   done < "$STATE_EXCLUDED4"
 }
@@ -250,15 +442,20 @@ add_excluded_routes_v6() {
   if [[ ! -s "$STATE_EXCLUDED6" ]]; then
     return 0
   fi
+  local fallback_gw="${1:-}"
+  local fallback_if="${2:-}"
   local route_spec underlay_gw underlay_if
   while IFS='|' read -r route_spec underlay_gw underlay_if; do
     [[ -z "$route_spec" ]] && continue
-    if [[ -n "$underlay_gw" ]]; then
-      route -n add -inet6 "$route_spec" "$underlay_gw" >/dev/null 2>&1 || \
-        route -n change -inet6 "$route_spec" "$underlay_gw" >/dev/null 2>&1 || true
-    elif [[ -n "$underlay_if" ]]; then
-      route -n add -inet6 "$route_spec" -interface "$underlay_if" >/dev/null 2>&1 || \
-        route -n change -inet6 "$route_spec" -interface "$underlay_if" >/dev/null 2>&1 || true
+    if [[ -z "$underlay_gw" && -z "$underlay_if" ]] && is_host_route_v6 "$route_spec"; then
+      underlay_gw="$fallback_gw"
+      underlay_if="$fallback_if"
+    fi
+    if [[ -n "$underlay_gw" || -n "$underlay_if" ]]; then
+      route_add_or_change_v6 "$route_spec" "$underlay_gw" "$underlay_if"
+      if ! route_matches_underlay_v6 "$route_spec" "$underlay_gw" "$underlay_if"; then
+        log "warning: excluded IPv6 route $route_spec did not resolve via underlay gw=${underlay_gw:-<none>} if=${underlay_if:-<none>}"
+      fi
     fi
   done < "$STATE_EXCLUDED6"
 }
@@ -274,18 +471,18 @@ delete_included_routes_v4() {
 
 delete_excluded_routes_v4() {
   if [[ -s "$STATE_EXCLUDED4" ]]; then
-    while IFS= read -r route_spec; do
+    while IFS='|' read -r route_spec _underlay_gw _underlay_if; do
       [[ -z "$route_spec" ]] && continue
-      route -n delete -net "$route_spec" >/dev/null 2>&1 || true
+      route_delete_v4 "$route_spec"
     done < "$STATE_EXCLUDED4"
   fi
 }
 
 delete_excluded_routes_v6() {
   if [[ -s "$STATE_EXCLUDED6" ]]; then
-    while IFS= read -r route_spec; do
+    while IFS='|' read -r route_spec _underlay_gw _underlay_if; do
       [[ -z "$route_spec" ]] && continue
-      route -n delete -inet6 "$route_spec" >/dev/null 2>&1 || true
+      route_delete_v6 "$route_spec"
     done < "$STATE_EXCLUDED6"
   fi
 }
@@ -299,6 +496,60 @@ delete_included_routes_v6() {
   fi
 }
 
+delete_included_routes_v4_from_file() {
+  local file="$1"
+  [[ -s "$file" ]] || return 0
+  while IFS= read -r route_spec; do
+    [[ -z "$route_spec" ]] && continue
+    route -n delete -net "$route_spec" >/dev/null 2>&1 || true
+  done < "$file"
+}
+
+delete_included_routes_v6_from_file() {
+  local file="$1"
+  [[ -s "$file" ]] || return 0
+  while IFS= read -r route_spec; do
+    [[ -z "$route_spec" ]] && continue
+    route -n delete -inet6 "$route_spec" >/dev/null 2>&1 || true
+  done < "$file"
+}
+
+delete_excluded_routes_v4_from_file() {
+  local file="$1"
+  [[ -s "$file" ]] || return 0
+  while IFS='|' read -r route_spec _underlay_gw _underlay_if; do
+    [[ -z "$route_spec" ]] && continue
+    route_delete_v4 "$route_spec"
+  done < "$file"
+}
+
+delete_excluded_routes_v6_from_file() {
+  local file="$1"
+  [[ -s "$file" ]] || return 0
+  while IFS='|' read -r route_spec _underlay_gw _underlay_if; do
+    [[ -z "$route_spec" ]] && continue
+    route_delete_v6 "$route_spec"
+  done < "$file"
+}
+
+cleanup_stale_managed_routes() {
+  local file
+  shopt -s nullglob
+  for file in "$STATE_DIR"/*.excluded4; do
+    delete_excluded_routes_v4_from_file "$file"
+  done
+  for file in "$STATE_DIR"/*.excluded6; do
+    delete_excluded_routes_v6_from_file "$file"
+  done
+  for file in "$STATE_DIR"/*.routes4; do
+    delete_included_routes_v4_from_file "$file"
+  done
+  for file in "$STATE_DIR"/*.routes6; do
+    delete_included_routes_v6_from_file "$file"
+  done
+  shopt -u nullglob
+}
+
 detect_underlay_gw() {
   local normalized_ip
   normalized_ip="$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")"
@@ -306,6 +557,64 @@ detect_underlay_gw() {
     return 1
   fi
   route -n get "$normalized_ip" 2>/dev/null | awk '/gateway:/{print $2; exit}'
+}
+
+detect_underlay_if() {
+  local normalized_ip
+  normalized_ip="$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")"
+  if [[ -z "$normalized_ip" ]]; then
+    return 1
+  fi
+  route -n get "$normalized_ip" 2>/dev/null | awk '/interface:/{print $2; exit}'
+}
+
+fallback_underlay_gw_v4() {
+  if [[ -n "$OVERLAY_UNDERLAY_GW" ]]; then
+    printf '%s' "$OVERLAY_UNDERLAY_GW"
+    return
+  fi
+  local gw
+  gw="$(current_default_gateway_v4 || true)"
+  if [[ -n "$gw" && "$gw" != "index:" ]]; then
+    printf '%s' "$gw"
+    return
+  fi
+  netstat_default_gateway_v4 || true
+}
+
+fallback_underlay_if_v4() {
+  if [[ -n "$OVERLAY_UNDERLAY_IF" ]]; then
+    printf '%s' "$OVERLAY_UNDERLAY_IF"
+    return
+  fi
+  local ifname
+  ifname="$(current_default_interface_v4 || true)"
+  if [[ -n "$ifname" && "$ifname" != "$IFNAME" ]]; then
+    printf '%s' "$ifname"
+    return
+  fi
+  netstat_default_interface_v4 || true
+}
+
+wait_for_underlay_v4() {
+  local attempts="${1:-25}"
+  local delay="${2:-0.2}"
+  local i
+  for ((i=0; i<attempts; i++)); do
+    local_underlay_gw="$(detect_underlay_gw || true)"
+    local_underlay_if="$(detect_underlay_if || true)"
+    if [[ -z "$local_underlay_gw" || "$local_underlay_gw" == "index:" ]]; then
+      local_underlay_gw="$(fallback_underlay_gw_v4)"
+    fi
+    if [[ -z "$local_underlay_if" || "$local_underlay_if" == "$IFNAME" ]]; then
+      local_underlay_if="$(fallback_underlay_if_v4)"
+    fi
+    if [[ -n "$local_underlay_gw" || -n "$local_underlay_if" ]]; then
+      return 0
+    fi
+    sleep "$delay"
+  done
+  return 1
 }
 
 save_default_routes() {
@@ -368,34 +677,39 @@ set_default_route_v4() {
 case "$ACTION" in
   up)
     log "bringing up $IFNAME addr=$TUN_ADDR peer=$TUN_GW addr6=${TUN_ADDR6:-<none>} peer6=${TUN_GW6:-<none>}"
+    cleanup_stale_managed_routes
     ifconfig "$IFNAME" inet "$TUN_ADDR_IP" "$TUN_GW" netmask "$(ipv4_prefix_to_netmask "$TUN_ADDR_PREFIX")" up
     if [[ -n "$TUN_ADDR6" ]]; then
       ifconfig "$IFNAME" inet6 "$TUN_ADDR6_IP" prefixlen "$TUN_ADDR6_PREFIX" alias >/dev/null 2>&1 || true
     fi
 
-    local_underlay_gw="$(detect_underlay_gw || true)"
+    local_underlay_gw=""
+    local_underlay_if=""
+    wait_for_underlay_v4 || true
     local_underlay_gw6="$(current_default_gateway_v6 || true)"
+    local_underlay_if6="$(current_default_interface_v6 || true)"
+    log "underlay detected peer=${OVERLAY_PEER_IP:-<none>} ipv4_gw=${local_underlay_gw:-<none>} ipv4_if=${local_underlay_if:-<none>} ipv6_gw=${local_underlay_gw6:-<none>} ipv6_if=${local_underlay_if6:-<none>}"
     save_default_routes
-    snapshot_excluded_routes_v4
-    snapshot_excluded_routes_v6
+    snapshot_excluded_routes_v4 "$local_underlay_gw" "$local_underlay_if"
+    snapshot_excluded_routes_v6 "$local_underlay_gw6" "$local_underlay_if6"
+    add_excluded_routes_v4 "$local_underlay_gw" "$local_underlay_if"
+    add_excluded_routes_v6 "$local_underlay_gw6" "$local_underlay_if6"
+
+    normalized_overlay_peer_ip="$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")"
+    if [[ "$normalized_overlay_peer_ip" == *.* && "$normalized_overlay_peer_ip" != *:* && -n "$local_underlay_gw" ]]; then
+      route_add_or_change_v4 "${normalized_overlay_peer_ip}/32" "$local_underlay_gw" "$local_underlay_if"
+    fi
+
     add_included_routes_v4
     add_included_routes_v6
-    add_excluded_routes_v4 "$local_underlay_gw"
-    add_excluded_routes_v6 "$local_underlay_gw6"
+    add_excluded_routes_v4 "$local_underlay_gw" "$local_underlay_if"
+    add_excluded_routes_v6 "$local_underlay_gw6" "$local_underlay_if6"
 
-    if [[ -n "$OVERLAY_PEER_IP" && -n "$local_underlay_gw" ]]; then
-      route -n add -host "$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")" "$local_underlay_gw" >/dev/null 2>&1 || true
+    if should_switch_default_v4 && ! wait_for_full_tunnel_v4_routes; then
+      log "failed to install IPv4 split full-tunnel routes via $IFNAME; keeping underlay defaults"
+      delete_included_routes_v4
     fi
-
-    if should_switch_default_v4; then
-      set_default_route_v4
-      if ! wait_for_default_gateway_v4 "$TUN_GW"; then
-        log "failed to switch IPv4 default route to $TUN_GW; restoring underlay routes"
-        restore_default_routes
-        exit 1
-      fi
-    fi
-    add_excluded_routes_v4
+    add_excluded_routes_v4 "$local_underlay_gw" "$local_underlay_if"
 
     if [[ -n "$TUN_GW6" ]] && should_switch_default_v6; then
       add_included_routes_v6
@@ -403,7 +717,7 @@ case "$ACTION" in
         log "failed to install IPv6 split full-tunnel routes via $IFNAME; keeping IPv4 route changes and restoring IPv6 only"
         restore_default_route_v6_only
       else
-        add_excluded_routes_v6
+        add_excluded_routes_v6 "$local_underlay_gw6" "$local_underlay_if6"
       fi
     fi
     log "default routes now ipv4_if=$(current_default_interface_v4 || true) ipv4_gw=$(current_default_gateway_v4 || true) ipv6_if=$(current_default_interface_v6 || true) ipv6_gw=$(current_default_gateway_v6 || true)"
@@ -413,6 +727,7 @@ case "$ACTION" in
     if [[ -n "$OVERLAY_PEER_IP" ]]; then
       route -n delete -host "$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")" >/dev/null 2>&1 || true
     fi
+    cleanup_stale_managed_routes
     restore_default_routes
     if [[ -n "$TUN_ADDR6" ]]; then
       ifconfig "$IFNAME" inet6 "$TUN_ADDR6_IP" delete >/dev/null 2>&1 || true
