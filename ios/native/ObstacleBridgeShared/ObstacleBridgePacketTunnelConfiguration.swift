@@ -69,43 +69,44 @@ struct ObstacleBridgePacketTunnelConfiguration {
         }
 
         let network = payload["network_settings"] as? [String: Any] ?? [:]
-        tunnelAddress = (network["tunnel_address"] as? String)
+        let resolvedTunnelAddress = (network["tunnel_address"] as? String)
             ?? routingOverride?.tunnelAddress
             ?? defaults.tunnelAddress
         let prefix = (network["tunnel_prefix"] as? NSNumber)?.intValue
             ?? (network["tunnel_prefix"] as? Int)
             ?? routingOverride?.tunnelPrefix
             ?? defaults.tunnelPrefix
+        let resolvedTunnelAddress6 = (network["tunnel_address6"] as? String)
+            ?? routingOverride?.tunnelAddress6
+            ?? defaults.tunnelAddress6
+        let resolvedTunnelPrefix6 = (network["tunnel_prefix6"] as? NSNumber)?.intValue
+            ?? (network["tunnel_prefix6"] as? Int)
+            ?? routingOverride?.tunnelPrefix6
+            ?? defaults.tunnelPrefix6
+        let resolvedIncludedRoutes = network["included_routes"] as? [String]
+            ?? routingOverride?.includedRoutes
+            ?? defaults.includedRoutes
+        let resolvedIncludedRoutes6 = network["included_routes6"] as? [String]
+            ?? routingOverride?.includedRoutes6
+            ?? (resolvedTunnelAddress6.isEmpty ? [] : defaults.includedRoutes6)
         tunnelSubnetMask = Self.subnetMask(prefix)
-        includedRoutes = try Self.routes(
-            network["included_routes"] as? [String]
-                ?? routingOverride?.includedRoutes
-                ?? defaults.includedRoutes
-        )
+        tunnelAddress = resolvedTunnelAddress
+        tunnelAddress6 = resolvedTunnelAddress6
+        tunnelPrefix6 = resolvedTunnelPrefix6
+        includedRoutes = try Self.routes(resolvedIncludedRoutes)
         let baseExcludedRoutes = network["excluded_routes"] as? [String]
             ?? routingOverride?.excludedRoutes
             ?? defaults.excludedRoutes
         let baseExcludedRoutes6 = network["excluded_routes6"] as? [String]
             ?? routingOverride?.excludedRoutes6
-            ?? (tunnelAddress6.isEmpty ? [] : defaults.excludedRoutes6)
+            ?? (resolvedTunnelAddress6.isEmpty ? [] : defaults.excludedRoutes6)
         let effectiveExcluded = ObstacleBridgeRuntimeConfig.effectiveExcludedRoutes(
             from: runtimeConfig,
             baseIPv4: baseExcludedRoutes,
             baseIPv6: baseExcludedRoutes6
         )
         excludedRoutes = try Self.routes(effectiveExcluded.ipv4)
-        tunnelAddress6 = (network["tunnel_address6"] as? String)
-            ?? routingOverride?.tunnelAddress6
-            ?? defaults.tunnelAddress6
-        tunnelPrefix6 = (network["tunnel_prefix6"] as? NSNumber)?.intValue
-            ?? (network["tunnel_prefix6"] as? Int)
-            ?? routingOverride?.tunnelPrefix6
-            ?? defaults.tunnelPrefix6
-        includedRoutes6 = try Self.routes6(
-            network["included_routes6"] as? [String]
-                ?? routingOverride?.includedRoutes6
-                ?? (tunnelAddress6.isEmpty ? [] : defaults.includedRoutes6)
-        )
+        includedRoutes6 = try Self.routes6(resolvedIncludedRoutes6)
         excludedRoutes6 = try Self.routes6(effectiveExcluded.ipv6)
         dnsServers = (network["dns_servers"] as? [String]) ?? runtimeNetworkFallback.dnsServers
         mtu = ((network["mtu"] as? NSNumber)?.intValue ?? (network["mtu"] as? Int))
