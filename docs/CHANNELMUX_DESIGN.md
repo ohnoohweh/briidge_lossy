@@ -1651,6 +1651,11 @@ Current Swift parity status for this recipe:
 - completed:
   - component parity for shared-TUN ownership, route planning, guarded inbound
     decisions, disconnect cleanup, and scoped throttling
+  - Linux-runnable source-guard regressions for the Apple-only WebSocket
+    transport owner path:
+    stale `didOpen`, `didClose`, `didCompleteWithError`, and receive callbacks
+    are pinned to the active `websocketTask`, and outbound queue flushing is
+    pinned to the same current task identity
   - macOS mixed-process control-plane visibility across `tcp`, `myudp`, `ws`,
     and `quic`
   - iOS probe visibility across `tcp`, `myudp`, `ws`, and `quic`

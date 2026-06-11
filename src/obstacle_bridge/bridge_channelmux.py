@@ -25,6 +25,80 @@ class _ChanCtr:
     crc_in: int = 0
     crc_out: int = 0
 
+
+class ProcessSharedTunRegistry:
+    def __init__(self) -> None:
+        self._by_key: dict[tuple[str, int], dict[str, Any]] = {}
+        self._by_dev_id: dict[int, tuple[str, int]] = {}
+
+    @staticmethod
+    def _key(ifname: str, mtu: int) -> tuple[str, int]:
+        return (str(ifname or ""), int(mtu))
+
+    def register(self, mux: "ChannelMux", svc_key: Any, dev: Any) -> None:
+        key = self._key(getattr(dev, "ifname", ""), int(getattr(dev, "mtu", 0) or 0))
+        entry = self._by_key.setdefault(
+            key,
+            {
+                "dev": dev,
+                "owner_mux": mux,
+                "service_key": svc_key,
+                "holders": {},
+            },
+        )
+        entry["dev"] = dev
+        entry["owner_mux"] = entry.get("owner_mux") or mux
+        entry["service_key"] = entry.get("service_key") or svc_key
+        holders = dict(entry.get("holders") or {})
+        holders[id(mux)] = mux
+        entry["holders"] = holders
+        self._by_key[key] = entry
+        self._by_dev_id[id(dev)] = key
+
+    def attach_existing(self, mux: "ChannelMux", ifname: str, mtu: int) -> Optional[Any]:
+        key = self._key(ifname, mtu)
+        entry = self._by_key.get(key)
+        if not isinstance(entry, dict):
+            return None
+        holders = dict(entry.get("holders") or {})
+        holders[id(mux)] = mux
+        entry["holders"] = holders
+        self._by_key[key] = entry
+        return entry.get("dev")
+
+    def service_key_for(self, ifname: str, mtu: int) -> Any:
+        entry = self._by_key.get(self._key(ifname, mtu))
+        if not isinstance(entry, dict):
+            return None
+        return entry.get("service_key")
+
+    def owner_mux_for_dev(self, dev: Any) -> Optional["ChannelMux"]:
+        key = self._by_dev_id.get(id(dev))
+        if key is None:
+            return None
+        entry = self._by_key.get(key)
+        if not isinstance(entry, dict):
+            return None
+        owner = entry.get("owner_mux")
+        return owner if owner is not None else None
+
+    def release(self, mux: "ChannelMux", dev: Any) -> bool:
+        key = self._by_dev_id.get(id(dev))
+        if key is None:
+            return True
+        entry = self._by_key.get(key)
+        if not isinstance(entry, dict):
+            return True
+        holders = dict(entry.get("holders") or {})
+        holders.pop(id(mux), None)
+        entry["holders"] = holders
+        self._by_key[key] = entry
+        if holders:
+            return False
+        self._by_key.pop(key, None)
+        self._by_dev_id.pop(id(dev), None)
+        return True
+
 # ============================================================================
 # ============================
 # Multi-service ChannelMux (v3 control payloads)
@@ -677,6 +751,7 @@ class ChannelMux:
         self._overlay_peer_name = ""
         self._overlay_peer_host = ""
         self._overlay_peer_port = 0
+        self._process_shared_tun_registry: Optional[ProcessSharedTunRegistry] = None
 
         # Overlay state gate
         self._overlay_connected: bool = self.session.is_connected()
@@ -756,6 +831,7 @@ class ChannelMux:
         self._shared_tun_peer_id_by_ref: dict[tuple[ChannelMux.ServiceKey, str], int] = {}
         self._shared_tun_drop_state_by_service: dict[ChannelMux.ServiceKey, dict[str, Any]] = {}
         self._tun_inflow_scope_state: dict[tuple[Any, ...], dict[str, Any]] = {}
+        self._shared_tun_normalization_warned: set[tuple[str, str, str]] = set()
         self._chan_owner_peer_id: dict[int, int] = {}
         self._ctrl_chunk_rx: dict[tuple[int, int, int, int, int], dict[str, Any]] = {}
         self._ctrl_chunk_next_txid: int = 1
@@ -1120,13 +1196,26 @@ class ChannelMux:
             if isinstance(env_extra, dict):
                 for k, v in env_extra.items():
                     env[str(k)] = self._render_hook_value(v, context)
+            hook_diag = ""
+            if str(spec.l_proto) == "tun":
+                hook_diag = (
+                    f" ifname={context.get('ifname')!r}"
+                    f" overlay_peer={env.get('OB_OVERLAY_PEER_HOST', '')!r}:{env.get('OB_OVERLAY_PEER_PORT', '')!r}"
+                    f" tun_addr={env.get('TUN_ADDR', '')!r}"
+                    f" tun_gw={env.get('TUN_GW', '')!r}"
+                    f" tun_addr6={env.get('TUN_ADDR6', '')!r}"
+                    f" tun_gw6={env.get('TUN_GW6', '')!r}"
+                    f" excluded4={env.get('EXCLUDED_ROUTES', '')!r}"
+                    f" excluded6={env.get('EXCLUDED_ROUTES6', '')!r}"
+                )
             self.log.info(
-                "[HOOK] start role=%s event=%s svc=%s argv=%r timeout_ms=%s",
+                "[HOOK] start role=%s event=%s svc=%s argv=%r timeout_ms=%s%s",
                 role,
                 event,
                 spec.svc_id,
                 argv,
                 timeout_ms,
+                hook_diag,
             )
             proc = await asyncio.create_subprocess_exec(
                 *argv,
@@ -1151,8 +1240,8 @@ class ChannelMux:
                     argv,
                 )
                 return
-            stdout_tail = (stdout_b or b"").decode("utf-8", "replace")[-400:]
-            stderr_tail = (stderr_b or b"").decode("utf-8", "replace")[-400:]
+            stdout_tail = (stdout_b or b"").decode("utf-8", "replace")[-1200:]
+            stderr_tail = (stderr_b or b"").decode("utf-8", "replace")[-1200:]
             level_fn = self.log.info if int(proc.returncode or 0) == 0 else self.log.warning
             level_fn(
                 "[HOOK] done role=%s event=%s svc=%s rc=%s stdout_tail=%r stderr_tail=%r",
@@ -2519,6 +2608,14 @@ class ChannelMux:
 
     def _send_open_for_service(self, chan_id: int, proto: "ChannelMux.Proto", spec: "ChannelMux.ServiceSpec") -> None:
         payload = self._build_open_v4(spec)
+        if int(proto) == int(ChannelMux.Proto.TUN):
+            self._log_tun_open_diagnostics(
+                direction="tx",
+                chan=int(chan_id),
+                spec=spec,
+                peer_id=self._chan_owner_peer_id.get(int(chan_id)),
+                note="sending_open_v4",
+            )
         if ChannelMux.MUX_HDR.size + len(payload) <= self._session_max_app_payload:
             self._send_mux(chan_id, proto, ChannelMux.MType.OPEN, payload)
             return
@@ -2574,7 +2671,12 @@ class ChannelMux:
             dev = self._svc_tun_devices.pop(svc_key, None)
             if dev is not None:
                 self._unbind_all_tun_channels_for_device(dev)
-                self._close_tun_device(dev)
+                close_dev = True
+                registry = self._process_shared_tun_registry
+                if registry is not None:
+                    close_dev = bool(registry.release(self, dev))
+                if close_dev:
+                    self._close_tun_device(dev)
             self._drop_shared_tun_state_for_service(svc_key)
             return
         srv = self._svc_tcp_servers.pop(svc_key, None)
@@ -2836,10 +2938,17 @@ class ChannelMux:
                 ) from exc
             raise
 
-    def _register_tun_reader(self, dev: "ChannelMux.TunDevice") -> None:
-        if dev.reader_registered:
+    def _register_tun_reader(self, dev: "ChannelMux.TunDevice", *, force_owner: bool = False) -> None:
+        current_owner = getattr(dev, "_reader_mux", None)
+        if dev.reader_registered and current_owner is self and not force_owner:
             return
+        if dev.reader_registered and current_owner is not None and current_owner is not self:
+            with contextlib.suppress(Exception):
+                if getattr(dev, "fd", None) is not None:
+                    current_owner.loop.remove_reader(dev.fd)
+            dev.reader_registered = False
         _bridge_tun_platform.register_tun_reader(self, dev)
+        setattr(dev, "_reader_mux", self)
 
     def _close_tun_device(self, dev: "ChannelMux.TunDevice") -> None:
         _bridge_tun_platform.close_tun_device(self, dev)
@@ -2871,17 +2980,100 @@ class ChannelMux:
         for dev in self._svc_tun_devices.values():
             if dev.ifname == ifname and int(dev.mtu) == int(mtu):
                 return dev
+        registry = self._process_shared_tun_registry
+        if registry is not None:
+            attached = registry.attach_existing(self, str(ifname), int(mtu))
+            if attached is not None:
+                shared_svc_key = registry.service_key_for(str(ifname), int(mtu))
+                if isinstance(shared_svc_key, tuple) and shared_svc_key in self._local_services:
+                    self._svc_tun_devices.setdefault(shared_svc_key, attached)
+                    spec = self._local_services.get(shared_svc_key)
+                    if spec is not None:
+                        self._install_shared_tun_ownership_for_service(shared_svc_key, spec)
+                return attached
         return None
+
+    def _shared_tun_open_requested(self, spec: "ChannelMux.ServiceSpec") -> bool:
+        return self._shared_tun_ownership_snapshot_for_spec(spec) is not None
+
+    def _service_tun_inventory_summary(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for svc_key, dev in self._svc_tun_devices.items():
+            ownership = self._shared_tun_ownership_by_service.get(svc_key)
+            rows.append(
+                {
+                    "svc_key": [str(v) for v in svc_key],
+                    "ifname": str(getattr(dev, "ifname", "") or ""),
+                    "mtu": int(getattr(dev, "mtu", 0) or 0),
+                    "shared_peer_refs": [str(v) for v in list((ownership or {}).get("peer_refs") or [])],
+                    "active_bindings": len(
+                        [
+                            key
+                            for key in self._shared_tun_runtime_by_peer
+                            if key[0] == svc_key
+                        ]
+                    ),
+                }
+            )
+        rows.sort(key=lambda item: (item["ifname"], item["mtu"], item["svc_key"]))
+        return rows
+
+    def _log_tun_open_diagnostics(
+        self,
+        *,
+        direction: str,
+        chan: int,
+        spec: "ChannelMux.ServiceSpec",
+        peer_id: Optional[int],
+        matched_dev: Optional["ChannelMux.TunDevice"] = None,
+        note: str = "",
+    ) -> None:
+        self.log.info(
+            "[TUN/OPEN] %s chan=%s peer_id=%s svc=%s name=%r l_if=%s l_mtu=%s r_if=%s r_mtu=%s shared_requested=%s matched_dev=%s note=%s inventory=%s",
+            direction,
+            chan,
+            None if peer_id is None else int(peer_id),
+            int(spec.svc_id),
+            str(spec.name or ""),
+            str(spec.l_bind),
+            int(spec.l_port),
+            str(spec.r_host),
+            int(spec.r_port),
+            self._shared_tun_open_requested(spec),
+            None if matched_dev is None else {
+                "ifname": str(getattr(matched_dev, "ifname", "") or ""),
+                "mtu": int(getattr(matched_dev, "mtu", 0) or 0),
+                "service_key": list(getattr(matched_dev, "service_key", ()) or ()),
+            },
+            str(note or ""),
+            self._service_tun_inventory_summary(),
+        )
 
     async def _start_tun_server_for(self, spec: ChannelMux.ServiceSpec, svc_key: "ChannelMux.ServiceKey"):
         self._start_tun_server_for_sync(spec, svc_key)
 
     def _start_tun_server_for_sync(self, spec: ChannelMux.ServiceSpec, svc_key: "ChannelMux.ServiceKey") -> "ChannelMux.TunDevice":
         mtu = max(68, int(spec.l_port or self.TUN_DEFAULT_MTU))
+        registry = self._process_shared_tun_registry
+        if self._is_server_shared_tun_service(spec) and registry is not None:
+            shared_dev = registry.attach_existing(self, str(spec.l_bind), mtu)
+            if shared_dev is not None:
+                self._svc_tun_devices[svc_key] = shared_dev
+                self._install_shared_tun_ownership_for_service(svc_key, spec)
+                self.log.info(
+                    "[TUN/SRV] service=%s:%s attached existing shared if=%s mtu=%s",
+                    svc_key[0],
+                    spec.svc_id,
+                    shared_dev.ifname,
+                    shared_dev.mtu,
+                )
+                return shared_dev
         dev = self._open_tun_device(spec.l_bind, mtu, svc_key=svc_key)
         self._svc_tun_devices[svc_key] = dev
         self._install_shared_tun_ownership_for_service(svc_key, spec)
         self._register_tun_reader(dev)
+        if self._is_server_shared_tun_service(spec) and registry is not None:
+            registry.register(self, svc_key, dev)
         self.log.info("[TUN/SRV] service=%s:%s opened if=%s mtu=%s", svc_key[0], spec.svc_id, dev.ifname, dev.mtu)
         self._schedule_service_hook(spec, svc_key, "listener", "on_created")
         return dev
@@ -2917,10 +3109,21 @@ class ChannelMux:
             self._chan_owner_peer_id.get(int(chan)),
             int(chan),
         )
+        self._register_tun_reader(dev, force_owner=True)
         if dev.chan_id is None:
             dev.chan_id = chan
         if dev.service_key is not None:
             self._tun_chan_by_service.setdefault(dev.service_key, chan)
+        self.log.info(
+            "[TUN/BIND] chan=%s if=%s mtu=%s peer_id=%s service_key=%s device_chans=%s shared_runtime=%s",
+            int(chan),
+            str(getattr(dev, "ifname", "") or ""),
+            int(getattr(dev, "mtu", 0) or 0),
+            self._chan_owner_peer_id.get(int(chan)),
+            getattr(dev, "service_key", None),
+            self._tun_channels_for_device(dev),
+            self._shared_tun_runtime_snapshot_for_service(getattr(dev, "service_key", None)),
+        )
 
     def _tun_channels_for_device(self, dev: "ChannelMux.TunDevice") -> list[int]:
         return [chan for chan, mapped in self._tun_by_chan.items() if mapped is dev]
@@ -3046,6 +3249,149 @@ class ChannelMux:
         state["window_start_ns"] = int(start_ns + windows * self.TUN_INFLOW_THROTTLE_WINDOW_NS)
         return state
 
+    @staticmethod
+    def _checksum16(payload: bytes) -> int:
+        data = bytes(payload or b"")
+        if len(data) % 2:
+            data += b"\x00"
+        total = 0
+        for idx in range(0, len(data), 2):
+            total += (data[idx] << 8) | data[idx + 1]
+            total = (total & 0xFFFF) + (total >> 16)
+        while total >> 16:
+            total = (total & 0xFFFF) + (total >> 16)
+        return (~total) & 0xFFFF
+
+    @classmethod
+    def _rewrite_ipv4_source(cls, packet: bytes, new_source: str) -> bytes:
+        payload = bytearray(packet)
+        if len(payload) < 20:
+            return packet
+        ihl = (payload[0] & 0x0F) * 4
+        if ihl < 20 or len(payload) < ihl:
+            return packet
+        try:
+            src_bytes = ipaddress.IPv4Address(str(new_source)).packed
+        except Exception:
+            return packet
+        payload[12:16] = src_bytes
+        payload[10:12] = b"\x00\x00"
+        payload[10:12] = cls._checksum16(bytes(payload[:ihl])).to_bytes(2, "big")
+        proto = int(payload[9])
+        total_len = ((payload[2] << 8) | payload[3]) if len(payload) >= 4 else len(payload)
+        if total_len <= 0 or total_len > len(payload):
+            total_len = len(payload)
+        l4 = payload[ihl:total_len]
+        if not l4:
+            return bytes(payload)
+        if proto == 6 and len(l4) >= 20:
+            l4[16:18] = b"\x00\x00"
+        elif proto == 17 and len(l4) >= 8:
+            l4[6:8] = b"\x00\x00"
+        elif proto == 1 and len(l4) >= 4:
+            l4[2:4] = b"\x00\x00"
+        else:
+            return bytes(payload)
+        pseudo = (
+            bytes(payload[12:16])
+            + bytes(payload[16:20])
+            + b"\x00"
+            + bytes([proto])
+            + len(l4).to_bytes(2, "big")
+        )
+        checksum = cls._checksum16(pseudo + bytes(l4))
+        if proto == 6 and len(l4) >= 20:
+            l4[16:18] = checksum.to_bytes(2, "big")
+        elif proto == 17 and len(l4) >= 8:
+            l4[6:8] = (checksum or 0xFFFF).to_bytes(2, "big")
+        elif proto == 1 and len(l4) >= 4:
+            l4[2:4] = checksum.to_bytes(2, "big")
+        payload[ihl:total_len] = l4
+        return bytes(payload)
+
+    @classmethod
+    def _rewrite_ipv6_source(cls, packet: bytes, new_source: str) -> bytes:
+        payload = bytearray(packet)
+        if len(payload) < 40:
+            return packet
+        try:
+            src_bytes = ipaddress.IPv6Address(str(new_source)).packed
+        except Exception:
+            return packet
+        payload[8:24] = src_bytes
+        next_header = int(payload[6])
+        l4 = payload[40:]
+        if next_header == 6 and len(l4) >= 20:
+            l4 = bytearray(l4)
+            l4[16:18] = b"\x00\x00"
+            pseudo = bytes(payload[8:24]) + bytes(payload[24:40]) + len(l4).to_bytes(4, "big") + b"\x00" * 3 + bytes([next_header])
+            l4[16:18] = cls._checksum16(pseudo + bytes(l4)).to_bytes(2, "big")
+            payload[40:] = l4
+        elif next_header == 17 and len(l4) >= 8:
+            l4 = bytearray(l4)
+            l4[6:8] = b"\x00\x00"
+            pseudo = bytes(payload[8:24]) + bytes(payload[24:40]) + len(l4).to_bytes(4, "big") + b"\x00" * 3 + bytes([next_header])
+            checksum = cls._checksum16(pseudo + bytes(l4)) or 0xFFFF
+            l4[6:8] = checksum.to_bytes(2, "big")
+            payload[40:] = l4
+        elif next_header == 58 and len(l4) >= 4:
+            l4 = bytearray(l4)
+            l4[2:4] = b"\x00\x00"
+            pseudo = bytes(payload[8:24]) + bytes(payload[24:40]) + len(l4).to_bytes(4, "big") + b"\x00" * 3 + bytes([next_header])
+            l4[2:4] = cls._checksum16(pseudo + bytes(l4)).to_bytes(2, "big")
+            payload[40:] = l4
+        return bytes(payload)
+
+    def _normalize_local_tun_packet_source(
+        self,
+        dev: "ChannelMux.TunDevice",
+        packet: bytes,
+    ) -> bytes:
+        parsed, parse_error = self._parse_tun_packet_endpoints(packet)
+        if parse_error is not None or not isinstance(parsed, dict):
+            return packet
+        version = int(parsed.get("ip_version", 0) or 0)
+        source_ip = str(parsed.get("source_ip") or "")
+        svc_key = getattr(dev, "service_key", None)
+        if not isinstance(svc_key, tuple) or str(svc_key[0]) != "local":
+            return packet
+        spec = self._effective_services_by_id().get(svc_key)
+        if spec is not None and self._shared_tun_ownership_snapshot_for_spec(spec) is not None:
+            return packet
+        if version == 4:
+            new_source = str(self._tun_routing_config().tunnel_address or "").strip()
+            if not new_source or source_ip == new_source:
+                return packet
+            if self._tun_routing_config().shared_tun_disable_outgoing_normalization:
+                warn_key = (str(dev.ifname or ""), source_ip, new_source)
+                if warn_key not in self._shared_tun_normalization_warned:
+                    self._shared_tun_normalization_warned.add(warn_key)
+                    self.log.warning(
+                        "[TUN] if=%s outgoing normalization disabled; keeping source=%s instead of configured tunnel source=%s",
+                        dev.ifname,
+                        source_ip,
+                        new_source,
+                    )
+                return packet
+            return self._rewrite_ipv4_source(packet, new_source)
+        if version == 6:
+            new_source = str(self._tun_routing_config().tunnel_address6 or "").strip()
+            if not new_source or source_ip == new_source:
+                return packet
+            if self._tun_routing_config().shared_tun_disable_outgoing_normalization:
+                warn_key = (str(dev.ifname or ""), source_ip, new_source)
+                if warn_key not in self._shared_tun_normalization_warned:
+                    self._shared_tun_normalization_warned.add(warn_key)
+                    self.log.warning(
+                        "[TUN] if=%s outgoing normalization disabled; keeping source=%s instead of configured tunnel source=%s",
+                        dev.ifname,
+                        source_ip,
+                        new_source,
+                    )
+                return packet
+            return self._rewrite_ipv6_source(packet, new_source)
+        return packet
+
     def _local_tun_send_allowed(self, packet_len: int, *, now_ns: int, scope_key: tuple[Any, ...]) -> bool:
         if self._tun_routing_config().shared_tun_disable_scoped_throttle:
             return True
@@ -3063,6 +3409,7 @@ class ChannelMux:
         state["curr_bytes"] = int(state.get("curr_bytes", 0) or 0) + max(0, int(packet_len))
 
     def _on_local_tun_packet(self, dev: "ChannelMux.TunDevice", packet: bytes) -> None:
+        packet = self._normalize_local_tun_packet_source(dev, packet)
         self._log_tun_packet_debug(stage="from_local_tun", packet=packet, ifname=dev.ifname, chan=dev.chan_id)
         if not (self._overlay_connected and self._accepting_enabled):
             return
@@ -3216,11 +3563,25 @@ class ChannelMux:
             lifecycle_hooks=lifecycle_hooks,
             options=options,
         )
+        self._log_tun_open_diagnostics(
+            direction="rx",
+            chan=int(chan),
+            spec=peer_spec,
+            peer_id=peer_id,
+            note="received_open_v4",
+        )
         self._schedule_service_hook(peer_spec, None, "client", "before_connect", channel_id=chan, peer_id=peer_id)
         dev = self._find_service_tun_device(str(host), int(r_port))
         if dev is None:
-            shared_tun_requested = self._shared_tun_ownership_snapshot_for_spec(peer_spec) is not None
+            shared_tun_requested = self._shared_tun_open_requested(peer_spec)
             if shared_tun_requested:
+                self._log_tun_open_diagnostics(
+                    direction="rx",
+                    chan=int(chan),
+                    spec=peer_spec,
+                    peer_id=peer_id,
+                    note="shared_attach_rejected_no_prestarted_match",
+                )
                 self.log.info(
                     "[TUN/CLI] chan=%s shared TUN attach rejected: no prestarted server-owned service if=%s mtu=%s",
                     chan,
@@ -3241,6 +3602,15 @@ class ChannelMux:
                 )
                 self._forget_tun_open_key(chan)
                 return
+        else:
+            self._log_tun_open_diagnostics(
+                direction="rx",
+                chan=int(chan),
+                spec=peer_spec,
+                peer_id=peer_id,
+                matched_dev=dev,
+                note="matched_prestarted_service",
+            )
         if dev is None:
             try:
                 dev = self._open_tun_device(str(host), max(68, int(r_port or self.TUN_DEFAULT_MTU)))

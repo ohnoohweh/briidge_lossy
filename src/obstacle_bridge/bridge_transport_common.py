@@ -339,6 +339,13 @@ class StreamRTT:
                 f"sample_ms={sample_ms:.3f} est_ms={self.rtt_est_ms:.3f} last_ok={self.last_rtt_ok_ns}"
             )
 
+    def reset(self) -> None:
+        self.rtt_est_ms = 0.0
+        self.rtt_sample_ms = 0.0
+        self.last_rtt_ok_ns = 0
+        self._last_rx_tx_ns = 0
+        self._last_rx_wall_ns = 0
+
 class StreamRTTRuntime:
     """
     Timer that drives initial and periodic pings and exposes connection events
@@ -369,6 +376,11 @@ class StreamRTTRuntime:
             self._task = None
         self._send_ping_fn = None
         self._on_state_change = None
+        self._conn_evt.clear()
+        self._conn_state = False
+        self._next_probe_due_ns = 0
+
+    def reset(self) -> None:
         self._conn_evt.clear()
         self._conn_state = False
         self._next_probe_due_ns = 0

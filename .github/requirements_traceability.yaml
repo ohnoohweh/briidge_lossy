@@ -113,6 +113,12 @@ REQ-OVL-007:
 # REQ-ADM-004 mapping intact while exposing the runtime-effective included/
 # excluded route lists, including auto-appended overlay-peer exclusions, via
 # `/api/tun-routing/status` and the browser TUN-routing summary.
+# NOTE: The 2026-06-11 reconnect hardening follow-up keeps the existing
+# REQ-LIFE-002, REQ-AUT-006/007, and REQ-MUX-006/009 mappings intact while
+# resetting stale WebSocket RTT state on reconnect, preserving authenticated
+# SecureLink outer connectivity across client transport-epoch restarts, and
+# restoring excluded peer routes from preserved underlay route state in the
+# Linux client TUN hook.
 # NOTE: The 2026-05-31 transport-scoped peer-resolution follow-up keeps the
 # REQ-OVL-007 mapping aligned while renaming resolve-family settings per
 # transport, preserving Python multi-host IPv4/IPv6 preference-plus-fallback
@@ -271,6 +277,7 @@ REQ-AUT-006:
     - tests/unit/test_secure_link_psk.py::test_data_counter_zero_is_rejected_as_lifecycle_violation
     - tests/unit/test_secure_link_psk.py::test_counter_exhaustion_fails_closed_before_nonce_wrap
     - tests/unit/test_secure_link_psk.py::test_explicit_transport_epoch_reset_forwards_to_inner_and_clears_client_state
+    - tests/unit/test_secure_link_psk.py::test_transport_epoch_change_keeps_outer_connected_during_live_rehandshake
 
 REQ-AUT-007:
   integration_tests:
@@ -538,6 +545,15 @@ REQ-LIFE-002:
     - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
   unit_tests:
     - tests/unit/test_ws_payload_mode.py::test_quick_reconnect_cancels_pending_disconnect
+    - tests/unit/test_ws_payload_mode.py::test_client_accept_resets_stale_rtt_state_before_new_transport_establishes
+    - tests/unit/test_ws_payload_mode.py::test_client_accept_rejects_overlapping_websocket_without_closing_active
+    - tests/unit/test_ws_payload_mode.py::test_stale_client_rx_pump_does_not_clear_newer_websocket
+    - tests/unit/test_ws_payload_mode.py::test_concurrent_client_connect_attempts_only_promote_one_websocket
+    - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_rejects_stale_open_callbacks
+    - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_rejects_stale_close_callbacks
+    - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_rejects_stale_completion_callbacks
+    - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_rejects_stale_receive_callbacks
+    - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_flushes_only_current_task
     - tests/unit/test_launcher_entrypoint.py::test_launcher_restarts_for_code_75
 
 REQ-LIFE-003:
@@ -710,6 +726,7 @@ REQ-MUX-006:
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_opens_channel_and_sends_data
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_device_keeps_symmetric_channel_aliases_routable
+    - tests/unit/test_channel_mux_listener_mode.py::test_process_shared_tun_registry_reuses_prestarted_server_owned_tun
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_active_tun_channel_as_open
@@ -786,6 +803,10 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_routes_shared_unicast_only_to_designated_peer_channel
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_routes_shared_broadcast_only_to_active_peer_channels
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_drops_shared_unknown_destination
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalizes_to_configured_ipv4_tunnel_address
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalizes_to_configured_ipv6_tunnel_address
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalization_can_be_disabled
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalization_disabled_warns_once
     - tests/unit/test_connection_snapshots.py::test_snapshot_exposes_shared_tun_ownership_and_active_binding
     - tests/unit/test_channel_mux_listener_mode.py::test_chunked_remote_services_transfer_reassembles_metadata
     - tests/unit/test_channel_mux_listener_mode.py::test_chunked_open_transfer_reassembles_metadata

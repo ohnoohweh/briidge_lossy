@@ -22,24 +22,32 @@ class RunnerEventBindingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_shutdown_event_binds_to_running_loop(self):
         runner = Runner(self._make_args())
-        runner.request_shutdown(reason="unit-test")
+        with mock.patch.object(bridge_runner.logging, "getLogger") as get_logger:
+            root_log = mock.Mock()
+            get_logger.return_value = root_log
+            runner.request_shutdown(reason="unit-test")
 
         runner._ensure_runtime_events()
 
         self.assertIsNotNone(runner._stop)
         self.assertTrue(runner._stop.is_set())
         self.assertEqual(runner._shutdown_reason, "unit-test")
+        root_log.warning.assert_called_with("[RUNNER] shutdown requested reason=%s", "unit-test")
         await asyncio.wait_for(runner._stop.wait(), timeout=0.1)
 
     async def test_restart_event_binds_to_running_loop(self):
         runner = Runner(self._make_args())
-        runner.request_restart(reason="unit-test")
+        with mock.patch.object(bridge_runner.logging, "getLogger") as get_logger:
+            root_log = mock.Mock()
+            get_logger.return_value = root_log
+            runner.request_restart(reason="unit-test")
 
         runner._ensure_runtime_events()
 
         self.assertIsNotNone(runner._restart_requested)
         self.assertTrue(runner._restart_requested.is_set())
         self.assertEqual(runner._restart_reason, "unit-test")
+        root_log.warning.assert_called_with("[RUNNER] restart requested reason=%s", "unit-test")
         await asyncio.wait_for(runner._restart_requested.wait(), timeout=0.1)
         self.assertEqual(runner._restart_exit_code, RESTART_EXIT_CODE_IMMEDIATE)
 

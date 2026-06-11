@@ -48,8 +48,18 @@ def test_client_tun_hook_supports_excluded_route_programming() -> None:
 
     assert 'EXCLUDED_ROUTES="${EXCLUDED_ROUTES:-}"' in script
     assert 'EXCLUDED_ROUTES6="${EXCLUDED_ROUTES6:-}"' in script
+    assert 'excluded_route_should_use_loopback4() {' in script
+    assert 'excluded_route_should_use_loopback6() {' in script
+    assert '127.0.0.0/8|127.0.0.1/32|127.0.0.1)' in script
+    assert '::1/128|::1)' in script
     assert 'add_excluded_routes4() {' in script
     assert 'add_excluded_routes6() {' in script
+    assert 'STATE_UNDERLAY4="${STATE_DIR}/${IFNAME}.underlay-route4"' in script
+    assert 'printf \'%s\\n\' "$route_line" > "$STATE_UNDERLAY4"' in script or "printf '%s\\n' \"$route_line\" > \"$STATE_UNDERLAY4\"" in script
+    assert 'done < <(_load_saved_route_parts "$STATE_UNDERLAY4" "ip route show default")' in script
+    assert 'ip route replace "$route_spec" dev lo' in script
+    assert 'ip -6 route replace "$route_spec" dev lo' in script
+    assert 'ip route replace "$route_spec" via "$gw" dev "$dev" src "$src"' in script
     assert 'delete_excluded_routes4() {' in script
     assert 'delete_excluded_routes6() {' in script
 
@@ -58,8 +68,13 @@ def test_client_tun_hook_waits_for_interface_and_uses_onlink_default_routes() ->
     script = (ROOT / "scripts" / "client-tun-hook.sh").read_text(encoding="utf-8")
 
     assert 'wait_for_interface() {' in script
+    assert 'log_route_snapshot() {' in script
+    assert 'log_diag() {' in script
     assert 'ip link show dev "$IFNAME"' in script
     assert 'wait_for_interface' in script
+    assert 'stage=${stage} default4=' in script
+    assert 'stage=${stage} overlay_route=' in script
+    assert 'ip route replace "$(overlay_route_prefix)" via "$UNDERLAY_GW" dev "$UNDERLAY_IF" src "$overlay_src"' in script
     assert 'ip route replace default via "$TUN_GW" dev "$IFNAME" onlink' in script
     assert 'ip -6 route replace default via "$TUN_GW6" dev "$IFNAME" metric 1 onlink' in script
 

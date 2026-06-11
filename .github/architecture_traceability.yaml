@@ -67,6 +67,11 @@
 # ARC-CMP-005 mapping intact while making the browser/admin payload surface
 # report runtime-effective route lists, including auto-appended overlay-peer
 # exclusions, rather than only the static config snapshot.
+# NOTE: The 2026-06-11 reconnect hardening follow-up keeps the existing
+# ARC-CMP-001/003/004/006 mappings intact while rejecting stale WebSocket
+# callbacks after reconnect, preserving authenticated SecureLink state across
+# client transport-epoch restarts, and persisting Linux client underlay route
+# state so excluded peer routes survive full-tunnel default-route mutation.
 # NOTE: The 2026-06-04 shared-TUN Phase 1 follow-up keeps the existing
 # ARC-CMP-003 mapping intact while adding validated structured ownership
 # metadata for tun->tun services and defending that metadata with Swift/Python
@@ -78,10 +83,19 @@ ARC-CMP-001:
     - tests/unit/test_ws_payload_mode.py::test_connect_refuses_upgrade_when_http_preflight_is_not_200
     - tests/unit/test_ws_payload_mode.py::test_connect_reports_dns_resolution_failures_as_failed
     - tests/unit/test_ws_payload_mode.py::test_connect_reports_proxy_negotiation_failures_as_failed
+    - tests/unit/test_ws_payload_mode.py::test_client_accept_resets_stale_rtt_state_before_new_transport_establishes
+    - tests/unit/test_ws_payload_mode.py::test_client_accept_rejects_overlapping_websocket_without_closing_active
+    - tests/unit/test_ws_payload_mode.py::test_stale_client_rx_pump_does_not_clear_newer_websocket
+    - tests/unit/test_ws_payload_mode.py::test_concurrent_client_connect_attempts_only_promote_one_websocket
     - tests/unit/test_ws_payload_mode.py::test_http_preflight_downloads_full_body_before_upgrade
     - tests/unit/test_ws_payload_mode.py::test_http_preflight_requests_default_page
     - tests/unit/test_ws_payload_mode.py::test_http_preflight_requires_success_status
     - tests/unit/test_ws_payload_mode.py::test_listener_peer_uses_advertised_payload_mode_for_rx_and_tx
+    - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_rejects_stale_open_callbacks
+    - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_rejects_stale_close_callbacks
+    - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_rejects_stale_completion_callbacks
+    - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_rejects_stale_receive_callbacks
+    - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_flushes_only_current_task
     - tests/unit/test_ws_multi_peer.py::test_unregister_peer_channels_only_removes_target_peer
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
     - tests/unit/test_ws_multi_peer.py::test_send_app_routes_to_matching_server_peer_queue
@@ -121,6 +135,7 @@ ARC-CMP-002:
 ARC-CMP-003:
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_opens_channel_and_sends_data
+    - tests/unit/test_channel_mux_listener_mode.py::test_process_shared_tun_registry_reuses_prestarted_server_owned_tun
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_brings_interface_up_before_underlay_route_is_known
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_normalizes_ipv4_mapped_ipv6_peer_for_route_programming
@@ -156,6 +171,10 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_routes_shared_unicast_only_to_designated_peer_channel
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_routes_shared_broadcast_only_to_active_peer_channels
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_drops_shared_unknown_destination
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalizes_to_configured_ipv4_tunnel_address
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalizes_to_configured_ipv6_tunnel_address
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalization_can_be_disabled
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalization_disabled_warns_once
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_guarded_inbound_tun_data_accepts_owned_ipv4
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_guarded_inbound_tun_data_accepts_broadcast_destination
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_guarded_inbound_tun_data_rejects_spoofed_ipv4
@@ -238,6 +257,10 @@ ARC-CMP-004:
     - tests/unit/test_channel_mux_listener_mode.py::test_from_args_defaults_omitted_tun_mtu_from_tun_routing
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_supports_excluded_route_programming
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_waits_for_interface_and_uses_onlink_default_routes
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalizes_to_configured_ipv4_tunnel_address
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalizes_to_configured_ipv6_tunnel_address
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalization_can_be_disabled
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalization_disabled_warns_once
     - tests/unit/test_tun_hook_scripts.py::test_server_tun_hook_supports_optional_tcpdump_capture
     - tests/unit/test_runner_ios_status_callbacks.py::test_runner_keeps_status_callbacks_wired_on_ios
     - tests/unit/test_channel_mux_listener_mode.py::test_peer_installed_tun_stop_runs_listener_on_stopped_before_close
@@ -348,6 +371,7 @@ ARC-CMP-006:
     - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_prevents_authenticated_session
     - tests/unit/test_secure_link_psk.py::test_explicit_transport_epoch_reset_forwards_to_inner_and_clears_client_state
+    - tests/unit/test_secure_link_psk.py::test_transport_epoch_change_keeps_outer_connected_during_live_rehandshake
     - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_schedules_transport_reconnect_recovery
     - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_recovery_can_be_disabled
     - tests/unit/test_secure_link_cert.py::test_cert_mode_happy_path_authenticates_and_exposes_peer_identity

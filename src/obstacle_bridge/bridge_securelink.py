@@ -461,6 +461,7 @@ class SecureLinkPskSession(ISession):
         self._handshake_attempts_total: int = 0
         self._authenticated_sessions_total: int = 0
         self._rekeys_completed_total: int = 0
+        self._preserve_connected_during_epoch_restart = False
         self._client_retry_task: Optional[asyncio.Task] = None
         self._client_recovery_task: Optional[asyncio.Task] = None
         self._client_rekey_task: Optional[asyncio.Task] = None
@@ -875,7 +876,9 @@ class SecureLinkPskSession(ISession):
         return int(peer_id) if peer_id is not None else 1
 
     def _compute_connected(self) -> bool:
-        return any(state.authenticated for state in self._peer_states.values())
+        if any(state.authenticated for state in self._peer_states.values()):
+            return True
+        return bool(self._preserve_connected_during_epoch_restart)
 
     @classmethod
     def _auth_fail_reason(cls, code: int) -> Optional[str]:
@@ -1091,6 +1094,7 @@ class SecureLinkPskSession(ISession):
         rekey_completed: bool,
     ) -> None:
         now = time.time()
+        self._preserve_connected_during_epoch_restart = False
         state.authenticated = True
         state.consecutive_failures = 0
         state.auth_fail_code = 0
@@ -2260,6 +2264,7 @@ class SecureLinkPskSession(ISession):
 
     def _on_inner_state_change(self, connected: bool) -> None:
         if not connected:
+            self._preserve_connected_during_epoch_restart = False
             self._cancel_client_retry_task(clear_schedule=False)
             self._cancel_client_rekey_task(clear_schedule=False)
             if self._client_mode:
@@ -2301,6 +2306,15 @@ class SecureLinkPskSession(ISession):
         self._cancel_client_retry_task(clear_schedule=False)
         self._cancel_client_rekey_task(clear_schedule=False)
         self._last_transport_epoch_change_unix_ts = time.time()
+        preserve_connected_epoch_restart = (
+            self._client_mode
+            and bool(getattr(self._inner, "is_connected", lambda: False)())
+            and any(
+                state.authenticated
+                or int(state.authenticated_sessions_total or 0) > 0
+                for state in self._peer_states.values()
+            )
+        )
         preserve_client_handshake = (
             self._client_mode
             and any(
@@ -2311,6 +2325,7 @@ class SecureLinkPskSession(ISession):
                 for state in self._peer_states.values()
             )
         )
+        self._preserve_connected_during_epoch_restart = bool(preserve_connected_epoch_restart)
         if not preserve_client_handshake:
             self._clear_all_states()
         if (

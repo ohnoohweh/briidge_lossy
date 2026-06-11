@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import contextlib
 import socket
 import sys
 import tempfile
@@ -88,6 +89,7 @@ class _FakeWs:
     def __init__(self):
         self.sent = []
         self.close_calls = 0
+        self.recv_calls = 0
 
     async def send(self, payload):
         self.sent.append(payload)
@@ -96,10 +98,23 @@ class _FakeWs:
         self.close_calls += 1
 
     async def recv(self):
+        self.recv_calls += 1
         await asyncio.Future()
 
     async def wait_closed(self):
         return None
+
+
+class _QueuedRecvWs(_FakeWs):
+    def __init__(self, frames):
+        super().__init__()
+        self._frames = list(frames)
+
+    async def recv(self):
+        self.recv_calls += 1
+        if self._frames:
+            return self._frames.pop(0)
+        await asyncio.Future()
 
 
 class _HangingWs(_FakeWs):
@@ -381,6 +396,42 @@ class WebSocketReconnectGraceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(session._overlay_connected)
         self.assertIsNone(session._disconnect_task)
 
+    async def test_client_accept_resets_stale_rtt_state_before_new_transport_establishes(self):
+        args = _args("binary")
+        args.peer = "127.0.0.1"
+        args.peer_port = 54321
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+        session._peer_tuple = ("127.0.0.1", 54321)
+        session._peer_host = "127.0.0.1"
+        session._peer_port = 54321
+        session._rtt_rt.attach(send_ping_fn=None, on_state_change=session._on_rtt_state_change)
+        state_changes = []
+        session.set_on_state_change(state_changes.append)
+
+        session._overlay_connected = True
+        session._rtt.last_rtt_ok_ns = 1
+        session._rtt_rt._conn_state = True
+
+        ping_frame = bytes([session._K_PING]) + session._rtt.build_ping_bytes()
+        ws = _QueuedRecvWs([ping_frame])
+
+        await session._on_accept(ws)
+        await asyncio.sleep(0.05)
+
+        self.assertTrue(session._run_flag)
+        self.assertTrue(session._ws is ws)
+        self.assertTrue(session._overlay_connected)
+        self.assertEqual(state_changes, [])
+        self.assertEqual(session._rtt.last_rtt_ok_ns, 0)
+
+        session._rtt_rt.detach()
+        session._rx_task.cancel()
+        await session._rx_task
+        session._tx_task.cancel()
+        await session._tx_task
+
 
 class WebSocketHttpPreflightTests(unittest.IsolatedAsyncioTestCase):
     async def test_http_preflight_requests_default_page(self):
@@ -641,6 +692,102 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(connect.await_args.kwargs["sock"], fake_sock)
         self.assertNotIn("host", connect.await_args.kwargs)
         self.assertNotIn("port", connect.await_args.kwargs)
+
+    async def test_client_accept_rejects_overlapping_websocket_without_closing_active(self):
+        args = _args("binary")
+        args.ws_peer = "127.0.0.1"
+        args.ws_peer_port = 54321
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+        session._peer_tuple = ("127.0.0.1", 54321)
+
+        current_ws = _FakeWs()
+        current_ws.local_address = ("127.0.0.1", 40000)
+        current_ws.remote_address = ("127.0.0.1", 54321)
+        session._ws = current_ws
+
+        overlapping_ws = _FakeWs()
+        overlapping_ws.local_address = ("127.0.0.1", 40002)
+        overlapping_ws.remote_address = ("127.0.0.1", 54321)
+
+        await session._on_accept(overlapping_ws)
+
+        self.assertIs(session._ws, current_ws)
+        self.assertEqual(current_ws.close_calls, 0)
+        self.assertEqual(overlapping_ws.close_calls, 1)
+
+    async def test_stale_client_rx_pump_does_not_clear_newer_websocket(self):
+        args = _args("binary")
+        args.ws_peer = "127.0.0.1"
+        args.ws_peer_port = 54321
+        args.ws_reconnect_grace = 0.0
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+        session._peer_tuple = ("127.0.0.1", 54321)
+
+        stale_ws = _FakeWs()
+        stale_ws.local_address = ("127.0.0.1", 40000)
+        stale_ws.remote_address = ("127.0.0.1", 54321)
+        current_ws = _FakeWs()
+        current_ws.local_address = ("127.0.0.1", 40002)
+        current_ws.remote_address = ("127.0.0.1", 54321)
+        session._ws = current_ws
+
+        reconnect_calls = []
+        session._start_reconnect_loop = lambda: reconnect_calls.append("called")  # type: ignore[method-assign]
+
+        task = asyncio.create_task(session._rx_pump(ws=stale_ws))
+        await asyncio.sleep(0)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        self.assertIs(session._ws, current_ws)
+        self.assertEqual(current_ws.close_calls, 0)
+        self.assertEqual(stale_ws.close_calls, 0)
+        self.assertEqual(reconnect_calls, [])
+
+    async def test_concurrent_client_connect_attempts_only_promote_one_websocket(self):
+        args = _args("binary")
+        args.ws_peer = "127.0.0.1"
+        args.ws_peer_port = 54321
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+        session._peer_tuple = ("127.0.0.1", 54321)
+        session._peer_name_host = "overlay.example"
+        session._peer_name_port = 54321
+
+        first_gate = asyncio.Event()
+        first_release = asyncio.Event()
+        connect_calls = {"count": 0}
+        created = []
+
+        async def fake_connect(uri, ssl=None, subprotocols=None, max_size=None, compression=None, ping_interval=None, ping_timeout=None, **kwargs):
+            connect_calls["count"] += 1
+            ws = _FakeWs()
+            ws.local_address = ("127.0.0.1", 40000 + connect_calls["count"])
+            ws.remote_address = ("127.0.0.1", 54321)
+            created.append(ws)
+            if connect_calls["count"] == 1:
+                first_gate.set()
+                await first_release.wait()
+            return ws
+
+        fake_websockets = types.SimpleNamespace(connect=fake_connect)
+
+        with mock.patch.dict(sys.modules, {"websockets": fake_websockets}):
+            with mock.patch.object(session, "_load_default_http_page", mock.AsyncMock()):
+                t1 = asyncio.create_task(session._connect_to("127.0.0.1", 54321))
+                await asyncio.wait_for(first_gate.wait(), timeout=1.0)
+                t2 = asyncio.create_task(session._connect_to("127.0.0.1", 54321))
+                first_release.set()
+                await asyncio.gather(t1, t2)
+
+        self.assertEqual(connect_calls["count"], 1)
+        self.assertIs(session._ws, created[0])
 
     async def test_connect_reports_dns_resolution_failures_as_failed(self):
         args = _args("binary")

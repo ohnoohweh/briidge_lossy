@@ -189,6 +189,7 @@ class Runner:
 
         loop = asyncio.get_running_loop()
         transport_sessions = Runner.build_sessions_from_overlay(self.args)
+        shared_tun_registry = ProcessSharedTunRegistry()
         self._sessions = []
         self._muxes = []
         self._session_labels = []
@@ -207,6 +208,7 @@ class Runner:
                 on_local_rx_bytes=self.stats.on_app_rx_bytes,
                 on_local_tx_bytes=self.stats.on_app_tx_bytes
             )
+            mux._process_shared_tun_registry = shared_tun_registry
             session.set_on_peer_set(
                 lambda host, port, mux=mux: (
                     self.stats.on_peer_set(host, port),
@@ -412,8 +414,14 @@ class Runner:
         parts = [item.strip().lower() for item in raw.split(",") if item.strip()]
         return "myudp" in parts
 
+    @staticmethod
+    def _emit_lifecycle_warning(message: str, *args) -> None:
+        with contextlib.suppress(Exception):
+            logging.getLogger().warning(message, *args)
+
     def request_restart(self, reason: str = "") -> None:
         self._restart_reason = str(reason or getattr(self, "_restart_reason", "") or "unspecified")
+        self._emit_lifecycle_warning("[RUNNER] restart requested reason=%s", self._restart_reason)
         self.log.info("[SERVER] Runner restart requested reason=%s", self._restart_reason)
         callback = getattr(self, "_embedded_restart_callback", None)
         if callable(callback):
@@ -1369,8 +1377,14 @@ class Runner:
         self._shutdown_reason = str(reason or self._shutdown_reason or "unspecified")
         if exit_code is not None:
             self._shutdown_exit_code = int(exit_code)
+            self._emit_lifecycle_warning(
+                "[RUNNER] shutdown requested rc=%d reason=%s",
+                self._shutdown_exit_code,
+                self._shutdown_reason,
+            )
             self.log.info("[SERVER] Runner shutdown requested rc=%d reason=%s", self._shutdown_exit_code, self._shutdown_reason)
         else:
+            self._emit_lifecycle_warning("[RUNNER] shutdown requested reason=%s", self._shutdown_reason)
             self.log.info("[SERVER] Runner shutdown requested reason=%s", self._shutdown_reason)
         self._stop_requested = True
         if self._stop is not None:

@@ -570,6 +570,7 @@ from .bridge_channelmux import (
     STATE_FAILED,
     _ChanCtr,
     ChannelMux,
+    ProcessSharedTunRegistry,
 )
 from .bridge_webadmin import AdminWebUI
 from .bridge_stats import StatsBoard

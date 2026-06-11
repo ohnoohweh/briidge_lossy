@@ -5,7 +5,7 @@ import ipaddress
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from obstacle_bridge.bridge import ChannelMux, SessionMetrics
+from obstacle_bridge.bridge import ChannelMux, ProcessSharedTunRegistry, SessionMetrics
 from obstacle_bridge.bridge_tun_routing import TunRoutingSettings
 
 
@@ -1023,6 +1023,129 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.mux._overlay_connected = True
         self.mux._accepting_enabled = True
 
+    async def test_process_shared_tun_registry_reuses_prestarted_server_owned_tun(self):
+        session2 = _FakeSession()
+        mux2 = ChannelMux(session2, asyncio.get_running_loop())
+        mux2._overlay_connected = True
+        mux2._accepting_enabled = True
+        registry = ProcessSharedTunRegistry()
+        self.mux._process_shared_tun_registry = registry
+        mux2._process_shared_tun_registry = registry
+        spec = ChannelMux.ServiceSpec(
+            1,
+            'tun',
+            'obtun0',
+            1600,
+            'tun',
+            'obtun0',
+            1600,
+            options={
+                'shared_tun_ownership': {
+                    'mode': 'server_shared',
+                    'peers': [
+                        {'peer_ref': 'linux-client', 'ipv4': ['192.168.106.2']},
+                    ],
+                }
+            },
+        )
+        svc_key = ('local', 0, 1)
+        self.mux._local_services[svc_key] = spec
+        mux2._local_services[svc_key] = spec
+        dev = ChannelMux.TunDevice(fd=55, ifname='obtun0', mtu=1600, service_key=svc_key)
+
+        with patch.object(self.mux, '_open_tun_device', return_value=dev) as open1, \
+             patch.object(self.mux, '_register_tun_reader') as reg1, \
+             patch.object(mux2, '_open_tun_device') as open2, \
+             patch.object(mux2, '_register_tun_reader') as reg2:
+            opened = self.mux._start_tun_server_for_sync(spec, svc_key)
+            attached = mux2._start_tun_server_for_sync(spec, svc_key)
+
+        self.assertIs(opened, dev)
+        self.assertIs(attached, dev)
+        open1.assert_called_once()
+        reg1.assert_called_once_with(dev)
+        open2.assert_not_called()
+        reg2.assert_not_called()
+        self.assertIs(self.mux._svc_tun_devices[svc_key], dev)
+        self.assertIs(mux2._svc_tun_devices[svc_key], dev)
+
+    async def test_local_tun_packet_source_normalizes_to_configured_ipv4_tunnel_address(self):
+        self.mux.args = argparse.Namespace(
+            TUN_routing={
+                "tunnel_address": "192.168.106.2",
+                "tunnel_address6": "fd20:106::2",
+                "shared_tun_disable_outgoing_normalization": False,
+            }
+        )
+        spec = ChannelMux.ServiceSpec(6, "tun", "obtun0", 1600, "tun", "obtun0", 1600)
+        svc_key = ("local", 0, 6)
+        dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1600, service_key=svc_key)
+        packet = _ipv4_packet("192.168.0.8", "49.13.72.183")
+
+        self.mux._local_services[svc_key] = spec
+
+        normalized = self.mux._normalize_local_tun_packet_source(dev, packet)
+
+        self.assertEqual(normalized[12:16], b"\xc0\xa8\x6a\x02")
+        self.assertEqual(normalized[16:20], ipaddress.IPv4Address("49.13.72.183").packed)
+
+    async def test_local_tun_packet_source_normalizes_to_configured_ipv6_tunnel_address(self):
+        self.mux.args = argparse.Namespace(
+            TUN_routing={
+                "tunnel_address": "192.168.106.2",
+                "tunnel_address6": "fd20:106::2",
+                "shared_tun_disable_outgoing_normalization": False,
+            }
+        )
+        spec = ChannelMux.ServiceSpec(6, "tun", "obtun0", 1600, "tun", "obtun0", 1600)
+        svc_key = ("local", 0, 6)
+        dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1600, service_key=svc_key)
+        packet = _ipv6_packet("fe80::5982:73cb:ba81:e36c", "ff02::16")
+
+        self.mux._local_services[svc_key] = spec
+
+        normalized = self.mux._normalize_local_tun_packet_source(dev, packet)
+
+        self.assertEqual(normalized[8:24], ipaddress.IPv6Address("fd20:106::2").packed)
+        self.assertEqual(normalized[24:40], ipaddress.IPv6Address("ff02::16").packed)
+
+    async def test_local_tun_packet_source_normalization_can_be_disabled(self):
+        self.mux.args = argparse.Namespace(
+            TUN_routing={
+                "tunnel_address": "192.168.106.2",
+                "shared_tun_disable_outgoing_normalization": True,
+            }
+        )
+        spec = ChannelMux.ServiceSpec(6, "tun", "obtun0", 1600, "tun", "obtun0", 1600)
+        svc_key = ("local", 0, 6)
+        dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1600, service_key=svc_key)
+        packet = _ipv4_packet("192.168.0.8", "49.13.72.183")
+
+        self.mux._local_services[svc_key] = spec
+
+        self.assertEqual(self.mux._normalize_local_tun_packet_source(dev, packet), packet)
+
+    async def test_local_tun_packet_source_normalization_disabled_warns_once(self):
+        self.mux.args = argparse.Namespace(
+            TUN_routing={
+                "tunnel_address": "192.168.106.2",
+                "shared_tun_disable_outgoing_normalization": True,
+            }
+        )
+        spec = ChannelMux.ServiceSpec(6, "tun", "obtun0", 1600, "tun", "obtun0", 1600)
+        svc_key = ("local", 0, 6)
+        dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1600, service_key=svc_key)
+        packet = _ipv4_packet("192.168.0.8", "49.13.72.183")
+
+        self.mux._local_services[svc_key] = spec
+
+        with patch.object(self.mux.log, "warning") as warn:
+            self.assertEqual(self.mux._normalize_local_tun_packet_source(dev, packet), packet)
+            self.assertEqual(self.mux._normalize_local_tun_packet_source(dev, packet), packet)
+
+        warn.assert_called_once()
+        self.assertIn("outgoing normalization disabled", warn.call_args.args[0])
+
     async def test_sends_control_install_when_overlay_connects(self):
         spec = ChannelMux.ServiceSpec(
             svc_id=1,
@@ -1578,10 +1701,15 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         open_payload = self.mux._build_open_v4(spec)
-        with patch.object(self.mux, '_ensure_peer_tun_listener_for_target') as ensure_peer_listener:
+        with patch.object(self.mux, '_ensure_peer_tun_listener_for_target') as ensure_peer_listener, \
+             patch.object(self.mux, '_log_tun_open_diagnostics') as log_diag:
             self.mux._rx_tun_open(1, open_payload, peer_id=77)
 
         ensure_peer_listener.assert_not_called()
+        self.assertEqual([call.kwargs.get('note') for call in log_diag.call_args_list], [
+            'received_open_v4',
+            'shared_attach_rejected_no_prestarted_match',
+        ])
         self.assertNotIn(1, self.mux._tun_by_chan)
 
     def test_shared_tun_open_binds_to_prestarted_server_owned_service(self):
@@ -1609,10 +1737,17 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.mux._install_shared_tun_ownership_for_service(svc_key, spec)
         open_payload = self.mux._build_open_v4(spec)
 
-        with patch.object(self.mux, '_ensure_peer_tun_listener_for_target') as ensure_peer_listener:
+        with patch.object(self.mux, '_ensure_peer_tun_listener_for_target') as ensure_peer_listener, \
+             patch.object(self.mux, '_register_tun_reader') as register_reader, \
+             patch.object(self.mux, '_log_tun_open_diagnostics') as log_diag:
             self.mux._rx_tun_open(1, open_payload, peer_id=77)
 
         ensure_peer_listener.assert_not_called()
+        register_reader.assert_called_once_with(dev, force_owner=True)
+        self.assertEqual([call.kwargs.get('note') for call in log_diag.call_args_list], [
+            'received_open_v4',
+            'matched_prestarted_service',
+        ])
         self.assertIs(self.mux._tun_by_chan.get(1), dev)
 
     async def test_remote_catalog_replacement_adds_and_removes_services(self):

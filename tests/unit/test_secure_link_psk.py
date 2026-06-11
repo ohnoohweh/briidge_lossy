@@ -586,6 +586,36 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         new_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
         self.assertNotEqual(old_session_id, new_session_id)
 
+    async def test_transport_epoch_change_keeps_outer_connected_during_live_rehandshake(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+
+        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
+        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
+        client_states = []
+        client.set_on_state_change(client_states.append)
+
+        await client.start()
+        await server.start()
+
+        server_inner.emit_state(True)
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        self.assertEqual(client_states, [True])
+        self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
+
+        client_inner.emit_transport_epoch(2)
+        for _ in range(8):
+            await asyncio.sleep(0)
+
+        self.assertEqual(client_states, [True])
+        self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
+
     async def test_explicit_transport_epoch_reset_forwards_to_inner_and_clears_client_state(self):
         client_inner = FakeInnerSession(connected=True)
         client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
