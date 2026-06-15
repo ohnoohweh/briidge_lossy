@@ -1070,12 +1070,29 @@ function roleClass(role) {
   return 'role-pill role-unknown';
 }
 
+function fmtThrottleSummary(throttle) {
+  if (!throttle || throttle.applicable === false) {
+    return 'n/a';
+  }
+  const active = !!throttle.active;
+  const budget = fmtBytes(throttle.budget_bytes ?? 0);
+  const used = fmtBytes(throttle.used_bytes ?? 0);
+  const remaining = fmtBytes(throttle.remaining_bytes ?? 0);
+  const aggregateRemaining = fmtBytes(throttle.aggregate?.remaining_bytes ?? 0);
+  const scopeRemaining = throttle.scope ? fmtBytes(throttle.scope.remaining_bytes ?? 0) : null;
+  const state = throttle.stalled ? 'stalled' : (active ? 'active' : 'idle');
+  if (scopeRemaining != null) {
+    return `${state} ${used}/${budget} rem ${remaining} agg ${aggregateRemaining} scope ${scopeRemaining}`;
+  }
+  return `${state} ${used}/${budget} rem ${remaining}`;
+}
+
 function renderConnectionTable(tbodyId, rows, protocolLabel = 'Connection') {
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
 
   if (!rows || rows.length === 0) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="13">No ${escapeHtml(protocolLabel)} connections</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="14">No ${escapeHtml(protocolLabel)} connections</td></tr>`;
     return;
   }
 
@@ -1100,7 +1117,8 @@ function renderConnectionTable(tbodyId, rows, protocolLabel = 'Connection') {
         <td class="mono">${escapeHtml(fmtBytes(rxBytes))}</td>
         <td class="mono">${escapeHtml(fmtBytes(txBytes))}</td>
         <td class="mono">${escapeHtml(fmtInteger(rxMsgs))}</td>
-        <td class="mono">${escapeHtml(fmtInteger(txMsgs))}</td>        
+        <td class="mono">${escapeHtml(fmtInteger(txMsgs))}</td>
+        <td class="mono">${escapeHtml(fmtThrottleSummary(row.throttle))}</td>
       </tr>
     `;
   }).join('');
@@ -1111,7 +1129,7 @@ function renderTunConnectionTable(tbodyId, rows) {
   if (!tbody) return;
 
   if (!rows || rows.length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="13">No TUN connections</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="15">No TUN connections</td></tr>';
     return;
   }
 
@@ -1189,6 +1207,7 @@ function renderTunRoutingConnectionTable(tbodyId, rows) {
         <td class="mono">${escapeHtml(fmtBytes(txBytes))}</td>
         <td class="mono">${escapeHtml(fmtInteger(rxMsgs))}</td>
         <td class="mono">${escapeHtml(fmtInteger(txMsgs))}</td>
+        <td class="mono">${escapeHtml(fmtThrottleSummary(row.throttle))}</td>
       </tr>
     `;
   }).join('');
@@ -2479,6 +2498,7 @@ function renderPeerTable(rows) {
         renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds)),
         renderMetric('RTT Est (ms)', fmtNumber(row.rtt_est_ms)),
         renderMetric('Transmit Delay Est (ms)', fmtNumber(row.transmit_delay_est_ms)),
+        renderMetric('Throttle', fmtThrottleSummary(row.throttle)),
         renderMetric('RX Bytes', fmtBytes(row.traffic?.rx_bytes ?? 0)),
         renderMetric('TX Bytes', fmtBytes(row.traffic?.tx_bytes ?? 0)),
       ]);

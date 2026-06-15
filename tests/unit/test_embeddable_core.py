@@ -48,6 +48,9 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         self.assertEqual(args.overlay_transport, "tcp")
         self.assertEqual(args.tcp_peer, "peer.example")
         self.assertEqual(args.tcp_peer_port, 8443)
+        self.assertIn("overlay_transport", args._config_sections["runner"])
+        self.assertIn("tcp_peer", args._config_sections["tcp_session"])
+        self.assertNotIn("tcp_peer", args._config_sections["runner"])
 
     def test_build_runtime_args_from_onboarding_config_marks_first_start(self) -> None:
         args = build_runtime_args_from_config(
@@ -130,7 +133,7 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         self.assertIn("peer_port", ios_tun_connector_rows)
         self.assertEqual(
             ios_tun_connector_rows["packetflow_connector"]["choices"],
-            ["", "udp", "direct", "simple_udp_peer", "swift_udp", "swift_udp_peer"],
+            ["", "udp", "direct", "simple_udp_peer", "swift_udp", "swift_udp_peer", "swift_host_runner"],
         )
 
     def test_build_runtime_args_preserves_explicit_config_path_for_embedders(self) -> None:

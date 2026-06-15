@@ -1105,6 +1105,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
 
     func adminPeersSnapshot() -> [[String: Any]] {
         let bridgeSnapshot = adminBridgeSnapshot()
+        let connections = adminConnectionsSnapshot()
         let traffic = adminPeerTraffic(bridgeSnapshot: bridgeSnapshot)
         let openConnections = adminOpenConnections(bridgeSnapshot: bridgeSnapshot)
         let state = adminTransportConnectedState(bridgeSnapshot: bridgeSnapshot) ? "connected" : "connecting"
@@ -1129,6 +1130,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "open_connections": openConnections,
             "secure_link": adminSecureLinkSnapshot(state: state),
             "compress_layer": adminCompressLayerSnapshot() ?? NSNull(),
+            "throttle": ObstacleBridgeAdminSnapshotSupport.peerThrottleSnapshot(peerID: 1, connectionsSnapshot: connections),
             "runtime": transportRuntime,
             "myudp": [
                 "buffered_frames": protocolStats["buffered_frames"] ?? 0,

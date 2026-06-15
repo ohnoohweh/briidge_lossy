@@ -276,6 +276,43 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         self.assertIn("connected", {row.get("state") for row in snap["udp"]})
         self.assertIn("connected", {row.get("state") for row in snap["tcp"]})
 
+    def test_snapshot_active_udp_connection_includes_throttle_summary(self):
+        self.mux._svc_udp_servers[self.udp_key] = _FakeDatagramTransport(("0.0.0.0", 1111))
+        self.mux._udp_by_chan[101] = (self.udp_key, ("10.10.10.10", 40001))
+        self.mux._local_ingress_throttle_snapshot_for_scope = lambda scope_key, now_ns=None: {  # type: ignore[method-assign]
+            "applicable": True,
+            "active": True,
+            "stalled": False,
+            "backpressure_active": True,
+            "disabled": False,
+            "budget_bytes": 2048,
+            "used_bytes": 1536,
+            "remaining_bytes": 512,
+            "aggregate": {
+                "scope_id": "aggregate",
+                "budget_bytes": 2048,
+                "used_bytes": 1536,
+                "remaining_bytes": 512,
+                "prev_window_bytes": 2048,
+                "throttle_drop_count": 1,
+            },
+            "scope": {
+                "scope_id": "udp:101",
+                "budget_bytes": 2048,
+                "used_bytes": 1536,
+                "remaining_bytes": 512,
+                "prev_window_bytes": 2048,
+                "throttle_drop_count": 1,
+            },
+        }
+
+        snap = self.mux.snapshot_connections()
+
+        row = next(row for row in snap["udp"] if row.get("state") == "connected")
+        self.assertTrue(row["throttle"]["applicable"])
+        self.assertTrue(row["throttle"]["active"])
+        self.assertEqual(row["throttle"]["remaining_bytes"], 512)
+
     def test_closed_channel_stats_are_archived_by_owner_peer(self):
         self.mux._chan_owner_peer_id[201] = 7
         ctr = self.mux._ctr(ChannelMux.Proto.TCP, 201)

@@ -26,6 +26,7 @@ def test_shared_packet_tunnel_configuration_source_exists() -> None:
 
 def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    snapshot_support = (SHARED_NATIVE_DIR / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")
 
     assert "NEPacketTunnelProvider" in provider
     assert "ObstacleBridgeAdminAPI" in provider
@@ -93,10 +94,16 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "private var secureLinkConnectedSinceUnixTS:" in provider
     assert '"rx_bytes_per_sec": rxRate' in provider
     assert '"connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTS ?? nowUnixTS)' in provider
+    assert '"throttle": ObstacleBridgeAdminSnapshotSupport.peerThrottleSnapshot(peerID: 1, connectionsSnapshot: connections)' in provider
+    assert "static func peerThrottleSnapshot(peerID: Int, connectionsSnapshot: [String: Any]) -> [String: Any]" in snapshot_support
+    assert 'let budgetBytes = Int(Double(prevWindowBytes) * peerThrottleRatio)' in snapshot_support
 
     runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
     assert "struct ObstacleBridgeAdminUIBootstrapState" in runtime_config
     assert "static func adminUIBootstrapState" in runtime_config
+    assert 'schemaItem(key: "ws_bind"' in runtime_config
+    assert 'schemaItem(key: "ws_own_port"' in runtime_config
+    assert 'schemaItem(key: "ws_path"' in runtime_config
 
 
 def test_native_packet_flow_bridge_source_exists() -> None:
@@ -358,6 +365,7 @@ def test_macos_swift_host_runner_source_exists() -> None:
     assert "ObstacleBridgeCompressLayerRuntime" in runtime
     assert "ObstacleBridgeSecureLinkPskRuntime" in runtime
     assert "ObstacleBridgeWebSocketOverlayRuntime" in runtime
+    assert '"throttle": ObstacleBridgeAdminSnapshotSupport.peerThrottleSnapshot(peerID: 1, connectionsSnapshot: connections)' in runtime
     assert "ObstacleBridgeTcpOverlayRuntime" in runtime
     assert "ObstacleBridgeTcpOverlayTransportOwner" in runtime
     assert "ObstacleBridgeSecureLinkPskTransportAdapter" in runtime

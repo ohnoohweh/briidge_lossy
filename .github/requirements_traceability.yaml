@@ -1,7 +1,10 @@
-# NOTE: The 2026-06-05 Linux cert-reload readiness follow-up keeps the
-# existing REQ-AUT-015/017/019 mappings intact while hardening the first
-# authenticated WebAdmin prime probe against self-restart and delayed
-# cert-session readiness in the shared overlay integration harness.
+# This manifest is CI/support metadata and therefore lives under .github/
+# rather than docs/.
+#
+# Keep this file state-based:
+# - list only active requirement-to-test mappings
+# - avoid rollout chronology or PR notes
+# - keep narrative in docs/REQUIREMENTS.md and docs/README_TESTING.md
 REQ-OVL-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic
@@ -64,83 +67,6 @@ REQ-OVL-007:
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_falls_back_to_ipv4_when_ipv6_candidate_fails
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_honors_bind_family_constraint
 
-# This manifest is CI/support metadata and therefore lives under .github/ rather than docs/.
-# NOTE: updated to reflect a small instrumentation/docs change (PR #178)
-# NOTE: additionally updated to reflect repository process/PR-style documentation changes (PR #178)
-# NOTE: the README is intentionally maintained as a compact coverage snapshot, while
-# detailed requirement, design, and testing narrative stays in the dedicated docs.
-# NOTE: the PR-185 backport also revalidated the Linux shared xdist slice after
-# loopback-isolated harness rewrites and secure-link session-budget fixes in the
-# delivered runtime, so the existing REQ-WSP-008/010, REQ-ADM-004/006, and
-# REQ-AUT-010 mappings remain defended in the CI-aligned parallel run.
-# NOTE: PR #189 additionally hardens the shared integration harness with
-# runtime-generated localhost TLS fixtures and availability-aware loopback
-# port-block selection. This is a testability/runtime-note update in
-# REQUIREMENTS.md; the underlying requirement-to-test mappings remain unchanged.
-# NOTE: The 2026-05-15 runtime-refactor recovery keeps the existing REQ-LIFE-002,
-# REQ-LIFE-005, REQ-LIFE-008, and REQ-LIFE-009 launcher mappings intact while
-# switching the default launcher subprocess from `-m obstacle_bridge.bridge` to
-# `from obstacle_bridge.bridge import main; main()` and restoring the branch's
-# default-entrypoint / failure-injection coverage.
-# NOTE: The 2026-05-15 iOS E2E CI follow-up keeps the existing REQ-OVL-004,
-# REQ-AUT-001/002/004, and REQ-LIFE-010 mappings intact while hardening the
-# host-side iOS E2E tests against xdist port-allocation races.
-# NOTE: The 2026-05-15 Windows proxy-negotiation import fix keeps the existing
-# REQ-WSP-009 and REQ-WSP-012 mappings intact while restoring ctypes-backed
-# WinHTTP/SSPI Negotiate behavior in the split WebSocket transport module.
-# NOTE: The 2026-05-31 Linux shared CI repair keeps the existing REQ-OVL-003,
-# REQ-OVL-004, REQ-OVL-006, REQ-OVL-007, REQ-AUT-006, and REQ-AUT-007 mappings
-# intact while fixing SecureLink transport-epoch reconnect handling and adding
-# listener-readiness waits to the shared overlay harness for xdist-stable IPv6
-# TCP/WS startup.
-# NOTE: The 2026-06-04 WebAdmin cert-reload Linux shared follow-up keeps the
-# existing REQ-AUT-015/017/019 mappings intact while adding one more readiness
-# gate before the first authenticated TCP probe: the forwarded probe listener
-# itself must be accepting connections, not just the admin session and secure-
-# link peer row.
-# NOTE: The 2026-06-04 full-material cert-reload Linux shared follow-up keeps
-# the same REQ-AUT-015/017/019 mappings intact while making the integration
-# harness wait for the client admin endpoint and CONNECTED runtime state to
-# recover before asserting post-reload authenticated peer state.
-# NOTE: The 2026-06-04 local-TUN hook-env follow-up keeps the existing
-# REQ-MUX-009 mapping intact while extending local hook defaults with peer and
-# subnet metadata already expected by the server-side TUN hook scripts.
-# NOTE: The 2026-06-08 Linux client TUN hook hardening keeps the existing
-# REQ-MUX-009 mapping intact while making client-side bring-up wait for the
-# TUN device, tolerate teardown after device disappearance, and use `onlink`
-# default routes so point-to-point shared-TUN gateways survive reconnect churn.
-# NOTE: The 2026-06-08 Python TUN-routing admin follow-up keeps the existing
-# REQ-ADM-004 mapping intact while exposing the runtime-effective included/
-# excluded route lists, including auto-appended overlay-peer exclusions, via
-# `/api/tun-routing/status` and the browser TUN-routing summary.
-# NOTE: The 2026-06-11 reconnect hardening follow-up keeps the existing
-# REQ-LIFE-002, REQ-AUT-006/007, and REQ-MUX-006/009 mappings intact while
-# resetting stale WebSocket RTT state on reconnect, preserving authenticated
-# SecureLink outer connectivity across client transport-epoch restarts, and
-# restoring excluded peer routes from preserved underlay route state in the
-# Linux client TUN hook.
-# NOTE: The 2026-05-31 transport-scoped peer-resolution follow-up keeps the
-# REQ-OVL-007 mapping aligned while renaming resolve-family settings per
-# transport, preserving Python multi-host IPv4/IPv6 preference-plus-fallback
-# coverage, and adding native Swift packet-tunnel probe coverage for candidate
-# selection and idle-time fallback rotation.
-# NOTE: The 2026-06-03 CI follow-up keeps the existing REQ-OVL-001/004/007 and
-# REQ-AUT-001/002/004/006/007/009 mappings intact while restricting the mixed
-# Swift/Python host-runner overlay cases to macOS, fixing the Linux onboarding
-# admin-port host reservation mismatch, and updating the Swift parity fixture to
-# pass the peer-runtime control-packet timestamps expected by the current API.
-# NOTE: The 2026-06-03 Linux cert-reload timeout follow-up keeps the existing
-# REQ-AUT-009/010/016 mappings intact while giving the authenticated WebAdmin
-# certificate-reload probe more time to survive slower CI startup on the shared
-# Linux lane.
-# NOTE: The 2026-06-04 Linux cert-reload readiness follow-up keeps the existing
-# REQ-AUT-009/010/016 mappings intact while requiring the authenticated client
-# admin session to expose connected status and an authenticated cert-mode peer
-# row before the browser-path reload test sends its first prime probe.
-# NOTE: The 2026-06-04 shared-TUN Phase 1 follow-up keeps the existing
-# REQ-MUX-009 mapping intact while adding a validated structured config contract
-# for `options.shared_tun_ownership` on tun->tun services and defending that
-# metadata with Python parsing plus Swift codec parity tests.
 # The application-vs-library functional decomposition for REQ-WSP-* is documented in
 # docs/ARCHITECTURE.md under "WebSocket proxy tunneling".
 # The broader separation between user use-cases, external assumptions, and
@@ -263,6 +189,8 @@ REQ-MUX-011:
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_broadcast_throttle_scope_does_not_consume_unicast_budget
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_scoped_tun_throttle_sequence_preserves_unrelated_scope_budget
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_scope_ids_preserve_broadcast_unicast_isolation
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_peers_payload_preserves_throttle_summary
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_preserves_throttle_summary
 
 REQ-AUT-006:
   integration_tests:
@@ -973,6 +901,9 @@ REQ-ADM-006:
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_active_tun_channel_as_open
+    - tests/unit/test_admin_web_payloads.py::test_status_frontend_renders_transmit_delay_next_to_rtt
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_peers_payload_preserves_throttle_summary
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_preserves_throttle_summary
     - tests/unit/test_connection_snapshots.py::test_snapshot_collapses_tun_channel_aliases_into_one_logical_connection
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_listeners_when_no_clients_connected
     - tests/unit/test_connection_snapshots.py::test_snapshot_mixed_listeners_and_active_connections

@@ -26,6 +26,7 @@ DEFAULT_TUN_TCPDUMP_PCAP_PATH = ""
 DEFAULT_SHARED_TUN_DISABLE_OUTGOING_NORMALIZATION = False
 DEFAULT_SHARED_TUN_DISABLE_INFLOW_FILTER = False
 DEFAULT_SHARED_TUN_DISABLE_OUTFLOW_FILTER = False
+DEFAULT_DISABLE_CHANNELMUX_INFLOW_THROTTLE = False
 DEFAULT_SHARED_TUN_DISABLE_SCOPED_THROTTLE = False
 
 
@@ -202,6 +203,7 @@ class TunRoutingSettings:
     shared_tun_disable_outgoing_normalization: bool = DEFAULT_SHARED_TUN_DISABLE_OUTGOING_NORMALIZATION
     shared_tun_disable_inflow_filter: bool = DEFAULT_SHARED_TUN_DISABLE_INFLOW_FILTER
     shared_tun_disable_outflow_filter: bool = DEFAULT_SHARED_TUN_DISABLE_OUTFLOW_FILTER
+    disable_channelmux_inflow_throttle: bool = DEFAULT_DISABLE_CHANNELMUX_INFLOW_THROTTLE
     shared_tun_disable_scoped_throttle: bool = DEFAULT_SHARED_TUN_DISABLE_SCOPED_THROTTLE
 
     @staticmethod
@@ -226,6 +228,7 @@ class TunRoutingSettings:
         g.add_argument("--shared-tun-disable-outgoing-normalization", action="store_true", default=DEFAULT_SHARED_TUN_DISABLE_OUTGOING_NORMALIZATION, help="Disable shared-TUN local packet source normalization (diagnostic)")
         g.add_argument("--shared-tun-disable-inflow-filter", action="store_true", default=DEFAULT_SHARED_TUN_DISABLE_INFLOW_FILTER, help="Disable shared-TUN inbound ownership/source filter (diagnostic)")
         g.add_argument("--shared-tun-disable-outflow-filter", action="store_true", default=DEFAULT_SHARED_TUN_DISABLE_OUTFLOW_FILTER, help="Disable shared-TUN outbound route and relay filtering (diagnostic)")
+        g.add_argument("--disable-channelmux-inflow-throttle", action="store_true", default=DEFAULT_DISABLE_CHANNELMUX_INFLOW_THROTTLE, help="Disable ChannelMux local ingress throttle for UDP and TUN (diagnostic)")
         g.add_argument("--shared-tun-disable-scoped-throttle", action="store_true", default=DEFAULT_SHARED_TUN_DISABLE_SCOPED_THROTTLE, help="Disable shared-TUN scoped inflow throttle (diagnostic)")
 
     @classmethod
@@ -239,6 +242,17 @@ class TunRoutingSettings:
         source: Mapping[str, Any] = config or {}
         group = source.get(TUN_ROUTING_SECTION) if isinstance(source, Mapping) else None
         values = group if isinstance(group, Mapping) else source
+        disable_channelmux_inflow_throttle = _clean_bool(
+            values.get("disable_channelmux_inflow_throttle"),
+            default=current.disable_channelmux_inflow_throttle,
+        )
+        legacy_disable_scoped = _clean_bool(
+            values.get("shared_tun_disable_scoped_throttle"),
+            default=current.shared_tun_disable_scoped_throttle,
+        )
+        disable_channelmux_inflow_throttle = bool(
+            disable_channelmux_inflow_throttle or legacy_disable_scoped
+        )
         return cls(
             tunnel_address=_mapping_text_value(values, "tunnel_address", current.tunnel_address),
             tunnel_prefix=int(values.get("tunnel_prefix") or current.tunnel_prefix),
@@ -259,7 +273,8 @@ class TunRoutingSettings:
             shared_tun_disable_outgoing_normalization=_clean_bool(values.get("shared_tun_disable_outgoing_normalization"), default=current.shared_tun_disable_outgoing_normalization),
             shared_tun_disable_inflow_filter=_clean_bool(values.get("shared_tun_disable_inflow_filter"), default=current.shared_tun_disable_inflow_filter),
             shared_tun_disable_outflow_filter=_clean_bool(values.get("shared_tun_disable_outflow_filter"), default=current.shared_tun_disable_outflow_filter),
-            shared_tun_disable_scoped_throttle=_clean_bool(values.get("shared_tun_disable_scoped_throttle"), default=current.shared_tun_disable_scoped_throttle),
+            disable_channelmux_inflow_throttle=disable_channelmux_inflow_throttle,
+            shared_tun_disable_scoped_throttle=legacy_disable_scoped,
         )
 
     def _local_gateway4(self) -> str:

@@ -1366,15 +1366,11 @@ Optional operations follow-up:
 - Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
 Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot across `python`, `macos`, and `ios`.
-The latest architecture follow-up extends [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) with a bounded real-time overload policy for the full data conveyor belt: safe admission-side shedding for `UDP`/`TUN`, ingress backpressure for `TCP`, protected in-pipeline ordering semantics for already-admitted traffic, and explicit component ownership across the reliability, mux, runner, and observability layers. This establishes the implementation checklist for future queue-bound, stale-drop, and backpressure work without yet changing the defending test set.
+Current emphasis:
 
-
-The latest transport-observability follow-up extends `myudp` with a transmit-delay EWMA shown next to RTT in the runtime status/dashboard surface, backed by the first-attempt timing reference of each acknowledged `DATA` frame: first emitted on-wire `tx_ns` for immediate sends, or local queue-entry time when the in-flight window was saturated, together with the existing delayed/lossy overlay harness. Local validation for that slice used `pytest -q tests/unit/test_requirements_unit_gaps.py -k transmit_delay` (`1 passed, 17 deselected`) and `pytest -q tests/integration/test_overlay_e2e.py -k myudp_delay_loss` (`13 passed, 131 deselected`).
-The latest CI-stability hardening on `ios-packet-tunnel-e2e` also revalidated the host-side iOS E2E lane under xdist with `pytest -q -n 16 tests/integration/test_ios_e2e.py` (`4 passed`) after replacing probe-and-release test ports with worker-partitioned TCP/UDP port allocation.
-The latest Windows CI recovery on `ios-packet-tunnel-e2e` also revalidated the `windows_only` integration lane with `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"` (`2 passed`) after restoring missing `ctypes`/`wintypes` imports in the split WebSocket transport module for WinHTTP/SSPI Negotiate proxy auth.
-For changes that touch Python runtime files, the most important regression signal after opening a pull request is the Linux shared integration lane in GitHub CI. Windows-local integration execution is still useful for targeted investigation, but it is not currently the most reliable green/red indicator for broad regression confidence on this branch history.
-
-The shared integration harness now generates localhost TLS test certificates in a temporary directory outside the repository and uses availability-aware loopback port allocation when materializing test cases. This keeps private key material out of version control and makes the Linux shared `xdist` run resilient to host services that already occupy uncommon local ports.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) defines the bounded overload and backpressure model across transport, mux, runner, and observability layers.
+- Peer and TUN/routing observability now include throttle state where ingress shedding is active.
+- For Python runtime changes, the Linux shared integration lane remains the strongest broad-regression signal in CI.
 
 ### Current coverage snapshot
 Current snapshot from `python3 scripts/report_product_traceability.py`:
@@ -1393,7 +1389,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python | `7/7 = 100.0%` | `7/7 = 100.0%` | `7/7 = 100.0%` |
 | macOS | `1/7 = 14.3%` | `3/7 = 42.9%` | `3/7 = 42.9%` |
-| iOS | `4/7 = 57.1%` | `2/7 = 28.6%` | `4/7 = 57.1%` |
+| iOS | `4/7 = 57.1%` | `3/7 = 42.9%` | `4/7 = 57.1%` |
 
 The supporting manifests remain shared:
 
@@ -1409,11 +1405,11 @@ This section is intentionally narrower than product coverage. It shows the evide
 
 | Evidence lane | Meaning | Integration covered | Unit covered | Any covered |
 | --- | --- | ---: | ---: | ---: |
-| Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `117` | `117` |
+| Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `118` | `118` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `4` | `0` | `4` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `28` | `0` | `28` |
-| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `18` | `18` |
-| Total parity-oriented evidence | Sum of the lanes above | `32` | `135` | `167` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `30` | `0` | `30` |
+| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `20` | `20` |
+| Total parity-oriented evidence | Sum of the lanes above | `34` | `138` | `172` |
 
 Important caveat:
 

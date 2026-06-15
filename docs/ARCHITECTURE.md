@@ -545,8 +545,9 @@ Every overlay transport contributes a `SessionMetrics` view that includes:
 `ChannelMux` consumes that one snapshot for local admission control. For
 freshness-sensitive ingress (`TUN` packets and local UDP datagrams), the next
 `100ms` ingress window may admit only `90%` of the bytes that the overlay
-actually carried in the previous `100ms` window whenever backpressure is
-active. If the same snapshot reports stalled forward progress, new local
+actually carried in the previous `100ms` window only while the transport has
+reached its configured inflight limit. If the same snapshot reports stalled
+forward progress, new local
 datagram/packet ingress is paused until progress resumes.
 
 That admission control applies at two levels at once:

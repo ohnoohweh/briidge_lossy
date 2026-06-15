@@ -1559,6 +1559,7 @@ def test_macos_swift_host_runner_bootstraps_ws_stack_and_serves_status(tmp_path:
         tcp_session_keys = {str(item["key"]) for item in config["schema"]["tcp_session"]}
         assert {"tcp_bind", "tcp_own_port", "tcp_peer", "tcp_peer_port"}.issubset(tcp_session_keys)
         ws_session_keys = {str(item["key"]) for item in config["schema"]["ws_session"]}
+        assert {"ws_bind", "ws_own_port", "ws_peer", "ws_peer_port", "ws_path"}.issubset(ws_session_keys)
         assert "overlay_transport" not in ws_session_keys
         channel_mux_keys = {str(item["key"]) for item in config["schema"]["channel_mux"]}
         assert channel_mux_keys == {"own_servers", "remote_servers"}

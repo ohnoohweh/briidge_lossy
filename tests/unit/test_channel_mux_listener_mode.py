@@ -136,7 +136,7 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         sess = _FakeSession(
             connected=True,
             waiting_count=2,
-            inflight=50,
+            inflight=200,
             max_inflight=200,
             last_rtt_ok_ns=now_ns,
             egress_prev_window_bytes=1000,
@@ -171,12 +171,14 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         self.assertFalse(settings.shared_tun_disable_outgoing_normalization)
         self.assertFalse(settings.shared_tun_disable_inflow_filter)
         self.assertFalse(settings.shared_tun_disable_outflow_filter)
+        self.assertFalse(settings.disable_channelmux_inflow_throttle)
         self.assertFalse(settings.shared_tun_disable_scoped_throttle)
 
     def test_tun_routing_diagnostic_switches_parse_from_mapping(self):
         settings = TunRoutingSettings.from_mapping(
             {
                 "TUN_routing": {
+                    "disable_channelmux_inflow_throttle": "yes",
                     "shared_tun_disable_outgoing_normalization": "true",
                     "shared_tun_disable_inflow_filter": True,
                     "shared_tun_disable_outflow_filter": "1",
@@ -193,7 +195,19 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         self.assertTrue(settings.shared_tun_disable_outgoing_normalization)
         self.assertTrue(settings.shared_tun_disable_inflow_filter)
         self.assertTrue(settings.shared_tun_disable_outflow_filter)
+        self.assertTrue(settings.disable_channelmux_inflow_throttle)
         self.assertTrue(settings.shared_tun_disable_scoped_throttle)
+
+    def test_tun_routing_legacy_scoped_throttle_flag_enables_global_channelmux_disable(self):
+        settings = TunRoutingSettings.from_mapping(
+            {
+                "TUN_routing": {
+                    "shared_tun_disable_scoped_throttle": "yes",
+                }
+            }
+        )
+        self.assertTrue(settings.shared_tun_disable_scoped_throttle)
+        self.assertTrue(settings.disable_channelmux_inflow_throttle)
 
     def test_tun_routing_explicit_empty_gateways_are_preserved(self):
         settings = TunRoutingSettings.from_mapping(
@@ -288,7 +302,7 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         mux = ChannelMux(_FakeSession(waiting_count=5), asyncio.new_event_loop())
         try:
             mux._tun_routing_settings = TunRoutingSettings(
-                shared_tun_disable_scoped_throttle=True,
+                disable_channelmux_inflow_throttle=True,
             )
             self.assertTrue(
                 mux._local_tun_send_allowed(
@@ -307,7 +321,7 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         try:
             mux._overlay_transport = "ws"
             mux._tun_routing_settings = TunRoutingSettings(
-                shared_tun_disable_scoped_throttle=True,
+                disable_channelmux_inflow_throttle=True,
             )
             self.assertFalse(
                 mux._local_tun_send_allowed(
@@ -336,12 +350,12 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
             mux.loop.close()
 
     def test_shared_tun_disable_scoped_throttle_does_not_bypass_stream_backpressure(self):
-        session = _FakeSession(waiting_count=1)
+        session = _FakeSession(waiting_count=1, inflight=200, max_inflight=200)
         mux = ChannelMux(session, asyncio.new_event_loop())
         try:
             mux._overlay_transport = "ws"
             mux._tun_routing_settings = TunRoutingSettings(
-                shared_tun_disable_scoped_throttle=True,
+                disable_channelmux_inflow_throttle=True,
             )
             self.assertFalse(
                 mux._local_tun_send_allowed(
@@ -2249,6 +2263,8 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
                 mux._on_local_tun_packet(dev, packet_a)
                 mux._on_local_tun_packet(dev, packet_b_seed)
                 session._metrics.waiting_count = 1
+                session._metrics.inflight = 200
+                session._metrics.max_inflight = 200
                 mux._on_local_tun_packet(dev, packet_a_budget)
                 mux._on_local_tun_packet(dev, packet_a_over)
                 mux._on_local_tun_packet(dev, packet_b_budget)
@@ -2393,10 +2409,15 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
             with patch("obstacle_bridge.bridge_channelmux.time.monotonic_ns", side_effect=[0, 100_000_000, 200_000_000, 300_000_000]), patch.object(mux, '_send_mux') as send_mux:
                 mux._on_local_tun_packet(dev, broadcast_seed)
                 session._metrics.waiting_count = 1
+                session._metrics.inflight = 200
+                session._metrics.max_inflight = 200
                 mux._on_local_tun_packet(dev, broadcast_over)
                 session._metrics.waiting_count = 0
+                session._metrics.inflight = 0
                 mux._on_local_tun_packet(dev, unicast_seed)
                 session._metrics.waiting_count = 1
+                session._metrics.inflight = 200
+                session._metrics.max_inflight = 200
                 mux._on_local_tun_packet(dev, unicast_budget)
 
             self.assertEqual(
@@ -2633,6 +2654,8 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
             with patch("obstacle_bridge.bridge_channelmux.time.monotonic_ns", side_effect=[0, 100_000_000, 100_000_000]):
                 mux._on_local_tun_packet(dev, b'a' * 100)
                 session._metrics.waiting_count = 1
+                session._metrics.inflight = 200
+                session._metrics.max_inflight = 200
                 mux._on_local_tun_packet(dev, b'b' * 80)
                 mux._on_local_tun_packet(dev, b'c' * 20)
 

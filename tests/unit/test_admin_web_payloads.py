@@ -141,6 +141,32 @@ class _RunnerStub:
                         "decompress_ok_total": 9,
                         "decompress_fail_total": 0,
                     },
+                    "throttle": {
+                        "applicable": True,
+                        "active": True,
+                        "stalled": False,
+                        "backpressure_active": True,
+                        "disabled": False,
+                        "budget_bytes": 12000,
+                        "used_bytes": 10800,
+                        "remaining_bytes": 1200,
+                        "aggregate": {
+                            "scope_id": "aggregate",
+                            "budget_bytes": 12000,
+                            "used_bytes": 10800,
+                            "remaining_bytes": 1200,
+                            "prev_window_bytes": 13333,
+                            "throttle_drop_count": 0,
+                        },
+                        "scope": {
+                            "scope_id": "udp:client:301",
+                            "budget_bytes": 12000,
+                            "used_bytes": 10800,
+                            "remaining_bytes": 1200,
+                            "prev_window_bytes": 13333,
+                            "throttle_drop_count": 0,
+                        },
+                    },
                 }
             ],
         }
@@ -626,6 +652,7 @@ class AdminWebPayloadTests(unittest.TestCase):
                 text = app_path.read_text(encoding="utf-8")
                 self.assertIn("renderMetric('RTT Est (ms)', fmtNumber(row.rtt_est_ms))", text)
                 self.assertIn("renderMetric('Transmit Delay Est (ms)', fmtNumber(row.transmit_delay_est_ms))", text)
+                self.assertIn("renderMetric('Throttle', fmtThrottleSummary(row.throttle))", text)
 
     def test_tun_routing_frontend_uses_dedicated_tab_and_api(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]
@@ -910,6 +937,9 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(peer["rtt_est_ms"], 42.0)
         self.assertEqual(peer["transmit_delay_sample_ms"], 101.0)
         self.assertEqual(peer["transmit_delay_est_ms"], 123.0)
+        self.assertTrue(peer["throttle"]["applicable"])
+        self.assertTrue(peer["throttle"]["active"])
+        self.assertEqual(peer["throttle"]["remaining_bytes"], 1200)
         self.assertTrue(peer["compress_layer"]["enabled"])
         self.assertEqual(peer["compress_layer"]["algorithm"], "zlib")
         self.assertEqual(peer["compress_layer"]["compress_applied_total"], 7)

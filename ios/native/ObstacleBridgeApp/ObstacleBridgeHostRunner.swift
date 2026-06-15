@@ -457,6 +457,7 @@ final class ObstacleBridgeHostRunner {
                 "decompress_ok_total": 0,
                 "decompress_fail_total": 0,
             ],
+            "throttle": ObstacleBridgeAdminSnapshotSupport.peerThrottleSnapshot(peerID: 1, connectionsSnapshot: connections),
             "runtime": transportRuntime,
         ]
         if let myudp = bootstrapState["transport"] as? String, myudp == "myudp" {

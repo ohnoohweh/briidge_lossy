@@ -3380,15 +3380,9 @@ class ChannelMux:
 
     @staticmethod
     def _session_overlay_backpressure_active(snapshot: dict[str, Any]) -> bool:
-        waiting_count = max(0, int(snapshot.get("waiting_count", 0) or 0))
         inflight = max(0, int(snapshot.get("inflight", 0) or 0))
         max_inflight = max(0, int(snapshot.get("max_inflight", 0) or 0))
-        tx_delay_ms = float(snapshot.get("transmit_delay_est_ms", 0.0) or 0.0)
-        return (
-            waiting_count > 0
-            or (max_inflight > 0 and inflight >= max_inflight)
-            or tx_delay_ms > 0.0
-        )
+        return max_inflight > 0 and inflight >= max_inflight
 
     def _tcp_overlay_read_size(self) -> int:
         size = max(1, int(self._SAFE_TCP_READ))
@@ -3476,6 +3470,130 @@ class ChannelMux:
             if base_prev_window_bytes <= 0:
                 base_prev_window_bytes = transport_prev_window_bytes
         return int(float(base_prev_window_bytes) * self.OVERLAY_BACKPRESSURE_THROTTLE_RATIO)
+
+    def _local_ingress_throttle_snapshot_for_scope(
+        self,
+        scope_key: tuple[Any, ...],
+        *,
+        now_ns: Optional[int] = None,
+    ) -> dict[str, Any]:
+        if now_ns is None:
+            now_ns = time.monotonic_ns()
+        snapshot = self._session_overlay_backpressure_snapshot(now_ns=now_ns)
+        backpressure_active = self._session_overlay_backpressure_active(snapshot)
+        scope_keys = self._local_ingress_scope_keys(scope_key)
+        states = self._local_ingress_scope_states(scope_key, now_ns=now_ns)
+        details: list[dict[str, Any]] = []
+        remaining_candidates: list[int] = []
+        for current_scope_key, state in zip(scope_keys, states):
+            allowance_bytes = self._local_ingress_scope_allowance_bytes(
+                snapshot=snapshot,
+                state=state,
+                scope_key=current_scope_key,
+            )
+            used_bytes = int(state.get("curr_bytes", 0) or 0)
+            remaining_bytes = max(0, int(allowance_bytes) - used_bytes)
+            remaining_candidates.append(remaining_bytes)
+            details.append(
+                {
+                    "scope_id": self._tun_inflow_scope_id(current_scope_key),
+                    "budget_bytes": int(allowance_bytes),
+                    "used_bytes": used_bytes,
+                    "remaining_bytes": remaining_bytes,
+                    "prev_window_bytes": int(state.get("prev_bytes", 0) or 0),
+                    "throttle_drop_count": int(state.get("throttle_drop_count", 0) or 0),
+                }
+            )
+        aggregate = details[0] if details else {
+            "scope_id": self._tun_inflow_scope_id(self._aggregate_local_ingress_scope_key()),
+            "budget_bytes": 0,
+            "used_bytes": 0,
+            "remaining_bytes": 0,
+            "prev_window_bytes": 0,
+            "throttle_drop_count": 0,
+        }
+        scoped = details[1] if len(details) > 1 else None
+        throttle_disabled = bool(
+            self._tun_routing_config().disable_channelmux_inflow_throttle
+            or self._tun_routing_config().shared_tun_disable_scoped_throttle
+        )
+        return {
+            "applicable": True,
+            "scope_id": self._tun_inflow_scope_id(tuple(scope_key)),
+            "mode": "aggregate_and_scope" if scoped is not None else "aggregate_only",
+            "active": bool(backpressure_active or snapshot.get("stalled")),
+            "stalled": bool(snapshot.get("stalled")),
+            "backpressure_active": bool(backpressure_active),
+            "disabled": throttle_disabled,
+            "transport_prev_window_bytes": int(snapshot.get("prev_window_bytes", 0) or 0),
+            "waiting_count": int(snapshot.get("waiting_count", 0) or 0),
+            "inflight": int(snapshot.get("inflight", 0) or 0),
+            "max_inflight": int(snapshot.get("max_inflight", 0) or 0),
+            "transmit_delay_est_ms": float(snapshot.get("transmit_delay_est_ms", 0.0) or 0.0),
+            "budget_bytes": min(remaining_candidates) + aggregate["used_bytes"] if remaining_candidates else 0,
+            "used_bytes": max(aggregate["used_bytes"], int(scoped.get("used_bytes", 0) or 0) if scoped else 0),
+            "remaining_bytes": min(remaining_candidates) if remaining_candidates else 0,
+            "aggregate": aggregate,
+            "scope": scoped,
+        }
+
+    def _local_ingress_throttle_snapshot_for_shared_tun_service(
+        self,
+        svc_key: "ChannelMux.ServiceKey",
+        *,
+        now_ns: Optional[int] = None,
+    ) -> dict[str, Any]:
+        if now_ns is None:
+            now_ns = time.monotonic_ns()
+        aggregate_snapshot = self._local_ingress_throttle_snapshot_for_scope(
+            self._aggregate_local_ingress_scope_key(),
+            now_ns=now_ns,
+        )
+        shared_scopes = self._shared_tun_throttle_scope_snapshots_for_service(svc_key)
+        worst_scope: Optional[dict[str, Any]] = None
+        for entry in shared_scopes:
+            prev_window_bytes = int(entry.get("prev_window_bytes", 0) or 0)
+            allowance_bytes = int(float(prev_window_bytes) * self.OVERLAY_BACKPRESSURE_THROTTLE_RATIO)
+            used_bytes = int(entry.get("curr_window_bytes", 0) or 0)
+            remaining_bytes = max(0, allowance_bytes - used_bytes)
+            scoped = {
+                "scope_id": str(entry.get("scope_id") or ""),
+                "budget_bytes": allowance_bytes,
+                "used_bytes": used_bytes,
+                "remaining_bytes": remaining_bytes,
+                "prev_window_bytes": prev_window_bytes,
+                "throttle_drop_count": int(entry.get("throttle_drop_count", 0) or 0),
+            }
+            if worst_scope is None or scoped["remaining_bytes"] < worst_scope["remaining_bytes"]:
+                worst_scope = scoped
+        active = bool(aggregate_snapshot.get("active"))
+        if worst_scope is not None:
+            active = active or worst_scope["used_bytes"] > 0 or worst_scope["throttle_drop_count"] > 0
+        remaining_candidates = [int(aggregate_snapshot.get("remaining_bytes", 0) or 0)]
+        if worst_scope is not None:
+            remaining_candidates.append(int(worst_scope.get("remaining_bytes", 0) or 0))
+        return {
+            "applicable": True,
+            "scope_id": f"shared-service:{svc_key[0]}:{svc_key[1]}:{svc_key[2]}",
+            "mode": "aggregate_and_shared_service" if worst_scope is not None else "aggregate_only",
+            "active": active,
+            "stalled": bool(aggregate_snapshot.get("stalled")),
+            "backpressure_active": bool(aggregate_snapshot.get("backpressure_active")),
+            "disabled": bool(aggregate_snapshot.get("disabled")),
+            "transport_prev_window_bytes": int(aggregate_snapshot.get("transport_prev_window_bytes", 0) or 0),
+            "waiting_count": int(aggregate_snapshot.get("waiting_count", 0) or 0),
+            "inflight": int(aggregate_snapshot.get("inflight", 0) or 0),
+            "max_inflight": int(aggregate_snapshot.get("max_inflight", 0) or 0),
+            "transmit_delay_est_ms": float(aggregate_snapshot.get("transmit_delay_est_ms", 0.0) or 0.0),
+            "budget_bytes": min(remaining_candidates) + int(aggregate_snapshot.get("aggregate", {}).get("used_bytes", 0) or 0),
+            "used_bytes": max(
+                int(aggregate_snapshot.get("aggregate", {}).get("used_bytes", 0) or 0),
+                int(worst_scope.get("used_bytes", 0) or 0) if worst_scope else 0,
+            ),
+            "remaining_bytes": min(remaining_candidates),
+            "aggregate": dict(aggregate_snapshot.get("aggregate") or {}),
+            "scope": worst_scope,
+        }
 
     @classmethod
     def _rewrite_ipv4_source(cls, packet: bytes, new_source: str) -> bytes:
@@ -3613,7 +3731,10 @@ class ChannelMux:
             return False
         states = self._local_ingress_scope_states(scope_key, now_ns=now_ns)
         backpressure_active = self._session_overlay_backpressure_active(snapshot)
-        if self._tun_routing_config().shared_tun_disable_scoped_throttle:
+        if (
+            self._tun_routing_config().disable_channelmux_inflow_throttle
+            or self._tun_routing_config().shared_tun_disable_scoped_throttle
+        ):
             if backpressure_active and str(self._overlay_transport or "").lower() in {"ws", "tcp", "quic"}:
                 return False
             return True
@@ -5323,6 +5444,7 @@ class ChannelMux:
 
     def snapshot_udp_connections(self) -> list[dict]:
         rows: list[dict] = []
+        now_ns = time.monotonic_ns()
 
         # Server-side UDP mappings: local client addr -> local listening port -> configured remote destination
         for chan, tup in list(self._udp_by_chan.items()):
@@ -5339,6 +5461,7 @@ class ChannelMux:
 
             src_ep = (src_addr[0], int(src_addr[1])) if isinstance(src_addr, tuple) and len(src_addr) >= 2 else None
             stats = self._chan_stat_dict(chan, ChannelMux.Proto.UDP)
+            throttle = self._local_ingress_throttle_snapshot_for_scope(("udp", svc_key, int(chan)), now_ns=now_ns)
 
             rows.append({
                 "protocol": "udp",
@@ -5353,6 +5476,7 @@ class ChannelMux:
                 "remote_destination": (
                     {"host": spec.r_host, "port": int(spec.r_port)} if spec else None
                 ),
+                "throttle": throttle,
                 "stats": stats,
             })
 
@@ -5379,6 +5503,7 @@ class ChannelMux:
                 "remote_destination": (
                     {"host": spec.r_host, "port": int(spec.r_port)} if spec else None
                 ),
+                "throttle": {"applicable": False, "active": False, "reason": "listening"},
                 "stats": {
                     "rx_msgs": 0,
                     "tx_msgs": 0,
@@ -5397,6 +5522,7 @@ class ChannelMux:
                 svc_id = self._udp_client_svc_id.get(chan)
                 spec = self._svc_spec_or_none(svc_id) if svc_id is not None else None
                 stats = self._chan_stat_dict(chan, ChannelMux.Proto.UDP)
+                throttle = self._local_ingress_throttle_snapshot_for_scope(("udp", "client", int(chan)), now_ns=now_ns)
 
                 rows.append({
                     "protocol": "udp",
@@ -5412,6 +5538,7 @@ class ChannelMux:
                         {"host": peer_ep[0], "port": int(peer_ep[1])} if peer_ep else
                         ({"host": spec.r_host, "port": int(spec.r_port)} if spec else None)
                     ),
+                    "throttle": throttle,
                     "stats": stats,
                 })
             except Exception:
@@ -5466,6 +5593,7 @@ class ChannelMux:
                 "local": local,
                 "local_port": int(local[1]) if local else (int(spec.l_port) if spec else None),
                 "remote_destination": remote_destination,
+                "throttle": {"applicable": False, "active": False, "reason": "tcp_stream_backpressure"},
                 "stats": stats,
             })
 
@@ -5515,6 +5643,7 @@ class ChannelMux:
 
     def snapshot_udp_connections(self) -> list[dict]:
         rows: list[dict] = []
+        now_ns = time.monotonic_ns()
 
         # Server-side UDP mappings: local client addr -> local listening port -> configured remote destination
         for chan, tup in list(self._udp_by_chan.items()):
@@ -5531,6 +5660,7 @@ class ChannelMux:
 
             src_ep = (src_addr[0], int(src_addr[1])) if isinstance(src_addr, tuple) and len(src_addr) >= 2 else None
             stats = self._chan_stat_dict(chan, ChannelMux.Proto.UDP)
+            throttle = self._local_ingress_throttle_snapshot_for_scope(("udp", svc_key, int(chan)), now_ns=now_ns)
 
             rows.append({
                 "protocol": "udp",
@@ -5545,6 +5675,7 @@ class ChannelMux:
                 "remote_destination": (
                     {"host": spec.r_host, "port": int(spec.r_port)} if spec else None
                 ),
+                "throttle": throttle,
                 "stats": stats,
             })
 
@@ -5571,6 +5702,7 @@ class ChannelMux:
                 "remote_destination": (
                     {"host": spec.r_host, "port": int(spec.r_port)} if spec else None
                 ),
+                "throttle": {"applicable": False, "active": False, "reason": "listening"},
                 "stats": {
                     "rx_msgs": 0,
                     "tx_msgs": 0,
@@ -5589,6 +5721,7 @@ class ChannelMux:
                 svc_id = self._udp_client_svc_id.get(chan)
                 spec = self._svc_spec_or_none(svc_id) if svc_id is not None else None
                 stats = self._chan_stat_dict(chan, ChannelMux.Proto.UDP)
+                throttle = self._local_ingress_throttle_snapshot_for_scope(("udp", "client", int(chan)), now_ns=now_ns)
 
                 rows.append({
                     "protocol": "udp",
@@ -5604,6 +5737,7 @@ class ChannelMux:
                         {"host": peer_ep[0], "port": int(peer_ep[1])} if peer_ep else
                         ({"host": spec.r_host, "port": int(spec.r_port)} if spec else None)
                     ),
+                    "throttle": throttle,
                     "stats": stats,
                 })
             except Exception:
@@ -5691,6 +5825,7 @@ class ChannelMux:
                     "remote_destination": (
                         {"host": spec.r_host, "port": int(spec.r_port)} if spec else None
                     ),
+                    "throttle": {"applicable": False, "active": False, "reason": "listening"},
                     "stats": {
                         "rx_msgs": 0,
                         "tx_msgs": 0,
@@ -5711,6 +5846,7 @@ class ChannelMux:
 
     def snapshot_tun_connections(self) -> list[dict]:
         rows: list[dict] = []
+        now_ns = time.monotonic_ns()
         active_service_keys: set[ChannelMux.ServiceKey] = set()
         dev_channels: dict[int, tuple[ChannelMux.TunDevice, list[int]]] = {}
         for chan, dev in list(self._tun_by_chan.items()):
@@ -5734,6 +5870,15 @@ class ChannelMux:
             spec = self._svc_spec_or_none(svc_id) if svc_id is not None else None
             if isinstance(svc_key, tuple):
                 active_service_keys.add(svc_key)
+            shared_snapshot = self._shared_tun_runtime_snapshot_for_service(svc_key)
+            throttle = (
+                self._local_ingress_throttle_snapshot_for_shared_tun_service(svc_key, now_ns=now_ns)
+                if isinstance(shared_snapshot, dict) and isinstance(svc_key, tuple)
+                else self._local_ingress_throttle_snapshot_for_scope(
+                    self._direct_tun_inflow_scope_key(svc_key, primary_chan),
+                    now_ns=now_ns,
+                )
+            )
             rows.append({
                 "protocol": "tun",
                 "role": "server" if svc_key is not None else "client",
@@ -5750,7 +5895,8 @@ class ChannelMux:
                     {"ifname": str(spec.r_host), "mtu": int(spec.r_port)} if spec else
                     {"ifname": str(getattr(dev, "ifname", "") or ""), "mtu": int(getattr(dev, "mtu", 0) or 0)}
                 ),
-                "shared_tun_ownership": self._shared_tun_runtime_snapshot_for_service(svc_key),
+                "shared_tun_ownership": shared_snapshot,
+                "throttle": throttle,
                 "stats": stats,
             })
 
@@ -5783,6 +5929,7 @@ class ChannelMux:
                     {"ifname": str(spec.r_host), "mtu": int(spec.r_port)} if spec else local
                 ),
                 "shared_tun_ownership": self._shared_tun_runtime_snapshot_for_service(svc_key),
+                "throttle": {"applicable": False, "active": False, "reason": "listening"},
                 "stats": {
                     "rx_msgs": 0,
                     "tx_msgs": 0,

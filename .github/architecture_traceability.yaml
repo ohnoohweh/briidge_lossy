@@ -2,80 +2,11 @@
 # It is intentionally narrower than the product-requirement traceability file:
 # it captures component-level evidence where the architecture decomposition
 # itself matters, especially for joint-function responsibilities.
-# NOTE: The 2026-05-15 runtime-refactor recovery revalidated the existing
-# ARC-CMP-004 launcher/runtime mappings while switching the default launcher
-# subprocess to `from obstacle_bridge.bridge import main; main()` and restoring
-# the default-entrypoint plus FI-admin debug paths used by the shared overlay
-# integration harness.
-# NOTE: The 2026-05-15 iOS E2E CI follow-up revalidates the existing ARC-CMP-003,
-# ARC-CMP-004, and ARC-CMP-006 mappings while replacing probe-and-release test
-# ports in the host-side iOS E2E harness with worker-partitioned allocations
-# that stay stable under `pytest -n 16`.
-# NOTE: The 2026-05-17 iOS TUN milestone extends ARC-CMP-003 and ARC-CMP-004
-# coverage with the dedicated iOS packet-flow bridge adapter and dual-stack
-# tunnel-setting derivation path while keeping the existing host-side iOS E2E
-# mappings as the simulator-free integration proof for that runtime slice.
-# NOTE: The 2026-05-28 overload/freshness architecture follow-up documents
-# bounded real-time overlay behavior, safe admission-time shedding points, and
-# component ownership for overload policy across ARC-CMP-002/003/004/005 without
-# changing the underlying defending test mappings yet; implementation work for
-# those bounded-queue and backpressure behaviors is expected to extend the same
-# component families rather than redefining them.
-# NOTE: The 2026-05-31 Linux shared CI repair keeps the existing ARC-CMP-001,
-# ARC-CMP-004, and ARC-CMP-006 mappings intact while fixing WS SecureLink
-# transport-epoch reconnect sequencing and hardening the shared TCP/WS IPv6 test
-# harness against listener-startup races under xdist.
-# NOTE: The 2026-05-31 transport-scoped peer-resolution follow-up keeps the
-# existing ARC-CMP-004 runtime/bootstrap mappings intact while renaming
-# resolve-family settings per transport and adding multi-host IPv4/IPv6
-# selection coverage in unit and overlay integration tests.
-# NOTE: The 2026-06-03 CI follow-up keeps the existing ARC-CMP-002/004/005/006
-# mappings intact while moving the mixed Swift/Python host-runner overlay cases
-# behind a macOS-only guard, repairing the Linux onboarding admin-port host
-# reservation mismatch in the shared overlay harness, and updating the Swift
-# parity fixture to supply the control-packet timing fields required by the
-# current peer-runtime API.
-# NOTE: The 2026-06-03 Linux cert-reload timeout follow-up keeps the existing
-# ARC-CMP-004 and ARC-CMP-005 mappings intact while relaxing only the startup
-# timing budget around the authenticated WebAdmin certificate-reload probe in
-# the shared overlay integration harness.
-# NOTE: The 2026-06-04 Linux cert-reload readiness follow-up keeps the existing
-# ARC-CMP-004 and ARC-CMP-005 mappings intact while making the browser-path
-# certificate-reload test wait for authenticated client status and peer-ready
-# secure-link observability before the first prime probe.
-# NOTE: The 2026-06-04 Linux cert-reload listener-readiness follow-up keeps the
-# same ARC-CMP-004 and ARC-CMP-005 mappings intact while requiring that the
-# forwarded TCP probe listener itself be accepting connections before the first
-# authenticated WebAdmin certificate-reload prime probe is sent.
-# NOTE: The 2026-06-04 Linux full-reload admin-recovery follow-up keeps the
-# same ARC-CMP-004 and ARC-CMP-005 mappings intact while making the full-
-# material certificate reload integration case wait for admin-surface recovery
-# and CONNECTED runtime state before checking post-reload authenticated peers.
-# NOTE: The 2026-06-05 Linux cert-reload readiness follow-up keeps the same
-# ARC-CMP-004 and ARC-CMP-005 mappings intact while turning the first
-# authenticated WebAdmin prime probe into a bounded readiness phase that can
-# survive self-restarting clients and delayed cert-session bring-up.
-# NOTE: The 2026-06-04 local-TUN hook-env follow-up keeps the existing
-# ARC-CMP-003 and ARC-CMP-004 mappings intact while extending local TUN hook
-# defaults with peer/subnet metadata required by server-owned shared-TUN hook
-# scripts.
-# NOTE: The 2026-06-08 Linux client TUN hook hardening keeps the existing
-# ARC-CMP-003 and ARC-CMP-004 mappings intact while making client-side TUN
-# bring-up wait for device creation and use `onlink` defaults for point-to-
-# point shared-TUN gateways during reconnect churn.
-# NOTE: The 2026-06-08 Python TUN-routing admin follow-up keeps the existing
-# ARC-CMP-005 mapping intact while making the browser/admin payload surface
-# report runtime-effective route lists, including auto-appended overlay-peer
-# exclusions, rather than only the static config snapshot.
-# NOTE: The 2026-06-11 reconnect hardening follow-up keeps the existing
-# ARC-CMP-001/003/004/006 mappings intact while rejecting stale WebSocket
-# callbacks after reconnect, preserving authenticated SecureLink state across
-# client transport-epoch restarts, and persisting Linux client underlay route
-# state so excluded peer routes survive full-tunnel default-route mutation.
-# NOTE: The 2026-06-04 shared-TUN Phase 1 follow-up keeps the existing
-# ARC-CMP-003 mapping intact while adding validated structured ownership
-# metadata for tun->tun services and defending that metadata with Swift/Python
-# codec parity.
+#
+# Keep this file state-based:
+# - list only active component-to-test mappings
+# - do not record rollout chronology or PR notes here
+# - keep architectural rationale in docs/ARCHITECTURE.md
 
 ARC-CMP-001:
   unit_tests:
@@ -346,12 +277,16 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_component_parity.py::test_swift_tun_routing_snapshot_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_tun_routing_route_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_tun_routing_matches_python
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_peers_payload_preserves_throttle_summary
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_preserves_throttle_summary
     - ios/tests/test_m3_native_sources.py::test_macos_swift_host_runner_source_exists
+    - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists
     - tests/unit/test_requirements_unit_gaps.py::test_auth_disabled_reports_authenticated_without_session
     - tests/unit/test_requirements_unit_gaps.py::test_auth_required_rejects_bad_login_and_accepts_challenge_proof
     - tests/unit/test_requirements_unit_gaps.py::test_admin_auth_sessions_are_cookie_scoped_per_client
     - tests/unit/test_requirements_unit_gaps.py::test_listener_peer_snapshot_preserves_distinct_peers_across_listener_transports
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
+    - tests/unit/test_admin_web_payloads.py::test_status_frontend_renders_transmit_delay_next_to_rtt
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_direct_preflight_requires_http_200_before_upgrade
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path

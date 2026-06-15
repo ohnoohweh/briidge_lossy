@@ -331,12 +331,15 @@ enum ObstacleBridgeRuntimeConfig {
         "runner",
         "udp_session",
         "tcp_session",
+        "quic_session",
         "ws_session",
         "secure_link",
         "compress_layer",
         "TUN_routing",
         "admin_web",
         "debug_logging",
+        "channel_mux",
+        "iOS_TUN_connector",
     ]
     private static let secureLinkFrameHeaderSize = 20
     private static let secureLinkAEADTagSize = 16
@@ -398,10 +401,24 @@ enum ObstacleBridgeRuntimeConfig {
                 schemaItem(key: "quic_max_size", description: "Maximum QUIC app payload size", defaultValue: 65535),
             ],
             "ws_session": [
+                schemaItem(key: "ws_bind", description: "WebSocket overlay bind address", defaultValue: "::"),
+                schemaItem(key: "ws_own_port", description: "WebSocket overlay own port", defaultValue: 8080),
                 schemaItem(key: "ws_peer", description: "Remote WebSocket peer host", defaultValue: "bridge.example.com"),
-                schemaItem(key: "ws_peer_port", description: "Remote WebSocket peer port", defaultValue: 443),
+                schemaItem(key: "ws_peer_port", description: "Remote WebSocket peer port", defaultValue: 8080),
+                schemaItem(key: "ws_path", description: "WebSocket HTTP path", defaultValue: "/"),
                 schemaItem(key: "ws_payload_mode", description: "WebSocket payload framing mode", defaultValue: "binary", choices: ["binary", "base64", "json-base64", "semi-text-shape"]),
+                schemaItem(key: "ws_peer_resolve_family", description: "WebSocket peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.", defaultValue: "prefer-ipv6", choices: ["prefer-ipv6", "ipv4", "ipv6"]),
+                schemaItem(key: "ws_proxy_auth", description: "WebSocket client proxy authentication mode.", defaultValue: "none", choices: ["none", "basic", "negotiate"]),
+                schemaItem(key: "ws_proxy_host", description: "Manual WebSocket proxy host.", defaultValue: ""),
+                schemaItem(key: "ws_proxy_mode", description: "WebSocket client proxy mode.", defaultValue: "env", choices: ["off", "env", "manual", "system"]),
+                schemaItem(key: "ws_proxy_port", description: "Manual WebSocket proxy port.", defaultValue: 8080),
+                schemaItem(key: "ws_reconnect_grace", description: "Seconds to wait before reporting DISCONNECTED after WebSocket transport loss.", defaultValue: 3.0),
+                schemaItem(key: "ws_send_timeout", description: "Seconds to wait for a WebSocket frame send before forcing reconnect.", defaultValue: 3.0),
                 schemaItem(key: "ws_static_dir", description: "Directory containing static web assets", defaultValue: "./web"),
+                schemaItem(key: "ws_subprotocol", description: "Optional WebSocket subprotocol.", defaultValue: NSNull()),
+                schemaItem(key: "ws_tcp_user_timeout_ms", description: "TCP_USER_TIMEOUT in milliseconds for WebSocket sockets.", defaultValue: 10000),
+                schemaItem(key: "ws_tls", description: "Use TLS (wss://) for the WebSocket overlay.", defaultValue: false),
+                schemaItem(key: "ws_max_size", description: "Maximum WebSocket message size accepted or sent.", defaultValue: 65535),
             ],
             "secure_link": [
                 schemaItem(key: "secure_link", description: "Enable SecureLink", defaultValue: false),
@@ -574,6 +591,39 @@ enum ObstacleBridgeRuntimeConfig {
         if payload["remote_servers"] == nil {
             payload["remote_servers"] = []
         }
+        if payload["quic_bind"] == nil {
+            payload["quic_bind"] = "::"
+        }
+        if payload["quic_own_port"] == nil {
+            payload["quic_own_port"] = 443
+        }
+        if payload["quic_peer"] == nil {
+            payload["quic_peer"] = NSNull()
+        }
+        if payload["quic_peer_port"] == nil {
+            payload["quic_peer_port"] = 443
+        }
+        if payload["quic_peer_resolve_family"] == nil {
+            payload["quic_peer_resolve_family"] = "prefer-ipv6"
+        }
+        if payload["ws_bind"] == nil {
+            payload["ws_bind"] = "::"
+        }
+        if payload["ws_own_port"] == nil {
+            payload["ws_own_port"] = 8080
+        }
+        if payload["ws_peer"] == nil {
+            payload["ws_peer"] = NSNull()
+        }
+        if payload["ws_peer_port"] == nil {
+            payload["ws_peer_port"] = 8080
+        }
+        if payload["ws_path"] == nil {
+            payload["ws_path"] = "/"
+        }
+        if payload["ws_peer_resolve_family"] == nil {
+            payload["ws_peer_resolve_family"] = "prefer-ipv6"
+        }
         for key in ["admin_web_password", "secure_link_psk"] where payload[key] != nil {
             payload[key] = ""
         }
@@ -652,20 +702,10 @@ enum ObstacleBridgeRuntimeConfig {
     static func flatten(_ payload: [String: Any]) -> [String: Any] {
         var merged: [String: Any] = [:]
         for section in knownGroupedSections {
-            if let block = payload[section] as? [String: Any] {
-                for (key, value) in block {
-                    merged[key] = value
-                }
-            }
-        }
-        if let channelMux = payload["channel_mux"] as? [String: Any] {
-            for (key, value) in channelMux {
+            let block = groupedSectionPayload(section, runtimeConfig: payload)
+            for (key, value) in block {
                 merged[key] = value
             }
-            merged["channel_mux"] = channelMux
-        }
-        if let connector = payload["iOS_TUN_connector"] as? [String: Any] {
-            merged["iOS_TUN_connector"] = connector
         }
         for (key, value) in payload where !(value is [String: Any]) {
             merged[key] = value

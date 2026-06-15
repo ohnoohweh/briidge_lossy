@@ -331,6 +331,86 @@ def test_swift_admin_api_live_topic_tun_routing_matches_python(swift_admin_web_c
     assert swift["payload"] == tun_routing
 
 
+def test_swift_admin_api_peers_payload_preserves_throttle_summary(swift_admin_web_component_runner: Path) -> None:
+    peer_snapshot = [
+        {
+            "id": "0:1",
+            "transport": "tcp",
+            "state": "connected",
+            "peer": "127.0.0.1:1234",
+            "throttle": {
+                "applicable": True,
+                "active": True,
+                "stalled": False,
+                "backpressure_active": True,
+                "disabled": False,
+                "budget_bytes": 12000,
+                "used_bytes": 10800,
+                "remaining_bytes": 1200,
+                "aggregate": {
+                    "scope_id": "aggregate",
+                    "budget_bytes": 12000,
+                    "used_bytes": 10800,
+                    "remaining_bytes": 1200,
+                    "prev_window_bytes": 13333,
+                    "throttle_drop_count": 0,
+                },
+                "scope": {
+                    "scope_id": "udp:client:301",
+                    "budget_bytes": 12000,
+                    "used_bytes": 10800,
+                    "remaining_bytes": 1200,
+                    "prev_window_bytes": 13333,
+                    "throttle_drop_count": 0,
+                },
+            },
+        }
+    ]
+    swift = _run_swift_component(
+        swift_admin_web_component_runner,
+        {
+            "action": "admin_api_request",
+            "request": {"method": "GET", "path": "/api/peers"},
+            "peers_snapshot": peer_snapshot,
+        },
+    )
+    assert swift["ok"] is True
+    assert swift["body_json"]["peers"][0]["throttle"]["active"] is True
+    assert swift["body_json"]["peers"][0]["throttle"]["remaining_bytes"] == 1200
+
+
+def test_swift_admin_api_live_topic_peers_preserves_throttle_summary(swift_admin_web_component_runner: Path) -> None:
+    peer_snapshot = [
+        {
+            "id": "0:1",
+            "transport": "tcp",
+            "state": "connected",
+            "peer": "127.0.0.1:1234",
+            "throttle": {
+                "applicable": True,
+                "active": True,
+                "stalled": False,
+                "backpressure_active": True,
+                "disabled": False,
+                "budget_bytes": 12000,
+                "used_bytes": 10800,
+                "remaining_bytes": 1200,
+            },
+        }
+    ]
+    swift = _run_swift_component(
+        swift_admin_web_component_runner,
+        {
+            "action": "admin_web_live_frame",
+            "topic": "peers",
+            "peers_snapshot": peer_snapshot,
+        },
+    )
+    assert swift["frame_json"]["type"] == "peers"
+    assert swift["frame_json"]["data"]["peers"][0]["throttle"]["active"] is True
+    assert swift["frame_json"]["data"]["peers"][0]["throttle"]["remaining_bytes"] == 1200
+
+
 def test_swift_admin_api_live_topic_status_frame_contains_payload(swift_admin_web_component_runner: Path) -> None:
     status = {
         "app": "udp-bidirectional-mux",

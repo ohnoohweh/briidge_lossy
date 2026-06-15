@@ -917,6 +917,74 @@ class Runner:
                 and str(row.get("state", "connected")).lower() != "listening"
             )
 
+        def _merge_throttle_summary(current: Optional[dict], candidate: Any) -> Optional[dict]:
+            if not isinstance(candidate, dict) or candidate.get("applicable") is False:
+                return current
+            if current is None:
+                return {
+                    "applicable": True,
+                    "active": bool(candidate.get("active")),
+                    "stalled": bool(candidate.get("stalled")),
+                    "backpressure_active": bool(candidate.get("backpressure_active")),
+                    "disabled": bool(candidate.get("disabled")),
+                    "budget_bytes": int(candidate.get("budget_bytes", 0) or 0),
+                    "used_bytes": int(candidate.get("used_bytes", 0) or 0),
+                    "remaining_bytes": int(candidate.get("remaining_bytes", 0) or 0),
+                    "aggregate": dict(candidate.get("aggregate") or {}),
+                    "scope": dict(candidate.get("scope") or {}) if isinstance(candidate.get("scope"), dict) else None,
+                }
+            current["active"] = bool(current.get("active")) or bool(candidate.get("active"))
+            current["stalled"] = bool(current.get("stalled")) or bool(candidate.get("stalled"))
+            current["backpressure_active"] = bool(current.get("backpressure_active")) or bool(candidate.get("backpressure_active"))
+            current["disabled"] = bool(current.get("disabled")) and bool(candidate.get("disabled"))
+            current["budget_bytes"] = max(
+                int(current.get("budget_bytes", 0) or 0),
+                int(candidate.get("budget_bytes", 0) or 0),
+            )
+            current["used_bytes"] = max(
+                int(current.get("used_bytes", 0) or 0),
+                int(candidate.get("used_bytes", 0) or 0),
+            )
+            current["remaining_bytes"] = min(
+                int(current.get("remaining_bytes", 0) or 0),
+                int(candidate.get("remaining_bytes", 0) or 0),
+            )
+            current_aggregate = current.get("aggregate") if isinstance(current.get("aggregate"), dict) else {}
+            candidate_aggregate = candidate.get("aggregate") if isinstance(candidate.get("aggregate"), dict) else {}
+            if not current_aggregate:
+                current["aggregate"] = dict(candidate_aggregate)
+            elif candidate_aggregate:
+                current["aggregate"] = {
+                    "scope_id": str(current_aggregate.get("scope_id") or candidate_aggregate.get("scope_id") or ""),
+                    "budget_bytes": max(
+                        int(current_aggregate.get("budget_bytes", 0) or 0),
+                        int(candidate_aggregate.get("budget_bytes", 0) or 0),
+                    ),
+                    "used_bytes": max(
+                        int(current_aggregate.get("used_bytes", 0) or 0),
+                        int(candidate_aggregate.get("used_bytes", 0) or 0),
+                    ),
+                    "remaining_bytes": min(
+                        int(current_aggregate.get("remaining_bytes", 0) or 0),
+                        int(candidate_aggregate.get("remaining_bytes", 0) or 0),
+                    ),
+                    "prev_window_bytes": max(
+                        int(current_aggregate.get("prev_window_bytes", 0) or 0),
+                        int(candidate_aggregate.get("prev_window_bytes", 0) or 0),
+                    ),
+                    "throttle_drop_count": max(
+                        int(current_aggregate.get("throttle_drop_count", 0) or 0),
+                        int(candidate_aggregate.get("throttle_drop_count", 0) or 0),
+                    ),
+                }
+            current_scope = current.get("scope") if isinstance(current.get("scope"), dict) else None
+            candidate_scope = candidate.get("scope") if isinstance(candidate.get("scope"), dict) else None
+            if current_scope is None:
+                current["scope"] = dict(candidate_scope) if candidate_scope else None
+            elif candidate_scope is not None and int(candidate_scope.get("remaining_bytes", 0) or 0) < int(current_scope.get("remaining_bytes", 0) or 0):
+                current["scope"] = dict(candidate_scope)
+            return current
+
         for idx, session in enumerate(self._sessions):
             mux = self._muxes[idx] if idx < len(self._muxes) else None
             label = self._session_labels[idx] if idx < len(self._session_labels) else f"session-{idx}"
@@ -992,6 +1060,7 @@ class Runner:
                     udp_open = 0
                     tcp_open = 0
                     tun_open = 0
+                    p_throttle: Optional[dict] = None
                     for row in udp_rows:
                         chan_id = row.get("chan_id")
                         if chan_id is None:
@@ -1004,6 +1073,7 @@ class Runner:
                         p_rx += int(st.get("rx_bytes", 0) or 0)
                         p_tx += int(st.get("tx_bytes", 0) or 0)
                         udp_open += 1
+                        p_throttle = _merge_throttle_summary(p_throttle, row.get("throttle"))
                     for row in tcp_rows:
                         chan_id = row.get("chan_id")
                         if chan_id is None:
@@ -1016,6 +1086,7 @@ class Runner:
                         p_rx += int(st.get("rx_bytes", 0) or 0)
                         p_tx += int(st.get("tx_bytes", 0) or 0)
                         tcp_open += 1
+                        p_throttle = _merge_throttle_summary(p_throttle, row.get("throttle"))
                     for row in tun_rows:
                         chan_id = row.get("chan_id")
                         if chan_id is None:
@@ -1029,6 +1100,7 @@ class Runner:
                         p_rx += int(st.get("rx_bytes", 0) or 0)
                         p_tx += int(st.get("tx_bytes", 0) or 0)
                         tun_open += 1
+                        p_throttle = _merge_throttle_summary(p_throttle, row.get("throttle"))
                     archived = peer_payload_totals.get(int(p.get("peer_id", 0))) or {}
                     p_rx += int(archived.get("rx_bytes", 0) or 0)
                     p_tx += int(archived.get("tx_bytes", 0) or 0)
@@ -1060,6 +1132,7 @@ class Runner:
                             "rx_bytes": p_rx,
                             "tx_bytes": p_tx,
                         },
+                        "throttle": p_throttle or {"applicable": False, "active": False, "reason": "no_local_ingress"},
                         "myudp": self._session_retransmit_stats(row_session),
                         "secure_link": dict(p.get("secure_link") or RunnerMuxAggregate._default_secure_link_snapshot()),
                         "compress_layer": dict(self._session_compress_layer_snapshot(session, peer_id=p.get("peer_id"))),
@@ -1068,10 +1141,12 @@ class Runner:
 
             rx_bytes = 0
             tx_bytes = 0
+            peer_throttle: Optional[dict] = None
             for row in udp_rows + tcp_rows + tun_rows:
                 st = row.get("stats", {})
                 rx_bytes += int(st.get("rx_bytes", 0) or 0)
                 tx_bytes += int(st.get("tx_bytes", 0) or 0)
+                peer_throttle = _merge_throttle_summary(peer_throttle, row.get("throttle"))
             for archived in peer_payload_totals.values():
                 rx_bytes += int(archived.get("rx_bytes", 0) or 0)
                 tx_bytes += int(archived.get("tx_bytes", 0) or 0)
@@ -1114,6 +1189,7 @@ class Runner:
                     "rx_bytes": rx_bytes,
                     "tx_bytes": tx_bytes,
                 },
+                "throttle": peer_throttle or {"applicable": False, "active": False, "reason": "no_local_ingress"},
                 "myudp": self._session_retransmit_stats(session),
                 "secure_link": dict(
                     getattr(
@@ -1286,6 +1362,18 @@ class Runner:
             if block:
                 grouped[section] = block
                 assigned.update(block.keys())
+        raw_grouped = getattr(self.args, "_raw_config", None)
+        if isinstance(raw_grouped, dict):
+            for section, raw_block in raw_grouped.items():
+                if not isinstance(raw_block, dict):
+                    continue
+                block = grouped.setdefault(section, {})
+                for key, value in raw_block.items():
+                    if key in block:
+                        continue
+                    block[key] = value
+                if block:
+                    assigned.update(block.keys())
         misc = {k: v for k, v in config.items() if k not in assigned}
         if misc:
             grouped["misc"] = misc
@@ -1472,21 +1560,6 @@ class Runner:
                      "comma-separated list from myudp,tcp,quic,ws. "
                      "Multiple transports are supported simultaneously for listening instances."
             )
-        for proto in ("tcp", "quic", "ws"):
-            bind_opt = f"--{proto}-bind"
-            listen_port_opt = f"--{proto}-own-port"
-            peer_opt = f"--{proto}-peer"
-            peer_port_opt = f"--{proto}-peer-port"
-            if not _has(bind_opt):
-                p.add_argument(bind_opt, default='::', help=f'{proto.upper()} overlay bind address')
-            if not _has(listen_port_opt):
-                default_port = {"tcp": 8081, "quic": 443, "ws": 8080}[proto]
-                p.add_argument(listen_port_opt, dest=f"{proto}_own_port", type=int, default=default_port, help=f'{proto.upper()} overlay own port')
-            if not _has(peer_opt):
-                p.add_argument(peer_opt, default=None, help=f'{proto.upper()} peer IP/FQDN or comma-separated IPv4/IPv6 alternatives')
-            if not _has(peer_port_opt):
-                default_peer_port = {"tcp": 8081, "quic": 443, "ws": 8080}[proto]
-                p.add_argument(peer_port_opt, type=int, default=default_peer_port, help=f'{proto.upper()} peer overlay port')
         if not _has('--client-restart-if-disconnected'):
             p.add_argument(
                 '--client-restart-if-disconnected',
@@ -2118,6 +2191,7 @@ def _attach_runtime_cli_metadata(args: argparse.Namespace, cli: ConfigAwareCLI) 
     args._config_defaults = dict(cli._baseline_defaults)
     args._config_help = dict(cli._action_help)
     args._config_choices = dict(cli._action_choices)
+    args._raw_config = dict(cli._raw_config) if isinstance(cli._raw_config, dict) else {}
     return args
 
 
