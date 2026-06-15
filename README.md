@@ -6,8 +6,6 @@ ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for ba
 - User: start with `Why this project was developed` and `Quick start (Setup Wizard)`
 - Contributor: start with `Contributor guidance`
 
-Contributor note: the latest 2026-06-11 follow-ups extend the current contributor snapshot with reconnect-hardening and shared-TUN underlay recovery. In addition to the Linux shared CI, shared-TUN, TUN-routing, Swift/Python component-parity, Admin Web parity, and listener-restart coverage already summarized below, the runtime now resets stale WebSocket RTT state whenever a new client socket supersedes an older one, rejects stale Python and Swift WebSocket callbacks after reconnect, preserves authenticated SecureLink outer connectivity while a live client transport-epoch rehandshake is in flight, and persists the original Linux underlay route so excluded peer routes can be restored with the correct `gw`/`dev`/`src` even after the full-tunnel default route has been moved onto `obtun0`. The focused defending tests for that slice now live in [tests/unit/test_ws_payload_mode.py](tests/unit/test_ws_payload_mode.py), [tests/unit/test_secure_link_psk.py](tests/unit/test_secure_link_psk.py), [tests/unit/test_tun_hook_scripts.py](tests/unit/test_tun_hook_scripts.py), and [tests/unit/test_swift_ws_transport_owner_source_guards.py](tests/unit/test_swift_ws_transport_owner_source_guards.py), while the detailed contributor-oriented validation summary remains in [docs/README_TESTING.md](docs/README_TESTING.md).
-
 ## For Users
 
 ### Whitepaper

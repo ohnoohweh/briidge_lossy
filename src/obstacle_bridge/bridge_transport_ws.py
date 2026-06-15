@@ -363,6 +363,8 @@ class WebSocketSession(ISession):
         )
         self._disconnect_task: Optional[asyncio.Task] = None
         self._tx_queue: "asyncio.Queue[tuple[bytes, Optional[Callable[[], None]]]]" = asyncio.Queue()
+        self._tx_inflight: bool = False
+        self._last_rx_ns: int = 0
         self._server_connected_evt = asyncio.Event()
         self._server_peers: Dict[int, dict] = {}
         self._server_peer_by_ws_id: Dict[int, int] = {}
@@ -598,9 +600,97 @@ class WebSocketSession(ISession):
                 rtt_est_ms=rtt_est_ms,
                 transmit_delay_est_ms=(0.5 * float(rtt_est_ms)) if rtt_est_ms is not None else None,
                 last_rtt_ok_ns=getattr(r, "last_rtt_ok_ns", None),
+                last_rx_ns=self._last_rx_ns or None,
+                waiting_count=self.waiting_count(),
             )
         except Exception:
             return SessionMetrics()
+
+    def waiting_count(self) -> int:
+        def _transport_pending(ws_obj: Any) -> int:
+            try:
+                transport = getattr(ws_obj, "transport", None)
+                size_getter = getattr(transport, "get_write_buffer_size", None)
+                if callable(size_getter):
+                    return 1 if int(size_getter() or 0) > 0 else 0
+            except Exception:
+                pass
+            return 0
+
+        pending = 0
+        try:
+            pending += int(self._tx_queue.qsize())
+        except Exception:
+            pass
+        try:
+            pending += len(self._early_buf)
+        except Exception:
+            pass
+        try:
+            pending += 1 if bool(self._tx_inflight) else 0
+        except Exception:
+            pass
+        try:
+            pending += _transport_pending(self._ws)
+        except Exception:
+            pass
+        try:
+            for ctx in list(self._server_peers.values()):
+                q = ctx.get("tx_queue")
+                pending += int(q.qsize()) if q is not None else 0
+                pending += 1 if bool(ctx.get("tx_inflight")) else 0
+                pending += _transport_pending(ctx.get("ws"))
+        except Exception:
+            pass
+        return max(0, int(pending))
+
+    def _client_transport_diag(self) -> str:
+        now_ns = time.monotonic_ns()
+        try:
+            last_rx_ns = int(self._last_rx_ns or 0)
+            last_rx_age_ms = ((now_ns - last_rx_ns) / 1e6) if last_rx_ns > 0 else -1.0
+        except Exception:
+            last_rx_age_ms = -1.0
+        try:
+            last_rtt_ok_ns = int(getattr(self._rtt, "last_rtt_ok_ns", 0) or 0)
+            last_rtt_ok_age_ms = ((now_ns - last_rtt_ok_ns) / 1e6) if last_rtt_ok_ns > 0 else -1.0
+        except Exception:
+            last_rtt_ok_age_ms = -1.0
+        try:
+            tx_q = int(self._tx_queue.qsize())
+        except Exception:
+            tx_q = -1
+        return (
+            f"waiting_count={self.waiting_count()} tx_queue={tx_q} tx_inflight={int(bool(self._tx_inflight))} "
+            f"early_buf_frames={len(self._early_buf)} early_buf_bytes={self._early_buf_bytes} "
+            f"last_rx_age_ms={last_rx_age_ms:.1f} last_rtt_ok_age_ms={last_rtt_ok_age_ms:.1f}"
+        )
+
+    def _server_peer_transport_diag(self, ctx: Optional[dict]) -> str:
+        if not isinstance(ctx, dict):
+            return "ctx=none"
+        now_ns = time.monotonic_ns()
+        try:
+            last_rx_ns = int(ctx.get("last_rx_ns", 0) or 0)
+            last_rx_age_ms = ((now_ns - last_rx_ns) / 1e6) if last_rx_ns > 0 else -1.0
+        except Exception:
+            last_rx_age_ms = -1.0
+        try:
+            rtt = ctx.get("rtt")
+            last_rtt_ok_ns = int(getattr(rtt, "last_rtt_ok_ns", 0) or 0)
+            last_rtt_ok_age_ms = ((now_ns - last_rtt_ok_ns) / 1e6) if last_rtt_ok_ns > 0 else -1.0
+        except Exception:
+            last_rtt_ok_age_ms = -1.0
+        try:
+            tx_queue = ctx.get("tx_queue")
+            tx_q = int(tx_queue.qsize()) if tx_queue is not None else 0
+        except Exception:
+            tx_q = -1
+        return (
+            f"peer_id={ctx.get('peer_id')} waiting_count={self.waiting_count()} tx_queue={tx_q} "
+            f"tx_inflight={int(bool(ctx.get('tx_inflight')))} last_rx_age_ms={last_rx_age_ms:.1f} "
+            f"last_rtt_ok_age_ms={last_rtt_ok_age_ms:.1f}"
+        )
 
     def get_max_app_payload_size(self) -> int:
         # send_app() prepends the 1-byte WS kind marker before payload encoding.
@@ -1964,6 +2054,8 @@ class WebSocketSession(ISession):
             rtt = StreamRTT(log=self._log)
             rtt_rt = StreamRTTRuntime(rtt)
             peer_id = self._alloc_server_peer_id()
+            previous_peer_count = len(self._server_peers)
+            self.connection_epoch += 1
             ctx = {
                 "peer_id": peer_id,
                 "ws": ws,
@@ -1983,6 +2075,13 @@ class WebSocketSession(ISession):
             self._log.info(
                 f"[WS-SESSION] ({self._probe_id}) accept: peer_id={peer_id} local={sockname} "
                 f"peer={peer} payload_mode={payload_mode}"
+            )
+            self._log.info(
+                "[WS-SESSION] (%s) server transport epoch=%d peer_id=%d previous_peer_count=%d",
+                self._probe_id,
+                self.connection_epoch,
+                peer_id,
+                previous_peer_count,
             )
             try:
                 if isinstance(peer, tuple) and len(peer) >= 2:
@@ -2272,6 +2371,7 @@ class WebSocketSession(ISession):
     def _reset_counters(self) -> None:
         self._rx_bytes = self._tx_bytes = 0
         self._rx_crc32 = self._tx_crc32 = 0
+        self._last_rx_ns = 0
         self._log.debug(f"[WS/CTR] ({self._probe_id}) reset (RX=0 CRC=0x00000000, TX=0 CRC=0x00000000)")
 
     def _log_counters(self, direction: str) -> None:
@@ -2290,6 +2390,7 @@ class WebSocketSession(ISession):
     def _bump_rx(self, data: bytes) -> None:
         self._rx_bytes += len(data)
         self._rx_crc32 = self._z.crc32(data, self._rx_crc32) & 0xFFFFFFFF
+        self._last_rx_ns = time.monotonic_ns()
         self._log_counters("UPDATE")
 
     # --- early buffer ----------------------------------------------------------
@@ -2339,6 +2440,7 @@ class WebSocketSession(ISession):
                     try:
                         if not self._ws:
                             continue
+                        self._tx_inflight = True
                         send_coro = self._ws.send(self._ws_payload_codec.encode(wire))
                         if self._ws_send_timeout_s > 0:
                             await asyncio.wait_for(send_coro, timeout=self._ws_send_timeout_s)
@@ -2352,7 +2454,8 @@ class WebSocketSession(ISession):
                                 pass
                     except asyncio.TimeoutError:
                         self._log.warning(
-                            f"[WS/TX] ({self._probe_id}) send timeout after {self._ws_send_timeout_s:.3f}s; forcing reconnect"
+                            f"[WS/TX] ({self._probe_id}) send timeout after {self._ws_send_timeout_s:.3f}s; "
+                            f"forcing reconnect {self._client_transport_diag()}"
                         )
                         try:
                             await asyncio.wait_for(self._ws.close(), timeout=1.0)
@@ -2361,6 +2464,7 @@ class WebSocketSession(ISession):
                     except Exception as e:
                         self._log.info(f"[WS/TX] ({self._probe_id}) send error: {e!r}")
                     finally:
+                        self._tx_inflight = False
                         self._tx_queue.task_done()
             except asyncio.CancelledError:
                 return
@@ -2380,6 +2484,7 @@ class WebSocketSession(ISession):
                     try:
                         if ws is None:
                             continue
+                        ctx["tx_inflight"] = True
                         _payload_mode, payload_codec = self._resolve_ws_codec_context(ctx)
                         send_coro = ws.send(payload_codec.encode(wire))
                         if self._ws_send_timeout_s > 0:
@@ -2394,13 +2499,15 @@ class WebSocketSession(ISession):
                                 pass
                     except asyncio.TimeoutError:
                         self._log.warning(
-                            f"[WS/TX] ({self._probe_id}) server peer_id={ctx['peer_id']} send timeout after {self._ws_send_timeout_s:.3f}s; closing peer"
+                            f"[WS/TX] ({self._probe_id}) server peer_id={ctx['peer_id']} send timeout after "
+                            f"{self._ws_send_timeout_s:.3f}s; closing peer {self._server_peer_transport_diag(ctx)}"
                         )
                         await self._close_server_peer(ctx["peer_id"])
                         return
                     except Exception as e:
                         self._log.info(f"[WS/TX] ({self._probe_id}) server peer_id={ctx['peer_id']} send error: {e!r}")
                     finally:
+                        ctx["tx_inflight"] = False
                         q.task_done()
             except asyncio.CancelledError:
                 return
@@ -2663,6 +2770,11 @@ class WebSocketSession(ISession):
                     continue
 
                 self._bump_rx(b)
+                if ctx is not None:
+                    try:
+                        ctx["last_rx_ns"] = time.monotonic_ns()
+                    except Exception:
+                        pass
                 if self._on_peer_rx:
                     try: self._on_peer_rx(len(b))
                     except Exception: pass
@@ -2671,6 +2783,21 @@ class WebSocketSession(ISession):
                 payload = b[1:]
 
                 if kind == self._K_APP:
+                    try:
+                        if len(payload) >= self._MUX_HDR.size:
+                            mux_chan, proto_i, _counter, mtype_i, dlen = self._MUX_HDR.unpack(payload[:self._MUX_HDR.size])
+                            if int(proto_i) == 2:
+                                self._log.info(
+                                    "[WS/APP] (%s) dispatch peer_id=%s chan=%s proto=tcp mtype=%s payload_len=%s total_len=%s",
+                                    self._probe_id,
+                                    peer_id,
+                                    mux_chan,
+                                    mtype_i,
+                                    dlen,
+                                    len(payload),
+                                )
+                    except Exception:
+                        pass
                     if not client_mode and peer_id is not None and not self._app_payload_passthrough:
                         payload = self._server_rewrite_inbound_app(peer_id, payload)
                     if self._on_app_from_peer_bytes:
@@ -2748,7 +2875,8 @@ class WebSocketSession(ISession):
             self._log.debug(f"[WS/RX] ({self._probe_id}) cancelled")
             return
         except Exception as e:
-            self._log.info(f"[WS/RX] ({self._probe_id}) pump error/close{suffix}: {e!r}")
+            diag = self._client_transport_diag() if client_mode else self._server_peer_transport_diag(ctx)
+            self._log.info(f"[WS/RX] ({self._probe_id}) pump error/close{suffix}: {e!r} {diag}")
         finally:
             if client_mode:
                 try:

@@ -14,6 +14,9 @@ except Exception:
     fcntl = None
 
 
+TUN_READ_BURST_MAX = 32
+
+
 def _tun_ifreq_name(name: str) -> bytes:
     return str(name).encode("utf-8", "ignore")[:15].ljust(16, b"\x00")
 
@@ -83,7 +86,8 @@ def write_tun_packet(_mux: Any, dev: Any, data: bytes) -> None:
 
 
 def on_tun_fd_readable(mux: Any, dev: Any) -> None:
-    while True:
+    processed = 0
+    while processed < TUN_READ_BURST_MAX:
         try:
             packet = os.read(dev.fd, max(68, min(mux.TUN_READ_SIZE_MAX, int(dev.mtu) + 4)))
         except BlockingIOError:
@@ -110,3 +114,15 @@ def on_tun_fd_readable(mux: Any, dev: Any) -> None:
             except Exception:
                 pass
         mux._on_local_tun_packet(dev, packet)
+        processed += 1
+    checker = getattr(mux.log, "isEnabledFor", None)
+    if callable(checker):
+        try:
+            if checker(logging.DEBUG):
+                mux.log.debug(
+                    "[TUN/LINUX] if=%s yielding after burst packets=%s",
+                    dev.ifname,
+                    processed,
+                )
+        except Exception:
+            pass

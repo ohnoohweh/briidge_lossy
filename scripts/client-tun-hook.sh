@@ -24,6 +24,9 @@ STATE_FILE6="${STATE_DIR}/${IFNAME}.default-route6"
 STATE_EXCLUDED4="${STATE_DIR}/${IFNAME}.excluded-routes4"
 STATE_EXCLUDED6="${STATE_DIR}/${IFNAME}.excluded-routes6"
 STATE_UNDERLAY4="${STATE_DIR}/${IFNAME}.underlay-route4"
+STATE_UNDERLAY6="${STATE_DIR}/${IFNAME}.underlay-route6"
+STATE_PROTECTED4="${STATE_DIR}/${IFNAME}.protected-routes4"
+STATE_PROTECTED6="${STATE_DIR}/${IFNAME}.protected-routes6"
 
 mkdir -p "$STATE_DIR"
 
@@ -38,7 +41,13 @@ log_route_snapshot() {
   log_diag "stage=${stage} default6=$(ip -6 route show default 2>/dev/null | tr '\n' ';' || true)"
   log_diag "stage=${stage} ifaddr=$(ip addr show dev "$IFNAME" 2>/dev/null | tr '\n' ';' || true)"
   if [[ -n "${OVERLAY_PEER_IP:-}" ]]; then
-    log_diag "stage=${stage} overlay_route=$(ip route get "$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")" 2>/dev/null | head -n1 || true)"
+    local normalized_ip
+    normalized_ip="$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")"
+    if [[ "$normalized_ip" == *:* ]]; then
+      log_diag "stage=${stage} overlay_route=$(ip -6 route get "$normalized_ip" 2>/dev/null | head -n1 || true)"
+    else
+      log_diag "stage=${stage} overlay_route=$(ip route get "$normalized_ip" 2>/dev/null | head -n1 || true)"
+    fi
   fi
   if [[ -n "${EXCLUDED_ROUTES:-}" ]]; then
     log_diag "stage=${stage} excluded4=${EXCLUDED_ROUTES}"
@@ -81,6 +90,12 @@ overlay_route_prefix() {
   fi
 }
 
+overlay_peer_is_ipv6() {
+  local normalized_ip
+  normalized_ip="$(normalize_overlay_peer_ip "${OVERLAY_PEER_IP:-}")"
+  [[ "$normalized_ip" == *:* ]]
+}
+
 detect_underlay() {
   local normalized_ip
   normalized_ip="$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")"
@@ -88,8 +103,20 @@ detect_underlay() {
     echo "overlay peer IP not known yet; skipping underlay route detection" >&2
     return 1
   fi
-  local route_line
-  route_line="$(ip route get "$normalized_ip" 2>/dev/null | head -n1 || true)"
+  local route_line=""
+  local route_cmd=""
+  local state_file=""
+  local stale_state_file=""
+  if [[ "$normalized_ip" == *:* ]]; then
+    route_cmd="ip -6 route get"
+    state_file="$STATE_UNDERLAY6"
+    stale_state_file="$STATE_UNDERLAY4"
+  else
+    route_cmd="ip route get"
+    state_file="$STATE_UNDERLAY4"
+    stale_state_file="$STATE_UNDERLAY6"
+  fi
+  route_line="$($route_cmd "$normalized_ip" 2>/dev/null | head -n1 || true)"
   if [[ -z "$route_line" ]]; then
     log_diag "unable to detect route to overlay peer ${normalized_ip}"
     return 1
@@ -104,8 +131,11 @@ detect_underlay() {
     log_diag "unable to detect underlay interface from: ${route_line}"
     return 1
   fi
-  if [[ -n "${STATE_UNDERLAY4:-}" ]]; then
-    printf '%s\n' "$route_line" > "$STATE_UNDERLAY4"
+  if [[ -n "$state_file" ]]; then
+    printf '%s\n' "$route_line" > "$state_file"
+  fi
+  if [[ -n "$stale_state_file" ]]; then
+    rm -f "$stale_state_file"
   fi
   log_diag "detected underlay route=${route_line} dev=${UNDERLAY_IF} gw=${UNDERLAY_GW:-}"
   return 0
@@ -196,6 +226,102 @@ add_excluded_routes4() {
   done < <(csv_to_lines "$EXCLUDED_ROUTES")
 }
 
+protect_underlay_routes4() {
+  : > "$STATE_PROTECTED4"
+  local gw="" dev="" src=""
+  while IFS='=' read -r key value; do
+    [[ "$key" == "gw" ]] && gw="$value"
+    [[ "$key" == "dev" ]] && dev="$value"
+    [[ "$key" == "src" ]] && src="$value"
+  done < <(_load_saved_route_parts "$STATE_UNDERLAY4" "ip route show default")
+  [[ -n "$dev" ]] || return 0
+
+  local protected_routes=()
+  if [[ -n "${OVERLAY_PEER_IP:-}" ]] && ! overlay_peer_is_ipv6; then
+    protected_routes+=("$(overlay_route_prefix)")
+  fi
+  if [[ -n "$src" ]]; then
+    protected_routes+=("${src}/32")
+  fi
+  if [[ -n "$gw" ]]; then
+    protected_routes+=("${gw}/32")
+  fi
+
+  local link_route
+  while IFS= read -r link_route; do
+    [[ -z "$link_route" ]] && continue
+    protected_routes+=("$link_route")
+  done < <(ip route show dev "$dev" scope link 2>/dev/null | awk '{print $1}' | sed '/^default$/d')
+
+  local route_spec
+  local seen=""
+  for route_spec in "${protected_routes[@]}"; do
+    [[ -n "$route_spec" ]] || continue
+    case ",${seen}," in
+      *",${route_spec},"*) continue ;;
+    esac
+    seen="${seen},${route_spec}"
+    if [[ -n "$gw" && "$route_spec" != "${gw}/32" && "$route_spec" != "${src}/32" ]]; then
+      if [[ -n "$src" ]]; then
+        ip route replace "$route_spec" dev "$dev" src "$src"
+      else
+        ip route replace "$route_spec" dev "$dev"
+      fi
+    else
+      if [[ -n "$src" ]]; then
+        ip route replace "$route_spec" dev "$dev" src "$src"
+      else
+        ip route replace "$route_spec" dev "$dev"
+      fi
+    fi
+    printf '%s\n' "$route_spec" >> "$STATE_PROTECTED4"
+  done
+}
+
+protect_underlay_routes6() {
+  : > "$STATE_PROTECTED6"
+  local gw="" dev="" src=""
+  while IFS='=' read -r key value; do
+    [[ "$key" == "gw" ]] && gw="$value"
+    [[ "$key" == "dev" ]] && dev="$value"
+    [[ "$key" == "src" ]] && src="$value"
+  done < <(_load_saved_route_parts "$STATE_UNDERLAY6" "ip -6 route show default")
+  [[ -n "$dev" ]] || return 0
+
+  local protected_routes=()
+  if [[ -n "${OVERLAY_PEER_IP:-}" ]] && overlay_peer_is_ipv6; then
+    protected_routes+=("$(overlay_route_prefix)")
+  fi
+  if [[ -n "$src" ]]; then
+    protected_routes+=("${src}/128")
+  fi
+  if [[ -n "$gw" ]]; then
+    protected_routes+=("${gw}/128")
+  fi
+
+  local link_route
+  while IFS= read -r link_route; do
+    [[ -z "$link_route" ]] && continue
+    protected_routes+=("$link_route")
+  done < <(ip -6 route show dev "$dev" 2>/dev/null | awk '{print $1}' | sed '/^default$/d')
+
+  local route_spec
+  local seen=""
+  for route_spec in "${protected_routes[@]}"; do
+    [[ -n "$route_spec" ]] || continue
+    case ",${seen}," in
+      *",${route_spec},"*) continue ;;
+    esac
+    seen="${seen},${route_spec}"
+    if [[ -n "$src" ]]; then
+      ip -6 route replace "$route_spec" dev "$dev" src "$src"
+    else
+      ip -6 route replace "$route_spec" dev "$dev"
+    fi
+    printf '%s\n' "$route_spec" >> "$STATE_PROTECTED6"
+  done
+}
+
 add_excluded_routes6() {
   : > "$STATE_EXCLUDED6"
   local gw="" dev=""
@@ -232,6 +358,24 @@ delete_excluded_routes6() {
       [[ -z "$route_spec" ]] && continue
       ip -6 route del "$route_spec" 2>/dev/null || true
     done < "$STATE_EXCLUDED6"
+  fi
+}
+
+delete_protected_routes4() {
+  if [[ -s "$STATE_PROTECTED4" ]]; then
+    while IFS= read -r route_spec; do
+      [[ -z "$route_spec" ]] && continue
+      ip route del "$route_spec" 2>/dev/null || true
+    done < "$STATE_PROTECTED4"
+  fi
+}
+
+delete_protected_routes6() {
+  if [[ -s "$STATE_PROTECTED6" ]]; then
+    while IFS= read -r route_spec; do
+      [[ -z "$route_spec" ]] && continue
+      ip -6 route del "$route_spec" 2>/dev/null || true
+    done < "$STATE_PROTECTED6"
   fi
 }
 
@@ -298,28 +442,51 @@ case "$ACTION" in
     save_default_route
     add_excluded_routes4
     add_excluded_routes6
+    protect_underlay_routes4
+    protect_underlay_routes6
 
     overlay_src=""
-    while IFS='=' read -r key value; do
-      [[ "$key" == "src" ]] && overlay_src="$value"
-    done < <(_load_saved_route_parts "$STATE_UNDERLAY4" "ip route show default")
-    if [[ -n "$UNDERLAY_GW" ]]; then
-      if [[ -n "$overlay_src" ]]; then
-        ip route replace "$(overlay_route_prefix)" via "$UNDERLAY_GW" dev "$UNDERLAY_IF" src "$overlay_src"
+    if overlay_peer_is_ipv6; then
+      while IFS='=' read -r key value; do
+        [[ "$key" == "src" ]] && overlay_src="$value"
+      done < <(_load_saved_route_parts "$STATE_UNDERLAY6" "ip -6 route show default")
+      if [[ -n "$UNDERLAY_GW" ]]; then
+        if [[ -n "$overlay_src" ]]; then
+          ip -6 route replace "$(overlay_route_prefix)" via "$UNDERLAY_GW" dev "$UNDERLAY_IF" src "$overlay_src"
+        else
+          ip -6 route replace "$(overlay_route_prefix)" via "$UNDERLAY_GW" dev "$UNDERLAY_IF"
+        fi
       else
-        ip route replace "$(overlay_route_prefix)" via "$UNDERLAY_GW" dev "$UNDERLAY_IF"
+        if [[ -n "$overlay_src" ]]; then
+          ip -6 route replace "$(overlay_route_prefix)" dev "$UNDERLAY_IF" src "$overlay_src"
+        else
+          ip -6 route replace "$(overlay_route_prefix)" dev "$UNDERLAY_IF"
+        fi
       fi
     else
-      if [[ -n "$overlay_src" ]]; then
-        ip route replace "$(overlay_route_prefix)" dev "$UNDERLAY_IF" src "$overlay_src"
+      while IFS='=' read -r key value; do
+        [[ "$key" == "src" ]] && overlay_src="$value"
+      done < <(_load_saved_route_parts "$STATE_UNDERLAY4" "ip route show default")
+      if [[ -n "$UNDERLAY_GW" ]]; then
+        if [[ -n "$overlay_src" ]]; then
+          ip route replace "$(overlay_route_prefix)" via "$UNDERLAY_GW" dev "$UNDERLAY_IF" src "$overlay_src"
+        else
+          ip route replace "$(overlay_route_prefix)" via "$UNDERLAY_GW" dev "$UNDERLAY_IF"
+        fi
       else
-        ip route replace "$(overlay_route_prefix)" dev "$UNDERLAY_IF"
+        if [[ -n "$overlay_src" ]]; then
+          ip route replace "$(overlay_route_prefix)" dev "$UNDERLAY_IF" src "$overlay_src"
+        else
+          ip route replace "$(overlay_route_prefix)" dev "$UNDERLAY_IF"
+        fi
       fi
     fi
     ip route replace default via "$TUN_GW" dev "$IFNAME" onlink
     if [[ -n "$TUN_GW6" ]]; then
       ip -6 route replace default via "$TUN_GW6" dev "$IFNAME" metric 1 onlink
     fi
+    ip route flush cache 2>/dev/null || true
+    ip -6 route flush cache 2>/dev/null || true
 
     set_dns
     log_route_snapshot "up-complete"
@@ -339,7 +506,33 @@ case "$ACTION" in
     fi
     delete_excluded_routes4
     delete_excluded_routes6
-    if [[ -s "$STATE_UNDERLAY4" ]]; then
+    delete_protected_routes4
+    delete_protected_routes6
+    if overlay_peer_is_ipv6 && [[ -s "$STATE_UNDERLAY6" ]]; then
+      saved_gw=""
+      saved_dev=""
+      saved_src=""
+      while IFS='=' read -r key value; do
+        [[ "$key" == "gw" ]] && saved_gw="$value"
+        [[ "$key" == "dev" ]] && saved_dev="$value"
+        [[ "$key" == "src" ]] && saved_src="$value"
+      done < <(_load_saved_route_parts "$STATE_UNDERLAY6" "ip -6 route show default")
+      if [[ -n "$saved_dev" ]]; then
+        if [[ -n "$saved_gw" ]]; then
+          if [[ -n "$saved_src" ]]; then
+            ip -6 route del "$(overlay_route_prefix)" via "$saved_gw" dev "$saved_dev" src "$saved_src" 2>/dev/null || true
+          else
+            ip -6 route del "$(overlay_route_prefix)" via "$saved_gw" dev "$saved_dev" 2>/dev/null || true
+          fi
+        else
+          if [[ -n "$saved_src" ]]; then
+            ip -6 route del "$(overlay_route_prefix)" dev "$saved_dev" src "$saved_src" 2>/dev/null || true
+          else
+            ip -6 route del "$(overlay_route_prefix)" dev "$saved_dev" 2>/dev/null || true
+          fi
+        fi
+      fi
+    elif [[ -s "$STATE_UNDERLAY4" ]]; then
       saved_gw=""
       saved_dev=""
       saved_src=""
@@ -370,6 +563,8 @@ case "$ACTION" in
       ip -6 addr del "$TUN_ADDR6" dev "$IFNAME" 2>/dev/null || true
     fi
     ip addr del "$TUN_ADDR" dev "$IFNAME" 2>/dev/null || true
+    ip route flush cache 2>/dev/null || true
+    ip -6 route flush cache 2>/dev/null || true
     log_route_snapshot "down-complete"
     ;;
   *)

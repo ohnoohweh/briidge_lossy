@@ -296,9 +296,36 @@ class TcpStreamSession(ISession):
                 rtt_est_ms=rtt_est_ms,
                 transmit_delay_est_ms=(0.5 * float(rtt_est_ms)) if rtt_est_ms is not None else None,
                 last_rtt_ok_ns=getattr(r, "last_rtt_ok_ns", None),
+                waiting_count=self.waiting_count(),
             )
         except Exception:
             return SessionMetrics()
+
+    def waiting_count(self) -> int:
+        pending = 0
+        try:
+            pending += 1 if len(self._early_buf) > 0 else 0
+        except Exception:
+            pass
+
+        def _writer_pending(writer: Any) -> int:
+            try:
+                transport = getattr(writer, "transport", None)
+                if transport is None and hasattr(writer, "get_extra_info"):
+                    transport = writer.get_extra_info("transport")
+                size_getter = getattr(transport, "get_write_buffer_size", None)
+                size = int(size_getter()) if callable(size_getter) else 0
+                return 1 if size > 0 else 0
+            except Exception:
+                return 0
+
+        pending += _writer_pending(getattr(self, "_writer", None))
+        try:
+            for ctx in list(self._server_peers.values()):
+                pending += _writer_pending(ctx.get("writer"))
+        except Exception:
+            pass
+        return max(0, int(pending))
 
     def get_max_app_payload_size(self) -> int:
         return 65535

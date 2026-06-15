@@ -147,12 +147,13 @@ class _SockoptWs(_FakeWs):
 
 
 class _ProbeTransport:
-    def __init__(self):
+    def __init__(self, *, write_buffer_size=0):
         self._sockname = ("127.0.0.1", 8080)
         self._peername = ("127.0.0.1", 40000)
+        self._write_buffer_size = int(write_buffer_size)
 
     def get_write_buffer_size(self):
-        return 0
+        return self._write_buffer_size
 
     def is_closing(self):
         return False
@@ -166,8 +167,8 @@ class _ProbeTransport:
 
 
 class _ProbeConnection:
-    def __init__(self):
-        self.transport = _ProbeTransport()
+    def __init__(self, *, write_buffer_size=0):
+        self.transport = _ProbeTransport(write_buffer_size=write_buffer_size)
 
 
 class _FakeLoop:
@@ -431,6 +432,24 @@ class WebSocketReconnectGraceTests(unittest.IsolatedAsyncioTestCase):
         await session._rx_task
         session._tx_task.cancel()
         await session._tx_task
+
+    def test_get_metrics_reports_waiting_count_from_tx_backlog(self):
+        session = WebSocketSession(_args("binary"))
+        session._early_buf.append((b"a", None))
+        session._tx_queue.put_nowait((b"b", None))
+        session._tx_inflight = True
+
+        metrics = session.get_metrics()
+
+        self.assertEqual(metrics.waiting_count, 3)
+
+    def test_get_metrics_reports_waiting_count_from_transport_write_buffer(self):
+        session = WebSocketSession(_args("binary"))
+        session._ws = _ProbeConnection(write_buffer_size=4096)
+
+        metrics = session.get_metrics()
+
+        self.assertEqual(metrics.waiting_count, 1)
 
 
 class WebSocketHttpPreflightTests(unittest.IsolatedAsyncioTestCase):

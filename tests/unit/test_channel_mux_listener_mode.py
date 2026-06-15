@@ -235,6 +235,59 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         finally:
             mux.loop.close()
 
+    def test_shared_tun_disable_scoped_throttle_does_not_bypass_stream_stall_guard(self):
+        session = _FakeSession(waiting_count=5)
+        session._metrics.last_rtt_ok_ns = 1
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._overlay_transport = "ws"
+            mux._tun_routing_settings = TunRoutingSettings(
+                shared_tun_disable_scoped_throttle=True,
+            )
+            self.assertFalse(
+                mux._local_tun_send_allowed(
+                    4096,
+                    now_ns=ChannelMux.TUN_STREAM_OVERLAY_STALL_NS + 2,
+                    scope_key=("peer", 7),
+                )
+            )
+        finally:
+            mux.loop.close()
+
+    def test_stream_overlay_stalls_on_recent_rx_idle_without_waiting_count_signal(self):
+        session = _FakeSession(waiting_count=0, transmit_delay_est_ms=60.0)
+        session._metrics.last_rx_ns = 1
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._overlay_transport = "ws"
+            self.assertFalse(
+                mux._local_tun_send_allowed(
+                    4096,
+                    now_ns=600_000_000,
+                    scope_key=("peer", 7),
+                )
+            )
+        finally:
+            mux.loop.close()
+
+    def test_shared_tun_disable_scoped_throttle_does_not_bypass_stream_backpressure(self):
+        session = _FakeSession(waiting_count=1)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._overlay_transport = "ws"
+            mux._tun_routing_settings = TunRoutingSettings(
+                shared_tun_disable_scoped_throttle=True,
+            )
+            self.assertFalse(
+                mux._local_tun_send_allowed(
+                    4096,
+                    now_ns=1,
+                    scope_key=("peer", 7),
+                )
+            )
+        finally:
+            mux.loop.close()
+
     def test_select_hook_argv_uses_list_directly(self):
         selected = ChannelMux._select_hook_argv({"argv": ["cmd", "arg1"]}, platform_key="linux")
         self.assertEqual(selected, ["cmd", "arg1"])
@@ -1059,6 +1112,7 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
              patch.object(mux2, '_register_tun_reader') as reg2:
             opened = self.mux._start_tun_server_for_sync(spec, svc_key)
             attached = mux2._start_tun_server_for_sync(spec, svc_key)
+            await asyncio.sleep(0)
 
         self.assertIs(opened, dev)
         self.assertIs(attached, dev)
@@ -1284,7 +1338,8 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
 
         apply_peer.assert_awaited_once()
         open_tun_device.assert_called_once_with('obtun1', 1500, svc_key=svc_key)
-        register_reader.assert_called_once()
+        self.assertGreaterEqual(register_reader.call_count, 1)
+        register_reader.assert_any_call(self.mux._svc_tun_devices[svc_key], force_owner=True)
         self.assertIn(svc_key, self.mux._peer_installed_services)
         self.assertIs(self.mux._tun_by_chan[1], self.mux._svc_tun_devices[svc_key])
         schedule_hook.assert_any_call(remote_tun, svc_key, 'listener', 'on_created')
@@ -1325,7 +1380,8 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
 
         apply_peer.assert_awaited_once()
         open_tun_device.assert_called_once_with('Obtun3', 1600, svc_key=svc_key)
-        register_reader.assert_called_once()
+        self.assertGreaterEqual(register_reader.call_count, 1)
+        register_reader.assert_any_call(self.mux._svc_tun_devices[svc_key], force_owner=True)
         self.assertIn(svc_key, self.mux._peer_installed_services)
         self.assertIs(self.mux._tun_by_chan[1], self.mux._svc_tun_devices[svc_key])
         schedule_hook.assert_any_call(remote_tun, svc_key, 'listener', 'on_created')
@@ -1808,6 +1864,27 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
         mux = ChannelMux(session, asyncio.new_event_loop())
         try:
             self.assertEqual(mux._SAFE_TCP_READ, 512 - ChannelMux.MUX_HDR.size)
+        finally:
+            mux.loop.close()
+
+    def test_stream_overlay_tcp_read_size_is_capped_for_ws(self):
+        session = _FakeSession(max_app_payload_size=65535)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._overlay_transport = "ws"
+            self.assertEqual(
+                mux._tcp_overlay_read_size(),
+                ChannelMux.STREAM_OVERLAY_TCP_READ_CAP,
+            )
+        finally:
+            mux.loop.close()
+
+    def test_datagram_overlay_tcp_read_size_keeps_session_budget(self):
+        session = _FakeSession(max_app_payload_size=512)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._overlay_transport = "myudp"
+            self.assertEqual(mux._tcp_overlay_read_size(), mux._SAFE_TCP_READ)
         finally:
             mux.loop.close()
 

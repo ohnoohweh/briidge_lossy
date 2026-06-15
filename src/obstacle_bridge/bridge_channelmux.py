@@ -192,6 +192,9 @@ class ChannelMux:
     CTRL_CHUNK_MAX_INFLIGHT = 512
     TUN_INFLOW_THROTTLE_WINDOW_NS = 100_000_000
     TUN_INFLOW_THROTTLE_RATIO = 0.9
+    TUN_STREAM_OVERLAY_STALL_NS = 2_500_000_000
+    TUN_STREAM_OVERLAY_RX_IDLE_NS_MIN = 500_000_000
+    STREAM_OVERLAY_TCP_READ_CAP = 2048
     SHARED_TUN_RECENT_DROP_LIMIT = 16
 
     @staticmethod
@@ -820,6 +823,9 @@ class ChannelMux:
         self._udp_chan_by_open_key: dict[tuple[int, int, int, int, str, int, int, str, int], int] = {}
         self._tcp_open_key_by_chan: dict[int, tuple[int, int, int, str, int, int, str, int]] = {}
         self._tcp_chan_by_open_key: dict[tuple[int, int, int, str, int, int, str, int], int] = {}
+        self._tcp_first_overlay_to_local_logged: set[int] = set()
+        self._tcp_first_remote_to_overlay_logged: set[int] = set()
+        self._tcp_pending_drain_logged: set[int] = set()
         self._tun_open_key_by_chan: dict[int, tuple[int, int, int, str, int, int, str, int]] = {}
         self._tun_chan_by_open_key: dict[tuple[int, int, int, str, int, int, str, int], int] = {}
         self._tun_by_chan: dict[int, ChannelMux.TunDevice] = {}
@@ -832,6 +838,7 @@ class ChannelMux:
         self._shared_tun_drop_state_by_service: dict[ChannelMux.ServiceKey, dict[str, Any]] = {}
         self._tun_inflow_scope_state: dict[tuple[Any, ...], dict[str, Any]] = {}
         self._shared_tun_normalization_warned: set[tuple[str, str, str]] = set()
+        self._stream_overlay_idle_warn_until_ns: int = 0
         self._chan_owner_peer_id: dict[int, int] = {}
         self._ctrl_chunk_rx: dict[tuple[int, int, int, int, int], dict[str, Any]] = {}
         self._ctrl_chunk_next_txid: int = 1
@@ -2950,6 +2957,16 @@ class ChannelMux:
         _bridge_tun_platform.register_tun_reader(self, dev)
         setattr(dev, "_reader_mux", self)
 
+    def _schedule_tun_reader_registration(self, dev: "ChannelMux.TunDevice") -> None:
+        if dev is None:
+            return
+        if getattr(dev, "reader_registered", False) and getattr(dev, "_reader_mux", None) is self:
+            return
+        if self.loop.is_running():
+            self.loop.call_soon(self._register_tun_reader, dev)
+            return
+        self._register_tun_reader(dev)
+
     def _close_tun_device(self, dev: "ChannelMux.TunDevice") -> None:
         _bridge_tun_platform.close_tun_device(self, dev)
 
@@ -3071,11 +3088,14 @@ class ChannelMux:
         dev = self._open_tun_device(spec.l_bind, mtu, svc_key=svc_key)
         self._svc_tun_devices[svc_key] = dev
         self._install_shared_tun_ownership_for_service(svc_key, spec)
-        self._register_tun_reader(dev)
         if self._is_server_shared_tun_service(spec) and registry is not None:
             registry.register(self, svc_key, dev)
         self.log.info("[TUN/SRV] service=%s:%s opened if=%s mtu=%s", svc_key[0], spec.svc_id, dev.ifname, dev.mtu)
         self._schedule_service_hook(spec, svc_key, "listener", "on_created")
+        if str(svc_key[0]) == "local":
+            self._schedule_tun_reader_registration(dev)
+        else:
+            self._register_tun_reader(dev)
         return dev
 
     def _tun_fragment_payload_limit(self) -> int:
@@ -3222,6 +3242,55 @@ class ChannelMux:
             return max(0, int(waiting_count or 0))
         except (TypeError, ValueError):
             return 0
+
+    def _session_stream_overlay_stalled(self, *, now_ns: int) -> bool:
+        if str(self._overlay_transport or "").lower() not in {"ws", "tcp"}:
+            return False
+        getter = getattr(self.session, "get_metrics", None)
+        if not callable(getter):
+            return False
+        try:
+            metrics = getter()
+        except Exception:
+            return False
+        last_rtt_ok_ns = getattr(metrics, "last_rtt_ok_ns", None)
+        last_rx_ns = getattr(metrics, "last_rx_ns", None)
+        transmit_delay_est_ms = getattr(metrics, "transmit_delay_est_ms", None)
+        try:
+            last_ok = int(last_rtt_ok_ns or 0)
+        except (TypeError, ValueError):
+            last_ok = 0
+        try:
+            last_rx = int(last_rx_ns or 0)
+        except (TypeError, ValueError):
+            last_rx = 0
+        progress_ns = max(last_ok, last_rx)
+        if progress_ns <= 0:
+            return False
+        idle_budget_ns = int(self.TUN_STREAM_OVERLAY_STALL_NS)
+        try:
+            tx_delay_ms = float(transmit_delay_est_ms or 0.0)
+        except (TypeError, ValueError):
+            tx_delay_ms = 0.0
+        if tx_delay_ms > 0.0:
+            adaptive_budget_ns = int(max(
+                self.TUN_STREAM_OVERLAY_RX_IDLE_NS_MIN,
+                min(
+                    self.TUN_STREAM_OVERLAY_STALL_NS,
+                    tx_delay_ms * 8.0 * 1_000_000.0,
+                ),
+            ))
+            idle_budget_ns = min(idle_budget_ns, adaptive_budget_ns)
+        return (int(now_ns) - progress_ns) >= idle_budget_ns
+
+    def _session_is_stream_overlay(self) -> bool:
+        return str(self._overlay_transport or "").lower() in {"ws", "tcp"}
+
+    def _tcp_overlay_read_size(self) -> int:
+        size = max(1, int(self._SAFE_TCP_READ))
+        if self._session_is_stream_overlay():
+            return min(size, int(self.STREAM_OVERLAY_TCP_READ_CAP))
+        return size
 
     def _advance_tun_inflow_window(self, scope_key: tuple[Any, ...], now_ns: int) -> dict[str, Any]:
         state = self._tun_inflow_scope_state.setdefault(
@@ -3393,10 +3462,15 @@ class ChannelMux:
         return packet
 
     def _local_tun_send_allowed(self, packet_len: int, *, now_ns: int, scope_key: tuple[Any, ...]) -> bool:
+        if self._session_stream_overlay_stalled(now_ns=now_ns):
+            return False
+        buffered_frames = self._session_buffered_frames()
+        if self._session_is_stream_overlay() and buffered_frames > 0:
+            if self._tun_routing_config().shared_tun_disable_scoped_throttle:
+                return False
         if self._tun_routing_config().shared_tun_disable_scoped_throttle:
             return True
         state = self._advance_tun_inflow_window(scope_key, now_ns)
-        buffered_frames = self._session_buffered_frames()
         if buffered_frames <= 0:
             return True
         allowance_bytes = int(float(int(state.get("prev_bytes", 0) or 0)) * self.TUN_INFLOW_THROTTLE_RATIO)
@@ -3431,6 +3505,7 @@ class ChannelMux:
         if not self._local_tun_send_allowed(len(packet), now_ns=now_ns, scope_key=scope_key):
             scope_state = self._advance_tun_inflow_window(scope_key, now_ns)
             scope_state["throttle_drop_count"] = int(scope_state.get("throttle_drop_count", 0) or 0) + 1
+            stream_overlay_stalled = self._session_stream_overlay_stalled(now_ns=now_ns)
             self._record_shared_tun_drop(
                 getattr(dev, "service_key", None),
                 reason="throttled_local_tun",
@@ -3440,14 +3515,24 @@ class ChannelMux:
                 destination_ip=None if shared_route is None else shared_route.get("destination_ip"),
                 packet_bytes=len(packet),
             )
+            if stream_overlay_stalled and now_ns >= int(self._stream_overlay_idle_warn_until_ns):
+                self._stream_overlay_idle_warn_until_ns = int(now_ns) + self.TUN_INFLOW_THROTTLE_WINDOW_NS
+                self.log.warning(
+                    "[TUN] if=%s pausing local forwarding on %s overlay: no RX progress observed recently; buffered_frames=%s packet_bytes=%s",
+                    dev.ifname,
+                    str(self._overlay_transport or "").lower(),
+                    self._session_buffered_frames(),
+                    len(packet),
+                )
             self.log.debug(
-                "[TUN] if=%s throttle local packet scope=%s buffered_frames=%s prev_window_bytes=%s curr_window_bytes=%s packet_bytes=%s",
+                "[TUN] if=%s throttle local packet scope=%s buffered_frames=%s prev_window_bytes=%s curr_window_bytes=%s packet_bytes=%s stream_overlay_stalled=%s",
                 dev.ifname,
                 self._tun_inflow_scope_id(scope_key),
                 self._session_buffered_frames(),
                 int(scope_state.get("prev_bytes", 0) or 0),
                 int(scope_state.get("curr_bytes", 0) or 0),
                 len(packet),
+                stream_overlay_stalled,
             )
             return
         if shared_route is not None:
@@ -4350,7 +4435,7 @@ class ChannelMux:
             async def _pump():
                 try:
                     while True:
-                        data = await reader.read(self._SAFE_TCP_READ)  # <= 65535-8
+                        data = await reader.read(self._tcp_overlay_read_size())
                         if not data:
                             break
 
@@ -4489,14 +4574,16 @@ class ChannelMux:
         async def _dial():
             try:
                 await self._run_service_hook(peer_spec, None, "client", "before_connect", channel_id=chan, peer_id=peer_id)
-                reader = asyncio.StreamReader()
-                protocol = asyncio.StreamReaderProtocol(reader)
                 self.log.info("[TCP/CLI] chan=%s connecting -> %s:%s", chan, host, r_port)
-                transport, _ = await self.loop.create_connection(lambda: protocol, host=host, port=int(r_port))
-                writer = asyncio.StreamWriter(transport, protocol, reader, self.loop)
+                reader, writer = await asyncio.open_connection(host=host, port=int(r_port))
                 self._tcp_by_chan[chan] = (svc_id, writer)
                 self._tcp_by_writer[writer] = (svc_id, chan)
                 self._tcp_role_by_chan[chan] = "client"
+                try:
+                    l_ep, r_ep = self._tcp_endpoints(writer)
+                    self.log.info("[TCP/CLI] chan=%s connected local=%s remote=%s", chan, l_ep, r_ep)
+                except Exception:
+                    pass
                 self._schedule_service_hook(peer_spec, None, "client", "on_connected", channel_id=chan, peer_id=peer_id)
                 pending = self._tcp_pending_data.pop(chan, [])
                 for buf in pending:
@@ -4510,6 +4597,23 @@ class ChannelMux:
                     except Exception as e:
                         self.log.info("[TCP/CLI] chan=%s pending flush error: %r", chan, e)
                         break
+                if pending:
+                    try:
+                        await writer.drain()
+                        if chan not in self._tcp_pending_drain_logged:
+                            self._tcp_pending_drain_logged.add(chan)
+                            pending_bytes = sum(len(buf) for buf in pending)
+                            self.log.info(
+                                "[TCP/CLI] chan=%s drained pending writes count=%d bytes=%d",
+                                chan,
+                                len(pending),
+                                pending_bytes,
+                            )
+                        else:
+                            self.log.debug("[TCP/CLI] chan=%s drained pending writes count=%d", chan, len(pending))
+                    except Exception as e:
+                        self.log.info("[TCP/CLI] chan=%s pending drain error: %r", chan, e)
+                        raise
 
                 # Backpressure worker
                 self._ensure_backpressure_task(chan, writer)
@@ -4518,7 +4622,7 @@ class ChannelMux:
                 async def _rx():
                     try:
                         while True:
-                            buf = await reader.read(self._SAFE_TCP_READ)
+                            buf = await reader.read(self._tcp_overlay_read_size())
                             if not buf:
                                 break
                             try:
@@ -4533,6 +4637,15 @@ class ChannelMux:
                             ctr.msgs_in += 1
                             ctr.bytes_in += len(buf)
                             self._send_mux(chan, ChannelMux.Proto.TCP, ChannelMux.MType.DATA, buf)
+                            if chan not in self._tcp_first_remote_to_overlay_logged:
+                                self._tcp_first_remote_to_overlay_logged.add(chan)
+                                self.log.info(
+                                    "[TCP/CLI] chan=%s first remote->overlay bytes=%d read_cap=%d buffered_frames=%d",
+                                    chan,
+                                    len(buf),
+                                    self._tcp_overlay_read_size(),
+                                    self._session_buffered_frames(),
+                                )
                             self.log.debug("[TCP/CLI] chan=%s remote->overlay %dB", chan, len(buf))
                     except Exception as e:
                         self.log.info("[TCP/CLI] chan=%s rx error: %r", chan, e)
@@ -4547,6 +4660,9 @@ class ChannelMux:
                         self._tcp_by_writer.pop(writer, None)
                         self._tcp_by_chan.pop(chan, None)
                         self._finalize_channel_stats(chan, ChannelMux.Proto.TCP)
+                        self._tcp_first_remote_to_overlay_logged.discard(chan)
+                        self._tcp_pending_drain_logged.discard(chan)
+                        self._tcp_first_overlay_to_local_logged.discard(chan)
                         self._forget_tcp_open_key(chan)
                         self._schedule_service_hook(peer_spec, None, "client", "after_closed", channel_id=chan, peer_id=peer_id)
                         self.log.info("[TCP/CLI] chan=%s CLOSE teardown complete map_size=%s", chan, len(self._tcp_by_chan))
@@ -4610,6 +4726,19 @@ class ChannelMux:
                 ctr.msgs_out += 1
                 ctr.bytes_out += len(data)
                 self._maybe_signal_backpressure(chan, writer)
+                if chan not in self._tcp_first_overlay_to_local_logged:
+                    self._tcp_first_overlay_to_local_logged.add(chan)
+                    try:
+                        pending_frames = self._session_buffered_frames()
+                    except Exception:
+                        pending_frames = 0
+                    self.log.info(
+                        "[TCP] chan=%s first overlay->local bytes=%d pending_frames=%d role=%s",
+                        chan,
+                        len(data),
+                        pending_frames,
+                        str(self._tcp_role_by_chan.get(chan) or "unknown"),
+                    )
                 self.log.debug("[TCP] chan=%s overlay->local %dB", chan, len(data))
             except Exception as e:
                 self.log.info("[TCP] chan=%s write error: %r", chan, e)
@@ -4625,6 +4754,9 @@ class ChannelMux:
                 self._tcp_by_writer.pop(writer, None)
                 self._finalize_channel_stats(chan, ChannelMux.Proto.TCP)
                 self._chan_owner_peer_id.pop(chan, None)
+                self._tcp_first_overlay_to_local_logged.discard(chan)
+                self._tcp_first_remote_to_overlay_logged.discard(chan)
+                self._tcp_pending_drain_logged.discard(chan)
                 try:
                     writer.close()
                 except Exception:

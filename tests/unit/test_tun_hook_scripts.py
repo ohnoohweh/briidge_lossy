@@ -55,13 +55,22 @@ def test_client_tun_hook_supports_excluded_route_programming() -> None:
     assert 'add_excluded_routes4() {' in script
     assert 'add_excluded_routes6() {' in script
     assert 'STATE_UNDERLAY4="${STATE_DIR}/${IFNAME}.underlay-route4"' in script
-    assert 'printf \'%s\\n\' "$route_line" > "$STATE_UNDERLAY4"' in script or "printf '%s\\n' \"$route_line\" > \"$STATE_UNDERLAY4\"" in script
+    assert 'STATE_UNDERLAY6="${STATE_DIR}/${IFNAME}.underlay-route6"' in script
+    assert 'printf \'%s\\n\' "$route_line" > "$state_file"' in script or "printf '%s\\n' \"$route_line\" > \"$state_file\"" in script
+    assert 'rm -f "$stale_state_file"' in script
     assert 'done < <(_load_saved_route_parts "$STATE_UNDERLAY4" "ip route show default")' in script
+    assert 'done < <(_load_saved_route_parts "$STATE_UNDERLAY6" "ip -6 route show default")' in script
     assert 'ip route replace "$route_spec" dev lo' in script
     assert 'ip -6 route replace "$route_spec" dev lo' in script
     assert 'ip route replace "$route_spec" via "$gw" dev "$dev" src "$src"' in script
     assert 'delete_excluded_routes4() {' in script
     assert 'delete_excluded_routes6() {' in script
+    assert 'protect_underlay_routes6() {' in script
+    assert 'delete_protected_routes6() {' in script
+    assert 'if [[ -n "${OVERLAY_PEER_IP:-}" ]] && ! overlay_peer_is_ipv6; then' in script
+    assert 'if [[ -n "${OVERLAY_PEER_IP:-}" ]] && overlay_peer_is_ipv6; then' in script
+    assert 'ip -6 route replace "$(overlay_route_prefix)" via "$UNDERLAY_GW" dev "$UNDERLAY_IF" src "$overlay_src"' in script
+    assert 'ip -6 route del "$(overlay_route_prefix)" via "$saved_gw" dev "$saved_dev" src "$saved_src"' in script
 
 
 def test_client_tun_hook_waits_for_interface_and_uses_onlink_default_routes() -> None:
@@ -74,6 +83,7 @@ def test_client_tun_hook_waits_for_interface_and_uses_onlink_default_routes() ->
     assert 'wait_for_interface' in script
     assert 'stage=${stage} default4=' in script
     assert 'stage=${stage} overlay_route=' in script
+    assert 'overlay_peer_is_ipv6() {' in script
     assert 'ip route replace "$(overlay_route_prefix)" via "$UNDERLAY_GW" dev "$UNDERLAY_IF" src "$overlay_src"' in script
     assert 'ip route replace default via "$TUN_GW" dev "$IFNAME" onlink' in script
     assert 'ip -6 route replace default via "$TUN_GW6" dev "$IFNAME" metric 1 onlink' in script

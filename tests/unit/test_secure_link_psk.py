@@ -97,6 +97,11 @@ class FakeInnerSession:
         if callable(self._on_state):
             self._on_state(connected)
 
+    def emit_stale_state_callback(self, callback_connected: bool, *, effective_connected: bool):
+        self._connected = bool(effective_connected)
+        if callable(self._on_state):
+            self._on_state(bool(callback_connected))
+
     def emit_transport_epoch(self, epoch: int):
         if callable(self._on_transport_epoch_change):
             self._on_transport_epoch_change(epoch)
@@ -615,6 +620,101 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(client_states, [True])
         self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
+
+    async def test_transport_epoch_change_discards_stale_client_handshake_state_after_prior_authentication(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+
+        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
+        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
+
+        await client.start()
+        await server.start()
+
+        server_inner.emit_state(True)
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
+        self.assertEqual(self._count_frame_type(client_inner.sent, client._SL_TYPE_CLIENT_HELLO), 1)
+
+        state = client._peer_states[0]
+        authenticated_session_id = int(state.session_id)
+        state.authenticated = False
+        state.client_handshake_proof_sent = False
+        state.auth_fail_code = 0
+        state.auth_fail_reason = ""
+        state.auth_fail_detail = ""
+        state.disconnect_reason = ""
+        state.disconnect_detail = ""
+
+        client_inner.emit_transport_epoch(2)
+        for _ in range(8):
+            await asyncio.sleep(0)
+
+        self.assertGreaterEqual(self._count_frame_type(client_inner.sent, client._SL_TYPE_CLIENT_HELLO), 2)
+        replacement_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
+        self.assertNotEqual(authenticated_session_id, replacement_session_id)
+
+    async def test_stale_inner_disconnect_callback_is_ignored_when_transport_is_already_reconnected(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+
+        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
+        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
+        client_states = []
+        client.set_on_state_change(client_states.append)
+
+        await client.start()
+        await server.start()
+
+        server_inner.emit_state(True)
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        self.assertEqual(client_states, [True])
+        self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
+
+    async def test_server_peer_disconnect_keeps_outer_connected_while_inner_transport_stays_up(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+
+        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
+        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
+        server_states = []
+        server.set_on_state_change(server_states.append)
+
+        await client.start()
+        await server.start()
+        server_inner.emit_state(True)
+        client_inner.emit_state(True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        self.assertEqual(server_states, [True])
+        self.assertEqual(server.get_secure_link_status_snapshot()["state"], "authenticated")
+
+        server._on_inner_peer_disconnect(1)
+        await asyncio.sleep(0)
+
+        self.assertEqual(server_states, [True])
+        self.assertTrue(server.is_connected())
+
+        server_inner.emit_state(False)
+        await asyncio.sleep(0)
+
+        self.assertFalse(server.is_connected())
 
     async def test_explicit_transport_epoch_reset_forwards_to_inner_and_clears_client_state(self):
         client_inner = FakeInnerSession(connected=True)

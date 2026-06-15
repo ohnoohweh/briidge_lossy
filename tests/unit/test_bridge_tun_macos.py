@@ -165,6 +165,36 @@ def test_on_tun_fd_readable_strips_family_header_before_forwarding(monkeypatch):
     assert any(row[0].startswith("[TUN/MACOS/PKT]") for row in mux.log.rows)
 
 
+def test_on_tun_fd_readable_yields_after_burst_limit(monkeypatch):
+    monkeypatch.setattr(bridge_tun_macos.sys, "platform", "darwin")
+    monkeypatch.setattr(bridge_tun_macos, "TUN_READ_BURST_MAX", 1)
+    packet1 = bytes.fromhex("450000150000000040010000c0a80101c0a8010208")
+    packet2 = bytes.fromhex("450000150000000040010000c0a80101c0a8010209")
+    frame1 = struct.pack("!I", bridge_tun_macos.socket.AF_INET) + packet1
+    frame2 = struct.pack("!I", bridge_tun_macos.socket.AF_INET) + packet2
+    reads = [frame1, frame2, BlockingIOError()]
+
+    def _fake_read(fd, size):
+        item = reads.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+    monkeypatch.setattr(bridge_tun_macos.os, "read", _fake_read)
+
+    mux = _FakeMux()
+    try:
+        dev = mux.TunDevice(fd=44, ifname="utun4", mtu=1500)
+        bridge_tun_macos.on_tun_fd_readable(mux, dev)
+        assert mux.packets == [("utun4", packet1)]
+        bridge_tun_macos.on_tun_fd_readable(mux, dev)
+    finally:
+        mux.loop.close()
+
+    assert mux.packets == [("utun4", packet1), ("utun4", packet2)]
+    assert any("yielding after burst" in row[0] for row in mux.log.rows)
+
+
 def test_require_tun_support_rejects_non_darwin(monkeypatch):
     monkeypatch.setattr(bridge_tun_macos.sys, "platform", "linux")
     mux = _FakeMux()

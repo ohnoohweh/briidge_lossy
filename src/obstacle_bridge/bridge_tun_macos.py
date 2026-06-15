@@ -16,6 +16,9 @@ except Exception:
     fcntl = None
 
 
+TUN_READ_BURST_MAX = 32
+
+
 CTLIOCGINFO = 0xC0644E03
 UTUN_CONTROL_NAME = b"com.apple.net.utun_control"
 UTUN_OPT_IFNAME = 2
@@ -187,7 +190,8 @@ def write_tun_packet(mux: Any, dev: Any, data: bytes) -> None:
 
 
 def on_tun_fd_readable(mux: Any, dev: Any) -> None:
-    while True:
+    processed = 0
+    while processed < TUN_READ_BURST_MAX:
         try:
             frame = os.read(dev.fd, max(72, min(mux.TUN_READ_SIZE_MAX, int(dev.mtu) + 4)))
         except BlockingIOError:
@@ -214,3 +218,13 @@ def on_tun_fd_readable(mux: Any, dev: Any) -> None:
                         packet.hex(),
                     )
         mux._on_local_tun_packet(dev, packet)
+        processed += 1
+    checker = getattr(mux.log, "isEnabledFor", None)
+    if callable(checker):
+        with contextlib.suppress(Exception):
+            if checker(logging.DEBUG):
+                mux.log.debug(
+                    "[TUN/MACOS] if=%s yielding after burst packets=%s",
+                    dev.ifname,
+                    processed,
+                )
