@@ -6,6 +6,7 @@ import ipaddress
 
 from ._bridge_import import export_bridge_globals
 from .bridge_transport_common import (
+    EgressThroughputTracker,
     _bind_family_constraint,
     _family_preference_rank,
     _listener_family_for_host,
@@ -1745,6 +1746,7 @@ class UdpSession(ISession):
         self._peer_mirror_out: Optional[Callable[[bytes], None]] = None
         self._peer_mirror_in: Optional[Callable[[bytes], None]] = None
         self._peer_mirror_installed: bool = False
+        self._egress_tracker = EgressThroughputTracker()
 
     # ---------- CLI integration ----------
     @staticmethod
@@ -1826,6 +1828,7 @@ class UdpSession(ISession):
     def get_metrics(self) -> SessionMetrics:
         if self._listener_mode and self._server_peers:
             try:
+                prev_bytes, curr_bytes = self._egress_tracker.snapshot()
                 sessions = [ctx["session"] for ctx in self._server_peers.values() if isinstance(ctx, dict) and ctx.get("session") is not None]
                 rtt_candidates = [float(getattr(s, "rtt_est_ms", 0.0) or 0.0) for s in sessions if getattr(s, "last_rtt_ok_ns", 0)]
                 transmit_delay_sample_candidates = [float(getattr(s, "transmit_delay_sample_ms", 0.0) or 0.0) for s in sessions if float(getattr(s, "transmit_delay_sample_ms", 0.0) or 0.0) > 0.0]
@@ -1839,6 +1842,8 @@ class UdpSession(ISession):
                     inflight=sum(int(s.in_flight()) for s in sessions if hasattr(s, "in_flight")),
                     max_inflight=sum(int(getattr(s, "max_in_flight", 0) or 0) for s in sessions),
                     waiting_count=sum(int(s.waiting_count()) for s in sessions if hasattr(s, "waiting_count")),
+                    egress_prev_window_bytes=prev_bytes,
+                    egress_curr_window_bytes=curr_bytes,
                     peer_missed_count=sum(int(getattr(s, "peer_missed_count", 0) or 0) for s in sessions),
                     our_missed_count=sum(len(getattr(s, "missing", [])) for s in sessions if hasattr(s, "missing")),
                 )
@@ -1846,6 +1851,7 @@ class UdpSession(ISession):
                 self._log.debug("[UdpSession] aggregated get_metrics failed %r", e)
         s = self.inner_session
         try:
+            prev_bytes, curr_bytes = self._egress_tracker.snapshot()
             return SessionMetrics(
                 rtt_sample_ms     = getattr(s, "rtt_sample_ms", None),
                 rtt_est_ms        = getattr(s, "rtt_est_ms", None),
@@ -1855,6 +1861,8 @@ class UdpSession(ISession):
                 inflight          = int(s.in_flight()) if hasattr(s, "in_flight") else None,
                 max_inflight      = getattr(s, "max_in_flight", None),
                 waiting_count     = int(s.waiting_count()) if hasattr(s, "waiting_count") else None,
+                egress_prev_window_bytes=prev_bytes,
+                egress_curr_window_bytes=curr_bytes,
                 last_ack_peer     = getattr(s, "last_ack_peer", None),
                 last_sent_ctr     = getattr(s, "last_sent_ctr", None),
                 expected          = getattr(s, "expected", None),
@@ -2188,7 +2196,10 @@ class UdpSession(ISession):
                 session = ctx.get("session")
                 if proto is None or session is None or getattr(proto, "send_port", None) is None:
                     return 0
-                return session.send_application_payload(payload, proto.send_port)
+                sent = session.send_application_payload(payload, proto.send_port)
+                if sent > 0:
+                    self._egress_tracker.record(int(sent))
+                return sent
             target = self._resolve_server_send_target(payload, peer_id=peer_id)
             if target is None:
                 return 0
@@ -2200,10 +2211,16 @@ class UdpSession(ISession):
             session = ctx.get("session")
             if proto is None or session is None or getattr(proto, "send_port", None) is None:
                 return 0
-            return session.send_application_payload(routed_payload, proto.send_port)
+            sent = session.send_application_payload(routed_payload, proto.send_port)
+            if sent > 0:
+                self._egress_tracker.record(int(sent))
+            return sent
         if not self._proto or not self._proto.send_port:
             return 0
-        return self.inner_session.send_application_payload(payload, self._proto.send_port)
+        sent = self.inner_session.send_application_payload(payload, self._proto.send_port)
+        if sent > 0:
+            self._egress_tracker.record(int(sent))
+        return sent
 
     # ---- Internals (callbacks given to PeerProtocol) ----
     def _on_control_needed(self) -> None:

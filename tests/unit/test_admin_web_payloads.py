@@ -636,12 +636,16 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn('id="tab-tun-routing"', index_html)
         self.assertIn('id="tunRoutingConnectionsBody"', index_html)
         self.assertIn('id="tunRoutingSharedBody"', index_html)
+        self.assertNotIn('id="tunRoutingIncludedRoutes"', index_html)
+        self.assertNotIn('id="tunRoutingExcludedRoutes"', index_html)
+        self.assertNotIn('id="tunRoutingIncludedRoutes6"', index_html)
+        self.assertNotIn('id="tunRoutingExcludedRoutes6"', index_html)
         self.assertNotIn('id="tunConnectionsBody"', index_html)
         self.assertNotIn('id="tunOpen"', index_html)
         self.assertIn("apiFetch('/api/tun-routing/status'", app_js)
         self.assertIn("applyTunRoutingDoc(j);", app_js)
-        self.assertIn("applyTunRoutingConfigSummary(runtimeRoutes);", app_js)
         self.assertIn("topics.push('tun_routing')", app_js)
+        self.assertNotIn("applyTunRoutingConfigSummary(", app_js)
 
     def test_restart_endpoint_uses_immediate_mode_for_embedded_restart(self):
         args = argparse.Namespace(

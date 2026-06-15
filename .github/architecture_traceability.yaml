@@ -1,4 +1,3 @@
-#
 # This manifest links stable architecture component IDs to defending tests.
 # It is intentionally narrower than the product-requirement traceability file:
 # it captures component-level evidence where the architecture decomposition

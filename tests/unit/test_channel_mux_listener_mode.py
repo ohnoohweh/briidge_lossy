@@ -17,6 +17,12 @@ class _FakeSession:
         max_app_payload_size=65535,
         transmit_delay_est_ms=None,
         waiting_count=0,
+        inflight=0,
+        max_inflight=0,
+        last_rtt_ok_ns=None,
+        last_rx_ns=None,
+        egress_prev_window_bytes=0,
+        egress_curr_window_bytes=0,
     ):
         self.app_cb = None
         self.peer_disconnect_cb = None
@@ -26,6 +32,12 @@ class _FakeSession:
         self._metrics = SessionMetrics(
             transmit_delay_est_ms=transmit_delay_est_ms,
             waiting_count=waiting_count,
+            inflight=inflight,
+            max_inflight=max_inflight,
+            last_rtt_ok_ns=last_rtt_ok_ns,
+            last_rx_ns=last_rx_ns,
+            egress_prev_window_bytes=egress_prev_window_bytes,
+            egress_curr_window_bytes=egress_curr_window_bytes,
         )
 
     def is_connected(self):
@@ -87,6 +99,59 @@ def _ipv6_packet(src: str, dst: str, payload: bytes = b"x") -> bytes:
 
 
 class ChannelMuxListenerModeTests(unittest.TestCase):
+    def test_unified_ingress_throttle_applies_to_udp_from_transport_metrics(self):
+        now_ns = 5_000_000_000
+        sess = _FakeSession(
+            connected=True,
+            waiting_count=3,
+            inflight=200,
+            max_inflight=200,
+            last_rtt_ok_ns=now_ns,
+            egress_prev_window_bytes=1000,
+            egress_curr_window_bytes=0,
+        )
+        mux = ChannelMux(sess, argparse.Namespace(overlay_transport="myudp"))
+        scope_key = ("udp", ("local", 1), 7)
+
+        self.assertTrue(mux._local_ingress_send_allowed(800, now_ns=now_ns, scope_key=scope_key))
+        mux._record_local_udp_forward(800, now_ns=now_ns, scope_key=scope_key)
+        self.assertFalse(mux._local_ingress_send_allowed(101, now_ns=now_ns, scope_key=scope_key))
+
+    def test_unified_ingress_stall_blocks_udp_even_without_stream_overlay(self):
+        now_ns = 9_000_000_000
+        sess = _FakeSession(
+            connected=True,
+            waiting_count=1,
+            last_rtt_ok_ns=now_ns - (2 * ChannelMux.TUN_STREAM_OVERLAY_STALL_NS),
+            egress_prev_window_bytes=1000,
+        )
+        mux = ChannelMux(sess, argparse.Namespace(overlay_transport="myudp"))
+
+        self.assertFalse(
+            mux._local_ingress_send_allowed(100, now_ns=now_ns, scope_key=("udp", "client", 9))
+        )
+
+    def test_unified_ingress_throttle_sums_udp_and_tun_against_shared_budget(self):
+        now_ns = 7_000_000_000
+        sess = _FakeSession(
+            connected=True,
+            waiting_count=2,
+            inflight=50,
+            max_inflight=200,
+            last_rtt_ok_ns=now_ns,
+            egress_prev_window_bytes=1000,
+            egress_curr_window_bytes=0,
+        )
+        mux = ChannelMux(sess, argparse.Namespace(overlay_transport="myudp"))
+        udp_scope = ("udp", ("local", 1), 7)
+        tun_scope = ("direct", ("local", 0, 5))
+
+        self.assertTrue(mux._local_ingress_send_allowed(500, now_ns=now_ns, scope_key=udp_scope))
+        mux._record_local_udp_forward(500, now_ns=now_ns, scope_key=udp_scope)
+        self.assertTrue(mux._local_ingress_send_allowed(400, now_ns=now_ns, scope_key=tun_scope))
+        mux._record_local_tun_forward(400, now_ns=now_ns, scope_key=tun_scope)
+        self.assertFalse(mux._local_ingress_send_allowed(1, now_ns=now_ns, scope_key=udp_scope))
+
     def test_tun_routing_defaults_match_bootstrap_shape(self):
         settings = TunRoutingSettings()
         self.assertEqual(settings.tunnel_address, "192.168.106.1")

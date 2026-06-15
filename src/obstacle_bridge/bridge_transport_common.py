@@ -11,6 +11,40 @@ import sys
 import time
 from typing import Callable, List, Optional, Tuple
 
+
+class EgressThroughputTracker:
+    def __init__(self, *, window_ns: int = 100_000_000):
+        self._window_ns = max(1, int(window_ns))
+        self._window_start_ns: Optional[int] = None
+        self._prev_bytes: int = 0
+        self._curr_bytes: int = 0
+
+    def _advance(self, now_ns: int) -> None:
+        start_ns = self._window_start_ns
+        if start_ns is None:
+            self._window_start_ns = int(now_ns)
+            return
+        elapsed = int(now_ns) - int(start_ns)
+        if elapsed < self._window_ns:
+            return
+        windows = elapsed // self._window_ns
+        if windows == 1:
+            self._prev_bytes = int(self._curr_bytes)
+        else:
+            self._prev_bytes = 0
+        self._curr_bytes = 0
+        self._window_start_ns = int(start_ns + windows * self._window_ns)
+
+    def record(self, byte_count: int, *, now_ns: Optional[int] = None) -> None:
+        now_v = int(now_ns or time.monotonic_ns())
+        self._advance(now_v)
+        self._curr_bytes += max(0, int(byte_count))
+
+    def snapshot(self, *, now_ns: Optional[int] = None) -> Tuple[int, int]:
+        now_v = int(now_ns or time.monotonic_ns())
+        self._advance(now_v)
+        return int(self._prev_bytes), int(self._curr_bytes)
+
 def _strip_brackets(host: str) -> str:
     if host and host.startswith('[') and host.endswith(']'):
         return host[1:-1]

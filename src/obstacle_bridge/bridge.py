@@ -456,6 +456,8 @@ class SessionMetrics:
     inflight: Optional[int]        = None
     max_inflight: Optional[int]    = None
     waiting_count: Optional[int]   = None
+    egress_prev_window_bytes: Optional[int] = None
+    egress_curr_window_bytes: Optional[int] = None
     last_ack_peer: Optional[int]   = None
     last_sent_ctr: Optional[int]   = None
     expected: Optional[int]        = None

@@ -2713,21 +2713,6 @@ function applyTunRoutingDoc(j) {
   setText('tunRoutingListening', fmtInteger(j.summary?.tun_listening ?? 0));
   setText('tunRoutingSharedServices', fmtInteger(j.summary?.shared_services ?? 0));
   setText('tunRoutingActiveBindings', fmtInteger(j.summary?.shared_active_peer_bindings ?? 0));
-  const runtimeRoutes = (
-    Array.isArray(j?.included_routes) ||
-    Array.isArray(j?.excluded_routes) ||
-    Array.isArray(j?.included_routes6) ||
-    Array.isArray(j?.excluded_routes6)
-  ) ? j : (configState.config || {});
-  applyTunRoutingConfigSummary(runtimeRoutes);
-}
-
-function applyTunRoutingConfigSummary(config) {
-  const doc = config || {};
-  setText('tunRoutingIncludedRoutes', fmtRouteList(doc.included_routes));
-  setText('tunRoutingExcludedRoutes', fmtRouteList(doc.excluded_routes));
-  setText('tunRoutingIncludedRoutes6', fmtRouteList(doc.included_routes6));
-  setText('tunRoutingExcludedRoutes6', fmtRouteList(doc.excluded_routes6));
 }
 
 async function loadConfig() {
@@ -2741,7 +2726,6 @@ async function loadConfig() {
     };
     applyAdminInstanceName(configState.config.admin_web_name);
     renderConfigSections(configState.schema, configState.config);
-    applyTunRoutingConfigSummary(configState.config);
     if (uiState.onboarding.initialized) {
       if ((uiState.onboarding.ownServersDraft || []).length === 0) {
         uiState.onboarding.ownServersDraft = sanitizeServiceSpecs(configState.config?.own_servers || []);

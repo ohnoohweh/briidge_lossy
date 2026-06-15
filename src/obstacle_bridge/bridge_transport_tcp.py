@@ -4,6 +4,7 @@ import struct
 
 from ._bridge_import import export_bridge_globals
 from .bridge_transport_common import (
+    EgressThroughputTracker,
     StreamRTT,
     StreamRTTRuntime,
     _listener_family_for_host,
@@ -183,6 +184,7 @@ class TcpStreamSession(ISession):
         # overlay "connected" view is RTT-driven
         self._overlay_connected: bool = False
         self._app_payload_passthrough: bool = False
+        self._egress_tracker = EgressThroughputTracker()
 
     # ---- ISession: callback wiring ----
     def set_on_app_payload(self, cb): self._on_app = cb
@@ -291,12 +293,15 @@ class TcpStreamSession(ISession):
         try:
             r = self._rtt
             rtt_est_ms = getattr(r, "rtt_est_ms", None)
+            prev_bytes, curr_bytes = self._egress_tracker.snapshot()
             return SessionMetrics(
                 rtt_sample_ms=getattr(r, "rtt_sample_ms", None),
                 rtt_est_ms=rtt_est_ms,
                 transmit_delay_est_ms=(0.5 * float(rtt_est_ms)) if rtt_est_ms is not None else None,
                 last_rtt_ok_ns=getattr(r, "last_rtt_ok_ns", None),
                 waiting_count=self.waiting_count(),
+                egress_prev_window_bytes=prev_bytes,
+                egress_curr_window_bytes=curr_bytes,
             )
         except Exception:
             return SessionMetrics()
@@ -544,6 +549,7 @@ class TcpStreamSession(ISession):
                 if self._on_peer_tx:
                     try: self._on_peer_tx(len(wire))
                     except Exception: pass
+                self._egress_tracker.record(len(routed_payload))
                 return len(payload)
             except Exception as e:
                 self._log.info(f"[TCP/TX] ({self._probe_id}) server write error peer_id={target_peer_id}: {e!r}")
@@ -567,6 +573,7 @@ class TcpStreamSession(ISession):
                 try: self._on_peer_tx(len(wire))
                 except Exception: pass
             self._maybe_signal_bp()
+            self._egress_tracker.record(len(payload))
             return len(payload)
         except Exception as e:
             self._log.info(f"[TCP/TX] ({self._probe_id}) write error: {e!r}")

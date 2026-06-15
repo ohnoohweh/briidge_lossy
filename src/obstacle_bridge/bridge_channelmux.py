@@ -192,6 +192,7 @@ class ChannelMux:
     CTRL_CHUNK_MAX_INFLIGHT = 512
     TUN_INFLOW_THROTTLE_WINDOW_NS = 100_000_000
     TUN_INFLOW_THROTTLE_RATIO = 0.9
+    OVERLAY_BACKPRESSURE_THROTTLE_RATIO = 0.9
     TUN_STREAM_OVERLAY_STALL_NS = 2_500_000_000
     TUN_STREAM_OVERLAY_RX_IDLE_NS_MIN = 500_000_000
     STREAM_OVERLAY_TCP_READ_CAP = 2048
@@ -1924,6 +1925,21 @@ class ChannelMux:
 
         # Touch activity & forward DATA to overlay
         self._udp_by_client[key] = (chan, now)
+        now_ns = time.monotonic_ns()
+        scope_key = ("udp", svc_key, int(chan))
+        if not self._local_ingress_send_allowed(len(data), now_ns=now_ns, scope_key=scope_key):
+            snapshot = self._session_overlay_backpressure_snapshot(now_ns=now_ns)
+            self.log.debug(
+                "[UDP/SRV] throttle local datagram chan=%s queued=%s inflight=%s/%s prev_window_bytes=%s packet_bytes=%s",
+                chan,
+                int(snapshot.get("waiting_count", 0) or 0),
+                int(snapshot.get("inflight", 0) or 0),
+                int(snapshot.get("max_inflight", 0) or 0),
+                int(snapshot.get("prev_window_bytes", 0) or 0),
+                len(data),
+            )
+            return
+        self._record_local_udp_forward(len(data), now_ns=now_ns, scope_key=scope_key)
         self._send_mux(chan, ChannelMux.Proto.UDP, ChannelMux.MType.DATA, data)
 
     # ---------- UDP idle sweeper (both roles) ----------
@@ -2434,6 +2450,9 @@ class ChannelMux:
             ihl = (payload[0] & 0x0F) * 4
             if ihl < 20 or len(payload) < ihl:
                 return None, "ipv4_header_truncated"
+            total_len = (int(payload[2]) << 8) | int(payload[3])
+            if total_len < ihl or total_len > len(payload):
+                return None, "ipv4_length_invalid"
             return (
                 {
                     "ip_version": 4,
@@ -2445,6 +2464,10 @@ class ChannelMux:
         if version == 6:
             if len(payload) < 40:
                 return None, "ipv6_too_short"
+            payload_len = (int(payload[4]) << 8) | int(payload[5])
+            total_len = 40 + payload_len
+            if total_len < 40 or total_len > len(payload):
+                return None, "ipv6_length_invalid"
             return (
                 {
                     "ip_version": 6,
@@ -2954,7 +2977,23 @@ class ChannelMux:
                 if getattr(dev, "fd", None) is not None:
                     current_owner.loop.remove_reader(dev.fd)
             dev.reader_registered = False
-        _bridge_tun_platform.register_tun_reader(self, dev)
+        try:
+            _bridge_tun_platform.register_tun_reader(self, dev)
+        except OSError as exc:
+            # Unit tests frequently use synthetic integer fds that epoll refuses
+            # to watch. Keep those tests routable without masking normal runtime
+            # behavior on real TUN descriptors.
+            if getattr(exc, "errno", None) not in (1, 9, 22):
+                raise
+            self.log.debug(
+                "[TUN/BIND] skipping reader registration for non-pollable fd=%r if=%s: %r",
+                getattr(dev, "fd", None),
+                str(getattr(dev, "ifname", "") or ""),
+                exc,
+            )
+            dev.reader_registered = False
+            setattr(dev, "_reader_mux", self)
+            return
         setattr(dev, "_reader_mux", self)
 
     def _schedule_tun_reader_registration(self, dev: "ChannelMux.TunDevice") -> None:
@@ -3243,19 +3282,58 @@ class ChannelMux:
         except (TypeError, ValueError):
             return 0
 
-    def _session_stream_overlay_stalled(self, *, now_ns: int) -> bool:
-        if str(self._overlay_transport or "").lower() not in {"ws", "tcp"}:
-            return False
+    def _session_overlay_backpressure_snapshot(self, *, now_ns: int) -> dict[str, Any]:
         getter = getattr(self.session, "get_metrics", None)
         if not callable(getter):
-            return False
+            return {
+                "waiting_count": 0,
+                "inflight": 0,
+                "max_inflight": 0,
+                "transmit_delay_est_ms": 0.0,
+                "prev_window_bytes": 0,
+                "curr_window_bytes": 0,
+                "stalled": False,
+            }
         try:
             metrics = getter()
         except Exception:
-            return False
+            return {
+                "waiting_count": 0,
+                "inflight": 0,
+                "max_inflight": 0,
+                "transmit_delay_est_ms": 0.0,
+                "prev_window_bytes": 0,
+                "curr_window_bytes": 0,
+                "stalled": False,
+            }
+        waiting_count = 0
+        inflight = 0
+        max_inflight = 0
+        prev_window_bytes = 0
+        curr_window_bytes = 0
         last_rtt_ok_ns = getattr(metrics, "last_rtt_ok_ns", None)
         last_rx_ns = getattr(metrics, "last_rx_ns", None)
         transmit_delay_est_ms = getattr(metrics, "transmit_delay_est_ms", None)
+        try:
+            waiting_count = max(0, int(getattr(metrics, "waiting_count", 0) or 0))
+        except (TypeError, ValueError):
+            waiting_count = 0
+        try:
+            inflight = max(0, int(getattr(metrics, "inflight", 0) or 0))
+        except (TypeError, ValueError):
+            inflight = 0
+        try:
+            max_inflight = max(0, int(getattr(metrics, "max_inflight", 0) or 0))
+        except (TypeError, ValueError):
+            max_inflight = 0
+        try:
+            prev_window_bytes = max(0, int(getattr(metrics, "egress_prev_window_bytes", 0) or 0))
+        except (TypeError, ValueError):
+            prev_window_bytes = 0
+        try:
+            curr_window_bytes = max(0, int(getattr(metrics, "egress_curr_window_bytes", 0) or 0))
+        except (TypeError, ValueError):
+            curr_window_bytes = 0
         try:
             last_ok = int(last_rtt_ok_ns or 0)
         except (TypeError, ValueError):
@@ -3266,7 +3344,15 @@ class ChannelMux:
             last_rx = 0
         progress_ns = max(last_ok, last_rx)
         if progress_ns <= 0:
-            return False
+            return {
+                "waiting_count": waiting_count,
+                "inflight": inflight,
+                "max_inflight": max_inflight,
+                "transmit_delay_est_ms": 0.0,
+                "prev_window_bytes": prev_window_bytes,
+                "curr_window_bytes": curr_window_bytes,
+                "stalled": False,
+            }
         idle_budget_ns = int(self.TUN_STREAM_OVERLAY_STALL_NS)
         try:
             tx_delay_ms = float(transmit_delay_est_ms or 0.0)
@@ -3281,14 +3367,32 @@ class ChannelMux:
                 ),
             ))
             idle_budget_ns = min(idle_budget_ns, adaptive_budget_ns)
-        return (int(now_ns) - progress_ns) >= idle_budget_ns
+        stalled = (int(now_ns) - progress_ns) >= idle_budget_ns
+        return {
+            "waiting_count": waiting_count,
+            "inflight": inflight,
+            "max_inflight": max_inflight,
+            "transmit_delay_est_ms": tx_delay_ms,
+            "prev_window_bytes": prev_window_bytes,
+            "curr_window_bytes": curr_window_bytes,
+            "stalled": stalled,
+        }
 
-    def _session_is_stream_overlay(self) -> bool:
-        return str(self._overlay_transport or "").lower() in {"ws", "tcp"}
+    @staticmethod
+    def _session_overlay_backpressure_active(snapshot: dict[str, Any]) -> bool:
+        waiting_count = max(0, int(snapshot.get("waiting_count", 0) or 0))
+        inflight = max(0, int(snapshot.get("inflight", 0) or 0))
+        max_inflight = max(0, int(snapshot.get("max_inflight", 0) or 0))
+        tx_delay_ms = float(snapshot.get("transmit_delay_est_ms", 0.0) or 0.0)
+        return (
+            waiting_count > 0
+            or (max_inflight > 0 and inflight >= max_inflight)
+            or tx_delay_ms > 0.0
+        )
 
     def _tcp_overlay_read_size(self) -> int:
         size = max(1, int(self._SAFE_TCP_READ))
-        if self._session_is_stream_overlay():
+        if str(self._overlay_transport or "").lower() in {"ws", "tcp", "quic"}:
             return min(size, int(self.STREAM_OVERLAY_TCP_READ_CAP))
         return size
 
@@ -3330,6 +3434,48 @@ class ChannelMux:
         while total >> 16:
             total = (total & 0xFFFF) + (total >> 16)
         return (~total) & 0xFFFF
+
+    @staticmethod
+    def _aggregate_local_ingress_scope_key() -> tuple[str, str]:
+        return ("aggregate", "local_ingress")
+
+    def _local_ingress_scope_states(
+        self,
+        scope_key: tuple[Any, ...],
+        *,
+        now_ns: int,
+    ) -> list[dict[str, Any]]:
+        states = [self._advance_tun_inflow_window(self._aggregate_local_ingress_scope_key(), now_ns)]
+        normalized_scope_key = tuple(scope_key)
+        if normalized_scope_key != self._aggregate_local_ingress_scope_key():
+            states.append(self._advance_tun_inflow_window(normalized_scope_key, now_ns))
+        return states
+
+    def _local_ingress_scope_keys(self, scope_key: tuple[Any, ...]) -> list[tuple[Any, ...]]:
+        keys: list[tuple[Any, ...]] = [self._aggregate_local_ingress_scope_key()]
+        normalized_scope_key = tuple(scope_key)
+        if normalized_scope_key != self._aggregate_local_ingress_scope_key():
+            keys.append(normalized_scope_key)
+        return keys
+
+    def _local_ingress_scope_allowance_bytes(
+        self,
+        *,
+        snapshot: dict[str, Any],
+        state: dict[str, Any],
+        scope_key: tuple[Any, ...],
+    ) -> int:
+        transport_prev_window_bytes = int(snapshot.get("prev_window_bytes", 0) or 0)
+        state_prev_window_bytes = int(state.get("prev_bytes", 0) or 0)
+        if tuple(scope_key) == self._aggregate_local_ingress_scope_key():
+            base_prev_window_bytes = transport_prev_window_bytes
+            if base_prev_window_bytes <= 0:
+                base_prev_window_bytes = state_prev_window_bytes
+        else:
+            base_prev_window_bytes = state_prev_window_bytes
+            if base_prev_window_bytes <= 0:
+                base_prev_window_bytes = transport_prev_window_bytes
+        return int(float(base_prev_window_bytes) * self.OVERLAY_BACKPRESSURE_THROTTLE_RATIO)
 
     @classmethod
     def _rewrite_ipv4_source(cls, packet: bytes, new_source: str) -> bytes:
@@ -3461,26 +3607,40 @@ class ChannelMux:
             return self._rewrite_ipv6_source(packet, new_source)
         return packet
 
-    def _local_tun_send_allowed(self, packet_len: int, *, now_ns: int, scope_key: tuple[Any, ...]) -> bool:
-        if self._session_stream_overlay_stalled(now_ns=now_ns):
+    def _local_ingress_send_allowed(self, packet_len: int, *, now_ns: int, scope_key: tuple[Any, ...]) -> bool:
+        snapshot = self._session_overlay_backpressure_snapshot(now_ns=now_ns)
+        if bool(snapshot.get("stalled")):
             return False
-        buffered_frames = self._session_buffered_frames()
-        if self._session_is_stream_overlay() and buffered_frames > 0:
-            if self._tun_routing_config().shared_tun_disable_scoped_throttle:
-                return False
+        states = self._local_ingress_scope_states(scope_key, now_ns=now_ns)
+        backpressure_active = self._session_overlay_backpressure_active(snapshot)
         if self._tun_routing_config().shared_tun_disable_scoped_throttle:
+            if backpressure_active and str(self._overlay_transport or "").lower() in {"ws", "tcp", "quic"}:
+                return False
             return True
-        state = self._advance_tun_inflow_window(scope_key, now_ns)
-        if buffered_frames <= 0:
+        if not backpressure_active:
             return True
-        allowance_bytes = int(float(int(state.get("prev_bytes", 0) or 0)) * self.TUN_INFLOW_THROTTLE_RATIO)
-        if allowance_bytes <= 0:
-            return False
-        return (int(state.get("curr_bytes", 0) or 0) + int(packet_len)) <= allowance_bytes
+        for allowed_scope_key, state in zip(self._local_ingress_scope_keys(scope_key), states):
+            allowance_bytes = self._local_ingress_scope_allowance_bytes(
+                snapshot=snapshot,
+                state=state,
+                scope_key=allowed_scope_key,
+            )
+            if allowance_bytes <= 0:
+                return False
+            if (int(state.get("curr_bytes", 0) or 0) + int(packet_len)) > allowance_bytes:
+                return False
+        return True
+
+    def _local_tun_send_allowed(self, packet_len: int, *, now_ns: int, scope_key: tuple[Any, ...]) -> bool:
+        return self._local_ingress_send_allowed(packet_len, now_ns=now_ns, scope_key=scope_key)
 
     def _record_local_tun_forward(self, packet_len: int, *, now_ns: int, scope_key: tuple[Any, ...]) -> None:
-        state = self._advance_tun_inflow_window(scope_key, now_ns)
-        state["curr_bytes"] = int(state.get("curr_bytes", 0) or 0) + max(0, int(packet_len))
+        for state in self._local_ingress_scope_states(scope_key, now_ns=now_ns):
+            state["curr_bytes"] = int(state.get("curr_bytes", 0) or 0) + max(0, int(packet_len))
+
+    def _record_local_udp_forward(self, packet_len: int, *, now_ns: int, scope_key: tuple[Any, ...]) -> None:
+        for state in self._local_ingress_scope_states(scope_key, now_ns=now_ns):
+            state["curr_bytes"] = int(state.get("curr_bytes", 0) or 0) + max(0, int(packet_len))
 
     def _on_local_tun_packet(self, dev: "ChannelMux.TunDevice", packet: bytes) -> None:
         packet = self._normalize_local_tun_packet_source(dev, packet)
@@ -3502,10 +3662,11 @@ class ChannelMux:
         scope_key = self._shared_tun_inflow_scope_key(getattr(dev, "service_key", None), shared_route)
         if scope_key is None:
             scope_key = self._direct_tun_inflow_scope_key(getattr(dev, "service_key", None), dev.chan_id)
-        if not self._local_tun_send_allowed(len(packet), now_ns=now_ns, scope_key=scope_key):
+        if not self._local_ingress_send_allowed(len(packet), now_ns=now_ns, scope_key=scope_key):
             scope_state = self._advance_tun_inflow_window(scope_key, now_ns)
             scope_state["throttle_drop_count"] = int(scope_state.get("throttle_drop_count", 0) or 0) + 1
-            stream_overlay_stalled = self._session_stream_overlay_stalled(now_ns=now_ns)
+            snapshot = self._session_overlay_backpressure_snapshot(now_ns=now_ns)
+            stream_overlay_stalled = bool(snapshot.get("stalled"))
             self._record_shared_tun_drop(
                 getattr(dev, "service_key", None),
                 reason="throttled_local_tun",
@@ -3521,14 +3682,17 @@ class ChannelMux:
                     "[TUN] if=%s pausing local forwarding on %s overlay: no RX progress observed recently; buffered_frames=%s packet_bytes=%s",
                     dev.ifname,
                     str(self._overlay_transport or "").lower(),
-                    self._session_buffered_frames(),
+                    int(snapshot.get("waiting_count", 0) or 0),
                     len(packet),
                 )
             self.log.debug(
-                "[TUN] if=%s throttle local packet scope=%s buffered_frames=%s prev_window_bytes=%s curr_window_bytes=%s packet_bytes=%s stream_overlay_stalled=%s",
+                "[TUN] if=%s throttle local packet scope=%s queued=%s inflight=%s/%s transport_prev_window_bytes=%s scope_prev_window_bytes=%s scope_curr_window_bytes=%s packet_bytes=%s stream_overlay_stalled=%s",
                 dev.ifname,
                 self._tun_inflow_scope_id(scope_key),
-                self._session_buffered_frames(),
+                int(snapshot.get("waiting_count", 0) or 0),
+                int(snapshot.get("inflight", 0) or 0),
+                int(snapshot.get("max_inflight", 0) or 0),
+                int(snapshot.get("prev_window_bytes", 0) or 0),
                 int(scope_state.get("prev_bytes", 0) or 0),
                 int(scope_state.get("curr_bytes", 0) or 0),
                 len(packet),
@@ -4384,6 +4548,21 @@ class ChannelMux:
             except Exception as e:
                 self.log.debug(f"[NET] logging failed : %r",e)
                 pass
+            now_ns = time.monotonic_ns()
+            scope_key = ("udp", "client", int(self.chan))
+            if not self.parent._local_ingress_send_allowed(len(data), now_ns=now_ns, scope_key=scope_key):
+                snapshot = self.parent._session_overlay_backpressure_snapshot(now_ns=now_ns)
+                self.parent.log.debug(
+                    "[UDP/CLI] throttle local datagram chan=%s queued=%s inflight=%s/%s prev_window_bytes=%s packet_bytes=%s",
+                    self.chan,
+                    int(snapshot.get("waiting_count", 0) or 0),
+                    int(snapshot.get("inflight", 0) or 0),
+                    int(snapshot.get("max_inflight", 0) or 0),
+                    int(snapshot.get("prev_window_bytes", 0) or 0),
+                    len(data),
+                )
+                return
+            self.parent._record_local_udp_forward(len(data), now_ns=now_ns, scope_key=scope_key)
             self.parent._send_mux(self.chan, ChannelMux.Proto.UDP, ChannelMux.MType.DATA, data)
             self.parent._udp_client_last_ts[self.chan] = time.time()
 

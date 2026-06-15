@@ -49,6 +49,7 @@ Important behaviors:
 - multi-peer listener behavior for transports that support multiple concurrent peer clients
 - transport-specific client bootstrap, such as proxy tunnel establishment and direct-path HTTP root preflight, before higher protocol handshakes
 - endpoint-local auxiliary behavior, such as WebSocket pre-upgrade HTTP/static handling, must stay scoped to the originating socket/request and must not mutate unrelated peer sessions
+- every overlay transport must publish one transport-agnostic backpressure view upward: queue depth, inflight state where available, recent egress throughput, and delay/progress estimates
 
 The current WebSocket-specific listener split, including direct static HTTP handling and same-socket upgrade considerations, is documented in [WEBSOCKET_DESIGN.md](/home/ohnoohweh/quic_br/docs/WEBSOCKET_DESIGN.md).
 
@@ -471,7 +472,9 @@ Stage A: admission control
 
 - decide whether new local traffic may enter the overlay pipeline
 - use stream backpressure for `TCP`
-- use bounded stale-drop for `UDP` and `TUN`
+- use bounded stale-drop / throttled admission for `UDP` and `TUN`
+- drive those `UDP` and `TUN` decisions from the same transport-reported
+  backpressure snapshot, regardless of the active overlay protocol
 
 Stage B: in-pipeline scheduling
 
@@ -530,15 +533,36 @@ The observability surface should eventually expose overload indicators in additi
 
 These signals are needed so rising `transmit_delay_ms` can be interpreted correctly: the operator should be able to tell whether the runtime is still carrying fresh traffic, is beginning to saturate, or is already discarding stale backlog by design.
 
-At present, the implemented TUN-pressure response is intentionally simpler than
-full traffic-class shedding: when the active overlay reports backlog
-(`buffered_frames > 0` or the transport's equivalent waiting-count signal),
-ChannelMux limits new local TUN inflow using a rolling `100ms` byte budget. The
-next `100ms` window may admit only `90%` of the TUN bytes that were actually
-forwarded in the previous `100ms` window. When backlog disappears, this
-TUN-specific throttle is disabled and local TUN ingress returns to unrestricted
-operation. This keeps fresh TUN traffic from overwhelming an already-backed-up
-transport without depending on a single fixed transmit-delay threshold.
+At present, the implemented ingress-pressure response is based on a unified
+transport backpressure snapshot rather than on transport-specific branches.
+Every overlay transport contributes a `SessionMetrics` view that includes:
+
+- queue depth / waiting-count
+- inflight and max-inflight when the transport exposes them
+- transmit-delay estimate
+- recent egress throughput measured in rolling `100ms` windows
+
+`ChannelMux` consumes that one snapshot for local admission control. For
+freshness-sensitive ingress (`TUN` packets and local UDP datagrams), the next
+`100ms` ingress window may admit only `90%` of the bytes that the overlay
+actually carried in the previous `100ms` window whenever backpressure is
+active. If the same snapshot reports stalled forward progress, new local
+datagram/packet ingress is paused until progress resumes.
+
+That admission control applies at two levels at once:
+
+- a global local-ingress bucket shared by `TUN` and local UDP together
+- a narrower per-scope bucket that preserves fairness between peer/channel
+  delivery scopes
+
+The shared bucket means a burst from one ingress source cannot consume overlay
+capacity while another source continues admitting traffic as if the budget were
+unused. `TUN` and UDP therefore compete for the same aggregate overlay-shaped
+budget first, then for their own scope-local budget second.
+
+This keeps `TUN` and UDP ingress aligned on one architecture rule: transports
+measure, `ChannelMux` decides, and ingress shedding uses the same data whether
+the active overlay is `myudp`, `ws`, `tcp`, or `quic`.
 
 #### Component implementation checklist
 

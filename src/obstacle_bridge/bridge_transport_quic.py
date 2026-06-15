@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 from ._bridge_import import resolve_bridge_module
 from .bridge_transport_common import (
+    EgressThroughputTracker,
     StreamRTT,
     StreamRTTRuntime,
     _resolve_cli_peer,
@@ -209,6 +210,7 @@ class QuicSession(ISession):
         self._overlay_connected: bool = False
         self._probe_id = f"{id(self)&0xFFFF:04x}"
         self._app_payload_passthrough: bool = False
+        self._egress_tracker = EgressThroughputTracker()
 
         # TLS/ALPN
         self._alpn = getattr(args, "quic_alpn", "hq-29") or "hq-29"
@@ -308,11 +310,15 @@ class QuicSession(ISession):
         try:
             r = self._rtt
             rtt_est_ms = getattr(r, "rtt_est_ms", None)
+            prev_bytes, curr_bytes = self._egress_tracker.snapshot()
             return SessionMetrics(
                 rtt_sample_ms=getattr(r, "rtt_sample_ms", None),
                 rtt_est_ms=rtt_est_ms,
                 transmit_delay_est_ms=(0.5 * float(rtt_est_ms)) if rtt_est_ms is not None else None,
                 last_rtt_ok_ns=getattr(r, "last_rtt_ok_ns", None),
+                waiting_count=(1 if len(self._early_buf) > 0 else 0),
+                egress_prev_window_bytes=prev_bytes,
+                egress_curr_window_bytes=curr_bytes,
             )
         except Exception:
             return SessionMetrics()
@@ -545,6 +551,7 @@ class QuicSession(ISession):
                 wire = self._LEN.pack(len(payload) + 1) + bytes([self._K_APP]) + payload
                 if not self._send_wire_ctx(ctx, wire):
                     return 0
+                self._egress_tracker.record(len(payload))
                 return len(payload)
             target = self._resolve_server_send_target(payload, peer_id=peer_id)
             if target is None:
@@ -557,6 +564,7 @@ class QuicSession(ISession):
             wire = self._LEN.pack(len(routed_payload) + 1) + bytes([self._K_APP]) + routed_payload
             if not self._send_wire_ctx(ctx, wire):
                 return 0
+            self._egress_tracker.record(len(routed_payload))
             return len(payload)
         body = bytes([self._K_APP]) + payload
         wire = self._LEN.pack(len(body)) + body
@@ -574,6 +582,7 @@ class QuicSession(ISession):
             if self._on_peer_tx:
                 try: self._on_peer_tx(len(wire))
                 except Exception: pass
+            self._egress_tracker.record(len(payload))
             return len(payload)
         except Exception as e:
             self._log.info(f"[QUIC/TX] ({self._probe_id}) write error: {e!r}")

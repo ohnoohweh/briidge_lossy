@@ -25,6 +25,7 @@ from ctypes import wintypes
 
 from ._bridge_import import resolve_bridge_module
 from .bridge_transport_common import (
+    EgressThroughputTracker,
     StreamRTT,
     StreamRTTRuntime,
     _listener_family_for_host,
@@ -396,6 +397,7 @@ class WebSocketSession(ISession):
         self._overlay_connected = False
         self.connection_epoch: int = 0
         self._app_payload_passthrough: bool = False
+        self._egress_tracker = EgressThroughputTracker()
         self._ws_connect_timeout_s: float = 5.0
         self._connection_failure_reason: Optional[str] = None
         self._connection_failure_detail: Optional[str] = None
@@ -595,6 +597,7 @@ class WebSocketSession(ISession):
         try:
             r = self._rtt
             rtt_est_ms = getattr(r, "rtt_est_ms", None)
+            prev_bytes, curr_bytes = self._egress_tracker.snapshot()
             return SessionMetrics(
                 rtt_sample_ms=getattr(r, "rtt_sample_ms", None),
                 rtt_est_ms=rtt_est_ms,
@@ -602,6 +605,8 @@ class WebSocketSession(ISession):
                 last_rtt_ok_ns=getattr(r, "last_rtt_ok_ns", None),
                 last_rx_ns=self._last_rx_ns or None,
                 waiting_count=self.waiting_count(),
+                egress_prev_window_bytes=prev_bytes,
+                egress_curr_window_bytes=curr_bytes,
             )
         except Exception:
             return SessionMetrics()
@@ -709,9 +714,11 @@ class WebSocketSession(ISession):
                     self._log.debug(f"[WS/TX] ({self._probe_id}) drop APP for missing peer_id={peer_id}")
                     return 0
                 self._schedule_server_send(ctx, wire, on_sent=lambda: self._notify_peer_tx(len(wire)))
+                self._egress_tracker.record(len(payload))
                 return len(payload)
             if not self._server_peers and self._ws is not None:
                 self._schedule_send(wire, on_sent=lambda: self._notify_peer_tx(len(wire)))
+                self._egress_tracker.record(len(payload))
                 return len(payload)
             routed = self._server_rewrite_outbound_app(payload)
             if routed is None:
@@ -723,6 +730,7 @@ class WebSocketSession(ISession):
                 self._log.debug(f"[WS/TX] ({self._probe_id}) drop APP for missing peer_id={peer_id}")
                 return 0
             self._schedule_server_send(ctx, bytes([self._K_APP]) + payload, on_sent=lambda: self._notify_peer_tx(len(payload) + 1))
+            self._egress_tracker.record(len(payload))
             return len(payload)
 
         if self._ws is None:
@@ -733,6 +741,7 @@ class WebSocketSession(ISession):
             return len(payload)
 
         self._schedule_send(wire, on_sent=lambda: self._notify_peer_tx(len(wire)))
+        self._egress_tracker.record(len(payload))
         return len(payload)
 
     def _alloc_server_peer_id(self) -> int:
