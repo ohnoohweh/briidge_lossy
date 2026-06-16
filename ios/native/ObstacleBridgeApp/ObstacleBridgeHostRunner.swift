@@ -329,11 +329,7 @@ final class ObstacleBridgeHostRunner {
     func stop() {
         clientRestartWatchdog?.cancel()
         clientRestartWatchdog = nil
-        if let tunService = ownServerSpecs.first(where: { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }) {
-            runMacOSTunLifecycleHook(for: tunService, event: "on_stopped")
-        }
-        sharedMacOSTunAdapter?.stop()
-        sharedMacOSTunAdapter = nil
+        teardownSharedMacOSTunAdapter(runLifecycleHook: true)
         sharedWebSocketOverlayTransportOwner?.stop()
         sharedWebSocketOverlayTransportOwner = nil
         sharedTcpOverlayTransportOwner?.stop()
@@ -836,6 +832,16 @@ final class ObstacleBridgeHostRunner {
             }
             udpServiceListeners.removeAll()
         }
+    }
+
+    private func teardownSharedMacOSTunAdapter(runLifecycleHook: Bool) {
+        if runLifecycleHook,
+           let tunService = ownServerSpecs.first(where: { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }) {
+            runMacOSTunLifecycleHook(for: tunService, event: "on_stopped")
+        }
+        sharedMacOSTunAdapter?.stop()
+        sharedMacOSTunAdapter = nil
+        macOSTunChannelConnectedHookFired = false
     }
 
     private func startUDPService(_ spec: ObstacleBridgeNativeServiceSpec) throws {
@@ -1685,11 +1691,7 @@ final class ObstacleBridgeHostRunner {
               tunService.targetProtocol == "tun",
               !trimmedIfname.isEmpty
         else {
-            if let existingService = ownServerSpecs.first(where: { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }) {
-                runMacOSTunLifecycleHook(for: existingService, event: "on_stopped")
-            }
-            sharedMacOSTunAdapter?.stop()
-            sharedMacOSTunAdapter = nil
+            teardownSharedMacOSTunAdapter(runLifecycleHook: true)
             return
         }
         let ifname = trimmedIfname
@@ -1697,10 +1699,11 @@ final class ObstacleBridgeHostRunner {
         if let existing = sharedMacOSTunAdapter,
            existing.requestedIfname == ifname,
            existing.mtu == mtu {
+            // Keep the shared adapter alive across overlay reconnects. The shell
+            // hooks are tied to adapter lifecycle, not transport peer churn.
             return
         }
-        sharedMacOSTunAdapter?.stop()
-        runMacOSTunLifecycleHook(for: tunService, event: "on_stopped")
+        teardownSharedMacOSTunAdapter(runLifecycleHook: true)
         let adapter = ObstacleBridgeMacOSTunAdapter(
             ifname: ifname,
             mtu: mtu,

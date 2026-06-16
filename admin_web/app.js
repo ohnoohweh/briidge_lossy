@@ -833,11 +833,31 @@ function handleAuthRequired(message = 'Authentication required.') {
 }
 
 async function apiFetch(url, options = {}) {
-  const { authRequest = false, ...fetchOptions } = options;
-  const response = await fetch(url, {
-    credentials: 'same-origin',
-    ...fetchOptions,
-  });
+  const { authRequest = false, timeoutMs = 4000, signal: externalSignal, ...fetchOptions } = options;
+  const controller = externalSignal ? null : new AbortController();
+  const signal = externalSignal || controller?.signal;
+  let timeoutId = null;
+  if (controller && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    timeoutId = window.setTimeout(() => {
+      try {
+        controller.abort(new DOMException('Request timed out', 'AbortError'));
+      } catch (_error) {
+        controller.abort();
+      }
+    }, timeoutMs);
+  }
+  let response;
+  try {
+    response = await fetch(url, {
+      credentials: 'same-origin',
+      signal,
+      ...fetchOptions,
+    });
+  } finally {
+    if (timeoutId) {
+      window.clearTimeout(timeoutId);
+    }
+  }
   if (response.status === 401 && !authRequest) {
     handleAuthRequired('Session expired. Please sign in again.');
     throw new Error('HTTP 401');
@@ -1248,6 +1268,14 @@ function renderTunRoutingSharedTable(tbodyId, rows) {
       </tr>
     `;
   }).join('');
+}
+
+function fmtTunRoutingRouteList(routes) {
+  if (!Array.isArray(routes) || routes.length === 0) return 'n/a';
+  return routes
+    .map((route) => String(route || '').trim())
+    .filter((route) => route.length > 0)
+    .join('\n') || 'n/a';
 }
 
 function detailPillClass(value) {
@@ -2733,6 +2761,10 @@ function applyTunRoutingDoc(j) {
   setText('tunRoutingListening', fmtInteger(j.summary?.tun_listening ?? 0));
   setText('tunRoutingSharedServices', fmtInteger(j.summary?.shared_services ?? 0));
   setText('tunRoutingActiveBindings', fmtInteger(j.summary?.shared_active_peer_bindings ?? 0));
+  setText('tunRoutingIncludedRoutes', fmtTunRoutingRouteList(j.included_routes));
+  setText('tunRoutingExcludedRoutes', fmtTunRoutingRouteList(j.excluded_routes));
+  setText('tunRoutingIncludedRoutes6', fmtTunRoutingRouteList(j.included_routes6));
+  setText('tunRoutingExcludedRoutes6', fmtTunRoutingRouteList(j.excluded_routes6));
 }
 
 async function loadConfig() {

@@ -43,6 +43,14 @@ SHARED_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeShared"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
 
 
+def test_macos_swift_host_runner_keeps_shared_tun_hooks_bound_to_adapter_lifecycle() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    assert "private func teardownSharedMacOSTunAdapter(runLifecycleHook: Bool)" in source
+    assert "Keep the shared adapter alive across overlay reconnects." in source
+    assert 'teardownSharedMacOSTunAdapter(runLifecycleHook: true)' in source
+    assert 'runMacOSTunLifecycleHook(for: tunService, event: "on_channel_connected")' in source
+
+
 class _AsyncBridgeClientThread:
     def __init__(self, config: dict) -> None:
         self.client = ObstacleBridgeClient(config)

@@ -17,6 +17,35 @@ except Exception:
 TUN_READ_BURST_MAX = 32
 
 
+def _record_sync_diag(mux: Any, name: str, *, phase: str, error: str = "") -> None:
+    cb = getattr(mux, "_runner_sync_diag_cb", None)
+    if not callable(cb):
+        return
+    with contextlib.suppress(Exception):
+        cb(name, kind="callback", phase=phase, error=error)
+
+
+def _schedule_reader_resume(mux: Any, dev: Any) -> None:
+    if getattr(dev, "_reader_yield_scheduled", False):
+        return
+    was_registered = bool(getattr(dev, "reader_registered", False))
+    if was_registered and getattr(dev, "fd", None) is not None:
+        with contextlib.suppress(Exception):
+            mux.loop.remove_reader(dev.fd)
+        dev.reader_registered = False
+    setattr(dev, "_reader_yield_scheduled", True)
+
+    def _resume() -> None:
+        setattr(dev, "_reader_yield_scheduled", False)
+        if was_registered:
+            with contextlib.suppress(Exception):
+                register_tun_reader(mux, dev)
+            return
+        on_tun_fd_readable(mux, dev)
+
+    mux.loop.call_soon(_resume)
+
+
 def _tun_ifreq_name(name: str) -> bytes:
     return str(name).encode("utf-8", "ignore")[:15].ljust(16, b"\x00")
 
@@ -82,47 +111,63 @@ def close_tun_device(mux: Any, dev: Any) -> None:
 
 
 def write_tun_packet(_mux: Any, dev: Any, data: bytes) -> None:
+    tracer = getattr(_mux, "_log_tun_packet_trace", None)
+    if callable(tracer):
+        with contextlib.suppress(Exception):
+            tracer(stage="platform_tun_write", packet=bytes(data), ifname=str(getattr(dev, "ifname", "") or ""), chan=getattr(dev, "chan_id", None))
     os.write(dev.fd, data)
 
 
 def on_tun_fd_readable(mux: Any, dev: Any) -> None:
+    _record_sync_diag(mux, "bridge_tun_linux.on_tun_fd_readable", phase="started")
     processed = 0
-    while processed < TUN_READ_BURST_MAX:
-        try:
-            packet = os.read(dev.fd, max(68, min(mux.TUN_READ_SIZE_MAX, int(dev.mtu) + 4)))
-        except BlockingIOError:
-            return
-        except OSError as e:
-            if getattr(e, "errno", None) in (11,):
+    try:
+        while processed < TUN_READ_BURST_MAX:
+            try:
+                packet = os.read(dev.fd, max(68, min(mux.TUN_READ_SIZE_MAX, int(dev.mtu) + 4)))
+            except BlockingIOError:
                 return
-            mux.log.info("[TUN] if=%s read failed: %r", dev.ifname, e)
-            return
-        if not packet:
-            return
+            except OSError as e:
+                if getattr(e, "errno", None) in (11,):
+                    return
+                mux.log.info("[TUN] if=%s read failed: %r", dev.ifname, e)
+                return
+            if not packet:
+                return
+            tracer = getattr(mux, "_log_tun_packet_trace", None)
+            if callable(tracer):
+                with contextlib.suppress(Exception):
+                    tracer(stage="platform_tun_read", packet=bytes(packet), ifname=str(getattr(dev, "ifname", "") or ""), chan=getattr(dev, "chan_id", None))
+            checker = getattr(mux.log, "isEnabledFor", None)
+            if callable(checker):
+                try:
+                    if checker(logging.DEBUG):
+                        ip_version = (packet[0] >> 4) if packet else -1
+                        mux.log.debug(
+                            "[TUN/LINUX/PKT] stage=tun_read if=%s len=%s ipver=%s hex=%s",
+                            dev.ifname,
+                            len(packet),
+                            ip_version,
+                            packet.hex(),
+                        )
+                except Exception:
+                    pass
+            mux._on_local_tun_packet(dev, packet)
+            processed += 1
+        _schedule_reader_resume(mux, dev)
         checker = getattr(mux.log, "isEnabledFor", None)
         if callable(checker):
             try:
                 if checker(logging.DEBUG):
-                    ip_version = (packet[0] >> 4) if packet else -1
                     mux.log.debug(
-                        "[TUN/LINUX/PKT] stage=tun_read if=%s len=%s ipver=%s hex=%s",
+                        "[TUN/LINUX] if=%s yielding after burst packets=%s",
                         dev.ifname,
-                        len(packet),
-                        ip_version,
-                        packet.hex(),
+                        processed,
                     )
             except Exception:
                 pass
-        mux._on_local_tun_packet(dev, packet)
-        processed += 1
-    checker = getattr(mux.log, "isEnabledFor", None)
-    if callable(checker):
-        try:
-            if checker(logging.DEBUG):
-                mux.log.debug(
-                    "[TUN/LINUX] if=%s yielding after burst packets=%s",
-                    dev.ifname,
-                    processed,
-                )
-        except Exception:
-            pass
+    except Exception as exc:
+        _record_sync_diag(mux, "bridge_tun_linux.on_tun_fd_readable", phase="failed", error=type(exc).__name__)
+        raise
+    finally:
+        _record_sync_diag(mux, "bridge_tun_linux.on_tun_fd_readable", phase="finished")

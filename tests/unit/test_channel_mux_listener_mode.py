@@ -117,7 +117,7 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         mux._record_local_udp_forward(800, now_ns=now_ns, scope_key=scope_key)
         self.assertFalse(mux._local_ingress_send_allowed(101, now_ns=now_ns, scope_key=scope_key))
 
-    def test_unified_ingress_stall_blocks_udp_even_without_stream_overlay(self):
+    def test_unified_ingress_stall_without_backpressure_does_not_block_udp(self):
         now_ns = 9_000_000_000
         sess = _FakeSession(
             connected=True,
@@ -127,7 +127,7 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         )
         mux = ChannelMux(sess, argparse.Namespace(overlay_transport="myudp"))
 
-        self.assertFalse(
+        self.assertTrue(
             mux._local_ingress_send_allowed(100, now_ns=now_ns, scope_key=("udp", "client", 9))
         )
 
@@ -314,8 +314,8 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         finally:
             mux.loop.close()
 
-    def test_shared_tun_disable_scoped_throttle_does_not_bypass_stream_stall_guard(self):
-        session = _FakeSession(waiting_count=5)
+    def test_shared_tun_disable_scoped_throttle_does_not_bypass_backpressured_stream_stall_guard(self):
+        session = _FakeSession(waiting_count=5, inflight=200, max_inflight=200)
         session._metrics.last_rtt_ok_ns = 1
         mux = ChannelMux(session, asyncio.new_event_loop())
         try:
@@ -334,7 +334,7 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
             mux.loop.close()
 
     def test_stream_overlay_stalls_on_recent_rx_idle_without_waiting_count_signal(self):
-        session = _FakeSession(waiting_count=0, transmit_delay_est_ms=60.0)
+        session = _FakeSession(waiting_count=0, inflight=200, max_inflight=200, transmit_delay_est_ms=60.0)
         session._metrics.last_rx_ns = 1
         mux = ChannelMux(session, asyncio.new_event_loop())
         try:
@@ -346,6 +346,58 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
                     scope_key=("peer", 7),
                 )
             )
+        finally:
+            mux.loop.close()
+
+    def test_throttle_snapshot_reports_inactive_when_not_backpressured(self):
+        now_ns = 7_000_000_000
+        session = _FakeSession(
+            connected=True,
+            waiting_count=1,
+            inflight=10,
+            max_inflight=200,
+            last_rtt_ok_ns=now_ns,
+            egress_prev_window_bytes=2048,
+        )
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            snapshot = mux._local_ingress_throttle_snapshot_for_scope(
+                ("udp", ("local", 1), 7),
+                now_ns=now_ns,
+            )
+            self.assertFalse(snapshot["active"])
+            self.assertFalse(snapshot["stalled"])
+            self.assertFalse(snapshot["backpressure_active"])
+        finally:
+            mux.loop.close()
+
+    def test_shared_tun_service_snapshot_reports_inactive_when_not_backpressured(self):
+        now_ns = 7_000_000_000
+        session = _FakeSession(
+            connected=True,
+            waiting_count=1,
+            inflight=10,
+            max_inflight=200,
+            last_rtt_ok_ns=now_ns,
+            egress_prev_window_bytes=2048,
+        )
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            svc_key = ("local", 0, 5)
+            mux._shared_tun_runtime_by_peer[(svc_key, 7)] = {
+                "preferred_chan_id": 1,
+                "bound_chan_ids": {1},
+                "throttle_prev_window_bytes": 2048,
+                "throttle_curr_window_bytes": 512,
+                "throttle_drop_count": 0,
+            }
+            snapshot = mux._local_ingress_throttle_snapshot_for_shared_tun_service(
+                svc_key,
+                now_ns=now_ns,
+            )
+            self.assertFalse(snapshot["active"])
+            self.assertFalse(snapshot["stalled"])
+            self.assertFalse(snapshot["backpressure_active"])
         finally:
             mux.loop.close()
 
@@ -1330,6 +1382,41 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         send_catalog.assert_called_once()
         schedule_hook.assert_not_called()
 
+    async def test_local_tun_reader_activation_waits_for_on_created_hook_success(self):
+        spec = ChannelMux.ServiceSpec(
+            svc_id=6,
+            l_proto='tun',
+            l_bind='obtun0',
+            l_port=1600,
+            r_proto='tun',
+            r_host='obtun0',
+            r_port=1600,
+            lifecycle_hooks={'listener': {'on_created': {'argv': ['hook', 'up']}}},
+        )
+        svc_key = ('local', 0, 6)
+        dev = ChannelMux.TunDevice(fd=44, ifname='obtun0', mtu=1600, service_key=svc_key)
+
+        class _Proc:
+            returncode = 0
+
+            async def communicate(self):
+                return (b'', b'hook ok')
+
+        async def fake_create_subprocess_exec(*_args, **_kwargs):
+            return _Proc()
+
+        with patch.object(self.mux, '_open_tun_device', return_value=dev), \
+             patch.object(self.mux, '_schedule_service_hook') as schedule_hook, \
+             patch.object(self.mux, '_schedule_tun_reader_registration') as schedule_reader, \
+             patch('obstacle_bridge.bridge_channelmux.asyncio.create_subprocess_exec', side_effect=fake_create_subprocess_exec):
+            self.mux._start_tun_server_for_sync(spec, svc_key)
+            schedule_hook.assert_called_once_with(spec, svc_key, 'listener', 'on_created')
+            schedule_reader.assert_called_once_with(dev)
+
+            await self.mux._run_service_hook(spec, svc_key, 'listener', 'on_created')
+
+        self.assertNotIn(svc_key, self.mux._tun_reader_activation_deferred)
+
     async def test_start_prestarts_listener_shared_tun_service_while_overlay_disconnected(self):
         spec = ChannelMux.ServiceSpec(
             svc_id=9,
@@ -1935,6 +2022,45 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         close_tun.assert_called_once_with(dev)
         self.assertNotIn(svc_key, self.mux._peer_installed_services)
         self.assertNotIn(svc_key, self.mux._svc_tun_devices)
+
+    async def test_shared_server_tun_stop_skips_on_stopped_hook_when_device_is_retained(self):
+        svc_key = ('local', 0, 1)
+        spec = ChannelMux.ServiceSpec(
+            1,
+            'tun',
+            'obtun0',
+            1500,
+            'tun',
+            'obtun0',
+            1500,
+            lifecycle_hooks={'listener': {'on_stopped': {'argv': ['echo', 'down']}}},
+            options={
+                'shared_tun_ownership': {
+                    'mode': 'server_shared',
+                    'peers': [
+                        {'peer_ref': 'linux-client', 'ipv4': ['192.168.106.2'], 'ipv6': ['fd20:106::2']},
+                    ],
+                }
+            },
+        )
+        dev = ChannelMux.TunDevice(fd=-1, ifname='obtun0', mtu=1500, service_key=svc_key)
+        registry = ProcessSharedTunRegistry()
+        registry.register(self.mux, svc_key, dev)
+        keeper_mux = ChannelMux(_FakeSession(), asyncio.new_event_loop())
+        try:
+            registry.attach_existing(keeper_mux, 'obtun0', 1500)
+            self.mux._process_shared_tun_registry = registry
+            self.mux._local_services[svc_key] = spec
+            self.mux._svc_tun_devices[svc_key] = dev
+
+            with patch.object(self.mux, '_run_service_hook', new=AsyncMock()) as run_hook, patch.object(self.mux, '_close_tun_device') as close_tun:
+                await self.mux._stop_listener_for_service_id(svc_key, 'tun', spec=spec)
+
+            run_hook.assert_not_awaited()
+            close_tun.assert_not_called()
+            self.assertNotIn(svc_key, self.mux._svc_tun_devices)
+        finally:
+            keeper_mux.loop.close()
 
 
 class ChannelMuxSessionBudgetTests(unittest.TestCase):

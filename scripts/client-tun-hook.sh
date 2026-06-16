@@ -21,12 +21,23 @@ EXCLUDED_ROUTES6="${EXCLUDED_ROUTES6:-}"
 STATE_DIR="/run/obbridge"
 STATE_FILE="${STATE_DIR}/${IFNAME}.default-route"
 STATE_FILE6="${STATE_DIR}/${IFNAME}.default-route6"
+STATE_INCLUDED4="${STATE_DIR}/${IFNAME}.included-routes4"
+STATE_INCLUDED6="${STATE_DIR}/${IFNAME}.included-routes6"
 STATE_EXCLUDED4="${STATE_DIR}/${IFNAME}.excluded-routes4"
 STATE_EXCLUDED6="${STATE_DIR}/${IFNAME}.excluded-routes6"
 STATE_UNDERLAY4="${STATE_DIR}/${IFNAME}.underlay-route4"
 STATE_UNDERLAY6="${STATE_DIR}/${IFNAME}.underlay-route6"
 STATE_PROTECTED4="${STATE_DIR}/${IFNAME}.protected-routes4"
 STATE_PROTECTED6="${STATE_DIR}/${IFNAME}.protected-routes6"
+STATE_POLICY4="${STATE_DIR}/${IFNAME}.policy-rules4"
+STATE_POLICY6="${STATE_DIR}/${IFNAME}.policy-rules6"
+STATE_POLICY_TABLE4="${STATE_DIR}/${IFNAME}.policy-table4"
+STATE_POLICY_TABLE6="${STATE_DIR}/${IFNAME}.policy-table6"
+
+POLICY_TABLE4="${OB_POLICY_TABLE4:-52190}"
+POLICY_TABLE6="${OB_POLICY_TABLE6:-52191}"
+POLICY_PREF4_BASE="${OB_POLICY_PREF4_BASE:-12000}"
+POLICY_PREF6_BASE="${OB_POLICY_PREF6_BASE:-12050}"
 
 mkdir -p "$STATE_DIR"
 
@@ -145,6 +156,26 @@ csv_to_lines() {
   tr ',' '\n' <<<"${1:-}" | sed '/^[[:space:]]*$/d'
 }
 
+is_full_tunnel_route4() {
+  local route_spec="$1"
+  case "$route_spec" in
+    0.0.0.0/0|default)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+is_full_tunnel_route6() {
+  local route_spec="$1"
+  case "$route_spec" in
+    ::/0|default|::0/0)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 excluded_route_should_use_loopback4() {
   local route_spec="$1"
   case "$route_spec" in
@@ -208,7 +239,8 @@ add_excluded_routes4() {
   while IFS= read -r route_spec; do
     [[ -z "$route_spec" ]] && continue
     if excluded_route_should_use_loopback4 "$route_spec"; then
-      ip route replace "$route_spec" dev lo
+      log_diag "skip explicit loopback route install for ${route_spec}; kernel loopback routes already cover it"
+      continue
     elif [[ -n "$gw" ]]; then
       if [[ -n "$src" ]]; then
         ip route replace "$route_spec" via "$gw" dev "$dev" src "$src"
@@ -228,98 +260,144 @@ add_excluded_routes4() {
 
 protect_underlay_routes4() {
   : > "$STATE_PROTECTED4"
-  local gw="" dev="" src=""
-  while IFS='=' read -r key value; do
-    [[ "$key" == "gw" ]] && gw="$value"
-    [[ "$key" == "dev" ]] && dev="$value"
-    [[ "$key" == "src" ]] && src="$value"
-  done < <(_load_saved_route_parts "$STATE_UNDERLAY4" "ip route show default")
-  [[ -n "$dev" ]] || return 0
-
-  local protected_routes=()
-  if [[ -n "${OVERLAY_PEER_IP:-}" ]] && ! overlay_peer_is_ipv6; then
-    protected_routes+=("$(overlay_route_prefix)")
-  fi
-  if [[ -n "$src" ]]; then
-    protected_routes+=("${src}/32")
-  fi
-  if [[ -n "$gw" ]]; then
-    protected_routes+=("${gw}/32")
-  fi
-
-  local link_route
-  while IFS= read -r link_route; do
-    [[ -z "$link_route" ]] && continue
-    protected_routes+=("$link_route")
-  done < <(ip route show dev "$dev" scope link 2>/dev/null | awk '{print $1}' | sed '/^default$/d')
-
-  local route_spec
-  local seen=""
-  for route_spec in "${protected_routes[@]}"; do
-    [[ -n "$route_spec" ]] || continue
-    case ",${seen}," in
-      *",${route_spec},"*) continue ;;
-    esac
-    seen="${seen},${route_spec}"
-    if [[ -n "$gw" && "$route_spec" != "${gw}/32" && "$route_spec" != "${src}/32" ]]; then
-      if [[ -n "$src" ]]; then
-        ip route replace "$route_spec" dev "$dev" src "$src"
-      else
-        ip route replace "$route_spec" dev "$dev"
-      fi
-    else
-      if [[ -n "$src" ]]; then
-        ip route replace "$route_spec" dev "$dev" src "$src"
-      else
-        ip route replace "$route_spec" dev "$dev"
-      fi
-    fi
-    printf '%s\n' "$route_spec" >> "$STATE_PROTECTED4"
-  done
 }
 
 protect_underlay_routes6() {
   : > "$STATE_PROTECTED6"
-  local gw="" dev="" src=""
-  while IFS='=' read -r key value; do
-    [[ "$key" == "gw" ]] && gw="$value"
-    [[ "$key" == "dev" ]] && dev="$value"
-    [[ "$key" == "src" ]] && src="$value"
-  done < <(_load_saved_route_parts "$STATE_UNDERLAY6" "ip -6 route show default")
-  [[ -n "$dev" ]] || return 0
+}
 
-  local protected_routes=()
+save_policy_table_ids() {
+  printf '%s\n' "$POLICY_TABLE4" > "$STATE_POLICY_TABLE4"
+  printf '%s\n' "$POLICY_TABLE6" > "$STATE_POLICY_TABLE6"
+}
+
+load_policy_table4() {
+  if [[ -s "$STATE_POLICY_TABLE4" ]]; then
+    cat "$STATE_POLICY_TABLE4"
+    return
+  fi
+  printf '%s\n' "$POLICY_TABLE4"
+}
+
+load_policy_table6() {
+  if [[ -s "$STATE_POLICY_TABLE6" ]]; then
+    cat "$STATE_POLICY_TABLE6"
+    return
+  fi
+  printf '%s\n' "$POLICY_TABLE6"
+}
+
+policy_rule_add4() {
+  local pref="$1"
+  shift
+  ip rule add pref "$pref" "$@"
+  printf '%s|%s\n' "$pref" "$*" >> "$STATE_POLICY4"
+}
+
+policy_rule_add6() {
+  local pref="$1"
+  shift
+  ip -6 rule add pref "$pref" "$@"
+  printf '%s|%s\n' "$pref" "$*" >> "$STATE_POLICY6"
+}
+
+delete_policy_rules4() {
+  local policy_table
+  policy_table="$(load_policy_table4)"
+  if [[ -s "$STATE_POLICY4" ]]; then
+    while IFS='|' read -r pref spec; do
+      [[ -z "$pref" || -z "$spec" ]] && continue
+      ip rule del pref "$pref" $spec 2>/dev/null || true
+    done < "$STATE_POLICY4"
+  fi
+  ip route flush table "$policy_table" 2>/dev/null || true
+}
+
+delete_policy_rules6() {
+  local policy_table
+  policy_table="$(load_policy_table6)"
+  if [[ -s "$STATE_POLICY6" ]]; then
+    while IFS='|' read -r pref spec; do
+      [[ -z "$pref" || -z "$spec" ]] && continue
+      ip -6 rule del pref "$pref" $spec 2>/dev/null || true
+    done < "$STATE_POLICY6"
+  fi
+  ip -6 route flush table "$policy_table" 2>/dev/null || true
+}
+
+connected_underlay_routes4() {
+  ip route show dev "$UNDERLAY_IF" proto kernel scope link 2>/dev/null | awk '{print $1}' | sed '/^[[:space:]]*$/d'
+}
+
+connected_underlay_routes6() {
+  ip -6 route show dev "$UNDERLAY_IF" proto kernel 2>/dev/null | awk '{print $1}' | sed '/^[[:space:]]*$/d'
+}
+
+connected_tun_routes4() {
+  ip route show dev "$IFNAME" proto kernel scope link 2>/dev/null | awk '{print $1}' | sed '/^[[:space:]]*$/d'
+}
+
+connected_tun_routes6() {
+  ip -6 route show dev "$IFNAME" proto kernel 2>/dev/null | awk '{print $1}' | sed '/^[[:space:]]*$/d'
+}
+
+configure_policy_full_tunnel4() {
+  local policy_table policy_pref
+  policy_table="$(load_policy_table4)"
+  policy_pref="$POLICY_PREF4_BASE"
+  : > "$STATE_POLICY4"
+  ip route flush table "$policy_table" 2>/dev/null || true
+  ip route replace table "$policy_table" default via "$TUN_GW" dev "$IFNAME" onlink
+  if [[ -n "${OVERLAY_PEER_IP:-}" ]]; then
+    policy_rule_add4 "$policy_pref" to "$(overlay_route_prefix)" lookup main
+    policy_pref=$((policy_pref + 1))
+  fi
+  while IFS= read -r route_spec; do
+    [[ -z "$route_spec" ]] && continue
+    policy_rule_add4 "$policy_pref" to "$route_spec" lookup main
+    policy_pref=$((policy_pref + 1))
+  done < <(connected_underlay_routes4)
+  while IFS= read -r route_spec; do
+    [[ -z "$route_spec" ]] && continue
+    policy_rule_add4 "$policy_pref" to "$route_spec" lookup main
+    policy_pref=$((policy_pref + 1))
+  done < <(connected_tun_routes4)
+  while IFS= read -r route_spec; do
+    [[ -z "$route_spec" ]] && continue
+    policy_rule_add4 "$policy_pref" to "$route_spec" lookup main
+    policy_pref=$((policy_pref + 1))
+  done < <(csv_to_lines "$EXCLUDED_ROUTES")
+  policy_rule_add4 "$policy_pref" to 0.0.0.0/0 lookup "$policy_table"
+}
+
+configure_policy_full_tunnel6() {
+  [[ -n "$TUN_GW6" ]] || return 0
+  local policy_table policy_pref
+  policy_table="$(load_policy_table6)"
+  policy_pref="$POLICY_PREF6_BASE"
+  : > "$STATE_POLICY6"
+  ip -6 route flush table "$policy_table" 2>/dev/null || true
+  ip -6 route replace table "$policy_table" default via "$TUN_GW6" dev "$IFNAME" metric 1 onlink
   if [[ -n "${OVERLAY_PEER_IP:-}" ]] && overlay_peer_is_ipv6; then
-    protected_routes+=("$(overlay_route_prefix)")
+    policy_rule_add6 "$policy_pref" to "$(overlay_route_prefix)" lookup main
+    policy_pref=$((policy_pref + 1))
   fi
-  if [[ -n "$src" ]]; then
-    protected_routes+=("${src}/128")
-  fi
-  if [[ -n "$gw" ]]; then
-    protected_routes+=("${gw}/128")
-  fi
-
-  local link_route
-  while IFS= read -r link_route; do
-    [[ -z "$link_route" ]] && continue
-    protected_routes+=("$link_route")
-  done < <(ip -6 route show dev "$dev" 2>/dev/null | awk '{print $1}' | sed '/^default$/d')
-
-  local route_spec
-  local seen=""
-  for route_spec in "${protected_routes[@]}"; do
-    [[ -n "$route_spec" ]] || continue
-    case ",${seen}," in
-      *",${route_spec},"*) continue ;;
-    esac
-    seen="${seen},${route_spec}"
-    if [[ -n "$src" ]]; then
-      ip -6 route replace "$route_spec" dev "$dev" src "$src"
-    else
-      ip -6 route replace "$route_spec" dev "$dev"
-    fi
-    printf '%s\n' "$route_spec" >> "$STATE_PROTECTED6"
-  done
+  while IFS= read -r route_spec; do
+    [[ -z "$route_spec" ]] && continue
+    policy_rule_add6 "$policy_pref" to "$route_spec" lookup main
+    policy_pref=$((policy_pref + 1))
+  done < <(connected_underlay_routes6)
+  while IFS= read -r route_spec; do
+    [[ -z "$route_spec" ]] && continue
+    policy_rule_add6 "$policy_pref" to "$route_spec" lookup main
+    policy_pref=$((policy_pref + 1))
+  done < <(connected_tun_routes6)
+  while IFS= read -r route_spec; do
+    [[ -z "$route_spec" ]] && continue
+    policy_rule_add6 "$policy_pref" to "$route_spec" lookup main
+    policy_pref=$((policy_pref + 1))
+  done < <(csv_to_lines "$EXCLUDED_ROUTES6")
+  policy_rule_add6 "$policy_pref" to ::/0 lookup "$policy_table"
 }
 
 add_excluded_routes6() {
@@ -328,12 +406,13 @@ add_excluded_routes6() {
   while IFS='=' read -r key value; do
     [[ "$key" == "gw" ]] && gw="$value"
     [[ "$key" == "dev" ]] && dev="$value"
-  done < <(_load_saved_route_parts "$STATE_FILE6" "ip -6 route show default")
+  done < <(_load_saved_route_parts "$STATE_UNDERLAY6" "ip -6 route show default")
   [[ -n "$dev" ]] || return 0
   while IFS= read -r route_spec; do
     [[ -z "$route_spec" ]] && continue
     if excluded_route_should_use_loopback6 "$route_spec"; then
-      ip -6 route replace "$route_spec" dev lo
+      log_diag "skip explicit IPv6 loopback route install for ${route_spec}; kernel loopback routes already cover it"
+      continue
     elif [[ -n "$gw" ]]; then
       ip -6 route replace "$route_spec" via "$gw" dev "$dev"
     else
@@ -341,6 +420,78 @@ add_excluded_routes6() {
     fi
     printf '%s\n' "$route_spec" >> "$STATE_EXCLUDED6"
   done < <(csv_to_lines "$EXCLUDED_ROUTES6")
+}
+
+add_included_routes4() {
+  : > "$STATE_INCLUDED4"
+  local installed_default=0
+  while IFS= read -r route_spec; do
+    [[ -z "$route_spec" ]] && continue
+    if is_full_tunnel_route4 "$route_spec"; then
+      configure_policy_full_tunnel4
+      printf '%s\n' "default" >> "$STATE_INCLUDED4"
+      installed_default=1
+      continue
+    fi
+    ip route replace "$route_spec" via "$TUN_GW" dev "$IFNAME" onlink
+    printf '%s\n' "$route_spec" >> "$STATE_INCLUDED4"
+  done < <(csv_to_lines "$INCLUDED_ROUTES")
+  return "$installed_default"
+}
+
+add_included_routes6() {
+  : > "$STATE_INCLUDED6"
+  local installed_default=0
+  while IFS= read -r route_spec; do
+    [[ -z "$route_spec" ]] && continue
+    if is_full_tunnel_route6 "$route_spec"; then
+      if [[ -n "$TUN_GW6" ]]; then
+        configure_policy_full_tunnel6
+        printf '%s\n' "default" >> "$STATE_INCLUDED6"
+        installed_default=1
+      fi
+      continue
+    fi
+    if [[ -n "$TUN_GW6" ]]; then
+      ip -6 route replace "$route_spec" via "$TUN_GW6" dev "$IFNAME" metric 1 onlink
+      printf '%s\n' "$route_spec" >> "$STATE_INCLUDED6"
+    fi
+  done < <(csv_to_lines "$INCLUDED_ROUTES6")
+  return "$installed_default"
+}
+
+delete_included_routes4() {
+  if [[ -s "$STATE_INCLUDED4" ]]; then
+    while IFS= read -r route_spec; do
+      [[ -z "$route_spec" ]] && continue
+      if [[ "$route_spec" == "default" ]]; then
+        delete_policy_rules4
+        ip route del default via "$TUN_GW" dev "$IFNAME" 2>/dev/null || true
+      else
+        ip route del "$route_spec" via "$TUN_GW" dev "$IFNAME" 2>/dev/null || true
+        ip route del "$route_spec" dev "$IFNAME" 2>/dev/null || true
+      fi
+    done < "$STATE_INCLUDED4"
+  fi
+}
+
+delete_included_routes6() {
+  if [[ -s "$STATE_INCLUDED6" ]]; then
+    while IFS= read -r route_spec; do
+      [[ -z "$route_spec" ]] && continue
+      if [[ "$route_spec" == "default" ]]; then
+        if [[ -n "$TUN_GW6" ]]; then
+          delete_policy_rules6
+          ip -6 route del default via "$TUN_GW6" dev "$IFNAME" 2>/dev/null || true
+        fi
+      else
+        if [[ -n "$TUN_GW6" ]]; then
+          ip -6 route del "$route_spec" via "$TUN_GW6" dev "$IFNAME" 2>/dev/null || true
+        fi
+        ip -6 route del "$route_spec" dev "$IFNAME" 2>/dev/null || true
+      fi
+    done < "$STATE_INCLUDED6"
+  fi
 }
 
 delete_excluded_routes4() {
@@ -440,6 +591,7 @@ case "$ACTION" in
     fi
 
     save_default_route
+    save_policy_table_ids
     add_excluded_routes4
     add_excluded_routes6
     protect_underlay_routes4
@@ -481,10 +633,8 @@ case "$ACTION" in
         fi
       fi
     fi
-    ip route replace default via "$TUN_GW" dev "$IFNAME" onlink
-    if [[ -n "$TUN_GW6" ]]; then
-      ip -6 route replace default via "$TUN_GW6" dev "$IFNAME" metric 1 onlink
-    fi
+    add_included_routes4 || true
+    add_included_routes6 || true
     ip route flush cache 2>/dev/null || true
     ip -6 route flush cache 2>/dev/null || true
 
@@ -498,10 +648,8 @@ case "$ACTION" in
       exit 0
     fi
     if detect_underlay; then
-      ip route del default via "$TUN_GW" dev "$IFNAME" 2>/dev/null || true
-      if [[ -n "$TUN_GW6" ]]; then
-        ip -6 route del default via "$TUN_GW6" dev "$IFNAME" 2>/dev/null || true
-      fi
+      delete_included_routes4
+      delete_included_routes6
       restore_default_route
     fi
     delete_excluded_routes4

@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import concurrent.futures
 import json
 import time
 import types
@@ -94,6 +95,34 @@ class _RunnerStub:
     def __init__(self, args):
         self.args = args
 
+    def get_async_diagnostics_snapshot(self):
+        return {
+            "async": {
+                "last_started_name": "myudp.mux.start",
+                "last_started_kind": "await",
+                "last_started_age_sec": 12.5,
+                "last_finished_name": "myudp.session.start",
+                "last_finished_kind": "await",
+                "last_finished_age_sec": 13.0,
+                "last_failed_name": "",
+                "last_failed_kind": "",
+                "last_failed_age_sec": None,
+                "last_failed_error": "",
+            },
+            "sync": {
+                "last_started_name": "ChannelMux._on_local_tun_packet",
+                "last_started_kind": "callback",
+                "last_started_age_sec": 0.25,
+                "last_finished_name": "ChannelMux._send_mux",
+                "last_finished_kind": "callback",
+                "last_finished_age_sec": 0.1,
+                "last_failed_name": "",
+                "last_failed_kind": "",
+                "last_failed_age_sec": None,
+                "last_failed_error": "",
+            },
+        }
+
 
 class AdminAuthRequirementUnitTests(unittest.IsolatedAsyncioTestCase):
     async def test_auth_disabled_reports_authenticated_without_session(self):
@@ -158,6 +187,38 @@ class AdminAuthRequirementUnitTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ui._is_authenticated({"cookie": f"{cookie_name}=client-a"}))
         self.assertFalse(ui._is_authenticated({"cookie": f"{cookie_name}=client-b"}))
         self.assertFalse(ui._is_authenticated({"cookie": "other_cookie=client-a"}))
+
+
+class AdminWebResilienceUnitTests(unittest.TestCase):
+    def test_status_snapshot_falls_back_to_cached_payload_when_runner_busy(self):
+        args = _admin_args()
+        ui = AdminWebUI(args, _RunnerStub(args))
+        ui._cache_snapshot("status", {"ok": True, "state": "connected"})
+
+        with mock.patch.object(ui, "_call_runner", side_effect=concurrent.futures.TimeoutError()):
+            payload = ui._build_status_payload()
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["state"], "connected")
+        self.assertTrue(payload["admin_web_snapshot"]["stale"])
+        self.assertEqual(payload["admin_web_snapshot"]["error"], "runner_loop_timeout")
+        self.assertEqual(payload["runner_async_diagnostics"]["async"]["last_started_name"], "myudp.mux.start")
+        self.assertEqual(payload["runner_async_diagnostics"]["sync"]["last_started_name"], "ChannelMux._on_local_tun_packet")
+
+    def test_connections_snapshot_marks_fresh_payload_when_runner_responds(self):
+        args = _admin_args()
+        ui = AdminWebUI(args, _RunnerStub(args))
+        with mock.patch.object(
+            ui,
+            "_call_runner",
+            return_value={"udp": [], "tcp": [], "tun": [], "counts": {}, "app": "udp-bidirectional-mux", "milestone": "C"},
+        ):
+            payload = ui._build_connections_payload()
+
+        self.assertFalse(payload["admin_web_snapshot"]["stale"])
+        self.assertEqual(payload["app"], "udp-bidirectional-mux")
+        self.assertEqual(payload["runner_async_diagnostics"]["async"]["last_started_kind"], "await")
+        self.assertEqual(payload["runner_async_diagnostics"]["sync"]["last_started_kind"], "callback")
 
 
 class _FakeSession:

@@ -57,6 +57,7 @@ Representative anchors for those areas:
   - [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py)
   - [tests/unit/test_channel_mux_component_parity.py](../tests/unit/test_channel_mux_component_parity.py)
   - [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py)
+  - [ios/tests/test_macos_swift_host_runner.py](../ios/tests/test_macos_swift_host_runner.py)
 - Admin Web and parity:
   - [tests/unit/test_admin_web_payloads.py](../tests/unit/test_admin_web_payloads.py)
   - [tests/unit/test_admin_web_component_parity.py](../tests/unit/test_admin_web_component_parity.py)

@@ -51,6 +51,14 @@ _LIBC.connect.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
 _LIBC.connect.restype = ctypes.c_int
 
 
+def _record_sync_diag(mux: Any, name: str, *, phase: str, error: str = "") -> None:
+    cb = getattr(mux, "_runner_sync_diag_cb", None)
+    if not callable(cb):
+        return
+    with contextlib.suppress(Exception):
+        cb(name, kind="callback", phase=phase, error=error)
+
+
 def require_tun_support(_mux: Any) -> None:
     if not sys.platform.startswith("darwin"):
         raise RuntimeError("macOS TUN support requested on a non-macOS platform")
@@ -152,6 +160,27 @@ def open_tun_device(mux: Any, ifname: str, mtu: int, svc_key: Optional[object] =
         raise
 
 
+def _schedule_reader_resume(mux: Any, dev: Any) -> None:
+    if getattr(dev, "_reader_yield_scheduled", False):
+        return
+    was_registered = bool(getattr(dev, "reader_registered", False))
+    if was_registered and getattr(dev, "fd", None) is not None:
+        with contextlib.suppress(Exception):
+            mux.loop.remove_reader(dev.fd)
+        dev.reader_registered = False
+    setattr(dev, "_reader_yield_scheduled", True)
+
+    def _resume() -> None:
+        setattr(dev, "_reader_yield_scheduled", False)
+        if was_registered:
+            with contextlib.suppress(Exception):
+                register_tun_reader(mux, dev)
+            return
+        on_tun_fd_readable(mux, dev)
+
+    mux.loop.call_soon(_resume)
+
+
 def register_tun_reader(mux: Any, dev: Any) -> None:
     if dev.reader_registered:
         return
@@ -175,6 +204,10 @@ def close_tun_device(mux: Any, dev: Any) -> None:
 
 def write_tun_packet(mux: Any, dev: Any, data: bytes) -> None:
     frame = _family_prefix_for_packet(data) + bytes(data)
+    tracer = getattr(mux, "_log_tun_packet_trace", None)
+    if callable(tracer):
+        with contextlib.suppress(Exception):
+            tracer(stage="platform_tun_write", packet=bytes(data), ifname=str(getattr(dev, "ifname", "") or ""), chan=getattr(dev, "chan_id", None))
     checker = getattr(mux.log, "isEnabledFor", None)
     if callable(checker):
         with contextlib.suppress(Exception):
@@ -190,41 +223,53 @@ def write_tun_packet(mux: Any, dev: Any, data: bytes) -> None:
 
 
 def on_tun_fd_readable(mux: Any, dev: Any) -> None:
+    _record_sync_diag(mux, "bridge_tun_macos.on_tun_fd_readable", phase="started")
     processed = 0
-    while processed < TUN_READ_BURST_MAX:
-        try:
-            frame = os.read(dev.fd, max(72, min(mux.TUN_READ_SIZE_MAX, int(dev.mtu) + 4)))
-        except BlockingIOError:
-            return
-        except OSError as exc:
-            if getattr(exc, "errno", None) in (11,):
+    try:
+        while processed < TUN_READ_BURST_MAX:
+            try:
+                frame = os.read(dev.fd, max(72, min(mux.TUN_READ_SIZE_MAX, int(dev.mtu) + 4)))
+            except BlockingIOError:
                 return
-            mux.log.info("[TUN/MACOS] if=%s read failed: %r", dev.ifname, exc)
-            return
-        if not frame:
-            return
-        packet = _packet_from_utun_frame(frame)
-        if not packet:
-            continue
+            except OSError as exc:
+                if getattr(exc, "errno", None) in (11,):
+                    return
+                mux.log.info("[TUN/MACOS] if=%s read failed: %r", dev.ifname, exc)
+                return
+            if not frame:
+                return
+            packet = _packet_from_utun_frame(frame)
+            if not packet:
+                continue
+            tracer = getattr(mux, "_log_tun_packet_trace", None)
+            if callable(tracer):
+                with contextlib.suppress(Exception):
+                    tracer(stage="platform_tun_read", packet=bytes(packet), ifname=str(getattr(dev, "ifname", "") or ""), chan=getattr(dev, "chan_id", None))
+            checker = getattr(mux.log, "isEnabledFor", None)
+            if callable(checker):
+                with contextlib.suppress(Exception):
+                    if checker(logging.DEBUG):
+                        mux.log.debug(
+                            "[TUN/MACOS/PKT] stage=tun_read if=%s len=%s ipver=%s hex=%s",
+                            dev.ifname,
+                            len(packet),
+                            (packet[0] >> 4) if packet else -1,
+                            packet.hex(),
+                        )
+            mux._on_local_tun_packet(dev, packet)
+            processed += 1
+        _schedule_reader_resume(mux, dev)
         checker = getattr(mux.log, "isEnabledFor", None)
         if callable(checker):
             with contextlib.suppress(Exception):
                 if checker(logging.DEBUG):
                     mux.log.debug(
-                        "[TUN/MACOS/PKT] stage=tun_read if=%s len=%s ipver=%s hex=%s",
+                        "[TUN/MACOS] if=%s yielding after burst packets=%s",
                         dev.ifname,
-                        len(packet),
-                        (packet[0] >> 4) if packet else -1,
-                        packet.hex(),
+                        processed,
                     )
-        mux._on_local_tun_packet(dev, packet)
-        processed += 1
-    checker = getattr(mux.log, "isEnabledFor", None)
-    if callable(checker):
-        with contextlib.suppress(Exception):
-            if checker(logging.DEBUG):
-                mux.log.debug(
-                    "[TUN/MACOS] if=%s yielding after burst packets=%s",
-                    dev.ifname,
-                    processed,
-                )
+    except Exception as exc:
+        _record_sync_diag(mux, "bridge_tun_macos.on_tun_fd_readable", phase="failed", error=type(exc).__name__)
+        raise
+    finally:
+        _record_sync_diag(mux, "bridge_tun_macos.on_tun_fd_readable", phase="finished")

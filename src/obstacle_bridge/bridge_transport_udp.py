@@ -654,6 +654,7 @@ class Session:
         self.expected = 1
         self.pending: Dict[int, DataPacket] = {}
         self.missing: Set[int] = set()
+        self._pending_highest: Optional[int] = None
         self.reass: Optional[Reassembly] = None
         # RTT mirrors read from Protocol (source of truth)
         self.transmit_delay_sample_ms: float = 0.0
@@ -884,12 +885,17 @@ class Session:
     def identify_missing(self):
         pendingkeylist = [k for k in self.pending.keys() if k != 0]
         self.missing.clear()
+        self._pending_highest = None
         if pendingkeylist:
             hi = highest_ring(pendingkeylist, self.expected)
             if hi is not None:
+                self._pending_highest = hi
                 for m in c16_range(self.expected, hi):
                     if m not in self.pending:
                         self.missing.add(m)
+        self._log_missing_state()
+
+    def _log_missing_state(self) -> None:
         if self.log.isEnabledFor(logging.DEBUG):
             try:
                 pend = sorted(self.pending.keys())[:12]
@@ -897,6 +903,26 @@ class Session:
                 self.log.debug(f"[RX] pending={pend}{'…' if len(self.pending)>12 else ''} missing={miss}{'…' if len(self.missing)>12 else ''} expected={self.expected}")
             except Exception:
                 pass
+
+    def _enqueue_out_of_order_packet(self, pkt: DataPacket) -> None:
+        ctr = pkt.pkt_counter
+        already_pending = ctr in self.pending
+        self.pending[ctr] = pkt
+        if not already_pending:
+            if ctr in self.missing:
+                self.missing.discard(ctr)
+            else:
+                gap_start = self.expected
+                if self._pending_highest is not None and ring_cmp(ctr, self._pending_highest) > 0:
+                    gap_start = c16_inc(self._pending_highest)
+                if self._pending_highest is None or ring_cmp(ctr, self._pending_highest) > 0:
+                    for missing_ctr in c16_range(gap_start, ctr):
+                        if missing_ctr not in self.pending:
+                            self.missing.add(missing_ctr)
+                self.missing.discard(ctr)
+            if self._pending_highest is None or ring_cmp(ctr, self._pending_highest) > 0:
+                self._pending_highest = ctr
+        self._log_missing_state()
     def process_data(self, pkt: DataPacket) -> Tuple[bool, List[bytes]]:
         if pkt.pkt_counter == 0:
             return False, []
@@ -914,8 +940,7 @@ class Session:
             if self.log.isEnabledFor(logging.DEBUG):
                 self.log.debug(f"[RX] ctr={X} IN-ORDER -> advance expected={self.expected}")
         else:
-            self.pending[X] = pkt
-            self.identify_missing()
+            self._enqueue_out_of_order_packet(pkt)
             if self.log.isEnabledFor(logging.DEBUG):
                 self.log.debug(f"[RX] ctr={X} QUEUED (gap); frame_type={pkt.frame_type} off/len={pkt.len_or_offset} chunk_len={pkt.chunk_len}")
             return adv, completed
@@ -975,7 +1000,12 @@ class Session:
                             pass
                     self.reass = None
                     self._reass_ctrs = set()
-            self.identify_missing()
+            if self.pending:
+                self.identify_missing()
+            else:
+                self._pending_highest = None
+                self.missing.clear()
+                self._log_missing_state()
         return adv, completed
     # ------------- API -------------
     def send_application_payload(self, data: bytes, transport: Any) -> int:
@@ -1021,6 +1051,7 @@ class Session:
         self.expected = 1
         self.pending.clear()
         self.missing.clear()
+        self._pending_highest = None
         self.reass = None
         self._reass_ctrs.clear()
 # -------------------- PeerProtocol --------------------

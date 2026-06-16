@@ -78,7 +78,7 @@ def test_on_tun_fd_readable_yields_after_burst_limit(monkeypatch):
         dev = mux.TunDevice(fd=33, ifname="obtun0", mtu=1500)
         bridge_tun_linux.on_tun_fd_readable(mux, dev)
         assert mux.packets == [("obtun0", packet1)]
-        bridge_tun_linux.on_tun_fd_readable(mux, dev)
+        mux.loop.run_until_complete(asyncio.sleep(0))
     finally:
         mux.loop.close()
 

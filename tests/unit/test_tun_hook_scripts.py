@@ -1,7 +1,25 @@
 from pathlib import Path
+import argparse
+
+from obstacle_bridge.bridge_tun_routing import auto_overlay_peer_excluded_routes
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_auto_overlay_peer_excluded_routes_splits_multi_host_peer_list() -> None:
+    cfg = {
+        "overlay_transport": "myudp",
+        "udp_peer": "38.180.143.5,[2001:ac8:29:60:0:6:0:47]",
+        "udp_peer_port": 4433,
+        "udp_peer_resolve_family": "prefer-ipv6",
+        "udp_bind": "::",
+    }
+
+    routes4, routes6 = auto_overlay_peer_excluded_routes(cfg)
+
+    assert "38.180.143.5/32" in routes4
+    assert "2001:ac8:29:60:0:6:0:47/128" in routes6
 
 
 def test_server_tun_hook_supports_optional_tcpdump_capture() -> None:
@@ -60,17 +78,20 @@ def test_client_tun_hook_supports_excluded_route_programming() -> None:
     assert 'rm -f "$stale_state_file"' in script
     assert 'done < <(_load_saved_route_parts "$STATE_UNDERLAY4" "ip route show default")' in script
     assert 'done < <(_load_saved_route_parts "$STATE_UNDERLAY6" "ip -6 route show default")' in script
-    assert 'ip route replace "$route_spec" dev lo' in script
-    assert 'ip -6 route replace "$route_spec" dev lo' in script
+    assert 'skip explicit loopback route install for ${route_spec}; kernel loopback routes already cover it' in script
+    assert 'skip explicit IPv6 loopback route install for ${route_spec}; kernel loopback routes already cover it' in script
     assert 'ip route replace "$route_spec" via "$gw" dev "$dev" src "$src"' in script
     assert 'delete_excluded_routes4() {' in script
     assert 'delete_excluded_routes6() {' in script
     assert 'protect_underlay_routes6() {' in script
     assert 'delete_protected_routes6() {' in script
-    assert 'if [[ -n "${OVERLAY_PEER_IP:-}" ]] && ! overlay_peer_is_ipv6; then' in script
-    assert 'if [[ -n "${OVERLAY_PEER_IP:-}" ]] && overlay_peer_is_ipv6; then' in script
     assert 'ip -6 route replace "$(overlay_route_prefix)" via "$UNDERLAY_GW" dev "$UNDERLAY_IF" src "$overlay_src"' in script
     assert 'ip -6 route del "$(overlay_route_prefix)" via "$saved_gw" dev "$saved_dev" src "$saved_src"' in script
+    assert 'protected_routes+=("$link_route")' not in script
+    assert 'protected_routes+=("${src}/32")' not in script
+    assert 'protected_routes+=("${gw}/32")' not in script
+    assert 'protected_routes+=("${src}/128")' not in script
+    assert 'protected_routes+=("${gw}/128")' not in script
 
 
 def test_client_tun_hook_waits_for_interface_and_uses_onlink_default_routes() -> None:
@@ -85,8 +106,42 @@ def test_client_tun_hook_waits_for_interface_and_uses_onlink_default_routes() ->
     assert 'stage=${stage} overlay_route=' in script
     assert 'overlay_peer_is_ipv6() {' in script
     assert 'ip route replace "$(overlay_route_prefix)" via "$UNDERLAY_GW" dev "$UNDERLAY_IF" src "$overlay_src"' in script
-    assert 'ip route replace default via "$TUN_GW" dev "$IFNAME" onlink' in script
-    assert 'ip -6 route replace default via "$TUN_GW6" dev "$IFNAME" metric 1 onlink' in script
+    assert 'add_included_routes4() {' in script
+    assert 'add_included_routes6() {' in script
+    assert 'delete_included_routes4() {' in script
+    assert 'delete_included_routes6() {' in script
+    assert 'is_full_tunnel_route4() {' in script
+    assert 'is_full_tunnel_route6() {' in script
+    assert 'ip route replace "$route_spec" via "$TUN_GW" dev "$IFNAME" onlink' in script
+    assert 'ip -6 route replace "$route_spec" via "$TUN_GW6" dev "$IFNAME" metric 1 onlink' in script
+    assert 'ip -6 route replace "$route_spec" via "$TUN_GW6" dev "$IFNAME" metric 1 onlink' in script
+    assert 'add_included_routes4 || true' in script
+    assert 'add_included_routes6 || true' in script
+    assert ': > "$STATE_PROTECTED4"' in script
+    assert ': > "$STATE_PROTECTED6"' in script
+
+
+def test_client_tun_hook_uses_dedicated_policy_table_for_full_tunnel_linux() -> None:
+    script = (ROOT / "scripts" / "client-tun-hook.sh").read_text(encoding="utf-8")
+
+    assert 'STATE_POLICY4="${STATE_DIR}/${IFNAME}.policy-rules4"' in script
+    assert 'STATE_POLICY6="${STATE_DIR}/${IFNAME}.policy-rules6"' in script
+    assert 'POLICY_TABLE4="${OB_POLICY_TABLE4:-52190}"' in script
+    assert 'POLICY_TABLE6="${OB_POLICY_TABLE6:-52191}"' in script
+    assert 'configure_policy_full_tunnel4() {' in script
+    assert 'configure_policy_full_tunnel6() {' in script
+    assert 'ip route replace table "$policy_table" default via "$TUN_GW" dev "$IFNAME" onlink' in script
+    assert 'ip -6 route replace table "$policy_table" default via "$TUN_GW6" dev "$IFNAME" metric 1 onlink' in script
+    assert 'policy_rule_add4 "$policy_pref" to 0.0.0.0/0 lookup "$policy_table"' in script
+    assert 'policy_rule_add6 "$policy_pref" to ::/0 lookup "$policy_table"' in script
+    assert 'connected_underlay_routes4() {' in script
+    assert 'connected_underlay_routes6() {' in script
+    assert 'connected_tun_routes4() {' in script
+    assert 'connected_tun_routes6() {' in script
+    assert 'policy_rule_add4 "$policy_pref" to "$route_spec" lookup main' in script
+    assert 'policy_rule_add6 "$policy_pref" to "$route_spec" lookup main' in script
+    assert 'delete_policy_rules4' in script
+    assert 'delete_policy_rules6' in script
 
 
 def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route() -> None:

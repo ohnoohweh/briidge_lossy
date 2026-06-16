@@ -3,6 +3,7 @@ import asyncio
 import time
 import types
 import unittest
+from unittest.mock import patch
 
 from obstacle_bridge.bridge import ChannelMux, Runner, SessionMetrics, StatsBoard, TcpStreamSession, QuicSession, UdpSession
 
@@ -147,8 +148,8 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         self.assertEqual(row["state"], "connected")
         self.assertEqual(row["chan_id"], 301)
         self.assertEqual(row["service_name"], "lab-tun")
-        self.assertEqual(row["stats"]["rx_msgs"], 2)
-        self.assertEqual(row["stats"]["tx_msgs"], 3)
+        self.assertEqual(row["stats"]["rx_msgs"], 3)
+        self.assertEqual(row["stats"]["tx_msgs"], 2)
         self.assertIsNone(row["shared_tun_ownership"])
 
     def test_snapshot_exposes_shared_tun_ownership_and_active_binding(self):
@@ -176,7 +177,8 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1400, service_key=self.tun_key)
         self.mux._svc_tun_devices[self.tun_key] = dev
         self.mux._chan_owner_peer_id[301] = 7
-        self.mux._bind_tun_channel(301, dev)
+        with patch.object(self.mux, "_register_tun_reader"):
+            self.mux._bind_tun_channel(301, dev)
 
         snap = self.mux.snapshot_connections()
 
@@ -249,10 +251,10 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         row = snap["tun"][0]
         self.assertEqual(row["chan_id"], 302)
         self.assertEqual(row["channel_aliases"], [301, 302])
-        self.assertEqual(row["stats"]["rx_msgs"], 2)
-        self.assertEqual(row["stats"]["tx_msgs"], 3)
-        self.assertEqual(row["stats"]["rx_bytes"], 100)
-        self.assertEqual(row["stats"]["tx_bytes"], 200)
+        self.assertEqual(row["stats"]["rx_msgs"], 3)
+        self.assertEqual(row["stats"]["tx_msgs"], 2)
+        self.assertEqual(row["stats"]["rx_bytes"], 200)
+        self.assertEqual(row["stats"]["tx_bytes"], 100)
         self.assertEqual(self.mux.tun_open_count(), 1)
 
     def test_snapshot_mixed_listeners_and_active_connections(self):

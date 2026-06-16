@@ -147,16 +147,20 @@ def auto_overlay_peer_excluded_routes(config: Mapping[str, Any] | None) -> tuple
     resolve_mode = str(source.get(resolve_attr, "prefer-ipv6") or "prefer-ipv6").strip().lower()
     bind_host = str(source.get(bind_attr) or "").strip()
     try:
-        from .bridge_transport_common import _resolve_peer_candidates
+        from .bridge_transport_common import _resolve_peer_candidates, _split_configured_peer_hosts
 
         socktype = 1 if transport in {"tcp", "ws"} else 2  # SOCK_STREAM / SOCK_DGRAM
-        candidates = _resolve_peer_candidates(
-            peer_host,
-            peer_port,
-            resolve_mode=resolve_mode,
-            socktype=socktype,
-            strict_family=False,
-        )
+        candidates = []
+        for configured_host in _split_configured_peer_hosts(peer_host):
+            candidates.extend(
+                _resolve_peer_candidates(
+                    configured_host,
+                    peer_port,
+                    resolve_mode=resolve_mode,
+                    socktype=socktype,
+                    strict_family=False,
+                )
+            )
         if bind_host:
             import socket
 

@@ -94,6 +94,7 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         private(set) var expected = 1
         private(set) var pending: [Int: ObstacleBridgeUdpOverlayCodec.DataPacket] = [:]
         private(set) var missing: Set<Int> = []
+        private var pendingHighest: Int?
         private(set) var reassembly: Reassembly?
 
         func process(_ packet: ObstacleBridgeUdpOverlayCodec.DataPacket) -> (Bool, [Data]) {
@@ -112,8 +113,7 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
                 advanced = true
                 expected = c16Inc(expected)
             } else {
-                pending[counter] = packet
-                identifyMissing()
+                enqueueOutOfOrder(packet, counter: counter)
                 return (advanced, completed)
             }
 
@@ -126,9 +126,42 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
                     expected = c16Inc(expected)
                     apply(next, counter: counter, completed: &completed)
                 }
-                identifyMissing()
+                if pending.isEmpty {
+                    pendingHighest = nil
+                    missing.removeAll()
+                } else {
+                    identifyMissing()
+                }
             }
             return (advanced, completed)
+        }
+
+        private func enqueueOutOfOrder(
+            _ packet: ObstacleBridgeUdpOverlayCodec.DataPacket,
+            counter: Int
+        ) {
+            let alreadyPending = pending[counter] != nil
+            pending[counter] = packet
+            guard !alreadyPending else {
+                return
+            }
+            if missing.contains(counter) {
+                missing.remove(counter)
+            } else {
+                var gapStart = expected
+                if let highest = pendingHighest, ringCmp(counter, highest) > 0 {
+                    gapStart = c16Inc(highest)
+                }
+                if pendingHighest == nil || ringCmp(counter, pendingHighest ?? counter) > 0 {
+                    for value in c16Range(gapStart, counter) where pending[value] == nil {
+                        missing.insert(value)
+                    }
+                }
+                missing.remove(counter)
+            }
+            if pendingHighest == nil || ringCmp(counter, pendingHighest ?? counter) > 0 {
+                pendingHighest = counter
+            }
         }
 
         private func apply(
@@ -159,10 +192,12 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         private func identifyMissing() {
             let pendingKeys = pending.keys.filter { $0 != 0 }
             missing.removeAll()
+            pendingHighest = nil
             guard !pendingKeys.isEmpty else {
                 return
             }
             if let highest = highestRing(Array(pendingKeys), ref: expected) {
+                pendingHighest = highest
                 for value in c16Range(expected, highest) where pending[value] == nil {
                     missing.insert(value)
                 }

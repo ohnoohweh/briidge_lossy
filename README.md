@@ -1371,6 +1371,7 @@ Current emphasis:
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) defines the bounded overload and backpressure model across transport, mux, runner, and observability layers.
 - Peer and TUN/routing observability now include throttle state where ingress shedding is active.
 - For Python runtime changes, the Linux shared integration lane remains the strongest broad-regression signal in CI.
+- Shared-TUN reconnect handling is currently validated on Linux, with matching macOS host-runner parity coverage keeping the Swift lifecycle behavior aligned.
 
 ### Current coverage snapshot
 Current snapshot from `python3 scripts/report_product_traceability.py`:

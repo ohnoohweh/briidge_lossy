@@ -4,6 +4,7 @@ from ._bridge_import import export_bridge_globals
 import contextlib as _process_contextlib
 import shutil
 import signal as _process_signal
+import threading
 from typing import Mapping
 
 _bridge = export_bridge_globals(globals())
@@ -159,6 +160,154 @@ class Runner:
         self._last_disconnected_monotonic: Optional[float] = None
         self._client_restart_watchdog_task: Optional[asyncio.Task] = None        
         self._peer_traffic_rate_state: Dict[str, Tuple[float, int, int]] = {}
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._async_diag_lock = threading.Lock()
+        self._async_diag: Dict[str, Any] = {
+            "last_started_name": "",
+            "last_started_kind": "",
+            "last_started_monotonic": None,
+            "last_finished_name": "",
+            "last_finished_kind": "",
+            "last_finished_monotonic": None,
+            "last_failed_name": "",
+            "last_failed_kind": "",
+            "last_failed_monotonic": None,
+            "last_failed_error": "",
+        }
+        self._sync_diag: Dict[str, Any] = {
+            "last_started_name": "",
+            "last_started_kind": "",
+            "last_started_monotonic": None,
+            "last_finished_name": "",
+            "last_finished_kind": "",
+            "last_finished_monotonic": None,
+            "last_failed_name": "",
+            "last_failed_kind": "",
+            "last_failed_monotonic": None,
+            "last_failed_error": "",
+        }
+
+    def _record_async_activity(self, name: str, *, kind: str, phase: str, error: str = "") -> None:
+        now_mono = time.monotonic()
+        with self._async_diag_lock:
+            if phase == "started":
+                self._async_diag["last_started_name"] = str(name or "")
+                self._async_diag["last_started_kind"] = str(kind or "")
+                self._async_diag["last_started_monotonic"] = now_mono
+            elif phase == "finished":
+                self._async_diag["last_finished_name"] = str(name or "")
+                self._async_diag["last_finished_kind"] = str(kind or "")
+                self._async_diag["last_finished_monotonic"] = now_mono
+            elif phase == "failed":
+                self._async_diag["last_failed_name"] = str(name or "")
+                self._async_diag["last_failed_kind"] = str(kind or "")
+                self._async_diag["last_failed_monotonic"] = now_mono
+                self._async_diag["last_failed_error"] = str(error or "")
+
+    def record_sync_activity(self, name: str, *, kind: str = "callback", phase: str, error: str = "") -> None:
+        now_mono = time.monotonic()
+        with self._async_diag_lock:
+            if phase == "started":
+                self._sync_diag["last_started_name"] = str(name or "")
+                self._sync_diag["last_started_kind"] = str(kind or "")
+                self._sync_diag["last_started_monotonic"] = now_mono
+            elif phase == "finished":
+                self._sync_diag["last_finished_name"] = str(name or "")
+                self._sync_diag["last_finished_kind"] = str(kind or "")
+                self._sync_diag["last_finished_monotonic"] = now_mono
+            elif phase == "failed":
+                self._sync_diag["last_failed_name"] = str(name or "")
+                self._sync_diag["last_failed_kind"] = str(kind or "")
+                self._sync_diag["last_failed_monotonic"] = now_mono
+                self._sync_diag["last_failed_error"] = str(error or "")
+
+    async def _await_with_async_diag(self, name: str, awaitable, *, kind: str = "await") -> Any:
+        self._record_async_activity(name, kind=kind, phase="started")
+        try:
+            result = await awaitable
+        except Exception as exc:
+            self._record_async_activity(name, kind=kind, phase="failed", error=type(exc).__name__)
+            raise
+        self._record_async_activity(name, kind=kind, phase="finished")
+        return result
+
+    def _task_diag_name(self, coro: Any) -> str:
+        code = getattr(coro, "cr_code", None)
+        if code is not None:
+            qualname = getattr(code, "co_qualname", "") or getattr(code, "co_name", "")
+            if qualname:
+                return str(qualname)
+        qualname = getattr(type(coro), "__qualname__", "") or getattr(type(coro), "__name__", "")
+        return str(qualname or repr(coro))
+
+    def _install_async_task_factory(self, loop: asyncio.AbstractEventLoop) -> None:
+        previous_factory = loop.get_task_factory()
+        runner = self
+
+        def _factory(loop_obj, coro, **kwargs):
+            task = previous_factory(loop_obj, coro, **kwargs) if previous_factory is not None else asyncio.tasks.Task(coro, loop=loop_obj, **kwargs)
+            name = runner._task_diag_name(coro)
+            runner._record_async_activity(name, kind="task", phase="started")
+
+            def _done(done_task):
+                try:
+                    exc = done_task.exception()
+                except asyncio.CancelledError:
+                    runner._record_async_activity(name, kind="task", phase="finished")
+                    return
+                except Exception as err:
+                    runner._record_async_activity(name, kind="task", phase="failed", error=type(err).__name__)
+                    return
+                if exc is None:
+                    runner._record_async_activity(name, kind="task", phase="finished")
+                else:
+                    runner._record_async_activity(name, kind="task", phase="failed", error=type(exc).__name__)
+
+            with contextlib.suppress(Exception):
+                task.add_done_callback(_done)
+            return task
+
+        loop.set_task_factory(_factory)
+
+    def get_async_diagnostics_snapshot(self) -> dict:
+        with self._async_diag_lock:
+            snapshot = dict(self._async_diag)
+            sync_snapshot = dict(self._sync_diag)
+        now_mono = time.monotonic()
+
+        def _age(value: Any) -> Optional[float]:
+            if value is None:
+                return None
+            with contextlib.suppress(Exception):
+                return max(0.0, now_mono - float(value))
+            return None
+
+        return {
+            "async": {
+                "last_started_name": str(snapshot.get("last_started_name") or ""),
+                "last_started_kind": str(snapshot.get("last_started_kind") or ""),
+                "last_started_age_sec": _age(snapshot.get("last_started_monotonic")),
+                "last_finished_name": str(snapshot.get("last_finished_name") or ""),
+                "last_finished_kind": str(snapshot.get("last_finished_kind") or ""),
+                "last_finished_age_sec": _age(snapshot.get("last_finished_monotonic")),
+                "last_failed_name": str(snapshot.get("last_failed_name") or ""),
+                "last_failed_kind": str(snapshot.get("last_failed_kind") or ""),
+                "last_failed_age_sec": _age(snapshot.get("last_failed_monotonic")),
+                "last_failed_error": str(snapshot.get("last_failed_error") or ""),
+            },
+            "sync": {
+                "last_started_name": str(sync_snapshot.get("last_started_name") or ""),
+                "last_started_kind": str(sync_snapshot.get("last_started_kind") or ""),
+                "last_started_age_sec": _age(sync_snapshot.get("last_started_monotonic")),
+                "last_finished_name": str(sync_snapshot.get("last_finished_name") or ""),
+                "last_finished_kind": str(sync_snapshot.get("last_finished_kind") or ""),
+                "last_finished_age_sec": _age(sync_snapshot.get("last_finished_monotonic")),
+                "last_failed_name": str(sync_snapshot.get("last_failed_name") or ""),
+                "last_failed_kind": str(sync_snapshot.get("last_failed_kind") or ""),
+                "last_failed_age_sec": _age(sync_snapshot.get("last_failed_monotonic")),
+                "last_failed_error": str(sync_snapshot.get("last_failed_error") or ""),
+            },
+        }
 
     def _ensure_runtime_events(self) -> None:
         if self._stop is None:
@@ -172,6 +321,8 @@ class Runner:
 
     async def start(self) -> None:
         ios_admin_ui = str(_admin_ui_platform()).strip().lower() == "ios"
+        self._loop = asyncio.get_running_loop()
+        self._install_async_task_factory(self._loop)
         self.log.debug("[SERVER] Runner start on session id=%x", id(self))
         self.log.info(
             "[SERVER] ObstacleBridge build=%r crypto_extract=%r",
@@ -185,7 +336,7 @@ class Runner:
         # tunnel providers where WebAdmin is the recovery/config surface.
         if getattr(self.args, "admin_web", False) and self.admin_web is None:
             self.admin_web = AdminWebUI(self.args, self)
-            await self.admin_web.start()
+            await self._await_with_async_diag("AdminWebUI.start", self.admin_web.start())
 
         loop = asyncio.get_running_loop()
         transport_sessions = Runner.build_sessions_from_overlay(self.args)
@@ -208,6 +359,7 @@ class Runner:
                 on_local_rx_bytes=self.stats.on_app_rx_bytes,
                 on_local_tx_bytes=self.stats.on_app_tx_bytes
             )
+            setattr(mux, "_runner_sync_diag_cb", self.record_sync_activity)
             mux._process_shared_tun_registry = shared_tun_registry
             session.set_on_peer_set(
                 lambda host, port, mux=mux: (
@@ -222,8 +374,8 @@ class Runner:
                 lambda epoch, transport_name=transport_name, session=session, mux=mux:
                     self._on_transport_epoch_change(transport_name, session, mux, epoch)
             )
-            await session.start()
-            await mux.start()
+            await self._await_with_async_diag(f"{transport_name}.session.start", session.start())
+            await self._await_with_async_diag(f"{transport_name}.mux.start", mux.start())
 
         self._session_obj = self._sessions[0] if self._sessions else None
         self.stats.bind_session(self._session_obj)
@@ -251,7 +403,7 @@ class Runner:
             self.stats.set_session_ref(inner)  # now the dashboard can show inflight/ACKed/etc.
             self.stats.set_mux_ref(self.mux)
             if self.args.status:
-                await self.stats.start()
+                await self._await_with_async_diag("StatsBoard.start", self.stats.start())
         else:
             self.log.info("[SERVER] iOS admin UI detected; stats board disabled")
 

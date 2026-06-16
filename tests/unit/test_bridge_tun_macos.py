@@ -187,7 +187,7 @@ def test_on_tun_fd_readable_yields_after_burst_limit(monkeypatch):
         dev = mux.TunDevice(fd=44, ifname="utun4", mtu=1500)
         bridge_tun_macos.on_tun_fd_readable(mux, dev)
         assert mux.packets == [("utun4", packet1)]
-        bridge_tun_macos.on_tun_fd_readable(mux, dev)
+        mux.loop.run_until_complete(asyncio.sleep(0))
     finally:
         mux.loop.close()
 

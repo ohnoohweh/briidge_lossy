@@ -71,6 +71,7 @@ ARC-CMP-003:
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_brings_interface_up_before_underlay_route_is_known
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_normalizes_ipv4_mapped_ipv6_peer_for_route_programming
     - tests/unit/test_channel_mux_listener_mode.py::test_peer_installed_tun_stop_runs_listener_on_stopped_before_close
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_server_tun_stop_skips_on_stopped_hook_when_device_is_retained
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_open_uses_pending_peer_listener_before_async_catalog_start
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_device_keeps_symmetric_channel_aliases_routable
     - tests/unit/test_channel_mux_listener_mode.py::test_send_mux_fragments_oversized_udp_data
@@ -136,6 +137,8 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_local_tun_throttle_sequence_matches_python
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_shared_throttle_is_scoped_per_peer_channel
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_broadcast_throttle_scope_does_not_consume_unicast_budget
+    - tests/unit/test_channel_mux_listener_mode.py::test_throttle_snapshot_reports_inactive_when_not_backpressured
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_service_snapshot_reports_inactive_when_not_backpressured
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_drop_snapshot_tracks_reasons_and_bounds_recent_entries
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_allows_rebind_after_peer_disconnect
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_scoped_tun_throttle_sequence_preserves_unrelated_scope_budget
