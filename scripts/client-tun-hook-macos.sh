@@ -25,6 +25,8 @@ STATE_ROUTES4="${STATE_DIR}/${IFNAME}.routes4"
 STATE_ROUTES6="${STATE_DIR}/${IFNAME}.routes6"
 STATE_EXCLUDED4="${STATE_DIR}/${IFNAME}.excluded4"
 STATE_EXCLUDED6="${STATE_DIR}/${IFNAME}.excluded6"
+STATE_DNS_SERVICE="${STATE_DIR}/${IFNAME}.dns-service"
+STATE_DNS_SERVERS="${STATE_DIR}/${IFNAME}.dns-servers"
 
 mkdir -p "$STATE_DIR"
 
@@ -35,6 +37,151 @@ TUN_ADDR6_PREFIX="${TUN_ADDR6##*/}"
 
 log() {
   printf '[client-tun-hook-macos] %s\n' "$*" >&2
+}
+
+debug_diag_enabled() {
+  [[ "${OB_TUN_HOOK_DEBUG:-0}" == "1" ]]
+}
+
+log_debug() {
+  if debug_diag_enabled; then
+    log "$*"
+  fi
+}
+
+network_service_for_device() {
+  local device="$1"
+  networksetup -listnetworkserviceorder 2>/dev/null | awk -v dev="$device" '
+    /^\([0-9]+\)/ {
+      service = $0
+      sub(/^\([0-9]+\)[[:space:]]*/, "", service)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", service)
+      next
+    }
+    /Device:/ {
+      current = $0
+      sub(/^.*Device:[[:space:]]*/, "", current)
+      sub(/\).*$/, "", current)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", current)
+      if (current == dev && service != "") {
+        print service
+        exit
+      }
+    }'
+}
+
+save_dns_state() {
+  local service_name="$1"
+  rm -f "$STATE_DNS_SERVICE" "$STATE_DNS_SERVERS"
+  [[ -n "$service_name" ]] || return 0
+  printf '%s\n' "$service_name" > "$STATE_DNS_SERVICE"
+  local output
+  output="$(networksetup -getdnsservers "$service_name" 2>&1 || true)"
+  if grep -q "There aren't any DNS Servers set" <<<"$output"; then
+    printf 'EMPTY\n' > "$STATE_DNS_SERVERS"
+    return 0
+  fi
+  if [[ -n "$(printf '%s\n' "$output" | sed '/^[[:space:]]*$/d')" ]]; then
+    printf '%s\n' "$output" | sed '/^[[:space:]]*$/d' > "$STATE_DNS_SERVERS"
+  else
+    printf 'EMPTY\n' > "$STATE_DNS_SERVERS"
+  fi
+}
+
+apply_dns_servers() {
+  local service_name="$1"
+  shift || true
+  local dns_servers=("$@")
+  [[ -n "$service_name" ]] || return 0
+  if [[ ${#dns_servers[@]} -eq 0 ]]; then
+    log "skip dns apply: no DNS servers configured for service=${service_name}"
+    return 0
+  fi
+  networksetup -setdnsservers "$service_name" "${dns_servers[@]}" >/dev/null
+  log "applied dns service=${service_name} servers=${dns_servers[*]}"
+}
+
+restore_dns_state() {
+  [[ -s "$STATE_DNS_SERVICE" ]] || return 0
+  local service_name
+  service_name="$(head -n1 "$STATE_DNS_SERVICE" 2>/dev/null || true)"
+  [[ -n "$service_name" ]] || return 0
+  if [[ ! -s "$STATE_DNS_SERVERS" ]]; then
+    networksetup -setdnsservers "$service_name" Empty >/dev/null || true
+    log "restored dns service=${service_name} servers=Empty"
+    return 0
+  fi
+  local first_line
+  first_line="$(head -n1 "$STATE_DNS_SERVERS" 2>/dev/null || true)"
+  if [[ "$first_line" == "EMPTY" ]]; then
+    networksetup -setdnsservers "$service_name" Empty >/dev/null || true
+    log "restored dns service=${service_name} servers=Empty"
+    return 0
+  fi
+  mapfile -t dns_servers < "$STATE_DNS_SERVERS"
+  if [[ ${#dns_servers[@]} -gt 0 ]]; then
+    networksetup -setdnsservers "$service_name" "${dns_servers[@]}" >/dev/null || true
+    log "restored dns service=${service_name} servers=${dns_servers[*]}"
+  fi
+}
+
+route_get_compact_v4() {
+  local host="$1"
+  route -n get "$host" 2>/dev/null | awk '
+    /destination:/{dest=$2}
+    /mask:/{mask=$2}
+    /gateway:/{gw=$2}
+    /interface:/{iface=$2}
+    END{
+      if (dest != "" || gw != "" || iface != "") {
+        printf "host=%s dest=%s mask=%s gw=%s if=%s", "'"$host"'", dest, mask, gw, iface
+      }
+    }'
+}
+
+route_get_compact_v6() {
+  local host="$1"
+  route -n get -inet6 "$host" 2>/dev/null | awk '
+    /destination:/{dest=$2}
+    /mask:/{mask=$2}
+    /gateway:/{gw=$2}
+    /interface:/{iface=$2}
+    END{
+      if (dest != "" || gw != "" || iface != "") {
+        printf "host=%s dest=%s mask=%s gw=%s if=%s", "'"$host"'", dest, mask, gw, iface
+      }
+    }'
+}
+
+log_route_snapshot() {
+  local stage="$1"
+  local normalized_overlay_peer_ip
+  normalized_overlay_peer_ip="$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")"
+  local peer4="<none>"
+  local peer6="<none>"
+  local internet4="<none>"
+  local internet6="<none>"
+  local tunnel4="<none>"
+  local tunnel6="<none>"
+  if [[ -n "$normalized_overlay_peer_ip" && "$normalized_overlay_peer_ip" == *.* && "$normalized_overlay_peer_ip" != *:* ]]; then
+    peer4="$(route_get_compact_v4 "$normalized_overlay_peer_ip" || true)"
+  fi
+  if [[ -n "${TUN_GW:-}" ]]; then
+    tunnel4="$(route_get_compact_v4 "$TUN_GW" || true)"
+  fi
+  if [[ -n "${TUN_GW6:-}" ]]; then
+    tunnel6="$(route_get_compact_v6 "$TUN_GW6" || true)"
+  fi
+  if csv_to_lines "$INCLUDED_ROUTES" | grep -qxE '(0\.0\.0\.0/0|default)'; then
+    internet4="$(route_get_compact_v4 "142.251.20.94" || true)"
+  fi
+  if csv_to_lines "$INCLUDED_ROUTES6" | grep -qxE '(::/0|default|::0/0)'; then
+    internet6="$(route_get_compact_v6 "2a03:2880:f126:83:face:b00c:0:25de" || true)"
+  fi
+  if csv_to_lines "$EXCLUDED_ROUTES6" | grep -q '2001:ac8:29:60:0:6:0:47/128'; then
+    peer6="$(route_get_compact_v6 "2001:ac8:29:60:0:6:0:47" || true)"
+  fi
+  log_debug "route-snapshot stage=${stage} peer4=${peer4} peer6=${peer6} internet4=${internet4} internet6=${internet6} tun_gw4=${tunnel4} tun_gw6=${tunnel6}"
 }
 
 normalize_overlay_peer_ip() {
@@ -348,6 +495,16 @@ route_matches_underlay_v4() {
     [[ -n "$expected_if" && "$current_if" == "$expected_if" ]]
 }
 
+overlay_peer_route_matches_underlay_v4() {
+  local expected_gw="$1"
+  local expected_if="${2:-}"
+  local normalized_ip
+  normalized_ip="$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")"
+  [[ -n "$normalized_ip" ]] || return 0
+  [[ "$normalized_ip" == *.* && "$normalized_ip" != *:* ]] || return 0
+  route_matches_underlay_v4 "${normalized_ip}/32" "$expected_gw" "$expected_if"
+}
+
 route_matches_underlay_v6() {
   local route_spec="$1"
   local expected_gw="$2"
@@ -358,6 +515,27 @@ route_matches_underlay_v6() {
   current_if="$(route -n get -inet6 "$probe" 2>/dev/null | awk '/interface:/{print $2; exit}')"
   [[ -n "$expected_gw" && "$current_gw" == "$expected_gw" ]] || \
     [[ -n "$expected_if" && "$current_if" == "$expected_if" ]]
+}
+
+enforce_overlay_peer_underlay_v4() {
+  local expected_gw="$1"
+  local expected_if="${2:-}"
+  local normalized_ip
+  normalized_ip="$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")"
+  [[ -n "$normalized_ip" ]] || return 0
+  [[ "$normalized_ip" == *.* && "$normalized_ip" != *:* ]] || return 0
+  local route_spec="${normalized_ip}/32"
+  local attempt
+  for attempt in 1 2 3; do
+    route_add_or_change_v4 "$route_spec" "$expected_gw" "$expected_if"
+    if overlay_peer_route_matches_underlay_v4 "$expected_gw" "$expected_if"; then
+      log_debug "overlay peer route preserved peer=${normalized_ip} gw=${expected_gw:-<none>} if=${expected_if:-<none>} attempt=${attempt}"
+      return 0
+    fi
+    sleep 0.2
+  done
+  log "warning: overlay peer route fell out of underlay peer=${normalized_ip} gw=${expected_gw:-<none>} if=${expected_if:-<none>}"
+  return 1
 }
 
 add_included_routes_v4() {
@@ -682,6 +860,7 @@ case "$ACTION" in
     if [[ -n "$TUN_ADDR6" ]]; then
       ifconfig "$IFNAME" inet6 "$TUN_ADDR6_IP" prefixlen "$TUN_ADDR6_PREFIX" alias >/dev/null 2>&1 || true
     fi
+    log_route_snapshot "after-ifconfig"
 
     local_underlay_gw=""
     local_underlay_if=""
@@ -689,6 +868,19 @@ case "$ACTION" in
     local_underlay_gw6="$(current_default_gateway_v6 || true)"
     local_underlay_if6="$(current_default_interface_v6 || true)"
     log "underlay detected peer=${OVERLAY_PEER_IP:-<none>} ipv4_gw=${local_underlay_gw:-<none>} ipv4_if=${local_underlay_if:-<none>} ipv6_gw=${local_underlay_gw6:-<none>} ipv6_if=${local_underlay_if6:-<none>}"
+    underlay_service_name=""
+    if [[ -n "$local_underlay_if" ]]; then
+      underlay_service_name="$(network_service_for_device "$local_underlay_if" || true)"
+    fi
+    if [[ -n "$underlay_service_name" ]]; then
+      save_dns_state "$underlay_service_name"
+      dns_servers=()
+      [[ -n "${DNS1:-}" ]] && dns_servers+=("$DNS1")
+      [[ -n "${DNS2:-}" ]] && dns_servers+=("$DNS2")
+      apply_dns_servers "$underlay_service_name" "${dns_servers[@]}"
+    else
+      log "warning: unable to resolve network service for underlay interface=${local_underlay_if:-<none>}; dns unchanged"
+    fi
     save_default_routes
     snapshot_excluded_routes_v4 "$local_underlay_gw" "$local_underlay_if"
     snapshot_excluded_routes_v6 "$local_underlay_gw6" "$local_underlay_if6"
@@ -699,31 +891,45 @@ case "$ACTION" in
     if [[ "$normalized_overlay_peer_ip" == *.* && "$normalized_overlay_peer_ip" != *:* && -n "$local_underlay_gw" ]]; then
       route_add_or_change_v4 "${normalized_overlay_peer_ip}/32" "$local_underlay_gw" "$local_underlay_if"
     fi
+    log_route_snapshot "after-overlay-peer-protect"
 
     add_included_routes_v4
     add_included_routes_v6
     add_excluded_routes_v4 "$local_underlay_gw" "$local_underlay_if"
     add_excluded_routes_v6 "$local_underlay_gw6" "$local_underlay_if6"
+    log_route_snapshot "after-route-install"
+    if ! enforce_overlay_peer_underlay_v4 "$local_underlay_gw" "$local_underlay_if"; then
+      log "failed to preserve IPv4 overlay peer route; reverting IPv4 full-tunnel route install on $IFNAME"
+      delete_included_routes_v4
+      log_route_snapshot "after-ipv4-revert"
+    fi
 
     if should_switch_default_v4 && ! wait_for_full_tunnel_v4_routes; then
       log "failed to install IPv4 split full-tunnel routes via $IFNAME; keeping underlay defaults"
       delete_included_routes_v4
+      log_route_snapshot "after-full-tunnel-v4-failed"
     fi
     add_excluded_routes_v4 "$local_underlay_gw" "$local_underlay_if"
+    enforce_overlay_peer_underlay_v4 "$local_underlay_gw" "$local_underlay_if" || true
 
     if [[ -n "$TUN_GW6" ]] && should_switch_default_v6; then
       add_included_routes_v6
       if ! wait_for_full_tunnel_v6_routes; then
         log "failed to install IPv6 split full-tunnel routes via $IFNAME; keeping IPv4 route changes and restoring IPv6 only"
         restore_default_route_v6_only
+        log_route_snapshot "after-full-tunnel-v6-failed"
       else
         add_excluded_routes_v6 "$local_underlay_gw6" "$local_underlay_if6"
       fi
     fi
+    enforce_overlay_peer_underlay_v4 "$local_underlay_gw" "$local_underlay_if" || true
+    log_route_snapshot "final-up"
     log "default routes now ipv4_if=$(current_default_interface_v4 || true) ipv4_gw=$(current_default_gateway_v4 || true) ipv6_if=$(current_default_interface_v6 || true) ipv6_gw=$(current_default_gateway_v6 || true)"
     ;;
   down)
     log "bringing down $IFNAME"
+    log_route_snapshot "before-down"
+    restore_dns_state
     if [[ -n "$OVERLAY_PEER_IP" ]]; then
       route -n delete -host "$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")" >/dev/null 2>&1 || true
     fi
@@ -733,6 +939,8 @@ case "$ACTION" in
       ifconfig "$IFNAME" inet6 "$TUN_ADDR6_IP" delete >/dev/null 2>&1 || true
     fi
     ifconfig "$IFNAME" down >/dev/null 2>&1 || true
+    rm -f "$STATE_DNS_SERVICE" "$STATE_DNS_SERVERS"
+    log_route_snapshot "after-down"
     ;;
   *)
     echo "unknown action: $ACTION" >&2

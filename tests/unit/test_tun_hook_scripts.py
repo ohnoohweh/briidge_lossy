@@ -148,6 +148,15 @@ def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route(
     script = (ROOT / "scripts" / "client-tun-hook-macos.sh").read_text(encoding="utf-8")
 
     assert 'export PATH="/usr/sbin:/sbin:/usr/bin:/bin:${PATH:-}"' in script
+    assert 'route_get_compact_v4() {' in script
+    assert 'route_get_compact_v6() {' in script
+    assert 'log_route_snapshot() {' in script
+    assert 'debug_diag_enabled() {' in script
+    assert 'log_debug() {' in script
+    assert 'network_service_for_device() {' in script
+    assert 'save_dns_state() {' in script
+    assert 'apply_dns_servers() {' in script
+    assert 'restore_dns_state() {' in script
     assert 'EXCLUDED_ROUTES="${EXCLUDED_ROUTES:-127.0.0.0/8}"' in script
     assert 'EXCLUDED_ROUTES6="${EXCLUDED_ROUTES6:-::1/128}"' in script
     assert 'ifconfig "$IFNAME" inet "$TUN_ADDR_IP" "$TUN_GW" netmask "$(ipv4_prefix_to_netmask "$TUN_ADDR_PREFIX")" up' in script
@@ -179,6 +188,8 @@ def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route(
     assert 'snapshot_excluded_routes_v6() {' in script
     assert 'route_add_or_change_v4() {' in script
     assert 'route_add_or_change_v6() {' in script
+    assert 'overlay_peer_route_matches_underlay_v4() {' in script
+    assert 'enforce_overlay_peer_underlay_v4() {' in script
     assert 'route_delete_v4() {' in script
     assert 'route_delete_v6() {' in script
     assert 'is_host_route_v4() {' in script
@@ -215,6 +226,34 @@ def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route(
     assert 'wait_for_underlay_v4 || true' in script
     assert 'cleanup_stale_managed_routes' in script
     assert 'underlay detected peer=${OVERLAY_PEER_IP:-<none>}' in script
+    assert 'STATE_DNS_SERVICE="${STATE_DIR}/${IFNAME}.dns-service"' in script
+    assert 'STATE_DNS_SERVERS="${STATE_DIR}/${IFNAME}.dns-servers"' in script
+    assert 'networksetup -listnetworkserviceorder' in script
+    assert 'networksetup -getdnsservers "$service_name"' in script
+    assert "printf 'EMPTY\\n' > \"$STATE_DNS_SERVERS\"" in script
+    assert 'networksetup -setdnsservers "$service_name" "${dns_servers[@]}"' in script
+    assert 'networksetup -setdnsservers "$service_name" Empty' in script
+    assert 'underlay_service_name="$(network_service_for_device "$local_underlay_if" || true)"' in script
+    assert 'save_dns_state "$underlay_service_name"' in script
+    assert 'apply_dns_servers "$underlay_service_name" "${dns_servers[@]}"' in script
+    assert 'restore_dns_state' in script
+    assert 'rm -f "$STATE_DNS_SERVICE" "$STATE_DNS_SERVERS"' in script
+    assert 'log_route_snapshot "after-ifconfig"' in script
+    assert 'log_route_snapshot "after-overlay-peer-protect"' in script
+    assert 'log_route_snapshot "after-route-install"' in script
+    assert 'log_route_snapshot "after-ipv4-revert"' in script
+    assert 'log_route_snapshot "after-full-tunnel-v4-failed"' in script
+    assert 'log_route_snapshot "after-full-tunnel-v6-failed"' in script
+    assert 'log_route_snapshot "final-up"' in script
+    assert 'log_route_snapshot "before-down"' in script
+    assert 'log_route_snapshot "after-down"' in script
+    assert 'route-snapshot stage=${stage} peer4=${peer4} peer6=${peer6} internet4=${internet4} internet6=${internet6} tun_gw4=${tunnel4} tun_gw6=${tunnel6}' in script
+    assert 'route_matches_underlay_v4 "${normalized_ip}/32" "$expected_gw" "$expected_if"' in script
+    assert 'log_debug "overlay peer route preserved peer=${normalized_ip} gw=${expected_gw:-<none>} if=${expected_if:-<none>} attempt=${attempt}"' in script
+    assert 'log "warning: overlay peer route fell out of underlay peer=${normalized_ip} gw=${expected_gw:-<none>} if=${expected_if:-<none>}"' in script
+    assert 'if ! enforce_overlay_peer_underlay_v4 "$local_underlay_gw" "$local_underlay_if"; then' in script
+    assert 'log "failed to preserve IPv4 overlay peer route; reverting IPv4 full-tunnel route install on $IFNAME"' in script
+    assert 'enforce_overlay_peer_underlay_v4 "$local_underlay_gw" "$local_underlay_if" || true' in script
     up_block = script[script.index('  up)') : script.index('  down)')]
     assert up_block.index('add_excluded_routes_v4 "$local_underlay_gw" "$local_underlay_if"') < up_block.index('add_included_routes_v4')
     assert 'route_add_or_change_v4 "${normalized_overlay_peer_ip}/32" "$local_underlay_gw" "$local_underlay_if"' in script

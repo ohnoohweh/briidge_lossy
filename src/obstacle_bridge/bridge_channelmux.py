@@ -851,6 +851,12 @@ class ChannelMux:
         self._chan_owner_peer_id: dict[int, int] = {}
         self._ctrl_chunk_rx: dict[tuple[int, int, int, int, int], dict[str, Any]] = {}
         self._ctrl_chunk_next_txid: int = 1
+        self._tun_flow_local_samples: int = 0
+        self._tun_flow_remote_samples: int = 0
+        self._tun_flow_drop_samples: int = 0
+        self._tun_flow_write_ok_samples: int = 0
+        self._tun_mux_tx_samples: int = 0
+        self._tun_mux_rx_samples: int = 0
 
         # Per-channel stats (readable counters + CRC)
         self._chan_stats: dict[tuple[int, ChannelMux.Proto], _ChanCtr] = {}
@@ -913,6 +919,11 @@ class ChannelMux:
             except Exception:
                 return False
         return False
+
+    @staticmethod
+    def _tun_flow_debug_enabled() -> bool:
+        raw = str(os.environ.get("OB_TUN_FLOW_DEBUG", "") or "").strip().lower()
+        return raw in {"1", "true", "yes", "on"}
 
     def _log_tun_packet_debug(
         self,
@@ -977,6 +988,168 @@ class ChannelMux:
             preview,
             parse_error,
             note,
+        )
+
+    @staticmethod
+    def _should_log_tun_flow_sample(counter: int) -> bool:
+        return counter <= 16 or counter % 100 == 0
+
+    @staticmethod
+    def _macos_route_summary(host: str, *, inet6: bool = False) -> str:
+        trimmed = str(host or "").strip()
+        if not trimmed or not sys.platform.startswith("darwin"):
+            return ""
+        try:
+            args = ["/sbin/route", "-n", "get"]
+            if inet6:
+                args.append("-inet6")
+            args.append(trimmed)
+            proc = subprocess.run(args, capture_output=True, text=True, check=False, timeout=2.0)
+        except Exception:
+            return ""
+        output = str(proc.stdout or "") + str(proc.stderr or "")
+        destination = ""
+        mask = ""
+        gateway = ""
+        interface_name = ""
+        for raw_line in output.splitlines():
+            line = str(raw_line).strip()
+            if line.startswith("destination:"):
+                destination = line.split(":", 1)[1].strip()
+            elif line.startswith("mask:"):
+                mask = line.split(":", 1)[1].strip()
+            elif line.startswith("gateway:"):
+                gateway = line.split(":", 1)[1].strip()
+            elif line.startswith("interface:"):
+                interface_name = line.split(":", 1)[1].strip()
+        if not destination and not gateway and not interface_name:
+            return ""
+        return f"host={trimmed} dest={destination} mask={mask} gw={gateway} if={interface_name}"
+
+    def _macos_tun_flow_route_note(self, *, parsed: Optional[dict[str, Any]], direction: str) -> str:
+        if not sys.platform.startswith("darwin") or not isinstance(parsed, dict):
+            return ""
+        src_ip = str(parsed.get("source_ip") or "").strip()
+        dst_ip = str(parsed.get("destination_ip") or "").strip()
+        ip_version = int(parsed.get("ip_version", 0) or 0)
+        inet6 = ip_version == 6
+        peer_host = str(self._overlay_peer_host or "").strip()
+        peer_summary = ""
+        if peer_host and "," not in peer_host and ";" not in peer_host:
+            peer_summary = self._macos_route_summary(peer_host, inet6=":" in peer_host)
+        src_summary = self._macos_route_summary(src_ip, inet6=inet6) if src_ip else ""
+        dst_summary = self._macos_route_summary(dst_ip, inet6=inet6) if dst_ip else ""
+        parts = [part for part in [peer_summary, src_summary, dst_summary] if part]
+        if not parts:
+            return ""
+        return f"{direction}_routes=" + " | ".join(parts)
+
+    def _log_tun_flow_sample(
+        self,
+        *,
+        direction: str,
+        packet: bytes,
+        ifname: str,
+        chan: Optional[int],
+        peer_id: Optional[int] = None,
+        note: str = "",
+    ) -> None:
+        if not self._tun_flow_debug_enabled():
+            return
+        if direction == "local_to_peer":
+            self._tun_flow_local_samples += 1
+            sample = self._tun_flow_local_samples
+        elif direction == "peer_to_local":
+            self._tun_flow_remote_samples += 1
+            sample = self._tun_flow_remote_samples
+        elif direction == "peer_to_local_written":
+            self._tun_flow_write_ok_samples += 1
+            sample = self._tun_flow_write_ok_samples
+        else:
+            self._tun_flow_drop_samples += 1
+            sample = self._tun_flow_drop_samples
+        if not self._should_log_tun_flow_sample(sample):
+            return
+        payload = bytes(packet or b"")
+        ip_version = (payload[0] >> 4) if payload else -1
+        src_ip = ""
+        dst_ip = ""
+        parse_error = ""
+        parsed, parse_error = self._parse_tun_packet_endpoints(payload)
+        if isinstance(parsed, dict):
+            ip_version = int(parsed.get("ip_version", ip_version) or ip_version)
+            src_ip = str(parsed.get("source_ip") or "")
+            dst_ip = str(parsed.get("destination_ip") or "")
+        route_note = self._macos_tun_flow_route_note(parsed=parsed, direction=direction)
+        note_text = note if not route_note else (f"{note}; {route_note}" if note else route_note)
+        self.log.info(
+            "[TUN/FLOW] dir=%s sample=%s if=%s chan=%s peer=%s len=%s ipver=%s src=%s dst=%s note=%s parse_error=%s",
+            direction,
+            sample,
+            ifname,
+            "" if chan is None else chan,
+            "" if peer_id is None else peer_id,
+            len(payload),
+            ip_version,
+            src_ip,
+            dst_ip,
+            note_text,
+            parse_error,
+        )
+
+    def _log_tun_mux_handoff_sample(
+        self,
+        *,
+        direction: str,
+        chan: int,
+        peer_id: Optional[int],
+        mtype: "ChannelMux.MType",
+        payload: bytes,
+        counter: Optional[int] = None,
+        note: str = "",
+    ) -> None:
+        if not self._tun_flow_debug_enabled():
+            return
+        if direction == "tx_securelink":
+            self._tun_mux_tx_samples += 1
+            sample = self._tun_mux_tx_samples
+        else:
+            self._tun_mux_rx_samples += 1
+            sample = self._tun_mux_rx_samples
+        if not self._should_log_tun_flow_sample(sample):
+            return
+        parsed, parse_error = self._parse_tun_packet_endpoints(payload)
+        ip_version = (payload[0] >> 4) if payload else -1
+        src_ip = ""
+        dst_ip = ""
+        if isinstance(parsed, dict):
+            ip_version = int(parsed.get("ip_version", ip_version) or ip_version)
+            src_ip = str(parsed.get("source_ip") or "")
+            dst_ip = str(parsed.get("destination_ip") or "")
+        route_note = self._macos_tun_flow_route_note(parsed=parsed, direction=direction)
+        note_bits = []
+        if note:
+            note_bits.append(note)
+        if route_note:
+            note_bits.append(route_note)
+        if counter is not None:
+            note_bits.append(f"mux_counter={counter}")
+        note_text = "; ".join(note_bits)
+        crc32 = f"{(zlib.crc32(bytes(payload or b'')) & 0xFFFFFFFF):08x}"
+        self.log.info(
+            "[TUN/E2E] dir=%s sample=%s chan=%s peer=%s mtype=%s len=%s ipver=%s src=%s dst=%s crc32=%s note=%s parse_error=%s",
+            direction,
+            sample,
+            chan,
+            "" if peer_id is None else peer_id,
+            int(mtype),
+            len(payload or b""),
+            ip_version,
+            src_ip,
+            dst_ip,
+            crc32,
+            note_text,
+            parse_error,
         )
 
     @staticmethod
@@ -2875,6 +3048,14 @@ class ChannelMux:
                     peer_id=self._chan_owner_peer_id.get(int(chan_id)),
                     mtype=mtype,
                 )
+                self._log_tun_mux_handoff_sample(
+                    direction="tx_securelink",
+                    chan=chan_id,
+                    peer_id=self._chan_owner_peer_id.get(int(chan_id)),
+                    mtype=mtype,
+                    payload=bytes(data),
+                    note="before_session_send_app",
+                )
             self._record_sync_diag("ChannelMux._send_mux:pack_mux", phase="started")
             wire = self._pack_mux(chan_id, proto, self._next_ctr(chan_id, proto, mtype), mtype, data)
             self._record_sync_diag("ChannelMux._send_mux:pack_mux", phase="finished")
@@ -3887,6 +4068,13 @@ class ChannelMux:
         try:
             packet = self._normalize_local_tun_packet_source(dev, packet)
             self._log_tun_packet_debug(stage="from_local_tun", packet=packet, ifname=dev.ifname, chan=dev.chan_id)
+            self._log_tun_flow_sample(
+                direction="local_to_peer",
+                packet=packet,
+                ifname=dev.ifname,
+                chan=dev.chan_id,
+                note="local_tun_read",
+            )
             if not (self._overlay_connected and self._accepting_enabled):
                 return
             if len(packet) > int(dev.mtu):
@@ -4128,6 +4316,14 @@ class ChannelMux:
                 return
             allowed, parsed, drop_reason = self._shared_tun_guard_inbound_packet(dev=dev, chan=chan, packet=data)
             if not allowed:
+                self._log_tun_flow_sample(
+                    direction="drop_peer_to_local",
+                    packet=data,
+                    ifname=dev.ifname,
+                    chan=chan,
+                    peer_id=self._chan_owner_peer_id.get(int(chan)),
+                    note=str(drop_reason or "inbound_guard_drop"),
+                )
                 self._record_shared_tun_drop(
                     getattr(dev, "service_key", None),
                     reason=str(drop_reason or "inbound_guard_drop"),
@@ -4149,6 +4345,14 @@ class ChannelMux:
                 )
                 return
             self._log_tun_packet_debug(stage="to_local_tun", packet=data, ifname=dev.ifname, chan=chan)
+            self._log_tun_flow_sample(
+                direction="peer_to_local",
+                packet=data,
+                ifname=dev.ifname,
+                chan=chan,
+                peer_id=self._chan_owner_peer_id.get(int(chan)),
+                note="before_local_tun_write",
+            )
             ctr = self._ctr(ChannelMux.Proto.TUN, chan)
             ctr.msgs_in += 1
             ctr.bytes_in += len(data)
@@ -4191,6 +4395,14 @@ class ChannelMux:
                 self._write_tun_packet(dev, data)
                 ctr.msgs_out += 1
                 ctr.bytes_out += len(data)
+                self._log_tun_flow_sample(
+                    direction="peer_to_local_written",
+                    packet=data,
+                    ifname=dev.ifname,
+                    chan=chan,
+                    peer_id=self._chan_owner_peer_id.get(int(chan)),
+                    note="local_tun_write_completed",
+                )
                 self._log_tun_packet_trace(
                     stage="to_local_tun_written",
                     packet=data,
@@ -4400,6 +4612,15 @@ class ChannelMux:
                 peer_id=peer_id,
                 mtype=mtype,
                 note=f"counter={counter}",
+            )
+            self._log_tun_mux_handoff_sample(
+                direction="rx_securelink",
+                chan=chan_id,
+                peer_id=peer_id,
+                mtype=mtype,
+                payload=payload,
+                counter=counter,
+                note="after_on_app_payload_from_peer",
             )
 
         # Stats (peer->local bytes count for DATA only)
