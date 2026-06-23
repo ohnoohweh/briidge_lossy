@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from obstacle_bridge.bridge import ChannelMux, SessionMetrics
-from obstacle_bridge.bridge import BaseFrameV2, ControlPacket, DataPacket, Protocol, Session
+from obstacle_bridge.bridge import BaseFrameV2, ControlPacket, DATA_MAX_CHUNK, DataPacket, Protocol, Session
 from obstacle_bridge.bridge import FRAME_CONT, FRAME_FIRST
 from obstacle_bridge.bridge import Runner, TcpStreamSession, UdpSession, QuicSession, WebSocketSession, SecureLinkPskSession
 from obstacle_bridge.bridge_compression import CompressLayerSession
@@ -1758,6 +1758,7 @@ def _python_peer_runtime_control_sequence_summary(
                 "flush_count": flush_count,
                 "control_should_emit": bool(control_reasons),
                 "control_reason": control_reasons[0] if control_reasons else None,
+                "transmit_delay_est_ms": session.transmit_delay_est_ms,
                 "last_sent_last_in_order": proto._last_sent_last_in_order,
                 "last_control_sent_ns": str(proto._last_control_sent_ns),
             }
@@ -1862,9 +1863,10 @@ def _python_peer_runtime_send_payload_summary(
     now_ns: int,
     echo_ns: int,
     next_counter: int,
+    max_in_flight: int = 32767,
 ) -> dict[str, object]:
     transport = _FakeDatagramTransport()
-    session = Session(proto=Protocol(BaseFrameV2))
+    session = Session(max_in_flight=max_in_flight, proto=Protocol(BaseFrameV2))
     session.next_ctr = next_counter
     with mock.patch.object(myudp, "now_ns", return_value=now_ns):
         session.send_application_payload(payload, transport)
@@ -1876,6 +1878,7 @@ def _python_peer_runtime_send_payload_summary(
         ],
         "frames_hex": [frame.hex() for frame in transport.frames],
         "send_buffer": sorted(session.send_buf),
+        "waiting_count": session.waiting_count(),
         "send_tx_ns": {str(key): str(value) for key, value in sorted(session.send_txns.items())},
         "send_attempts": _int_keyed_map(dict(session.send_attempts)),
         "last_send_ns": str(session.last_send_ns),
@@ -4299,7 +4302,17 @@ def test_swift_udp_peer_runtime_control_sequence_matches_python(
     )
     for item in python:
         item.pop("flush_count")
+    for swift_item, python_item in zip(swift["snapshots"], python, strict=True):
+        swift_transmit_delay_est_ms = swift_item.pop("transmit_delay_est_ms")
+        python_transmit_delay_est_ms = python_item.pop("transmit_delay_est_ms")
+        assert swift_transmit_delay_est_ms == pytest.approx(
+            python_transmit_delay_est_ms,
+            abs=1.0,
+        )
+        if swift_item["send_buffer"] == []:
+            assert swift_transmit_delay_est_ms == pytest.approx(50.0)
     assert swift["snapshots"] == python
+    assert swift["snapshots"][-1]["send_buffer"] == []
 
 
 def test_swift_udp_peer_runtime_control_timer_matches_python(
@@ -4391,6 +4404,35 @@ def test_swift_udp_peer_runtime_send_payload_matches_python(
         },
     )
     assert swift["snapshot"] == python
+
+
+def test_swift_udp_peer_runtime_send_payload_honors_max_inflight_like_python(
+    swift_channelmux_runner: Path,
+) -> None:
+    payload = bytes((idx % 251 for idx in range((DATA_MAX_CHUNK * 2) + 17)))
+    python = _python_peer_runtime_send_payload_summary(
+        payload=payload,
+        now_ns=12_345_678,
+        echo_ns=0,
+        next_counter=7,
+        max_in_flight=2,
+    )
+    swift = _run_swift(
+        swift_channelmux_runner,
+        {
+            "action": "drive_udp_peer_runtime_send_payload",
+            "payload_hex": payload.hex(),
+            "now_ns": 12_345_678,
+            "echo_ns": 0,
+            "next_counter": 7,
+            "max_inflight": 2,
+        },
+    )
+    assert swift["snapshot"] == python
+    assert swift["protocol_stats"]["buffered_frames"] == 1
+    assert swift["protocol_stats"]["waiting_count"] == 1
+    assert swift["protocol_stats"]["inflight"] == 2
+    assert swift["protocol_stats"]["max_inflight"] == 2
 
 
 def test_swift_udp_peer_runtime_build_control_matches_python(

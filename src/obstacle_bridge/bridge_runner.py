@@ -116,7 +116,7 @@ class RunnerMuxAggregate:
         }
 
     @staticmethod
-    def _peer_label_for_ui(value) -> Optional[str]:
+    def _peer_label_for_ui(value) -> Optional[object]:
         if value is None:
             return None
         if isinstance(value, Mapping):
@@ -126,8 +126,10 @@ class RunnerMuxAggregate:
             except Exception:
                 port = 0
             if host and port > 0:
-                return f"[{host}]:{port}" if ":" in host and not host.startswith("[") else f"{host}:{port}"
-            return host or None
+                return {"host": host, "port": port}
+            if host:
+                return {"host": host, "port": 0}
+            return None
         text = str(value).strip()
         return text or None
 

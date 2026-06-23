@@ -393,6 +393,7 @@ class MyUdpReliabilityRequirementUnitTests(unittest.TestCase):
     def test_myudp_ack_samples_transmit_delay_from_first_send_minus_half_rtt(self):
         session, transport = self._session_and_transport()
         session.send_application_payload(b"one", transport)
+        session.send_application_payload(b"two", transport)
         session.proto.rtt_est_ms = 100.0
 
         first_send_ctr1_ns = session.send_txns[1]
@@ -404,6 +405,22 @@ class MyUdpReliabilityRequirementUnitTests(unittest.TestCase):
 
         self.assertAlmostEqual(session.transmit_delay_sample_ms, 300.0, places=3)
         self.assertAlmostEqual(session.transmit_delay_est_ms, 300.0, places=3)
+
+    def test_myudp_empty_pipeline_rebases_transmit_delay_est_to_half_rtt(self):
+        session, transport = self._session_and_transport()
+        session.send_application_payload(b"one", transport)
+        session.proto.rtt_est_ms = 100.0
+
+        first_send_ctr1_ns = session.send_txns[1]
+        with mock.patch(
+            "obstacle_bridge.bridge_transport_udp.now_ns",
+            return_value=first_send_ctr1_ns + 350_000_000,
+        ):
+            session.confirm_with_feedback(last_in_order=1, highest=1, missed=[])
+
+        self.assertEqual(session.send_buf, {})
+        self.assertAlmostEqual(session.transmit_delay_sample_ms, 300.0, places=3)
+        self.assertAlmostEqual(session.transmit_delay_est_ms, 50.0, places=3)
 
     def test_myudp_rtt_refresh_rebases_transmit_delay_est_to_half_rtt(self):
         session, _transport = self._session_and_transport()

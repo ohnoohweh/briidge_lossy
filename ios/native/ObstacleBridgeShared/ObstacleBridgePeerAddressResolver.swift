@@ -290,9 +290,6 @@ enum ObstacleBridgePeerAddressResolver {
             return candidate
         }
         if socketFamily == AF_INET6, candidate.family == AF_INET {
-            guard resolveMode == .ipv6 else {
-                return candidate
-            }
             return try resolveAddress(host: ipv4MappedIPv6(candidate.host), port: candidate.port, passive: false, family: AF_INET6, errorDomain: errorDomain)
         }
         throw NSError(

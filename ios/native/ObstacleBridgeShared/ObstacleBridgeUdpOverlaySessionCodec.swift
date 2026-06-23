@@ -97,6 +97,14 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         private var pendingHighest: Int?
         private(set) var reassembly: Reassembly?
 
+        func reset() {
+            expected = 1
+            pending.removeAll()
+            missing.removeAll()
+            pendingHighest = nil
+            reassembly = nil
+        }
+
         func process(_ packet: ObstacleBridgeUdpOverlayCodec.DataPacket) -> (Bool, [Data]) {
             if packet.pktCounter == 0 {
                 return (false, [])

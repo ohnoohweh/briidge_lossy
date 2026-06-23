@@ -115,7 +115,29 @@ def test_swift_tun_rows_include_throttle_snapshot_like_python() -> None:
     assert "func sharedTunThrottleSnapshot(snapshot: OverlayBackpressureSnapshot, nowNS: UInt64) -> [String: Any]" in tun_runtime
     assert '"applicable": true' in tun_runtime
     assert '"remaining_bytes": remainingBytes' in tun_runtime
-    assert 'bufferedFrames: Int(overlayRuntime.protocolStatsSnapshot()["buffered_frames"] as? Int ?? 0)' in udp_owner
+    assert 'bufferedFrames: Int(protocolStats["buffered_frames"] as? Int ?? 0)' in udp_owner
+    assert 'waitingCount: Int(protocolStats["waiting_count"] as? Int ?? 0)' in udp_owner
+    assert 'inflight: Int(protocolStats["inflight"] as? Int ?? 0)' in udp_owner
+    assert 'maxInflight: Int(protocolStats["max_inflight"] as? Int ?? 0)' in udp_owner
+
+
+def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_python() -> None:
+    peer_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift").read_text(encoding="utf-8")
+    udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    secure_adapter = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskTransportAdapter.swift").read_text(encoding="utf-8")
+
+    assert "guard lastRttOkNS > 0 else" in peer_runtime
+    assert "max(lastRttOkNS, lastRxWallNS)" not in peer_runtime
+    assert "func resetTransportEpoch()" in peer_runtime
+    assert "receiveState.reset()" in peer_runtime
+    assert "private static let secureLinkHandshakeStaleNS" in udp_owner
+    assert "maybeRecoverStaleSecureLinkHandshake(nowNS:" in udp_owner
+    assert 'resetOverlayTransportEpoch(reason: "secure_link_handshake_stale")' in udp_owner
+    assert 'resetOverlayTransportEpoch(reason: "liveness_lost")' in udp_owner
+    assert 'resetOverlayTransportEpoch(reason: "peer_candidate_rotated")' in udp_owner
+    assert "overlayRuntime.resetTransportEpoch()" in udp_owner
+    assert "overlayLayerTransportAdapter?.handleTransportDisconnected()" in udp_owner
+    assert "runtime.handleTransportDisconnected()" in secure_adapter
 
 
 def test_swift_stream_transports_report_throttle_metrics_like_python() -> None:
@@ -141,6 +163,19 @@ def test_swift_stream_transports_report_throttle_metrics_like_python() -> None:
         assert "backpressure: overlayBackpressureSnapshot()" in source
         assert "maxInflight: 1" in source
         assert "ObstacleBridgeOverlayChannelCore.recordOverlayEgress(" in source
+
+
+def test_swift_udp_status_reports_inflight_separately_from_buffered_frames() -> None:
+    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    packet_tunnel = (ROOT / "ios" / "native" / "IPServer" / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    udp_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift").read_text(encoding="utf-8")
+
+    assert '"inflight": protocolStats["inflight"] ?? 0' in host_runner
+    assert '"inflight": protocolStats["inflight"] ?? 0' in packet_tunnel
+    assert '"buffered_frames": waitQueue.count' in udp_runtime
+    assert '"waiting_count": waitQueue.count' in udp_runtime
+    assert '"inflight": sendBuffer.count' in udp_runtime
+    assert '"max_inflight": maxInFlight' in udp_runtime
 
 
 def test_swift_peer_status_includes_direct_tun_throttle_for_single_peer_mode() -> None:
@@ -191,16 +226,88 @@ def test_macos_swift_host_runner_keeps_secure_link_connection_time_stable() -> N
     assert '"connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTs ?? nowUnix)' in source
 
 
-def test_swift_peer_resolution_only_ipv6_mode_uses_ipv4_mapped_addresses() -> None:
+def test_swift_peer_resolution_maps_ipv4_fallback_on_ipv6_socket_like_python() -> None:
     resolver = (SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressResolver.swift").read_text(encoding="utf-8")
     udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    packet_tunnel = (ROOT / "ios" / "native" / "IPServer" / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
 
     assert "resolveMode: ResolveMode" in resolver
-    assert "guard resolveMode == .ipv6 else {" in resolver
-    assert "return candidate" in resolver
+    assert "guard resolveMode == .ipv6 else {" not in resolver
     assert "resolveAddress(host: ipv4MappedIPv6(candidate.host)" in resolver
     assert "let resolveMode = ObstacleBridgePeerAddressResolver.ResolveMode(rawValue: peerResolveFamily)" in udp_owner
     assert "resolveMode: resolveMode," in udp_owner
+    assert "setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY" in udp_owner
+    assert "EAFNOSUPPORT" in udp_owner
+    assert "resolveMode: ObstacleBridgePeerAddressResolver.ResolveMode(rawValue: peerResolveFamily)" in packet_tunnel
+
+
+def test_swift_peer_resolution_probe_keeps_ipv4_fallback_for_prefer_ipv6(tmp_path: Path) -> None:
+    source_path = tmp_path / "PeerResolutionProbe.swift"
+    binary_path = tmp_path / "peer-resolution-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+            import Darwin
+
+            @main
+            struct PeerResolutionProbeMain {
+                static func main() throws {
+                    let candidates = try ObstacleBridgePeerAddressResolver.resolvePeerAddresses(
+                        host: "[2001:db8::10],198.51.100.10",
+                        port: 4433,
+                        resolveFamily: "prefer-ipv6",
+                        bindHost: "::",
+                        errorDomain: "PeerResolutionProbe"
+                    )
+                    let mode = ObstacleBridgePeerAddressResolver.ResolveMode(rawValue: "prefer-ipv6")
+                    let normalized = try candidates.map {
+                        try ObstacleBridgePeerAddressResolver.normalizePeerCandidate(
+                            $0,
+                            socketFamily: AF_INET6,
+                            resolveMode: mode,
+                            errorDomain: "PeerResolutionProbe"
+                        )
+                    }
+                    let excluded = ObstacleBridgeRuntimeConfig.effectiveExcludedRoutes(
+                        from: [
+                            "overlay_transport": "myudp",
+                            "udp_session": [
+                                "peer_resolve_family": "prefer-ipv6",
+                                "udp_bind": "::",
+                                "udp_peer": "[2001:db8::10],198.51.100.10",
+                                "udp_peer_port": 4433,
+                            ],
+                        ],
+                        baseIPv4: ["127.0.0.0/8"],
+                        baseIPv6: ["::1/128"]
+                    )
+                    let payload: [String: Any] = [
+                        "candidate_count": candidates.count,
+                        "candidate_families": candidates.map { ObstacleBridgePeerAddressResolver.familyName($0.family) },
+                        "excluded4": excluded.ipv4,
+                        "excluded6": excluded.ipv6,
+                        "normalized_hosts": normalized.map { $0.host },
+                        "normalized_families": normalized.map { ObstacleBridgePeerAddressResolver.familyName($0.family) },
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_runtime_probe(source_path, binary_path)
+    completed = subprocess.run([str(binary_path)], capture_output=True, text=True, check=True)
+    payload = json.loads(completed.stdout)
+    assert payload["candidate_count"] == 2
+    assert payload["candidate_families"] == ["ipv6", "ipv4"]
+    assert payload["normalized_families"] == ["ipv6", "ipv6"]
+    assert payload["normalized_hosts"][0] == "2001:db8::10"
+    assert payload["normalized_hosts"][1].startswith("::ffff:")
+    assert payload["excluded4"] == ["127.0.0.0/8", "198.51.100.10/32"]
+    assert payload["excluded6"] == ["::1/128", "2001:db8::10/128", "::ffff:198.51.100.10/128"]
 
 
 def test_macos_app_bundle_embeds_latest_macos_tun_hook() -> None:
@@ -1118,6 +1225,14 @@ struct RuntimeProbe {
                 "tun_tcpdump_pcap_path": "/tmp/swift-runtime-probe.pcap",
             ]
         ])
+        let flattenedAlias = ObstacleBridgeRuntimeConfig.flatten([
+            "udp_session": [
+                "peer_resolve_family": "prefer-ipv6",
+                "udp_bind": "::",
+                "udp_peer": "[2001:db8::10],198.51.100.10",
+                "udp_peer_port": 4433,
+            ]
+        ])
         let loopbackTun = ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: "ios-utun", mtu: 1400)
         let result: [String: Any] = [
             "own_count": own.count,
@@ -1142,6 +1257,7 @@ struct RuntimeProbe {
             "flattened_empty_gateway6": flattenedEmptyGateway?.tunnelGateway6 ?? "nil",
             "flattened_override_dns": flattenedOverride?.dnsServers ?? [],
             "flattened_override_mtu": flattenedOverride?.mtu ?? -1,
+            "flattened_alias_peer_resolve_family": flattenedAlias["udp_peer_resolve_family"] as? String ?? "",
             "override_enable_tcpmss": tcpdumpOverride?.enableTCPMSS ?? false,
             "override_enable_tun_tcpdump": tcpdumpOverride?.enableTunTcpdump ?? false,
             "override_tun_tcpdump_pcap_path": tcpdumpOverride?.tunTcpdumpPcapPath ?? "",
@@ -1182,6 +1298,7 @@ struct RuntimeProbe {
         "flattened_empty_gateway6": "",
         "flattened_override_gateway": "192.168.107.2",
         "flattened_override_mtu": 1400,
+        "flattened_alias_peer_resolve_family": "prefer-ipv6",
         "override_enable_tcpmss": True,
         "override_enable_tun_tcpdump": True,
         "override_dns": ["9.9.9.9"],
@@ -1198,7 +1315,7 @@ struct RuntimeProbe {
     }
 
 
-def test_shared_udp_overlay_peer_runtime_recent_inbound_keeps_connected_state(tmp_path: Path) -> None:
+def test_shared_udp_overlay_peer_runtime_requires_rtt_echo_for_connected_state(tmp_path: Path) -> None:
     source_path = tmp_path / "UdpOverlayPeerRuntimeProbe.swift"
     binary_path = tmp_path / "udp-overlay-peer-runtime-probe"
     source_path.write_text(
@@ -1235,7 +1352,7 @@ def test_shared_udp_overlay_peer_runtime_recent_inbound_keeps_connected_state(tm
     _compile_swift_udp_overlay_peer_probe(source_path, binary_path)
     completed = subprocess.run([str(binary_path)], capture_output=True, text=True, check=True)
     payload = json.loads(completed.stdout)
-    assert payload["connected"] is True
+    assert payload["connected"] is False
     assert int(payload["last_rx_wall_ns"]) > 0
     assert int(payload["last_rtt_ok_ns"]) == 0
 

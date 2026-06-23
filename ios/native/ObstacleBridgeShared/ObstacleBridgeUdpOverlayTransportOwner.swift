@@ -11,6 +11,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private static let peerFallbackIdleNS: UInt64 = 3_000_000_000
     private static let reconnectProbeIntervalNS: UInt64 = 1_000_000_000
     private static let secureLinkHandshakeRetryIntervalNS: UInt64 = 1_000_000_000
+    private static let secureLinkHandshakeStaleNS: UInt64 = 5_000_000_000
 
     private let bindHost: String
     private let bindPort: Int
@@ -20,6 +21,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private let overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
     private let startupMuxFrames: [Data]
     private let sessionMaxAppPayload: Int
+    private let maxInFlight: Int
     private let queue: DispatchQueue
     private let eventSink: EventSink?
     private let serviceNameByID: [Int: String]
@@ -37,7 +39,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private let muxConnectionSeq: UInt32
 
     private var udpRuntime: ObstacleBridgeChannelMuxUdpRuntime
-    private let overlayRuntime = ObstacleBridgeUdpOverlayPeerRuntime()
+    private let overlayRuntime: ObstacleBridgeUdpOverlayPeerRuntime
     private var tunRuntime: ObstacleBridgeChannelMuxTunRuntime?
     private lazy var tcpTransportOwner = ObstacleBridgeChannelMuxTCPTransportOwner(
         runtime: ObstacleBridgeChannelMuxTcpRuntime(
@@ -97,6 +99,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         peerPort: Int? = nil,
         peerResolveFamily: String = "prefer-ipv6",
         sessionMaxAppPayload: Int = 65535,
+        maxInFlight: Int = 32767,
         overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter? = nil,
         startupMuxFrames: [Data] = [],
         queue: DispatchQueue = DispatchQueue(label: "ObstacleBridgeUdpOverlayTransportOwner"),
@@ -118,6 +121,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         self.bindHost = bindHost
         self.bindPort = bindPort
         self.sessionMaxAppPayload = max(0, sessionMaxAppPayload)
+        self.maxInFlight = max(1, min(32767, maxInFlight))
         let trimmedPeerHost = peerHost?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.configuredPeerHost = (trimmedPeerHost?.isEmpty == false) ? trimmedPeerHost : nil
         self.configuredPeerPort = peerPort
@@ -139,6 +143,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         self.muxInstanceID = muxInstanceID
         self.muxConnectionSeq = muxConnectionSeq
         self.eventSink = eventSink
+        self.overlayRuntime = ObstacleBridgeUdpOverlayPeerRuntime(maxInFlight: self.maxInFlight)
         self.queue.setSpecific(key: Self.queueSpecificKey, value: 1)
         self.udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(
             instanceID: muxInstanceID,
@@ -232,6 +237,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         currentPeerAddress = fixedPeerAddress
         peerCandidates.removeAll()
         peerCandidateIndex = 0
+        overlayRuntime.resetTransportEpoch()
         secureLinkHandshakePrimed = false
         lastSecureLinkPrimeNS = 0
         startupMuxFramesSent = false
@@ -250,6 +256,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         withOwnerQueue {
             let tcpRows = ObstacleBridgeOverlayConnectionSupport.connectionRows(from: tcpConnectionStates)
             let udpRows = ObstacleBridgeOverlayConnectionSupport.connectionRows(from: udpConnectionStates)
+            let protocolStats = overlayRuntime.protocolStatsSnapshot()
             let tunRows = ObstacleBridgeOverlayChannelCore.tunRows(
                 activeTunChanIDs: activeTunChanIDs,
                 tunStats: tunStats,
@@ -257,7 +264,14 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 tunServiceSpec: tunServiceSpec,
                 tunIfname: tunIfname,
                 tunMTU: tunMTU,
-                bufferedFrames: Int(overlayRuntime.protocolStatsSnapshot()["buffered_frames"] as? Int ?? 0)
+                bufferedFrames: Int(protocolStats["buffered_frames"] as? Int ?? 0),
+                backpressure: ObstacleBridgeOverlayChannelCore.backpressureSnapshot(
+                    waitingCount: Int(protocolStats["waiting_count"] as? Int ?? 0),
+                    inflight: Int(protocolStats["inflight"] as? Int ?? 0),
+                    maxInflight: Int(protocolStats["max_inflight"] as? Int ?? 0),
+                    egressWindow: ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState(),
+                    transmitDelayEstMS: overlayRuntime.transmitDelayEstMS
+                )
             )
             return (tcpRows, udpRows, tunRows)
         }
@@ -302,7 +316,14 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     func sendLocalTunPacket(_ packet: Data) {
-        let bufferedFrames = Int(overlayRuntime.protocolStatsSnapshot()["buffered_frames"] as? Int ?? 0)
+        let protocolStats = overlayRuntime.protocolStatsSnapshot()
+        let backpressure = ObstacleBridgeOverlayChannelCore.backpressureSnapshot(
+            waitingCount: Int(protocolStats["waiting_count"] as? Int ?? 0),
+            inflight: Int(protocolStats["inflight"] as? Int ?? 0),
+            maxInflight: Int(protocolStats["max_inflight"] as? Int ?? 0),
+            egressWindow: ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState(),
+            transmitDelayEstMS: overlayRuntime.transmitDelayEstMS
+        )
         do {
             try ObstacleBridgeOverlayChannelCore.sendLocalTunPacket(
                 packet,
@@ -312,7 +333,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 tunIfname: tunIfname,
                 tunMTU: tunMTU,
                 overlayConnected: overlayConnected,
-                bufferedFrames: bufferedFrames,
+                bufferedFrames: Int(protocolStats["buffered_frames"] as? Int ?? 0),
+                backpressure: backpressure,
                 activeTunChanIDs: &activeTunChanIDs,
                 tunStats: &tunStats,
                 sendMuxFrames: sendMuxFrames
@@ -575,7 +597,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                     packetLastInOrder: control.lastInOrderRX,
                     packetHighest: control.highestRX,
                     packetMissed: control.missed,
-                    sendPortPresent: currentPeerAddress != nil
+                    sendPortPresent: currentPeerAddress != nil,
+                    flushEchoNS: currentEchoNS(nowNS)
                 )
                 for emitted in snapshot.emittedFrames {
                     sendDatagram(emitted)
@@ -620,13 +643,15 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         let connected = overlayConnected
         if lastOverlayConnectedState && !connected {
             tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: currentTunPeerID())
-            secureLinkHandshakePrimed = false
-            lastSecureLinkPrimeNS = 0
-            startupMuxFramesSent = false
-            overlayLayerTransportAdapter?.handleTransportDisconnected()
+            resetOverlayTransportEpoch(reason: "liveness_lost")
         }
         lastOverlayConnectedState = connected
         if connected {
+            if maybeRecoverStaleSecureLinkHandshake(nowNS: nowNS) {
+                lastOverlayConnectedState = false
+                sendInitialIdleProbe()
+                return
+            }
             maybePrimeSecureLinkHandshake(nowNS: nowNS)
             maybeSendStartupMuxFrames()
         }
@@ -637,6 +662,34 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             return
         }
         sendInitialIdleProbe()
+    }
+
+    @discardableResult
+    private func maybeRecoverStaleSecureLinkHandshake(nowNS: UInt64) -> Bool {
+        guard let adapter = overlayLayerTransportAdapter,
+              let status = adapter.secureLinkStatusSnapshot(),
+              status.clientMode,
+              !status.authenticated,
+              status.sessionID != 0,
+              status.authFailCode == 0,
+              secureLinkHandshakePrimed,
+              lastSecureLinkPrimeNS != 0,
+              nowNS >= lastSecureLinkPrimeNS,
+              (nowNS - lastSecureLinkPrimeNS) >= Self.secureLinkHandshakeStaleNS
+        else {
+            return false
+        }
+        resetOverlayTransportEpoch(reason: "secure_link_handshake_stale")
+        return true
+    }
+
+    private func resetOverlayTransportEpoch(reason: String) {
+        overlayRuntime.resetTransportEpoch()
+        secureLinkHandshakePrimed = false
+        lastSecureLinkPrimeNS = 0
+        startupMuxFramesSent = false
+        overlayLayerTransportAdapter?.handleTransportDisconnected()
+        eventSink?("udp_overlay_transport_epoch_reset", ["reason": reason])
     }
 
     private func routeOverlayPayloads(_ payloads: [Data]) {
@@ -712,7 +765,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func handleInboundTunMuxFrame(_ frame: ObstacleBridgeChannelMuxCodec.MuxFrame) {
-        let bufferedFrames = Int(overlayRuntime.protocolStatsSnapshot()["buffered_frames"] as? Int ?? 0)
+        let protocolStats = overlayRuntime.protocolStatsSnapshot()
         ObstacleBridgeOverlayChannelCore.handleInboundTunMuxFrame(
             frame,
             tunRuntime: tunRuntime,
@@ -720,7 +773,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             tunIfname: tunIfname,
             tunMTU: tunMTU,
             overlayConnected: overlayConnected,
-            bufferedFrames: bufferedFrames,
+            bufferedFrames: Int(protocolStats["buffered_frames"] as? Int ?? 0),
             currentTunPeerID: currentTunPeerID(),
             activeTunChanIDs: &activeTunChanIDs,
             tunStats: &tunStats,
@@ -929,7 +982,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             return
         }
         switch sendErrno {
-        case ENETUNREACH, EHOSTUNREACH, EADDRNOTAVAIL:
+        case ENETUNREACH, EHOSTUNREACH, EADDRNOTAVAIL, EAFNOSUPPORT, EPROTOTYPE, EINVAL:
             rotateToNextPeerCandidate(nowNS: monotonicNowNS(), reason: "send_error")
         default:
             break
@@ -944,8 +997,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         currentPeerAddress = peerCandidates[peerCandidateIndex]
         currentPeerSelectedAtNS = nowNS
         lastInboundDatagramNS = 0
-        secureLinkHandshakePrimed = false
-        startupMuxFramesSent = false
+        resetOverlayTransportEpoch(reason: "peer_candidate_rotated")
         eventSink?("udp_overlay_peer_candidate_rotated", [
             "reason": reason,
             "candidate_index": peerCandidateIndex,
@@ -1102,6 +1154,12 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         }
         let flags = fcntl(sock, F_GETFL, 0)
         _ = fcntl(sock, F_SETFL, flags | O_NONBLOCK)
+        if bindAddr.family == AF_INET6 {
+            var dualStackOff: Int32 = 0
+            _ = withUnsafePointer(to: &dualStackOff) { ptr in
+                setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, ptr, socklen_t(MemoryLayout<Int32>.size))
+            }
+        }
         var noSigPipe: Int32 = 1
         _ = withUnsafePointer(to: &noSigPipe) { ptr in
             setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, ptr, socklen_t(MemoryLayout<Int32>.size))

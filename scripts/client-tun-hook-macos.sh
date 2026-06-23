@@ -325,6 +325,29 @@ is_host_route_v6() {
   [[ "$route_spec" == */128 ]]
 }
 
+is_ipv4_mapped_host_route_v6() {
+  local route_spec="$1"
+  is_host_route_v6 "$route_spec" && [[ "$(route_spec_addr "$route_spec")" =~ ^::ffff:[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
+is_overlay_peer_route_v4() {
+  local route_spec="$1"
+  local normalized_ip
+  normalized_ip="$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")"
+  [[ -n "$normalized_ip" ]] || return 1
+  [[ "$normalized_ip" == *.* && "$normalized_ip" != *:* ]] || return 1
+  [[ "$(route_spec_addr "$route_spec")" == "$normalized_ip" ]]
+}
+
+is_overlay_peer_mapped_route_v6() {
+  local route_spec="$1"
+  local normalized_ip
+  normalized_ip="$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")"
+  [[ -n "$normalized_ip" ]] || return 1
+  [[ "$normalized_ip" == *.* && "$normalized_ip" != *:* ]] || return 1
+  [[ "$(route_spec_addr "$route_spec")" == "::ffff:${normalized_ip}" ]]
+}
+
 route_spec_probe_host_v4() {
   local route_spec="$1"
   case "$route_spec" in
@@ -610,7 +633,10 @@ snapshot_excluded_routes_v4() {
     probe="$(route_spec_probe_host "$route_spec")"
     gateway="$(route -n get "$probe" 2>/dev/null | awk '/gateway:/{print $2; exit}')"
     ifname="$(route -n get "$probe" 2>/dev/null | awk '/interface:/{print $2; exit}')"
-    if [[ -z "$gateway" && -z "$ifname" && -n "$fallback_gw" ]] && is_host_route_v4 "$route_spec"; then
+    if is_overlay_peer_route_v4 "$route_spec" && [[ -n "$fallback_gw" || -n "$fallback_if" ]]; then
+      gateway="$fallback_gw"
+      ifname="$fallback_if"
+    elif [[ -z "$gateway" && -z "$ifname" && -n "$fallback_gw" ]] && is_host_route_v4 "$route_spec"; then
       gateway="$fallback_gw"
       ifname="$fallback_if"
     fi
@@ -628,9 +654,14 @@ snapshot_excluded_routes_v6() {
     probe="$(route_spec_probe_host "$route_spec")"
     gateway="$(route -n get -inet6 "$probe" 2>/dev/null | awk '/gateway:/{print $2; exit}')"
     ifname="$(route -n get -inet6 "$probe" 2>/dev/null | awk '/interface:/{print $2; exit}')"
-    if [[ -z "$gateway" && -z "$ifname" && -n "$fallback_gw" ]] && is_host_route_v6 "$route_spec"; then
+    if is_overlay_peer_mapped_route_v6 "$route_spec" && [[ -n "$OVERLAY_UNDERLAY_IF" ]]; then
+      gateway=""
+      ifname="$OVERLAY_UNDERLAY_IF"
+    elif [[ -z "$gateway" && -z "$ifname" && -n "$fallback_gw" ]] && is_host_route_v6 "$route_spec"; then
       gateway="$fallback_gw"
       ifname="$fallback_if"
+    elif [[ -z "$gateway" && -z "$ifname" && -n "$OVERLAY_UNDERLAY_IF" ]] && is_ipv4_mapped_host_route_v6 "$route_spec"; then
+      ifname="$OVERLAY_UNDERLAY_IF"
     fi
     printf '%s|%s|%s\n' "$route_spec" "$gateway" "$ifname" >> "$STATE_EXCLUDED6"
   done < <(csv_to_lines "$EXCLUDED_ROUTES6")
@@ -645,7 +676,10 @@ add_excluded_routes_v4() {
   local route_spec underlay_gw underlay_if
   while IFS='|' read -r route_spec underlay_gw underlay_if; do
     [[ -z "$route_spec" ]] && continue
-    if [[ -z "$underlay_gw" && -z "$underlay_if" ]] && is_host_route_v4 "$route_spec"; then
+    if is_overlay_peer_route_v4 "$route_spec" && [[ -n "$fallback_gw" || -n "$fallback_if" ]]; then
+      underlay_gw="$fallback_gw"
+      underlay_if="$fallback_if"
+    elif [[ -z "$underlay_gw" && -z "$underlay_if" ]] && is_host_route_v4 "$route_spec"; then
       underlay_gw="$fallback_gw"
       underlay_if="$fallback_if"
     fi
@@ -667,7 +701,10 @@ add_excluded_routes_v6() {
   local route_spec underlay_gw underlay_if
   while IFS='|' read -r route_spec underlay_gw underlay_if; do
     [[ -z "$route_spec" ]] && continue
-    if [[ -z "$underlay_gw" && -z "$underlay_if" ]] && is_host_route_v6 "$route_spec"; then
+    if is_overlay_peer_mapped_route_v6 "$route_spec" && [[ -n "$OVERLAY_UNDERLAY_IF" ]]; then
+      underlay_gw=""
+      underlay_if="$OVERLAY_UNDERLAY_IF"
+    elif [[ -z "$underlay_gw" && -z "$underlay_if" ]] && is_host_route_v6 "$route_spec"; then
       underlay_gw="$fallback_gw"
       underlay_if="$fallback_if"
     fi

@@ -151,6 +151,7 @@ private func inboundControlSnapshotObject(_ snapshot: ObstacleBridgeUdpOverlayPe
         "flush_requested": snapshot.flushRequested,
         "control_should_emit": snapshot.controlShouldEmit,
         "control_reason": snapshot.controlReason ?? NSNull(),
+        "transmit_delay_est_ms": snapshot.transmitDelayEstMS,
         "last_sent_last_in_order": snapshot.lastSentLastInOrder,
         "last_control_sent_ns": String(snapshot.lastControlSentNS),
     ]
@@ -182,6 +183,7 @@ private func outboundDataSnapshotObject(_ snapshot: ObstacleBridgeUdpOverlayPeer
         "counters": snapshot.counters,
         "frames_hex": snapshot.frames.map(hexFromData),
         "send_buffer": snapshot.sendBuffer,
+        "waiting_count": snapshot.waitingCount,
         "send_tx_ns": intKeyedStringMap(snapshot.sendTXNS) { String($0) },
         "send_attempts": intKeyedIntMap(snapshot.sendAttempts),
         "last_send_ns": String(snapshot.lastSendNS),
@@ -1742,9 +1744,15 @@ private func handle(_ request: [String: Any]) throws -> Any {
         else {
             throw ChannelMuxCodecRunnerError.invalidRequest
         }
-        let runtime = ObstacleBridgeUdpOverlayPeerRuntime(nextCounter: nextCounter.intValue)
+        let runtime = ObstacleBridgeUdpOverlayPeerRuntime(
+            nextCounter: nextCounter.intValue,
+            maxInFlight: (request["max_inflight"] as? NSNumber)?.intValue ?? 32767
+        )
         let snapshot = try runtime.sendApplicationPayload(payload, nowNS: nowNS.uint64Value, echoNS: echoNS.uint64Value)
-        return ["snapshot": outboundDataSnapshotObject(snapshot)]
+        return [
+            "snapshot": outboundDataSnapshotObject(snapshot),
+            "protocol_stats": runtime.protocolStatsSnapshot(),
+        ]
     case "drive_udp_peer_runtime_build_control":
         guard
             let preFramesRaw = request["pre_frames_hex"],

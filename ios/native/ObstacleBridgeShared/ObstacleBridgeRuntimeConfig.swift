@@ -525,6 +525,7 @@ enum ObstacleBridgeRuntimeConfig {
                 normalized[key] = value
             }
         }
+        applyCompatibilityAliases(to: &normalized)
         if (normalized["admin_web_auth_disable"] as? Bool) == true {
             normalized["admin_web_username"] = ""
             normalized["admin_web_password"] = ""
@@ -646,6 +647,7 @@ enum ObstacleBridgeRuntimeConfig {
     }
 
     private static func normalizeFlatPayloadForSchema(_ payload: inout [String: Any]) {
+        applyCompatibilityAliases(to: &payload)
         for rowsValue in configSchemaSnapshot().values {
             guard let rows = rowsValue as? [[String: Any]] else {
                 continue
@@ -657,6 +659,12 @@ enum ObstacleBridgeRuntimeConfig {
                 }
                 payload[key] = normalizeValueForSchema(rawValue: rawValue, defaultValue: row["default"])
             }
+        }
+    }
+
+    private static func applyCompatibilityAliases(to payload: inout [String: Any]) {
+        if payload["udp_peer_resolve_family"] == nil, let value = payload["peer_resolve_family"] {
+            payload["udp_peer_resolve_family"] = value
         }
     }
 
@@ -712,6 +720,7 @@ enum ObstacleBridgeRuntimeConfig {
                 merged[key] = value
             }
         }
+        applyCompatibilityAliases(to: &merged)
         return merged
     }
 
@@ -1191,6 +1200,24 @@ enum ObstacleBridgeRuntimeConfig {
         return nil
     }
 
+    private static func ipv4MappedIPv6RouteCIDR(for host: String) -> String? {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        let normalized: String
+        if trimmed.hasPrefix("::ffff:") {
+            normalized = String(trimmed.dropFirst(7))
+        } else {
+            normalized = trimmed
+        }
+        var ipv4 = in_addr()
+        guard normalized.withCString({ inet_pton(AF_INET, $0, &ipv4) }) == 1 else {
+            return nil
+        }
+        return "::ffff:\(normalized)/128"
+    }
+
     private static func dedupeRoutes(_ values: [String]) -> [String] {
         var out: [String] = []
         var seen: Set<String> = []
@@ -1250,6 +1277,11 @@ enum ObstacleBridgeRuntimeConfig {
                 routes6.append(route)
             } else {
                 routes4.append(route)
+                if resolveMode != .ipv4,
+                   bindHost.trimmingCharacters(in: .whitespacesAndNewlines) == "::",
+                   let mappedRoute = ipv4MappedIPv6RouteCIDR(for: candidate.host) {
+                    routes6.append(mappedRoute)
+                }
             }
         }
         return (dedupeRoutes(routes4), dedupeRoutes(routes6))
@@ -1398,7 +1430,7 @@ enum ObstacleBridgeRuntimeConfig {
         case "quic":
             peerResolveFamily = peerResolveFamilyValue(from: payload["quic_peer_resolve_family"]) ?? "prefer-ipv6"
         default:
-            peerResolveFamily = peerResolveFamilyValue(from: experiment["udp_peer_resolve_family"]) ?? "prefer-ipv6"
+            peerResolveFamily = peerResolveFamilyValue(from: payload["udp_peer_resolve_family"]) ?? "prefer-ipv6"
         }
         let mtu = intValue(from: experiment["mtu"]) ?? defaultMTU
         let tunIfname = stringValue(from: experiment["ifname"]) ?? "ios-utun"

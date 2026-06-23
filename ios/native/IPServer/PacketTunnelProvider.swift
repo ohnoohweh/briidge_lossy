@@ -1122,7 +1122,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "listen": NSNull(),
             "peer": endpoint,
             "decode_errors": 0,
-            "inflight": protocolStats["buffered_frames"] ?? 0,
+            "inflight": protocolStats["inflight"] ?? 0,
             "last_incoming_age_seconds": adminLastIncomingAgeSeconds(runtime: myudpRuntime),
             "rtt_est_ms": myudpRuntime["rtt_est_ms"] ?? NSNull(),
             "transmit_delay_est_ms": myudpRuntime["transmit_delay_est_ms"] ?? NSNull(),
@@ -2238,6 +2238,7 @@ private final class SwiftSimpleUDPPeerBridge {
                     peerPort: settings.peerPort,
                     peerResolveFamily: settings.peerResolveFamily,
                     sessionMaxAppPayload: sessionMaxAppPayload,
+                    maxInFlight: ObstacleBridgeRuntimeConfig.intValue(from: settings.runtimeConfig["max_inflight"]) ?? 32767,
                     overlayLayerTransportAdapter: overlayLayerTransportAdapter,
                     startupMuxFrames: startupMuxFrames,
                     queue: queue,
@@ -2986,6 +2987,7 @@ private final class SwiftSimpleUDPPeerBridge {
             let normalized = try ObstacleBridgePeerAddressResolver.normalizePeerCandidate(
                 candidate,
                 socketFamily: socketFamily,
+                resolveMode: ObstacleBridgePeerAddressResolver.ResolveMode(rawValue: peerResolveFamily),
                 errorDomain: "ObstacleBridge.IPServer"
             )
             if !peerCandidates.contains(where: {

@@ -662,6 +662,45 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         )
     }
 
+    func scopedTunThrottle(
+        packetBytes: Int,
+        snapshot: OverlayBackpressureSnapshot,
+        nowNS: UInt64,
+        route: SharedTunOutboundRouteSnapshot?
+    ) -> ScopedTunThrottleSnapshot {
+        let scopeID = sharedTunInflowScopeID(route: route ?? SharedTunOutboundRouteSnapshot(
+            routed: false,
+            routeClass: nil,
+            selectedPeerIDs: [],
+            selectedChanIDs: [],
+            ipVersion: nil,
+            destinationIP: nil,
+            dropReason: nil
+        )) ?? directTunScopeID()
+        let allowed = localTunSendAllowed(
+            packetBytes: packetBytes,
+            snapshot: snapshot,
+            nowNS: nowNS,
+            scopeID: scopeID
+        )
+        var state = advanceTunInflowWindow(scopeID: scopeID, nowNS: nowNS)
+        if !allowed {
+            state.throttleDropCount += 1
+            tunInflowScopeStates[scopeID] = state
+        }
+        let states = localIngressScopeIDs(scopeID).map { currentScopeID in
+            (currentScopeID, advanceTunInflowWindow(scopeID: currentScopeID, nowNS: nowNS))
+        }
+        let summaryState = states.last?.1 ?? state
+        return ScopedTunThrottleSnapshot(
+            scopeID: scopeID,
+            allowed: allowed,
+            prevWindowBytes: summaryState.previousBytes,
+            currWindowBytes: summaryState.currentBytes,
+            throttleDropCount: summaryState.throttleDropCount
+        )
+    }
+
     func scopeID(for route: SharedTunOutboundRouteSnapshot?) -> String {
         sharedTunInflowScopeID(route: route ?? SharedTunOutboundRouteSnapshot(
             routed: false,

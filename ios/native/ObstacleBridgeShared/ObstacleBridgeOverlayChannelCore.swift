@@ -321,7 +321,7 @@ enum ObstacleBridgeOverlayChannelCore {
         let sharedRoute = tunRuntime.planSharedTunOutboundRoute(packet: packet)
         let throttle = tunRuntime.scopedTunThrottle(
             packetBytes: packet.count,
-            bufferedFrames: bufferedFrames,
+            snapshot: backpressure,
             nowNS: nowNS,
             route: sharedRoute
         )

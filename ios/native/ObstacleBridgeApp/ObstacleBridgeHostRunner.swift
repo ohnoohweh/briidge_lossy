@@ -584,7 +584,7 @@ final class ObstacleBridgeHostRunner {
             "listen": NSNull(),
             "peer": peerEndpoint,
             "decode_errors": 0,
-            "inflight": protocolStats["buffered_frames"] ?? 0,
+            "inflight": protocolStats["inflight"] ?? 0,
             "last_incoming_age_seconds": lastIncomingAgeSeconds(from: myudpRuntime),
             "rtt_est_ms": myudpRuntime["rtt_est_ms"] ?? NSNull(),
             "transmit_delay_est_ms": myudpRuntime["transmit_delay_est_ms"] ?? NSNull(),
@@ -1794,6 +1794,7 @@ final class ObstacleBridgeHostRunner {
             peerPort: peerPort,
             peerResolveFamily: peerResolveFamily,
             sessionMaxAppPayload: ObstacleBridgeRuntimeConfig.overlaySessionMaxAppPayload(from: runtimeConfig),
+            maxInFlight: Self.intValue(from: runtimeConfig["max_inflight"]) ?? 32767,
             overlayLayerTransportAdapter: sharedOverlayLayerTransportAdapter,
             startupMuxFrames: remoteServiceCatalogMuxFrames(
                 instanceID: muxInstanceID,
@@ -1902,7 +1903,8 @@ final class ObstacleBridgeHostRunner {
             : tunService.listenBind
         let overlayTransport = overlayTransportName()
         let overlayPeer = configuredOverlayPeerEndpoint(for: overlayTransport)
-        let normalizedOverlayPeerHost = Self.firstConfiguredPeerHost(from: overlayPeer.host)
+        let normalizedOverlayPeerHost = Self.firstConfiguredIPv4PeerHost(from: overlayPeer.host)
+            ?? Self.firstConfiguredPeerHost(from: overlayPeer.host)
         return [
             "service_id": String(tunService.svcID),
             "service_name": tunService.name ?? "svc-\(tunService.svcID)",
@@ -1935,7 +1937,9 @@ final class ObstacleBridgeHostRunner {
     private func captureMacOSOverlayUnderlayRoute(fields: [String: Any]) {
         let fieldPeerHost = Self.stringValue(from: fields["peer_host"]) ?? ""
         let configuredPeerHost = macOSTunHookContextPeerHost()
-        let peerHost = Self.firstConfiguredPeerHost(from: fieldPeerHost.isEmpty ? configuredPeerHost : fieldPeerHost)
+        let peerCandidates = fieldPeerHost.isEmpty ? configuredPeerHost : fieldPeerHost
+        let peerHost = Self.firstConfiguredIPv4PeerHost(from: peerCandidates)
+            ?? Self.firstConfiguredPeerHost(from: peerCandidates)
         guard !peerHost.isEmpty,
               peerHost.contains("."),
               !peerHost.contains(":")
@@ -1998,16 +2002,47 @@ final class ObstacleBridgeHostRunner {
     }
 
     private static func firstConfiguredPeerHost(from raw: String) -> String {
+        firstConfiguredPeerHostCandidates(from: raw).first ?? raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func firstConfiguredIPv4PeerHost(from raw: String) -> String? {
+        for candidate in firstConfiguredPeerHostCandidates(from: raw) {
+            let normalized = normalizeIPv4MappedPeerHost(candidate)
+            if normalized.contains(".") && !normalized.contains(":") {
+                return normalized
+            }
+        }
+        return nil
+    }
+
+    private static func firstConfiguredPeerHostCandidates(from raw: String) -> [String] {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            return ""
+            return []
         }
         let replaced = trimmed.replacingOccurrences(of: ";", with: ",")
-        let pieces = replaced
+        return replaced
             .split(separator: ",")
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .map { stripPeerHostBrackets(String($0).trimmingCharacters(in: .whitespacesAndNewlines)) }
             .filter { !$0.isEmpty }
-        return pieces.first ?? trimmed
+    }
+
+    private static func stripPeerHostBrackets(_ raw: String) -> String {
+        var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.hasPrefix("[") && value.hasSuffix("]") && value.count >= 2 {
+            value.removeFirst()
+            value.removeLast()
+        }
+        return value
+    }
+
+    private static func normalizeIPv4MappedPeerHost(_ raw: String) -> String {
+        let trimmed = stripPeerHostBrackets(raw)
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("::ffff:") {
+            return String(trimmed.dropFirst(7))
+        }
+        return trimmed
     }
 
     private func renderHookValue(_ value: String, context: [String: String]) -> String {

@@ -3247,11 +3247,11 @@ class ChannelMux:
             dev.reader_registered = False
         try:
             _bridge_tun_platform.register_tun_reader(self, dev)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             # Unit tests frequently use synthetic integer fds that epoll refuses
             # to watch. Keep those tests routable without masking normal runtime
             # behavior on real TUN descriptors.
-            if getattr(exc, "errno", None) not in (1, 9, 22):
+            if isinstance(exc, OSError) and getattr(exc, "errno", None) not in (1, 9, 22):
                 raise
             self.log.debug(
                 "[TUN/BIND] skipping reader registration for non-pollable fd=%r if=%s: %r",

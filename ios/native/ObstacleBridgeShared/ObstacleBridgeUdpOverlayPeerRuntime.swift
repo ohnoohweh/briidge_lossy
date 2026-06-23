@@ -5,6 +5,7 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
         var counters: [Int]
         var frames: [Data]
         var sendBuffer: [Int]
+        var waitingCount: Int
         var sendTXNS: [Int: UInt64]
         var sendAttempts: [Int: Int]
         var lastSendNS: UInt64
@@ -30,6 +31,7 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
         var flushRequested: Bool
         var controlShouldEmit: Bool
         var controlReason: String?
+        var transmitDelayEstMS: Double
         var lastSentLastInOrder: Int
         var lastControlSentNS: UInt64
     }
@@ -82,6 +84,7 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
     private var sendBuffer: [Int]
     private var sendMeta: [Int: ObstacleBridgeUdpOverlaySessionCodec.OutgoingSegment]
     private var sendTXNS: [Int: UInt64]
+    private var sendPathStartNS: [Int: UInt64]
     private var lastRetxNS: [Int: UInt64]
     private var sendAttempts: [Int: Int]
     private var peerReportedMissing: [Int]
@@ -89,6 +92,9 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
     private var peerMissedCount: Int
     private var lastSendNS: UInt64
     private var nextCounter: Int
+    private var waitQueue: [ObstacleBridgeUdpOverlaySessionCodec.OutgoingSegment]
+    private var waitQueueStartNS: [UInt64]
+    private let maxInFlight: Int
 
     private(set) var establishedNS: UInt64
     private(set) var lastRxTxNS: UInt64
@@ -117,17 +123,20 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
         sendBuffer: [Int] = [],
         sendMeta: [Int: ObstacleBridgeUdpOverlaySessionCodec.OutgoingSegment] = [:],
         sendTXNS: [Int: UInt64] = [:],
+        sendPathStartNS: [Int: UInt64] = [:],
         lastRetxNS: [Int: UInt64] = [:],
         sendAttempts: [Int: Int] = [:],
         peerReportedMissing: [Int] = [],
         lastAckPeer: Int = 0,
         peerMissedCount: Int = 0,
         lastSendNS: UInt64 = 0,
-        nextCounter: Int = 1
+        nextCounter: Int = 1,
+        maxInFlight: Int = 32767
     ) {
         self.sendBuffer = sendBuffer.sorted()
         self.sendMeta = sendMeta
         self.sendTXNS = sendTXNS
+        self.sendPathStartNS = sendPathStartNS
         self.lastRetxNS = lastRetxNS
         self.sendAttempts = sendAttempts
         self.peerReportedMissing = peerReportedMissing.sorted()
@@ -135,6 +144,9 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
         self.peerMissedCount = peerMissedCount
         self.lastSendNS = lastSendNS
         self.nextCounter = nextCounter
+        self.waitQueue = []
+        self.waitQueueStartNS = []
+        self.maxInFlight = max(1, min(32767, maxInFlight))
         self.establishedNS = establishedNS
         self.lastRxTxNS = 0
         self.lastRxWallNS = 0
@@ -153,11 +165,41 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
 
     func isConnected(nowNS: UInt64? = nil) -> Bool {
         let now = nowNS ?? DispatchTime.now().uptimeNanoseconds
-        let activityNS = max(lastRttOkNS, lastRxWallNS)
-        guard activityNS > 0 else {
+        guard lastRttOkNS > 0 else {
             return false
         }
-        return now >= activityNS && (now - activityNS) <= connectedLossNS
+        return now >= lastRttOkNS && (now - lastRttOkNS) <= connectedLossNS
+    }
+
+    func resetTransportEpoch() {
+        resetSender()
+        receiveState.reset()
+        establishedNS = 0
+        lastRxTxNS = 0
+        lastRxWallNS = 0
+        lastRttOkNS = 0
+        rttSampleMS = 0
+        rttEstMS = 0
+        transmitDelayEstMS = 0
+        lastSentLastInOrder = 0
+        lastControlSentNS = 0
+    }
+
+    func resetSender() {
+        sendBuffer.removeAll()
+        sendMeta.removeAll()
+        sendTXNS.removeAll()
+        sendPathStartNS.removeAll()
+        lastRetxNS.removeAll()
+        sendAttempts.removeAll()
+        peerReportedMissing.removeAll()
+        waitQueue.removeAll()
+        waitQueueStartNS.removeAll()
+        lastAckPeer = 0
+        peerMissedCount = 0
+        lastSendNS = 0
+        nextCounter = 1
+        transmitDelayEstMS = 0
     }
 
     func sendApplicationPayload(_ payload: Data, nowNS: UInt64, echoNS: UInt64 = 0) throws -> OutboundDataSnapshot {
@@ -167,20 +209,48 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
             echoNS: echoNS,
             startingCounter: nextCounter
         )
-        var counters: [Int] = []
-        for frame in frames {
+        let segments = frames.compactMap { frame -> ObstacleBridgeUdpOverlaySessionCodec.OutgoingSegment? in
             guard let packet = ObstacleBridgeUdpOverlayCodec.parseDataFrame(frame) else {
-                continue
+                return nil
             }
-            let counter = packet.pktCounter
-            counters.append(counter)
-            sendBuffer.append(counter)
-            sendMeta[counter] = ObstacleBridgeUdpOverlaySessionCodec.OutgoingSegment(
+            return ObstacleBridgeUdpOverlaySessionCodec.OutgoingSegment(
                 frameType: packet.frameType,
                 lenOrOffset: packet.lenOrOffset,
                 data: packet.data
             )
+        }
+        for segment in segments {
+            waitQueue.append(segment)
+            waitQueueStartNS.append(nowNS)
+        }
+        return try flushSendQueue(nowNS: nowNS, echoNS: echoNS)
+    }
+
+    func flushSendQueue(nowNS: UInt64, echoNS: UInt64 = 0) throws -> OutboundDataSnapshot {
+        var counters: [Int] = []
+        var frames: [Data] = []
+        while sendBuffer.count < maxInFlight && !waitQueue.isEmpty {
+            let segment = waitQueue.removeFirst()
+            let queuedAtNS = waitQueueStartNS.isEmpty ? nowNS : waitQueueStartNS.removeFirst()
+            let counter = nextCounter
+            let payload = try ObstacleBridgeUdpOverlayCodec.buildDataPayload(
+                pktCounter: counter,
+                frameType: segment.frameType,
+                lenOrOffset: segment.lenOrOffset,
+                data: segment.data
+            )
+            let frame = try ObstacleBridgeUdpOverlayCodec.buildProtocolFrame(
+                ptype: ObstacleBridgeUdpOverlayCodec.ptypeData,
+                payload: payload,
+                txNS: nowNS,
+                echoNS: echoNS
+            )
+            counters.append(counter)
+            frames.append(frame)
+            sendBuffer.append(counter)
+            sendMeta[counter] = segment
             sendTXNS[counter] = nowNS
+            sendPathStartNS[counter] = queuedAtNS
             sendAttempts[counter] = (sendAttempts[counter] ?? 0) + 1
             lastSendNS = nowNS
             nextCounter = counter == 65535 ? 1 : counter + 1
@@ -191,6 +261,7 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
             counters: counters,
             frames: frames,
             sendBuffer: sendBuffer,
+            waitingCount: waitQueue.count,
             sendTXNS: sendTXNS,
             sendAttempts: sendAttempts,
             lastSendNS: lastSendNS,
@@ -335,7 +406,8 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
         packetLastInOrder: Int,
         packetHighest: Int,
         packetMissed: [Int],
-        sendPortPresent: Bool
+        sendPortPresent: Bool,
+        flushEchoNS: UInt64 = 0
     ) throws -> InboundControlSnapshot {
         updateInboundHeartbeat(nowNS: nowNS, txNS: txNS, echoNS: echoNS, fromIdle: false)
         let snapshot = try ObstacleBridgeUdpOverlaySessionCodec.handleInboundControlPacket(
@@ -372,11 +444,14 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
         }
 
         sendBuffer = snapshot.feedback.sendBufferKeys
+        let flushedSnapshot = try flushSendQueue(nowNS: nowNS, echoNS: flushEchoNS)
+        rebaseTransmitDelayIfPipelineEmpty()
         peerReportedMissing = snapshot.retransmit.peerReportedMissing.sorted()
         lastAckPeer = snapshot.feedback.lastAckPeer
         let activeCounters = Set(sendBuffer)
         sendMeta = sendMeta.filter { activeCounters.contains($0.key) }
         sendTXNS = sendTXNS.filter { activeCounters.contains($0.key) }
+        sendPathStartNS = sendPathStartNS.filter { activeCounters.contains($0.key) }
         lastRetxNS = snapshot.retransmit.lastRetxNS.filter { activeCounters.contains($0.key) }
         sendAttempts = snapshot.retransmit.sendAttempts.filter { activeCounters.contains($0.key) }
         peerMissedCount = snapshot.retransmit.peerMissedCount
@@ -386,8 +461,8 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
             sendBuffer: sendBuffer,
             peerReportedMissing: peerReportedMissing,
             lastAckPeer: lastAckPeer,
-            emittedCounters: snapshot.retransmit.emittedCounters,
-            emittedFrames: snapshot.retransmit.emittedFrames,
+            emittedCounters: snapshot.retransmit.emittedCounters + flushedSnapshot.counters,
+            emittedFrames: snapshot.retransmit.emittedFrames + flushedSnapshot.frames,
             lastRetxNS: lastRetxNS,
             sendAttempts: sendAttempts,
             peerMissedCount: peerMissedCount,
@@ -395,6 +470,7 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
             flushRequested: snapshot.flushRequested,
             controlShouldEmit: snapshot.controlDecision.shouldEmit,
             controlReason: snapshot.controlDecision.reason,
+            transmitDelayEstMS: transmitDelayEstMS,
             lastSentLastInOrder: lastSentLastInOrder,
             lastControlSentNS: lastControlSentNS
         )
@@ -486,7 +562,10 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
 
     func protocolStatsSnapshot() -> [String: Any] {
         [
-            "buffered_frames": sendBuffer.count,
+            "buffered_frames": waitQueue.count,
+            "waiting_count": waitQueue.count,
+            "inflight": sendBuffer.count,
+            "max_inflight": maxInFlight,
             "first_pass": firstPassTotal,
             "repeated_once": repeatedOnceTotal,
             "repeated_multiple": repeatedMultipleTotal,
@@ -519,7 +598,8 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
     }
 
     private func recordTransmitDelaySample(counter: Int, ackNowNS: UInt64) {
-        guard let pathStartNS = sendTXNS[counter], pathStartNS > 0, ackNowNS > pathStartNS else {
+        let pathStartNS = sendPathStartNS[counter] ?? sendTXNS[counter] ?? 0
+        guard pathStartNS > 0, ackNowNS > pathStartNS else {
             return
         }
         let elapsedMS = Double(ackNowNS - pathStartNS) / 1_000_000.0
@@ -531,6 +611,12 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
             transmitDelayEstMS = sampleMS
         } else {
             transmitDelayEstMS = ((1.0 - transmitDelayEwmaAlpha) * transmitDelayEstMS) + (transmitDelayEwmaAlpha * sampleMS)
+        }
+    }
+
+    private func rebaseTransmitDelayIfPipelineEmpty() {
+        if sendBuffer.isEmpty, rttEstMS > 0.0 {
+            transmitDelayEstMS = 0.5 * rttEstMS
         }
     }
 

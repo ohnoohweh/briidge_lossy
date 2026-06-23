@@ -190,6 +190,10 @@ def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route(
     assert 'route_add_or_change_v6() {' in script
     assert 'overlay_peer_route_matches_underlay_v4() {' in script
     assert 'enforce_overlay_peer_underlay_v4() {' in script
+    assert 'is_ipv4_mapped_host_route_v6() {' in script
+    assert 'route_spec_addr "$route_spec")" =~ ^::ffff:' in script
+    assert 'is_ipv4_mapped_host_route_v6 "$route_spec"' in script
+    assert 'ifname="$OVERLAY_UNDERLAY_IF"' in script
     assert 'route_delete_v4() {' in script
     assert 'route_delete_v6() {' in script
     assert 'is_host_route_v4() {' in script

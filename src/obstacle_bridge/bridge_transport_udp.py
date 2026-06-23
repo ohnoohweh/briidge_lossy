@@ -865,6 +865,10 @@ class Session:
         self.peer_reported_missing.intersection_update(self.send_buf.keys())
         self.peer_reported_missing.update(cnt for cnt in missed_set if cnt in self.send_buf and cnt != 0)
         self.last_ack_peer = last_in_order
+        if not self.send_buf:
+            rtt_est_ms = float(getattr(self.proto, "rtt_est_ms", 0.0) or 0.0)
+            if rtt_est_ms > 0.0:
+                self.transmit_delay_est_ms = 0.5 * rtt_est_ms
     # ------------- RTT mirrors -------------
     @property
     def rtt_est_ms(self) -> float:

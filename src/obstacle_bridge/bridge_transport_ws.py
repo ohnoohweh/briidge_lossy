@@ -597,14 +597,15 @@ class WebSocketSession(ISession):
         try:
             r = self._rtt
             rtt_est_ms = getattr(r, "rtt_est_ms", None)
-            prev_bytes, curr_bytes = self._egress_tracker.snapshot()
+            tracker = getattr(self, "_egress_tracker", None)
+            prev_bytes, curr_bytes = tracker.snapshot() if tracker is not None else (0, 0)
             return SessionMetrics(
                 rtt_sample_ms=getattr(r, "rtt_sample_ms", None),
                 rtt_est_ms=rtt_est_ms,
                 transmit_delay_est_ms=(0.5 * float(rtt_est_ms)) if rtt_est_ms is not None else None,
                 last_rtt_ok_ns=getattr(r, "last_rtt_ok_ns", None),
-                last_rx_ns=self._last_rx_ns or None,
-                waiting_count=self.waiting_count(),
+                last_rx_ns=getattr(self, "_last_rx_ns", 0) or None,
+                waiting_count=self.waiting_count() if hasattr(self, "_send_queue") else 0,
                 egress_prev_window_bytes=prev_bytes,
                 egress_curr_window_bytes=curr_bytes,
             )

@@ -310,13 +310,14 @@ class QuicSession(ISession):
         try:
             r = self._rtt
             rtt_est_ms = getattr(r, "rtt_est_ms", None)
-            prev_bytes, curr_bytes = self._egress_tracker.snapshot()
+            tracker = getattr(self, "_egress_tracker", None)
+            prev_bytes, curr_bytes = tracker.snapshot() if tracker is not None else (0, 0)
             return SessionMetrics(
                 rtt_sample_ms=getattr(r, "rtt_sample_ms", None),
                 rtt_est_ms=rtt_est_ms,
                 transmit_delay_est_ms=(0.5 * float(rtt_est_ms)) if rtt_est_ms is not None else None,
                 last_rtt_ok_ns=getattr(r, "last_rtt_ok_ns", None),
-                waiting_count=(1 if len(self._early_buf) > 0 else 0),
+                waiting_count=(1 if len(getattr(self, "_early_buf", [])) > 0 else 0),
                 egress_prev_window_bytes=prev_bytes,
                 egress_curr_window_bytes=curr_bytes,
             )
