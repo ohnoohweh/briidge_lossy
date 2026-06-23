@@ -1461,6 +1461,12 @@ enum ObstacleBridgeRuntimeConfig {
             .map { $0.toChannelMuxServiceSpec() }
     }
 
+    static func localUDPServiceSpecs(from payload: [String: Any]) -> [ObstacleBridgeChannelMuxCodec.ServiceSpec] {
+        ownServerSpecs(from: payload, preserveInputIndices: true)
+            .filter { $0.listenProtocol == "udp" && $0.targetProtocol == "udp" }
+            .map { $0.toChannelMuxServiceSpec() }
+    }
+
     private static func serviceSpecs(
         from payload: [String: Any],
         key: String,
@@ -1486,7 +1492,23 @@ enum ObstacleBridgeRuntimeConfig {
     }
 
     private static func packetflowConnectorSection(from payload: [String: Any]) -> [String: Any]? {
-        payload["iOS_TUN_connector"] as? [String: Any]
+        if let section = payload["iOS_TUN_connector"] as? [String: Any] {
+            return section
+        }
+        let flat = flatten(payload)
+        let transport = stringValue(from: flat["overlay_transport"]) ?? ""
+        guard !transport.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return [
+            "packetflow_connector": "swift_udp",
+            "bind_host": "127.0.0.1",
+            "bind_port": 5555,
+            "peer_host": "",
+            "peer_port": 0,
+            "ifname": "ios-utun",
+            "mtu": intValue(from: flat["mtu"]) ?? 1600,
+        ]
     }
 
     private static func serviceArray(from payload: [String: Any], key: String) -> [Any]? {

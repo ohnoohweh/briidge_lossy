@@ -96,17 +96,38 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
             return nil
         }
         do {
+            eventSink?("\(eventPrefix)_tcp_server_accept_attempt", [
+                "service_id": spec.svcID,
+                "service_name": spec.name ?? "",
+                "listen_host": spec.lBind,
+                "listen_port": spec.lPort,
+                "target_host": spec.rHost,
+                "target_port": spec.rPort,
+                "overlay_connected": overlayConnectedProvider(),
+            ])
             guard let acceptSnapshot = try runtime.handleAcceptedServerConnection(
                 spec: spec,
                 overlayConnected: overlayConnectedProvider(),
                 acceptingEnabled: true
             ) else {
+                eventSink?("\(eventPrefix)_tcp_server_accept_rejected", [
+                    "service_id": spec.svcID,
+                    "service_name": spec.name ?? "",
+                    "overlay_connected": overlayConnectedProvider(),
+                ])
                 cancelConnection(connection)
                 return nil
             }
             let chanID = acceptSnapshot.chanID
             serverConnections[chanID] = connection
             metricSink?("server_accepted")
+            eventSink?("\(eventPrefix)_tcp_server_accepted", [
+                "chan_id": chanID,
+                "service_id": spec.svcID,
+                "service_name": spec.name ?? "",
+                "open_frames": acceptSnapshot.frames.count,
+                "overlay_connected": overlayConnectedProvider(),
+            ])
             connection.stateUpdateHandler = { [weak self] state in
                 self?.queue.async {
                     self?.handleServerConnectionState(state, chanID: chanID)
@@ -149,11 +170,21 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
 
         switch frame.mtype {
         case .open:
+            eventSink?("\(eventPrefix)_tcp_client_open_received", ["chan_id": frame.chanID, "bytes": frame.body.count])
             handleInboundClientOpen(chanID: frame.chanID, payload: frame.body)
         case .openChunk:
+            eventSink?("\(eventPrefix)_tcp_client_open_chunk_received", ["chan_id": frame.chanID, "bytes": frame.body.count])
             handleInboundClientOpenChunk(chanID: frame.chanID, payload: frame.body)
         case .data:
             let snapshot = runtime.handleInboundClientData(chanID: frame.chanID, body: frame.body)
+            eventSink?("\(eventPrefix)_tcp_client_data_received", [
+                "chan_id": frame.chanID,
+                "bytes": frame.body.count,
+                "buffered": snapshot.buffered,
+                "sent_immediately": snapshot.sentImmediately,
+                "pending_count": snapshot.pendingCount,
+                "local_connection_present": clientConnections[frame.chanID] != nil,
+            ])
             if let connection = clientConnections[frame.chanID] {
                 for buffer in snapshot.writtenBuffers {
                     sendOnTCPConnection(connection, payload: buffer, chanID: frame.chanID, event: "\(eventPrefix)_tcp_client_write_failed")
@@ -250,6 +281,17 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
             return
         }
         let snapshot = runtime.handleInboundClientOpen(chanID: chanID, payload: payload)
+        eventSink?("\(eventPrefix)_tcp_client_open_parsed", [
+            "chan_id": chanID,
+            "service_id": parsed.spec.svcID,
+            "service_name": parsed.spec.name ?? "",
+            "target_host": parsed.spec.rHost,
+            "target_port": parsed.spec.rPort,
+            "accepted": snapshot.accepted,
+            "connect_requested": snapshot.connectRequested,
+            "connected": snapshot.connected,
+            "pending_count": snapshot.pendingCount,
+        ])
         if snapshot.accepted {
             transportEventSink?(.clientAccepted(chanID: chanID, spec: parsed.spec, connected: snapshot.connected))
         }
@@ -283,6 +325,13 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
             eventSink?("\(eventPrefix)_tcp_client_connect_invalid_port", ["chan_id": chanID, "port": spec.rPort])
             return
         }
+        eventSink?("\(eventPrefix)_tcp_client_connect_start", [
+            "chan_id": chanID,
+            "service_id": spec.svcID,
+            "service_name": spec.name ?? "",
+            "host": spec.rHost,
+            "port": spec.rPort,
+        ])
         let connection = NWConnection(host: NWEndpoint.Host(spec.rHost), port: port, using: .tcp)
         clientConnections[chanID] = connection
         metricSink?("client_dialed")
@@ -301,6 +350,11 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
     private func handleClientConnectionState(_ state: NWConnection.State, chanID: Int, spec: ObstacleBridgeChannelMuxCodec.ServiceSpec) {
         switch state {
         case .ready:
+            eventSink?("\(eventPrefix)_tcp_client_connection_ready", [
+                "chan_id": chanID,
+                "host": spec.rHost,
+                "port": spec.rPort,
+            ])
             if activateClientOnReady {
                 activateClientConnection(chanID: chanID, spec: spec)
             }
@@ -332,6 +386,15 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
             peerAddrHost: spec.rHost,
             peerAddrPort: spec.rPort
         )
+        eventSink?("\(eventPrefix)_tcp_client_activated", [
+            "chan_id": chanID,
+            "service_id": spec.svcID,
+            "service_name": spec.name ?? "",
+            "target_host": spec.rHost,
+            "target_port": spec.rPort,
+            "pending_flushed": connectSnapshot.flushedBuffers.count,
+            "connected": connectSnapshot.connected,
+        ])
         transportEventSink?(.clientConnected(chanID: chanID, localHost: connectSnapshot.localAddrHost, localPort: connectSnapshot.localAddrPort))
         if let connection = clientConnections[chanID] {
             for buffer in connectSnapshot.flushedBuffers {
@@ -349,14 +412,22 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
             self?.queue.async {
                 guard let self, self.active else { return }
                 if let data, !data.isEmpty {
+                    self.eventSink?("\(self.eventPrefix)_tcp_client_data_read", ["chan_id": chanID, "bytes": data.count])
                     do {
                         if let snapshot = try self.runtime.handleLocalClientData(
                             chanID: chanID,
                             payload: data,
                             overlayConnected: self.overlayConnectedProvider()
                         ) {
+                            self.eventSink?("\(self.eventPrefix)_tcp_client_data_mux", ["chan_id": chanID, "bytes": data.count, "frames": snapshot.frames.count])
                             self.muxFrameSink(snapshot.frames)
                             self.transportEventSink?(.clientOutbound(chanID: chanID, bytes: data.count))
+                        } else {
+                            self.eventSink?("\(self.eventPrefix)_tcp_client_data_not_sent", [
+                                "chan_id": chanID,
+                                "bytes": data.count,
+                                "overlay_connected": self.overlayConnectedProvider(),
+                            ])
                         }
                     } catch {
                         self.eventSink?("\(self.eventPrefix)_tcp_client_data_failed", ["chan_id": chanID, "error": error.localizedDescription])

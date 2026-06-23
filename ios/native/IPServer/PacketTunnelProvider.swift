@@ -380,6 +380,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     let muxInstanceID = UInt64.random(in: 1...UInt64.max)
                     let muxConnectionSeq = UInt32.random(in: 1...UInt32.max)
                     let tcpServiceSpecs = self.localTCPServiceSpecs(providerConfiguration: providerConfiguration)
+                    let udpServiceSpecs = self.localUDPServiceSpecs(providerConfiguration: providerConfiguration)
                     let startupMuxFrames = self.remoteServiceCatalogMuxFrames(
                         providerConfiguration: providerConfiguration,
                         instanceID: muxInstanceID,
@@ -391,6 +392,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         tunnelAddress: configuration.tunnelAddress,
                         tunnelAddress6: configuration.tunnelAddress6,
                         tcpServiceSpecs: tcpServiceSpecs,
+                        udpServiceSpecs: udpServiceSpecs,
                         startupMuxFrames: startupMuxFrames,
                         muxInstanceID: muxInstanceID,
                         muxConnectionSeq: muxConnectionSeq,
@@ -805,6 +807,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         return []
     }
 
+    private func localUDPServiceSpecs(providerConfiguration: [String: Any]?) -> [ObstacleBridgeChannelMuxCodec.ServiceSpec] {
+        if let payload = runtimeConfigPayload(providerConfiguration: providerConfiguration) {
+            return Self.localUDPServiceSpecs(from: payload)
+        }
+        return []
+    }
+
     private func remoteServiceCatalogMuxFrames(
         providerConfiguration: [String: Any]?,
         instanceID: UInt64 = 0,
@@ -994,6 +1003,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         ObstacleBridgeRuntimeConfig.localTCPServiceSpecs(from: payload)
     }
 
+    private static func localUDPServiceSpecs(from payload: [String: Any]) -> [ObstacleBridgeChannelMuxCodec.ServiceSpec] {
+        ObstacleBridgeRuntimeConfig.localUDPServiceSpecs(from: payload)
+    }
+
     private static func intValue(from value: Any?) -> Int? {
         ObstacleBridgeRuntimeConfig.intValue(from: value)
     }
@@ -1100,7 +1113,14 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
     }
 
     func adminTunRoutingSnapshot() -> [String: Any] {
-        ObstacleBridgeAdminAPI.tunRoutingSnapshot(fromConnections: adminConnectionsSnapshot())
+        var payload = ObstacleBridgeAdminAPI.tunRoutingSnapshot(fromConnections: adminConnectionsSnapshot())
+        if !effectivePacketTunnelSettingsState.isEmpty {
+            payload["included_routes"] = Self.ipv4RouteCIDRList(effectivePacketTunnelSettingsState["included_routes"])
+            payload["excluded_routes"] = Self.ipv4RouteCIDRList(effectivePacketTunnelSettingsState["excluded_routes"])
+            payload["included_routes6"] = Self.ipv6RouteCIDRList(effectivePacketTunnelSettingsState["included_routes6"])
+            payload["excluded_routes6"] = Self.ipv6RouteCIDRList(effectivePacketTunnelSettingsState["excluded_routes6"])
+        }
+        return payload
     }
 
     func adminPeersSnapshot() -> [[String: Any]] {
@@ -1638,6 +1658,61 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         ]
     }
 
+    private static func ipv4RouteCIDRList(_ value: Any?) -> [String] {
+        guard let rows = value as? [[String: Any]] else {
+            return []
+        }
+        return rows.compactMap { row in
+            guard let destination = row["destination"] as? String, !destination.isEmpty else {
+                return nil
+            }
+            guard let subnetMask = row["subnet_mask"] as? String,
+                  let prefix = ipv4PrefixLength(fromSubnetMask: subnetMask)
+            else {
+                return destination
+            }
+            return "\(destination)/\(prefix)"
+        }
+    }
+
+    private static func ipv6RouteCIDRList(_ value: Any?) -> [String] {
+        guard let rows = value as? [[String: Any]] else {
+            return []
+        }
+        return rows.compactMap { row in
+            guard let destination = row["destination"] as? String, !destination.isEmpty else {
+                return nil
+            }
+            guard let prefix = ObstacleBridgeRuntimeConfig.intValue(from: row["network_prefix_length"]) else {
+                return destination
+            }
+            return "\(destination)/\(prefix)"
+        }
+    }
+
+    private static func ipv4PrefixLength(fromSubnetMask subnetMask: String) -> Int? {
+        let octets = subnetMask.split(separator: ".").compactMap { UInt8(String($0)) }
+        guard octets.count == 4 else {
+            return nil
+        }
+        var prefix = 0
+        var sawZero = false
+        for octet in octets {
+            for bit in stride(from: 7, through: 0, by: -1) {
+                let set = ((Int(octet) >> bit) & 1) == 1
+                if set {
+                    guard !sawZero else {
+                        return nil
+                    }
+                    prefix += 1
+                } else {
+                    sawZero = true
+                }
+            }
+        }
+        return prefix
+    }
+
     private func adminCompressLayerSnapshot() -> [String: Any]? {
         guard let runtime = sharedCompressLayerRuntime else {
             return nil
@@ -2042,6 +2117,7 @@ private final class SwiftSimpleUDPPeerBridge {
     private let tunnelAddress: String
     private let tunnelAddress6: String
     private let tcpServiceSpecs: [ObstacleBridgeChannelMuxCodec.ServiceSpec]
+    private let udpServiceSpecs: [ObstacleBridgeChannelMuxCodec.ServiceSpec]
     private let startupMuxFrames: [Data]
     private let muxInstanceID: UInt64
     private let muxConnectionSeq: UInt32
@@ -2088,6 +2164,7 @@ private final class SwiftSimpleUDPPeerBridge {
         tunnelAddress: String,
         tunnelAddress6: String,
         tcpServiceSpecs: [ObstacleBridgeChannelMuxCodec.ServiceSpec],
+        udpServiceSpecs: [ObstacleBridgeChannelMuxCodec.ServiceSpec] = [],
         startupMuxFrames: [Data] = [],
         muxInstanceID: UInt64 = UInt64.random(in: 1...UInt64.max),
         muxConnectionSeq: UInt32 = UInt32.random(in: 1...UInt32.max),
@@ -2103,6 +2180,7 @@ private final class SwiftSimpleUDPPeerBridge {
         self.tunnelAddress = tunnelAddress
         self.tunnelAddress6 = tunnelAddress6
         self.tcpServiceSpecs = tcpServiceSpecs
+        self.udpServiceSpecs = udpServiceSpecs
         self.startupMuxFrames = startupMuxFrames
         self.muxInstanceID = muxInstanceID
         self.muxConnectionSeq = muxConnectionSeq
@@ -2295,6 +2373,7 @@ private final class SwiftSimpleUDPPeerBridge {
             if #available(iOS 15.0, *) {
                 quicOverlayTransportOwner?.start()
             }
+            recordServiceCatalog()
             startTCPServices()
         } else {
             let source = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: queue)
@@ -2341,6 +2420,7 @@ private final class SwiftSimpleUDPPeerBridge {
                 started = false
                 fatalError("swift_udp probe start failed: \(error.localizedDescription)")
             }
+            recordServiceCatalog()
             startTCPServices()
         } else {
             let source = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: queue)
@@ -2759,6 +2839,10 @@ private final class SwiftSimpleUDPPeerBridge {
                 }
                 tcpListeners[spec.svcID] = listener
                 listener.start(queue: queue)
+                provider?.recordPacketBridgeEvent(
+                    "swift_udp_tcp_listener_starting",
+                    fields: serviceFields(spec)
+                )
             } catch {
                 provider?.recordPacketBridgeEvent(
                     "swift_udp_tcp_listener_start_failed",
@@ -2788,7 +2872,7 @@ private final class SwiftSimpleUDPPeerBridge {
         case .ready:
             provider?.recordPacketBridgeEvent(
                 "swift_udp_tcp_listener_ready",
-                fields: ["service_id": spec.svcID, "bind": spec.lBind, "port": spec.lPort]
+                fields: serviceFields(spec)
             )
         case .failed(let error):
             tcpListenerFailures += 1
@@ -2807,8 +2891,13 @@ private final class SwiftSimpleUDPPeerBridge {
     }
 
     private func handleAcceptedTCPConnection(_ connection: NWConnection, spec: ObstacleBridgeChannelMuxCodec.ServiceSpec) {
+        var acceptedFields = serviceFields(spec)
+        acceptedFields["remote_endpoint"] = Self.endpointLogValue(connection.endpoint)
+        acceptedFields["selected_transport"] = selectedTransport
+        provider?.recordPacketBridgeEvent("swift_udp_tcp_listener_accepted", fields: acceptedFields)
         if let owner = udpOverlayTransportOwner {
             guard owner.acceptLocalTCPConnection(connection, spec: spec, listenerHost: spec.lBind, listenerPort: spec.lPort) else {
+                provider?.recordPacketBridgeEvent("swift_udp_tcp_listener_accept_rejected", fields: acceptedFields.merging(["owner": "myudp"]) { current, _ in current })
                 cancelConnection(connection)
                 return
             }
@@ -2816,6 +2905,7 @@ private final class SwiftSimpleUDPPeerBridge {
         }
         if let owner = tcpOverlayTransportOwner {
             guard owner.acceptLocalTCPConnection(connection, spec: spec, listenerHost: spec.lBind, listenerPort: spec.lPort) else {
+                provider?.recordPacketBridgeEvent("swift_udp_tcp_listener_accept_rejected", fields: acceptedFields.merging(["owner": "tcp"]) { current, _ in current })
                 cancelConnection(connection)
                 return
             }
@@ -2823,6 +2913,7 @@ private final class SwiftSimpleUDPPeerBridge {
         }
         if let owner = wsOverlayTransportOwner {
             guard owner.acceptLocalTCPConnection(connection, spec: spec, listenerHost: spec.lBind, listenerPort: spec.lPort) else {
+                provider?.recordPacketBridgeEvent("swift_udp_tcp_listener_accept_rejected", fields: acceptedFields.merging(["owner": "ws"]) { current, _ in current })
                 cancelConnection(connection)
                 return
             }
@@ -2830,12 +2921,66 @@ private final class SwiftSimpleUDPPeerBridge {
         }
         if #available(iOS 15.0, *), let owner = quicOverlayTransportOwner {
             guard owner.acceptLocalTCPConnection(connection, spec: spec, listenerHost: spec.lBind, listenerPort: spec.lPort) else {
+                provider?.recordPacketBridgeEvent("swift_udp_tcp_listener_accept_rejected", fields: acceptedFields.merging(["owner": "quic"]) { current, _ in current })
                 cancelConnection(connection)
                 return
             }
             return
         }
+        provider?.recordPacketBridgeEvent("swift_udp_tcp_listener_accept_no_transport_owner", fields: acceptedFields)
         cancelConnection(connection)
+    }
+
+    private func recordServiceCatalog() {
+        provider?.recordPacketBridgeEvent(
+            "swift_udp_service_catalog",
+            fields: [
+                "selected_transport": selectedTransport,
+                "tcp_service_count": tcpServiceSpecs.count,
+                "udp_service_count": udpServiceSpecs.count,
+                "tcp_services": tcpServiceSpecs.map { serviceFields($0) },
+                "udp_services": udpServiceSpecs.map { serviceFields($0) },
+                "udp_own_servers_hosted": false,
+            ]
+        )
+        for spec in udpServiceSpecs {
+            provider?.recordPacketBridgeEvent(
+                "swift_udp_udp_own_server_not_hosted",
+                fields: serviceFields(spec).merging([
+                    "reason": "Network Extension currently starts TCP own_servers only; UDP own_server listener support is not wired here yet"
+                ]) { current, _ in current }
+            )
+        }
+    }
+
+    private func serviceFields(_ spec: ObstacleBridgeChannelMuxCodec.ServiceSpec) -> [String: Any] {
+        [
+            "service_id": spec.svcID,
+            "service_name": spec.name ?? "",
+            "listen_protocol": spec.lProto,
+            "listen_host": spec.lBind,
+            "listen_port": spec.lPort,
+            "target_protocol": spec.rProto,
+            "target_host": spec.rHost,
+            "target_port": spec.rPort,
+        ]
+    }
+
+    private static func endpointLogValue(_ endpoint: Network.NWEndpoint) -> String {
+        switch endpoint {
+        case .hostPort(let host, let port):
+            return "\(host):\(port.rawValue)"
+        case .service(let name, let type, let domain, _):
+            return "\(name).\(type).\(domain)"
+        case .unix(let path):
+            return path
+        case .url(let url):
+            return url.absoluteString
+        case .opaque(let endpoint):
+            return "opaque:\(endpoint)"
+        @unknown default:
+            return "\(endpoint)"
+        }
     }
 
     private func sendDatagram(_ packet: Data) {

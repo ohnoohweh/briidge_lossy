@@ -169,6 +169,7 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         str(SHARED_NATIVE_DIR / "ObstacleBridgeNativeServiceSpec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeNativeProxyConnections.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayConnectionSupport.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressResolver.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxUdpRuntime.swift"),
@@ -1478,6 +1479,74 @@ def test_ios_packet_tunnel_provider_probe_swift_udp_empty_connector_peer_falls_b
     assert payload["bind_host"] == "127.0.0.1"
     assert payload["overlay_bind_host"] == "::"
     assert payload["bind_port"] == 5555
+
+
+def test_ios_packet_tunnel_provider_probe_swift_udp_missing_connector_defaults_to_overlay_peer(tmp_path: Path) -> None:
+    source_path = tmp_path / "PacketTunnelProviderSwiftUDPMissingConnectorProbe.swift"
+    binary_path = tmp_path / "packet-tunnel-provider-swift-udp-missing-connector-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            @main
+            struct PacketTunnelProviderSwiftUDPMissingConnectorProbeMain {
+                static func main() throws {
+                    let payload: [String: Any] = [
+                        "runner": [
+                            "overlay_transport": "myudp",
+                        ],
+                        "udp_session": [
+                            "udp_bind": "::",
+                            "udp_peer": "[2001:ac8:29:60:0:6:0:47],38.180.143.5",
+                            "udp_peer_port": 4433,
+                            "udp_peer_resolve_family": "prefer-ipv6",
+                        ],
+                    ]
+                    let flattened = ObstacleBridgeRuntimeConfig.flatten(payload)
+                    guard let config = ObstacleBridgeRuntimeConfig.swiftUDPPeerConfig(from: flattened, defaultMTU: 1600) else {
+                        throw NSError(domain: "PacketTunnelProviderProbe", code: 1, userInfo: [NSLocalizedDescriptionKey: "swiftUDPPeerConfig returned nil"])
+                    }
+                    let result: [String: Any] = [
+                        "runtime_mode": config.runtimeMode,
+                        "peer_host": config.peerHost,
+                        "peer_port": config.peerPort,
+                        "peer_resolve_family": config.peerResolveFamily,
+                        "bind_host": config.bindHost,
+                        "overlay_bind_host": config.overlayBindHost,
+                        "bind_port": config.bindPort,
+                        "tun_ifname": config.tunIfname,
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_packet_tunnel_provider_probe(source_path, binary_path)
+    completed = subprocess.run(
+        [str(binary_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout)
+    assert payload["runtime_mode"] == "swift_udp"
+    assert payload["peer_host"] == "[2001:ac8:29:60:0:6:0:47],38.180.143.5"
+    assert payload["peer_port"] == 4433
+    assert payload["peer_resolve_family"] == "prefer-ipv6"
+    assert payload["bind_host"] == "127.0.0.1"
+    assert payload["overlay_bind_host"] == "::"
+    assert payload["bind_port"] == 5555
+    assert payload["tun_ifname"] == "ios-utun"
 
 
 def test_ios_packet_tunnel_provider_probe_rotates_to_next_peer_candidate_after_idle_timeout(tmp_path: Path) -> None:

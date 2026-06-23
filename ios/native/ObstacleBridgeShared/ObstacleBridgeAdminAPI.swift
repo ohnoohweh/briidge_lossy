@@ -371,7 +371,7 @@ enum ObstacleBridgeAdminAPI {
 
     static func tunRoutingSnapshot(fromConnections snapshot: [String: Any]) -> [String: Any] {
         let tunRows = snapshot["tun"] as? [[String: Any]] ?? []
-        let sharedRows = tunRows.filter { $0["shared_tun_ownership"] is [String: Any] }
+        let sharedRows = deduplicatedSharedTunRows(from: tunRows)
         let tunOpen = tunRows.reduce(into: 0) { partialResult, row in
             let state = String(describing: row["state"] ?? "connected").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if row["chan_id"] is NSNull {
@@ -414,6 +414,38 @@ enum ObstacleBridgeAdminAPI {
             "app": "udp-bidirectional-mux",
             "milestone": "C",
         ]
+    }
+
+    private static func deduplicatedSharedTunRows(from tunRows: [[String: Any]]) -> [[String: Any]] {
+        var rowsByKey: [String: [String: Any]] = [:]
+        var order: [String] = []
+        for row in tunRows {
+            guard row["shared_tun_ownership"] is [String: Any] else {
+                continue
+            }
+            let local = row["local"] as? [String: Any] ?? [:]
+            let key = [
+                String(describing: row["svc_owner_peer_id"] ?? ""),
+                String(describing: row["svc_id"] ?? ""),
+                String(describing: local["ifname"] ?? row["local_bind"] ?? ""),
+                String(describing: local["mtu"] ?? row["local_port"] ?? ""),
+            ].joined(separator: "|")
+            if rowsByKey[key] == nil {
+                order.append(key)
+                rowsByKey[key] = row
+                continue
+            }
+            let existingState = String(describing: rowsByKey[key]?["state"] ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            let rowState = String(describing: row["state"] ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            if existingState == "listening" && rowState != "listening" {
+                rowsByKey[key] = row
+            }
+        }
+        return order.compactMap { rowsByKey[$0] }
     }
 
     static func jsonResponse(_ payload: Any, statusLine: String = "HTTP/1.1 200 OK", headers: [(String, String)] = []) -> ObstacleBridgeAdminAPIResponse {

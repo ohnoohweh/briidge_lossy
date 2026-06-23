@@ -2033,6 +2033,11 @@ final class ObstacleBridgeTunnelControl: NSObject {
     }
 
 
+// This app-owned Admin Web endpoint is only a foreground convenience facade for
+// opening the app UI. Do not expose channelmux own_servers or service aliases
+// here: once Safari is foregrounded, the ObstacleBridge app can be suspended and
+// cannot reliably provide bytes. Admin Web and offered TCP/UDP services that must
+// survive app backgrounding belong in the Network Extension.
 private final class ObstacleBridgeIOSAppAdminWebProxy {
     private let statusProvider: () -> [String: Any]
     private let stateQueue = DispatchQueue(label: "com.obstaclebridge.ios-admin-web-proxy")

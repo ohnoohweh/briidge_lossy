@@ -585,7 +585,26 @@ class AdminWebUI:
     def _build_tun_routing_payload_now(self) -> dict:
         snapshot = self.runner.get_connections_snapshot() or {}
         tun_rows = list(snapshot.get("tun") or [])
-        shared_rows = [dict(row) for row in tun_rows if isinstance(row.get("shared_tun_ownership"), dict)]
+        shared_rows_by_key: dict[tuple, dict] = {}
+        for row in tun_rows:
+            if not isinstance(row.get("shared_tun_ownership"), dict):
+                continue
+            row_copy = dict(row)
+            local = row_copy.get("local") or {}
+            if not isinstance(local, dict):
+                local = {}
+            key = (
+                row_copy.get("svc_owner_peer_id"),
+                row_copy.get("svc_id"),
+                local.get("ifname") or row_copy.get("local_bind"),
+                local.get("mtu") or row_copy.get("local_port"),
+            )
+            existing = shared_rows_by_key.get(key)
+            existing_state = str((existing or {}).get("state", "")).lower()
+            row_state = str(row_copy.get("state", "")).lower()
+            if existing is None or (existing_state == "listening" and row_state != "listening"):
+                shared_rows_by_key[key] = row_copy
+        shared_rows = list(shared_rows_by_key.values())
         active_bindings_total = 0
         shared_drop_total = 0
         tun_routing_effective = {}

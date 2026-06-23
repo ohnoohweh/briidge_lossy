@@ -366,7 +366,11 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                     self.udpConnectionStates.removeValue(forKey: chanID)
                 }
                 self.udpServerDrivers.removeValue(forKey: ObjectIdentifier(connection))
-            }
+            },
+            eventSink: { [weak self] event, fields in
+                self?.eventSink?(event, fields)
+            },
+            eventPrefix: "ws_overlay"
         )
         udpServerDrivers[ObjectIdentifier(connection)] = driver
         driver.start()

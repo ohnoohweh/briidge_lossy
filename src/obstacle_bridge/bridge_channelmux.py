@@ -5814,9 +5814,19 @@ class ChannelMux:
 
     # --- Dashboard helpers ---
 
-    def _svc_spec_or_none(self, svc_id: int):
+    def _svc_spec_or_none(self, svc_id: int, *, svc_key=None, owner_peer_id=None):
         try:
             i = int(svc_id)
+            if svc_key is not None:
+                spec = self._local_services.get(svc_key)
+                if spec is None:
+                    spec = self._peer_installed_services.get(svc_key)
+                if spec is not None:
+                    return spec
+            if owner_peer_id is not None:
+                spec = self._peer_installed_services.get(("peer", int(owner_peer_id), i))
+                if spec is not None:
+                    return spec
             local = self._local_services.get(("local", 0, i))
             if local is not None:
                 return local
@@ -5855,7 +5865,7 @@ class ChannelMux:
                 continue
 
             svc_id = int(svc_key[2])
-            spec = self._svc_spec_or_none(svc_id)
+            spec = self._svc_spec_or_none(svc_id, svc_key=svc_key)
             srv_tr = self._svc_udp_servers.get(svc_key)
             sockname = srv_tr.get_extra_info("sockname") if srv_tr else None
             local_ep = (sockname[0], int(sockname[1])) if isinstance(sockname, tuple) and len(sockname) >= 2 else None
@@ -5887,7 +5897,7 @@ class ChannelMux:
                 svc_id = int(svc_key[2])
             except Exception:
                 continue
-            spec = self._svc_spec_or_none(svc_id)
+            spec = self._svc_spec_or_none(svc_id, svc_key=svc_key)
             sockname = srv_tr.get_extra_info("sockname") if srv_tr else None
             local_ep = (sockname[0], int(sockname[1])) if isinstance(sockname, tuple) and len(sockname) >= 2 else None
             rows.append({
@@ -5921,7 +5931,10 @@ class ChannelMux:
                 local_ep = (sockname[0], int(sockname[1])) if isinstance(sockname, tuple) and len(sockname) >= 2 else None
                 peer_ep = (peername[0], int(peername[1])) if isinstance(peername, tuple) and len(peername) >= 2 else None
                 svc_id = self._udp_client_svc_id.get(chan)
-                spec = self._svc_spec_or_none(svc_id) if svc_id is not None else None
+                spec = self._svc_spec_or_none(
+                    svc_id,
+                    owner_peer_id=self._chan_owner_peer_id.get(chan),
+                ) if svc_id is not None else None
                 stats = self._chan_stat_dict(chan, ChannelMux.Proto.UDP)
                 throttle = self._local_ingress_throttle_snapshot_for_scope(("udp", "client", int(chan)), now_ns=now_ns)
 
@@ -5964,8 +5977,11 @@ class ChannelMux:
             except Exception:
                 continue
 
-            spec = self._svc_spec_or_none(svc_id)
             role = self._tcp_role_by_chan.get(chan, "unknown")
+            spec = self._svc_spec_or_none(
+                svc_id,
+                owner_peer_id=self._chan_owner_peer_id.get(chan) if role == "server" else None,
+            )
             local_ep, remote_ep = self._tcp_endpoints(writer)
             stats = self._chan_stat_dict(chan, ChannelMux.Proto.TCP)
 
@@ -6013,9 +6029,19 @@ class ChannelMux:
             },
         }        
     
-    def _svc_spec_or_none(self, svc_id: int):
+    def _svc_spec_or_none(self, svc_id: int, *, svc_key=None, owner_peer_id=None):
         try:
             i = int(svc_id)
+            if svc_key is not None:
+                spec = self._local_services.get(svc_key)
+                if spec is None:
+                    spec = self._peer_installed_services.get(svc_key)
+                if spec is not None:
+                    return spec
+            if owner_peer_id is not None:
+                spec = self._peer_installed_services.get(("peer", int(owner_peer_id), i))
+                if spec is not None:
+                    return spec
             local = self._local_services.get(("local", 0, i))
             if local is not None:
                 return local
@@ -6054,7 +6080,7 @@ class ChannelMux:
                 continue
 
             svc_id = int(svc_key[2])
-            spec = self._svc_spec_or_none(svc_id)
+            spec = self._svc_spec_or_none(svc_id, svc_key=svc_key)
             srv_tr = self._svc_udp_servers.get(svc_key)
             sockname = srv_tr.get_extra_info("sockname") if srv_tr else None
             local_ep = (sockname[0], int(sockname[1])) if isinstance(sockname, tuple) and len(sockname) >= 2 else None
@@ -6086,7 +6112,7 @@ class ChannelMux:
                 svc_id = int(svc_key[2])
             except Exception:
                 continue
-            spec = self._svc_spec_or_none(svc_id)
+            spec = self._svc_spec_or_none(svc_id, svc_key=svc_key)
             sockname = srv_tr.get_extra_info("sockname") if srv_tr else None
             local_ep = (sockname[0], int(sockname[1])) if isinstance(sockname, tuple) and len(sockname) >= 2 else None
             rows.append({
@@ -6120,7 +6146,10 @@ class ChannelMux:
                 local_ep = (sockname[0], int(sockname[1])) if isinstance(sockname, tuple) and len(sockname) >= 2 else None
                 peer_ep = (peername[0], int(peername[1])) if isinstance(peername, tuple) and len(peername) >= 2 else None
                 svc_id = self._udp_client_svc_id.get(chan)
-                spec = self._svc_spec_or_none(svc_id) if svc_id is not None else None
+                spec = self._svc_spec_or_none(
+                    svc_id,
+                    owner_peer_id=self._chan_owner_peer_id.get(chan),
+                ) if svc_id is not None else None
                 stats = self._chan_stat_dict(chan, ChannelMux.Proto.UDP)
                 throttle = self._local_ingress_throttle_snapshot_for_scope(("udp", "client", int(chan)), now_ns=now_ns)
 
@@ -6163,8 +6192,11 @@ class ChannelMux:
             except Exception:
                 continue
 
-            spec = self._svc_spec_or_none(svc_id)
             role = self._tcp_role_by_chan.get(chan, "unknown")
+            spec = self._svc_spec_or_none(
+                svc_id,
+                owner_peer_id=self._chan_owner_peer_id.get(chan) if role == "server" else None,
+            )
             local_ep, remote_ep = self._tcp_endpoints(writer)
             stats = self._chan_stat_dict(chan, ChannelMux.Proto.TCP)
 
@@ -6202,7 +6234,7 @@ class ChannelMux:
                 svc_id = int(svc_key[2])
             except Exception:
                 continue
-            spec = self._svc_spec_or_none(svc_id)
+            spec = self._svc_spec_or_none(svc_id, svc_key=svc_key)
             sockets = list((getattr(srv, "sockets", None) or []))
             if not sockets:
                 sockets = [None]
@@ -6272,7 +6304,7 @@ class ChannelMux:
                 stats["tx_bytes"] += int(chan_stats.get("rx_bytes", 0) or 0)
             svc_key = getattr(dev, "service_key", None)
             svc_id = int(svc_key[2]) if isinstance(svc_key, tuple) and len(svc_key) >= 3 else None
-            spec = self._svc_spec_or_none(svc_id) if svc_id is not None else None
+            spec = self._svc_spec_or_none(svc_id, svc_key=svc_key) if svc_id is not None else None
             if isinstance(svc_key, tuple):
                 active_service_keys.add(svc_key)
             shared_snapshot = self._shared_tun_runtime_snapshot_for_service(svc_key)
@@ -6314,7 +6346,7 @@ class ChannelMux:
                 svc_id = int(svc_key[2])
             except Exception:
                 continue
-            spec = self._svc_spec_or_none(svc_id)
+            spec = self._svc_spec_or_none(svc_id, svc_key=svc_key)
             local = {
                 "ifname": str(getattr(dev, "ifname", "") or ""),
                 "mtu": int(getattr(dev, "mtu", 0) or 0),

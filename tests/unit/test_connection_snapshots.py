@@ -278,6 +278,44 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         self.assertIn("connected", {row.get("state") for row in snap["udp"]})
         self.assertIn("connected", {row.get("state") for row in snap["tcp"]})
 
+    def test_snapshot_uses_peer_service_spec_when_peer_svc_id_collides_with_local(self):
+        local_shared_tun = ChannelMux.ServiceSpec(
+            1,
+            "tun",
+            "obtun0",
+            1600,
+            "tun",
+            "obtun0",
+            1600,
+            name="Shared TUN server",
+        )
+        peer_webadmin = ChannelMux.ServiceSpec(
+            1,
+            "tcp",
+            "0.0.0.0",
+            13081,
+            "tcp",
+            "127.0.0.1",
+            18090,
+            name="WebAdmin iphone",
+        )
+        peer_key = ("peer", 13, 1)
+        self.mux._local_services[("local", 0, 1)] = local_shared_tun
+        self.mux._peer_installed_services[peer_key] = peer_webadmin
+        self.mux._svc_tcp_servers[peer_key] = _FakeTcpServer([_FakeSocket(("0.0.0.0", 13081))])
+        self.mux._tcp_by_chan[134] = (1, _FakeWriter(("38.180.143.5", 13081), ("39.144.43.105", 23428)))
+        self.mux._tcp_role_by_chan[134] = "server"
+        self.mux._chan_owner_peer_id[134] = 13
+
+        snap = self.mux.snapshot_connections()
+
+        connected = next(row for row in snap["tcp"] if row.get("chan_id") == 134)
+        listener = next(row for row in snap["tcp"] if row.get("state") == "listening" and row.get("svc_owner_peer_id") == 13)
+        self.assertEqual(connected["service_name"], "WebAdmin iphone")
+        self.assertEqual(connected["remote_destination"], {"host": "127.0.0.1", "port": 18090})
+        self.assertEqual(listener["service_name"], "WebAdmin iphone")
+        self.assertEqual(listener["remote_destination"], {"host": "127.0.0.1", "port": 18090})
+
     def test_snapshot_active_udp_connection_includes_throttle_summary(self):
         self.mux._svc_udp_servers[self.udp_key] = _FakeDatagramTransport(("0.0.0.0", 1111))
         self.mux._udp_by_chan[101] = (self.udp_key, ("10.10.10.10", 40001))

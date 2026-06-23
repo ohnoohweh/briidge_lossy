@@ -576,6 +576,64 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["shared_tun"][0]["shared_tun_ownership"]["peer_count"], 2)
         self.assertEqual(payload["shared_tun"][0]["shared_tun_ownership"]["drop_counters"]["by_reason"]["unknown_destination"], 2)
 
+    def test_build_tun_routing_payload_deduplicates_shared_tun_listener_and_open_row(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+        )
+        runner = _RunnerStub()
+        shared = {
+            "mode": "server_shared",
+            "peer_count": 1,
+            "active_peer_bindings": [{"peer_id": 7}],
+            "drop_counters": {"total": 0, "by_reason": {}},
+        }
+        runner.get_connections_snapshot = lambda: {
+            "udp": [],
+            "tcp": [],
+            "tun": [
+                {
+                    "protocol": "tun",
+                    "state": "connected",
+                    "chan_id": 11,
+                    "svc_id": 1,
+                    "service_name": "shared-tun",
+                    "local": {"ifname": "obtun0", "mtu": 1600},
+                    "shared_tun_ownership": dict(shared),
+                },
+                {
+                    "protocol": "tun",
+                    "state": "listening",
+                    "chan_id": None,
+                    "svc_id": 1,
+                    "service_name": "shared-tun",
+                    "local": {"ifname": "obtun0", "mtu": 1600},
+                    "shared_tun_ownership": {**shared, "active_peer_bindings": []},
+                },
+            ],
+            "counts": {"udp": 0, "tcp": 0, "tun": 1, "udp_listening": 0, "tcp_listening": 0, "tun_listening": 1},
+        }
+        ui = AdminWebUI(args, runner)
+
+        payload = ui._build_tun_routing_payload()
+
+        self.assertEqual(payload["summary"]["tun_total"], 2)
+        self.assertEqual(payload["summary"]["tun_open"], 1)
+        self.assertEqual(payload["summary"]["tun_listening"], 1)
+        self.assertEqual(payload["summary"]["shared_services"], 1)
+        self.assertEqual(payload["summary"]["shared_active_peer_bindings"], 1)
+        self.assertEqual(len(payload["shared_tun"]), 1)
+        self.assertEqual(payload["shared_tun"][0]["state"], "connected")
+
     def test_build_tun_routing_payload_exposes_effective_overlay_peer_excluded_routes(self):
         args = argparse.Namespace(
             admin_web=True,

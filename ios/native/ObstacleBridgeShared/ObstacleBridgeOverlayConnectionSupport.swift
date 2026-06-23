@@ -122,6 +122,8 @@ final class ObstacleBridgeUDPServerConnectionDriver {
     private let overlayConnectedProvider: () -> Bool
     private let handleSnapshot: (SnapshotEvent) -> Void
     private let handleClosed: (Int?) -> Void
+    private let eventSink: (String, [String: Any]) -> Void
+    private let eventPrefix: String
 
     private var chanID: Int?
 
@@ -134,7 +136,9 @@ final class ObstacleBridgeUDPServerConnectionDriver {
         startedProvider: @escaping () -> Bool,
         overlayConnectedProvider: @escaping () -> Bool,
         handleSnapshot: @escaping (SnapshotEvent) -> Void,
-        handleClosed: @escaping (Int?) -> Void
+        handleClosed: @escaping (Int?) -> Void,
+        eventSink: @escaping (String, [String: Any]) -> Void = { _, _ in },
+        eventPrefix: String = "overlay"
     ) {
         self.connection = connection
         self.spec = spec
@@ -145,9 +149,17 @@ final class ObstacleBridgeUDPServerConnectionDriver {
         self.overlayConnectedProvider = overlayConnectedProvider
         self.handleSnapshot = handleSnapshot
         self.handleClosed = handleClosed
+        self.eventSink = eventSink
+        self.eventPrefix = eventPrefix
     }
 
     func start() {
+        eventSink("\(eventPrefix)_udp_server_driver_started", [
+            "service_id": spec.svcID,
+            "service_name": spec.name ?? "",
+            "target_host": spec.rHost,
+            "target_port": spec.rPort,
+        ])
         receiveNext()
     }
 
@@ -160,20 +172,49 @@ final class ObstacleBridgeUDPServerConnectionDriver {
                 guard let self, self.startedProvider() else { return }
                 if let data, !data.isEmpty {
                     let endpoint = ObstacleBridgeOverlayConnectionSupport.endpointDescription(self.connection.endpoint)
-                    if let snapshot = try? self.runtime.handleLocalServerDatagram(
-                        spec: self.spec,
-                        serviceKey: self.serviceKey,
-                        payload: data,
-                        addrHost: endpoint.host,
-                        addrPort: endpoint.port,
-                        overlayConnected: self.overlayConnectedProvider(),
-                        acceptingEnabled: true
-                    ) {
-                        self.chanID = snapshot.chanID
-                        self.handleSnapshot(.init(chanID: snapshot.chanID, frames: snapshot.frames, bytes: data.count))
+                    self.eventSink("\(self.eventPrefix)_udp_server_datagram_read", [
+                        "bytes": data.count,
+                        "source_host": endpoint.host,
+                        "source_port": endpoint.port,
+                        "service_id": self.spec.svcID,
+                        "overlay_connected": self.overlayConnectedProvider(),
+                    ])
+                    do {
+                        if let snapshot = try self.runtime.handleLocalServerDatagram(
+                            spec: self.spec,
+                            serviceKey: self.serviceKey,
+                            payload: data,
+                            addrHost: endpoint.host,
+                            addrPort: endpoint.port,
+                            overlayConnected: self.overlayConnectedProvider(),
+                            acceptingEnabled: true
+                        ) {
+                            self.chanID = snapshot.chanID
+                            self.eventSink("\(self.eventPrefix)_udp_server_datagram_mux", [
+                                "chan_id": snapshot.chanID,
+                                "bytes": data.count,
+                                "frames": snapshot.frames.count,
+                            ])
+                            self.handleSnapshot(.init(chanID: snapshot.chanID, frames: snapshot.frames, bytes: data.count))
+                        } else {
+                            self.eventSink("\(self.eventPrefix)_udp_server_datagram_rejected", [
+                                "bytes": data.count,
+                                "service_id": self.spec.svcID,
+                                "overlay_connected": self.overlayConnectedProvider(),
+                            ])
+                        }
+                    } catch {
+                        self.eventSink("\(self.eventPrefix)_udp_server_datagram_failed", [
+                            "bytes": data.count,
+                            "error": error.localizedDescription,
+                        ])
                     }
                 }
                 if error != nil {
+                    self.eventSink("\(self.eventPrefix)_udp_server_receive_error", [
+                        "chan_id": self.chanID ?? -1,
+                        "error": error?.localizedDescription ?? "",
+                    ])
                     if let chanID = self.chanID {
                         let snapshot = self.runtime.handleInboundClose(chanID: chanID)
                         self.handleClosed(snapshot.closed ? chanID : nil)
@@ -244,8 +285,16 @@ final class ObstacleBridgeUDPClientConnectionDriver {
         guard !closed, connection == nil,
               let port = NWEndpoint.Port(rawValue: UInt16(spec.rPort))
         else {
+            eventSink(failureEvent, ["chan_id": chanID, "error": "invalid or duplicate UDP client start", "host": spec.rHost, "port": spec.rPort])
             return
         }
+        eventSink("\(failureEvent.replacingOccurrences(of: "_failed", with: ""))_start", [
+            "chan_id": chanID,
+            "service_id": spec.svcID,
+            "service_name": spec.name ?? "",
+            "host": spec.rHost,
+            "port": spec.rPort,
+        ])
         let connection = NWConnection(host: NWEndpoint.Host(spec.rHost), port: port, using: .udp)
         self.connection = connection
         registerConnection(connection)
@@ -261,6 +310,14 @@ final class ObstacleBridgeUDPClientConnectionDriver {
             peerAddrPort: spec.rPort
         )
         updateConnected(snapshot.localAddrHost, snapshot.localAddrPort)
+        eventSink("\(failureEvent.replacingOccurrences(of: "_failed", with: ""))_activated", [
+            "chan_id": chanID,
+            "service_id": spec.svcID,
+            "service_name": spec.name ?? "",
+            "host": spec.rHost,
+            "port": spec.rPort,
+            "pending_flushed": snapshot.flushedPackets.count,
+        ])
         for packet in snapshot.flushedPackets {
             sendOnUDPConnection(connection, packet, chanID)
             recordInbound(packet.count)
@@ -282,6 +339,11 @@ final class ObstacleBridgeUDPClientConnectionDriver {
     private func handleState(_ state: NWConnection.State) {
         switch state {
         case .ready:
+            eventSink("\(failureEvent.replacingOccurrences(of: "_failed", with: ""))_ready", [
+                "chan_id": chanID,
+                "host": spec.rHost,
+                "port": spec.rPort,
+            ])
             updateConnected(nil, nil)
         case .failed(let error):
             eventSink(failureEvent, ["chan_id": chanID, "error": error.localizedDescription, "host": spec.rHost, "port": spec.rPort])
@@ -302,10 +364,19 @@ final class ObstacleBridgeUDPClientConnectionDriver {
                 guard let self, self.startedProvider(), !self.closed else { return }
                 if let data, !data.isEmpty,
                    let snapshot = try? self.runtime.handleLocalClientDatagram(chanID: self.chanID, payload: data) {
+                    self.eventSink("\(self.failureEvent.replacingOccurrences(of: "_failed", with: ""))_data_read", [
+                        "chan_id": self.chanID,
+                        "bytes": data.count,
+                        "frames": snapshot.frames.count,
+                    ])
                     self.sendMuxFrames(snapshot.frames)
                     self.recordOutbound(data.count)
                 }
                 if error != nil {
+                    self.eventSink("\(self.failureEvent.replacingOccurrences(of: "_failed", with: ""))_receive_error", [
+                        "chan_id": self.chanID,
+                        "error": error?.localizedDescription ?? "",
+                    ])
                     self.stop(notifyClosed: true)
                     return
                 }
