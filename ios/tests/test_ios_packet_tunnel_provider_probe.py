@@ -1284,6 +1284,7 @@ def test_ios_packet_tunnel_provider_probe_uses_tun_routing_for_full_route_and_ad
                         "excluded_routes6": configuration.excludedRoutes6.map {
                             ["destination": $0.destinationAddress, "prefix": $0.networkPrefixLength]
                         },
+                        "route_diagnostics": configuration.routeDiagnostics,
                         "dns_servers": configuration.dnsServers,
                         "mtu": configuration.mtu,
                     ]
@@ -1317,6 +1318,15 @@ def test_ios_packet_tunnel_provider_probe_uses_tun_routing_for_full_route_and_ad
     assert payload["tunnel_prefix6"] == 124
     assert payload["included_routes6"] == [{"destination": "2001:db8:205::", "prefix": 64}]
     assert payload["excluded_routes6"] == [{"destination": "::1", "prefix": 128}]
+    diag = payload["route_diagnostics"]
+    ipv4_probes = {probe["host"]: probe for probe in diag["ipv4"]["probes"]}
+    ipv6_probes = {probe["host"]: probe for probe in diag["ipv6"]["probes"]}
+    assert ipv4_probes["127.0.0.1"]["included"] is False
+    assert ipv4_probes["127.0.0.1"]["excluded"] is True
+    assert ipv4_probes["127.0.0.1"]["routed_to_tunnel"] is False
+    assert ipv6_probes["::1"]["included"] is False
+    assert ipv6_probes["::1"]["excluded"] is True
+    assert ipv6_probes["::1"]["routed_to_tunnel"] is False
     assert payload["dns_servers"] == ["9.9.9.9"]
     assert payload["mtu"] == 1600
 

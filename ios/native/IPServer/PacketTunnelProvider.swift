@@ -1655,6 +1655,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "excluded_routes6": configuration.excludedRoutes6.map { ["destination": $0.destinationAddress, "network_prefix_length": $0.networkPrefixLength] },
             "dns_servers": configuration.dnsServers,
             "mtu": configuration.mtu,
+            "route_diagnostics": configuration.routeDiagnostics,
         ]
     }
 
