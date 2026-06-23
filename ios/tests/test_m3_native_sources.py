@@ -795,4 +795,6 @@ def test_ios_packet_tunnel_provider_owns_restart_without_app_process() -> None:
     assert 'scheduleEmbeddedRuntimeReload(action: "reconnect")' in provider
     assert 'scheduleEmbeddedRuntimeReload(action: "restart_after_save")' in provider
     assert '"restart_embedded": true' in provider
-    assert '"protocol_stats": overlayRuntime.protocolStatsSnapshot()' in (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    assert "let protocolStats = overlayRuntime.protocolStatsSnapshot()" in udp_owner
+    assert 'snapshot["protocol_stats"] = protocolStats' in udp_owner

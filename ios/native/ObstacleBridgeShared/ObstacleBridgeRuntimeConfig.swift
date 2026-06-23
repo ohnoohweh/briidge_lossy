@@ -1184,8 +1184,31 @@ enum ObstacleBridgeRuntimeConfig {
         }
     }
 
-    private static func normalizedRouteCIDR(for host: String) -> String? {
+    private static func splitConfiguredPeerHosts(_ host: String) -> [String] {
+        let rendered = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rendered.isEmpty else {
+            return []
+        }
+        guard rendered.contains(",") || rendered.contains(";") else {
+            return [rendered]
+        }
+        return rendered
+            .replacingOccurrences(of: ";", with: ",")
+            .split(separator: ",")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private static func stripHostBrackets(_ host: String) -> String {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+            return String(trimmed.dropFirst().dropLast())
+        }
+        return trimmed
+    }
+
+    private static func normalizedRouteCIDR(for host: String) -> String? {
+        let trimmed = stripHostBrackets(host)
         guard !trimmed.isEmpty else {
             return nil
         }
@@ -1207,7 +1230,7 @@ enum ObstacleBridgeRuntimeConfig {
     }
 
     private static func ipv4MappedIPv6RouteCIDR(for host: String) -> String? {
-        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = stripHostBrackets(host)
         guard !trimmed.isEmpty else {
             return nil
         }
@@ -1222,6 +1245,22 @@ enum ObstacleBridgeRuntimeConfig {
             return nil
         }
         return "::ffff:\(normalized)/128"
+    }
+
+    private static func routeHostFamily(_ host: String) -> Int32? {
+        let rendered = stripHostBrackets(host)
+        guard !rendered.isEmpty else {
+            return nil
+        }
+        var ipv4 = in_addr()
+        if rendered.withCString({ inet_pton(AF_INET, $0, &ipv4) }) == 1 {
+            return AF_INET
+        }
+        var ipv6 = in6_addr()
+        if rendered.withCString({ inet_pton(AF_INET6, $0, &ipv6) }) == 1 {
+            return AF_INET6
+        }
+        return nil
     }
 
     private static func dedupeRoutes(_ values: [String]) -> [String] {
@@ -1251,41 +1290,28 @@ enum ObstacleBridgeRuntimeConfig {
         else {
             return ([], [])
         }
-        let resolveMode = ObstacleBridgePeerAddressResolver.ResolveMode(
-            rawValue: peerResolveFamily(for: transport, payload: flat)
-        )
+        let resolveFamily = peerResolveFamily(for: transport, payload: flat)
         let bindHost = bindHost(for: transport, payload: flat)
-        let candidates: [ObstacleBridgeResolvedAddress]
-        do {
-            candidates = try ObstacleBridgePeerAddressResolver.resolvePeerAddresses(
-                host: host,
-                port: port,
-                resolveFamily: {
-                    switch resolveMode {
-                    case .ipv4: return "ipv4"
-                    case .ipv6: return "ipv6"
-                    case .preferIPv6: return "prefer-ipv6"
-                    }
-                }(),
-                bindHost: bindHost,
-                errorDomain: "ObstacleBridge.RuntimeConfig"
-            )
-        } catch {
-            return ([], [])
-        }
         var routes4: [String] = []
         var routes6: [String] = []
-        for candidate in candidates {
-            guard let route = normalizedRouteCIDR(for: candidate.host) else {
+        for candidateHost in splitConfiguredPeerHosts(host) {
+            guard let family = routeHostFamily(candidateHost),
+                  let route = normalizedRouteCIDR(for: candidateHost) else {
                 continue
             }
-            if route.contains(":") {
+            if family == AF_INET6 {
+                guard resolveFamily != "ipv4" else {
+                    continue
+                }
                 routes6.append(route)
             } else {
+                guard resolveFamily != "ipv6" else {
+                    continue
+                }
                 routes4.append(route)
-                if resolveMode != .ipv4,
+                if resolveFamily != "ipv4",
                    bindHost.trimmingCharacters(in: .whitespacesAndNewlines) == "::",
-                   let mappedRoute = ipv4MappedIPv6RouteCIDR(for: candidate.host) {
+                   let mappedRoute = ipv4MappedIPv6RouteCIDR(for: candidateHost) {
                     routes6.append(mappedRoute)
                 }
             }
