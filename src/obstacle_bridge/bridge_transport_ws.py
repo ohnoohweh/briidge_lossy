@@ -2123,6 +2123,7 @@ class WebSocketSession(ISession):
                 await ws.close()
             return
 
+        had_previous_connection = self.connection_epoch > 0
         self._ws = ws
         if self._disconnect_task:
             self._disconnect_task.cancel()
@@ -2130,6 +2131,12 @@ class WebSocketSession(ISession):
         # A reconnect starts a fresh transport epoch. Drop any RTT connectedness
         # inherited from the previous socket so a stale runtime tick cannot flip
         # the new websocket back to DISCONNECTED before its first PONG arrives.
+        # Also clear the internal overlay-connected latch so the first healthy
+        # PONG on the replacement socket emits a fresh CONNECTED edge to any
+        # wrapper session (for example SecureLink) waiting on the new transport
+        # epoch rather than inheriting the prior socket's connected state.
+        if had_previous_connection:
+            self._overlay_connected = False
         self._rtt.reset()
         self._rtt_rt.reset()
         self._configure_ws_socket(ws)

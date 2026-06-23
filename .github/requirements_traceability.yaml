@@ -199,6 +199,7 @@ REQ-AUT-006:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_reconnects_with_fresh_session
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly
+    # Also defends the fresh connected-edge handoff on WS transport-epoch restart.
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_reconnect_drops_stale_buffered_old_session_data
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_replay_after_reconnect_is_rejected
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_replay_after_rekey_is_rejected
