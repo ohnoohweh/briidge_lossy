@@ -558,11 +558,13 @@ class SendPort:
         log: logging.Logger,
         initial_peer: Optional[Tuple[str, int]] = None,
         on_bytes_sent: Optional[Callable[[int], None]] = None,
+        allow_ipv4_mapped_send: bool = False,
     ):
         self.udp_transport = udp_transport
         self.log = log
         self.peer_addr: Optional[Tuple[str, int]] = initial_peer
         self._on_bytes_sent = on_bytes_sent
+        self._allow_ipv4_mapped_send = bool(allow_ipv4_mapped_send)
 
     @staticmethod
     def _pretty(addr) -> str:
@@ -596,7 +598,7 @@ class SendPort:
                 sock = self.udp_transport.get_extra_info("socket") if self.udp_transport else None
                 family = sock.family if sock is not None else None
                 host, port = str(dst[0]), int(dst[1])
-                if family == socket.AF_INET6 and ":" not in host:
+                if self._allow_ipv4_mapped_send and family == socket.AF_INET6 and ":" not in host:
                     ipaddress.IPv4Address(host)
                     send_dst = (f"::ffff:{host}", port, 0, 0)
             except Exception:
@@ -1080,6 +1082,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
         on_rtt_success: Optional[Callable[[int], None]] = None,
         on_state_change: Optional[Callable[[bool], None]] = None,
         on_send_error: Optional[Callable[[Exception], None]] = None,
+        allow_ipv4_mapped_send: bool = False,
     ):
         self.session = session
         self.proto = proto or getattr(session, "proto", PROTO)
@@ -1094,6 +1097,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
         self._on_rtt_success = on_rtt_success
         self._on_state_change = on_state_change
         self._on_send_error = on_send_error
+        self._allow_ipv4_mapped_send = bool(allow_ipv4_mapped_send)
         super().__init__()
         self._last_control_sent_ns = 0
         self._last_sent_last_in_order = 0
@@ -1156,6 +1160,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
             self.session.log,
             initial_peer=forced_peer,
             on_bytes_sent=self._on_peer_tx_bytes,
+            allow_ipv4_mapped_send=self._allow_ipv4_mapped_send,
         )
 
         self.controltimerstart()
@@ -2033,6 +2038,8 @@ class UdpSession(ISession):
         )
         peer = None
         peer_family = socket.AF_UNSPEC
+        resolve_mode = _peer_resolve_mode(self._args, "udp_peer_resolve_family")
+        allow_ipv4_mapped_send = resolve_mode == "ipv6"
         if peer_info is not None:
             peer_host, peer_port, peer_family = peer_info
             peer = (peer_host, peer_port)
@@ -2072,6 +2079,7 @@ class UdpSession(ISession):
                 on_rtt_success=self._on_rtt_success,
                 on_state_change=self._on_state_change,
                 on_send_error=self._on_peer_send_error,
+                allow_ipv4_mapped_send=allow_ipv4_mapped_send,
             )
 
         sock = None
@@ -2530,6 +2538,7 @@ class UdpSession(ISession):
                 on_peer_tx_bytes=self._on_peer_tx_bytes,
                 on_rtt_success=lambda echo_tx_ns, _peer_id=peer_id: self._on_rtt_success_for_peer(_peer_id, echo_tx_ns),
                 on_state_change=lambda connected, _peer_id=peer_id: self._on_state_change_for_peer(_peer_id, connected),
+                allow_ipv4_mapped_send=False,
             )
             self._server_peers[peer_id] = {
                 "peer_id": peer_id,

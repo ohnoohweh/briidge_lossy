@@ -38,6 +38,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private var overlayPeerID: Int?
     private var overlayConnected = false
     private var receiveBuffer = Data()
+    private var pendingOutboundWires: [Data] = []
+    private var outboundSendInFlight = false
+    private var overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
     private var udpServerConnections: [Int: NWConnection] = [:]
     private var udpClientConnections: [Int: NWConnection] = [:]
     private var udpClientDrivers: [Int: ObstacleBridgeUDPClientConnectionDriver] = [:]
@@ -192,6 +195,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         activeTunChanIDs.removeAll()
         tunStats = ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
         receiveBuffer.removeAll(keepingCapacity: false)
+        pendingOutboundWires.removeAll(keepingCapacity: false)
+        outboundSendInFlight = false
+        overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
         resetOverlayTransportEpoch()
     }
 
@@ -199,34 +205,16 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         withOwnerQueue {
             let tcpRows = ObstacleBridgeOverlayConnectionSupport.connectionRows(from: tcpConnectionStates)
             let udpRows = ObstacleBridgeOverlayConnectionSupport.connectionRows(from: udpConnectionStates)
-            let tunRows: [[String: Any]]
-            if activeTunChanIDs.isEmpty, (tunStats["rx_bytes"] ?? 0) == 0, (tunStats["tx_bytes"] ?? 0) == 0 {
-                tunRows = []
-            } else {
-                let ifname = tunIfname ?? "tun"
-                let mtu = tunMTU
-                let spec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: ifname, mtu: mtu)
-                let stats = tunStats
-                tunRows = activeTunChanIDs.sorted().map { chanID in
-                    var row = ObstacleBridgeNativeConnectionSnapshot.make(
-                        proto: "tun",
-                        role: "server",
-                        state: "connected",
-                        chanID: chanID,
-                        svcID: spec.svcID,
-                        serviceName: "TUN",
-                        sourceHost: nil,
-                        sourcePort: nil,
-                        localHost: ifname,
-                        localPort: mtu,
-                        remoteHost: spec.rHost,
-                        remotePort: spec.rPort,
-                        stats: stats
-                    )
-                    row["shared_tun_ownership"] = tunRuntime?.sharedTunRuntimeSnapshot() ?? NSNull()
-                    return row
-                }
-            }
+            let tunRows = ObstacleBridgeOverlayChannelCore.tunRows(
+                activeTunChanIDs: activeTunChanIDs,
+                tunStats: tunStats,
+                tunRuntime: tunRuntime,
+                tunServiceSpec: tunServiceSpec,
+                tunIfname: tunIfname,
+                tunMTU: tunMTU,
+                bufferedFrames: overlayWaitingCount(),
+                backpressure: overlayBackpressureSnapshot()
+            )
             return (tcpRows, udpRows, tunRows)
         }
     }
@@ -250,6 +238,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
                 "client_udp_channels": udpConnectionStates.count,
                 "tun_channels": activeTunChanIDs.count,
                 "tun_stats": tunStats,
+                "protocol_stats": overlayProtocolStats(),
             ]
         }
     }
@@ -262,80 +251,21 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     func sendLocalTunPacket(_ packet: Data) {
-        guard started, let tunRuntime, let tunIfname, tunMTU > 0 else {
-            return
-        }
-        let localTunSpec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: tunIfname, mtu: tunMTU)
-        let nowNS = DispatchTime.now().uptimeNanoseconds
         do {
-            let sharedRoute = tunRuntime.planSharedTunOutboundRoute(packet: packet)
-            let throttle = tunRuntime.scopedTunThrottle(
-                packetBytes: packet.count,
-                bufferedFrames: 0,
-                nowNS: nowNS,
-                route: sharedRoute
-            )
-            guard throttle.allowed else {
-                tunRuntime.recordSharedTunDrop(
-                    reason: "throttled_local_tun",
-                    direction: "local_to_peer",
-                    destinationIP: sharedRoute?.destinationIP,
-                    routeClass: sharedRoute?.routeClass,
-                    packetBytes: packet.count
-                )
-                return
-            }
-            if let sharedRoute {
-                guard sharedRoute.routed else {
-                    tunRuntime.recordSharedTunDrop(
-                        reason: sharedRoute.dropReason ?? "shared_route_drop",
-                        direction: "local_to_peer",
-                        ipVersion: sharedRoute.ipVersion,
-                        destinationIP: sharedRoute.destinationIP,
-                        routeClass: sharedRoute.routeClass,
-                        packetBytes: packet.count
-                    )
-                    return
-                }
-                let scopeID = tunRuntime.scopeID(for: sharedRoute)
-                for chanID in sharedRoute.selectedChanIDs {
-                    guard let localSnapshot = try tunRuntime.handleLocalTunPacket(
-                        packet: packet,
-                        mtu: tunMTU,
-                        existingChanID: chanID,
-                        spec: localTunSpec,
-                        overlayConnected: overlayConnected,
-                        acceptingEnabled: true,
-                        bufferedFrames: 0,
-                        nowNS: nowNS,
-                        recordInflow: false,
-                        scopeID: scopeID
-                    ) else {
-                        continue
-                    }
-                    activeTunChanIDs.insert(localSnapshot.chanID)
-                    sendMuxFrames(localSnapshot.frames)
-                }
-                tunRuntime.recordLocalTunForward(packetBytes: packet.count, nowNS: nowNS, route: sharedRoute)
-                tunStats["tx_msgs", default: 0] += 1
-                tunStats["tx_bytes", default: 0] += packet.count
-                return
-            }
-            guard let localSnapshot = try tunRuntime.handleLocalTunPacket(
-                packet: packet,
-                mtu: tunMTU,
-                spec: localTunSpec,
+            try ObstacleBridgeOverlayChannelCore.sendLocalTunPacket(
+                packet,
+                started: started,
+                tunRuntime: tunRuntime,
+                tunServiceSpec: tunServiceSpec,
+                tunIfname: tunIfname,
+                tunMTU: tunMTU,
                 overlayConnected: overlayConnected,
-                acceptingEnabled: true,
-                bufferedFrames: 0,
-                nowNS: nowNS
-            ) else {
-                return
-            }
-            activeTunChanIDs.insert(localSnapshot.chanID)
-            tunStats["tx_msgs", default: 0] += 1
-            tunStats["tx_bytes", default: 0] += packet.count
-            sendMuxFrames(localSnapshot.frames)
+                bufferedFrames: overlayWaitingCount(),
+                backpressure: overlayBackpressureSnapshot(),
+                activeTunChanIDs: &activeTunChanIDs,
+                tunStats: &tunStats,
+                sendMuxFrames: sendMuxFrames
+            )
         } catch {
             eventSink?("tcp_overlay_tun_send_failed", [
                 "error": error.localizedDescription,
@@ -351,21 +281,16 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         listenerHost: String,
         listenerPort: Int
     ) -> Bool {
-        if let chanID = tcpTransportOwner.acceptLocalConnection(connection, spec: spec) {
-            tcpConnectionStates[chanID] = ObstacleBridgeOverlayConnectionSupport.makeState(
-                proto: "tcp",
-                role: "server",
-                chanID: chanID,
-                spec: spec,
-                serviceName: serviceName(spec),
-                state: "connecting",
-                localHost: listenerHost,
-                localPort: listenerPort
-            )
-            return true
-        }
-        connection.cancel()
-        return false
+        ObstacleBridgeOverlayChannelCore.acceptLocalTCPConnection(
+            connection,
+            spec: spec,
+            listenerHost: listenerHost,
+            listenerPort: listenerPort,
+            tcpTransportOwner: tcpTransportOwner,
+            tcpConnectionStates: &tcpConnectionStates,
+            serviceNameByID: serviceNameByID,
+            cancelConnection: { $0.cancel() }
+        )
     }
 
     @discardableResult
@@ -672,6 +597,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         overlayLayerTransportAdapter?.handleTransportDisconnected()
         secureLinkHandshakePrimed = false
         startupMuxFramesSent = false
+        pendingOutboundWires.removeAll(keepingCapacity: false)
+        outboundSendInFlight = false
+        overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
     }
 
     private func maybeSendStartupMuxFrames() {
@@ -711,128 +639,20 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     private func handleInboundTunMuxFrame(_ frame: ObstacleBridgeChannelMuxCodec.MuxFrame) {
-        guard let tunRuntime, tunMTU > 0 else {
-            return
-        }
-        let localTunSpec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: tunIfname ?? "tun", mtu: tunMTU)
-        switch frame.mtype {
-        case .open:
-            let snapshot = tunRuntime.handleInboundTunOpen(chanID: frame.chanID, payload: frame.body)
-            if snapshot.accepted {
-                activeTunChanIDs.insert(frame.chanID)
-                tunRuntime.recordSharedTunPeerBinding(peerID: currentTunPeerID(), chanID: frame.chanID)
-            }
-        case .openChunk:
-            let snapshot = tunRuntime.handleInboundTunOpenChunk(chanID: frame.chanID, payload: frame.body)
-            if snapshot.accepted {
-                activeTunChanIDs.insert(frame.chanID)
-                tunRuntime.recordSharedTunPeerBinding(peerID: currentTunPeerID(), chanID: frame.chanID)
-            }
-        case .data:
-            let snapshot = tunRuntime.handleInboundTunDataSharedGuarded(
-                peerID: currentTunPeerID(),
-                chanID: frame.chanID,
-                body: frame.body,
-                mtu: tunMTU
-            )
-            if !snapshot.delivered {
-                if let reason = snapshot.dropReason {
-                    tunRuntime.recordSharedTunDrop(
-                        reason: reason,
-                        direction: "peer_to_local",
-                        peerID: currentTunPeerID(),
-                        chanID: frame.chanID,
-                        ipVersion: snapshot.ipVersion,
-                        sourceIP: snapshot.sourceIP,
-                        destinationIP: snapshot.destinationIP,
-                        packetBytes: frame.body.count
-                    )
-                }
-                return
-            }
-            if let packet = snapshot.packet {
-                activeTunChanIDs.insert(frame.chanID)
-                if let relay = tunRuntime.planSharedTunInboundPeerRelay(sourcePeerID: currentTunPeerID(), packet: packet),
-                   relay.relayToPeer {
-                    for chanID in relay.selectedChanIDs where chanID != frame.chanID {
-                        if let localSnapshot = try? tunRuntime.handleLocalTunPacket(
-                            packet: packet,
-                            mtu: tunMTU,
-                            existingChanID: chanID,
-                            spec: localTunSpec,
-                            overlayConnected: overlayConnected,
-                            acceptingEnabled: true,
-                            bufferedFrames: 0,
-                            nowNS: DispatchTime.now().uptimeNanoseconds,
-                            recordInflow: false
-                        ) {
-                            sendMuxFrames(localSnapshot.frames)
-                        }
-                    }
-                    return
-                }
-                tunStats["rx_msgs", default: 0] += 1
-                tunStats["rx_bytes", default: 0] += packet.count
-                tunPacketSink?(packet)
-            }
-        case .dataFrag:
-            let snapshot = tunRuntime.handleInboundTunFragment(chanID: frame.chanID, payload: frame.body, mtu: tunMTU)
-            if let packet = snapshot.packet, snapshot.delivered {
-                activeTunChanIDs.insert(frame.chanID)
-                let guarded = tunRuntime.handleInboundTunDataSharedGuarded(
-                    peerID: currentTunPeerID(),
-                    chanID: frame.chanID,
-                    body: packet,
-                    mtu: tunMTU,
-                    boundChanID: frame.chanID
-                )
-                if !guarded.delivered {
-                    if let reason = guarded.dropReason {
-                        tunRuntime.recordSharedTunDrop(
-                            reason: reason,
-                            direction: "peer_to_local",
-                            peerID: currentTunPeerID(),
-                            chanID: frame.chanID,
-                            ipVersion: guarded.ipVersion,
-                            sourceIP: guarded.sourceIP,
-                            destinationIP: guarded.destinationIP,
-                            packetBytes: packet.count
-                        )
-                    }
-                    return
-                }
-                if let relay = tunRuntime.planSharedTunInboundPeerRelay(sourcePeerID: currentTunPeerID(), packet: packet),
-                   relay.relayToPeer {
-                    for chanID in relay.selectedChanIDs where chanID != frame.chanID {
-                        if let localSnapshot = try? tunRuntime.handleLocalTunPacket(
-                            packet: packet,
-                            mtu: tunMTU,
-                            existingChanID: chanID,
-                            spec: localTunSpec,
-                            overlayConnected: overlayConnected,
-                            acceptingEnabled: true,
-                            bufferedFrames: 0,
-                            nowNS: DispatchTime.now().uptimeNanoseconds,
-                            recordInflow: false
-                        ) {
-                            sendMuxFrames(localSnapshot.frames)
-                        }
-                    }
-                    return
-                }
-                tunStats["rx_msgs", default: 0] += 1
-                tunStats["rx_bytes", default: 0] += packet.count
-                tunPacketSink?(packet)
-            }
-        case .close:
-            let snapshot = tunRuntime.handleInboundTunClose(chanID: frame.chanID)
-            if snapshot.closed {
-                activeTunChanIDs.remove(frame.chanID)
-                tunRuntime.dropSharedTunPeerBinding(peerID: currentTunPeerID(), chanID: frame.chanID)
-            }
-        default:
-            break
-        }
+        ObstacleBridgeOverlayChannelCore.handleInboundTunMuxFrame(
+            frame,
+            tunRuntime: tunRuntime,
+            tunServiceSpec: tunServiceSpec,
+            tunIfname: tunIfname,
+            tunMTU: tunMTU,
+            overlayConnected: overlayConnected,
+            bufferedFrames: 0,
+            currentTunPeerID: currentTunPeerID(),
+            activeTunChanIDs: &activeTunChanIDs,
+            tunStats: &tunStats,
+            tunPacketSink: tunPacketSink,
+            sendMuxFrames: sendMuxFrames
+        )
     }
 
     private func handleInboundUDPMuxFrame(_ frame: ObstacleBridgeChannelMuxCodec.MuxFrame) {
@@ -1000,7 +820,55 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     private func sendRawOverlayWire(_ payload: Data) {
-        overlayConnection?.send(content: payload, completion: .contentProcessed { _ in })
+        guard !payload.isEmpty else { return }
+        pendingOutboundWires.append(payload)
+        ObstacleBridgeOverlayChannelCore.recordOverlayEgress(
+            bytes: payload.count,
+            state: &overlayEgressWindow
+        )
+        flushNextOutboundWireIfNeeded()
+    }
+
+    private func flushNextOutboundWireIfNeeded() {
+        guard !outboundSendInFlight, let connection = overlayConnection, !pendingOutboundWires.isEmpty else {
+            return
+        }
+        outboundSendInFlight = true
+        let payload = pendingOutboundWires.removeFirst()
+        connection.send(content: payload, completion: .contentProcessed { [weak self] error in
+            guard let self else { return }
+            self.queue.async {
+                self.outboundSendInFlight = false
+                if let error {
+                    self.eventSink?("tcp_overlay_send_failed", ["error": error.localizedDescription])
+                    self.pendingOutboundWires.removeAll(keepingCapacity: false)
+                    return
+                }
+                self.flushNextOutboundWireIfNeeded()
+            }
+        })
+    }
+
+    private func overlayWaitingCount() -> Int {
+        pendingOutboundWires.count + (outboundSendInFlight ? 1 : 0)
+    }
+
+    private func overlayBackpressureSnapshot() -> ObstacleBridgeChannelMuxTunRuntime.OverlayBackpressureSnapshot {
+        ObstacleBridgeOverlayChannelCore.backpressureSnapshot(
+            waitingCount: overlayWaitingCount(),
+            inflight: outboundSendInFlight ? 1 : 0,
+            maxInflight: 1,
+            egressWindow: overlayEgressWindow
+        )
+    }
+
+    private func overlayProtocolStats() -> [String: Any] {
+        ObstacleBridgeOverlayChannelCore.overlayProtocolStats(
+            waitingCount: overlayWaitingCount(),
+            inflight: outboundSendInFlight ? 1 : 0,
+            maxInflight: 1,
+            egressWindow: overlayEgressWindow
+        )
     }
 
     private func sendOnUDPConnection(_ connection: NWConnection, payload: Data, chanID: Int) {
@@ -1019,63 +887,36 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     private func recordInbound(proto: String, chanID: Int, bytes: Int) {
-        switch proto {
-        case "tcp":
-            ObstacleBridgeOverlayConnectionSupport.recordTraffic(states: &tcpConnectionStates, proto: proto, chanID: chanID, direction: "inbound", bytes: bytes)
-        case "udp":
-            ObstacleBridgeOverlayConnectionSupport.recordTraffic(states: &udpConnectionStates, proto: proto, chanID: chanID, direction: "inbound", bytes: bytes)
-        default:
-            break
-        }
+        ObstacleBridgeOverlayChannelCore.recordTraffic(
+            proto: proto,
+            chanID: chanID,
+            bytes: bytes,
+            direction: "inbound",
+            tcpConnectionStates: &tcpConnectionStates,
+            udpConnectionStates: &udpConnectionStates
+        )
     }
 
     private func recordOutbound(proto: String, chanID: Int, bytes: Int) {
-        switch proto {
-        case "tcp":
-            ObstacleBridgeOverlayConnectionSupport.recordTraffic(states: &tcpConnectionStates, proto: proto, chanID: chanID, direction: "outbound", bytes: bytes)
-        case "udp":
-            ObstacleBridgeOverlayConnectionSupport.recordTraffic(states: &udpConnectionStates, proto: proto, chanID: chanID, direction: "outbound", bytes: bytes)
-        default:
-            break
-        }
+        ObstacleBridgeOverlayChannelCore.recordTraffic(
+            proto: proto,
+            chanID: chanID,
+            bytes: bytes,
+            direction: "outbound",
+            tcpConnectionStates: &tcpConnectionStates,
+            udpConnectionStates: &udpConnectionStates
+        )
     }
 
     private func serviceName(_ spec: ObstacleBridgeChannelMuxCodec.ServiceSpec) -> String {
-        if let name = serviceNameByID[spec.svcID], !name.isEmpty {
-            return name
-        }
-        return spec.name ?? ""
+        ObstacleBridgeOverlayChannelCore.serviceName(spec, serviceNameByID: serviceNameByID)
     }
 
     private func handleTCPTransportEvent(_ event: ObstacleBridgeChannelMuxTCPTransportOwner.TransportEvent) {
-        switch event {
-        case .clientAccepted(let chanID, let spec, let connected):
-            tcpConnectionStates[chanID] = ObstacleBridgeOverlayConnectionSupport.makeState(
-                proto: "tcp",
-                role: "client",
-                chanID: chanID,
-                spec: spec,
-                serviceName: serviceName(spec),
-                state: connected ? "connected" : "connecting",
-                localHost: nil,
-                localPort: nil
-            )
-        case .clientConnected(let chanID, let localHost, let localPort):
-            ObstacleBridgeOverlayConnectionSupport.updateConnectedState(states: &tcpConnectionStates, proto: "tcp", chanID: chanID, localHost: localHost, localPort: localPort)
-        case .clientInbound(let chanID, let bytes):
-            recordInbound(proto: "tcp", chanID: chanID, bytes: bytes)
-        case .clientOutbound(let chanID, let bytes):
-            recordOutbound(proto: "tcp", chanID: chanID, bytes: bytes)
-        case .clientClosed(let chanID):
-            tcpConnectionStates.removeValue(forKey: chanID)
-        case .serverConnected(let chanID):
-            ObstacleBridgeOverlayConnectionSupport.updateConnectedState(states: &tcpConnectionStates, proto: "tcp", chanID: chanID, localHost: nil, localPort: nil)
-        case .serverInbound(let chanID, let bytes):
-            recordInbound(proto: "tcp", chanID: chanID, bytes: bytes)
-        case .serverOutbound(let chanID, let bytes):
-            recordOutbound(proto: "tcp", chanID: chanID, bytes: bytes)
-        case .serverClosed(let chanID):
-            tcpConnectionStates.removeValue(forKey: chanID)
-        }
+        ObstacleBridgeOverlayChannelCore.handleTCPTransportEvent(
+            event,
+            tcpConnectionStates: &tcpConnectionStates,
+            serviceNameByID: serviceNameByID
+        )
     }
 }

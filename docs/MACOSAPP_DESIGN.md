@@ -3,13 +3,13 @@
 ## Purpose
 
 This document records the current macOS application design for ObstacleBridge,
-with special attention to the gap between:
+with special attention to the remaining gaps between:
 
 - the Python runtime, which can now establish a working macOS full-tunnel TUN
   session when started with sufficient privilege
-- the Swift-based macOS app, which can start the overlay runtime and local
-  services but does not yet own a privileged path for creating and configuring
-  a real `utun` interface
+- the Swift-based macOS app, which now uses a privileged host-runner bridge
+  for real `utun` ownership, but still needs a bit more hardening and parity
+  verification to behave as predictably as the Python path
 
 The goal is to keep the macOS app aligned with the existing ObstacleBridge
 architecture and with the working Linux and Python/macOS behavior, while being
@@ -29,12 +29,14 @@ The project now has three meaningfully different macOS runtime shapes:
    - can move real traffic through the tunnel when started with privilege
 3. Swift-based macOS app:
    - can load config, start overlay transports, and expose admin state
-   - can represent the TUN service logically
-   - does not yet create and configure a real local `utun` interface during
-     normal app startup
+   - launches a privileged bundled host runner when local TUN is configured
+   - can create and configure a real local `utun` interface during normal app
+     startup
+   - uses the same Darwin TUN hook script family as the Python runtime
 
-That means the Python/macOS path has crossed the "working full tunnel" line,
-while the Swift app is still one layer short of that same outcome.
+That means the Python/macOS path is the proven reference, and the Swift app is
+now close enough that the main remaining work is parity hardening rather than
+basic capability creation.
 
 ## What is already working on macOS
 
@@ -56,38 +58,41 @@ Swift app obtain and use the same privilege correctly?"
 
 ### Swift app runtime
 
-The Swift app currently does several important things correctly:
+The Swift app now does the important parts of the macOS tunnel flow:
 
 - loads runtime config from the app support config path
 - starts the overlay runtime
 - supports the transport matrix used elsewhere in the project
 - exposes admin APIs and connection state
-- carries the logical TUN service definition into runtime state
+- carries the TUN service definition into runtime state
+- launches the privileged bundled host runner when TUN is configured
+- passes DNS servers, included routes, excluded routes, and preserved underlay
+  peer-route hints into the same macOS hook used by Python
+- resolves the hook path to the bundled app resources so rebuilds carry the
+  latest hook logic into the app bundle
 
-However, the live state still shows the TUN path only as a logical listener,
-not as an active local TUN channel with a real macOS interface behind it.
-
-That is a design and privilege boundary issue, not a transport or ChannelMux
-concept issue.
+The important practical consequence is that Swift is no longer missing the real
+`utun` step. The remaining gap is behavioral parity: making sure the app bundle
+reliably realizes the same routing and DNS outcome that Python already proves.
 
 ## Proven macOS-specific constraint
 
-The project has now reproduced a concrete macOS platform boundary:
+The project reproduced a concrete macOS platform boundary:
 
 - raw Darwin `utun` creation from a normal process can fail with
   `Operation not permitted`
 - the same Python runtime succeeds when relaunched through an elevated path
-- the Swift app currently has no equivalent privilege-escalation or privileged
-  helper path
+- the Swift app therefore needs an equivalent privileged helper path
 
-This explains the current product split:
+This explains the earlier product split:
 
 - Python on the command line can ask the user for admin permission and then
   continue
 - a GUI app cannot rely on the same ad hoc terminal-style `sudo` interaction
 
-So the missing piece in the Swift app is not merely "call the same code." It is
-"obtain and hold the required privilege in a macOS-approved app architecture."
+That part is now bridged by the bundled privileged host runner. The remaining
+question is how far to harden that bridge into a more Apple-native helper
+architecture.
 
 ## Why Python can work without Network Extension
 
@@ -131,6 +136,28 @@ The current flow is:
 This is intentionally a pragmatic first step. It is meant to make the Swift
 app functionally converge with the working Python/macOS path, not to claim that
 the final macOS privilege architecture is finished.
+
+## Current parity status
+
+What is already aligned with Python on macOS:
+
+- the app bundle ships the same `scripts/client-tun-hook-macos.sh` logic that
+  the Python runtime uses
+- the Swift host runner passes the tunnel addresses, gateways, MTU, DNS
+  servers, included routes, excluded routes, and preserved underlay peer route
+  metadata into that hook
+- the bundled app resources are now the source of truth at runtime, so hook
+  changes require an app rebuild exactly as expected
+- the app/helper environment exports a fixed system `PATH`, so privileged hook
+  execution can resolve `route`, `ifconfig`, `netstat`, and related tools
+
+What still needs attention for true day-to-day parity:
+
+- repeated app starts should realize the same routing outcome as Python without
+  landing in the transient "connecting" or "handshaking" stalls we observed
+- full-tunnel DNS behavior should stay consistent across app restart cycles
+- the Swift transport path still needs routine regression testing against the
+  Python reference path whenever the hook contract changes
 
 ## Recommended near-term architecture
 

@@ -167,6 +167,7 @@ enum ObstacleBridgeAdminConfigSupport {
                 var block = (nextRawConfig[section] as? [String: Any]) ?? [:]
                 block[key] = value
                 nextRawConfig[section] = block
+                nextRawConfig.removeValue(forKey: key)
             } else {
                 nextRawConfig[key] = value
             }

@@ -2295,14 +2295,20 @@ class ConfigAwareCLI:
 
     def _apply_config_defaults_from_json(self, parser: argparse.ArgumentParser, cfg: Dict[str, Any]) -> None:
         actions = self._scan_actions(parser)
-        # Flatten sectioned or flat JSON
         flat: Dict[str, Any] = {}
+        # Prefer grouped section values over legacy duplicate root keys.
+        for section in self._sections.keys():
+            value = cfg.get(section)
+            if not isinstance(value, dict):
+                continue
+            for kk, vv in value.items():
+                flat[kk] = vv
         for k, v in cfg.items():
             if isinstance(v, dict):
                 for kk, vv in v.items():
-                    flat[kk] = vv
+                    flat.setdefault(kk, vv)
             else:
-                flat[k] = v
+                flat.setdefault(k, v)
         # Coerce/validate and set defaults
         defaults: Dict[str, Any] = {}
         for dest, val in flat.items():
@@ -2379,12 +2385,13 @@ def build_runtime_args_from_config(
     parser = cli._build_full_parser(default_runtime_registrars())
 
     def _config_value(doc: Mapping[str, Any], key: str, section: str | None = None) -> Any:
-        if key in doc:
-            return doc.get(key)
         if section:
             grouped = doc.get(section)
             if isinstance(grouped, Mapping):
-                return grouped.get(key)
+                if key in grouped:
+                    return grouped.get(key)
+        if key in doc:
+            return doc.get(key)
         return None
 
     def _semantic_bootstrap_state(doc: Mapping[str, Any]) -> tuple[bool, str]:

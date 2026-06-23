@@ -128,6 +128,7 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeNativeServiceSpec.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeNativeProxyConnections.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayChannelCore.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayConnectionSupport.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgePeerAddressResolver.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift" \
@@ -181,6 +182,7 @@ echo "[build_macos_app] compiling macOS app executable"
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeNativeServiceSpec.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeNativeProxyConnections.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayChannelCore.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayConnectionSupport.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgePeerAddressResolver.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift" \

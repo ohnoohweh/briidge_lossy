@@ -106,6 +106,7 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
     private(set) var repeatedMultipleTotal: Int
 
     private let connectedLossNS: UInt64 = 20_000_000_000
+    private let transmitDelayEwmaAlpha = 0.125
 
     init(
         establishedNS: UInt64 = 0,
@@ -365,6 +366,7 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
         let confirmedCounters = priorCounters.subtracting(updatedCounters)
         if !confirmedCounters.isEmpty {
             for counter in confirmedCounters {
+                recordTransmitDelaySample(counter: counter, ackNowNS: nowNS)
                 tallyConfirmedCounter(counter)
             }
         }
@@ -514,6 +516,22 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
             establishedNS = nowNS
         }
         lastRttOkNS = nowNS
+    }
+
+    private func recordTransmitDelaySample(counter: Int, ackNowNS: UInt64) {
+        guard let pathStartNS = sendTXNS[counter], pathStartNS > 0, ackNowNS > pathStartNS else {
+            return
+        }
+        let elapsedMS = Double(ackNowNS - pathStartNS) / 1_000_000.0
+        let halfRTTMS = rttEstMS > 0 ? 0.5 * rttEstMS : 0.0
+        let sampleMS = max(0.0, elapsedMS - halfRTTMS)
+        if transmitDelayEstMS <= 0.0 {
+            transmitDelayEstMS = sampleMS
+        } else if transmitDelayEstMS < sampleMS {
+            transmitDelayEstMS = sampleMS
+        } else {
+            transmitDelayEstMS = ((1.0 - transmitDelayEwmaAlpha) * transmitDelayEstMS) + (transmitDelayEwmaAlpha * sampleMS)
+        }
     }
 
     private func tallyConfirmedCounter(_ counter: Int) {

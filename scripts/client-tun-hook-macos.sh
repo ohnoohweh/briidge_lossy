@@ -483,6 +483,48 @@ route_delete_v6() {
   route -n delete -inet6 "$route_kind" "$route_target" >/dev/null 2>&1 || true
 }
 
+install_tunnel_local_routes() {
+  local subnet4="${TUN_SUBNET:-}"
+  local subnet6="${TUN_SUBNET6:-}"
+
+  route_add_or_change_v4 "${TUN_ADDR_IP}/32" "" "$IFNAME"
+  route_add_or_change_v4 "${TUN_GW}/32" "" "$IFNAME"
+  if [[ -n "$subnet4" ]]; then
+    route_add_or_change_v4 "$subnet4" "" "$IFNAME"
+  fi
+
+  if [[ -n "$TUN_ADDR6_IP" ]]; then
+    route_add_or_change_v6 "${TUN_ADDR6_IP}/128" "" "$IFNAME"
+  fi
+  if [[ -n "$TUN_GW6" ]]; then
+    route_add_or_change_v6 "${TUN_GW6}/128" "" "$IFNAME"
+  fi
+  if [[ -n "$subnet6" ]]; then
+    route_add_or_change_v6 "$subnet6" "" "$IFNAME"
+  fi
+}
+
+remove_tunnel_local_routes() {
+  local subnet4="${TUN_SUBNET:-}"
+  local subnet6="${TUN_SUBNET6:-}"
+
+  route_delete_v4 "${TUN_ADDR_IP}/32"
+  route_delete_v4 "${TUN_GW}/32"
+  if [[ -n "$subnet4" ]]; then
+    route_delete_v4 "$subnet4"
+  fi
+
+  if [[ -n "$TUN_ADDR6_IP" ]]; then
+    route_delete_v6 "${TUN_ADDR6_IP}/128"
+  fi
+  if [[ -n "$TUN_GW6" ]]; then
+    route_delete_v6 "${TUN_GW6}/128"
+  fi
+  if [[ -n "$subnet6" ]]; then
+    route_delete_v6 "$subnet6"
+  fi
+}
+
 route_matches_underlay_v4() {
   local route_spec="$1"
   local expected_gw="$2"
@@ -845,6 +887,32 @@ restore_default_routes() {
   fi
 }
 
+ensure_underlay_default_v4() {
+  local expected_gw="${1:-}"
+  if should_switch_default_v4; then
+    return 0
+  fi
+  if [[ -z "$expected_gw" && -s "$STATE_FILE" ]]; then
+    expected_gw="$(cat "$STATE_FILE" 2>/dev/null || true)"
+  fi
+  [[ -n "$expected_gw" ]] || return 0
+  route -n add default "$expected_gw" >/dev/null 2>&1 || \
+    route -n change default "$expected_gw" >/dev/null 2>&1 || true
+}
+
+ensure_underlay_default_v6() {
+  local expected_gw="${1:-}"
+  if should_switch_default_v6; then
+    return 0
+  fi
+  if [[ -z "$expected_gw" && -s "$STATE_FILE6" ]]; then
+    expected_gw="$(cat "$STATE_FILE6" 2>/dev/null || true)"
+  fi
+  [[ -n "$expected_gw" ]] || return 0
+  route -n add -inet6 default "$expected_gw" >/dev/null 2>&1 || \
+    route -n change -inet6 default "$expected_gw" >/dev/null 2>&1 || true
+}
+
 set_default_route_v4() {
   route -n change default -interface "$IFNAME" >/dev/null 2>&1 && return 0
   route -n delete default >/dev/null 2>&1 || true
@@ -860,6 +928,7 @@ case "$ACTION" in
     if [[ -n "$TUN_ADDR6" ]]; then
       ifconfig "$IFNAME" inet6 "$TUN_ADDR6_IP" prefixlen "$TUN_ADDR6_PREFIX" alias >/dev/null 2>&1 || true
     fi
+    install_tunnel_local_routes
     log_route_snapshot "after-ifconfig"
 
     local_underlay_gw=""
@@ -874,10 +943,14 @@ case "$ACTION" in
     fi
     if [[ -n "$underlay_service_name" ]]; then
       save_dns_state "$underlay_service_name"
-      dns_servers=()
+      declare -a dns_servers=()
       [[ -n "${DNS1:-}" ]] && dns_servers+=("$DNS1")
       [[ -n "${DNS2:-}" ]] && dns_servers+=("$DNS2")
-      apply_dns_servers "$underlay_service_name" "${dns_servers[@]}"
+      if (( ${#dns_servers[@]} > 0 )); then
+        apply_dns_servers "$underlay_service_name" "${dns_servers[@]}"
+      else
+        log "skip dns apply: no DNS servers configured"
+      fi
     else
       log "warning: unable to resolve network service for underlay interface=${local_underlay_if:-<none>}; dns unchanged"
     fi
@@ -922,6 +995,8 @@ case "$ACTION" in
         add_excluded_routes_v6 "$local_underlay_gw6" "$local_underlay_if6"
       fi
     fi
+    ensure_underlay_default_v4 "$local_underlay_gw"
+    ensure_underlay_default_v6 "$local_underlay_gw6"
     enforce_overlay_peer_underlay_v4 "$local_underlay_gw" "$local_underlay_if" || true
     log_route_snapshot "final-up"
     log "default routes now ipv4_if=$(current_default_interface_v4 || true) ipv4_gw=$(current_default_gateway_v4 || true) ipv6_if=$(current_default_interface_v6 || true) ipv6_gw=$(current_default_gateway_v6 || true)"
@@ -934,6 +1009,7 @@ case "$ACTION" in
       route -n delete -host "$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")" >/dev/null 2>&1 || true
     fi
     cleanup_stale_managed_routes
+    remove_tunnel_local_routes
     restore_default_routes
     if [[ -n "$TUN_ADDR6" ]]; then
       ifconfig "$IFNAME" inet6 "$TUN_ADDR6_IP" delete >/dev/null 2>&1 || true

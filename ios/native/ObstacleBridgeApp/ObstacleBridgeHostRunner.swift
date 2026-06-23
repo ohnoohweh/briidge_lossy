@@ -90,6 +90,30 @@ private final class ObstacleBridgeConfigStore {
     }
 }
 
+private protocol ObstacleBridgeOverlayTransportOwning: AnyObject {
+    func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]])
+    func transportSnapshot() -> [String: Any]
+    func sendLocalTunPacket(_ packet: Data)
+    func acceptLocalTCPConnection(
+        _ connection: NWConnection,
+        spec: ObstacleBridgeChannelMuxCodec.ServiceSpec,
+        listenerHost: String,
+        listenerPort: Int
+    ) -> Bool
+    func acceptLocalUDPConnection(
+        _ connection: NWConnection,
+        spec: ObstacleBridgeChannelMuxCodec.ServiceSpec,
+        listenerHost: String,
+        listenerPort: Int,
+        serviceKey: String
+    ) -> Bool
+}
+
+extension ObstacleBridgeWebSocketOverlayTransportOwner: ObstacleBridgeOverlayTransportOwning {}
+extension ObstacleBridgeTcpOverlayTransportOwner: ObstacleBridgeOverlayTransportOwning {}
+extension ObstacleBridgeQuicOverlayTransportOwner: ObstacleBridgeOverlayTransportOwning {}
+extension ObstacleBridgeUdpOverlayTransportOwner: ObstacleBridgeOverlayTransportOwning {}
+
 final class ObstacleBridgeHostRunner {
     private static let configChallengeTTL: TimeInterval = 90
     private static let serviceStateQueueKey = DispatchSpecificKey<UInt8>()
@@ -105,6 +129,7 @@ final class ObstacleBridgeHostRunner {
     private var startedAt = Date()
     private let serviceStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Services")
     private let authStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Auth")
+    private let adminSnapshotQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.AdminSnapshots")
     private var controlServer: ObstacleBridgeWebAdminServer?
     private var bootstrapState: [String: Any] = [:]
     private var restartCount = 0
@@ -133,7 +158,17 @@ final class ObstacleBridgeHostRunner {
     private var macOSOverlayUnderlayGatewayV4 = ""
     private var macOSOverlayUnderlayInterfaceV4 = ""
     private var clientRestartWatchdog: DispatchSourceTimer?
+    private var adminSnapshotTimer: DispatchSourceTimer?
+    private var cachedStatusSnapshot: [String: Any] = [:]
+    private var cachedConnectionsSnapshot: [String: Any] = [:]
+    private var cachedPeersSnapshot: [[String: Any]] = []
+    private var cachedMetaSnapshot: [String: Any] = [:]
+    private var cachedTunRoutingSnapshot: [String: Any] = [:]
+    private var peerTrafficRateState: [String: (timestamp: TimeInterval, rxBytes: Int, txBytes: Int)] = [:]
     private var overlayDisconnectedAt: TimeInterval?
+    private var secureLinkSnapshotSessionID: UInt64 = 0
+    private var secureLinkConnectedSinceUnixTs: Int?
+    private var secureLinkLastAuthenticatedUnixTs: Int?
     private lazy var adminAuth = ObstacleBridgeAdminAuth(
         queueLabel: "ObstacleBridgeHostRunner.AdminAuth",
         authRequiredProvider: { [weak self] in
@@ -161,6 +196,16 @@ final class ObstacleBridgeHostRunner {
             self?.adminAuthPassword() ?? ""
         }
     )
+
+    private struct OverlayPeerEndpoint {
+        let host: String
+        let port: Int
+    }
+
+    private struct ActiveOverlayOwner {
+        let transport: String
+        let owner: ObstacleBridgeOverlayTransportOwning
+    }
 
     init(runtimeConfigPath: String, bindHostOverride: String?, statusPortOverride: Int?) throws {
         self.runtimeConfigPath = runtimeConfigPath
@@ -323,12 +368,15 @@ final class ObstacleBridgeHostRunner {
             bootstrapState["startup_status"] = "failed"
             bootstrapState["startup_error"] = error.localizedDescription
         }
+        startAdminSnapshotPublisher()
         startClientRestartWatchdog()
     }
 
     func stop() {
         clientRestartWatchdog?.cancel()
         clientRestartWatchdog = nil
+        adminSnapshotTimer?.cancel()
+        adminSnapshotTimer = nil
         teardownSharedMacOSTunAdapter(runLifecycleHook: true)
         sharedWebSocketOverlayTransportOwner?.stop()
         sharedWebSocketOverlayTransportOwner = nil
@@ -343,7 +391,104 @@ final class ObstacleBridgeHostRunner {
         controlServer = nil
     }
 
+    private func startAdminSnapshotPublisher() {
+        adminSnapshotTimer?.cancel()
+        refreshAdminSnapshotCache()
+        let timer = DispatchSource.makeTimerSource(queue: serviceStateQueue)
+        timer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(500))
+        timer.setEventHandler { [weak self] in
+            self?.refreshAdminSnapshotCache()
+        }
+        adminSnapshotTimer = timer
+        timer.resume()
+    }
+
+    private func refreshAdminSnapshotCache() {
+        let status = snapshotUncached()
+        let connections = connectionsSnapshotUncached()
+        let peers = peersSnapshotUncached(connections: connections, transportRuntime: status["transport_runtime"] as? [String: Any])
+        let meta = metaSnapshotUncached(transportRuntime: status["transport_runtime"] as? [String: Any])
+        var tunRouting = ObstacleBridgeAdminAPI.tunRoutingSnapshot(fromConnections: connections)
+        if let tunRoutingConfig = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig) {
+            let effectiveExcluded = ObstacleBridgeRuntimeConfig.effectiveExcludedRoutes(
+                from: runtimeConfig,
+                baseIPv4: tunRoutingConfig.excludedRoutes ?? [],
+                baseIPv6: tunRoutingConfig.excludedRoutes6 ?? []
+            )
+            tunRouting["included_routes"] = tunRoutingConfig.includedRoutes ?? []
+            tunRouting["excluded_routes"] = effectiveExcluded.ipv4
+            tunRouting["included_routes6"] = tunRoutingConfig.includedRoutes6 ?? []
+            tunRouting["excluded_routes6"] = effectiveExcluded.ipv6
+        }
+        adminSnapshotQueue.async { [weak self] in
+            self?.cachedStatusSnapshot = status
+            self?.cachedConnectionsSnapshot = connections
+            self?.cachedPeersSnapshot = peers
+            self?.cachedMetaSnapshot = meta
+            self?.cachedTunRoutingSnapshot = tunRouting
+        }
+    }
+
+    private func withCurrentUptime(_ snapshot: [String: Any]) -> [String: Any] {
+        var updated = snapshot
+        updated["uptime_ms"] = Int(Date().timeIntervalSince(startedAt) * 1000)
+        updated["uptime_sec"] = Int(Date().timeIntervalSince(startedAt))
+        return updated
+    }
+
+    private func cachedStatusOrBuild() -> [String: Any] {
+        let cached = adminSnapshotQueue.sync { cachedStatusSnapshot }
+        if cached.isEmpty {
+            return snapshotUncached()
+        }
+        return withCurrentUptime(cached)
+    }
+
+    private func cachedConnectionsOrBuild() -> [String: Any] {
+        let cached = adminSnapshotQueue.sync { cachedConnectionsSnapshot }
+        return cached.isEmpty ? connectionsSnapshotUncached() : cached
+    }
+
+    private func cachedPeersOrBuild() -> [[String: Any]] {
+        let cached = adminSnapshotQueue.sync { cachedPeersSnapshot }
+        return cached.isEmpty ? peersSnapshotUncached() : cached
+    }
+
+    private func cachedMetaOrBuild() -> [String: Any] {
+        let cached = adminSnapshotQueue.sync { cachedMetaSnapshot }
+        if cached.isEmpty {
+            return metaSnapshotUncached()
+        }
+        var updated = cached
+        updated["uptime_sec"] = Int(Date().timeIntervalSince(startedAt))
+        return updated
+    }
+
+    private func cachedTunRoutingOrBuild() -> [String: Any] {
+        let cached = adminSnapshotQueue.sync { cachedTunRoutingSnapshot }
+        if !cached.isEmpty {
+            return cached
+        }
+        var payload = ObstacleBridgeAdminAPI.tunRoutingSnapshot(fromConnections: connectionsSnapshotUncached())
+        if let tunRouting = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig) {
+            let effectiveExcluded = ObstacleBridgeRuntimeConfig.effectiveExcludedRoutes(
+                from: runtimeConfig,
+                baseIPv4: tunRouting.excludedRoutes ?? [],
+                baseIPv6: tunRouting.excludedRoutes6 ?? []
+            )
+            payload["included_routes"] = tunRouting.includedRoutes ?? []
+            payload["excluded_routes"] = effectiveExcluded.ipv4
+            payload["included_routes6"] = tunRouting.includedRoutes6 ?? []
+            payload["excluded_routes6"] = effectiveExcluded.ipv6
+        }
+        return payload
+    }
+
     func snapshot() -> [String: Any] {
+        cachedStatusOrBuild()
+    }
+
+    private func snapshotUncached() -> [String: Any] {
         let uptimeMS = Int(Date().timeIntervalSince(startedAt) * 1000)
         let uptimeSec = Int(Date().timeIntervalSince(startedAt))
         return [
@@ -383,6 +528,10 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func metaSnapshot() -> [String: Any] {
+        cachedMetaOrBuild()
+    }
+
+    private func metaSnapshotUncached(transportRuntime: [String: Any]? = nil) -> [String: Any] {
         let uptimeSec = Int(Date().timeIntervalSince(startedAt))
         return ObstacleBridgeAdminSnapshotSupport.metaEnvelope(
             runtimeOwner: "ObstacleBridgeApp swift_host_runner",
@@ -393,7 +542,7 @@ final class ObstacleBridgeHostRunner {
             startedAt: startedAt.timeIntervalSince1970,
             uptimeSec: uptimeSec,
             bootstrapState: bootstrapState,
-            transportRuntime: transportRuntimeSnapshot(),
+            transportRuntime: transportRuntime ?? transportRuntimeSnapshot(),
             compressLayer: compressLayerSnapshot(peerID: nil) ?? NSNull(),
             extra: [
                 "build": buildSummary(),
@@ -404,13 +553,21 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func peersSnapshot() -> [[String: Any]] {
-        let connections = connectionsSnapshot()
+        cachedPeersOrBuild()
+    }
+
+    private func peersSnapshotUncached(
+        connections: [String: Any]? = nil,
+        transportRuntime suppliedTransportRuntime: [String: Any]? = nil
+    ) -> [[String: Any]] {
+        let connections = connections ?? connectionsSnapshotUncached()
         let counts = connections["counts"] as? [String: Any] ?? [:]
         let transport = bootstrapState["transport"] ?? (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp")
         let peerEndpoint = peerEndpointSnapshot()
-        let transportRuntime = transportRuntimeSnapshot()
+        let transportRuntime = suppliedTransportRuntime ?? transportRuntimeSnapshot()
         let myudpRuntime = transportRuntime["myudp"] as? [String: Any] ?? [:]
         let protocolStats = myudpRuntime["protocol_stats"] as? [String: Any] ?? [:]
+        let trafficTotals = peerTrafficTotals(from: connections)
         let overlayConnected = overlayCurrentlyConnected() ?? false
         let stateText: String
         if overlayConnected {
@@ -431,12 +588,7 @@ final class ObstacleBridgeHostRunner {
             "last_incoming_age_seconds": lastIncomingAgeSeconds(from: myudpRuntime),
             "rtt_est_ms": myudpRuntime["rtt_est_ms"] ?? NSNull(),
             "transmit_delay_est_ms": myudpRuntime["transmit_delay_est_ms"] ?? NSNull(),
-            "traffic": [
-                "rx_bytes": 0,
-                "tx_bytes": 0,
-                "rx_bytes_per_sec": 0,
-                "tx_bytes_per_sec": 0,
-            ],
+            "traffic": trafficSnapshot(peerID: "1", rxBytes: trafficTotals.rxBytes, txBytes: trafficTotals.txBytes),
             "open_connections": [
                 "udp": counts["udp"] ?? 0,
                 "tcp": counts["tcp"] ?? 0,
@@ -468,6 +620,50 @@ final class ObstacleBridgeHostRunner {
         return [peer]
     }
 
+    private func peerTrafficTotals(from connections: [String: Any]) -> (rxBytes: Int, txBytes: Int) {
+        var rxBytes = 0
+        var txBytes = 0
+        for key in ["udp", "tcp", "tun"] {
+            guard let rows = connections[key] as? [[String: Any]] else {
+                continue
+            }
+            for row in rows {
+                if row["chan_id"] == nil {
+                    continue
+                }
+                if String(describing: row["state"] ?? "connected").lowercased() == "listening" {
+                    continue
+                }
+                let stats = row["stats"] as? [String: Any] ?? [:]
+                rxBytes += Self.intValue(from: stats["rx_bytes"]) ?? 0
+                txBytes += Self.intValue(from: stats["tx_bytes"]) ?? 0
+            }
+        }
+        return (rxBytes, txBytes)
+    }
+
+    private func trafficSnapshot(peerID: String, rxBytes rawRXBytes: Int, txBytes rawTXBytes: Int) -> [String: Any] {
+        let now = Date().timeIntervalSince1970
+        var rxBytes = max(0, rawRXBytes)
+        var txBytes = max(0, rawTXBytes)
+        var rxRate = 0.0
+        var txRate = 0.0
+        if let previous = peerTrafficRateState[peerID] {
+            rxBytes = max(rxBytes, previous.rxBytes)
+            txBytes = max(txBytes, previous.txBytes)
+            let dt = max(0.000001, now - previous.timestamp)
+            rxRate = max(0.0, Double(rxBytes - previous.rxBytes) / dt)
+            txRate = max(0.0, Double(txBytes - previous.txBytes) / dt)
+        }
+        peerTrafficRateState[peerID] = (timestamp: now, rxBytes: rxBytes, txBytes: txBytes)
+        return [
+            "rx_bytes": rxBytes,
+            "tx_bytes": txBytes,
+            "rx_bytes_per_sec": rxRate,
+            "tx_bytes_per_sec": txRate,
+        ]
+    }
+
     private func lastIncomingAgeSeconds(from runtime: [String: Any]) -> Any {
         ObstacleBridgeAdminSnapshotSupport.lastIncomingAgeSeconds(from: runtime)
     }
@@ -475,7 +671,7 @@ final class ObstacleBridgeHostRunner {
     private func peerEndpointSnapshot() -> Any {
         let overlayTransport = Self.stringValue(from: bootstrapState["transport"]) ?? (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp")
         if overlayTransport == "myudp",
-           let ownerSnapshot = serviceStateQueue.sync(execute: { sharedUdpOverlayTransportOwner?.transportSnapshot() }),
+           let ownerSnapshot = withServiceStateQueue({ sharedUdpOverlayTransportOwner?.transportSnapshot() }),
            let host = ownerSnapshot["overlay_peer_host"] as? String,
            !host.isEmpty {
             return ["host": host, "port": ownerSnapshot["overlay_peer_port"] ?? NSNull()]
@@ -511,7 +707,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func udpRuntimeSnapshot() -> [String: Any]? {
-        serviceStateQueue.sync {
+        withServiceStateQueue {
             sharedUdpOverlayTransportOwner?.transportSnapshot()
         }
     }
@@ -555,7 +751,7 @@ final class ObstacleBridgeHostRunner {
             "keep_alive_enabled": socketConfig.keepAliveEnabled,
             "tcp_user_timeout_ms": socketConfig.tcpUserTimeoutMS ?? NSNull(),
         ]
-        if let ownerSnapshot = serviceStateQueue.sync(execute: { sharedWebSocketOverlayTransportOwner?.transportSnapshot() }) {
+        if let ownerSnapshot = withServiceStateQueue({ sharedWebSocketOverlayTransportOwner?.transportSnapshot() }) {
             for (key, value) in ownerSnapshot {
                 snapshot[key] = value
             }
@@ -577,7 +773,7 @@ final class ObstacleBridgeHostRunner {
             "backpressure_threshold": threshold,
             "backpressure_signaled": backpressure.signaled,
         ]
-        if let ownerSnapshot = serviceStateQueue.sync(execute: { sharedTcpOverlayTransportOwner?.transportSnapshot() }) {
+        if let ownerSnapshot = withServiceStateQueue({ sharedTcpOverlayTransportOwner?.transportSnapshot() }) {
             for (key, value) in ownerSnapshot {
                 snapshot[key] = value
             }
@@ -603,7 +799,7 @@ final class ObstacleBridgeHostRunner {
             "backpressure_threshold": threshold,
             "backpressure_signaled": backpressure.signaled,
         ]
-        if let ownerSnapshot = serviceStateQueue.sync(execute: { sharedQuicOverlayTransportOwner?.transportSnapshot() }) {
+        if let ownerSnapshot = withServiceStateQueue({ sharedQuicOverlayTransportOwner?.transportSnapshot() }) {
             for (key, value) in ownerSnapshot {
                 snapshot[key] = value
             }
@@ -635,7 +831,7 @@ final class ObstacleBridgeHostRunner {
     private func secureLinkSnapshot(defaultState: String) -> [String: Any] {
         let enabled = Self.boolValue(from: runtimeConfig["secure_link"]) ?? false
         let mode = Self.stringValue(from: runtimeConfig["secure_link_mode"]) ?? "off"
-        guard enabled, let adapter = serviceStateQueue.sync(execute: { sharedSecureLinkPskTransportAdapter }) else {
+        guard enabled, let adapter = withServiceStateQueue({ sharedSecureLinkPskTransportAdapter }) else {
             return [
                 "enabled": enabled,
                 "mode": mode,
@@ -671,6 +867,18 @@ final class ObstacleBridgeHostRunner {
 
         let snapshot = adapter.statusSnapshot()
         let displayAuthenticated = snapshot.peerConfirmedAuthenticated
+        let nowUnix = Int(Date().timeIntervalSince1970)
+        if snapshot.sessionID == 0 {
+            secureLinkSnapshotSessionID = 0
+            secureLinkConnectedSinceUnixTs = nil
+            secureLinkLastAuthenticatedUnixTs = nil
+        } else if secureLinkSnapshotSessionID != snapshot.sessionID {
+            secureLinkSnapshotSessionID = snapshot.sessionID
+            secureLinkConnectedSinceUnixTs = nowUnix
+            secureLinkLastAuthenticatedUnixTs = displayAuthenticated ? nowUnix : nil
+        } else if displayAuthenticated, secureLinkLastAuthenticatedUnixTs == nil {
+            secureLinkLastAuthenticatedUnixTs = nowUnix
+        }
         let state: String
         let lastEvent: String
         let disconnectReason: String
@@ -701,8 +909,8 @@ final class ObstacleBridgeHostRunner {
             "rekey_in_progress": false,
             "last_event": lastEvent,
             "last_event_unix_ts": NSNull(),
-            "last_authenticated_unix_ts": displayAuthenticated ? Int(Date().timeIntervalSince1970) : NSNull(),
-            "connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : Int(Date().timeIntervalSince1970),
+            "last_authenticated_unix_ts": displayAuthenticated ? (secureLinkLastAuthenticatedUnixTs ?? nowUnix) : NSNull(),
+            "connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTs ?? nowUnix),
             "authenticated_sessions_total": displayAuthenticated ? 1 : 0,
             "rekeys_completed_total": 0,
             "peer_subject_id": "",
@@ -862,53 +1070,15 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func acceptUDPConnection(_ connection: NWConnection, spec: ObstacleBridgeNativeServiceSpec) {
-        if let owner = sharedWebSocketOverlayTransportOwner,
-           (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "").lowercased() == "ws" {
-            if owner.acceptLocalUDPConnection(
-                connection,
-                spec: spec.toChannelMuxServiceSpec(),
-                listenerHost: spec.listenBind,
-                listenerPort: spec.listenPort,
-                serviceKey: "svc-\(spec.svcID)"
-            ) {
-                return
-            }
-        }
-        if let owner = sharedTcpOverlayTransportOwner,
-           (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "").lowercased() == "tcp" {
-            if owner.acceptLocalUDPConnection(
-                connection,
-                spec: spec.toChannelMuxServiceSpec(),
-                listenerHost: spec.listenBind,
-                listenerPort: spec.listenPort,
-                serviceKey: "svc-\(spec.svcID)"
-            ) {
-                return
-            }
-        }
-        if let owner = sharedQuicOverlayTransportOwner,
-           (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "").lowercased() == "quic" {
-            if owner.acceptLocalUDPConnection(
-                connection,
-                spec: spec.toChannelMuxServiceSpec(),
-                listenerHost: spec.listenBind,
-                listenerPort: spec.listenPort,
-                serviceKey: "svc-\(spec.svcID)"
-            ) {
-                return
-            }
-        }
-        if let owner = sharedUdpOverlayTransportOwner,
-           (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp").lowercased() == "myudp" {
-            if owner.acceptLocalUDPConnection(
-                connection,
-                spec: spec.toChannelMuxServiceSpec(),
-                listenerHost: spec.listenBind,
-                listenerPort: spec.listenPort,
-                serviceKey: "svc-\(spec.svcID)"
-            ) {
-                return
-            }
+        if let activeOwner = currentOverlayOwner(),
+           activeOwner.owner.acceptLocalUDPConnection(
+            connection,
+            spec: spec.toChannelMuxServiceSpec(),
+            listenerHost: spec.listenBind,
+            listenerPort: spec.listenPort,
+            serviceKey: "svc-\(spec.svcID)"
+           ) {
+            return
         }
         guard let remotePort = NWEndpoint.Port(rawValue: UInt16(spec.targetPort)) else {
             connection.cancel()
@@ -964,49 +1134,14 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func acceptTCPConnection(_ connection: NWConnection, spec: ObstacleBridgeNativeServiceSpec) {
-        if let owner = sharedWebSocketOverlayTransportOwner,
-           (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "").lowercased() == "ws" {
-            if owner.acceptLocalTCPConnection(
-                connection,
-                spec: spec.toChannelMuxServiceSpec(),
-                listenerHost: spec.listenBind,
-                listenerPort: spec.listenPort
-            ) {
-                return
-            }
-        }
-        if let owner = sharedTcpOverlayTransportOwner,
-           (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "").lowercased() == "tcp" {
-            if owner.acceptLocalTCPConnection(
-                connection,
-                spec: spec.toChannelMuxServiceSpec(),
-                listenerHost: spec.listenBind,
-                listenerPort: spec.listenPort
-            ) {
-                return
-            }
-        }
-        if let owner = sharedQuicOverlayTransportOwner,
-           (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "").lowercased() == "quic" {
-            if owner.acceptLocalTCPConnection(
-                connection,
-                spec: spec.toChannelMuxServiceSpec(),
-                listenerHost: spec.listenBind,
-                listenerPort: spec.listenPort
-            ) {
-                return
-            }
-        }
-        if let owner = sharedUdpOverlayTransportOwner,
-           (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp").lowercased() == "myudp" {
-            if owner.acceptLocalTCPConnection(
-                connection,
-                spec: spec.toChannelMuxServiceSpec(),
-                listenerHost: spec.listenBind,
-                listenerPort: spec.listenPort
-            ) {
-                return
-            }
+        if let activeOwner = currentOverlayOwner(),
+           activeOwner.owner.acceptLocalTCPConnection(
+            connection,
+            spec: spec.toChannelMuxServiceSpec(),
+            listenerHost: spec.listenBind,
+            listenerPort: spec.listenPort
+           ) {
+            return
         }
         let acceptSnapshot = try? sharedChannelMuxTcpRuntime.handleAcceptedServerConnection(
             spec: spec.toChannelMuxServiceSpec(),
@@ -1048,6 +1183,10 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func connectionsSnapshot() -> [String: Any] {
+        cachedConnectionsOrBuild()
+    }
+
+    private func connectionsSnapshotUncached() -> [String: Any] {
         withServiceStateQueue {
             let wsOverlayRows = sharedWebSocketOverlayTransportOwner?.connectionRows()
             let tcpOverlayRows = sharedTcpOverlayTransportOwner?.connectionRows()
@@ -1733,7 +1872,11 @@ final class ObstacleBridgeHostRunner {
 
     private func handleSharedOverlayOwnerEvent(event: String, fields: [String: Any]) {
         NSLog("[ObstacleBridgeHostRunner][%@] %@", event, String(describing: fields))
-        guard event == "ws_overlay_connected" || event == "tcp_overlay_connected" || event == "quic_overlay_connected" else {
+        guard event == "ws_overlay_connected"
+            || event == "tcp_overlay_connected"
+            || event == "quic_overlay_connected"
+            || event == "udp_overlay_connected"
+        else {
             return
         }
         guard let tunService = ownServerSpecs.first(where: { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" })
@@ -1757,24 +1900,9 @@ final class ObstacleBridgeHostRunner {
         let actualIfname = (sharedMacOSTunAdapter?.actualIfname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
             ? sharedMacOSTunAdapter!.actualIfname
             : tunService.listenBind
-        let overlayTransport = (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp").lowercased()
-        let overlayPeerHost: String
-        let overlayPeerPort: String
-        switch overlayTransport {
-        case "tcp":
-            overlayPeerHost = Self.stringValue(from: runtimeConfig["tcp_peer"]) ?? ""
-            overlayPeerPort = String(Self.intValue(from: runtimeConfig["tcp_peer_port"]) ?? 0)
-        case "ws":
-            overlayPeerHost = Self.stringValue(from: runtimeConfig["ws_peer"]) ?? ""
-            overlayPeerPort = String(Self.intValue(from: runtimeConfig["ws_peer_port"]) ?? 0)
-        case "quic":
-            overlayPeerHost = Self.stringValue(from: runtimeConfig["quic_peer"]) ?? ""
-            overlayPeerPort = String(Self.intValue(from: runtimeConfig["quic_peer_port"]) ?? 0)
-        default:
-            overlayPeerHost = Self.stringValue(from: runtimeConfig["udp_peer"]) ?? ""
-            overlayPeerPort = String(Self.intValue(from: runtimeConfig["udp_peer_port"]) ?? 0)
-        }
-        let normalizedOverlayPeerHost = Self.firstConfiguredPeerHost(from: overlayPeerHost)
+        let overlayTransport = overlayTransportName()
+        let overlayPeer = configuredOverlayPeerEndpoint(for: overlayTransport)
+        let normalizedOverlayPeerHost = Self.firstConfiguredPeerHost(from: overlayPeer.host)
         return [
             "service_id": String(tunService.svcID),
             "service_name": tunService.name ?? "svc-\(tunService.svcID)",
@@ -1792,7 +1920,7 @@ final class ObstacleBridgeHostRunner {
             "overlay_transport": overlayTransport,
             "overlay_peer_name": "",
             "overlay_peer_host": normalizedOverlayPeerHost,
-            "overlay_peer_port": overlayPeerPort == "0" ? "" : overlayPeerPort,
+            "overlay_peer_port": overlayPeer.port > 0 ? String(overlayPeer.port) : "",
             "overlay_underlay_gateway": macOSOverlayUnderlayGatewayV4,
             "overlay_underlay_interface": macOSOverlayUnderlayInterfaceV4,
             "role": "listener",
@@ -1831,17 +1959,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func macOSTunHookContextPeerHost() -> String {
-        let overlayTransport = (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp").lowercased()
-        switch overlayTransport {
-        case "tcp":
-            return Self.stringValue(from: runtimeConfig["tcp_peer"]) ?? ""
-        case "ws":
-            return Self.stringValue(from: runtimeConfig["ws_peer"]) ?? ""
-        case "quic":
-            return Self.stringValue(from: runtimeConfig["quic_peer"]) ?? ""
-        default:
-            return Self.stringValue(from: runtimeConfig["udp_peer"]) ?? ""
-        }
+        configuredOverlayPeerEndpoint().host
     }
 
     private static func macOSRouteSnapshot(to host: String, inet6: Bool) -> MacOSRouteSnapshot? {
@@ -2130,17 +2248,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func deliverLocalTunPacketToActiveOverlay(_ packet: Data) {
-        let transport = (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp").lowercased()
-        switch transport {
-        case "ws":
-            sharedWebSocketOverlayTransportOwner?.sendLocalTunPacket(packet)
-        case "tcp":
-            sharedTcpOverlayTransportOwner?.sendLocalTunPacket(packet)
-        case "quic":
-            sharedQuicOverlayTransportOwner?.sendLocalTunPacket(packet)
-        default:
-            sharedUdpOverlayTransportOwner?.sendLocalTunPacket(packet)
-        }
+        currentOverlayOwner()?.owner.sendLocalTunPacket(packet)
     }
 
     private func deliverRemoteTunPacketToLocalAdapter(_ packet: Data) {
@@ -2169,40 +2277,59 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func hasConfiguredOverlayPeer() -> Bool {
-        let transport = (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp").lowercased()
-        if transport == "tcp" {
-            let peerHost = (Self.stringValue(from: runtimeConfig["tcp_peer"]) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let peerPort = Self.intValue(from: runtimeConfig["tcp_peer_port"]) ?? 0
-            return !peerHost.isEmpty && peerPort > 0
-        }
-        if transport == "quic" {
-            let peerHost = (Self.stringValue(from: runtimeConfig["quic_peer"]) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let peerPort = Self.intValue(from: runtimeConfig["quic_peer_port"]) ?? 0
-            return !peerHost.isEmpty && peerPort > 0
-        }
-        if transport == "myudp" {
-            let peerHost = (Self.stringValue(from: runtimeConfig["udp_peer"]) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let peerPort = Self.intValue(from: runtimeConfig["udp_peer_port"]) ?? 0
-            return !peerHost.isEmpty && peerPort > 0
-        }
-        return false
+        let endpoint = configuredOverlayPeerEndpoint()
+        return !endpoint.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && endpoint.port > 0
     }
 
     private func overlayCurrentlyConnected() -> Bool? {
-        let transport = (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp").lowercased()
-        if transport == "ws" {
-            return sharedWebSocketOverlayTransportOwner?.transportSnapshot()["overlay_connected"] as? Bool
+        currentOverlayOwner()?.owner.transportSnapshot()["overlay_connected"] as? Bool
+    }
+
+    private func overlayTransportName() -> String {
+        (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp").lowercased()
+    }
+
+    private func configuredOverlayPeerEndpoint(for transport: String? = nil) -> OverlayPeerEndpoint {
+        switch (transport ?? overlayTransportName()).lowercased() {
+        case "tcp":
+            return OverlayPeerEndpoint(
+                host: Self.stringValue(from: runtimeConfig["tcp_peer"]) ?? "",
+                port: Self.intValue(from: runtimeConfig["tcp_peer_port"]) ?? 0
+            )
+        case "ws":
+            return OverlayPeerEndpoint(
+                host: Self.stringValue(from: runtimeConfig["ws_peer"]) ?? "",
+                port: Self.intValue(from: runtimeConfig["ws_peer_port"]) ?? 0
+            )
+        case "quic":
+            return OverlayPeerEndpoint(
+                host: Self.stringValue(from: runtimeConfig["quic_peer"]) ?? "",
+                port: Self.intValue(from: runtimeConfig["quic_peer_port"]) ?? 0
+            )
+        default:
+            return OverlayPeerEndpoint(
+                host: Self.stringValue(from: runtimeConfig["udp_peer"]) ?? "",
+                port: Self.intValue(from: runtimeConfig["udp_peer_port"]) ?? 0
+            )
         }
-        if transport == "tcp" {
-            return sharedTcpOverlayTransportOwner?.transportSnapshot()["overlay_connected"] as? Bool
+    }
+
+    private func currentOverlayOwner() -> ActiveOverlayOwner? {
+        let transport = overlayTransportName()
+        switch transport {
+        case "ws":
+            guard let owner = sharedWebSocketOverlayTransportOwner else { return nil }
+            return ActiveOverlayOwner(transport: transport, owner: owner)
+        case "tcp":
+            guard let owner = sharedTcpOverlayTransportOwner else { return nil }
+            return ActiveOverlayOwner(transport: transport, owner: owner)
+        case "quic":
+            guard let owner = sharedQuicOverlayTransportOwner else { return nil }
+            return ActiveOverlayOwner(transport: transport, owner: owner)
+        default:
+            guard let owner = sharedUdpOverlayTransportOwner else { return nil }
+            return ActiveOverlayOwner(transport: "myudp", owner: owner)
         }
-        if transport == "quic" {
-            return sharedQuicOverlayTransportOwner?.transportSnapshot()["overlay_connected"] as? Bool
-        }
-        if transport == "myudp" {
-            return sharedUdpOverlayTransportOwner?.transportSnapshot()["overlay_connected"] as? Bool
-        }
-        return nil
     }
 
     private func startClientRestartWatchdog() {
@@ -2250,6 +2377,10 @@ extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
 
     func adminConnectionsSnapshot() -> [String: Any] {
         connectionsSnapshot()
+    }
+
+    func adminTunRoutingSnapshot() -> [String: Any] {
+        cachedTunRoutingOrBuild()
     }
 
     func adminPeersSnapshot() -> [[String: Any]] {

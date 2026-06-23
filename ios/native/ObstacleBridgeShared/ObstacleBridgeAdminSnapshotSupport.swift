@@ -132,7 +132,7 @@ enum ObstacleBridgeAdminSnapshotSupport {
                 continue
             }
             for row in rows {
-                if let throttle = row["throttle"] as? [String: Any], rowMatchesPeer(row, peerID: peerID) {
+                if let throttle = row["throttle"] as? [String: Any], rowMatchesPeer(row, peerID: peerID, protocolKey: key) {
                     summary = mergeThrottleSummary(current: summary, candidate: throttle)
                 }
                 guard let ownership = row["shared_tun_ownership"] as? [String: Any] else {
@@ -245,7 +245,7 @@ enum ObstacleBridgeAdminSnapshotSupport {
         ]
     }
 
-    private static func rowMatchesPeer(_ row: [String: Any], peerID: Int) -> Bool {
+    private static func rowMatchesPeer(_ row: [String: Any], peerID: Int, protocolKey: String) -> Bool {
         if let value = row["peer_id"] as? Int {
             return value == peerID
         }
@@ -253,6 +253,13 @@ enum ObstacleBridgeAdminSnapshotSupport {
             if value == "\(peerID)" || value.hasSuffix(":\(peerID)") {
                 return true
             }
+        }
+        if peerID == 1,
+           protocolKey == "tun",
+           row["throttle"] is [String: Any],
+           row["chan_id"] != nil,
+           String(describing: row["state"] ?? "connected").lowercased() != "listening" {
+            return true
         }
         return false
     }

@@ -708,7 +708,9 @@ enum ObstacleBridgeRuntimeConfig {
             }
         }
         for (key, value) in payload where !(value is [String: Any]) {
-            merged[key] = value
+            if merged[key] == nil {
+                merged[key] = value
+            }
         }
         return merged
     }

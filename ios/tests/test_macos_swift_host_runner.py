@@ -51,6 +51,165 @@ def test_macos_swift_host_runner_keeps_shared_tun_hooks_bound_to_adapter_lifecyc
     assert 'runMacOSTunLifecycleHook(for: tunService, event: "on_channel_connected")' in source
 
 
+def test_macos_swift_host_runner_passes_python_parity_hook_env() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+
+    assert 'env["OB_OVERLAY_UNDERLAY_GW"] = context["overlay_underlay_gateway"] ?? ""' in source
+    assert 'env["OB_OVERLAY_UNDERLAY_IF"] = context["overlay_underlay_interface"] ?? ""' in source
+    assert 'env[index == 0 ? "DNS1" : "DNS2"] = dns' in source
+    assert 'env["INCLUDED_ROUTES"] = includedRoutes.joined(separator: ",")' in source
+    assert 'env["EXCLUDED_ROUTES"] = effectiveExcludedRoutes.ipv4.joined(separator: ",")' in source
+    assert 'env["INCLUDED_ROUTES6"] = includedRoutes6.joined(separator: ",")' in source
+    assert 'env["EXCLUDED_ROUTES6"] = effectiveExcludedRoutes.ipv6.joined(separator: ",")' in source
+
+
+def test_macos_swift_host_runner_routes_tun_and_local_accepts_through_active_overlay_owner() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+
+    assert "private protocol ObstacleBridgeOverlayTransportOwning: AnyObject" in source
+    assert "private func currentOverlayOwner() -> ActiveOverlayOwner?" in source
+    assert 'if let activeOwner = currentOverlayOwner(),' in source
+    assert "activeOwner.owner.acceptLocalUDPConnection(" in source
+    assert "activeOwner.owner.acceptLocalTCPConnection(" in source
+    assert "currentOverlayOwner()?.owner.sendLocalTunPacket(packet)" in source
+    assert 'currentOverlayOwner()?.owner.transportSnapshot()["overlay_connected"] as? Bool' in source
+
+
+def test_macos_swift_host_runner_uses_shared_overlay_peer_endpoint_lookup() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+
+    assert "private func configuredOverlayPeerEndpoint(for transport: String? = nil) -> OverlayPeerEndpoint" in source
+    assert "let overlayPeer = configuredOverlayPeerEndpoint(for: overlayTransport)" in source
+    assert 'configuredOverlayPeerEndpoint().host' in source
+
+
+def test_swift_overlay_owners_share_channelmux_tun_core() -> None:
+    core = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
+    tcp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    ws_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    quic_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeQuicOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "enum ObstacleBridgeOverlayChannelCore" in core
+    assert "static func sendLocalTunPacket(" in core
+    assert "static func handleInboundTunMuxFrame(" in core
+    assert "static func handleTCPTransportEvent(" in core
+
+    for source in (tcp_owner, udp_owner, ws_owner, quic_owner):
+        assert "ObstacleBridgeOverlayChannelCore.tunRows(" in source
+        assert "ObstacleBridgeOverlayChannelCore.sendLocalTunPacket(" in source
+        assert "ObstacleBridgeOverlayChannelCore.handleInboundTunMuxFrame(" in source
+        assert "ObstacleBridgeOverlayChannelCore.handleTCPTransportEvent(" in source
+
+
+def test_swift_tun_rows_include_throttle_snapshot_like_python() -> None:
+    core = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
+    tun_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
+    udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "bufferedFrames: Int = 0" in core
+    assert 'row["throttle"] = throttle' in core
+    assert 'return tunRuntime.sharedTunThrottleSnapshot(snapshot: backpressure, nowNS: nowNS)' in core
+    assert 'return tunRuntime.directTunThrottleSnapshot(snapshot: backpressure, nowNS: nowNS)' in core
+    assert "func directTunThrottleSnapshot(snapshot: OverlayBackpressureSnapshot, nowNS: UInt64) -> [String: Any]" in tun_runtime
+    assert "func sharedTunThrottleSnapshot(snapshot: OverlayBackpressureSnapshot, nowNS: UInt64) -> [String: Any]" in tun_runtime
+    assert '"applicable": true' in tun_runtime
+    assert '"remaining_bytes": remainingBytes' in tun_runtime
+    assert 'bufferedFrames: Int(overlayRuntime.protocolStatsSnapshot()["buffered_frames"] as? Int ?? 0)' in udp_owner
+
+
+def test_swift_stream_transports_report_throttle_metrics_like_python() -> None:
+    core = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
+    tcp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    ws_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    quic_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeQuicOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "struct OverlayEgressWindowState" in core
+    assert "static func overlayProtocolStats(" in core
+    assert '"waiting_count": max(0, waitingCount)' in core
+    assert '"inflight": max(0, inflight)' in core
+    assert '"max_inflight": max(0, maxInflight)' in core
+    assert '"egress_prev_window_bytes": max(0, egressWindow.previousBytes)' in core
+    assert '"egress_curr_window_bytes": max(0, egressWindow.currentBytes)' in core
+
+    for source in (tcp_owner, ws_owner, quic_owner):
+        assert "private func overlayWaitingCount() -> Int" in source
+        assert "private func overlayBackpressureSnapshot() -> ObstacleBridgeChannelMuxTunRuntime.OverlayBackpressureSnapshot" in source
+        assert "private func overlayProtocolStats() -> [String: Any]" in source
+        assert '"protocol_stats": overlayProtocolStats()' in source
+        assert "bufferedFrames: overlayWaitingCount()" in source
+        assert "backpressure: overlayBackpressureSnapshot()" in source
+        assert "maxInflight: 1" in source
+        assert "ObstacleBridgeOverlayChannelCore.recordOverlayEgress(" in source
+
+
+def test_swift_peer_status_includes_direct_tun_throttle_for_single_peer_mode() -> None:
+    support = (SHARED_NATIVE_DIR / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")
+
+    assert "rowMatchesPeer(row, peerID: peerID, protocolKey: key)" in support
+    assert 'protocolKey == "tun"' in support
+    assert "peerID == 1" in support
+    assert 'String(describing: row["state"] ?? "connected").lowercased() != "listening"' in support
+
+
+def test_macos_swift_host_runner_serves_admin_from_snapshot_cache() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+
+    assert "private let adminSnapshotQueue = DispatchQueue(label: \"ObstacleBridgeHostRunner.AdminSnapshots\")" in source
+    assert "private var adminSnapshotTimer: DispatchSourceTimer?" in source
+    assert "private func startAdminSnapshotPublisher()" in source
+    assert "private func refreshAdminSnapshotCache()" in source
+    assert "func adminStatusSnapshot() -> [String: Any] {\n        snapshot()\n    }" in source
+    assert "func snapshot() -> [String: Any] {\n        cachedStatusOrBuild()\n    }" in source
+    assert "func adminConnectionsSnapshot() -> [String: Any] {\n        connectionsSnapshot()\n    }" in source
+    assert "private func connectionsSnapshot() -> [String: Any] {\n        cachedConnectionsOrBuild()\n    }" in source
+    assert "func adminTunRoutingSnapshot() -> [String: Any] {\n        cachedTunRoutingOrBuild()\n    }" in source
+
+
+def test_macos_swift_host_runner_peer_status_aggregates_connection_traffic_like_python() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+
+    assert "private var peerTrafficRateState: [String: (timestamp: TimeInterval, rxBytes: Int, txBytes: Int)] = [:]" in source
+    assert "private func peerTrafficTotals(from connections: [String: Any]) -> (rxBytes: Int, txBytes: Int)" in source
+    assert 'for key in ["udp", "tcp", "tun"]' in source
+    assert 'rxBytes += Self.intValue(from: stats["rx_bytes"]) ?? 0' in source
+    assert 'txBytes += Self.intValue(from: stats["tx_bytes"]) ?? 0' in source
+    assert "private func trafficSnapshot(peerID: String, rxBytes rawRXBytes: Int, txBytes rawTXBytes: Int) -> [String: Any]" in source
+    assert '"rx_bytes_per_sec": rxRate' in source
+    assert '"tx_bytes_per_sec": txRate' in source
+    assert '"traffic": trafficSnapshot(peerID: "1", rxBytes: trafficTotals.rxBytes, txBytes: trafficTotals.txBytes)' in source
+
+
+def test_macos_swift_host_runner_keeps_secure_link_connection_time_stable() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+
+    assert "private var secureLinkSnapshotSessionID: UInt64 = 0" in source
+    assert "private var secureLinkConnectedSinceUnixTs: Int?" in source
+    assert "private var secureLinkLastAuthenticatedUnixTs: Int?" in source
+    assert "secureLinkSnapshotSessionID != snapshot.sessionID" in source
+    assert "secureLinkConnectedSinceUnixTs = nowUnix" in source
+    assert '"connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTs ?? nowUnix)' in source
+
+
+def test_swift_peer_resolution_only_ipv6_mode_uses_ipv4_mapped_addresses() -> None:
+    resolver = (SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressResolver.swift").read_text(encoding="utf-8")
+    udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "resolveMode: ResolveMode" in resolver
+    assert "guard resolveMode == .ipv6 else {" in resolver
+    assert "return candidate" in resolver
+    assert "resolveAddress(host: ipv4MappedIPv6(candidate.host)" in resolver
+    assert "let resolveMode = ObstacleBridgePeerAddressResolver.ResolveMode(rawValue: peerResolveFamily)" in udp_owner
+    assert "resolveMode: resolveMode," in udp_owner
+
+
+def test_macos_app_bundle_embeds_latest_macos_tun_hook() -> None:
+    build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
+
+    assert 'cp "${REPO_ROOT}/scripts/client-tun-hook-macos.sh" "${APP_RESOURCES_DIR}/scripts/client-tun-hook-macos.sh"' in build_script
+    assert 'chmod 755 "${APP_RESOURCES_DIR}/scripts/client-tun-hook-macos.sh"' in build_script
+
+
 class _AsyncBridgeClientThread:
     def __init__(self, config: dict) -> None:
         self.client = ObstacleBridgeClient(config)
@@ -297,6 +456,7 @@ def _compile_swift_runtime_probe(source_path: Path, binary_path: Path) -> None:
         str(binary_path),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayStackPlanner.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressResolver.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift"),
         str(source_path),
     ]
@@ -2198,6 +2358,7 @@ def test_macos_swift_host_runner_applies_invite_updates_with_tun_routing_section
 
         persisted = json.loads(runtime_config_path.read_text(encoding="utf-8"))
         assert persisted["runner"]["overlay_transport"] == "myudp"
+        assert "overlay_transport" not in persisted
         assert persisted["udp_session"]["udp_peer"] == "bridge.example.net"
         assert persisted["udp_session"]["udp_peer_port"] == 4433
         assert persisted["TUN_routing"]["dns_servers"] == ["9.9.9.9"]

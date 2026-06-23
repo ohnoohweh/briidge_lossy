@@ -93,6 +93,15 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         var throttleDropCount: Int
     }
 
+    struct OverlayBackpressureSnapshot {
+        var waitingCount: Int
+        var inflight: Int
+        var maxInflight: Int
+        var transmitDelayEstMS: Double
+        var transportPrevWindowBytes: Int
+        var stalled: Bool
+    }
+
     struct InboundTunFragmentSnapshot {
         var delivered: Bool
         var packet: Data?
@@ -255,6 +264,128 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         return snapshot
     }
 
+    private func throttleBudgetBytes(previousBytes: Int) -> Int {
+        Int(Double(previousBytes) * Self.tunInflowThrottleRatio)
+    }
+
+    private func throttleSummary(
+        scopeID: String,
+        snapshot: OverlayBackpressureSnapshot,
+        states: [(String, TunInflowScopeState)]
+    ) -> [String: Any] {
+        let backpressureActive = overlayBackpressureActive(snapshot)
+        let details: [[String: Any]] = states.map { currentScopeID, state in
+            let budgetBytes = max(0, localIngressScopeAllowanceBytes(snapshot: snapshot, state: state, scopeID: currentScopeID))
+            let usedBytes = max(0, state.currentBytes)
+            let remainingBytes = max(0, budgetBytes - usedBytes)
+            return [
+                "scope_id": currentScopeID,
+                "budget_bytes": budgetBytes,
+                "used_bytes": usedBytes,
+                "remaining_bytes": remainingBytes,
+                "prev_window_bytes": state.previousBytes,
+                "throttle_drop_count": state.throttleDropCount,
+            ]
+        }
+        let aggregate = details.first ?? [
+            "scope_id": aggregateLocalIngressScopeID(),
+            "budget_bytes": 0,
+            "used_bytes": 0,
+            "remaining_bytes": 0,
+            "prev_window_bytes": 0,
+            "throttle_drop_count": 0,
+        ]
+        let scoped = details.count > 1 ? details[1] : nil
+        let remainingCandidates = details.compactMap { $0["remaining_bytes"] as? Int }
+        return [
+            "applicable": true,
+            "scope_id": scopeID,
+            "mode": scoped == nil ? "aggregate_only" : "aggregate_and_scope",
+            "active": backpressureActive,
+            "stalled": backpressureActive ? snapshot.stalled : false,
+            "backpressure_active": backpressureActive,
+            "disabled": sharedTunDisableScopedThrottle,
+            "transport_prev_window_bytes": snapshot.transportPrevWindowBytes,
+            "waiting_count": snapshot.waitingCount,
+            "inflight": snapshot.inflight,
+            "max_inflight": snapshot.maxInflight,
+            "transmit_delay_est_ms": snapshot.transmitDelayEstMS,
+            "budget_bytes": remainingCandidates.isEmpty ? 0 : (remainingCandidates.min() ?? 0) + Int(aggregate["used_bytes"] as? Int ?? 0),
+            "used_bytes": max(Int(aggregate["used_bytes"] as? Int ?? 0), Int(scoped?["used_bytes"] as? Int ?? 0)),
+            "remaining_bytes": remainingCandidates.min() ?? 0,
+            "aggregate": aggregate,
+            "scope": scoped ?? NSNull(),
+        ]
+    }
+
+    func directTunThrottleSnapshot(snapshot: OverlayBackpressureSnapshot, nowNS: UInt64) -> [String: Any] {
+        let scopeID = directTunScopeID()
+        let states = localIngressScopeIDs(scopeID).map { currentScopeID in
+            (currentScopeID, advanceTunInflowWindow(scopeID: currentScopeID, nowNS: nowNS))
+        }
+        return throttleSummary(scopeID: scopeID, snapshot: snapshot, states: states)
+    }
+
+    func directTunThrottleSnapshot(bufferedFrames: Int, nowNS: UInt64) -> [String: Any] {
+        directTunThrottleSnapshot(
+            snapshot: OverlayBackpressureSnapshot(
+                waitingCount: max(0, bufferedFrames),
+                inflight: max(0, bufferedFrames),
+                maxInflight: 0,
+                transmitDelayEstMS: 0.0,
+                transportPrevWindowBytes: 0,
+                stalled: false
+            ),
+            nowNS: nowNS
+        )
+    }
+
+    func sharedTunThrottleSnapshot(snapshot: OverlayBackpressureSnapshot, nowNS: UInt64) -> [String: Any] {
+        var worstScope: [String: Any]? = nil
+        for (scopeID, metadata) in sharedTunScopeMetadata {
+            let state = advanceTunInflowWindow(scopeID: scopeID, nowNS: nowNS)
+            let budgetBytes = max(0, throttleBudgetBytes(previousBytes: state.previousBytes))
+            let usedBytes = max(0, state.currentBytes)
+            let remainingBytes = max(0, budgetBytes - usedBytes)
+            let scoped: [String: Any] = [
+                "scope_id": scopeID,
+                "route_class": metadata.routeClass,
+                "selected_peer_ids": metadata.selectedPeerIDs,
+                "selected_chan_ids": metadata.selectedChanIDs,
+                "budget_bytes": budgetBytes,
+                "used_bytes": usedBytes,
+                "remaining_bytes": remainingBytes,
+                "prev_window_bytes": state.previousBytes,
+                "throttle_drop_count": state.throttleDropCount,
+            ]
+            if worstScope == nil || Int(scoped["remaining_bytes"] as? Int ?? 0) < Int(worstScope?["remaining_bytes"] as? Int ?? 0) {
+                worstScope = scoped
+            }
+        }
+        guard let worstScope else {
+            return directTunThrottleSnapshot(snapshot: snapshot, nowNS: nowNS)
+        }
+        let scopeID = String(describing: worstScope["scope_id"] ?? "")
+        let states = localIngressScopeIDs(scopeID).map { currentScopeID in
+            (currentScopeID, advanceTunInflowWindow(scopeID: currentScopeID, nowNS: nowNS))
+        }
+        return throttleSummary(scopeID: scopeID, snapshot: snapshot, states: states)
+    }
+
+    func sharedTunThrottleSnapshot(bufferedFrames: Int, nowNS: UInt64) -> [String: Any] {
+        sharedTunThrottleSnapshot(
+            snapshot: OverlayBackpressureSnapshot(
+                waitingCount: max(0, bufferedFrames),
+                inflight: max(0, bufferedFrames),
+                maxInflight: 0,
+                transmitDelayEstMS: 0.0,
+                transportPrevWindowBytes: 0,
+                stalled: false
+            ),
+            nowNS: nowNS
+        )
+    }
+
     func handleLocalTunPacket(
         packet: Data,
         mtu: Int,
@@ -262,7 +393,7 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         spec: ObstacleBridgeChannelMuxCodec.ServiceSpec,
         overlayConnected: Bool,
         acceptingEnabled: Bool,
-        bufferedFrames: Int = 0,
+        backpressure: OverlayBackpressureSnapshot,
         nowNS: UInt64? = nil,
         recordInflow: Bool = true,
         scopeID: String? = nil
@@ -275,7 +406,7 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         }
         let sendNowNS = nowNS ?? DispatchTime.now().uptimeNanoseconds
         let appliedScopeID = scopeID ?? "direct:\(spec.svcID)"
-        guard localTunSendAllowed(packetBytes: packet.count, bufferedFrames: bufferedFrames, nowNS: sendNowNS, scopeID: appliedScopeID) else {
+        guard localTunSendAllowed(packetBytes: packet.count, snapshot: backpressure, nowNS: sendNowNS, scopeID: appliedScopeID) else {
             return nil
         }
 
@@ -309,6 +440,39 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             frames: frames,
             nextTunID: nextTunID,
             nextCounter: counters[chanID] ?? 0
+        )
+    }
+
+    func handleLocalTunPacket(
+        packet: Data,
+        mtu: Int,
+        existingChanID: Int? = nil,
+        spec: ObstacleBridgeChannelMuxCodec.ServiceSpec,
+        overlayConnected: Bool,
+        acceptingEnabled: Bool,
+        bufferedFrames: Int = 0,
+        nowNS: UInt64? = nil,
+        recordInflow: Bool = true,
+        scopeID: String? = nil
+    ) throws -> LocalTunSendSnapshot? {
+        try handleLocalTunPacket(
+            packet: packet,
+            mtu: mtu,
+            existingChanID: existingChanID,
+            spec: spec,
+            overlayConnected: overlayConnected,
+            acceptingEnabled: acceptingEnabled,
+            backpressure: OverlayBackpressureSnapshot(
+                waitingCount: max(0, bufferedFrames),
+                inflight: max(0, bufferedFrames),
+                maxInflight: 0,
+                transmitDelayEstMS: 0.0,
+                transportPrevWindowBytes: 0,
+                stalled: false
+            ),
+            nowNS: nowNS,
+            recordInflow: recordInflow,
+            scopeID: scopeID
         )
     }
 
@@ -366,19 +530,37 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         return state
     }
 
-    private func localTunSendAllowed(packetBytes: Int, bufferedFrames: Int, nowNS: UInt64, scopeID: String) -> Bool {
+    private func localTunSendAllowed(
+        packetBytes: Int,
+        snapshot: OverlayBackpressureSnapshot,
+        nowNS: UInt64,
+        scopeID: String
+    ) -> Bool {
+        let backpressureActive = overlayBackpressureActive(snapshot)
+        guard backpressureActive else {
+            return true
+        }
+        if snapshot.stalled {
+            return false
+        }
         if sharedTunDisableScopedThrottle {
             return true
         }
-        let state = advanceTunInflowWindow(scopeID: scopeID, nowNS: nowNS)
-        guard bufferedFrames > 0 else {
-            return true
+        for currentScopeID in localIngressScopeIDs(scopeID) {
+            let state = advanceTunInflowWindow(scopeID: currentScopeID, nowNS: nowNS)
+            let allowanceBytes = localIngressScopeAllowanceBytes(
+                snapshot: snapshot,
+                state: state,
+                scopeID: currentScopeID
+            )
+            guard allowanceBytes > 0 else {
+                return false
+            }
+            if (state.currentBytes + max(0, packetBytes)) > allowanceBytes {
+                return false
+            }
         }
-        let allowanceBytes = Int(Double(state.previousBytes) * Self.tunInflowThrottleRatio)
-        guard allowanceBytes > 0 else {
-            return false
-        }
-        return (state.currentBytes + max(0, packetBytes)) <= allowanceBytes
+        return true
     }
 
     private func recordLocalTunForward(packetBytes: Int, nowNS: UInt64, scopeID: String) {
@@ -409,6 +591,36 @@ final class ObstacleBridgeChannelMuxTunRuntime {
 
     private func directTunScopeID() -> String {
         "direct:\(localSpec?.svcID ?? 0)"
+    }
+
+    private func aggregateLocalIngressScopeID() -> String {
+        "aggregate:local_ingress"
+    }
+
+    private func localIngressScopeIDs(_ scopeID: String) -> [String] {
+        let aggregate = aggregateLocalIngressScopeID()
+        return scopeID == aggregate ? [aggregate] : [aggregate, scopeID]
+    }
+
+    private func overlayBackpressureActive(_ snapshot: OverlayBackpressureSnapshot) -> Bool {
+        snapshot.maxInflight > 0 && snapshot.inflight >= snapshot.maxInflight
+    }
+
+    private func localIngressScopeAllowanceBytes(
+        snapshot: OverlayBackpressureSnapshot,
+        state: TunInflowScopeState,
+        scopeID: String
+    ) -> Int {
+        let aggregateScopeID = aggregateLocalIngressScopeID()
+        let statePrevWindowBytes = max(0, state.previousBytes)
+        let basePrevWindowBytes: Int
+        if scopeID == aggregateScopeID {
+            let transportPrevWindowBytes = max(0, snapshot.transportPrevWindowBytes)
+            basePrevWindowBytes = transportPrevWindowBytes > 0 ? transportPrevWindowBytes : statePrevWindowBytes
+        } else {
+            basePrevWindowBytes = statePrevWindowBytes
+        }
+        return throttleBudgetBytes(previousBytes: basePrevWindowBytes)
     }
 
     private func sharedTunInflowScopeID(route: SharedTunOutboundRouteSnapshot) -> String? {
@@ -476,9 +688,17 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     }
 
     func handleScopedTunThrottle(packetBytes: Int, bufferedFrames: Int, nowNS: UInt64, scopeID: String) -> ScopedTunThrottleSnapshot {
+        let snapshot = OverlayBackpressureSnapshot(
+            waitingCount: max(0, bufferedFrames),
+            inflight: max(0, bufferedFrames),
+            maxInflight: 0,
+            transmitDelayEstMS: 0.0,
+            transportPrevWindowBytes: 0,
+            stalled: false
+        )
         let allowed = localTunSendAllowed(
             packetBytes: packetBytes,
-            bufferedFrames: bufferedFrames,
+            snapshot: snapshot,
             nowNS: nowNS,
             scopeID: scopeID
         )

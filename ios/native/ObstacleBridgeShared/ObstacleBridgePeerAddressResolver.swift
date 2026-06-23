@@ -280,11 +280,19 @@ enum ObstacleBridgePeerAddressResolver {
         }
     }
 
-    static func normalizePeerCandidate(_ candidate: ObstacleBridgeResolvedAddress, socketFamily: Int32, errorDomain: String) throws -> ObstacleBridgeResolvedAddress {
+    static func normalizePeerCandidate(
+        _ candidate: ObstacleBridgeResolvedAddress,
+        socketFamily: Int32,
+        resolveMode: ResolveMode,
+        errorDomain: String
+    ) throws -> ObstacleBridgeResolvedAddress {
         guard candidate.family != socketFamily else {
             return candidate
         }
         if socketFamily == AF_INET6, candidate.family == AF_INET {
+            guard resolveMode == .ipv6 else {
+                return candidate
+            }
             return try resolveAddress(host: ipv4MappedIPv6(candidate.host), port: candidate.port, passive: false, family: AF_INET6, errorDomain: errorDomain)
         }
         throw NSError(

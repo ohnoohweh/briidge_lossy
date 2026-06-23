@@ -52,6 +52,17 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         self.assertIn("tcp_peer", args._config_sections["tcp_session"])
         self.assertNotIn("tcp_peer", args._config_sections["runner"])
 
+    def test_build_runtime_args_prefers_runner_overlay_transport_over_legacy_root_value(self) -> None:
+        args = build_runtime_args_from_config(
+            {
+                "overlay_transport": "ws",
+                "runner": {"overlay_transport": "tcp"},
+                "tcp_session": {"tcp_peer": "peer.example", "tcp_peer_port": 8443},
+            }
+        )
+
+        self.assertEqual(args.overlay_transport, "tcp")
+
     def test_build_runtime_args_from_onboarding_config_marks_first_start(self) -> None:
         args = build_runtime_args_from_config(
             {

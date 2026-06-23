@@ -1,11 +1,12 @@
 import argparse
 import errno
+import logging
 import socket
 
 import pytest
 
 from obstacle_bridge.bridge import _resolve_peer_endpoint
-from obstacle_bridge.bridge_transport_udp import UdpSession
+from obstacle_bridge.bridge_transport_udp import SendPort, UdpSession
 
 
 def test_resolve_localhost_ipv6_uses_loopback_fallback_on_gaierror(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -123,3 +124,48 @@ def test_udp_session_immediately_falls_back_to_ipv4_on_unreachable_ipv6_send_err
     assert fake_runtime._conn_state is False
     assert fake_runtime._next_probe_due_ns == 0
     assert fake_runtime.sent_initial is True
+
+
+class _FakeSocket:
+    family = socket.AF_INET6
+
+
+class _FakeTransport:
+    def __init__(self) -> None:
+        self.sent = []
+
+    def get_extra_info(self, name: str):
+        if name == "socket":
+            return _FakeSocket()
+        return None
+
+    def sendto(self, payload: bytes, dst) -> None:
+        self.sent.append((payload, dst))
+
+
+def test_send_port_prefer_ipv6_keeps_native_ipv4_destination() -> None:
+    transport = _FakeTransport()
+    send_port = SendPort(
+        transport,
+        logging.getLogger("test"),
+        initial_peer=("192.0.2.10", 4433),
+        allow_ipv4_mapped_send=False,
+    )
+
+    send_port.sendto(b"payload")
+
+    assert transport.sent == [(b"payload", ("192.0.2.10", 4433))]
+
+
+def test_send_port_ipv6_mode_allows_ipv4_mapped_destination() -> None:
+    transport = _FakeTransport()
+    send_port = SendPort(
+        transport,
+        logging.getLogger("test"),
+        initial_peer=("192.0.2.10", 4433),
+        allow_ipv4_mapped_send=True,
+    )
+
+    send_port.sendto(b"payload")
+
+    assert transport.sent == [(b"payload", ("::ffff:192.0.2.10", 4433, 0, 0))]
