@@ -279,32 +279,43 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
 
     func transportSnapshot() -> [String: Any] {
         withOwnerQueue {
-            [
-                "overlay_connected": overlayConnected,
-                "overlay_bind_host": bindHost,
-                "overlay_bind_port": bindPort,
-                "overlay_peer_host": currentPeerAddress?.host ?? NSNull(),
-                "overlay_peer_port": currentPeerAddress?.port ?? NSNull(),
-                "overlay_peer_family": currentPeerAddress.map { ObstacleBridgePeerAddressResolver.familyName($0.family) } ?? NSNull(),
-                "overlay_peer_candidate_index": peerCandidateIndex,
-                "overlay_peer_candidate_count": peerCandidates.count,
-                "fixed_peer_host": configuredPeerHost ?? NSNull(),
-                "fixed_peer_port": configuredPeerPort as Any,
-                "mux_instance_id": muxInstanceID,
-                "mux_connection_seq": muxConnectionSeq,
-                "server_tcp_channels": tcpTransportOwner.serverConnectionCount,
-                "client_tcp_channels": tcpConnectionStates.count,
-                "server_udp_channels": udpServerConnections.count,
-                "client_udp_channels": udpConnectionStates.count,
-                "tun_channels": activeTunChanIDs.count,
-                "tun_stats": tunStats,
-                "established_ns": overlayRuntime.establishedNS,
-                "last_rx_wall_ns": overlayRuntime.lastRxWallNS,
-                "last_rtt_ok_ns": overlayRuntime.lastRttOkNS,
-                "rtt_est_ms": overlayRuntime.rttEstMS,
-                "transmit_delay_est_ms": overlayRuntime.transmitDelayEstMS,
-                "protocol_stats": overlayRuntime.protocolStatsSnapshot(),
-            ]
+            let peerHost: Any = currentPeerAddress?.host ?? NSNull()
+            let peerPort: Any = currentPeerAddress?.port ?? NSNull()
+            let peerFamily: Any
+            if let currentPeerAddress {
+                peerFamily = ObstacleBridgePeerAddressResolver.familyName(currentPeerAddress.family)
+            } else {
+                peerFamily = NSNull()
+            }
+            let fixedPeerHost: Any = configuredPeerHost ?? NSNull()
+            let fixedPeerPort: Any = configuredPeerPort ?? NSNull()
+            let protocolStats = overlayRuntime.protocolStatsSnapshot()
+            var snapshot: [String: Any] = [:]
+            snapshot["overlay_connected"] = overlayConnected
+            snapshot["overlay_bind_host"] = bindHost
+            snapshot["overlay_bind_port"] = bindPort
+            snapshot["overlay_peer_host"] = peerHost
+            snapshot["overlay_peer_port"] = peerPort
+            snapshot["overlay_peer_family"] = peerFamily
+            snapshot["overlay_peer_candidate_index"] = peerCandidateIndex
+            snapshot["overlay_peer_candidate_count"] = peerCandidates.count
+            snapshot["fixed_peer_host"] = fixedPeerHost
+            snapshot["fixed_peer_port"] = fixedPeerPort
+            snapshot["mux_instance_id"] = muxInstanceID
+            snapshot["mux_connection_seq"] = muxConnectionSeq
+            snapshot["server_tcp_channels"] = tcpTransportOwner.serverConnectionCount
+            snapshot["client_tcp_channels"] = tcpConnectionStates.count
+            snapshot["server_udp_channels"] = udpServerConnections.count
+            snapshot["client_udp_channels"] = udpConnectionStates.count
+            snapshot["tun_channels"] = activeTunChanIDs.count
+            snapshot["tun_stats"] = tunStats
+            snapshot["established_ns"] = overlayRuntime.establishedNS
+            snapshot["last_rx_wall_ns"] = overlayRuntime.lastRxWallNS
+            snapshot["last_rtt_ok_ns"] = overlayRuntime.lastRttOkNS
+            snapshot["rtt_est_ms"] = overlayRuntime.rttEstMS
+            snapshot["transmit_delay_est_ms"] = overlayRuntime.transmitDelayEstMS
+            snapshot["protocol_stats"] = protocolStats
+            return snapshot
         }
     }
 
