@@ -650,8 +650,9 @@ The examples below use repo-local script paths (`./scripts/...`) for development
 What the scripts automate:
 
 - Server: assign `10.20.0.2/30` to `obtun1`, bring the interface up, enable IPv4 forwarding, add forwarding rules between `obtun1` and `eth0`, add NAT for `10.20.0.0/30`, optionally add TCP MSS clamping, and clean those rules up on disconnect.
-- Client: assign `10.20.0.1/30` to `obtun0`, bring the interface up, auto-detect or preserve the route to the overlay server public IP outside the tunnel, replace the default route via `10.20.0.2 dev obtun0`, set tunnel DNS, and restore the previous default route on disconnect.
+- Client: assign `10.20.0.1/30` to `obtun0`, bring the interface up, auto-detect or preserve the route to the overlay server public IP outside the tunnel, preserve excluded local subnets on their original interfaces when full-tunnel routes are installed, replace the default route via `10.20.0.2 dev obtun0`, set tunnel DNS, and restore the previous default route on disconnect.
 - Client environment: the client hook script auto-detects the original default gateway/interface and reads the resolved overlay peer address from `OB_OVERLAY_PEER_HOST`, so the hook config only needs tunnel-specific values such as TUN addresses, gateway, optional DNS, and optional explicit underlay overrides.
+- Dual-stack note: Linux and Darwin route exclusion helpers also filter IPv4-mapped IPv6 loopback or host forms such as `::ffff:127.0.0.1/128` so listener self-reachability exclusions do not get duplicated across families.
 
 Single peer-client config assumptions:
 

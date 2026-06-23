@@ -1254,8 +1254,17 @@ function renderTunRoutingSharedTable(tbodyId, rows) {
       : 'n/a';
     const bindingText = Array.isArray(shared.active_peer_bindings) && shared.active_peer_bindings.length
       ? shared.active_peer_bindings.map((binding) => {
+          const addresses = [];
+          if (Array.isArray(binding.ipv4) && binding.ipv4.length) addresses.push(...binding.ipv4);
+          if (Array.isArray(binding.ipv6) && binding.ipv6.length) addresses.push(...binding.ipv6);
+          const header = addresses.length
+            ? `peer ${fmtInteger(binding.peer_id)} -> ${addresses.join(', ')}`
+            : `peer ${fmtInteger(binding.peer_id)}`;
+          const parts = [header];
           const bound = Array.isArray(binding.bound_chan_ids) ? binding.bound_chan_ids.join(', ') : '';
-          return `peer ${fmtInteger(binding.peer_id)} -> preferred ${fmtChan(binding.preferred_chan_id)}${bound ? ` · bound ${bound}` : ''}`;
+          parts.push(`preferred ${fmtChan(binding.preferred_chan_id)}`);
+          if (bound) parts.push(`bound ${bound}`);
+          return parts.join(' · ');
         }).join('\n')
       : 'none';
     return `

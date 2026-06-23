@@ -235,13 +235,31 @@ final class ObstacleBridgeChannelMuxTunRuntime {
                 throttleByPeer[selectedPeerIDs[0]] = scope
             }
         }
+        let peerDetailsByRef: [String: [String: Any]] = Dictionary(
+            uniqueKeysWithValues: ((snapshot["peers"] as? [[String: Any]]) ?? []).compactMap { entry in
+                guard let peerRef = entry["peer_ref"] as? String, peerRef.isEmpty == false else {
+                    return nil
+                }
+                return (peerRef, entry)
+            }
+        )
         var activeBindings: [[String: Any]] = sharedTunRuntimeByPeer.values
             .sorted { $0.peerID < $1.peerID }
             .map { state in
+                let peerRef = sharedTunPeerRefByPeer[state.peerID]
+                    ?? sharedTunPeerIDByRef.first(where: { $0.value == state.peerID })?.key
+                    ?? ""
+                let peerDetails = peerDetailsByRef[peerRef]
+                    ?? (peerDetailsByRef.count == 1 ? peerDetailsByRef.values.first : nil)
+                    ?? [:]
                 var entry: [String: Any] = [
                     "peer_id": state.peerID,
+                    "peer_ref": peerRef.isEmpty ? ((peerDetails["peer_ref"] as? String) ?? "") : peerRef,
                     "preferred_chan_id": state.preferredChanID as Any,
                     "bound_chan_ids": state.boundChanIDs.sorted(),
+                    "ipv4": peerDetails["ipv4"] as? [String] ?? [],
+                    "ipv6": peerDetails["ipv6"] as? [String] ?? [],
+                    "address_count": peerDetails["address_count"] as? Int ?? 0,
                     "throttle_prev_window_bytes": 0,
                     "throttle_curr_window_bytes": 0,
                     "throttle_drop_count": 0,

@@ -197,7 +197,15 @@ class _RunnerStub:
                             {"peer_ref": "ios-client", "ipv4": ["192.168.107.4"], "ipv6": ["fd20:107::4"]},
                         ],
                         "active_peer_bindings": [
-                            {"peer_id": 7, "preferred_chan_id": 301, "bound_chan_ids": [301]},
+                            {
+                                "peer_id": 7,
+                                "peer_ref": "linux-client",
+                                "preferred_chan_id": 301,
+                                "bound_chan_ids": [301],
+                                "ipv4": ["192.168.107.2"],
+                                "ipv6": ["fd20:107::2"],
+                                "address_count": 2,
+                            },
                         ],
                         "drop_counters": {
                             "total": 3,
@@ -357,7 +365,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         ui.server = server
         ui._active_client_writers.update({writer_a, writer_b})
 
-        asyncio.run(ui.stop())
+        asyncio.run(ui._stop_server_current_loop())
 
         self.assertTrue(server.closed)
         self.assertEqual(server.wait_closed_calls, 0)
@@ -671,7 +679,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["included_routes"], ["0.0.0.0/0"])
         self.assertEqual(payload["excluded_routes"], ["127.0.0.0/8", "38.180.143.5/32"])
         self.assertEqual(payload["included_routes6"], ["::/0"])
-        self.assertEqual(payload["excluded_routes6"], ["::1/128"])
+        self.assertEqual(payload["excluded_routes6"], ["::1/128", "::ffff:38.180.143.5/128"])
 
     def test_meta_payload_suppresses_runtime_dependency_warnings_on_ios(self):
         args = argparse.Namespace(

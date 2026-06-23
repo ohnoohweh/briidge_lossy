@@ -600,7 +600,7 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
             self.assertEqual(local_env["INCLUDED_ROUTES"], "0.0.0.0/0")
             self.assertEqual(local_env["EXCLUDED_ROUTES"], "127.0.0.0/8,127.0.0.1/32")
             self.assertEqual(local_env["INCLUDED_ROUTES6"], "::/0")
-            self.assertEqual(local_env["EXCLUDED_ROUTES6"], "::1/128")
+            self.assertEqual(local_env["EXCLUDED_ROUTES6"], "::1/128,::ffff:127.0.0.1/128")
             self.assertEqual(remote_env["TUN_ADDR"], "192.168.107.2/30")
             self.assertEqual(remote_env["MTU"], "1600")
             self.assertEqual(remote_env["ENABLE_TCPMSS"], "1")
@@ -1615,8 +1615,12 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
             [
                 {
                     'peer_id': 77,
+                    'peer_ref': 'linux-client',
                     'preferred_chan_id': 1,
                     'bound_chan_ids': [1],
+                    'ipv4': ['192.168.107.2'],
+                    'ipv6': ['fd20:107::2'],
+                    'address_count': 2,
                     'throttle_prev_window_bytes': 0,
                     'throttle_curr_window_bytes': 0,
                     'throttle_drop_count': 0,

@@ -620,10 +620,14 @@ class ChannelMux:
             snapshot["active_peer_bindings"] = [
                 {
                     "peer_id": int(entry.get("peer_id", 0) or 0),
+                    "peer_ref": str(entry.get("peer_ref") or ""),
                     "preferred_chan_id": (
                         None if entry.get("preferred_chan_id") is None else int(entry.get("preferred_chan_id"))
                     ),
                     "bound_chan_ids": [int(v) for v in list(entry.get("bound_chan_ids") or [])],
+                    "ipv4": [str(v) for v in list(entry.get("ipv4") or [])],
+                    "ipv6": [str(v) for v in list(entry.get("ipv6") or [])],
+                    "address_count": int(entry.get("address_count", 0) or 0),
                     "throttle_prev_window_bytes": int(entry.get("throttle_prev_window_bytes", 0) or 0),
                     "throttle_curr_window_bytes": int(entry.get("throttle_curr_window_bytes", 0) or 0),
                     "throttle_drop_count": int(entry.get("throttle_drop_count", 0) or 0),
@@ -2359,9 +2363,20 @@ class ChannelMux:
         ownership = self._shared_tun_ownership_by_service.get(svc_key)
         if not isinstance(ownership, dict):
             return None
+        peer_details_by_ref = {
+            str(entry.get("peer_ref") or ""): {
+                "peer_ref": str(entry.get("peer_ref") or ""),
+                "ipv4": [str(v) for v in list(entry.get("ipv4") or [])],
+                "ipv6": [str(v) for v in list(entry.get("ipv6") or [])],
+                "address_count": int(entry.get("address_count", 0) or 0),
+            }
+            for entry in list(ownership.get("peers") or [])
+            if isinstance(entry, dict) and str(entry.get("peer_ref") or "")
+        }
         active_peer_bindings = [
             {
                 "peer_id": int(key[1]),
+                "peer_ref": "",
                 "preferred_chan_id": state.get("preferred_chan_id"),
                 "bound_chan_ids": [int(v) for v in list(state.get("bound_chan_ids") or [])],
                 "throttle_prev_window_bytes": 0,
@@ -2378,12 +2393,38 @@ class ChannelMux:
             if len(selected_peer_ids) == 1:
                 throttle_by_peer[int(selected_peer_ids[0])] = scope
         for entry in active_peer_bindings:
+            if not str(entry.get("peer_ref") or ""):
+                peer_id = int(entry.get("peer_id", 0) or 0)
+                peer_ref = str(self._shared_tun_peer_ref_by_peer.get((svc_key, peer_id)) or "")
+                if not peer_ref:
+                    peer_ref = next(
+                        (
+                            str(mapped_peer_ref)
+                            for (mapped_svc_key, mapped_peer_ref), mapped_peer_id in self._shared_tun_peer_id_by_ref.items()
+                            if mapped_svc_key == svc_key and int(mapped_peer_id) == peer_id
+                        ),
+                        "",
+                    )
+                entry["peer_ref"] = peer_ref
             scope = throttle_by_peer.get(int(entry.get("peer_id", 0) or 0))
             if not isinstance(scope, dict):
-                continue
-            entry["throttle_prev_window_bytes"] = int(scope.get("prev_window_bytes", 0) or 0)
-            entry["throttle_curr_window_bytes"] = int(scope.get("curr_window_bytes", 0) or 0)
-            entry["throttle_drop_count"] = int(scope.get("throttle_drop_count", 0) or 0)
+                scope = None
+            if isinstance(scope, dict):
+                entry["throttle_prev_window_bytes"] = int(scope.get("prev_window_bytes", 0) or 0)
+                entry["throttle_curr_window_bytes"] = int(scope.get("curr_window_bytes", 0) or 0)
+                entry["throttle_drop_count"] = int(scope.get("throttle_drop_count", 0) or 0)
+            peer_details = peer_details_by_ref.get(str(entry.get("peer_ref") or ""))
+            if peer_details is None and len(peer_details_by_ref) == 1:
+                peer_details = next(iter(peer_details_by_ref.values()))
+                entry["peer_ref"] = str(peer_details.get("peer_ref") or "")
+            if isinstance(peer_details, dict):
+                entry["ipv4"] = list(peer_details.get("ipv4") or [])
+                entry["ipv6"] = list(peer_details.get("ipv6") or [])
+                entry["address_count"] = int(peer_details.get("address_count", 0) or 0)
+            else:
+                entry["ipv4"] = []
+                entry["ipv6"] = []
+                entry["address_count"] = 0
         active_peer_bindings.sort(key=lambda entry: int(entry.get("peer_id", 0)))
         drop_state = self._shared_tun_drop_state_by_service.get(svc_key)
         return self._shared_tun_runtime_snapshot(ownership, active_peer_bindings, throttle_scopes, drop_state)

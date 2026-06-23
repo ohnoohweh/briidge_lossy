@@ -20,6 +20,22 @@ def test_auto_overlay_peer_excluded_routes_splits_multi_host_peer_list() -> None
 
     assert "38.180.143.5/32" in routes4
     assert "2001:ac8:29:60:0:6:0:47/128" in routes6
+    assert "::ffff:38.180.143.5/128" in routes6
+
+
+def test_auto_overlay_peer_excluded_routes_adds_ipv4_mapped_ipv6_exclusion() -> None:
+    cfg = {
+        "overlay_transport": "tcp",
+        "tcp_peer": "198.51.100.10",
+        "tcp_peer_port": 4433,
+        "tcp_peer_resolve_family": "prefer-ipv4",
+        "tcp_bind": "0.0.0.0",
+    }
+
+    routes4, routes6 = auto_overlay_peer_excluded_routes(cfg)
+
+    assert routes4 == ["198.51.100.10/32"]
+    assert "::ffff:198.51.100.10/128" in routes6
 
 
 def test_server_tun_hook_supports_optional_tcpdump_capture() -> None:
@@ -72,15 +88,20 @@ def test_client_tun_hook_supports_excluded_route_programming() -> None:
     assert '::1/128|::1)' in script
     assert 'add_excluded_routes4() {' in script
     assert 'add_excluded_routes6() {' in script
+    assert 'snapshot_excluded_routes4() {' in script
+    assert 'snapshot_excluded_routes6() {' in script
     assert 'STATE_UNDERLAY4="${STATE_DIR}/${IFNAME}.underlay-route4"' in script
     assert 'STATE_UNDERLAY6="${STATE_DIR}/${IFNAME}.underlay-route6"' in script
     assert 'printf \'%s\\n\' "$route_line" > "$state_file"' in script or "printf '%s\\n' \"$route_line\" > \"$state_file\"" in script
     assert 'rm -f "$stale_state_file"' in script
-    assert 'done < <(_load_saved_route_parts "$STATE_UNDERLAY4" "ip route show default")' in script
-    assert 'done < <(_load_saved_route_parts "$STATE_UNDERLAY6" "ip -6 route show default")' in script
+    assert 'route_line="$(ip route show match "$route_spec"' in script
+    assert 'route_line="$(ip -6 route show match "$route_spec"' in script
+    assert 'done < "$STATE_EXCLUDED4"' in script
+    assert 'done < "$STATE_EXCLUDED6"' in script
     assert 'skip explicit loopback route install for ${route_spec}; kernel loopback routes already cover it' in script
     assert 'skip explicit IPv6 loopback route install for ${route_spec}; kernel loopback routes already cover it' in script
     assert 'ip route replace "$route_spec" via "$gw" dev "$dev" src "$src"' in script
+    assert 'printf \'%s|%s|%s|%s\\n\' "$route_spec" "$gw" "$dev" "$src" >> "$STATE_EXCLUDED4"' in script or 'printf "%s|%s|%s|%s\\n" "$route_spec" "$gw" "$dev" "$src" >> "$STATE_EXCLUDED4"' in script
     assert 'delete_excluded_routes4() {' in script
     assert 'delete_excluded_routes6() {' in script
     assert 'protect_underlay_routes6() {' in script
@@ -123,6 +144,7 @@ def test_client_tun_hook_waits_for_interface_and_uses_onlink_default_routes() ->
 
 def test_client_tun_hook_uses_dedicated_policy_table_for_full_tunnel_linux() -> None:
     script = (ROOT / "scripts" / "client-tun-hook.sh").read_text(encoding="utf-8")
+    up_block = script[script.index('  up)') : script.index('  down)')]
 
     assert 'STATE_POLICY4="${STATE_DIR}/${IFNAME}.policy-rules4"' in script
     assert 'STATE_POLICY6="${STATE_DIR}/${IFNAME}.policy-rules6"' in script
@@ -140,6 +162,8 @@ def test_client_tun_hook_uses_dedicated_policy_table_for_full_tunnel_linux() -> 
     assert 'connected_tun_routes6() {' in script
     assert 'policy_rule_add4 "$policy_pref" to "$route_spec" lookup main' in script
     assert 'policy_rule_add6 "$policy_pref" to "$route_spec" lookup main' in script
+    assert up_block.index('snapshot_excluded_routes4') < up_block.index('add_excluded_routes4')
+    assert up_block.index('snapshot_excluded_routes6') < up_block.index('add_excluded_routes6')
     assert 'delete_policy_rules4' in script
     assert 'delete_policy_rules6' in script
 

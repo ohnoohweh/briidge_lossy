@@ -227,21 +227,85 @@ _load_saved_route_parts() {
   _parse_route_parts "$route_line"
 }
 
-add_excluded_routes4() {
+snapshot_excluded_routes4() {
   : > "$STATE_EXCLUDED4"
-  local gw="" dev="" src=""
-  while IFS='=' read -r key value; do
-    [[ "$key" == "gw" ]] && gw="$value"
-    [[ "$key" == "dev" ]] && dev="$value"
-    [[ "$key" == "src" ]] && src="$value"
-  done < <(_load_saved_route_parts "$STATE_UNDERLAY4" "ip route show default")
-  [[ -n "$dev" ]] || return 0
+  local route_spec route_line gw="" dev="" src="" probe=""
   while IFS= read -r route_spec; do
+    [[ -z "$route_spec" ]] && continue
+    if excluded_route_should_use_loopback4 "$route_spec"; then
+      continue
+    fi
+    route_line="$(ip route show match "$route_spec" 2>/dev/null | head -n1 || true)"
+    if [[ -z "$route_line" ]]; then
+      probe="${route_spec%%/*}"
+      if [[ -n "$probe" ]]; then
+        route_line="$(ip route get "$probe" 2>/dev/null | head -n1 || true)"
+      fi
+    fi
+    gw=""
+    dev=""
+    src=""
+    if [[ -n "$route_line" ]]; then
+      while IFS='=' read -r key value; do
+        [[ "$key" == "gw" ]] && gw="$value"
+        [[ "$key" == "dev" ]] && dev="$value"
+        [[ "$key" == "src" ]] && src="$value"
+      done < <(_parse_route_parts "$route_line")
+    fi
+    printf '%s|%s|%s|%s\n' "$route_spec" "$gw" "$dev" "$src" >> "$STATE_EXCLUDED4"
+  done < <(csv_to_lines "$EXCLUDED_ROUTES")
+}
+
+snapshot_excluded_routes6() {
+  : > "$STATE_EXCLUDED6"
+  local route_spec route_line gw="" dev="" src="" probe=""
+  while IFS= read -r route_spec; do
+    [[ -z "$route_spec" ]] && continue
+    if excluded_route_should_use_loopback6 "$route_spec"; then
+      continue
+    fi
+    route_line="$(ip -6 route show match "$route_spec" 2>/dev/null | head -n1 || true)"
+    if [[ -z "$route_line" ]]; then
+      probe="${route_spec%%/*}"
+      if [[ -n "$probe" ]]; then
+        route_line="$(ip -6 route get "$probe" 2>/dev/null | head -n1 || true)"
+      fi
+    fi
+    gw=""
+    dev=""
+    src=""
+    if [[ -n "$route_line" ]]; then
+      while IFS='=' read -r key value; do
+        [[ "$key" == "gw" ]] && gw="$value"
+        [[ "$key" == "dev" ]] && dev="$value"
+        [[ "$key" == "src" ]] && src="$value"
+      done < <(_parse_route_parts "$route_line")
+    fi
+    printf '%s|%s|%s|%s\n' "$route_spec" "$gw" "$dev" "$src" >> "$STATE_EXCLUDED6"
+  done < <(csv_to_lines "$EXCLUDED_ROUTES6")
+}
+
+add_excluded_routes4() {
+  local fallback_gw="" fallback_dev="" fallback_src=""
+  while IFS='=' read -r key value; do
+    [[ "$key" == "gw" ]] && fallback_gw="$value"
+    [[ "$key" == "dev" ]] && fallback_dev="$value"
+    [[ "$key" == "src" ]] && fallback_src="$value"
+  done < <(_load_saved_route_parts "$STATE_UNDERLAY4" "ip route show default")
+  [[ -n "$fallback_dev" ]] || return 0
+  [[ -s "$STATE_EXCLUDED4" ]] || snapshot_excluded_routes4
+  while IFS='|' read -r route_spec gw dev src; do
     [[ -z "$route_spec" ]] && continue
     if excluded_route_should_use_loopback4 "$route_spec"; then
       log_diag "skip explicit loopback route install for ${route_spec}; kernel loopback routes already cover it"
       continue
-    elif [[ -n "$gw" ]]; then
+    fi
+    if [[ -z "$dev" ]]; then
+      gw="$fallback_gw"
+      dev="$fallback_dev"
+      src="$fallback_src"
+    fi
+    if [[ -n "$gw" ]]; then
       if [[ -n "$src" ]]; then
         ip route replace "$route_spec" via "$gw" dev "$dev" src "$src"
       else
@@ -254,8 +318,7 @@ add_excluded_routes4() {
         ip route replace "$route_spec" dev "$dev"
       fi
     fi
-    printf '%s\n' "$route_spec" >> "$STATE_EXCLUDED4"
-  done < <(csv_to_lines "$EXCLUDED_ROUTES")
+  done < "$STATE_EXCLUDED4"
 }
 
 protect_underlay_routes4() {
@@ -401,25 +464,30 @@ configure_policy_full_tunnel6() {
 }
 
 add_excluded_routes6() {
-  : > "$STATE_EXCLUDED6"
-  local gw="" dev=""
+  local fallback_gw="" fallback_dev="" fallback_src=""
   while IFS='=' read -r key value; do
-    [[ "$key" == "gw" ]] && gw="$value"
-    [[ "$key" == "dev" ]] && dev="$value"
+    [[ "$key" == "gw" ]] && fallback_gw="$value"
+    [[ "$key" == "dev" ]] && fallback_dev="$value"
+    [[ "$key" == "src" ]] && fallback_src="$value"
   done < <(_load_saved_route_parts "$STATE_UNDERLAY6" "ip -6 route show default")
-  [[ -n "$dev" ]] || return 0
-  while IFS= read -r route_spec; do
+  [[ -n "$fallback_dev" ]] || return 0
+  [[ -s "$STATE_EXCLUDED6" ]] || snapshot_excluded_routes6
+  while IFS='|' read -r route_spec gw dev _src; do
     [[ -z "$route_spec" ]] && continue
     if excluded_route_should_use_loopback6 "$route_spec"; then
       log_diag "skip explicit IPv6 loopback route install for ${route_spec}; kernel loopback routes already cover it"
       continue
-    elif [[ -n "$gw" ]]; then
+    fi
+    if [[ -z "$dev" ]]; then
+      gw="$fallback_gw"
+      dev="$fallback_dev"
+    fi
+    if [[ -n "$gw" ]]; then
       ip -6 route replace "$route_spec" via "$gw" dev "$dev"
     else
       ip -6 route replace "$route_spec" dev "$dev"
     fi
-    printf '%s\n' "$route_spec" >> "$STATE_EXCLUDED6"
-  done < <(csv_to_lines "$EXCLUDED_ROUTES6")
+  done < "$STATE_EXCLUDED6"
 }
 
 add_included_routes4() {
@@ -592,6 +660,8 @@ case "$ACTION" in
 
     save_default_route
     save_policy_table_ids
+    snapshot_excluded_routes4
+    snapshot_excluded_routes6
     add_excluded_routes4
     add_excluded_routes6
     protect_underlay_routes4

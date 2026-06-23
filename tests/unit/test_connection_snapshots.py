@@ -177,6 +177,8 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1400, service_key=self.tun_key)
         self.mux._svc_tun_devices[self.tun_key] = dev
         self.mux._chan_owner_peer_id[301] = 7
+        self.mux._shared_tun_peer_ref_by_peer[(self.tun_key, 7)] = "linux-client"
+        self.mux._shared_tun_peer_id_by_ref[(self.tun_key, "linux-client")] = 7
         with patch.object(self.mux, "_register_tun_reader"):
             self.mux._bind_tun_channel(301, dev)
 
@@ -215,8 +217,12 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
                 "active_peer_bindings": [
                     {
                         "peer_id": 7,
+                        "peer_ref": "linux-client",
                         "preferred_chan_id": 301,
                         "bound_chan_ids": [301],
+                        "ipv4": ["192.168.107.2"],
+                        "ipv6": ["fd20:107::2"],
+                        "address_count": 2,
                         "throttle_prev_window_bytes": 0,
                         "throttle_curr_window_bytes": 0,
                         "throttle_drop_count": 0,
@@ -662,7 +668,7 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(peer["id"], f"0:{peer_row['peer_id']}")
         self.assertFalse(peer["connected"])
         self.assertEqual(peer["state"], "connecting")
-        self.assertEqual(peer["peer"], "38.180.143.5:50227")
+        self.assertEqual(peer["peer"], {"host": "38.180.143.5", "port": 50227})
         self.assertIsNotNone(peer["last_incoming_age_seconds"])
         self.assertGreaterEqual(peer["last_incoming_age_seconds"], 0)
         self.assertEqual(peer["decode_errors"], 1)
@@ -695,7 +701,7 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
 
         out = runner.get_peer_connections_snapshot()
         self.assertEqual(len(out["peers"]), 1)
-        self.assertEqual(out["peers"][0]["peer"], "198.51.100.1:4433")
+        self.assertEqual(out["peers"][0]["peer"], {"host": "198.51.100.1", "port": 4433})
 
     def test_listener_peer_snapshot_uses_child_myudp_session_stats(self):
         class _InnerStats:

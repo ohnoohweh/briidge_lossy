@@ -699,6 +699,8 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_render_hook_value_replaces_known_placeholders
     - tests/unit/test_channel_mux_listener_mode.py::test_hook_context_exposes_resolved_overlay_peer
     - tests/unit/test_channel_mux_listener_mode.py::test_hook_context_prefers_live_overlay_peer_over_initial_candidate
+    - tests/unit/test_tun_hook_scripts.py::test_auto_overlay_peer_excluded_routes_splits_multi_host_peer_list
+    - tests/unit/test_tun_hook_scripts.py::test_auto_overlay_peer_excluded_routes_adds_ipv4_mapped_ipv6_exclusion
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_brings_interface_up_before_underlay_route_is_known
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_normalizes_ipv4_mapped_ipv6_peer_for_route_programming
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_supports_excluded_route_programming

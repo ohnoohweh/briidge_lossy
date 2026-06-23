@@ -107,6 +107,17 @@ def _normalized_route_cidr(host: str) -> str:
     return f"{addr}/{'128' if addr.version == 6 else '32'}"
 
 
+def _ipv4_mapped_ipv6_route_cidr(host: str) -> str:
+    text = str(host or "").strip()
+    if text.startswith("::ffff:"):
+        text = text.split("::ffff:", 1)[1]
+    try:
+        addr = ipaddress.IPv4Address(text)
+    except ValueError:
+        return ""
+    return f"::ffff:{addr}/128"
+
+
 def _dedupe_routes(routes: Sequence[str]) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
@@ -183,6 +194,9 @@ def auto_overlay_peer_excluded_routes(config: Mapping[str, Any] | None) -> tuple
             routes6.append(route)
         else:
             routes4.append(route)
+            mapped_route = _ipv4_mapped_ipv6_route_cidr(str(host))
+            if mapped_route:
+                routes6.append(mapped_route)
     return (_dedupe_routes(routes4), _dedupe_routes(routes6))
 
 
