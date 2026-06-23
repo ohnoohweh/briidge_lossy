@@ -381,6 +381,7 @@ enum ObstacleBridgeRuntimeConfig {
                 schemaItem(key: "udp_peer", description: "peer IP/FQDN, or comma-separated IPv4/IPv6 alternatives (IPv6 may be in [brackets])", defaultValue: NSNull()),
                 schemaItem(key: "udp_peer_port", description: "peer overlay port", defaultValue: 4433),
                 schemaItem(key: "udp_peer_resolve_family", description: "Peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.", defaultValue: "prefer-ipv6", choices: ["prefer-ipv6", "ipv4", "ipv6"]),
+                schemaItem(key: "max_inflight", description: "Maximum myUDP DATA frames allowed in flight before excess frames are queued.", defaultValue: 32767),
             ],
             "tcp_session": [
                 schemaItem(key: "tcp_bind", description: "TCP overlay bind address", defaultValue: "::"),
@@ -512,6 +513,11 @@ enum ObstacleBridgeRuntimeConfig {
             limit = max(0, limit - secureLinkFrameHeaderSize - secureLinkAEADTagSize)
         }
         return max(0, limit)
+    }
+
+    static func overlayMaxInflight(from payload: [String: Any]) -> Int {
+        let configured = intValue(from: payload["max_inflight"]) ?? 32767
+        return min(32767, max(1, configured))
     }
 
     static func normalizedConfigUpdates(_ updates: [String: Any], currentRuntimeConfig: [String: Any]) -> [String: Any] {

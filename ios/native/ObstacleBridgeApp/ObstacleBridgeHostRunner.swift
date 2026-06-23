@@ -1794,7 +1794,7 @@ final class ObstacleBridgeHostRunner {
             peerPort: peerPort,
             peerResolveFamily: peerResolveFamily,
             sessionMaxAppPayload: ObstacleBridgeRuntimeConfig.overlaySessionMaxAppPayload(from: runtimeConfig),
-            maxInFlight: Self.intValue(from: runtimeConfig["max_inflight"]) ?? 32767,
+            maxInFlight: ObstacleBridgeRuntimeConfig.overlayMaxInflight(from: runtimeConfig),
             overlayLayerTransportAdapter: sharedOverlayLayerTransportAdapter,
             startupMuxFrames: remoteServiceCatalogMuxFrames(
                 instanceID: muxInstanceID,

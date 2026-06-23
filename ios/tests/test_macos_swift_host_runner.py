@@ -169,6 +169,7 @@ def test_swift_udp_status_reports_inflight_separately_from_buffered_frames() -> 
     host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     packet_tunnel = (ROOT / "ios" / "native" / "IPServer" / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     udp_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift").read_text(encoding="utf-8")
+    runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
 
     assert '"inflight": protocolStats["inflight"] ?? 0' in host_runner
     assert '"inflight": protocolStats["inflight"] ?? 0' in packet_tunnel
@@ -176,6 +177,10 @@ def test_swift_udp_status_reports_inflight_separately_from_buffered_frames() -> 
     assert '"waiting_count": waitQueue.count' in udp_runtime
     assert '"inflight": sendBuffer.count' in udp_runtime
     assert '"max_inflight": maxInFlight' in udp_runtime
+    assert 'schemaItem(key: "max_inflight"' in runtime_config
+    assert "static func overlayMaxInflight(from payload: [String: Any]) -> Int" in runtime_config
+    assert "maxInFlight: ObstacleBridgeRuntimeConfig.overlayMaxInflight(from: settings.runtimeConfig)" in packet_tunnel
+    assert "maxInFlight: ObstacleBridgeRuntimeConfig.overlayMaxInflight(from: runtimeConfig)" in host_runner
 
 
 def test_swift_peer_status_includes_direct_tun_throttle_for_single_peer_mode() -> None:

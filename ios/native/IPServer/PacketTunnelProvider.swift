@@ -2317,7 +2317,7 @@ private final class SwiftSimpleUDPPeerBridge {
                     peerPort: settings.peerPort,
                     peerResolveFamily: settings.peerResolveFamily,
                     sessionMaxAppPayload: sessionMaxAppPayload,
-                    maxInFlight: ObstacleBridgeRuntimeConfig.intValue(from: settings.runtimeConfig["max_inflight"]) ?? 32767,
+                    maxInFlight: ObstacleBridgeRuntimeConfig.overlayMaxInflight(from: settings.runtimeConfig),
                     overlayLayerTransportAdapter: overlayLayerTransportAdapter,
                     startupMuxFrames: startupMuxFrames,
                     queue: queue,
