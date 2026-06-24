@@ -1,6 +1,10 @@
 __pycache__
 *.cfg
-.codex
+.codex/*
+!.codex/skills/
+.codex/skills/*
+!.codex/skills/obstaclebridge-project/
+!.codex/skills/obstaclebridge-project/**
 run.sh
 *.egg-info/
 Cert_SecureLink/

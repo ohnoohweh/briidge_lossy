@@ -1,0 +1,4 @@
+interface:
+  display_name: "ObstacleBridge Project"
+  short_description: "Project guard, PR, and Python/Swift parity workflow."
+  default_prompt: "Use the ObstacleBridge project workflow before committing, pushing, or changing Python/Swift runtime behavior."
