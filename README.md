@@ -1,6 +1,13 @@
 # ObstacleBridge
 ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for barrier-resilient networking. It can run over multiple overlay transports (`myudp`, `tcp`, `quic`, `ws`), expose local TCP/UDP listener services through a reliable overlay, and host an admin UI for monitoring active channels.
 
+The project currently has two macOS product paths:
+
+- **macOS Python CLI/runtime**: the normal Python product running on macOS, including the Python TUN path and shell hook based routing.
+- **macOS Swift app**: the native app bundle and Swift host runner, sharing protocol behavior with Python while owning macOS app lifecycle and native packet/routing integration.
+
+iOS is a third native product path built around the packet tunnel extension.
+
 ## Reader guide
 
 - User: start with `Why this project was developed` and `Quick start (Setup Wizard)`
@@ -1366,32 +1373,34 @@ Optional operations follow-up:
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 - Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
-Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot across `python`, `macos`, and `ios`.
-Current emphasis:
-
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) defines the bounded overload and backpressure model across transport, mux, runner, and observability layers.
-- Peer and TUN/routing observability now include throttle state where ingress shedding is active.
-- For Python runtime changes, the Linux shared integration lane remains the strongest broad-regression signal in CI.
-- Shared-TUN reconnect handling is currently validated on Linux, with matching macOS host-runner parity coverage keeping the Swift lifecycle behavior aligned.
+Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot. In that report, `python` means the Python CLI/runtime product across supported host operating systems, including macOS Python; `macos` means the macOS Swift app product.
 
 ### Current coverage snapshot
 Current snapshot from `python3 scripts/report_product_traceability.py`:
+
+#### Suite statistics
+
+| Product | Test files | Test defs |
+| --- | ---: | ---: |
+| Python CLI/runtime, including macOS Python | `35` | `630` |
+| macOS Swift app | `1` | `46` |
+| iOS app/extension | `23` | `143` |
 
 #### Requirement traceability
 
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
-| Python | `80/88 = 90.9%` | `85/88 = 96.6%` | `85/88 = 96.6%` |
-| macOS | `2/88 = 2.3%` | `4/88 = 4.5%` | `6/88 = 6.8%` |
-| iOS | `8/88 = 9.1%` | `8/88 = 9.1%` | `13/88 = 14.8%` |
+| Python CLI/runtime, including macOS Python | `80/88 = 90.9%` | `85/88 = 96.6%` | `85/88 = 96.6%` |
+| macOS Swift app | `2/88 = 2.3%` | `4/88 = 4.5%` | `6/88 = 6.8%` |
+| iOS app/extension | `8/88 = 9.1%` | `8/88 = 9.1%` | `13/88 = 14.8%` |
 
 #### Architecture traceability
 
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
-| Python | `7/7 = 100.0%` | `7/7 = 100.0%` | `7/7 = 100.0%` |
-| macOS | `1/7 = 14.3%` | `3/7 = 42.9%` | `3/7 = 42.9%` |
-| iOS | `4/7 = 57.1%` | `3/7 = 42.9%` | `4/7 = 57.1%` |
+| Python CLI/runtime, including macOS Python | `7/7 = 100.0%` | `7/7 = 100.0%` | `7/7 = 100.0%` |
+| macOS Swift app | `1/7 = 14.3%` | `3/7 = 42.9%` | `3/7 = 42.9%` |
+| iOS app/extension | `4/7 = 57.1%` | `3/7 = 42.9%` | `4/7 = 57.1%` |
 
 The supporting manifests remain shared:
 
@@ -1407,11 +1416,11 @@ This section is intentionally narrower than product coverage. It shows the evide
 
 | Evidence lane | Meaning | Integration covered | Unit covered | Any covered |
 | --- | --- | ---: | ---: | ---: |
-| Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `118` | `118` |
+| Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `119` | `119` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `4` | `0` | `4` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `30` | `0` | `30` |
-| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `20` | `20` |
-| Total parity-oriented evidence | Sum of the lanes above | `34` | `138` | `172` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `46` | `0` | `46` |
+| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `21` | `21` |
+| Total parity-oriented evidence | Sum of the lanes above | `50` | `140` | `190` |
 
 Important caveat:
 
