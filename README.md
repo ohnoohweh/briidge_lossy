@@ -1382,17 +1382,17 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `36` | `631` |
-| macOS Swift app | `1` | `46` |
-| iOS app/extension | `23` | `143` |
+| Python CLI/runtime, including macOS Python | `36` | `633` |
+| macOS Swift app | `1` | `47` |
+| iOS app/extension | `23` | `144` |
 
 #### Requirement traceability
 
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `80/88 = 90.9%` | `85/88 = 96.6%` | `85/88 = 96.6%` |
-| macOS Swift app | `2/88 = 2.3%` | `4/88 = 4.5%` | `6/88 = 6.8%` |
-| iOS app/extension | `8/88 = 9.1%` | `8/88 = 9.1%` | `13/88 = 14.8%` |
+| macOS Swift app | `2/88 = 2.3%` | `5/88 = 5.7%` | `7/88 = 8.0%` |
+| iOS app/extension | `8/88 = 9.1%` | `9/88 = 10.2%` | `14/88 = 15.9%` |
 
 #### Architecture traceability
 
@@ -1418,9 +1418,9 @@ This section is intentionally narrower than product coverage. It shows the evide
 | --- | --- | ---: | ---: | ---: |
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `119` | `119` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `4` | `0` | `4` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `46` | `0` | `46` |
-| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `21` | `21` |
-| Total parity-oriented evidence | Sum of the lanes above | `50` | `140` | `190` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `47` | `0` | `47` |
+| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `22` | `22` |
+| Total parity-oriented evidence | Sum of the lanes above | `51` | `141` | `192` |
 
 Important caveat:
 

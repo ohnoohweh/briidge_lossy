@@ -227,3 +227,118 @@ def test_ios_secure_link_transport_adapter_can_prime_handshake_on_transport_conn
         "server_authenticated": True,
         "client_received": ["reply-secure"],
     }
+
+
+def test_ios_secure_link_transport_adapter_reconnect_edge_reprimes_after_authenticated_failure_like_python(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "SecureLinkTransportRecoveryProbe.swift"
+    binary_path = tmp_path / "secure-link-transport-recovery-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            enum ProbeError: Error {
+                case badState(String)
+            }
+
+            @main
+            struct SecureLinkTransportRecoveryProbe {
+                static func main() throws {
+                    var clientSessionIDs: [UInt64] = [0x0102030405060708, 0x0102030405060709]
+                    let client = ObstacleBridgeSecureLinkPskTransportAdapter(
+                        runtime: ObstacleBridgeSecureLinkPskRuntime(
+                            clientMode: true,
+                            psk: "shared-psk",
+                            randomBytes: { count in Data(repeating: 0x11, count: count) },
+                            sessionIDProvider: {
+                                if clientSessionIDs.isEmpty {
+                                    return 0x0102030405060710
+                                }
+                                return clientSessionIDs.removeFirst()
+                            }
+                        )
+                    )
+                    let server = ObstacleBridgeSecureLinkPskTransportAdapter(
+                        runtime: ObstacleBridgeSecureLinkPskRuntime(
+                            clientMode: false,
+                            psk: "shared-psk",
+                            randomBytes: { count in Data(repeating: 0x22, count: count) },
+                            sessionIDProvider: { 0 }
+                        )
+                    )
+
+                    let firstPrime = try client.handleTransportConnected()
+                    guard let firstHello = firstPrime.emittedFrames.first,
+                          let parsedFirstHello = ObstacleBridgeSecureLinkPskCodec.parseFrame(firstHello),
+                          parsedFirstHello.slType == ObstacleBridgeSecureLinkPskRuntime.typeClientHello
+                    else {
+                        throw ProbeError.badState("missing first client hello")
+                    }
+
+                    let serverHello = server.handleInboundFrame(firstHello)
+                    guard let serverHelloFrame = serverHello.emittedFrames.first else {
+                        throw ProbeError.badState("missing server hello")
+                    }
+                    let clientAuth = client.handleInboundFrame(serverHelloFrame)
+                    guard let clientProofFrame = clientAuth.emittedFrames.first else {
+                        throw ProbeError.badState("missing client proof")
+                    }
+                    _ = server.handleInboundFrame(clientProofFrame)
+                    guard client.statusSnapshot().authenticated else {
+                        throw ProbeError.badState("client did not authenticate")
+                    }
+
+                    let failure = client.handleInboundFrame(Data([0x00, 0x01, 0x02]))
+                    guard failure.authFailCode == ObstacleBridgeSecureLinkPskRuntime.authFailDecode else {
+                        throw ProbeError.badState("authenticated failure did not fail closed")
+                    }
+                    let failedStatus = client.statusSnapshot()
+
+                    client.handleTransportDisconnected()
+                    let disconnectedStatus = client.statusSnapshot()
+                    let secondPrime = try client.handleTransportConnected()
+                    guard let secondHello = secondPrime.emittedFrames.first,
+                          let parsedSecondHello = ObstacleBridgeSecureLinkPskCodec.parseFrame(secondHello),
+                          parsedSecondHello.slType == ObstacleBridgeSecureLinkPskRuntime.typeClientHello
+                    else {
+                        throw ProbeError.badState("missing recovery client hello")
+                    }
+
+                    let payload: [String: Any] = [
+                        "first_session_id": String(parsedFirstHello.sessionID),
+                        "failed_auth_code": failedStatus.authFailCode,
+                        "failed_authenticated": failedStatus.authenticated,
+                        "disconnected_session_id": String(disconnectedStatus.sessionID),
+                        "disconnected_auth_code": disconnectedStatus.authFailCode,
+                        "second_session_id": String(parsedSecondHello.sessionID),
+                        "second_emitted_frames": secondPrime.emittedFrames.count,
+                        "second_authenticated": secondPrime.authenticated,
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_secure_link_transport_probe(source_path, binary_path)
+    completed = subprocess.run([str(binary_path)], capture_output=True, text=True, check=False, timeout=30)
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+    payload = json.loads(completed.stdout)
+
+    assert payload == {
+        "first_session_id": "72623859790382856",
+        "failed_auth_code": 4,
+        "failed_authenticated": False,
+        "disconnected_session_id": "0",
+        "disconnected_auth_code": 0,
+        "second_session_id": "72623859790382857",
+        "second_emitted_frames": 1,
+        "second_authenticated": False,
+    }

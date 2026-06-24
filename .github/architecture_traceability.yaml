@@ -170,6 +170,8 @@ ARC-CMP-004:
   unit_tests:
     - tests/unit/test_peer_resolution.py::test_udp_session_prefer_ipv6_keeps_candidate_on_immediate_send_error
     - tests/unit/test_peer_resolution.py::test_send_port_prefer_ipv6_allows_ipv4_mapped_destination_on_ipv6_socket
+    - tests/unit/test_peer_resolution.py::test_resolve_prefer_ipv6_keeps_native_ipv4_literal_until_ipv6_socket_send_mapping
+    - ios/tests/test_macos_swift_host_runner.py::test_swift_peer_resolution_prefer_ipv6_keeps_ipv4_literal_native_until_socket_normalization
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv6_literal_when_available
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_falls_back_to_ipv4_when_ipv6_candidate_fails
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_honors_bind_family_constraint
@@ -182,6 +184,7 @@ ARC-CMP-004:
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_compress_layer_above_secure_link
     - tests/unit/test_runner_overlay_transports.py::test_request_secure_link_reload_targets_matching_peer_id_only
     - tests/unit/test_runner_overlay_transports.py::test_request_secure_link_reload_rejects_unknown_peer_id
+    - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_reconnect_edge_reprimes_after_authenticated_failure_like_python
     - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_uses_child_myudp_session_stats
     - tests/unit/test_requirements_unit_gaps.py::test_udp_peer_labels_bracket_ipv6_and_plain_ipv4
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_sender_reset_clears_stale_reconnect_state

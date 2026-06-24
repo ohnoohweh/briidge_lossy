@@ -315,6 +315,63 @@ def test_swift_peer_resolution_probe_keeps_ipv4_fallback_for_prefer_ipv6(tmp_pat
     assert payload["excluded6"] == ["::1/128", "2001:db8::10/128", "::ffff:198.51.100.10/128"]
 
 
+def test_swift_peer_resolution_prefer_ipv6_keeps_ipv4_literal_native_until_socket_normalization(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "PeerResolutionIPv4LiteralProbe.swift"
+    binary_path = tmp_path / "peer-resolution-ipv4-literal-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+            import Darwin
+
+            @main
+            struct PeerResolutionIPv4LiteralProbeMain {
+                static func main() throws {
+                    let candidates = try ObstacleBridgePeerAddressResolver.resolvePeerAddresses(
+                        host: "38.180.143.5",
+                        port: 8080,
+                        resolveFamily: "prefer-ipv6",
+                        bindHost: "::",
+                        errorDomain: "PeerResolutionIPv4LiteralProbe"
+                    )
+                    let mode = ObstacleBridgePeerAddressResolver.ResolveMode(rawValue: "prefer-ipv6")
+                    let normalized = try candidates.map {
+                        try ObstacleBridgePeerAddressResolver.normalizePeerCandidate(
+                            $0,
+                            socketFamily: AF_INET6,
+                            resolveMode: mode,
+                            errorDomain: "PeerResolutionIPv4LiteralProbe"
+                        )
+                    }
+                    let payload: [String: Any] = [
+                        "candidate_count": candidates.count,
+                        "candidate_host": candidates.first?.host ?? "",
+                        "candidate_family": candidates.first.map { ObstacleBridgePeerAddressResolver.familyName($0.family) } ?? "",
+                        "normalized_host": normalized.first?.host ?? "",
+                        "normalized_family": normalized.first.map { ObstacleBridgePeerAddressResolver.familyName($0.family) } ?? "",
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_runtime_probe(source_path, binary_path)
+    completed = subprocess.run([str(binary_path)], capture_output=True, text=True, check=True)
+    payload = json.loads(completed.stdout)
+    assert payload == {
+        "candidate_count": 1,
+        "candidate_host": "38.180.143.5",
+        "candidate_family": "ipv4",
+        "normalized_host": "::ffff:38.180.143.5",
+        "normalized_family": "ipv6",
+    }
+
+
 def test_macos_app_bundle_embeds_latest_macos_tun_hook() -> None:
     build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
 
