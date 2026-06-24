@@ -6,6 +6,12 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
     private static let queueSpecificKey = DispatchSpecificKey<Int>()
+
+    // Keep Swift QUIC writes capped at 1024 bytes. Network.framework has been
+    // observed to stall larger single stream writes in the mixed Swift/Python
+    // service-forwarding path, while 1024-byte chunks are proven by the current
+    // QUIC design notes and integration tests. Do not "optimize" this away
+    // without updating docs/QUIC_DESIGN.md and re-proving larger writes.
     private static let maxNetworkFrameworkWriteBytes = 1024
 
     private let peerHost: String
@@ -552,9 +558,6 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
 
     private func enqueueOutboundWire(_ wire: Data) {
         guard !wire.isEmpty else { return }
-        // Network.framework QUIC has been observed to stall large single stream writes
-        // in the mixed Swift/Python service-forwarding path. Keep this transport-level
-        // chunking in place unless docs/QUIC_DESIGN.md has been updated with a new proof.
         for chunk in Self.networkFrameworkWriteChunks(wire) {
             pendingOutboundWires.append(chunk)
             ObstacleBridgeOverlayChannelCore.recordOverlayEgress(
