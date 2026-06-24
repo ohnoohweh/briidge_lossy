@@ -90,12 +90,14 @@ def test_client_tun_hook_supports_excluded_route_programming() -> None:
     assert 'add_excluded_routes6() {' in script
     assert 'snapshot_excluded_routes4() {' in script
     assert 'snapshot_excluded_routes6() {' in script
+    assert 'ip route show exact "$route_spec" 2>/dev/null | head -n1 || true' in script
+    assert 'ip -6 route show exact "$route_spec" 2>/dev/null | head -n1 || true' in script
     assert 'STATE_UNDERLAY4="${STATE_DIR}/${IFNAME}.underlay-route4"' in script
     assert 'STATE_UNDERLAY6="${STATE_DIR}/${IFNAME}.underlay-route6"' in script
     assert 'printf \'%s\\n\' "$route_line" > "$state_file"' in script or "printf '%s\\n' \"$route_line\" > \"$state_file\"" in script
     assert 'rm -f "$stale_state_file"' in script
-    assert 'route_line="$(ip route show match "$route_spec"' in script
-    assert 'route_line="$(ip -6 route show match "$route_spec"' in script
+    assert 'route_line="$(ip route show exact "$route_spec"' in script
+    assert 'route_line="$(ip -6 route show exact "$route_spec"' in script
     assert 'done < "$STATE_EXCLUDED4"' in script
     assert 'done < "$STATE_EXCLUDED6"' in script
     assert 'skip explicit loopback route install for ${route_spec}; kernel loopback routes already cover it' in script

@@ -235,7 +235,7 @@ snapshot_excluded_routes4() {
     if excluded_route_should_use_loopback4 "$route_spec"; then
       continue
     fi
-    route_line="$(ip route show match "$route_spec" 2>/dev/null | head -n1 || true)"
+    route_line="$(ip route show exact "$route_spec" 2>/dev/null | head -n1 || true)"
     if [[ -z "$route_line" ]]; then
       probe="${route_spec%%/*}"
       if [[ -n "$probe" ]]; then
@@ -264,7 +264,7 @@ snapshot_excluded_routes6() {
     if excluded_route_should_use_loopback6 "$route_spec"; then
       continue
     fi
-    route_line="$(ip -6 route show match "$route_spec" 2>/dev/null | head -n1 || true)"
+    route_line="$(ip -6 route show exact "$route_spec" 2>/dev/null | head -n1 || true)"
     if [[ -z "$route_line" ]]; then
       probe="${route_spec%%/*}"
       if [[ -n "$probe" ]]; then

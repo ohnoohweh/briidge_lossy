@@ -64,6 +64,8 @@ ARC-CMP-002:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_udp_fragmentation_survives_text_mode
 
 ARC-CMP-003:
+  # The TUN hook coverage here includes exact excluded-route snapshotting so
+  # local subnet routes stay attached to their original interfaces.
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_opens_channel_and_sends_data
     - tests/unit/test_channel_mux_listener_mode.py::test_process_shared_tun_registry_reuses_prestarted_server_owned_tun

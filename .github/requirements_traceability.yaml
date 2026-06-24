@@ -688,6 +688,8 @@ REQ-MUX-008:
     - tests/unit/test_channel_mux_listener_mode.py::test_reassembles_tun_fragments_before_device_write
 
 REQ-MUX-009:
+  # Includes Linux hook coverage for exact excluded-route snapshotting so
+  # full-tunnel installs preserve pre-existing local subnet ownership.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_structured_own_servers_lifecycle_hooks_execute
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_structured_remote_servers_udp_forwarding

@@ -58,7 +58,7 @@ Representative anchors for those areas:
   - [tests/unit/test_channel_mux_component_parity.py](../tests/unit/test_channel_mux_component_parity.py)
   - [tests/integration/test_linux_elevated.py](../tests/integration/test_linux_elevated.py)
   - [ios/tests/test_macos_swift_host_runner.py](../ios/tests/test_macos_swift_host_runner.py)
-  - current coverage includes Linux hook assertions for IPv4-mapped IPv6 overlay exclusions and preserving excluded local subnets on their original interfaces during full-tunnel route installation
+- current coverage includes Linux hook assertions for IPv4-mapped IPv6 overlay exclusions, exact-route snapshotting for excluded routes, and preserving excluded local subnets on their original interfaces during full-tunnel route installation
 - Admin Web and parity:
   - [tests/unit/test_admin_web_payloads.py](../tests/unit/test_admin_web_payloads.py)
   - [tests/unit/test_admin_web_component_parity.py](../tests/unit/test_admin_web_component_parity.py)
