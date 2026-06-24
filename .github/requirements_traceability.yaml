@@ -52,6 +52,8 @@ REQ-OVL-006:
     - tests/unit/test_requirements_unit_gaps.py::test_udp_peer_labels_bracket_ipv6_and_plain_ipv4
 
 REQ-OVL-007:
+  # Includes dual-stack peer-resolution parity: native IPv4 literals remain native
+  # at resolution time under prefer-ipv6 and are mapped only for IPv6 socket sends.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_udp_peer_multi_host_prefers_ipv6_and_falls_back_to_ipv4

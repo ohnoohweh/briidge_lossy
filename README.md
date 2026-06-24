@@ -1467,6 +1467,7 @@ Debugging in a project like this can be difficult because the behavior emerges f
 - Use the parallel overlay harness for frequent end-to-end validation when transport and socket behavior matter most.
 - Keep reconnect, listener, and concurrent multi-peer coverage in the regular regression flow instead of treating them as occasional manual checks.
 - Keep UDP multi-peer resolution coverage aligned with dual-stack behavior, including `prefer-ipv6` retention across immediate send errors and IPv4 fallback through IPv4-mapped sends when the active socket is IPv6.
+- Keep the Python and Swift `prefer-ipv6` peer-resolution contract pinned for native IPv4 literals: resolution should keep the IPv4 host identity intact, while IPv4-mapped notation is reserved for IPv6 socket send compatibility.
 - Keep reconnect waits aligned with expected process self-restarts, so a freshly relaunched peer gets a bounded chance to reconnect before the integration harness reports failure.
 - Keep secure-link multi-peer listener probes gated on authenticated peer state before expecting client-published services to accept traffic.
 - Keep WebSocket reconnect coverage in that same regression flow, including secure-link cases that must emit a fresh connected edge after transport-epoch restart instead of inheriting stale connected state from the previous socket.
