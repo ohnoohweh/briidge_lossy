@@ -100,6 +100,7 @@ REQ-AUT-001:
   unit_tests:
     - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_psk
+    - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
 
 REQ-AUT-002:
   integration_tests:
@@ -146,6 +147,7 @@ REQ-AUT-004:
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_prevents_authenticated_session
     - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session
+    - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
 
 REQ-AUT-005:
   # Multi-peer SecureLink coverage waits for authenticated peer state before
@@ -160,6 +162,7 @@ REQ-AUT-005:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener
   unit_tests:
     - tests/unit/test_secure_link_psk.py::test_server_rewrites_mux_channels_per_peer_for_multiple_connections
+    - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
 
 REQ-LST-007:
   integration_tests:

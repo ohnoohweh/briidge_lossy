@@ -463,6 +463,8 @@ class TcpStreamSession(ISession):
         return hdr.pack(new_chan, proto, counter, mtype, dlen) + payload[hdr.size:hdr.size + dlen]
 
     def _server_rewrite_inbound_app(self, peer_id: int, payload: bytes) -> bytes:
+        if self._app_payload_passthrough:
+            return payload
         hdr = _MUX_HDR
         if len(payload) < hdr.size:
             return payload

@@ -30,6 +30,7 @@ ARC-CMP-001:
     - tests/unit/test_ws_multi_peer.py::test_unregister_peer_channels_only_removes_target_peer
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
     - tests/unit/test_ws_multi_peer.py::test_send_app_routes_to_matching_server_peer_queue
+    - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_direct_preflight_requires_http_200_before_upgrade
@@ -68,6 +69,7 @@ ARC-CMP-003:
   # local subnet routes stay attached to their original interfaces.
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_opens_channel_and_sends_data
+    - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
     - tests/unit/test_channel_mux_listener_mode.py::test_process_shared_tun_registry_reuses_prestarted_server_owned_tun
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
     - tests/unit/test_tun_hook_scripts.py::test_auto_overlay_peer_excluded_routes_splits_multi_host_peer_list
@@ -324,6 +326,7 @@ ARC-CMP-006:
     - tests/unit/test_secure_link_cert.py::test_revocation_reload_drops_existing_authenticated_peer
     - tests/unit/test_secure_link_cert.py::test_local_identity_reload_failure_is_atomic
     - tests/unit/test_secure_link_cert.py::test_local_identity_reload_applies_and_reauthenticates
+    - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_secure_link_psk_happy_path_other_transports
