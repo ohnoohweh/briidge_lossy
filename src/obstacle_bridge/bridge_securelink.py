@@ -1046,6 +1046,14 @@ class SecureLinkPskSession(ISession):
         self._server_next_mux_chan = 1
         self._refresh_connected_state()
 
+    def _has_pending_client_recovery(self) -> bool:
+        if not self._client_mode:
+            return False
+        if self._client_recovery_not_before_mono <= 0.0 and self._client_recovery_not_before_unix_ts is None:
+            return False
+        state = self._peer_states.get(0)
+        return bool(state is not None and int(state.auth_fail_code or 0) > 0)
+
     def _clear_client_rekey_app_queue(self) -> None:
         self._client_rekey_hold_after_commit = False
         self._client_rekey_app_queue.clear()
@@ -1217,11 +1225,11 @@ class SecureLinkPskSession(ISession):
                 return
             if int(state.session_id or 0) != int(expected_session_id or 0):
                 return
-            self._client_recovery_not_before_mono = 0.0
-            self._client_recovery_not_before_unix_ts = None
             state.last_event = "recovery_reconnect_started"
             state.last_event_unix_ts = time.time()
             self._record_secure_link_event("recovery_reconnect_started", state.last_event_unix_ts)
+            self._client_recovery_not_before_mono = 0.0
+            self._client_recovery_not_before_unix_ts = None
             if not self.request_reconnect():
                 self._log.warning(
                     "[SECURE-LINK] recovery reconnect unavailable transport=%s side=client session_id=%s",
@@ -1713,7 +1721,9 @@ class SecureLinkPskSession(ISession):
             return
         self._cancel_client_retry_task(clear_schedule=False)
         self._cancel_client_rekey_task(clear_schedule=False)
-        self._clear_all_states()
+        preserve_client_recovery = self._has_pending_client_recovery()
+        if not preserve_client_recovery:
+            self._clear_all_states()
         resetter = getattr(self._inner, "reset_transport_epoch", None)
         if not callable(resetter):
             resetter = getattr(self._inner, "reset_sender", None)
@@ -2331,24 +2341,27 @@ class SecureLinkPskSession(ISession):
                 for state in self._peer_states.values()
             )
         )
+        preserve_client_recovery = self._has_pending_client_recovery()
         self._log.info(
-            "[SECURE-LINK] transport epoch change transport=%s side=%s epoch=%s preserve_connected=%s preserve_handshake=%s authenticated_sessions_total=%s peer_states=%s",
+            "[SECURE-LINK] transport epoch change transport=%s side=%s epoch=%s preserve_connected=%s preserve_handshake=%s preserve_recovery=%s authenticated_sessions_total=%s peer_states=%s",
             self._transport_name,
             "client" if self._client_mode else "server",
             int(epoch),
             bool(preserve_connected_epoch_restart),
             bool(preserve_client_handshake),
+            bool(preserve_client_recovery),
             int(self._authenticated_sessions_total or 0),
             len(self._peer_states),
         )
         self._preserve_connected_during_epoch_restart = bool(preserve_connected_epoch_restart)
-        if not preserve_client_handshake:
+        if not preserve_client_handshake and not preserve_client_recovery:
             self._clear_all_states()
         if (
             self._client_mode
             and self._started
             and bool(getattr(self._inner, "is_connected", lambda: False)())
             and not preserve_client_handshake
+            and not preserve_client_recovery
         ):
             self._maybe_begin_client_handshake()
         if callable(self._outer_on_transport_epoch_change):

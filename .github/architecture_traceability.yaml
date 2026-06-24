@@ -314,7 +314,8 @@ ARC-CMP-005:
 
 ARC-CMP-006:
   # SecureLink integration coverage includes authenticated-readiness gating
-  # before multi-peer client-published TCP service probes.
+  # before multi-peer client-published TCP service probes and preservation of
+  # authenticated-failure recovery timers across runner reset/epoch callbacks.
   unit_tests:
     - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_prevents_authenticated_session

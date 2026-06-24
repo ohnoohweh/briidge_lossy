@@ -1177,7 +1177,7 @@ API fallback for details not fully surfaced in WebAdmin yet:
   - `failure_code=1`
   - `failure_reason=bad_psk`
   - repeated client-side retries show increasing `consecutive_failures`, a bounded `retry_backoff_sec`, a populated `next_retry_unix_ts`, a populated `failure_session_id`, increasing `handshake_attempts_total`, and `last_event=retry_scheduled`
-- if an already-authenticated client-side secure-link session later fails closed, the client schedules lower-transport reconnect recovery and reports `recovery_enabled`, `recovery_delay_sec`, `recovery_reconnect_sec`, `next_recovery_reconnect_unix_ts`, and `last_event=recovery_reconnect_scheduled`
+- if an already-authenticated client-side secure-link session later fails closed, the client schedules lower-transport reconnect recovery that survives runner reset/epoch cleanup and reports `recovery_enabled`, `recovery_delay_sec`, `recovery_reconnect_sec`, `next_recovery_reconnect_unix_ts`, and recovery scheduling/starting `last_event` values
 
 Current WebAdmin gap to close in a future update:
 

@@ -408,6 +408,14 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(scheduled["next_recovery_reconnect_unix_ts"])
             self.assertEqual(client_inner.reconnect_requests, 0)
 
+            client.reset_transport_epoch()
+            client_inner.emit_transport_epoch(2)
+            client_inner.emit_state(False)
+            preserved = client.get_secure_link_status_snapshot()
+            self.assertEqual(preserved["state"], "failed")
+            self.assertEqual(preserved["last_event"], "recovery_reconnect_scheduled")
+            self.assertIsNotNone(preserved["next_recovery_reconnect_unix_ts"])
+
             await asyncio.sleep(0.04)
             await asyncio.sleep(0)
 
@@ -775,7 +783,13 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(server.send_app(reply1), len(reply1))
         self.assertEqual(server.send_app(reply2), len(reply2))
 
-        sent_data = [(payload, peer_id) for payload, peer_id in server_inner.sent if server._parse_frame(payload)[0] == server._SL_TYPE_DATA]
+        sent_data = [
+            (payload, peer_id)
+            for payload, peer_id in server_inner.sent
+            if (frame := server._parse_frame(payload))
+            and frame[0] == server._SL_TYPE_DATA
+            and int(frame[2] or 0) == 2
+        ]
         self.assertEqual([peer_id for _payload, peer_id in sent_data], [101, 202])
 
         payload1, peer_id1 = sent_data[0]

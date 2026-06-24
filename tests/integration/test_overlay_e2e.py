@@ -10470,10 +10470,10 @@ def test_overlay_e2e_tcp_secure_link_psk_authenticated_failure_recovers_with_rec
                 failure_reason='decode',
             )
             failed_secure = dict((first_active_secure_link_row(failed_doc, transport='tcp').get('secure_link') or {}))
-            assert failed_secure.get('last_event') == 'recovery_reconnect_scheduled'
+            last_event = str(failed_secure.get('last_event') or '')
+            assert last_event in {'recovery_reconnect_scheduled', 'recovery_reconnect_started'}
             assert bool(failed_secure.get('recovery_enabled')) is True
-            assert float(failed_secure.get('recovery_reconnect_sec') or 0.0) > 0.0
-            assert failed_secure.get('next_recovery_reconnect_unix_ts') is not None
+            assert float(failed_secure.get('recovery_delay_sec') or 0.0) > 0.0
 
             recovered_doc = wait_peer_secure_link_session_change(
                 client_proc.admin_port or 0,
