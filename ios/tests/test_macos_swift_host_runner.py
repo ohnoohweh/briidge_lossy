@@ -198,12 +198,12 @@ def test_macos_swift_host_runner_serves_admin_from_snapshot_cache() -> None:
     assert "private let adminSnapshotQueue = DispatchQueue(label: \"ObstacleBridgeHostRunner.AdminSnapshots\")" in source
     assert "private var adminSnapshotTimer: DispatchSourceTimer?" in source
     assert "private func startAdminSnapshotPublisher()" in source
-    assert "private func refreshAdminSnapshotCache()" in source
-    assert "func adminStatusSnapshot() -> [String: Any] {\n        snapshot()\n    }" in source
+    assert "private func refreshAdminSnapshotCache(sync: Bool = false)" in source
+    assert "func adminStatusSnapshot() -> [String: Any] {\n        refreshAdminSnapshotCache(sync: true)\n        return snapshot()\n    }" in source
     assert "func snapshot() -> [String: Any] {\n        cachedStatusOrBuild()\n    }" in source
-    assert "func adminConnectionsSnapshot() -> [String: Any] {\n        connectionsSnapshot()\n    }" in source
+    assert "func adminConnectionsSnapshot() -> [String: Any] {\n        refreshAdminSnapshotCache(sync: true)\n        return connectionsSnapshot()\n    }" in source
     assert "private func connectionsSnapshot() -> [String: Any] {\n        cachedConnectionsOrBuild()\n    }" in source
-    assert "func adminTunRoutingSnapshot() -> [String: Any] {\n        cachedTunRoutingOrBuild()\n    }" in source
+    assert "func adminTunRoutingSnapshot() -> [String: Any] {\n        refreshAdminSnapshotCache(sync: true)\n        return cachedTunRoutingOrBuild()\n    }" in source
 
 
 def test_macos_swift_host_runner_peer_status_aggregates_connection_traffic_like_python() -> None:
@@ -1660,7 +1660,7 @@ def test_macos_swift_host_runner_myudp_remote_tcp_admin_web_handles_multiple_con
             "--runtime-config",
             str(runtime_config_path),
             "--hold-sec",
-            "20",
+            "45",
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -3989,7 +3989,7 @@ def test_macos_swift_host_runner_remote_tcp_admin_web_handles_multiple_connectio
             "--runtime-config",
             str(runtime_config_path),
             "--hold-sec",
-            "20",
+            "45",
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
