@@ -5783,6 +5783,14 @@ def run_case_tcp_two_clients_concurrent_udp_tcp(
         wait_peers_count(server_admin, minimum_count=2, timeout=12.0, label='server')
         wait_listener_peer_rows_zeroed(server_admin, timeout=12.0, label='server')
         wait_distinct_peer_endpoints(server_admin, transport='tcp', minimum_count=2, timeout=12.0, label='server')
+        if secure_slot is not None:
+            wait_status_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', authenticated=True)
+            wait_status_secure_link_authenticated_peers(server_admin, minimum_count=2, timeout=12.0, label='server')
+            wait_status_secure_link_state(client1_admin, expected_state='authenticated', timeout=12.0, label='client1', authenticated=True)
+            wait_status_secure_link_state(client2_admin, expected_state='authenticated', timeout=12.0, label='client2', authenticated=True)
+            wait_peer_secure_link_state(client1_admin, expected_state='authenticated', timeout=12.0, label='client1', transport='tcp', authenticated=True)
+            wait_peer_secure_link_state(client2_admin, expected_state='authenticated', timeout=12.0, label='client2', transport='tcp', authenticated=True)
+            wait_peer_secure_link_state(server_admin, expected_state='authenticated', timeout=12.0, label='server', transport='tcp', authenticated=True)
 
         phase('5. Open 8 concurrent TCP channels and hold them during /api/connections polling')
         for name, port, _payload in tcp_specs:
