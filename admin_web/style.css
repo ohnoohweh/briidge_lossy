@@ -1194,6 +1194,32 @@ select.config-editor option:disabled {
   border-bottom: none;
 }
 
+.tun-route-wrap {
+  max-height: none;
+}
+
+.tun-route-table {
+  min-width: 0;
+}
+
+.tun-route-table tbody td {
+  vertical-align: top;
+}
+
+.tun-route-table tbody td:first-child {
+  width: 180px;
+  white-space: nowrap;
+  color: rgba(170, 196, 235, 0.9);
+  font-weight: 700;
+}
+
+.tun-route-value {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+  padding-left: 8px;
+}
+
 .peer-table {
   min-width: 1100px;
 }

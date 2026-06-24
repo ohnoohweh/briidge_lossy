@@ -13,6 +13,7 @@ from obstacle_bridge_ios.m3_tunnel import (
     m3_tunnel_config_from_profile,
     m3_vpn_profile_from_profile,
     network_settings_from_runtime_config,
+    normalized_ios_tun_connector_config,
     provider_status_request_message,
     provider_configuration_from_m3_config,
     tunnel_status_from_provider_payload,
@@ -59,11 +60,60 @@ def test_m3_tunnel_config_uses_profile_peer_and_network_settings() -> None:
     assert cfg.peer_port == 4433
     assert cfg.server_address == "bridge.example.net:4433"
     assert cfg.network.included_routes == ["10.88.0.0/24"]
+    assert cfg.runtime_config["iOS_TUN_connector"]["packetflow_connector"] == "swift_udp"
+
+
+def test_normalized_ios_tun_connector_config_preserves_explicit_section_values() -> None:
+    section = normalized_ios_tun_connector_config(
+        {
+            "iOS_TUN_connector": {
+                "packetflow_connector": "swift_host_runner",
+                "bind_host": "127.0.0.1",
+                "bind_port": 7000,
+                "peer_host": "example.invalid",
+                "peer_port": 7001,
+                "ifname": "ios-utun9",
+                "mtu": 1500,
+            }
+        }
+    )
+
+    assert section == {
+        "packetflow_connector": "swift_host_runner",
+        "bind_host": "127.0.0.1",
+        "bind_port": 7000,
+        "peer_host": "example.invalid",
+        "peer_port": 7001,
+        "ifname": "ios-utun9",
+        "mtu": 1500,
+    }
+
+
+def test_normalized_ios_tun_connector_config_leaves_swift_udp_peer_unset() -> None:
+    section = normalized_ios_tun_connector_config({})
+
+    assert section["packetflow_connector"] == "swift_udp"
+    assert section["bind_host"] == "127.0.0.1"
+    assert section["bind_port"] == 5555
+    assert section["peer_host"] == "127.0.0.1"
+    assert section["peer_port"] == 5556
 
 
 def test_provider_configuration_is_native_extension_contract() -> None:
     cfg = m3_tunnel_config_from_profile(
-        _m25_profile(),
+        {
+            **_m25_profile(),
+            "obstacle_bridge": {
+                **_m25_profile()["obstacle_bridge"],
+                "iOS_TUN_connector": {
+                    "packetflow_connector": "swift_udp",
+                    "bind_host": "127.0.0.1",
+                    "bind_port": 5555,
+                    "peer_host": "",
+                    "peer_port": 0,
+                },
+            },
+        },
         provider_bundle_identifier="com.obstaclebridge.ObstacleBridge.PacketTunnel",
     )
 
@@ -75,15 +125,41 @@ def test_provider_configuration_is_native_extension_contract() -> None:
     assert provider_config["runtime_config"]["overlay_transport"] == "tcp"
     assert provider_config["runtime_config"]["tcp_peer"] == "bridge.example.net"
     assert provider_config["runtime_config"]["tcp_peer_port"] == 4433
-    assert provider_config["network_settings"]["tunnel_address"] == "192.168.105.1"
+    assert provider_config["runtime_config"]["iOS_TUN_connector"]["packetflow_connector"] == "swift_udp"
+    assert provider_config["runtime_config"]["iOS_TUN_connector"]["bind_host"] == "127.0.0.1"
+    assert provider_config["runtime_config"]["iOS_TUN_connector"]["peer_host"] == "127.0.0.1"
+    assert provider_config["runtime_config"]["iOS_TUN_connector"]["peer_port"] == 5556
+    assert provider_config["network_settings"]["tunnel_address"] == "192.168.106.1"
     assert provider_config["network_settings"]["tunnel_prefix"] == 30
     assert provider_config["network_settings"]["included_routes"] == ["0.0.0.0/0"]
     assert provider_config["network_settings"]["excluded_routes"] == ["127.0.0.0/8"]
-    assert provider_config["network_settings"]["tunnel_address6"] == ""
-    assert provider_config["network_settings"]["included_routes6"] == []
-    assert provider_config["network_settings"]["excluded_routes6"] == []
+    assert provider_config["network_settings"]["tunnel_address6"] == "fd20:106::1"
+    assert provider_config["network_settings"]["included_routes6"] == ["::/0"]
+    assert provider_config["network_settings"]["excluded_routes6"] == ["::1/128"]
     assert provider_config["poc"]["packet_flow"] == "NEPacketTunnelFlow"
     assert provider_config["poc"]["secure_link"] == "deferred-to-M4"
+
+
+def test_m3_tunnel_config_normalizes_multi_host_peer_for_native_provider_contract() -> None:
+    cfg = m3_tunnel_config_from_profile(
+        {
+            **_m25_profile(),
+            "obstacle_bridge": {
+                **_m25_profile()["obstacle_bridge"],
+                "overlay_transport": "myudp",
+                "udp_peer": "[2001:db8::10],198.51.100.10",
+                "udp_peer_port": 4443,
+            },
+        },
+        provider_bundle_identifier="com.obstaclebridge.ObstacleBridge.PacketTunnel",
+    )
+
+    provider_config = provider_configuration_from_m3_config(cfg)
+
+    assert cfg.peer_host == "[2001:db8::10]"
+    assert cfg.server_address == "[2001:db8::10]:4443"
+    assert provider_config["peer"] == {"host": "[2001:db8::10]", "port": 4443}
+    assert provider_config["runtime_config"]["udp_peer"] == "[2001:db8::10],198.51.100.10"
 
 
 def test_m3_vpn_profile_describes_netunnel_provider_install() -> None:
@@ -166,6 +242,79 @@ def test_network_settings_from_runtime_config_can_fallback_to_remote_peer_addr()
     assert settings.tunnel_prefix6 == 126
     assert settings.included_routes6 == ["::/0"]
     assert settings.excluded_routes6 == ["::1/128"]
+
+
+def test_network_settings_from_runtime_config_applies_tun_routing_override() -> None:
+    settings = network_settings_from_runtime_config(
+        {
+            "TUN_routing": {
+                "included_routes": ["198.18.0.254/32"],
+                "excluded_routes": ["0.0.0.0/0"],
+                "included_routes6": ["2001:db8:ffff::254/128"],
+                "excluded_routes6": ["::/0"],
+                "dns_servers": ["9.9.9.9"],
+                "mtu": 1600,
+            },
+            "channel_mux": {
+                "own_servers": [
+                    {
+                        "listen": {"protocol": "tun", "ifname": "ios-utun", "mtu": 1400},
+                        "target": {"protocol": "tun", "ifname": "obtun1", "mtu": 1400},
+                        "lifecycle_hooks": {
+                            "listener": {
+                                "on_created": {
+                                    "env": {"TUN_ADDR": "192.168.105.1/30", "TUN_ADDR6": "fd20:105::1/126"}
+                                }
+                            }
+                        },
+                    }
+                ]
+            },
+        }
+    )
+
+    assert settings.tunnel_address == "192.168.105.1"
+    assert settings.tunnel_prefix == 30
+    assert settings.included_routes == ["198.18.0.254/32"]
+    assert settings.excluded_routes == ["0.0.0.0/0"]
+    assert settings.tunnel_address6 == "fd20:105::1"
+    assert settings.tunnel_prefix6 == 126
+    assert settings.included_routes6 == ["2001:db8:ffff::254/128"]
+    assert settings.excluded_routes6 == ["::/0"]
+    assert settings.dns_servers == ["9.9.9.9"]
+    assert settings.mtu == 1600
+
+
+def test_m3_network_settings_can_derive_client_and_server_hook_env() -> None:
+    settings = M3NetworkSettings(
+        tunnel_address="192.168.107.1",
+        tunnel_prefix=30,
+        tunnel_gateway="192.168.107.2",
+        tunnel_address6="fd20:107::1",
+        tunnel_prefix6=126,
+        tunnel_gateway6="fd20:107::2",
+        dns_servers=["9.9.9.9", "1.1.1.1"],
+    )
+
+    local_env = settings.local_hook_env()
+    remote_env = settings.remote_hook_env()
+
+    assert local_env["TUN_ADDR"] == "192.168.107.1/30"
+    assert local_env["TUN_GW"] == "192.168.107.2"
+    assert local_env["TUN_ADDR6"] == "fd20:107::1/126"
+    assert local_env["TUN_GW6"] == "fd20:107::2"
+    assert local_env["DNS1"] == "9.9.9.9"
+    assert local_env["DNS2"] == "1.1.1.1"
+    assert local_env["INCLUDED_ROUTES"] == "0.0.0.0/0"
+    assert local_env["EXCLUDED_ROUTES"] == "127.0.0.0/8"
+    assert local_env["INCLUDED_ROUTES6"] == "::/0"
+    assert local_env["EXCLUDED_ROUTES6"] == "::1/128"
+    assert remote_env["TUN_ADDR"] == "192.168.107.2/30"
+    assert remote_env["PEER_ADDR"] == "192.168.107.1"
+    assert remote_env["TUN_SUBNET"] == "192.168.107.0/30"
+    assert remote_env["TUN_ADDR6"] == "fd20:107::2/126"
+    assert remote_env["PEER_ADDR6"] == "fd20:107::1"
+    assert remote_env["TUN_SUBNET6"] == "fd20:107::/126"
 
 
 def test_provider_status_request_message_is_versioned() -> None:

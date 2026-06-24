@@ -140,6 +140,29 @@ RESTART_EXIT_CODE_DELAYED = 77
 _BUILD_INFO_CACHE: Optional[dict] = None
 
 
+def _load_generated_build_info() -> dict:
+    namespace: dict[str, object] = {}
+    generated_path = pathlib.Path(__file__).with_name("_generated") / "build_info_generated.py"
+    if not generated_path.exists():
+        return {}
+    try:
+        exec(generated_path.read_text(encoding="utf-8"), namespace)
+    except Exception:
+        return {}
+    commit = str(namespace.get("BUILD_COMMIT") or "").strip()
+    if not commit:
+        return {}
+    return {
+        "commit": commit,
+        "source": str(namespace.get("BUILD_SOURCE") or "embedded-build-info"),
+        "diff_sha": str(namespace.get("BUILD_DIFF_SHA") or ""),
+        "repo_root": "",
+        "tainted": bool(namespace.get("BUILD_DIRTY")),
+        "available": True,
+        "build_timestamp_utc": str(namespace.get("BUILD_TIMESTAMP_UTC") or ""),
+    }
+
+
 def _config_secret_seed() -> bytes:
     for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
         try:
@@ -179,6 +202,11 @@ def _detect_build_info() -> dict:
         "untracked_changes": 0,
         "available": False,
     }
+    generated_info = _load_generated_build_info()
+    if generated_info:
+        info.update(generated_info)
+        _BUILD_INFO_CACHE = dict(info)
+        return dict(info)
     try:
         from .build_info import BUILD_COMMIT, BUILD_DIFF_SHA, BUILD_DIRTY, BUILD_SOURCE
 
@@ -420,11 +448,16 @@ class SessionMetrics:
     # RTT (if known)
     rtt_sample_ms: Optional[float] = None
     rtt_est_ms:    Optional[float] = None
+    transmit_delay_sample_ms: Optional[float] = None
+    transmit_delay_est_ms: Optional[float] = None
     last_rtt_ok_ns: Optional[int]  = None
+    last_rx_ns: Optional[int]      = None
     # Congestion / flow stats (if known)
     inflight: Optional[int]        = None
     max_inflight: Optional[int]    = None
     waiting_count: Optional[int]   = None
+    egress_prev_window_bytes: Optional[int] = None
+    egress_curr_window_bytes: Optional[int] = None
     last_ack_peer: Optional[int]   = None
     last_sent_ctr: Optional[int]   = None
     expected: Optional[int]        = None
@@ -540,6 +573,7 @@ from .bridge_channelmux import (
     STATE_FAILED,
     _ChanCtr,
     ChannelMux,
+    ProcessSharedTunRegistry,
 )
 from .bridge_webadmin import AdminWebUI
 from .bridge_stats import StatsBoard

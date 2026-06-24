@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
 import logging.handlers
+import os
+import pathlib
 import sys
 import time
 from collections import deque
@@ -90,6 +93,13 @@ class DebugLoggingConfigurator:
                 default=5,
                 help="number of rotated log files to keep when --log-file-max-bytes is enabled",
             )
+        if not _has("--log-file-truncate-on-start"):
+            p.add_argument(
+                "--log-file-truncate-on-start",
+                action="store_true",
+                default=False,
+                help="move the existing --log-file to a sibling *.lastsession file on startup, overwriting any previous lastsession copy",
+            )
         if not _has("--console-level"):
             p.add_argument(
                 "--console-level",
@@ -126,6 +136,7 @@ class DebugLoggingConfigurator:
             file_path=getattr(args, "log_file", None),
             file_max_bytes=getattr(args, "log_file_max_bytes", 0),
             file_backup_count=getattr(args, "log_file_backup_count", 5),
+            truncate_on_start=bool(getattr(args, "log_file_truncate_on_start", False)),
             debug_to_stderr=bool(getattr(args, "debug_stderr", False)),
             admin_web_log_max_lines=getattr(
                 args,
@@ -165,6 +176,7 @@ class DebugLoggingConfigurator:
         file_path: Optional[str] = None,
         file_max_bytes: int = 0,
         file_backup_count: int = 5,
+        truncate_on_start: bool = False,
         debug_to_stderr: bool = False,
         admin_web_log_max_lines: int = DEFAULT_ADMIN_WEB_LOG_MAX_LINES,
     ):
@@ -174,6 +186,7 @@ class DebugLoggingConfigurator:
         self.file_path = file_path
         self.file_max_bytes = max(0, int(file_max_bytes))
         self.file_backup_count = max(0, int(file_backup_count))
+        self.truncate_on_start = bool(truncate_on_start)
         self.debug_to_stderr = debug_to_stderr
         self.admin_web_log_max_lines = max(1, int(admin_web_log_max_lines))
 
@@ -194,6 +207,13 @@ class DebugLoggingConfigurator:
 
         if self.file_path:
             try:
+                if self.truncate_on_start:
+                    current_path = pathlib.Path(self.file_path)
+                    if current_path.exists():
+                        lastsession_path = current_path.with_name(f"{current_path.name}.lastsession")
+                        with contextlib.suppress(FileNotFoundError):
+                            lastsession_path.unlink()
+                        os.replace(current_path, lastsession_path)
                 if self.file_max_bytes > 0:
                     fh = logging.handlers.RotatingFileHandler(
                         self.file_path,

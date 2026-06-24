@@ -31,6 +31,26 @@ function fmtPeerCompositeId(transport, id) {
 
 function fmtText(value) {
   if (value == null || value === '') return 'n/a';
+  if (Array.isArray(value)) {
+    return value.length ? value.map((item) => fmtText(item)).join(', ') : 'n/a';
+  }
+  if (typeof value === 'object') {
+    const host = typeof value.host === 'string' ? value.host.trim() : '';
+    const bind = typeof value.bind === 'string' ? value.bind.trim() : '';
+    const ifname = typeof value.ifname === 'string' ? value.ifname.trim() : '';
+    const port = value.port == null || value.port === '' ? '' : String(value.port).trim();
+    if (host || bind) {
+      return port ? `${host || bind}:${port}` : (host || bind);
+    }
+    if (ifname) {
+      return port ? `${ifname}:${port}` : ifname;
+    }
+    try {
+      return JSON.stringify(value);
+    } catch (error) {
+      return 'n/a';
+    }
+  }
   return String(value);
 }
 
@@ -92,6 +112,11 @@ function fmtUptime(sec) {
   return `${r}s`;
 }
 
+function fmtRouteList(routes) {
+  if (!Array.isArray(routes) || routes.length === 0) return 'none';
+  return routes.join(', ');
+}
+
 function fmtAgeSeconds(sec) {
   if (sec == null || Number.isNaN(sec)) return 'n/a';
   return fmtUptime(sec);
@@ -120,6 +145,7 @@ const liveState = {
   connected: false,
   pollingStarted: false,
   pollingStops: [],
+  tunRoutingRefreshStop: null,
 };
 
 const uiState = {
@@ -143,6 +169,7 @@ const uiState = {
     tokenGateOpen: false,
     profiles: [],
     blueprints: [],
+    tokenTunRoutingDraft: {},
     ownServersDraft: [],
     remoteServersDraft: [],
     invitePreview: null,
@@ -806,11 +833,31 @@ function handleAuthRequired(message = 'Authentication required.') {
 }
 
 async function apiFetch(url, options = {}) {
-  const { authRequest = false, ...fetchOptions } = options;
-  const response = await fetch(url, {
-    credentials: 'same-origin',
-    ...fetchOptions,
-  });
+  const { authRequest = false, timeoutMs = 4000, signal: externalSignal, ...fetchOptions } = options;
+  const controller = externalSignal ? null : new AbortController();
+  const signal = externalSignal || controller?.signal;
+  let timeoutId = null;
+  if (controller && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    timeoutId = window.setTimeout(() => {
+      try {
+        controller.abort(new DOMException('Request timed out', 'AbortError'));
+      } catch (_error) {
+        controller.abort();
+      }
+    }, timeoutMs);
+  }
+  let response;
+  try {
+    response = await fetch(url, {
+      credentials: 'same-origin',
+      signal,
+      ...fetchOptions,
+    });
+  } finally {
+    if (timeoutId) {
+      window.clearTimeout(timeoutId);
+    }
+  }
   if (response.status === 401 && !authRequest) {
     handleAuthRequired('Session expired. Please sign in again.');
     throw new Error('HTTP 401');
@@ -1043,12 +1090,29 @@ function roleClass(role) {
   return 'role-pill role-unknown';
 }
 
+function fmtThrottleSummary(throttle) {
+  if (!throttle || throttle.applicable === false) {
+    return 'n/a';
+  }
+  const active = !!throttle.active;
+  const budget = fmtBytes(throttle.budget_bytes ?? 0);
+  const used = fmtBytes(throttle.used_bytes ?? 0);
+  const remaining = fmtBytes(throttle.remaining_bytes ?? 0);
+  const aggregateRemaining = fmtBytes(throttle.aggregate?.remaining_bytes ?? 0);
+  const scopeRemaining = throttle.scope ? fmtBytes(throttle.scope.remaining_bytes ?? 0) : null;
+  const state = throttle.stalled ? 'stalled' : (active ? 'active' : 'idle');
+  if (scopeRemaining != null) {
+    return `${state} ${used}/${budget} rem ${remaining} agg ${aggregateRemaining} scope ${scopeRemaining}`;
+  }
+  return `${state} ${used}/${budget} rem ${remaining}`;
+}
+
 function renderConnectionTable(tbodyId, rows, protocolLabel = 'Connection') {
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
 
   if (!rows || rows.length === 0) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="13">No ${escapeHtml(protocolLabel)} connections</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="14">No ${escapeHtml(protocolLabel)} connections</td></tr>`;
     return;
   }
 
@@ -1073,7 +1137,8 @@ function renderConnectionTable(tbodyId, rows, protocolLabel = 'Connection') {
         <td class="mono">${escapeHtml(fmtBytes(rxBytes))}</td>
         <td class="mono">${escapeHtml(fmtBytes(txBytes))}</td>
         <td class="mono">${escapeHtml(fmtInteger(rxMsgs))}</td>
-        <td class="mono">${escapeHtml(fmtInteger(txMsgs))}</td>        
+        <td class="mono">${escapeHtml(fmtInteger(txMsgs))}</td>
+        <td class="mono">${escapeHtml(fmtThrottleSummary(row.throttle))}</td>
       </tr>
     `;
   }).join('');
@@ -1084,7 +1149,7 @@ function renderTunConnectionTable(tbodyId, rows) {
   if (!tbody) return;
 
   if (!rows || rows.length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="13">No TUN connections</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="15">No TUN connections</td></tr>';
     return;
   }
 
@@ -1118,6 +1183,108 @@ function renderTunConnectionTable(tbodyId, rows) {
       </tr>
     `;
   }).join('');
+}
+
+function summarizeSharedTunOwnership(shared) {
+  if (!shared || typeof shared !== 'object') return 'no';
+  return `yes · ${fmtInteger(shared.peer_count ?? 0)} peers · ${fmtInteger(shared.address_count ?? 0)} addresses`;
+}
+
+function renderTunRoutingConnectionTable(tbodyId, rows) {
+  const tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+
+  if (!rows || rows.length === 0) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="14">No TUN interfaces</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = rows.map((row) => {
+    const rxBytes = row.stats?.rx_bytes ?? 0;
+    const txBytes = row.stats?.tx_bytes ?? 0;
+    const rxMsgs = row.stats?.rx_msgs ?? 0;
+    const txMsgs = row.stats?.tx_msgs ?? 0;
+    const state = String(row.state || 'connected').toLowerCase();
+    const isListening = state === 'listening';
+    const local = row.local || {};
+    const remote = row.remote_destination || {};
+    const chanText = Array.isArray(row.channel_aliases) && row.channel_aliases.length > 1
+      ? row.channel_aliases.map((v) => fmtChan(v)).join(', ')
+      : fmtChan(row.chan_id);
+    return `
+      <tr>
+        <td class="mono">${escapeHtml(fmtConnectionId(row.peer_id))}</td>
+        <td class="mono">${escapeHtml(chanText)}</td>
+        <td class="mono">${escapeHtml(fmtInteger(row.svc_id))}</td>
+        <td class="mono">${escapeHtml(fmtText(row.service_name || ''))}</td>
+        <td><span class="${isListening ? 'role-pill role-unknown' : 'role-pill role-client'}">${escapeHtml(state)}</span></td>
+        <td><span class="${roleClass(row.role)}">${escapeHtml(row.role || 'unknown')}</span></td>
+        <td class="mono">${escapeHtml(fmtText(local.ifname))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(local.mtu))}</td>
+        <td class="mono">${escapeHtml(fmtEndpoint(remote))}</td>
+        <td class="mono">${escapeHtml(summarizeSharedTunOwnership(row.shared_tun_ownership))}</td>
+        <td class="mono">${escapeHtml(fmtBytes(rxBytes))}</td>
+        <td class="mono">${escapeHtml(fmtBytes(txBytes))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(rxMsgs))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(txMsgs))}</td>
+        <td class="mono">${escapeHtml(fmtThrottleSummary(row.throttle))}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderTunRoutingSharedTable(tbodyId, rows) {
+  const tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+
+  if (!rows || rows.length === 0) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No shared TUN routing state</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = rows.map((row) => {
+    const shared = row.shared_tun_ownership || {};
+    const ownershipText = Array.isArray(shared.peers) && shared.peers.length
+      ? shared.peers.map((peer) => {
+          const parts = [];
+          if (Array.isArray(peer.ipv4) && peer.ipv4.length) parts.push(`IPv4 ${peer.ipv4.join(', ')}`);
+          if (Array.isArray(peer.ipv6) && peer.ipv6.length) parts.push(`IPv6 ${peer.ipv6.join(', ')}`);
+          return `${peer.peer_ref}: ${parts.join(' · ') || 'no addresses'}`;
+        }).join('\n')
+      : 'n/a';
+    const bindingText = Array.isArray(shared.active_peer_bindings) && shared.active_peer_bindings.length
+      ? shared.active_peer_bindings.map((binding) => {
+          const addresses = [];
+          if (Array.isArray(binding.ipv4) && binding.ipv4.length) addresses.push(...binding.ipv4);
+          if (Array.isArray(binding.ipv6) && binding.ipv6.length) addresses.push(...binding.ipv6);
+          const header = addresses.length
+            ? `peer ${fmtInteger(binding.peer_id)} -> ${addresses.join(', ')}`
+            : `peer ${fmtInteger(binding.peer_id)}`;
+          const parts = [header];
+          const bound = Array.isArray(binding.bound_chan_ids) ? binding.bound_chan_ids.join(', ') : '';
+          parts.push(`preferred ${fmtChan(binding.preferred_chan_id)}`);
+          if (bound) parts.push(`bound ${bound}`);
+          return parts.join(' · ');
+        }).join('\n')
+      : 'none';
+    return `
+      <tr>
+        <td class="mono">${escapeHtml(fmtInteger(row.svc_id))}</td>
+        <td class="mono">${escapeHtml(fmtText(row.service_name || ''))}</td>
+        <td class="mono">${escapeHtml(fmtText(row.local?.ifname))}</td>
+        <td class="mono" style="white-space:pre-wrap;">${escapeHtml(ownershipText)}</td>
+        <td class="mono" style="white-space:pre-wrap;">${escapeHtml(bindingText)}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function fmtTunRoutingRouteList(routes) {
+  if (!Array.isArray(routes) || routes.length === 0) return 'n/a';
+  return routes
+    .map((route) => String(route || '').trim())
+    .filter((route) => route.length > 0)
+    .join('\n') || 'n/a';
 }
 
 function detailPillClass(value) {
@@ -1421,6 +1588,23 @@ function setActiveTab(tabName) {
   tabs.forEach((tab) => tab.classList.toggle('active', tab.dataset.tab === tabName));
   panels.forEach((panel) => panel.classList.toggle('active', panel.id === `tab-${tabName}`));
   updateLiveSubscriptions();
+  updateTunRoutingRefreshLoop();
+}
+
+function updateTunRoutingRefreshLoop() {
+  if (liveState.tunRoutingRefreshStop) {
+    try {
+      liveState.tunRoutingRefreshStop();
+    } catch (e) {
+      console.error('tun routing refresh stop failed', e);
+    }
+    liveState.tunRoutingRefreshStop = null;
+  }
+  if (!authState.appStarted || !isApiEnabled() || !isTabActive('tun-routing')) return;
+  liveState.tunRoutingRefreshStop = startPolling(async () => {
+    if (!isTabActive('tun-routing')) return;
+    await loadTunRouting();
+  }, 1000);
 }
 
 function advisorSeverityClass(value) {
@@ -1593,9 +1777,9 @@ function updateSetupAssistantNav() {
 }
 
 function setTokenGeneratorStep(step) {
-  const normalized = Math.max(1, Math.min(5, Number(step) || 1));
+  const normalized = Math.max(1, Math.min(6, Number(step) || 1));
   uiState.onboarding.tokenStep = normalized;
-  if (normalized < 5) {
+  if (normalized < 6) {
     uiState.onboarding.tokenAutoGenerated = false;
   }
   document.getElementById('tokenGeneratorStep1')?.classList.toggle('hidden', normalized !== 1);
@@ -1603,7 +1787,11 @@ function setTokenGeneratorStep(step) {
   document.getElementById('tokenGeneratorStep3')?.classList.toggle('hidden', normalized !== 3);
   document.getElementById('tokenGeneratorStep4')?.classList.toggle('hidden', normalized !== 4);
   document.getElementById('tokenGeneratorStep5')?.classList.toggle('hidden', normalized !== 5);
-  if (normalized === 5) {
+  document.getElementById('tokenGeneratorStep6')?.classList.toggle('hidden', normalized !== 6);
+  if (normalized === 3) {
+    populateTokenTunRoutingForm(uiState.onboarding.tokenTunRoutingDraft || tokenTunRoutingDraftFromConfig());
+  }
+  if (normalized === 6) {
     renderTokenGeneratorReview();
     if (!uiState.onboarding.tokenAutoGenerated) {
       uiState.onboarding.tokenAutoGenerated = true;
@@ -1626,7 +1814,7 @@ function updateTokenGeneratorNav() {
   }
   if (nextBtn instanceof HTMLButtonElement) {
     nextBtn.textContent = 'Next';
-    nextBtn.classList.toggle('hidden', step >= 5);
+    nextBtn.classList.toggle('hidden', step >= 6);
   }
 }
 
@@ -1635,6 +1823,7 @@ function renderTokenGeneratorReview() {
   if (!node) return;
   const selectedId = String(document.getElementById('onboardingConnectionSelect')?.value || '').trim();
   const selected = (uiState.onboarding.profiles || []).find((item) => String(item?.id || '') === selectedId) || null;
+  const tokenAdminName = String(document.getElementById('onboardingTokenAdminName')?.value || '').trim();
   let ownServices = [];
   let remoteServices = [];
   try {
@@ -1647,6 +1836,8 @@ function renderTokenGeneratorReview() {
   node.textContent = JSON.stringify(
     {
       connection_profile: selected || '(not selected)',
+      admin_web_name: tokenAdminName || '(default)',
+      TUN_routing: uiState.onboarding.tokenTunRoutingDraft || {},
       own_servers: ownServices,
       remote_servers: remoteServices,
       secure_link_psk_included_encrypted: true,
@@ -1654,6 +1845,106 @@ function renderTokenGeneratorReview() {
     null,
     2,
   );
+}
+
+function getTokenGeneratorAdminName() {
+  return String(document.getElementById('onboardingTokenAdminName')?.value || '').trim();
+}
+
+function splitTunRoutingListInput(value) {
+  return String(value || '')
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function joinTunRoutingListInput(value) {
+  if (Array.isArray(value)) return value.join('\n');
+  if (value == null) return '';
+  return String(value);
+}
+
+function tokenTunRoutingDraftFromConfig() {
+  return {
+    tunnel_address: String(configState.config?.tunnel_address || ''),
+    tunnel_prefix: configState.config?.tunnel_prefix ?? '',
+    tunnel_gateway: String(configState.config?.tunnel_gateway || ''),
+    tunnel_address6: String(configState.config?.tunnel_address6 || ''),
+    tunnel_prefix6: configState.config?.tunnel_prefix6 ?? '',
+    tunnel_gateway6: String(configState.config?.tunnel_gateway6 || ''),
+    mtu: configState.config?.mtu ?? '',
+    dns_servers: Array.isArray(configState.config?.dns_servers) ? configState.config.dns_servers : [],
+    included_routes: Array.isArray(configState.config?.included_routes) ? configState.config.included_routes : [],
+    excluded_routes: Array.isArray(configState.config?.excluded_routes) ? configState.config.excluded_routes : [],
+    included_routes6: Array.isArray(configState.config?.included_routes6) ? configState.config.included_routes6 : [],
+    excluded_routes6: Array.isArray(configState.config?.excluded_routes6) ? configState.config.excluded_routes6 : [],
+    log_TUN_routing: String(configState.config?.log_TUN_routing || ''),
+  };
+}
+
+function populateTokenTunRoutingForm(draft = {}) {
+  const fields = {
+    tokenTunAddress: draft.tunnel_address,
+    tokenTunPrefix: draft.tunnel_prefix,
+    tokenTunGateway: draft.tunnel_gateway,
+    tokenTunAddress6: draft.tunnel_address6,
+    tokenTunPrefix6: draft.tunnel_prefix6,
+    tokenTunGateway6: draft.tunnel_gateway6,
+    tokenTunMtu: draft.mtu,
+    tokenTunDnsServers: joinTunRoutingListInput(draft.dns_servers),
+    tokenTunIncludedRoutes: joinTunRoutingListInput(draft.included_routes),
+    tokenTunExcludedRoutes: joinTunRoutingListInput(draft.excluded_routes),
+    tokenTunIncludedRoutes6: joinTunRoutingListInput(draft.included_routes6),
+    tokenTunExcludedRoutes6: joinTunRoutingListInput(draft.excluded_routes6),
+    tokenTunLogLevel: draft.log_TUN_routing,
+  };
+  Object.entries(fields).forEach(([id, value]) => {
+    const node = document.getElementById(id);
+    if (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement) {
+      node.value = value == null ? '' : String(value);
+    }
+  });
+}
+
+function readTokenTunRoutingForm() {
+  const readValue = (id) => String(document.getElementById(id)?.value || '').trim();
+  const readNumber = (id) => {
+    const text = readValue(id);
+    if (!text) return null;
+    const value = Number(text);
+    if (!Number.isInteger(value) || value < 0) {
+      throw new Error(`Invalid numeric TUN routing value in ${id}.`);
+    }
+    return value;
+  };
+  const routing = {
+    tunnel_address: readValue('tokenTunAddress'),
+    tunnel_prefix: readNumber('tokenTunPrefix'),
+    tunnel_gateway: readValue('tokenTunGateway'),
+    tunnel_address6: readValue('tokenTunAddress6'),
+    tunnel_prefix6: readNumber('tokenTunPrefix6'),
+    tunnel_gateway6: readValue('tokenTunGateway6'),
+    mtu: readNumber('tokenTunMtu'),
+    dns_servers: splitTunRoutingListInput(readValue('tokenTunDnsServers')),
+    included_routes: splitTunRoutingListInput(readValue('tokenTunIncludedRoutes')),
+    excluded_routes: splitTunRoutingListInput(readValue('tokenTunExcludedRoutes')),
+    included_routes6: splitTunRoutingListInput(readValue('tokenTunIncludedRoutes6')),
+    excluded_routes6: splitTunRoutingListInput(readValue('tokenTunExcludedRoutes6')),
+    log_TUN_routing: readValue('tokenTunLogLevel'),
+  };
+  const cleaned = {};
+  Object.entries(routing).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      if (value.length) cleaned[key] = value;
+      return;
+    }
+    if (typeof value === 'number') {
+      cleaned[key] = value;
+      return;
+    }
+    if (value) cleaned[key] = value;
+  });
+  return cleaned;
 }
 
 function isLikelyLocalAdminBind(value) {
@@ -1803,6 +2094,12 @@ function openTokenGeneratorGate() {
   renderOnboardingDependencyWarnings();
   const output = document.getElementById('onboardingInviteOutput');
   if (output instanceof HTMLTextAreaElement) output.value = '';
+  const tokenNameInput = document.getElementById('onboardingTokenAdminName');
+  if (tokenNameInput instanceof HTMLInputElement) {
+    tokenNameInput.value = String(configState.config?.admin_web_name || '').trim();
+  }
+  uiState.onboarding.tokenTunRoutingDraft = tokenTunRoutingDraftFromConfig();
+  populateTokenTunRoutingForm(uiState.onboarding.tokenTunRoutingDraft);
   setOnboardingMode('server');
   setTokenGeneratorStep(1);
   void ensureOnboardingInitialized();
@@ -1935,6 +2232,7 @@ async function loadOnboardingResources() {
 async function ensureOnboardingInitialized() {
   if (uiState.onboarding.initialized) return;
   uiState.onboarding.initialized = true;
+  uiState.onboarding.tokenTunRoutingDraft = tokenTunRoutingDraftFromConfig();
   uiState.onboarding.ownServersDraft = sanitizeServiceSpecs(configState.config?.own_servers || []);
   uiState.onboarding.remoteServersDraft = sanitizeServiceSpecs(configState.config?.remote_servers || []);
   renderOnboardingServiceList('own');
@@ -1969,10 +2267,16 @@ async function generateOnboardingInvite() {
   try {
     const ownServers = readOnboardingSpecsFromDom('own');
     const remoteServers = readOnboardingSpecsFromDom('remote');
+    const tunRouting = readTokenTunRoutingForm();
+    uiState.onboarding.tokenTunRoutingDraft = tunRouting;
     uiState.onboarding.ownServersDraft = ownServers;
     uiState.onboarding.remoteServersDraft = remoteServers;
     const select = document.getElementById('onboardingConnectionSelect');
     const connectionId = String(select?.value || '').trim();
+    const tokenAdminName = getTokenGeneratorAdminName();
+    if (!tokenAdminName) {
+      throw new Error('Enter the name to include in the invite token before generating it.');
+    }
     const r = await apiFetch('/api/onboarding/invite/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1980,6 +2284,8 @@ async function generateOnboardingInvite() {
         connection_id: connectionId,
         own_servers: ownServers,
         remote_servers: remoteServers,
+        admin_web_name: tokenAdminName,
+        TUN_routing: tunRouting,
       }),
     });
     const j = await r.json();
@@ -2228,6 +2534,8 @@ function renderPeerTable(rows) {
         renderMetric('Connection Uptime', fmtUptimeFromUnixTs(secureLink.connected_since_unix_ts)),
         renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds)),
         renderMetric('RTT Est (ms)', fmtNumber(row.rtt_est_ms)),
+        renderMetric('Transmit Delay Est (ms)', fmtNumber(row.transmit_delay_est_ms)),
+        renderMetric('Throttle', fmtThrottleSummary(row.throttle)),
         renderMetric('RX Bytes', fmtBytes(row.traffic?.rx_bytes ?? 0)),
         renderMetric('TX Bytes', fmtBytes(row.traffic?.tx_bytes ?? 0)),
       ]);
@@ -2384,6 +2692,17 @@ async function loadPeers() {
   }
 }
 
+async function loadTunRouting() {
+  try {
+    const r = await apiFetch('/api/tun-routing/status', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    applyTunRoutingDoc(j);
+  } catch (e) {
+    console.error('tun routing load failed', e);
+  }
+}
+
 function applyMetaDoc(j) {
   if (j.runtime_dependencies) {
     uiState.runtimeDependencies = j.runtime_dependencies;
@@ -2442,6 +2761,19 @@ function applyConnectionsDoc(j) {
 
 function applyPeersDoc(j) {
   renderPeerTable(j.peers || []);
+}
+
+function applyTunRoutingDoc(j) {
+  renderTunRoutingConnectionTable('tunRoutingConnectionsBody', j.tun || []);
+  renderTunRoutingSharedTable('tunRoutingSharedBody', j.shared_tun || []);
+  setText('tunRoutingOpen', fmtInteger(j.summary?.tun_open ?? 0));
+  setText('tunRoutingListening', fmtInteger(j.summary?.tun_listening ?? 0));
+  setText('tunRoutingSharedServices', fmtInteger(j.summary?.shared_services ?? 0));
+  setText('tunRoutingActiveBindings', fmtInteger(j.summary?.shared_active_peer_bindings ?? 0));
+  setText('tunRoutingIncludedRoutes', fmtTunRoutingRouteList(j.included_routes));
+  setText('tunRoutingExcludedRoutes', fmtTunRoutingRouteList(j.excluded_routes));
+  setText('tunRoutingIncludedRoutes6', fmtTunRoutingRouteList(j.included_routes6));
+  setText('tunRoutingExcludedRoutes6', fmtTunRoutingRouteList(j.excluded_routes6));
 }
 
 async function loadConfig() {
@@ -3577,8 +3909,13 @@ function initTabs() {
       updateLiveSubscriptions();
       if (!isApiEnabled()) return;
       if (target === 'status' && !liveState.connected) {
-        loadConnections();
         loadPeers();
+      }
+      if (target === 'connections' && !liveState.connected) {
+        loadConnections();
+      }
+      if (target === 'tun-routing' && !liveState.connected) {
+        loadTunRouting();
       }
       if (target === 'misc' && !liveState.connected) {
         loadMeta();
@@ -3597,6 +3934,12 @@ function currentLiveTopics() {
   if (isTabActive('status')) {
     topics.push('connections', 'peers');
   }
+  if (isTabActive('connections')) {
+    topics.push('connections');
+  }
+  if (isTabActive('tun-routing')) {
+    topics.push('tun_routing');
+  }
   if (isTabActive('misc')) {
     topics.push('meta');
   }
@@ -3613,6 +3956,8 @@ function updateLiveSubscriptions() {
   if (!liveState.connected) return;
   const activeTabs = [];
   if (isTabActive('status')) activeTabs.push('status');
+  if (isTabActive('connections')) activeTabs.push('connections');
+  if (isTabActive('tun-routing')) activeTabs.push('tun-routing');
   if (isTabActive('misc')) activeTabs.push('misc');
   sendLiveMessage({
     subscribe: currentLiveTopics(),
@@ -3639,12 +3984,16 @@ function startHttpPollingFallback() {
   liveState.pollingStops = [
     startPolling(loadStatus, 1000),
     startPolling(async () => {
-      if (!isTabActive('status')) return;
+      if (!isTabActive('status') && !isTabActive('connections')) return;
       await loadConnections();
     }, 1000),
     startPolling(async () => {
       if (!isTabActive('status')) return;
       await loadPeers();
+    }, 1000),
+    startPolling(async () => {
+      if (!isTabActive('tun-routing')) return;
+      await loadTunRouting();
     }, 1000),
     startPolling(async () => {
       if (!isTabActive('misc')) return;
@@ -3679,6 +4028,10 @@ function handleLiveMessage(event) {
   }
   if (msg.type === 'peers') {
     applyPeersDoc(msg.data || {});
+    return;
+  }
+  if (msg.type === 'tun_routing') {
+    applyTunRoutingDoc(msg.data || {});
     return;
   }
   if (msg.type === 'meta') {
@@ -3790,6 +4143,7 @@ async function logoutAdmin() {
   }
   liveState.connected = false;
   startHttpPollingFallback();
+  updateTunRoutingRefreshLoop();
   authState.authenticated = false;
   authState.username = '';
   updateAuthUi();
@@ -3802,19 +4156,29 @@ async function startAdminApp() {
     loadStatus();
     loadConnections();
     loadPeers();
+    loadTunRouting();
     loadMeta();
     loadConfig();
     startHttpPollingFallback();
     connectLiveUpdates();
+    updateTunRoutingRefreshLoop();
     return;
   }
   connectLiveUpdates();
+  updateTunRoutingRefreshLoop();
   if (isTabActive('status')) {
     await loadStatus();
     if (!liveState.connected) {
-      await loadConnections();
       await loadPeers();
     }
+    return;
+  }
+  if (isTabActive('connections') && !liveState.connected) {
+    await loadConnections();
+    return;
+  }
+  if (isTabActive('tun-routing') && !liveState.connected) {
+    await loadTunRouting();
     return;
   }
   if (isTabActive('configuration')) {
@@ -3976,14 +4340,19 @@ document.getElementById('tokenGeneratorNextBtn')?.addEventListener('click', asyn
       setOnboardingMessage('Select a connection profile before continuing.');
       return;
     }
+    if (!getTokenGeneratorAdminName()) {
+      setOnboardingMessage('Enter the name to include in the invite token before continuing.');
+      document.getElementById('onboardingTokenAdminName')?.focus();
+      return;
+    }
     setTokenGeneratorStep(3);
     return;
   }
   if (step === 3) {
     try {
-      uiState.onboarding.ownServersDraft = readOnboardingSpecsFromDom('own');
+      uiState.onboarding.tokenTunRoutingDraft = readTokenTunRoutingForm();
     } catch (error) {
-      setOnboardingMessage(`Own service definition is invalid: ${error}`);
+      setOnboardingMessage(`TUN routing definition is invalid: ${error}`);
       return;
     }
     setTokenGeneratorStep(4);
@@ -3991,12 +4360,22 @@ document.getElementById('tokenGeneratorNextBtn')?.addEventListener('click', asyn
   }
   if (step === 4) {
     try {
+      uiState.onboarding.ownServersDraft = readOnboardingSpecsFromDom('own');
+    } catch (error) {
+      setOnboardingMessage(`Own service definition is invalid: ${error}`);
+      return;
+    }
+    setTokenGeneratorStep(5);
+    return;
+  }
+  if (step === 5) {
+    try {
       uiState.onboarding.remoteServersDraft = readOnboardingSpecsFromDom('remote');
     } catch (error) {
       setOnboardingMessage(`Remote service definition is invalid: ${error}`);
       return;
     }
-    setTokenGeneratorStep(5);
+    setTokenGeneratorStep(6);
     return;
   }
   await generateOnboardingInvite();
@@ -4054,8 +4433,15 @@ document.body?.addEventListener('click', (event) => {
   }
   if (tabName === 'status' && !liveState.connected) {
     loadStatus();
-    loadConnections();
     loadPeers();
+    return;
+  }
+  if (tabName === 'connections' && !liveState.connected) {
+    loadConnections();
+    return;
+  }
+  if (tabName === 'tun-routing' && !liveState.connected) {
+    loadTunRouting();
     return;
   }
   if (tabName === 'misc' && !liveState.connected) {

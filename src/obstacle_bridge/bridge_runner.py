@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from . import bridge as _bridge
+from ._bridge_import import export_bridge_globals
+import contextlib as _process_contextlib
+import shutil
+import signal as _process_signal
+import threading
+from typing import Mapping
 
-globals().update({
-    key: value
-    for key, value in _bridge.__dict__.items()
-    if key not in {"__builtins__", "__name__", "__package__", "__file__", "__cached__", "__doc__", "__spec__", "__loader__"}
-})
+_bridge = export_bridge_globals(globals())
 
 class RunnerMuxAggregate:
     def __init__(self, muxes: List["ChannelMux"]):
@@ -114,6 +115,24 @@ class RunnerMuxAggregate:
             "decompress_fail_total": 0,
         }
 
+    @staticmethod
+    def _peer_label_for_ui(value) -> Optional[object]:
+        if value is None:
+            return None
+        if isinstance(value, Mapping):
+            host = str(value.get("host") or "").strip()
+            try:
+                port = int(value.get("port") or 0)
+            except Exception:
+                port = 0
+            if host and port > 0:
+                return {"host": host, "port": port}
+            if host:
+                return {"host": host, "port": 0}
+            return None
+        text = str(value).strip()
+        return text or None
+
 
 class Runner:
     """
@@ -137,10 +156,160 @@ class Runner:
         self._restart_requested_flag = False
         self._restart_exit_code: int = RESTART_EXIT_CODE_IMMEDIATE
         self._shutdown_exit_code: Optional[int] = None
+        self._shutdown_reason: str = ""
+        self._restart_reason: str = ""
         self._last_connected_monotonic: Optional[float] = None
         self._last_disconnected_monotonic: Optional[float] = None
         self._client_restart_watchdog_task: Optional[asyncio.Task] = None        
         self._peer_traffic_rate_state: Dict[str, Tuple[float, int, int]] = {}
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._async_diag_lock = threading.Lock()
+        self._async_diag: Dict[str, Any] = {
+            "last_started_name": "",
+            "last_started_kind": "",
+            "last_started_monotonic": None,
+            "last_finished_name": "",
+            "last_finished_kind": "",
+            "last_finished_monotonic": None,
+            "last_failed_name": "",
+            "last_failed_kind": "",
+            "last_failed_monotonic": None,
+            "last_failed_error": "",
+        }
+        self._sync_diag: Dict[str, Any] = {
+            "last_started_name": "",
+            "last_started_kind": "",
+            "last_started_monotonic": None,
+            "last_finished_name": "",
+            "last_finished_kind": "",
+            "last_finished_monotonic": None,
+            "last_failed_name": "",
+            "last_failed_kind": "",
+            "last_failed_monotonic": None,
+            "last_failed_error": "",
+        }
+
+    def _record_async_activity(self, name: str, *, kind: str, phase: str, error: str = "") -> None:
+        now_mono = time.monotonic()
+        with self._async_diag_lock:
+            if phase == "started":
+                self._async_diag["last_started_name"] = str(name or "")
+                self._async_diag["last_started_kind"] = str(kind or "")
+                self._async_diag["last_started_monotonic"] = now_mono
+            elif phase == "finished":
+                self._async_diag["last_finished_name"] = str(name or "")
+                self._async_diag["last_finished_kind"] = str(kind or "")
+                self._async_diag["last_finished_monotonic"] = now_mono
+            elif phase == "failed":
+                self._async_diag["last_failed_name"] = str(name or "")
+                self._async_diag["last_failed_kind"] = str(kind or "")
+                self._async_diag["last_failed_monotonic"] = now_mono
+                self._async_diag["last_failed_error"] = str(error or "")
+
+    def record_sync_activity(self, name: str, *, kind: str = "callback", phase: str, error: str = "") -> None:
+        now_mono = time.monotonic()
+        with self._async_diag_lock:
+            if phase == "started":
+                self._sync_diag["last_started_name"] = str(name or "")
+                self._sync_diag["last_started_kind"] = str(kind or "")
+                self._sync_diag["last_started_monotonic"] = now_mono
+            elif phase == "finished":
+                self._sync_diag["last_finished_name"] = str(name or "")
+                self._sync_diag["last_finished_kind"] = str(kind or "")
+                self._sync_diag["last_finished_monotonic"] = now_mono
+            elif phase == "failed":
+                self._sync_diag["last_failed_name"] = str(name or "")
+                self._sync_diag["last_failed_kind"] = str(kind or "")
+                self._sync_diag["last_failed_monotonic"] = now_mono
+                self._sync_diag["last_failed_error"] = str(error or "")
+
+    async def _await_with_async_diag(self, name: str, awaitable, *, kind: str = "await") -> Any:
+        self._record_async_activity(name, kind=kind, phase="started")
+        try:
+            result = await awaitable
+        except Exception as exc:
+            self._record_async_activity(name, kind=kind, phase="failed", error=type(exc).__name__)
+            raise
+        self._record_async_activity(name, kind=kind, phase="finished")
+        return result
+
+    def _task_diag_name(self, coro: Any) -> str:
+        code = getattr(coro, "cr_code", None)
+        if code is not None:
+            qualname = getattr(code, "co_qualname", "") or getattr(code, "co_name", "")
+            if qualname:
+                return str(qualname)
+        qualname = getattr(type(coro), "__qualname__", "") or getattr(type(coro), "__name__", "")
+        return str(qualname or repr(coro))
+
+    def _install_async_task_factory(self, loop: asyncio.AbstractEventLoop) -> None:
+        previous_factory = loop.get_task_factory()
+        runner = self
+
+        def _factory(loop_obj, coro, **kwargs):
+            task = previous_factory(loop_obj, coro, **kwargs) if previous_factory is not None else asyncio.tasks.Task(coro, loop=loop_obj, **kwargs)
+            name = runner._task_diag_name(coro)
+            runner._record_async_activity(name, kind="task", phase="started")
+
+            def _done(done_task):
+                try:
+                    exc = done_task.exception()
+                except asyncio.CancelledError:
+                    runner._record_async_activity(name, kind="task", phase="finished")
+                    return
+                except Exception as err:
+                    runner._record_async_activity(name, kind="task", phase="failed", error=type(err).__name__)
+                    return
+                if exc is None:
+                    runner._record_async_activity(name, kind="task", phase="finished")
+                else:
+                    runner._record_async_activity(name, kind="task", phase="failed", error=type(exc).__name__)
+
+            with contextlib.suppress(Exception):
+                task.add_done_callback(_done)
+            return task
+
+        loop.set_task_factory(_factory)
+
+    def get_async_diagnostics_snapshot(self) -> dict:
+        with self._async_diag_lock:
+            snapshot = dict(self._async_diag)
+            sync_snapshot = dict(self._sync_diag)
+        now_mono = time.monotonic()
+
+        def _age(value: Any) -> Optional[float]:
+            if value is None:
+                return None
+            with contextlib.suppress(Exception):
+                return max(0.0, now_mono - float(value))
+            return None
+
+        return {
+            "async": {
+                "last_started_name": str(snapshot.get("last_started_name") or ""),
+                "last_started_kind": str(snapshot.get("last_started_kind") or ""),
+                "last_started_age_sec": _age(snapshot.get("last_started_monotonic")),
+                "last_finished_name": str(snapshot.get("last_finished_name") or ""),
+                "last_finished_kind": str(snapshot.get("last_finished_kind") or ""),
+                "last_finished_age_sec": _age(snapshot.get("last_finished_monotonic")),
+                "last_failed_name": str(snapshot.get("last_failed_name") or ""),
+                "last_failed_kind": str(snapshot.get("last_failed_kind") or ""),
+                "last_failed_age_sec": _age(snapshot.get("last_failed_monotonic")),
+                "last_failed_error": str(snapshot.get("last_failed_error") or ""),
+            },
+            "sync": {
+                "last_started_name": str(sync_snapshot.get("last_started_name") or ""),
+                "last_started_kind": str(sync_snapshot.get("last_started_kind") or ""),
+                "last_started_age_sec": _age(sync_snapshot.get("last_started_monotonic")),
+                "last_finished_name": str(sync_snapshot.get("last_finished_name") or ""),
+                "last_finished_kind": str(sync_snapshot.get("last_finished_kind") or ""),
+                "last_finished_age_sec": _age(sync_snapshot.get("last_finished_monotonic")),
+                "last_failed_name": str(sync_snapshot.get("last_failed_name") or ""),
+                "last_failed_kind": str(sync_snapshot.get("last_failed_kind") or ""),
+                "last_failed_age_sec": _age(sync_snapshot.get("last_failed_monotonic")),
+                "last_failed_error": str(sync_snapshot.get("last_failed_error") or ""),
+            },
+        }
 
     def _ensure_runtime_events(self) -> None:
         if self._stop is None:
@@ -154,6 +323,8 @@ class Runner:
 
     async def start(self) -> None:
         ios_admin_ui = str(_admin_ui_platform()).strip().lower() == "ios"
+        self._loop = asyncio.get_running_loop()
+        self._install_async_task_factory(self._loop)
         self.log.debug("[SERVER] Runner start on session id=%x", id(self))
         self.log.info(
             "[SERVER] ObstacleBridge build=%r crypto_extract=%r",
@@ -167,10 +338,11 @@ class Runner:
         # tunnel providers where WebAdmin is the recovery/config surface.
         if getattr(self.args, "admin_web", False) and self.admin_web is None:
             self.admin_web = AdminWebUI(self.args, self)
-            await self.admin_web.start()
+            await self._await_with_async_diag("AdminWebUI.start", self.admin_web.start())
 
         loop = asyncio.get_running_loop()
         transport_sessions = Runner.build_sessions_from_overlay(self.args)
+        shared_tun_registry = ProcessSharedTunRegistry()
         self._sessions = []
         self._muxes = []
         self._session_labels = []
@@ -182,13 +354,20 @@ class Runner:
             # active overlay session.
             session.set_on_peer_rx(self.stats.on_peer_rx_bytes)
             session.set_on_peer_tx(self.stats.on_peer_tx_bytes)
-            session.set_on_peer_set(self.stats.on_peer_set)
             mux = ChannelMux.from_args(
                 session,
                 loop,
                 self.args,
                 on_local_rx_bytes=self.stats.on_app_rx_bytes,
                 on_local_tx_bytes=self.stats.on_app_tx_bytes
+            )
+            setattr(mux, "_runner_sync_diag_cb", self.record_sync_activity)
+            mux._process_shared_tun_registry = shared_tun_registry
+            session.set_on_peer_set(
+                lambda host, port, mux=mux: (
+                    self.stats.on_peer_set(host, port),
+                    mux.on_overlay_peer_set(host, port),
+                )
             )
             self._sessions.append(session)
             self._muxes.append(mux)
@@ -197,8 +376,8 @@ class Runner:
                 lambda epoch, transport_name=transport_name, session=session, mux=mux:
                     self._on_transport_epoch_change(transport_name, session, mux, epoch)
             )
-            await session.start()
-            await mux.start()
+            await self._await_with_async_diag(f"{transport_name}.session.start", session.start())
+            await self._await_with_async_diag(f"{transport_name}.mux.start", mux.start())
 
         self._session_obj = self._sessions[0] if self._sessions else None
         self.stats.bind_session(self._session_obj)
@@ -226,7 +405,7 @@ class Runner:
             self.stats.set_session_ref(inner)  # now the dashboard can show inflight/ACKed/etc.
             self.stats.set_mux_ref(self.mux)
             if self.args.status:
-                await self.stats.start()
+                await self._await_with_async_diag("StatsBoard.start", self.stats.start())
         else:
             self.log.info("[SERVER] iOS admin UI detected; stats board disabled")
 
@@ -263,7 +442,7 @@ class Runner:
         finally:
             try:
                 self.log.debug("[RUNNER] wait for stop with 2.0 timeout")
-                await asyncio.wait_for(self.stop(), timeout=2.0)
+                await asyncio.wait_for(self.stop(reason="run-finally"), timeout=2.0)
             except Exception:
                 self.log.debug("[RUNNER] stop timed out during restart")
 
@@ -278,8 +457,16 @@ class Runner:
         self.log.debug("[RUNNER] Leaving stop")
 
 
-    async def stop(self):
-        self.log.debug("[SERVER] Stop entered")
+    async def stop(self, reason: str = ""):
+        stop_reason = str(reason or self._shutdown_reason or self._restart_reason or "unspecified")
+        self.log.info(
+            "[SERVER] Stop entered reason=%s shutdown_rc=%r shutdown_reason=%r restart_requested=%s restart_reason=%r",
+            stop_reason,
+            self._shutdown_exit_code,
+            self._shutdown_reason,
+            self._restart_requested_flag,
+            self._restart_reason,
+        )
 
         async def _run_stop_step(label: str, awaitable, timeout_s: float = 5.0) -> None:
             started = time.monotonic()
@@ -315,12 +502,12 @@ class Runner:
 
         self.log.debug("[RUNNER] stop: entering mux.stop")
         for idx, mux in enumerate(reversed(self._muxes)):
-            await _run_stop_step(f"mux.stop[{idx}]", mux.stop(), timeout_s=5.0)
+            await _run_stop_step(f"mux.stop[{idx}]", mux.stop(reason=stop_reason), timeout_s=5.0)
 
         self.log.debug("[RUNNER] stop: entering _session_obj")
         for idx, session in enumerate(reversed(self._sessions)):
             await _run_stop_step(f"session.stop[{idx}]", session.stop(), timeout_s=5.0)
-        self.log.debug("[RUNNER] stop leaving")
+        self.log.info("[RUNNER] stop leaving reason=%s", stop_reason)
 
 
     # ---- overlay state propagation (unchanged behavior) -----------------------
@@ -349,9 +536,11 @@ class Runner:
                 asyncio.get_running_loop().create_task(mux.on_overlay_state(connected))
             except RuntimeError:
                 pass
-        # Reset reliability sender state on disconnect so reconnect starts clean.
+        # Reset overlay epoch state on disconnect so reconnect starts clean.
         if not aggregate_connected:
-            resetter = getattr(session, "reset_sender", None)
+            resetter = getattr(session, "reset_transport_epoch", None)
+            if not callable(resetter):
+                resetter = getattr(session, "reset_sender", None)
             if callable(resetter):
                 with contextlib.suppress(Exception):
                     resetter()
@@ -363,6 +552,12 @@ class Runner:
             id(session),
             epoch,
         )
+        resetter = getattr(session, "reset_transport_epoch", None)
+        if not callable(resetter):
+            resetter = getattr(session, "reset_sender", None)
+        if callable(resetter):
+            with contextlib.suppress(Exception):
+                resetter()
         try:
             asyncio.get_running_loop().create_task(mux.on_transport_epoch_change(epoch))
         except RuntimeError:
@@ -373,11 +568,18 @@ class Runner:
         parts = [item.strip().lower() for item in raw.split(",") if item.strip()]
         return "myudp" in parts
 
-    def request_restart(self) -> None:
-        self.log.debug("[SERVER] Runner restart requested")
+    @staticmethod
+    def _emit_lifecycle_warning(message: str, *args) -> None:
+        with contextlib.suppress(Exception):
+            logging.getLogger().warning(message, *args)
+
+    def request_restart(self, reason: str = "") -> None:
+        self._restart_reason = str(reason or getattr(self, "_restart_reason", "") or "unspecified")
+        self._emit_lifecycle_warning("[RUNNER] restart requested reason=%s", self._restart_reason)
+        self.log.info("[SERVER] Runner restart requested reason=%s", self._restart_reason)
         callback = getattr(self, "_embedded_restart_callback", None)
         if callable(callback):
-            self.log.debug("[SERVER] dispatching embedded restart callback")
+            self.log.debug("[SERVER] dispatching embedded restart callback reason=%s", self._restart_reason)
             try:
                 result = callback()
             except Exception:
@@ -731,6 +933,8 @@ class Runner:
             return SessionMetrics(
                 rtt_sample_ms=getattr(session_obj, "rtt_sample_ms", None),
                 rtt_est_ms=getattr(session_obj, "rtt_est_ms", None),
+                transmit_delay_sample_ms=getattr(session_obj, "transmit_delay_sample_ms", None),
+                transmit_delay_est_ms=getattr(session_obj, "transmit_delay_est_ms", None),
                 last_rtt_ok_ns=getattr(session_obj, "last_rtt_ok_ns", None),
                 inflight=int(session_obj.in_flight()) if hasattr(session_obj, "in_flight") else None,
                 max_inflight=getattr(session_obj, "max_in_flight", None),
@@ -867,6 +1071,74 @@ class Runner:
                 and str(row.get("state", "connected")).lower() != "listening"
             )
 
+        def _merge_throttle_summary(current: Optional[dict], candidate: Any) -> Optional[dict]:
+            if not isinstance(candidate, dict) or candidate.get("applicable") is False:
+                return current
+            if current is None:
+                return {
+                    "applicable": True,
+                    "active": bool(candidate.get("active")),
+                    "stalled": bool(candidate.get("stalled")),
+                    "backpressure_active": bool(candidate.get("backpressure_active")),
+                    "disabled": bool(candidate.get("disabled")),
+                    "budget_bytes": int(candidate.get("budget_bytes", 0) or 0),
+                    "used_bytes": int(candidate.get("used_bytes", 0) or 0),
+                    "remaining_bytes": int(candidate.get("remaining_bytes", 0) or 0),
+                    "aggregate": dict(candidate.get("aggregate") or {}),
+                    "scope": dict(candidate.get("scope") or {}) if isinstance(candidate.get("scope"), dict) else None,
+                }
+            current["active"] = bool(current.get("active")) or bool(candidate.get("active"))
+            current["stalled"] = bool(current.get("stalled")) or bool(candidate.get("stalled"))
+            current["backpressure_active"] = bool(current.get("backpressure_active")) or bool(candidate.get("backpressure_active"))
+            current["disabled"] = bool(current.get("disabled")) and bool(candidate.get("disabled"))
+            current["budget_bytes"] = max(
+                int(current.get("budget_bytes", 0) or 0),
+                int(candidate.get("budget_bytes", 0) or 0),
+            )
+            current["used_bytes"] = max(
+                int(current.get("used_bytes", 0) or 0),
+                int(candidate.get("used_bytes", 0) or 0),
+            )
+            current["remaining_bytes"] = min(
+                int(current.get("remaining_bytes", 0) or 0),
+                int(candidate.get("remaining_bytes", 0) or 0),
+            )
+            current_aggregate = current.get("aggregate") if isinstance(current.get("aggregate"), dict) else {}
+            candidate_aggregate = candidate.get("aggregate") if isinstance(candidate.get("aggregate"), dict) else {}
+            if not current_aggregate:
+                current["aggregate"] = dict(candidate_aggregate)
+            elif candidate_aggregate:
+                current["aggregate"] = {
+                    "scope_id": str(current_aggregate.get("scope_id") or candidate_aggregate.get("scope_id") or ""),
+                    "budget_bytes": max(
+                        int(current_aggregate.get("budget_bytes", 0) or 0),
+                        int(candidate_aggregate.get("budget_bytes", 0) or 0),
+                    ),
+                    "used_bytes": max(
+                        int(current_aggregate.get("used_bytes", 0) or 0),
+                        int(candidate_aggregate.get("used_bytes", 0) or 0),
+                    ),
+                    "remaining_bytes": min(
+                        int(current_aggregate.get("remaining_bytes", 0) or 0),
+                        int(candidate_aggregate.get("remaining_bytes", 0) or 0),
+                    ),
+                    "prev_window_bytes": max(
+                        int(current_aggregate.get("prev_window_bytes", 0) or 0),
+                        int(candidate_aggregate.get("prev_window_bytes", 0) or 0),
+                    ),
+                    "throttle_drop_count": max(
+                        int(current_aggregate.get("throttle_drop_count", 0) or 0),
+                        int(candidate_aggregate.get("throttle_drop_count", 0) or 0),
+                    ),
+                }
+            current_scope = current.get("scope") if isinstance(current.get("scope"), dict) else None
+            candidate_scope = candidate.get("scope") if isinstance(candidate.get("scope"), dict) else None
+            if current_scope is None:
+                current["scope"] = dict(candidate_scope) if candidate_scope else None
+            elif candidate_scope is not None and int(candidate_scope.get("remaining_bytes", 0) or 0) < int(current_scope.get("remaining_bytes", 0) or 0):
+                current["scope"] = dict(candidate_scope)
+            return current
+
         for idx, session in enumerate(self._sessions):
             mux = self._muxes[idx] if idx < len(self._muxes) else None
             label = self._session_labels[idx] if idx < len(self._session_labels) else f"session-{idx}"
@@ -904,8 +1176,10 @@ class Runner:
                             "state": "listening",
                             "connected": False,
                             "listen": listen_endpoint,
-                            "peer": p.get("peer"),
+                            "peer": RunnerMuxAggregate._peer_label_for_ui(p.get("peer")),
                             "rtt_est_ms": p.get("rtt_est_ms", listener_metrics.rtt_est_ms),
+                            "transmit_delay_sample_ms": p.get("transmit_delay_sample_ms", listener_metrics.transmit_delay_sample_ms),
+                            "transmit_delay_est_ms": p.get("transmit_delay_est_ms", listener_metrics.transmit_delay_est_ms),
                             "last_incoming_age_seconds": p.get("last_incoming_age_seconds"),
                             "inflight": listener_metrics.inflight,
                             "decode_errors": 0,
@@ -940,6 +1214,7 @@ class Runner:
                     udp_open = 0
                     tcp_open = 0
                     tun_open = 0
+                    p_throttle: Optional[dict] = None
                     for row in udp_rows:
                         chan_id = row.get("chan_id")
                         if chan_id is None:
@@ -952,6 +1227,7 @@ class Runner:
                         p_rx += int(st.get("rx_bytes", 0) or 0)
                         p_tx += int(st.get("tx_bytes", 0) or 0)
                         udp_open += 1
+                        p_throttle = _merge_throttle_summary(p_throttle, row.get("throttle"))
                     for row in tcp_rows:
                         chan_id = row.get("chan_id")
                         if chan_id is None:
@@ -964,6 +1240,7 @@ class Runner:
                         p_rx += int(st.get("rx_bytes", 0) or 0)
                         p_tx += int(st.get("tx_bytes", 0) or 0)
                         tcp_open += 1
+                        p_throttle = _merge_throttle_summary(p_throttle, row.get("throttle"))
                     for row in tun_rows:
                         chan_id = row.get("chan_id")
                         if chan_id is None:
@@ -977,6 +1254,7 @@ class Runner:
                         p_rx += int(st.get("rx_bytes", 0) or 0)
                         p_tx += int(st.get("tx_bytes", 0) or 0)
                         tun_open += 1
+                        p_throttle = _merge_throttle_summary(p_throttle, row.get("throttle"))
                     archived = peer_payload_totals.get(int(p.get("peer_id", 0))) or {}
                     p_rx += int(archived.get("rx_bytes", 0) or 0)
                     p_tx += int(archived.get("tx_bytes", 0) or 0)
@@ -989,8 +1267,10 @@ class Runner:
                         "state": row_state,
                         "connected": row_connected,
                         "listen": listen_endpoint,
-                        "peer": p.get("peer"),
+                        "peer": RunnerMuxAggregate._peer_label_for_ui(p.get("peer")),
                         "rtt_est_ms": p.get("rtt_est_ms", row_metrics.rtt_est_ms),
+                        "transmit_delay_sample_ms": p.get("transmit_delay_sample_ms", row_metrics.transmit_delay_sample_ms),
+                        "transmit_delay_est_ms": p.get("transmit_delay_est_ms", row_metrics.transmit_delay_est_ms),
                         "last_incoming_age_seconds": p.get(
                             "last_incoming_age_seconds",
                             self._session_last_incoming_age_seconds(row_session),
@@ -1006,6 +1286,7 @@ class Runner:
                             "rx_bytes": p_rx,
                             "tx_bytes": p_tx,
                         },
+                        "throttle": p_throttle or {"applicable": False, "active": False, "reason": "no_local_ingress"},
                         "myudp": self._session_retransmit_stats(row_session),
                         "secure_link": dict(p.get("secure_link") or RunnerMuxAggregate._default_secure_link_snapshot()),
                         "compress_layer": dict(self._session_compress_layer_snapshot(session, peer_id=p.get("peer_id"))),
@@ -1014,10 +1295,12 @@ class Runner:
 
             rx_bytes = 0
             tx_bytes = 0
+            peer_throttle: Optional[dict] = None
             for row in udp_rows + tcp_rows + tun_rows:
                 st = row.get("stats", {})
                 rx_bytes += int(st.get("rx_bytes", 0) or 0)
                 tx_bytes += int(st.get("tx_bytes", 0) or 0)
+                peer_throttle = _merge_throttle_summary(peer_throttle, row.get("throttle"))
             for archived in peer_payload_totals.values():
                 rx_bytes += int(archived.get("rx_bytes", 0) or 0)
                 tx_bytes += int(archived.get("tx_bytes", 0) or 0)
@@ -1046,6 +1329,8 @@ class Runner:
                 "listen": listen_endpoint,
                 "peer": peer_label,
                 "rtt_est_ms": m.rtt_est_ms,
+                "transmit_delay_sample_ms": m.transmit_delay_sample_ms,
+                "transmit_delay_est_ms": m.transmit_delay_est_ms,
                 "last_incoming_age_seconds": self._session_last_incoming_age_seconds(real_session),
                 "inflight": m.inflight,
                 "decode_errors": decode_errors,
@@ -1058,6 +1343,7 @@ class Runner:
                     "rx_bytes": rx_bytes,
                     "tx_bytes": tx_bytes,
                 },
+                "throttle": peer_throttle or {"applicable": False, "active": False, "reason": "no_local_ingress"},
                 "myudp": self._session_retransmit_stats(session),
                 "secure_link": dict(
                     getattr(
@@ -1230,6 +1516,18 @@ class Runner:
             if block:
                 grouped[section] = block
                 assigned.update(block.keys())
+        raw_grouped = getattr(self.args, "_raw_config", None)
+        if isinstance(raw_grouped, dict):
+            for section, raw_block in raw_grouped.items():
+                if not isinstance(raw_block, dict):
+                    continue
+                block = grouped.setdefault(section, {})
+                for key, value in raw_block.items():
+                    if key in block:
+                        continue
+                    block[key] = value
+                if block:
+                    assigned.update(block.keys())
         misc = {k: v for k, v in config.items() if k not in assigned}
         if misc:
             grouped["misc"] = misc
@@ -1317,12 +1615,19 @@ class Runner:
             setattr(self.args, key, value)
         return self.save_runtime_config()
 
-    def request_shutdown(self, exit_code: Optional[int] = None) -> None:
+    def request_shutdown(self, exit_code: Optional[int] = None, reason: str = "") -> None:
+        self._shutdown_reason = str(reason or self._shutdown_reason or "unspecified")
         if exit_code is not None:
             self._shutdown_exit_code = int(exit_code)
-            self.log.debug("[SERVER] Runner shutdown requested rc=%d", self._shutdown_exit_code)
+            self._emit_lifecycle_warning(
+                "[RUNNER] shutdown requested rc=%d reason=%s",
+                self._shutdown_exit_code,
+                self._shutdown_reason,
+            )
+            self.log.info("[SERVER] Runner shutdown requested rc=%d reason=%s", self._shutdown_exit_code, self._shutdown_reason)
         else:
-            self.log.debug("[SERVER] Runner shutdown requested")
+            self._emit_lifecycle_warning("[RUNNER] shutdown requested reason=%s", self._shutdown_reason)
+            self.log.info("[SERVER] Runner shutdown requested reason=%s", self._shutdown_reason)
         self._stop_requested = True
         if self._stop is not None:
             self._stop.set()
@@ -1356,6 +1661,26 @@ class Runner:
                 if sess.is_connected():
                     continue
 
+                secure_link_status = {}
+                get_secure_link_status = getattr(sess, "get_secure_link_status_snapshot", None)
+                if callable(get_secure_link_status):
+                    with contextlib.suppress(Exception):
+                        secure_link_status = dict(get_secure_link_status() or {})
+                if (
+                    str(secure_link_status.get("state") or "").strip().lower() == "failed"
+                    and str(secure_link_status.get("failure_reason") or "").strip().lower() == "revoked_serial"
+                ):
+                    continue
+                if (
+                    bool(secure_link_status.get("recovery_enabled"))
+                    and (
+                        secure_link_status.get("next_recovery_reconnect_unix_ts") is not None
+                        or str(secure_link_status.get("last_event") or "").strip().lower()
+                        in {"recovery_reconnect_scheduled", "recovery_reconnect_started"}
+                    )
+                ):
+                    continue
+
                 # No disconnect timestamp yet -> initialize defensively
                 if self._last_disconnected_monotonic is None:
                     self._last_disconnected_monotonic = time.monotonic()
@@ -1370,7 +1695,7 @@ class Runner:
                     down_for,
                     timeout_s,
                 )
-                self.request_restart()
+                self.request_restart(reason=f"client_restart_watchdog down_for={down_for:.3f}s timeout={timeout_s:.3f}s")
                 return
 
         except asyncio.CancelledError:
@@ -1398,21 +1723,6 @@ class Runner:
                      "comma-separated list from myudp,tcp,quic,ws. "
                      "Multiple transports are supported simultaneously for listening instances."
             )
-        for proto in ("tcp", "quic", "ws"):
-            bind_opt = f"--{proto}-bind"
-            listen_port_opt = f"--{proto}-own-port"
-            peer_opt = f"--{proto}-peer"
-            peer_port_opt = f"--{proto}-peer-port"
-            if not _has(bind_opt):
-                p.add_argument(bind_opt, default='::', help=f'{proto.upper()} overlay bind address')
-            if not _has(listen_port_opt):
-                default_port = {"tcp": 8081, "quic": 443, "ws": 8080}[proto]
-                p.add_argument(listen_port_opt, dest=f"{proto}_own_port", type=int, default=default_port, help=f'{proto.upper()} overlay own port')
-            if not _has(peer_opt):
-                p.add_argument(peer_opt, default=None, help=f'{proto.upper()} peer IP/FQDN')
-            if not _has(peer_port_opt):
-                default_peer_port = {"tcp": 8081, "quic": 443, "ws": 8080}[proto]
-                p.add_argument(peer_port_opt, type=int, default=default_peer_port, help=f'{proto.upper()} peer overlay port')
         if not _has('--client-restart-if-disconnected'):
             p.add_argument(
                 '--client-restart-if-disconnected',
@@ -1510,6 +1820,8 @@ class Runner:
 
 # ------------ Admin Webinterface ------------
 
+from .bridge_tun_ios import IOSTUNConnectorSettings, IOS_TUN_CONNECTOR_SECTION
+from .bridge_tun_routing import TUN_ROUTING_SECTION, TunRoutingSettings
 from .bridge_webadmin import AdminWebUI
 
 class ConfigAwareCLI:
@@ -1657,8 +1969,15 @@ class ConfigAwareCLI:
         for section in sections.keys():
             opt_name = f"log_{section}"       # internal dest
             cli_flag = f"--log-{section.replace('_', '-')}"
-            p.add_argument(cli_flag, dest=opt_name, default=None,
-                        help=f"Override log level for component '{section}'")
+            existing_option_strings = {
+                option
+                for action in p._actions
+                for option in getattr(action, "option_strings", [])
+            }
+            existing_dests = {getattr(action, "dest", None) for action in p._actions}
+            if cli_flag not in existing_option_strings and opt_name not in existing_dests:
+                p.add_argument(cli_flag, dest=opt_name, default=None,
+                            help=f"Override log level for component '{section}'")
 
             # 3) Add them directly into the SAME section
             sections[section].add(opt_name)
@@ -1885,11 +2204,22 @@ class ConfigAwareCLI:
     def _group_effective(self, eff: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         grouped: Dict[str, Dict[str, Any]] = {}
         assigned: Set[str] = set()
+        raw_grouped = self._raw_config if isinstance(self._raw_config, dict) else {}
         for sec, dests in self._sections.items():
             block = {k: eff[k] for k in dests if k in eff}
+            raw_block = raw_grouped.get(sec) if isinstance(raw_grouped.get(sec), dict) else None
+            if raw_block:
+                for key, value in raw_block.items():
+                    if key not in block:
+                        block[key] = value
             if block:
                 grouped[sec] = block
                 assigned |= set(block.keys())
+        for sec, raw_block in raw_grouped.items():
+            if sec in grouped or not isinstance(raw_block, dict):
+                continue
+            grouped[sec] = dict(raw_block)
+            assigned |= set(raw_block.keys())
         misc = {k: v for k, v in eff.items() if k not in assigned}
         if misc:
             grouped["misc"] = misc
@@ -1976,14 +2306,20 @@ class ConfigAwareCLI:
 
     def _apply_config_defaults_from_json(self, parser: argparse.ArgumentParser, cfg: Dict[str, Any]) -> None:
         actions = self._scan_actions(parser)
-        # Flatten sectioned or flat JSON
         flat: Dict[str, Any] = {}
+        # Prefer grouped section values over legacy duplicate root keys.
+        for section in self._sections.keys():
+            value = cfg.get(section)
+            if not isinstance(value, dict):
+                continue
+            for kk, vv in value.items():
+                flat[kk] = vv
         for k, v in cfg.items():
             if isinstance(v, dict):
                 for kk, vv in v.items():
-                    flat[kk] = vv
+                    flat.setdefault(kk, vv)
             else:
-                flat[k] = v
+                flat.setdefault(k, v)
         # Coerce/validate and set defaults
         defaults: Dict[str, Any] = {}
         for dest, val in flat.items():
@@ -2003,17 +2339,19 @@ RUNTIME_CLI_DESCRIPTION = (
 
 def default_runtime_registrars() -> List[Tuple[str, Callable[[argparse.ArgumentParser], None]]]:
     return [
-        ("stats_board",        StatsBoard.register_cli),
-        ("secure_link",       SecureLinkPskSession.register_cli),
-        ("compress_layer",    CompressLayerSession.register_cli),
+        ("admin_web",          AdminWebUI.register_cli),
+        ("channel_mux",        ChannelMux.register_cli),
+        (IOS_TUN_CONNECTOR_SECTION, IOSTUNConnectorSettings.register_cli),
+        (TUN_ROUTING_SECTION,   TunRoutingSettings.register_cli),
+        ("runner",             Runner.register_overlay_cli),
         ("udp_session",        UdpSession.register_cli),
         ("ws_session",         WebSocketSession.register_cli),
-        ("tcp_session",        TcpStreamSession.register_cli),
         ("quic_session",       QuicSession.register_cli),
-        ("channel_mux",        ChannelMux.register_cli),
-        ("admin_web",          AdminWebUI.register_cli),
+        ("tcp_session",        TcpStreamSession.register_cli),
+        ("secure_link",        SecureLinkPskSession.register_cli),
+        ("compress_layer",     CompressLayerSession.register_cli),
         ("debug_logging",      DebugLoggingConfigurator.register_cli),
-        ("runner",             Runner.register_overlay_cli),
+        ("stats_board",        StatsBoard.register_cli),
     ]
 
 
@@ -2022,6 +2360,7 @@ def _attach_runtime_cli_metadata(args: argparse.Namespace, cli: ConfigAwareCLI) 
     args._config_defaults = dict(cli._baseline_defaults)
     args._config_help = dict(cli._action_help)
     args._config_choices = dict(cli._action_choices)
+    args._raw_config = dict(cli._raw_config) if isinstance(cli._raw_config, dict) else {}
     return args
 
 
@@ -2055,12 +2394,46 @@ def build_runtime_args_from_config(
     """
     cli = ConfigAwareCLI(description=RUNTIME_CLI_DESCRIPTION)
     parser = cli._build_full_parser(default_runtime_registrars())
+
+    def _config_value(doc: Mapping[str, Any], key: str, section: str | None = None) -> Any:
+        if section:
+            grouped = doc.get(section)
+            if isinstance(grouped, Mapping):
+                if key in grouped:
+                    return grouped.get(key)
+        if key in doc:
+            return doc.get(key)
+        return None
+
+    def _semantic_bootstrap_state(doc: Mapping[str, Any]) -> tuple[bool, str]:
+        overlay_transport = str(
+            _config_value(doc, "overlay_transport", "runner") or "myudp"
+        ).split(",", 1)[0].strip() or "myudp"
+        if overlay_transport == "myudp":
+            peer_host = _config_value(doc, "udp_peer", "udp_session")
+            peer_port = _config_value(doc, "udp_peer_port", "udp_session")
+        elif overlay_transport == "tcp":
+            peer_host = _config_value(doc, "tcp_peer", "tcp_session")
+            peer_port = _config_value(doc, "tcp_peer_port", "tcp_session")
+        elif overlay_transport == "ws":
+            peer_host = _config_value(doc, "ws_peer", "ws_session")
+            peer_port = _config_value(doc, "ws_peer_port", "ws_session")
+        else:
+            peer_host = None
+            peer_port = None
+        peer_configured = bool(str(peer_host or "").strip()) and int(peer_port or 0) > 0
+        own_servers = _config_value(doc, "own_servers", "channel_mux") or []
+        remote_servers = _config_value(doc, "remote_servers", "channel_mux") or []
+        first_start_detected = not peer_configured and not own_servers and not remote_servers
+        return first_start_detected, ("empty" if first_start_detected else "loaded")
+
     if config:
         cli._raw_config = dict(config)
         cli._apply_config_defaults_from_json(parser, dict(config))
-        cli._config_file_state = "loaded"
+        cli._first_start_detected, cli._config_file_state = _semantic_bootstrap_state(dict(config))
     else:
         cli._config_file_state = "missing"
+        cli._first_start_detected = True
     argv_list = list(argv or [])
     args = parser.parse_args(argv_list)
     persisted_config_path = str(config_path or "")
@@ -2070,7 +2443,7 @@ def build_runtime_args_from_config(
     args.save_format = "json"
     args.force = False
     args._config_file_state = cli._config_file_state
-    args._first_start_detected = False
+    args._first_start_detected = cli._first_start_detected
     args._config_path = str(pathlib.Path(persisted_config_path).expanduser().resolve()) if persisted_config_path else ""
     _attach_runtime_cli_metadata(args, cli)
     cli._apply_per_section_overrides(args)
@@ -2079,14 +2452,157 @@ def build_runtime_args_from_config(
     return args
 
 
+def _signal_name(signum: int) -> str:
+    with _process_contextlib.suppress(Exception):
+        return _process_signal.Signals(int(signum)).name
+    return str(signum)
+
+
+def _install_process_signal_handlers(runner: Runner, log: logging.Logger) -> list[tuple[int, object]]:
+    installed: list[tuple[int, object]] = []
+
+    def _handle_signal(signum: int, _frame: object) -> None:
+        exit_code = 128 + int(signum)
+        reason = f"signal:{_signal_name(int(signum))}"
+        log.warning(
+            "[RUNNER] process signal received signum=%d signame=%s exit_code=%d",
+            int(signum),
+            _signal_name(int(signum)),
+            exit_code,
+        )
+        runner.request_shutdown(exit_code, reason=reason)
+
+    for signum in (_process_signal.SIGINT, _process_signal.SIGTERM):
+        with _process_contextlib.suppress(Exception):
+            previous = _process_signal.getsignal(signum)
+            _process_signal.signal(signum, _handle_signal)
+            installed.append((int(signum), previous))
+    return installed
+
+
+def _restore_process_signal_handlers(installed: list[tuple[int, object]]) -> None:
+    for signum, previous in installed:
+        with _process_contextlib.suppress(Exception):
+            _process_signal.signal(signum, previous)
+
+
+def _configured_local_tun_services(args: argparse.Namespace) -> list[Any]:
+    raw_specs = getattr(args, "own_servers", None)
+    try:
+        specs = ChannelMux._parse_own_servers(raw_specs)
+    except Exception:
+        return []
+    return [spec for spec in specs if str(getattr(spec, "l_proto", "") or "").strip().lower() == "tun"]
+
+
+def _configured_packetflow_connector_mode(args: argparse.Namespace) -> str:
+    return str(getattr(args, "packetflow_connector", "") or "").strip().lower()
+
+
+def _needs_macos_tun_elevation(args: argparse.Namespace) -> bool:
+    if not sys.platform.startswith("darwin"):
+        return False
+    geteuid = getattr(os, "geteuid", None)
+    if not callable(geteuid):
+        return False
+    if int(geteuid()) == 0:
+        return False
+    if str(os.environ.get("OBSTACLEBRIDGE_MACOS_TUN_ELEVATED", "") or "").strip():
+        return False
+    if not _configured_local_tun_services(args):
+        return False
+    if _configured_packetflow_connector_mode(args):
+        return False
+    return True
+
+
+def _macos_tun_elevation_exec_argv(argv: Optional[List[str]] = None) -> list[str]:
+    runtime_argv = list(argv) if argv is not None else list(sys.argv[1:])
+    return [
+        "sudo",
+        "-E",
+        sys.executable,
+        "-m",
+        "obstacle_bridge.bridge_runner",
+        *runtime_argv,
+    ]
+
+
+def _maybe_reexec_with_macos_tun_privileges(
+    args: argparse.Namespace,
+    *,
+    argv: Optional[List[str]],
+    log: logging.Logger,
+) -> None:
+    if not _needs_macos_tun_elevation(args):
+        return
+    sudo_path = shutil.which("sudo")
+    if not sudo_path:
+        raise RuntimeError(
+            "macOS local TUN services require elevated privileges, but sudo is not available. "
+            "Install sudo or run the runtime as root."
+        )
+    cmd = _macos_tun_elevation_exec_argv(argv)
+    env = dict(os.environ)
+    env["OBSTACLEBRIDGE_MACOS_TUN_ELEVATED"] = "1"
+    log.warning(
+        "[RUNNER] re-executing with elevated privileges for macOS local TUN service(s); "
+        "this keeps the Python TUN lifecycle aligned with the Linux route/interface model"
+    )
+    os.execvpe(sudo_path, cmd, env)
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     args = parse_runtime_args(argv, apply_logging=True)
-
+    log = logging.getLogger("runner")
+    _maybe_reexec_with_macos_tun_privileges(args, argv=argv, log=log)
     r = Runner(args)
+    installed_signal_handlers = _install_process_signal_handlers(r, log)
+    log.info("[RUNNER] process start pid=%s argv=%r", os.getpid(), list(argv) if argv is not None else sys.argv[1:])
     try:
         asyncio.run(r.run())
+    except SystemExit as exc:
+        log.warning(
+            "[RUNNER] process exit via SystemExit code=%r stop_requested=%s shutdown_rc=%r shutdown_reason=%r restart_requested=%s restart_rc=%r restart_reason=%r",
+            exc.code,
+            r._stop_requested,
+            r._shutdown_exit_code,
+            r._shutdown_reason,
+            r._restart_requested_flag,
+            r._restart_exit_code,
+            r._restart_reason,
+        )
+        raise
     except KeyboardInterrupt:
-        pass
+        log.warning(
+            "[RUNNER] process exit via KeyboardInterrupt stop_requested=%s shutdown_rc=%r shutdown_reason=%r restart_requested=%s restart_reason=%r",
+            r._stop_requested,
+            r._shutdown_exit_code,
+            r._shutdown_reason,
+            r._restart_requested_flag,
+            r._restart_reason,
+        )
+    except BaseException:
+        log.exception(
+            "[RUNNER] fatal exception escaped main stop_requested=%s shutdown_rc=%r shutdown_reason=%r restart_requested=%s restart_reason=%r",
+            r._stop_requested,
+            r._shutdown_exit_code,
+            r._shutdown_reason,
+            r._restart_requested_flag,
+            r._restart_reason,
+        )
+        raise
+    finally:
+        _restore_process_signal_handlers(installed_signal_handlers)
+        log.info(
+            "[RUNNER] process leaving stop_requested=%s shutdown_rc=%r shutdown_reason=%r restart_requested=%s restart_rc=%r restart_reason=%r",
+            r._stop_requested,
+            r._shutdown_exit_code,
+            r._shutdown_reason,
+            r._restart_requested_flag,
+            r._restart_exit_code,
+            r._restart_reason,
+        )
 
 if __name__ == '__main__':
     main()

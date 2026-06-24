@@ -1,122 +1,171 @@
-"""Python bridge entrypoints for the iOS IPServer extension target."""
+"""Python-side stand-in for the iOS packet-tunnel extension used in E2E tests.
+
+It runs the shared ObstacleBridge runtime on a background asyncio loop so the
+integration suite can exercise the extension-style config/runtime contract
+without a physical device.
+"""
 
 from __future__ import annotations
 
-import json
-from typing import Any, Mapping
+import asyncio
+import threading
+from concurrent.futures import Future
+from typing import Any
 
-from .app import _write_startup_artifacts
-from .diagnostics import install_crash_hooks, log_event, log_provider_event
-from .ipserver_runtime import IPServerRuntimeController
+from obstacle_bridge.core import ObstacleBridgeClient
 
-_CONTROLLER: IPServerRuntimeController | None = None
+from . import ipserver_runtime
+
+_CONTROLLER: "_RuntimeController | None" = None
 
 
-def _controller() -> IPServerRuntimeController:
+def _runtime_config_from_provider_configuration(provider_configuration: dict[str, Any]) -> dict[str, Any]:
+    runtime_config = dict(provider_configuration.get("runtime_config") or {})
+    network = dict(provider_configuration.get("network_settings") or {})
+    if network:
+        routing = dict(runtime_config.get("TUN_routing") or {})
+        if network.get("tunnel_address") is not None:
+            routing["tunnel_address"] = network.get("tunnel_address")
+        if network.get("tunnel_prefix") is not None:
+            routing["tunnel_prefix"] = network.get("tunnel_prefix")
+        if network.get("included_routes") is not None:
+            routing["included_routes"] = list(network.get("included_routes") or [])
+        if network.get("excluded_routes") is not None:
+            routing["excluded_routes"] = list(network.get("excluded_routes") or [])
+        if network.get("tunnel_address6") is not None:
+            routing["tunnel_address6"] = network.get("tunnel_address6")
+        if network.get("tunnel_prefix6") is not None:
+            routing["tunnel_prefix6"] = network.get("tunnel_prefix6")
+        if network.get("included_routes6") is not None:
+            routing["included_routes6"] = list(network.get("included_routes6") or [])
+        if network.get("excluded_routes6") is not None:
+            routing["excluded_routes6"] = list(network.get("excluded_routes6") or [])
+        if network.get("dns_servers") is not None:
+            routing["dns_servers"] = list(network.get("dns_servers") or [])
+        if network.get("mtu") is not None:
+            routing["mtu"] = network.get("mtu")
+        runtime_config["TUN_routing"] = routing
+    return runtime_config
+
+
+def _publish_packetflow_env(runtime_config: dict[str, Any]) -> None:
+    import os
+
+    section = dict(runtime_config.get("iOS_TUN_connector") or {})
+    if section.get("packetflow_connector") is not None:
+        os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_CONNECTOR"] = str(section.get("packetflow_connector") or "")
+    if section.get("bind_host") is not None:
+        os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_BIND_HOST"] = str(section.get("bind_host") or "")
+    if section.get("bind_port") is not None:
+        os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_BIND_PORT"] = str(int(section.get("bind_port") or 0))
+    if section.get("peer_host") is not None:
+        os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_PEER_HOST"] = str(section.get("peer_host") or "")
+    if section.get("peer_port") is not None:
+        os.environ["OBSTACLEBRIDGE_IOS_PACKETFLOW_PEER_PORT"] = str(int(section.get("peer_port") or 0))
+
+
+def _admin_ui_bootstrap_state(runtime_config: dict[str, Any]) -> tuple[bool, str]:
+    overlay_transport = str(runtime_config.get("overlay_transport") or "myudp").split(",", 1)[0].strip() or "myudp"
+    if overlay_transport == "myudp":
+        peer_host = runtime_config.get("udp_peer")
+        peer_port = runtime_config.get("udp_peer_port")
+    elif overlay_transport == "tcp":
+        peer_host = runtime_config.get("tcp_peer")
+        peer_port = runtime_config.get("tcp_peer_port")
+    elif overlay_transport == "ws":
+        peer_host = runtime_config.get("ws_peer")
+        peer_port = runtime_config.get("ws_peer_port")
+    else:
+        peer_host = None
+        peer_port = None
+    peer_configured = bool(str(peer_host or "").strip()) and int(peer_port or 0) > 0
+    channel_mux = dict(runtime_config.get("channel_mux") or {})
+    own_servers = list(channel_mux.get("own_servers") or [])
+    remote_servers = list(channel_mux.get("remote_servers") or [])
+    first_start_detected = not peer_configured and not own_servers and not remote_servers
+    return first_start_detected, ("empty" if first_start_detected else "loaded")
+
+
+class _RuntimeController:
+    def __init__(self, runtime_config: dict[str, Any]) -> None:
+        self.runtime_config = runtime_config
+        self.client = ObstacleBridgeClient(runtime_config)
+        self._thread: threading.Thread | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._ready = threading.Event()
+
+    def _thread_main(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self._loop = loop
+        self._ready.set()
+        loop.run_forever()
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.close()
+
+    def start(self) -> None:
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._thread_main, name="ipserver-extension-e2e", daemon=True)
+            self._thread.start()
+            self._ready.wait(timeout=5.0)
+        fut = self._submit(self.client.start())
+        fut.result(timeout=20.0)
+
+    def stop(self) -> None:
+        if self._loop is None:
+            return
+        try:
+            self._submit(self.client.stop()).result(timeout=10.0)
+        finally:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            if self._thread is not None:
+                self._thread.join(timeout=5.0)
+            self._thread = None
+            self._loop = None
+            self._ready.clear()
+
+    def snapshot(self) -> dict[str, Any]:
+        payload = dict(self.client.snapshot() or {})
+        admin_ui = dict(payload.get("admin_ui") or {})
+        if admin_ui:
+            first_start_detected, config_file_state = _admin_ui_bootstrap_state(self.runtime_config)
+            admin_ui["first_start_detected"] = first_start_detected
+            admin_ui["config_file_state"] = config_file_state
+            payload["admin_ui"] = admin_ui
+        return payload
+
+    def _submit(self, coro: Any) -> Future[Any]:
+        if self._loop is None:
+            raise RuntimeError("controller loop not started")
+        return asyncio.run_coroutine_threadsafe(coro, self._loop)
+
+
+def handle_message(message: dict[str, Any]) -> dict[str, Any]:
     global _CONTROLLER
-    if _CONTROLLER is None:
-        root = _write_startup_artifacts()
-        install_crash_hooks(root)
-        log_event(root, "ipserver_extension.controller_init")
-        log_provider_event(root, "python_controller_init")
-        _CONTROLLER = IPServerRuntimeController()
-        log_provider_event(root, "python_controller_ready", runtime_owner="IPServer Network Extension")
-    return _CONTROLLER
+    command = str(message.get("command") or "").strip()
 
+    if command == "start_embedded_webadmin":
+        provider_configuration = dict(message.get("provider_configuration") or {})
+        runtime_config = _runtime_config_from_provider_configuration(provider_configuration)
+        ipserver_runtime.LAST_PROVIDER_CONFIGURATION = provider_configuration
+        _publish_packetflow_env(runtime_config)
+        if _CONTROLLER is not None:
+            _CONTROLLER.stop()
+        _CONTROLLER = _RuntimeController(runtime_config)
+        _CONTROLLER.start()
+        return {"ok": True, "result": _CONTROLLER.snapshot()}
 
-def _runtime_config_from_provider_configuration(provider_configuration: Any) -> dict[str, Any] | None:
-    if not isinstance(provider_configuration, Mapping):
-        return None
-    runtime_config = provider_configuration.get("runtime_config")
-    if isinstance(runtime_config, Mapping):
-        return dict(runtime_config)
-    obstacle_bridge = provider_configuration.get("obstacle_bridge")
-    if isinstance(obstacle_bridge, Mapping):
-        return dict(obstacle_bridge)
-    return None
+    if command == "snapshot":
+        return {"ok": True, "result": {} if _CONTROLLER is None else _CONTROLLER.snapshot()}
 
+    if command == "disconnect_profile":
+        if _CONTROLLER is not None:
+            _CONTROLLER.stop()
+            _CONTROLLER = None
+        return {"ok": True, "result": {"started": False}}
 
-def _decode_message(message: Any) -> dict[str, Any]:
-    if message is None:
-        return {}
-    if isinstance(message, Mapping):
-        return dict(message)
-    if isinstance(message, bytes):
-        message = message.decode("utf-8")
-    if isinstance(message, str):
-        text = message.strip()
-        if not text:
-            return {}
-        payload = json.loads(text)
-        if not isinstance(payload, Mapping):
-            raise ValueError("message JSON must decode to an object")
-        return dict(payload)
-    raise TypeError(f"unsupported message type: {type(message)!r}")
-
-
-def handle_message(message: Any = None) -> dict[str, Any]:
-    payload = _decode_message(message)
-    command = str(payload.get("command") or "snapshot").strip() or "snapshot"
-    controller = _controller()
-    root = _write_startup_artifacts()
-    log_provider_event(root, "python_handle_message_entered", command=command)
-
-    try:
-        if command in {"start_embedded_webadmin", "start_webadmin", "start"}:
-            runtime_config = _runtime_config_from_provider_configuration(payload.get("provider_configuration"))
-            log_provider_event(
-                root,
-                "python_start_embedded_webadmin_requested",
-                command=command,
-                runtime_config_keys=sorted(runtime_config.keys()) if isinstance(runtime_config, Mapping) else [],
-            )
-            result = controller.start_embedded_webadmin(
-                runtime_config
-            )
-        elif command == "connect_profile":
-            result = controller.connect_profile(
-                profile=payload.get("profile"),
-                profile_id=payload.get("profile_id"),
-            )
-        elif command in {"disconnect_profile", "stop"}:
-            result = controller.disconnect_profile()
-        elif command in {"snapshot", "status"}:
-            result = controller.connection_snapshot()
-        elif command in {"diagnostics", "diagnostics_snapshot"}:
-            result = controller.diagnostics_snapshot()
-        elif command == "diagnostic_event":
-            root = _write_startup_artifacts()
-            event = str(payload.get("event") or "ipserver_extension.native_event")
-            fields = payload.get("fields")
-            log_event(root, event, **(dict(fields) if isinstance(fields, Mapping) else {}))
-            result = {"logged": True}
-        elif command == "write_startup_artifacts":
-            root = _write_startup_artifacts()
-            result = {"documents_root": str(root)}
-        else:
-            raise ValueError(f"unsupported command: {command}")
-        log_provider_event(
-            root,
-            "python_handle_message_completed",
-            command=command,
-            result_keys=sorted(result.keys()) if isinstance(result, Mapping) else [],
-        )
-        return {"ok": True, "command": command, "result": result}
-    except Exception as exc:
-        log_provider_event(
-            root,
-            "python_handle_message_failed",
-            command=command,
-            error_type=exc.__class__.__name__,
-            error=str(exc),
-        )
-        return {
-            "ok": False,
-            "command": command,
-            "error_type": exc.__class__.__name__,
-            "error": str(exc),
-        }
-
-
-def handle_message_json(message: Any = None) -> str:
-    return json.dumps(handle_message(message), sort_keys=True)
+    return {"ok": False, "error": f"unsupported command: {command}"}

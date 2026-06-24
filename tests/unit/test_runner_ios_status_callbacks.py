@@ -50,12 +50,16 @@ class _FakeMux:
         self.on_local_rx_bytes = on_local_rx_bytes
         self.on_local_tx_bytes = on_local_tx_bytes
         self.started = False
+        self.peer_set_calls = []
 
     async def start(self):
         self.started = True
 
     async def stop(self):
         return None
+
+    def on_overlay_peer_set(self, host, port):
+        self.peer_set_calls.append((host, port))
 
     def udp_open_count(self):
         return 0
@@ -108,8 +112,12 @@ def test_runner_keeps_status_callbacks_wired_on_ios(monkeypatch):
         assert session.started is True
         assert session.on_peer_rx == runner.stats.on_peer_rx_bytes
         assert session.on_peer_tx == runner.stats.on_peer_tx_bytes
-        assert session.on_peer_set == runner.stats.on_peer_set
         assert mux_holder["mux"].on_local_rx_bytes == runner.stats.on_app_rx_bytes
         assert mux_holder["mux"].on_local_tx_bytes == runner.stats.on_app_tx_bytes
+        assert callable(session.on_peer_set)
+
+        session.on_peer_set("198.51.100.10", 4433)
+
+        assert mux_holder["mux"].peer_set_calls == [("198.51.100.10", 4433)]
 
     asyncio.run(_run())

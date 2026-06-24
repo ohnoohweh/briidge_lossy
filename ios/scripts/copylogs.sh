@@ -7,7 +7,17 @@ if [ -f "${SCRIPT_DIR}/.local-device-env" ]; then
   . "${SCRIPT_DIR}/.local-device-env"
 fi
 
-export LOG_DIR="${SCRIPT_DIR}/../.logs/obstaclebridge-logs"
+cleanup_macos_metadata() {
+  local ios_dir log_dir
+  ios_dir="$(cd "${SCRIPT_DIR}/.." && pwd)"
+  log_dir="${ios_dir}/.logs/fedora"
+  rm -f "${ios_dir}/.DS_Store"
+  find "${log_dir}" -name '.DS_Store' -delete 2>/dev/null || true
+}
+
+trap cleanup_macos_metadata EXIT
+
+export LOG_DIR="${SCRIPT_DIR}/../.logs/fedora"
 
 rm -Rf "${LOG_DIR}"
 mkdir -p "${LOG_DIR}"

@@ -5,13 +5,17 @@ ACTION="${1:?missing action}"
 IFNAME="${2:?missing ifname}"
 
 : "${TUN_ADDR:?missing TUN_ADDR}"
-: "${PEER_ADDR:?missing PEER_ADDR}"
 : "${WAN_IF:?missing WAN_IF}"
 : "${TUN_SUBNET:?missing TUN_SUBNET}"
 TUN_ADDR6="${TUN_ADDR6:-}"
 PEER_ADDR6="${PEER_ADDR6:-}"
 TUN_SUBNET6="${TUN_SUBNET6:-}"
 ENABLE_TCPMSS="${ENABLE_TCPMSS:-0}"
+ENABLE_TUN_TCPDUMP="${ENABLE_TUN_TCPDUMP:-0}"
+TCPDUMP_BIN="${TCPDUMP_BIN:-tcpdump}"
+TCPDUMP_PCAP_PATH="${TCPDUMP_PCAP_PATH:-/tmp/ObstacleBridge-${IFNAME}.pcap}"
+TCPDUMP_PIDFILE="${TCPDUMP_PIDFILE:-/tmp/ObstacleBridge-${IFNAME}.tcpdump.pid}"
+TCPDUMP_STDERR_LOG="${TCPDUMP_STDERR_LOG:-/tmp/ObstacleBridge-${IFNAME}.tcpdump.log}"
 
 ipt_add_unique() {
   local table="$1"; shift
@@ -45,6 +49,51 @@ ip6t_del_if_exists() {
   done
 }
 
+tcpdump_start_if_enabled() {
+  if [[ "$ENABLE_TUN_TCPDUMP" != "1" ]]; then
+    return
+  fi
+  if ! command -v "$TCPDUMP_BIN" >/dev/null 2>&1; then
+    echo "tcpdump capture requested but '$TCPDUMP_BIN' was not found" >&2
+    return
+  fi
+  if [[ -f "$TCPDUMP_PIDFILE" ]]; then
+    local existing_pid
+    existing_pid="$(cat "$TCPDUMP_PIDFILE" 2>/dev/null || true)"
+    if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+      return
+    fi
+    rm -f "$TCPDUMP_PIDFILE"
+  fi
+  local started_pid=""
+  if nohup "$TCPDUMP_BIN" -U -ni "$IFNAME" -w "$TCPDUMP_PCAP_PATH" >"$TCPDUMP_STDERR_LOG" 2>&1 & then
+    started_pid="$!"
+    if [[ -n "$started_pid" ]]; then
+      echo "$started_pid" > "$TCPDUMP_PIDFILE" || true
+      if ! kill -0 "$started_pid" 2>/dev/null; then
+        echo "tcpdump capture requested but process exited immediately; see ${TCPDUMP_STDERR_LOG}" >&2
+        rm -f "$TCPDUMP_PIDFILE"
+      fi
+    fi
+  else
+    echo "tcpdump capture requested but could not be started; see ${TCPDUMP_STDERR_LOG}" >&2
+  fi
+}
+
+tcpdump_stop_if_enabled() {
+  if [[ "$ENABLE_TUN_TCPDUMP" != "1" ]]; then
+    return
+  fi
+  if [[ -f "$TCPDUMP_PIDFILE" ]]; then
+    local existing_pid
+    existing_pid="$(cat "$TCPDUMP_PIDFILE" 2>/dev/null || true)"
+    if [[ -n "$existing_pid" ]]; then
+      kill "$existing_pid" 2>/dev/null || true
+    fi
+    rm -f "$TCPDUMP_PIDFILE"
+  fi
+}
+
 case "$ACTION" in
   up)
     ip addr replace "$TUN_ADDR" dev "$IFNAME"
@@ -75,6 +124,7 @@ case "$ACTION" in
         ip6t_add_unique mangle FORWARD -o "$IFNAME" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
       fi
     fi
+    tcpdump_start_if_enabled
     ;;
   down)
     ipt_del_if_exists "" FORWARD -i "$IFNAME" -o "$WAN_IF" -j ACCEPT
@@ -94,6 +144,8 @@ case "$ACTION" in
         ip6t_del_if_exists mangle FORWARD -o "$IFNAME" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
       fi
     fi
+
+    tcpdump_stop_if_enabled
 
     if [[ -n "$TUN_ADDR6" ]]; then
       ip -6 addr del "$TUN_ADDR6" dev "$IFNAME" 2>/dev/null || true

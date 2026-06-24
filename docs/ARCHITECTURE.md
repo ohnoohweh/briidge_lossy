@@ -49,6 +49,7 @@ Important behaviors:
 - multi-peer listener behavior for transports that support multiple concurrent peer clients
 - transport-specific client bootstrap, such as proxy tunnel establishment and direct-path HTTP root preflight, before higher protocol handshakes
 - endpoint-local auxiliary behavior, such as WebSocket pre-upgrade HTTP/static handling, must stay scoped to the originating socket/request and must not mutate unrelated peer sessions
+- every overlay transport must publish one transport-agnostic backpressure view upward: queue depth, inflight state where available, recent egress throughput, and delay/progress estimates
 
 The current WebSocket-specific listener split, including direct static HTTP handling and same-socket upgrade considerations, is documented in [WEBSOCKET_DESIGN.md](/home/ohnoohweh/quic_br/docs/WEBSOCKET_DESIGN.md).
 
@@ -175,6 +176,13 @@ The important point is that large TCP application traffic is handled by chunking
 
 The current QUIC session uses the same internal `LEN(4) + KIND(1) + BYTES...` stream framing model as `TcpStreamSession`, but exposes a configurable upper-layer cap through `quic_max_size`.
 
+Implementation boundary note:
+
+- Python QUIC is implemented with `aioquic`
+- native Swift QUIC on macOS/iOS is implemented with Network.framework
+
+So parity for QUIC has to be established at the observable behavior level rather than assumed from one shared transport implementation.
+
 That means:
 
 - the QUIC session budget is explicit and configurable
@@ -182,6 +190,12 @@ That means:
 - QUIC send-side code also rejects application payloads above `quic_max_size`
 
 So QUIC is conceptually aligned with TCP stream processing, but with an explicit knob rather than a hard-coded `65535` software budget.
+
+Practical Swift note:
+
+- mixed Swift/Python validation found a native Swift QUIC large-write boundary issue on the macOS host-runner service path
+- the current Swift workaround splits larger outbound QUIC wires into smaller stream writes before handing them to Network.framework
+- the detailed rationale and validation evidence live in [QUIC_DESIGN.md](./QUIC_DESIGN.md)
 
 #### WebSocket
 
@@ -369,6 +383,236 @@ Important behaviors:
 
 This layer is especially important for the `myudp` requirements in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md).
 
+### Overload and freshness policy
+
+The runtime is not intended to behave like an unbounded store-and-forward buffer.
+For the delivered overlay behavior, bounded latency and forward progress are more important than preserving every queued payload indefinitely.
+
+The architectural rule is:
+
+- every buffering boundary must be bounded
+- every buffered payload class must have a freshness budget
+- overload must trigger backpressure or shedding that matches the traffic type
+
+This matters most for `myudp`, but the policy is deliberately cross-layer because overload can build up at multiple seams in the conveyor belt:
+
+- local TCP/UDP/TUN ingress
+- `ChannelMux` channel queues
+- reliable transport wait queues
+- retransmit/inflight windows
+- peer-side reassembly buffers
+
+Under high load, the runtime must prefer:
+
+- fresh control traffic over stale bulk payload
+- retransmission of still-fresh missing frames over emission of very old queued frames
+- bounded delay over unbounded reliability
+
+The design intent is therefore a bounded real-time overlay, not a reliable archive of old traffic.
+
+#### Traffic-class policy
+
+Different traffic classes are allowed to react differently under overload.
+
+`TUN` traffic:
+
+- IP packets are freshness-sensitive
+- queued packets may become semantically useless long before transport delivery would succeed
+- the runtime is therefore allowed to drop stale queued TUN packets under pressure
+
+`UDP` service traffic:
+
+- datagram semantics already allow loss
+- the runtime is allowed to drop queued or stale UDP datagrams under pressure rather than preserving them indefinitely
+
+`TCP` service traffic:
+
+- TCP already has built-in flow control
+- the runtime should prefer reader throttling and socket backpressure over large user-space overlay queues
+- if bounded buffering and backpressure are still insufficient, the runtime may fail an affected TCP channel rather than allowing arbitrarily stale backlog to accumulate
+
+#### Safe reduction points vs unsafe drop points
+
+The most important decomposition rule is that not every layer is a safe place to discard payload.
+The runtime therefore distinguishes between:
+
+- admission-time reduction, where the system may still choose not to accept more work
+- post-admission transport behavior, where the system must preserve ordering/protection semantics for already-admitted work
+
+Safe reduction points:
+
+- before `ChannelMux` admits a local `TUN` packet into the ordered overlay path
+- before `ChannelMux` admits a local UDP datagram into the ordered overlay path
+- at local TCP read ingress, by pausing or slowing reads so kernel TCP flow control pushes back on the sender
+- at TCP channel lifecycle boundaries, by failing a persistently overloaded stream rather than preserving arbitrarily stale backlog
+
+Unsafe drop points:
+
+- arbitrary drop of already-admitted `ChannelMux` TCP stream chunks
+- arbitrary drop of secure-link handshake, rekey, or protected control traffic
+- arbitrary drop of already-admitted reliable `myudp` data frames that higher layers now depend on for ordered delivery
+
+Architectural implication:
+
+- `UDP` and `TUN` should primarily shed at ingress before admission
+- `TCP` should primarily backpressure at ingress before admission
+- once payload has entered the ordered reliable protected pipeline, the runtime should either deliver it in order, or fail the owning stream/session; it should not silently discard selected interior frames as an overload tactic
+
+This rule protects three important dependencies:
+
+- `ChannelMux` expects monotonic ordered carriage for admitted stream chunks
+- SecureLink expects its control and protected data flow to remain internally coherent
+- `myudp` reliability should not be turned into a partial-delivery layer by downstream selective discard
+
+#### Two-stage overload strategy
+
+The intended overload strategy is therefore two-stage:
+
+Stage A: admission control
+
+- decide whether new local traffic may enter the overlay pipeline
+- use stream backpressure for `TCP`
+- use bounded stale-drop / throttled admission for `UDP` and `TUN`
+- drive those `UDP` and `TUN` decisions from the same transport-reported
+  backpressure snapshot, regardless of the active overlay protocol
+
+Stage B: in-pipeline scheduling
+
+- once traffic has been admitted, prefer control and fresh recovery work over stale bulk work
+- keep already-admitted ordered/protected payload semantically coherent
+- if coherence can no longer be preserved with bounded delay, fail the affected channel/session rather than emitting arbitrarily stale traffic much later
+
+This decomposition is the main guardrail against the "inflatable balloon" failure mode where the runtime absorbs unbounded local traffic and releases it too late to remain useful.
+
+#### Architectural consequences
+
+The overload contract implies the following design rules:
+
+- `ARC-CMP-002` must expose bounded inflight and wait-queue behavior, not only retransmission behavior
+- `ARC-CMP-003` must distinguish stream-style backpressure (`TCP`) from datagram-style shedding (`UDP`, `TUN`)
+- `ARC-CMP-004` must own runtime thresholds and the policy wiring between transport, mux, and service readers
+- `ARC-CMP-005` must expose overload state, queue depth, queue age, and drop counters so operators can understand whether the runtime is delaying, shedding, or backpressuring traffic
+
+This means the reliability layer is not only responsible for making loss survivable; it is also responsible for refusing to turn temporary congestion into arbitrarily stale delivery.
+
+#### Required boundedness properties
+
+For overload-safe behavior, the runtime should move toward explicit limits such as:
+
+- maximum inflight frame count
+- maximum queued frame count
+- maximum queued payload bytes
+- maximum queued age per traffic class
+- explicit stale-drop thresholds
+- explicit TCP reader pause / resume thresholds
+
+The exact threshold values are an implementation concern, but the existence of hard bounds is an architectural concern.
+
+#### Scheduling preference under pressure
+
+When pressure is present, the intended send priority is:
+
+1. liveness, ACK, and other control traffic
+2. retransmission of still-fresh missing data
+3. fresh interactive traffic
+4. fresh bulk traffic
+5. stale queued traffic that is already beyond its useful delivery window
+
+The runtime is allowed to shed the last class rather than letting it dominate the tunnel and inflate end-to-end delay for all newer traffic.
+
+#### Operator-visible overload state
+
+The observability surface should eventually expose overload indicators in addition to RTT and transmit delay, for example:
+
+- queue depth in packets/frames
+- queue depth in bytes
+- oldest queued age
+- stale-drop counters by traffic class
+- TCP backpressure events
+- current overload state such as `normal`, `pressured`, or `shedding`
+
+These signals are needed so rising `transmit_delay_ms` can be interpreted correctly: the operator should be able to tell whether the runtime is still carrying fresh traffic, is beginning to saturate, or is already discarding stale backlog by design.
+
+At present, the implemented ingress-pressure response is based on a unified
+transport backpressure snapshot rather than on transport-specific branches.
+Every overlay transport contributes a `SessionMetrics` view that includes:
+
+- queue depth / waiting-count
+- inflight and max-inflight when the transport exposes them
+- transmit-delay estimate
+- recent egress throughput measured in rolling `100ms` windows
+
+`ChannelMux` consumes that one snapshot for local admission control. For
+freshness-sensitive ingress (`TUN` packets and local UDP datagrams), the next
+`100ms` ingress window may admit only `90%` of the bytes that the overlay
+actually carried in the previous `100ms` window only while the transport has
+reached its configured inflight limit. If the same snapshot reports stalled
+forward progress, new local
+datagram/packet ingress is paused until progress resumes.
+
+That admission control applies at two levels at once:
+
+- a global local-ingress bucket shared by `TUN` and local UDP together
+- a narrower per-scope bucket that preserves fairness between peer/channel
+  delivery scopes
+
+The shared bucket means a burst from one ingress source cannot consume overlay
+capacity while another source continues admitting traffic as if the budget were
+unused. `TUN` and UDP therefore compete for the same aggregate overlay-shaped
+budget first, then for their own scope-local budget second.
+
+This keeps `TUN` and UDP ingress aligned on one architecture rule: transports
+measure, `ChannelMux` decides, and ingress shedding uses the same data whether
+the active overlay is `myudp`, `ws`, `tcp`, or `quic`.
+
+#### Component implementation checklist
+
+The architecture implies the following implementation checklist across the main components.
+
+`ARC-CMP-002` reliability and framing layer:
+
+- add explicit queue-depth and queue-age accounting for reliable transport work
+- add bounded wait-queue limits in frames and bytes
+- keep control and retransmit traffic above fresh bulk traffic in send scheduling
+- do not use selective drop of already-admitted reliable payload as the primary overload tactic
+- expose overload state and queue metrics upward
+
+`ARC-CMP-003` channel and service multiplexing layer:
+
+- classify ingress by traffic type: `TCP`, `UDP`, and `TUN`
+- add bounded ingress queues for datagram-style traffic
+- add stale-drop policy for `UDP` and `TUN` before admission to the ordered overlay path
+- add pause/resume backpressure hooks for local TCP readers before admission
+- add overload-driven TCP channel failure policy for streams that cannot drain within bounded delay
+
+`ARC-CMP-004` runner and orchestration layer:
+
+- own the runtime thresholds, watermarks, and age budgets
+- distribute those policy knobs into transport, mux, and admin subsystems
+- ensure reconnect/restart behavior clears overload state cleanly
+- keep configuration and defaults coherent across the end-to-end pipeline
+
+`ARC-CMP-005` admin web and observability layer:
+
+- expose queue depth, queue age, overload state, and drop/backpressure counters in `/api/status`
+- expose per-peer/per-session overload state in `/api/peers` where relevant
+- render those signals in the WebAdmin UI next to RTT/transmit-delay context
+- preserve enough diagnostics to distinguish healthy delay, pressure, shedding, and collapse
+
+Transport/session layer:
+
+- provide the hooks needed for ingress pause/resume and datagram admission control
+- avoid transport-specific buffering behavior that bypasses the shared overload policy
+- preserve transport-local liveness/control paths even while bulk ingress is being reduced
+
+Secure-link layer:
+
+- ensure handshake, rekey, and protected control traffic are not treated as ordinary drop-eligible bulk payload
+- tolerate admission-side reduction in outer traffic classes without leaving internal protocol state ambiguous
+- fail and recover cleanly if bounded-delay guarantees can no longer be preserved for the protected session
+
+These checklist items are intentionally architectural rather than code-local. They describe what each component must contribute so the overload policy becomes a property of the whole conveyor belt rather than a one-off queue cap in one layer.
+
 ## 4. Channel and service multiplexing layer
 
 Primary responsibility:
@@ -389,6 +633,7 @@ Important behaviors:
 - per-peer isolation in listener mode
 - cleanup on disconnect
 - peer-scoped mutation only: routing, remote catalog changes, and disconnect cleanup must always act on the owning peer rather than on listener-global shortcuts inherited from earlier single-peer designs
+- transport-appropriate overload handling: backpressure for stream ingress where possible, bounded shedding for freshness-sensitive datagram ingress where necessary
 
 This is the main realization layer for listener and mixed-service requirements.
 
@@ -412,6 +657,7 @@ Important behaviors:
 - restart handling
 - process-safe event binding
 - configuration persistence
+- policy ownership for overload thresholds and whether a given ingress path should pause, drop stale payload, or fail a channel under sustained pressure
 
 ### Entrypoint split (`bridge.py` vs module launcher)
 
@@ -445,6 +691,7 @@ Important behaviors:
 - show per-connection and aggregate transfer state
 - isolate authenticated sessions per client
 - support troubleshooting and regression validation
+- expose overload diagnostics such as queue pressure, stale-drop behavior, backpressure activity, and transport freshness metrics so operators can distinguish healthy delay from overload collapse
 
 ## Component responsibilities
 
@@ -470,6 +717,7 @@ Expected to own:
 - missed-frame tracking
 - retransmission decisions
 - RTT and inflight metrics
+- bounded wait-queue policy, queued-age accounting, and stale-drop eligibility for reliability-managed payload buffers
 
 Expected not to own:
 
@@ -483,6 +731,7 @@ Expected to own:
 - mapping between overlay channels and local TCP/UDP services
 - peer-scoped remote service state
 - listener lifecycle for published services
+- ingress policy selection between backpressure and shedding based on traffic type
 
 Expected not to own:
 
@@ -496,6 +745,7 @@ Expected to own:
 - startup/shutdown lifecycle
 - config and argument integration
 - platform-gated enablement of optional transport features such as Windows `Negotiate` proxy authentication, while preserving platform-default proxy discovery semantics
+- wiring of overload thresholds and runtime policy knobs across transport, reliability, mux, and observability boundaries
 
 Expected not to own:
 
@@ -509,6 +759,7 @@ Expected to own:
 - HTTP API
 - auth session control
 - presentation of runtime state
+- exposure of overload, queue, delay, drop, and backpressure diagnostics in machine-readable and browser-visible form
 
 Expected not to own:
 

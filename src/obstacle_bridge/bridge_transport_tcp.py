@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import struct
 
-from . import bridge as _bridge
+from ._bridge_import import export_bridge_globals
 from .bridge_transport_common import (
+    EgressThroughputTracker,
     StreamRTT,
     StreamRTTRuntime,
     _listener_family_for_host,
@@ -12,11 +13,7 @@ from .bridge_transport_common import (
     _wildcard_host_for_family,
 )
 
-globals().update({
-    key: value
-    for key, value in _bridge.__dict__.items()
-    if key not in {"__builtins__", "__name__", "__package__", "__file__", "__cached__", "__doc__", "__spec__", "__loader__"}
-})
+_bridge = export_bridge_globals(globals())
 
 _MUX_HDR = struct.Struct(">HHBBH")
 
@@ -63,6 +60,14 @@ class TcpStreamSession(ISession):
             p.add_argument('--tcp-peer', default=None, help='TCP peer IP/FQDN')
         if not _has('--tcp-peer-port'):
             p.add_argument('--tcp-peer-port', type=int, default=8081, help='TCP peer overlay port')
+        if not _has('--tcp-peer-resolve-family'):
+            p.add_argument(
+                '--tcp-peer-resolve-family',
+                dest='tcp_peer_resolve_family',
+                choices=['prefer-ipv6', 'ipv4', 'ipv6'],
+                default='prefer-ipv6',
+                help='TCP peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.'
+            )
 
         if not _has('--tcp-bp-wbuf-threshold'):
             p.add_argument('--tcp-bp-wbuf-threshold', type=int, default=128 * 1024,
@@ -124,6 +129,7 @@ class TcpStreamSession(ISession):
             self._args,
             peer_attr="tcp_peer",
             peer_port_attr="tcp_peer_port",
+            resolve_attr="tcp_peer_resolve_family",
             bind_host=self._listen_host,
             socktype=socket.SOCK_STREAM,
         )
@@ -178,6 +184,7 @@ class TcpStreamSession(ISession):
         # overlay "connected" view is RTT-driven
         self._overlay_connected: bool = False
         self._app_payload_passthrough: bool = False
+        self._egress_tracker = EgressThroughputTracker()
 
     # ---- ISession: callback wiring ----
     def set_on_app_payload(self, cb): self._on_app = cb
@@ -285,13 +292,46 @@ class TcpStreamSession(ISession):
         """
         try:
             r = self._rtt
+            rtt_est_ms = getattr(r, "rtt_est_ms", None)
+            tracker = getattr(self, "_egress_tracker", None)
+            prev_bytes, curr_bytes = tracker.snapshot() if tracker is not None else (0, 0)
             return SessionMetrics(
                 rtt_sample_ms=getattr(r, "rtt_sample_ms", None),
-                rtt_est_ms=getattr(r, "rtt_est_ms", None),
+                rtt_est_ms=rtt_est_ms,
+                transmit_delay_est_ms=(0.5 * float(rtt_est_ms)) if rtt_est_ms is not None else None,
                 last_rtt_ok_ns=getattr(r, "last_rtt_ok_ns", None),
+                waiting_count=self.waiting_count() if hasattr(self, "_send_queue") else 0,
+                egress_prev_window_bytes=prev_bytes,
+                egress_curr_window_bytes=curr_bytes,
             )
         except Exception:
             return SessionMetrics()
+
+    def waiting_count(self) -> int:
+        pending = 0
+        try:
+            pending += 1 if len(self._early_buf) > 0 else 0
+        except Exception:
+            pass
+
+        def _writer_pending(writer: Any) -> int:
+            try:
+                transport = getattr(writer, "transport", None)
+                if transport is None and hasattr(writer, "get_extra_info"):
+                    transport = writer.get_extra_info("transport")
+                size_getter = getattr(transport, "get_write_buffer_size", None)
+                size = int(size_getter()) if callable(size_getter) else 0
+                return 1 if size > 0 else 0
+            except Exception:
+                return 0
+
+        pending += _writer_pending(getattr(self, "_writer", None))
+        try:
+            for ctx in list(self._server_peers.values()):
+                pending += _writer_pending(ctx.get("writer"))
+        except Exception:
+            pass
+        return max(0, int(pending))
 
     def get_max_app_payload_size(self) -> int:
         return 65535
@@ -306,6 +346,19 @@ class TcpStreamSession(ISession):
             if not host_s:
                 return None
             return f"[{host_s}]:{port_i}" if ":" in host_s and not host_s.startswith("[") else f"{host_s}:{port_i}"
+        except Exception:
+            return None
+
+    @staticmethod
+    def _format_peer_endpoint(host: Optional[object], port: Optional[object]) -> Optional[dict]:
+        try:
+            if host is None or port is None:
+                return None
+            host_s = str(host)
+            port_i = int(port)
+            if not host_s:
+                return None
+            return {"host": host_s, "port": port_i}
         except Exception:
             return None
 
@@ -335,7 +388,7 @@ class TcpStreamSession(ISession):
                 "peer_id": 0,
                 "connected": bool(self.is_connected()),
                 "state": "connected" if self.is_connected() else "connecting",
-                "peer": self._format_peer_label(self._peer_host, self._peer_port),
+                "peer": self._format_peer_endpoint(self._peer_host, self._peer_port),
                 "mux_chans": [],
                 "rtt_est_ms": getattr(self._rtt, "rtt_est_ms", None),
                 "last_incoming_age_seconds": _monotonic_age_seconds_from_ns(
@@ -370,7 +423,7 @@ class TcpStreamSession(ISession):
                 "peer_id": peer_id,
                 "connected": bool(ctx.get("connected")) if isinstance(ctx, dict) else False,
                 "state": "connected" if bool(ctx.get("connected")) else "connecting",
-                "peer": self._format_peer_label(host, port),
+                "peer": self._format_peer_endpoint(host, port),
                 "mux_chans": sorted(mux_by_peer.get(peer_id, [])),
                 "rtt_est_ms": getattr(rtt, "rtt_est_ms", None),
                 "last_incoming_age_seconds": _monotonic_age_seconds_from_ns(
@@ -410,6 +463,8 @@ class TcpStreamSession(ISession):
         return hdr.pack(new_chan, proto, counter, mtype, dlen) + payload[hdr.size:hdr.size + dlen]
 
     def _server_rewrite_inbound_app(self, peer_id: int, payload: bytes) -> bytes:
+        if self._app_payload_passthrough:
+            return payload
         hdr = _MUX_HDR
         if len(payload) < hdr.size:
             return payload
@@ -497,6 +552,7 @@ class TcpStreamSession(ISession):
                 if self._on_peer_tx:
                     try: self._on_peer_tx(len(wire))
                     except Exception: pass
+                self._egress_tracker.record(len(routed_payload))
                 return len(payload)
             except Exception as e:
                 self._log.info(f"[TCP/TX] ({self._probe_id}) server write error peer_id={target_peer_id}: {e!r}")
@@ -520,6 +576,7 @@ class TcpStreamSession(ISession):
                 try: self._on_peer_tx(len(wire))
                 except Exception: pass
             self._maybe_signal_bp()
+            self._egress_tracker.record(len(payload))
             return len(payload)
         except Exception as e:
             self._log.info(f"[TCP/TX] ({self._probe_id}) write error: {e!r}")

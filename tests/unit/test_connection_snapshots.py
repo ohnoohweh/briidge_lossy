@@ -3,8 +3,13 @@ import asyncio
 import time
 import types
 import unittest
+from unittest.mock import patch
 
 from obstacle_bridge.bridge import ChannelMux, Runner, SessionMetrics, StatsBoard, TcpStreamSession, QuicSession, UdpSession
+
+
+def _peer_endpoint(host: str, port: int) -> dict:
+    return {"host": host, "port": port}
 
 
 class _FakeSession:
@@ -121,6 +126,7 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         self.assertEqual(row["service_name"], "lab-tun")
         self.assertEqual(row["local"]["ifname"], "obtun0")
         self.assertEqual(row["remote_destination"]["ifname"], "obtun1")
+        self.assertIsNone(row["shared_tun_ownership"])
 
     def test_snapshot_counts_active_tun_channel_as_open(self):
         dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1400, service_key=self.tun_key)
@@ -142,8 +148,94 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         self.assertEqual(row["state"], "connected")
         self.assertEqual(row["chan_id"], 301)
         self.assertEqual(row["service_name"], "lab-tun")
-        self.assertEqual(row["stats"]["rx_msgs"], 2)
-        self.assertEqual(row["stats"]["tx_msgs"], 3)
+        self.assertEqual(row["stats"]["rx_msgs"], 3)
+        self.assertEqual(row["stats"]["tx_msgs"], 2)
+        self.assertIsNone(row["shared_tun_ownership"])
+
+    def test_snapshot_exposes_shared_tun_ownership_and_active_binding(self):
+        self.tun_spec = ChannelMux.ServiceSpec(
+            3,
+            "tun",
+            "obtun0",
+            1400,
+            "tun",
+            "obtun1",
+            1400,
+            name="lab-tun",
+            options={
+                "shared_tun_ownership": {
+                    "mode": "server_shared",
+                    "peers": [
+                        {"peer_ref": "linux-client", "ipv4": ["192.168.107.2"], "ipv6": ["fd20:107::2"]},
+                        {"peer_ref": "ios-client", "ipv4": ["192.168.107.4"], "ipv6": ["fd20:107::4"]},
+                    ],
+                }
+            },
+        )
+        self.mux._local_services[self.tun_key] = self.tun_spec
+        self.mux._install_shared_tun_ownership_for_service(self.tun_key, self.tun_spec)
+        dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1400, service_key=self.tun_key)
+        self.mux._svc_tun_devices[self.tun_key] = dev
+        self.mux._chan_owner_peer_id[301] = 7
+        self.mux._shared_tun_peer_ref_by_peer[(self.tun_key, 7)] = "linux-client"
+        self.mux._shared_tun_peer_id_by_ref[(self.tun_key, "linux-client")] = 7
+        with patch.object(self.mux, "_register_tun_reader"):
+            self.mux._bind_tun_channel(301, dev)
+
+        snap = self.mux.snapshot_connections()
+
+        row = snap["tun"][0]
+        self.assertEqual(
+            row["shared_tun_ownership"],
+            {
+                "mode": "server_shared",
+                "peer_count": 2,
+                "address_count": 4,
+                "peer_refs": ["linux-client", "ios-client"],
+                "peers": [
+                    {
+                        "peer_ref": "linux-client",
+                        "ipv4": ["192.168.107.2"],
+                        "ipv6": ["fd20:107::2"],
+                        "address_count": 2,
+                    },
+                    {
+                        "peer_ref": "ios-client",
+                        "ipv4": ["192.168.107.4"],
+                        "ipv6": ["fd20:107::4"],
+                        "address_count": 2,
+                    },
+                ],
+                "owner_by_ipv4": {
+                    "192.168.107.2": "linux-client",
+                    "192.168.107.4": "ios-client",
+                },
+                "owner_by_ipv6": {
+                    "fd20:107::2": "linux-client",
+                    "fd20:107::4": "ios-client",
+                },
+                "active_peer_bindings": [
+                    {
+                        "peer_id": 7,
+                        "peer_ref": "linux-client",
+                        "preferred_chan_id": 301,
+                        "bound_chan_ids": [301],
+                        "ipv4": ["192.168.107.2"],
+                        "ipv6": ["fd20:107::2"],
+                        "address_count": 2,
+                        "throttle_prev_window_bytes": 0,
+                        "throttle_curr_window_bytes": 0,
+                        "throttle_drop_count": 0,
+                    }
+                ],
+                "throttle_scopes": [],
+                "drop_counters": {
+                    "total": 0,
+                    "by_reason": {},
+                },
+                "recent_drops": [],
+            },
+        )
 
     def test_snapshot_collapses_tun_channel_aliases_into_one_logical_connection(self):
         dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1400, service_key=self.tun_key)
@@ -165,10 +257,10 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         row = snap["tun"][0]
         self.assertEqual(row["chan_id"], 302)
         self.assertEqual(row["channel_aliases"], [301, 302])
-        self.assertEqual(row["stats"]["rx_msgs"], 2)
-        self.assertEqual(row["stats"]["tx_msgs"], 3)
-        self.assertEqual(row["stats"]["rx_bytes"], 100)
-        self.assertEqual(row["stats"]["tx_bytes"], 200)
+        self.assertEqual(row["stats"]["rx_msgs"], 3)
+        self.assertEqual(row["stats"]["tx_msgs"], 2)
+        self.assertEqual(row["stats"]["rx_bytes"], 200)
+        self.assertEqual(row["stats"]["tx_bytes"], 100)
         self.assertEqual(self.mux.tun_open_count(), 1)
 
     def test_snapshot_mixed_listeners_and_active_connections(self):
@@ -191,6 +283,81 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         self.assertEqual(snap["counts"]["tcp_listening"], 1)
         self.assertIn("connected", {row.get("state") for row in snap["udp"]})
         self.assertIn("connected", {row.get("state") for row in snap["tcp"]})
+
+    def test_snapshot_uses_peer_service_spec_when_peer_svc_id_collides_with_local(self):
+        local_shared_tun = ChannelMux.ServiceSpec(
+            1,
+            "tun",
+            "obtun0",
+            1600,
+            "tun",
+            "obtun0",
+            1600,
+            name="Shared TUN server",
+        )
+        peer_webadmin = ChannelMux.ServiceSpec(
+            1,
+            "tcp",
+            "0.0.0.0",
+            13081,
+            "tcp",
+            "127.0.0.1",
+            18090,
+            name="WebAdmin iphone",
+        )
+        peer_key = ("peer", 13, 1)
+        self.mux._local_services[("local", 0, 1)] = local_shared_tun
+        self.mux._peer_installed_services[peer_key] = peer_webadmin
+        self.mux._svc_tcp_servers[peer_key] = _FakeTcpServer([_FakeSocket(("0.0.0.0", 13081))])
+        self.mux._tcp_by_chan[134] = (1, _FakeWriter(("38.180.143.5", 13081), ("39.144.43.105", 23428)))
+        self.mux._tcp_role_by_chan[134] = "server"
+        self.mux._chan_owner_peer_id[134] = 13
+
+        snap = self.mux.snapshot_connections()
+
+        connected = next(row for row in snap["tcp"] if row.get("chan_id") == 134)
+        listener = next(row for row in snap["tcp"] if row.get("state") == "listening" and row.get("svc_owner_peer_id") == 13)
+        self.assertEqual(connected["service_name"], "WebAdmin iphone")
+        self.assertEqual(connected["remote_destination"], {"host": "127.0.0.1", "port": 18090})
+        self.assertEqual(listener["service_name"], "WebAdmin iphone")
+        self.assertEqual(listener["remote_destination"], {"host": "127.0.0.1", "port": 18090})
+
+    def test_snapshot_active_udp_connection_includes_throttle_summary(self):
+        self.mux._svc_udp_servers[self.udp_key] = _FakeDatagramTransport(("0.0.0.0", 1111))
+        self.mux._udp_by_chan[101] = (self.udp_key, ("10.10.10.10", 40001))
+        self.mux._local_ingress_throttle_snapshot_for_scope = lambda scope_key, now_ns=None: {  # type: ignore[method-assign]
+            "applicable": True,
+            "active": True,
+            "stalled": False,
+            "backpressure_active": True,
+            "disabled": False,
+            "budget_bytes": 2048,
+            "used_bytes": 1536,
+            "remaining_bytes": 512,
+            "aggregate": {
+                "scope_id": "aggregate",
+                "budget_bytes": 2048,
+                "used_bytes": 1536,
+                "remaining_bytes": 512,
+                "prev_window_bytes": 2048,
+                "throttle_drop_count": 1,
+            },
+            "scope": {
+                "scope_id": "udp:101",
+                "budget_bytes": 2048,
+                "used_bytes": 1536,
+                "remaining_bytes": 512,
+                "prev_window_bytes": 2048,
+                "throttle_drop_count": 1,
+            },
+        }
+
+        snap = self.mux.snapshot_connections()
+
+        row = next(row for row in snap["udp"] if row.get("state") == "connected")
+        self.assertTrue(row["throttle"]["applicable"])
+        self.assertTrue(row["throttle"]["active"])
+        self.assertEqual(row["throttle"]["remaining_bytes"], 512)
 
     def test_closed_channel_stats_are_archived_by_owner_peer(self):
         self.mux._chan_owner_peer_id[201] = 7
@@ -470,7 +637,7 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
             udp_own_port=4443,
             udp_peer=None,
             udp_peer_port=4433,
-            peer_resolve_family="prefer-ipv6",
+            udp_peer_resolve_family="prefer-ipv6",
         )
         session = UdpSession(args)
         session._listener_mode = True
@@ -482,7 +649,7 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(len(overlay_rows), 2)
         peer_row = next(row for row in overlay_rows if row["peer_id"] != -1)
         self.assertFalse(peer_row["connected"])
-        self.assertEqual(peer_row["peer"], "38.180.143.5:50227")
+        self.assertEqual(peer_row["peer"], _peer_endpoint("38.180.143.5", 50227))
         self.assertIsNotNone(peer_row["last_incoming_age_seconds"])
         self.assertGreaterEqual(peer_row["last_incoming_age_seconds"], 0)
 
@@ -501,12 +668,40 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(peer["id"], f"0:{peer_row['peer_id']}")
         self.assertFalse(peer["connected"])
         self.assertEqual(peer["state"], "connecting")
-        self.assertEqual(peer["peer"], "38.180.143.5:50227")
+        self.assertEqual(peer["peer"], {"host": "38.180.143.5", "port": 50227})
         self.assertIsNotNone(peer["last_incoming_age_seconds"])
         self.assertGreaterEqual(peer["last_incoming_age_seconds"], 0)
         self.assertEqual(peer["decode_errors"], 1)
         self.assertEqual(peer["open_connections"]["udp"], 0)
         self.assertEqual(peer["open_connections"]["tcp"], 0)
+
+    def test_peer_snapshot_formats_structured_peer_endpoint_for_webadmin(self):
+        class _StructuredPeerSession:
+            def get_metrics(self):
+                return SessionMetrics(inflight=0)
+
+            def is_connected(self):
+                return True
+
+            def get_overlay_peers_snapshot(self):
+                return [
+                    {
+                        "peer_id": 1,
+                        "connected": True,
+                        "peer": {"host": "198.51.100.1", "port": 4433},
+                        "mux_chans": [101],
+                    },
+                ]
+
+        args = argparse.Namespace(no_dashboard=True, overlay_transport="tcp")
+        runner = Runner(args)
+        runner._sessions = [_StructuredPeerSession()]
+        runner._muxes = []
+        runner._session_labels = ["tcp"]
+
+        out = runner.get_peer_connections_snapshot()
+        self.assertEqual(len(out["peers"]), 1)
+        self.assertEqual(out["peers"][0]["peer"], {"host": "198.51.100.1", "port": 4433})
 
     def test_listener_peer_snapshot_uses_child_myudp_session_stats(self):
         class _InnerStats:
@@ -676,6 +871,7 @@ class TransportPeerSnapshotLastIncomingTests(unittest.TestCase):
         rows = session.get_overlay_peers_snapshot()
 
         self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["peer"], _peer_endpoint("127.0.0.1", 8081))
         self.assertIsNotNone(rows[0]["last_incoming_age_seconds"])
         self.assertGreaterEqual(rows[0]["last_incoming_age_seconds"], 0.0)
 
@@ -694,6 +890,7 @@ class TransportPeerSnapshotLastIncomingTests(unittest.TestCase):
         rows = session.get_overlay_peers_snapshot()
 
         peer_row = next(row for row in rows if row["peer_id"] == 1)
+        self.assertEqual(peer_row["peer"], _peer_endpoint("198.51.100.10", 5000))
         self.assertIsNotNone(peer_row["last_incoming_age_seconds"])
         self.assertGreaterEqual(peer_row["last_incoming_age_seconds"], 0.0)
 
@@ -708,6 +905,7 @@ class TransportPeerSnapshotLastIncomingTests(unittest.TestCase):
         rows = session.get_overlay_peers_snapshot()
 
         self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["peer"], _peer_endpoint("127.0.0.1", 443))
         self.assertIsNotNone(rows[0]["last_incoming_age_seconds"])
         self.assertGreaterEqual(rows[0]["last_incoming_age_seconds"], 0.0)
 
@@ -726,6 +924,7 @@ class TransportPeerSnapshotLastIncomingTests(unittest.TestCase):
         rows = session.get_overlay_peers_snapshot()
 
         peer_row = next(row for row in rows if row["peer_id"] == 2)
+        self.assertEqual(peer_row["peer"], _peer_endpoint("203.0.113.20", 8443))
         self.assertIsNotNone(peer_row["last_incoming_age_seconds"])
         self.assertGreaterEqual(peer_row["last_incoming_age_seconds"], 0.0)
 

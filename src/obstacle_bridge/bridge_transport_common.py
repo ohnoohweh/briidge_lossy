@@ -11,14 +11,57 @@ import sys
 import time
 from typing import Callable, List, Optional, Tuple
 
+
+class EgressThroughputTracker:
+    def __init__(self, *, window_ns: int = 100_000_000):
+        self._window_ns = max(1, int(window_ns))
+        self._window_start_ns: Optional[int] = None
+        self._prev_bytes: int = 0
+        self._curr_bytes: int = 0
+
+    def _advance(self, now_ns: int) -> None:
+        start_ns = self._window_start_ns
+        if start_ns is None:
+            self._window_start_ns = int(now_ns)
+            return
+        elapsed = int(now_ns) - int(start_ns)
+        if elapsed < self._window_ns:
+            return
+        windows = elapsed // self._window_ns
+        if windows == 1:
+            self._prev_bytes = int(self._curr_bytes)
+        else:
+            self._prev_bytes = 0
+        self._curr_bytes = 0
+        self._window_start_ns = int(start_ns + windows * self._window_ns)
+
+    def record(self, byte_count: int, *, now_ns: Optional[int] = None) -> None:
+        now_v = int(now_ns or time.monotonic_ns())
+        self._advance(now_v)
+        self._curr_bytes += max(0, int(byte_count))
+
+    def snapshot(self, *, now_ns: Optional[int] = None) -> Tuple[int, int]:
+        now_v = int(now_ns or time.monotonic_ns())
+        self._advance(now_v)
+        return int(self._prev_bytes), int(self._curr_bytes)
+
 def _strip_brackets(host: str) -> str:
     if host and host.startswith('[') and host.endswith(']'):
         return host[1:-1]
     return host
 
 
-def _peer_resolve_mode(args: argparse.Namespace) -> str:
-    return str(getattr(args, "peer_resolve_family", "prefer-ipv6") or "prefer-ipv6")
+def _split_configured_peer_hosts(host: str) -> List[str]:
+    raw = str(host or "").strip()
+    if not raw:
+        return []
+    if "," not in raw and ";" not in raw:
+        return [raw]
+    return [part.strip() for part in raw.replace(";", ",").split(",") if part.strip()]
+
+
+def _peer_resolve_mode(args: argparse.Namespace, resolve_attr: str) -> str:
+    return str(getattr(args, resolve_attr, "prefer-ipv6") or "prefer-ipv6")
 
 
 def _host_ip_family(host: Optional[str]) -> int:
@@ -95,14 +138,23 @@ def _ipv4_to_mapped_ipv6(host: str) -> str:
     return f"::ffff:{host}"
 
 
-def _resolve_peer_endpoint(
+def _family_preference_rank(family: int, resolve_mode: str) -> int:
+    mode = (resolve_mode or "").strip().lower()
+    if mode in ("prefer-ipv6", "ipv6"):
+        return 0 if family == socket.AF_INET6 else 1
+    if mode == "ipv4":
+        return 0 if family == socket.AF_INET else 1
+    return 0
+
+
+def _resolve_peer_candidates(
     host: str,
     port: int,
     *,
     resolve_mode: str = "prefer-ipv6",
-    bind_host: Optional[str] = None,
     socktype: int = 0,
-) -> Tuple[str, int, int]:
+    strict_family: bool = True,
+) -> List[Tuple[str, int, int]]:
     host = _strip_brackets(host)
     if not host:
         raise RuntimeError("overlay peer requires a non-empty host name")
@@ -111,26 +163,23 @@ def _resolve_peer_endpoint(
 
     family = _host_ip_family(host)
     if family != socket.AF_UNSPEC:
-        if resolve_mode == "ipv4" and family != socket.AF_INET:
-            raise RuntimeError(f"overlay peer {host!r} is not an IPv4 address")
-        if resolve_mode == "ipv6" and family != socket.AF_INET6:
-            if family == socket.AF_INET:
-                host = _ipv4_to_mapped_ipv6(host)
-                family = socket.AF_INET6
-            else:
-                raise RuntimeError(f"overlay peer {host!r} is not an IPv6 address")
-        bind_family = _bind_family_constraint(bind_host)
-        if bind_family is not None and bind_family != family:
-            raise RuntimeError(
-                f"overlay peer {host!r} resolves to family {family}, incompatible with bind {bind_host!r}"
-            )
-        return host, int(port), family
+        if strict_family:
+            if resolve_mode == "ipv4" and family != socket.AF_INET:
+                raise RuntimeError(f"overlay peer {host!r} is not an IPv4 address")
+            if resolve_mode == "ipv6" and family != socket.AF_INET6:
+                if family == socket.AF_INET:
+                    host = _ipv4_to_mapped_ipv6(host)
+                    family = socket.AF_INET6
+                else:
+                    raise RuntimeError(f"overlay peer {host!r} is not an IPv6 address")
+        return [(host, int(port), family)]
 
     lookup_family = socket.AF_UNSPEC
-    if resolve_mode == "ipv4":
-        lookup_family = socket.AF_INET
-    elif resolve_mode == "ipv6":
-        lookup_family = socket.AF_INET6
+    if strict_family:
+        if resolve_mode == "ipv4":
+            lookup_family = socket.AF_INET
+        elif resolve_mode == "ipv6":
+            lookup_family = socket.AF_INET6
 
     try:
         infos = socket.getaddrinfo(host, int(port), family=lookup_family, type=socktype)
@@ -138,7 +187,7 @@ def _resolve_peer_endpoint(
         localhost_fallback = _localhost_fallback(resolve_mode)
         if localhost_fallback and host.lower() == "localhost":
             fallback_host, fallback_family = localhost_fallback
-            return fallback_host, int(port), fallback_family
+            return [(fallback_host, int(port), fallback_family)]
         raise RuntimeError(f"Could not resolve overlay peer {host!r}: {exc}") from exc
     candidates: List[Tuple[str, int, int]] = []
     for fam, _socktype, _proto, _canonname, sockaddr in infos:
@@ -146,10 +195,55 @@ def _resolve_peer_endpoint(
             continue
         if not isinstance(sockaddr, tuple) or len(sockaddr) < 2:
             continue
-        candidates.append((str(sockaddr[0]), int(sockaddr[1]), fam))
+        candidate = (str(sockaddr[0]), int(sockaddr[1]), fam)
+        if candidate not in candidates:
+            candidates.append(candidate)
 
-    if resolve_mode == "prefer-ipv6":
-        candidates.sort(key=lambda item: 0 if item[2] == socket.AF_INET6 else 1)
+    if not candidates:
+        raise RuntimeError(f"Could not resolve overlay peer {host!r}")
+
+    return candidates
+
+
+def _resolve_peer_endpoint(
+    host: str,
+    port: int,
+    *,
+    resolve_mode: str = "prefer-ipv6",
+    bind_host: Optional[str] = None,
+    socktype: int = 0,
+) -> Tuple[str, int, int]:
+    configured_hosts = _split_configured_peer_hosts(host)
+    if not configured_hosts:
+        raise RuntimeError("overlay peer requires a non-empty host name")
+    strict_family = len(configured_hosts) == 1
+    if strict_family:
+        candidates = _resolve_peer_candidates(
+            configured_hosts[0],
+            int(port),
+            resolve_mode=resolve_mode,
+            socktype=socktype,
+            strict_family=True,
+        )
+    else:
+        candidates = []
+        for candidate_host in configured_hosts:
+            try:
+                candidates.extend(
+                    _resolve_peer_candidates(
+                        candidate_host,
+                        int(port),
+                        resolve_mode=resolve_mode,
+                        socktype=socktype,
+                        strict_family=False,
+                    )
+                )
+            except RuntimeError:
+                continue
+        if not candidates:
+            raise RuntimeError(f"Could not resolve overlay peer {host!r}")
+
+    candidates.sort(key=lambda item: _family_preference_rank(item[2], resolve_mode))
 
     bind_family = _bind_family_constraint(bind_host)
     if bind_family is not None:
@@ -162,9 +256,6 @@ def _resolve_peer_endpoint(
                 f"overlay peer {host!r} resolved, but no {fam_name} address is compatible with bind {bind_host!r}"
             )
 
-    if not candidates:
-        raise RuntimeError(f"Could not resolve overlay peer {host!r}")
-
     return candidates[0]
 
 
@@ -173,6 +264,7 @@ def _resolve_cli_peer(
     *,
     peer_attr: str = "peer",
     peer_port_attr: str = "peer_port",
+    resolve_attr: str,
     bind_host: Optional[str] = None,
     socktype: int = 0,
 ) -> Optional[Tuple[str, int, int]]:
@@ -187,7 +279,7 @@ def _resolve_cli_peer(
     return _resolve_peer_endpoint(
         str(peer),
         int(peer_port if peer_port is not None else 443),
-        resolve_mode=_peer_resolve_mode(args),
+        resolve_mode=_peer_resolve_mode(args, resolve_attr),
         bind_host=bind_host,
         socktype=socktype,
     )
@@ -281,6 +373,13 @@ class StreamRTT:
                 f"sample_ms={sample_ms:.3f} est_ms={self.rtt_est_ms:.3f} last_ok={self.last_rtt_ok_ns}"
             )
 
+    def reset(self) -> None:
+        self.rtt_est_ms = 0.0
+        self.rtt_sample_ms = 0.0
+        self.last_rtt_ok_ns = 0
+        self._last_rx_tx_ns = 0
+        self._last_rx_wall_ns = 0
+
 class StreamRTTRuntime:
     """
     Timer that drives initial and periodic pings and exposes connection events
@@ -311,6 +410,11 @@ class StreamRTTRuntime:
             self._task = None
         self._send_ping_fn = None
         self._on_state_change = None
+        self._conn_evt.clear()
+        self._conn_state = False
+        self._next_probe_due_ns = 0
+
+    def reset(self) -> None:
         self._conn_evt.clear()
         self._conn_state = False
         self._next_probe_due_ns = 0

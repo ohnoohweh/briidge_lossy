@@ -6,6 +6,20 @@ import ipaddress
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Optional
 
+from obstacle_bridge import bridge_tun_ios
+from obstacle_bridge.bridge_tun_routing import (
+    DEFAULT_EXCLUDED_ROUTES,
+    DEFAULT_EXCLUDED_ROUTES6,
+    DEFAULT_INCLUDED_ROUTES,
+    DEFAULT_INCLUDED_ROUTES6,
+    DEFAULT_TUNNEL_ADDRESS,
+    DEFAULT_TUNNEL_ADDRESS6,
+    DEFAULT_TUNNEL_MTU,
+    DEFAULT_TUNNEL_PREFIX,
+    DEFAULT_TUNNEL_PREFIX6,
+    TunRoutingSettings as M3NetworkSettings,
+)
+
 
 _TRANSPORT_PEER_KEYS = {
     "tcp": ("tcp_peer", "tcp_peer_port"),
@@ -16,31 +30,8 @@ _TRANSPORT_PEER_KEYS = {
 M3_TUNNEL_SCHEMA = "obstaclebridge.ios.packet-tunnel.v1"
 M3_APP_MESSAGE_SCHEMA = "obstaclebridge.ios.packet-tunnel.app-message.v1"
 M3_TUNNEL_STATUS_STATES = {"idle", "starting", "running", "stopping", "stopped", "failed"}
-DEFAULT_IOS_TUNNEL_ADDRESS = "192.168.105.1"
-DEFAULT_IOS_TUNNEL_PREFIX = 30
-DEFAULT_IOS_INCLUDED_ROUTES = ["0.0.0.0/0"]
-DEFAULT_IOS_EXCLUDED_ROUTES = ["127.0.0.0/8"]
-DEFAULT_IOS_TUNNEL_ADDRESS6 = ""
-DEFAULT_IOS_TUNNEL_PREFIX6 = 126
-DEFAULT_IOS_INCLUDED_ROUTES6 = ["::/0"]
-DEFAULT_IOS_EXCLUDED_ROUTES6 = ["::1/128"]
 DEFAULT_IOS_TUN_IFNAME = "ios-utun"
-
-
-@dataclass
-class M3NetworkSettings:
-    """Network settings the native Packet Tunnel Provider applies on start."""
-
-    tunnel_address: str = DEFAULT_IOS_TUNNEL_ADDRESS
-    tunnel_prefix: int = DEFAULT_IOS_TUNNEL_PREFIX
-    included_routes: list[str] = field(default_factory=lambda: list(DEFAULT_IOS_INCLUDED_ROUTES))
-    excluded_routes: list[str] = field(default_factory=lambda: list(DEFAULT_IOS_EXCLUDED_ROUTES))
-    tunnel_address6: str = DEFAULT_IOS_TUNNEL_ADDRESS6
-    tunnel_prefix6: int = DEFAULT_IOS_TUNNEL_PREFIX6
-    included_routes6: list[str] = field(default_factory=list)
-    excluded_routes6: list[str] = field(default_factory=list)
-    dns_servers: list[str] = field(default_factory=lambda: ["1.1.1.1"])
-    mtu: int = 1280
+DEFAULT_IOS_PACKETFLOW_CONNECTOR = "swift_udp"
 
 
 @dataclass
@@ -112,6 +103,61 @@ def _parse_interface_address(value: Any, *, version: Optional[int] = None) -> tu
     return str(net.ip), int(net.network.prefixlen)
 
 
+def _normalize_bootstrap_peer_host(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if "," not in raw and ";" not in raw:
+        return raw
+    for part in raw.replace(";", ",").split(","):
+        candidate = part.strip()
+        if candidate:
+            return candidate
+    return raw
+
+
+def normalized_ios_tun_connector_config(
+    config: Mapping[str, Any] | None,
+    *,
+    default_packetflow_connector: str = DEFAULT_IOS_PACKETFLOW_CONNECTOR,
+) -> dict[str, Any]:
+    settings = bridge_tun_ios.IOSTUNConnectorSettings.from_mapping(config)
+    section: Mapping[str, Any] = {}
+    if isinstance(config, Mapping):
+        raw_section = config.get(bridge_tun_ios.IOS_TUN_CONNECTOR_SECTION)
+        if isinstance(raw_section, Mapping):
+            section = raw_section
+    packetflow_connector = str(
+        section.get("packetflow_connector")
+        or settings.packetflow_connector
+        or default_packetflow_connector
+    ).strip().lower()
+    bind_port = int(section.get("bind_port") or settings.bind_port or bridge_tun_ios.DEFAULT_IOS_PACKETFLOW_BIND_PORT)
+    peer_host = str(section.get("peer_host") or settings.peer_host).strip()
+    peer_port = int(section.get("peer_port") or settings.peer_port or 0)
+    if packetflow_connector in {"swift_udp", "swift_udp_peer", "swift_simple_udp", "swift_simple_udp_peer", "simple_udp_peer"}:
+        if not peer_host:
+            peer_host = bridge_tun_ios.DEFAULT_IOS_SWIFT_UDP_SHIM_HOST
+        if peer_port <= 0:
+            peer_port = bind_port + 1
+    return {
+        "packetflow_connector": packetflow_connector or default_packetflow_connector,
+        "bind_host": str(section.get("bind_host") or settings.bind_host).strip() or bridge_tun_ios.DEFAULT_IOS_PACKETFLOW_BIND_HOST,
+        "bind_port": bind_port,
+        "peer_host": peer_host,
+        "peer_port": peer_port,
+        "ifname": str(section.get("ifname") or settings.ifname).strip() or bridge_tun_ios.DEFAULT_IOS_PACKETFLOW_IFNAME,
+        "mtu": int(section.get("mtu") or settings.mtu or bridge_tun_ios.DEFAULT_IOS_PACKETFLOW_MTU),
+    }
+
+
+def _override_network_settings(
+    config: Mapping[str, Any],
+    base: M3NetworkSettings,
+) -> M3NetworkSettings:
+    return M3NetworkSettings.from_mapping(config, base=base)
+
+
 def _prefix_from_subnet(value: Any, *, version: Optional[int] = None) -> int | None:
     text = str(value or "").strip()
     if not text:
@@ -130,7 +176,7 @@ def network_settings_from_runtime_config(
     *,
     ios_ifname: str = DEFAULT_IOS_TUN_IFNAME,
     dns_servers: Optional[list[str]] = None,
-    mtu: int = 1280,
+    mtu: int = DEFAULT_TUNNEL_MTU,
 ) -> M3NetworkSettings:
     """Derive iOS packet-tunnel network settings from live ChannelMux TUN config.
 
@@ -142,10 +188,10 @@ def network_settings_from_runtime_config(
     from `TUN_ADDR` or `TUN_SUBNET`.
     """
 
-    chosen_address = DEFAULT_IOS_TUNNEL_ADDRESS
-    chosen_prefix = DEFAULT_IOS_TUNNEL_PREFIX
-    chosen_address6 = DEFAULT_IOS_TUNNEL_ADDRESS6
-    chosen_prefix6 = DEFAULT_IOS_TUNNEL_PREFIX6
+    chosen_address = DEFAULT_TUNNEL_ADDRESS
+    chosen_prefix = DEFAULT_TUNNEL_PREFIX
+    chosen_address6 = DEFAULT_TUNNEL_ADDRESS6
+    chosen_prefix6 = DEFAULT_TUNNEL_PREFIX6
 
     own_services = _service_catalog(config, "own_servers")
     remote_services = _service_catalog(config, "remote_servers")
@@ -171,17 +217,20 @@ def network_settings_from_runtime_config(
                 chosen_address, chosen_prefix = parsed4
             if parsed6 is not None:
                 chosen_address6, chosen_prefix6 = parsed6
-            return M3NetworkSettings(
+            return _override_network_settings(
+                config,
+                M3NetworkSettings(
                 tunnel_address=chosen_address,
                 tunnel_prefix=chosen_prefix,
-                included_routes=list(DEFAULT_IOS_INCLUDED_ROUTES),
-                excluded_routes=list(DEFAULT_IOS_EXCLUDED_ROUTES),
+                included_routes=list(DEFAULT_INCLUDED_ROUTES),
+                excluded_routes=list(DEFAULT_EXCLUDED_ROUTES),
                 tunnel_address6=chosen_address6,
                 tunnel_prefix6=chosen_prefix6,
-                included_routes6=list(DEFAULT_IOS_INCLUDED_ROUTES6) if chosen_address6 else [],
-                excluded_routes6=list(DEFAULT_IOS_EXCLUDED_ROUTES6) if chosen_address6 else [],
+                included_routes6=list(DEFAULT_INCLUDED_ROUTES6) if chosen_address6 else [],
+                excluded_routes6=list(DEFAULT_EXCLUDED_ROUTES6) if chosen_address6 else [],
                 dns_servers=list(dns_servers or ["1.1.1.1"]),
                 mtu=int(service.get("listen", {}).get("mtu") or mtu),
+                ),
             )
 
     remote_tun_services = [
@@ -208,7 +257,7 @@ def network_settings_from_runtime_config(
                     prefix = (
                         (_parse_interface_address(env.get("TUN_ADDR"), version=4) or ("", None))[1]
                         or _prefix_from_subnet(env.get("TUN_SUBNET"), version=4)
-                        or DEFAULT_IOS_TUNNEL_PREFIX
+                        or DEFAULT_TUNNEL_PREFIX
                     )
                     chosen_address = str(ip)
                     chosen_prefix = int(prefix)
@@ -221,36 +270,42 @@ def network_settings_from_runtime_config(
                     prefix6 = (
                         (_parse_interface_address(env.get("TUN_ADDR6"), version=6) or ("", None))[1]
                         or _prefix_from_subnet(env.get("TUN_SUBNET6"), version=6)
-                        or DEFAULT_IOS_TUNNEL_PREFIX6
+                        or DEFAULT_TUNNEL_PREFIX6
                     )
                     chosen_address6 = str(ip6)
                     chosen_prefix6 = int(prefix6)
             if not peer_addr and not peer_addr6:
                 continue
-            return M3NetworkSettings(
+            return _override_network_settings(
+                config,
+                M3NetworkSettings(
                 tunnel_address=chosen_address,
                 tunnel_prefix=chosen_prefix,
-                included_routes=list(DEFAULT_IOS_INCLUDED_ROUTES),
-                excluded_routes=list(DEFAULT_IOS_EXCLUDED_ROUTES),
+                included_routes=list(DEFAULT_INCLUDED_ROUTES),
+                excluded_routes=list(DEFAULT_EXCLUDED_ROUTES),
                 tunnel_address6=chosen_address6,
                 tunnel_prefix6=chosen_prefix6,
-                included_routes6=list(DEFAULT_IOS_INCLUDED_ROUTES6) if chosen_address6 else [],
-                excluded_routes6=list(DEFAULT_IOS_EXCLUDED_ROUTES6) if chosen_address6 else [],
+                included_routes6=list(DEFAULT_INCLUDED_ROUTES6) if chosen_address6 else [],
+                excluded_routes6=list(DEFAULT_EXCLUDED_ROUTES6) if chosen_address6 else [],
                 dns_servers=list(dns_servers or ["1.1.1.1"]),
                 mtu=int(service.get("target", {}).get("mtu") or service.get("listen", {}).get("mtu") or mtu),
+                ),
             )
 
-    return M3NetworkSettings(
+    return _override_network_settings(
+        config,
+        M3NetworkSettings(
         tunnel_address=chosen_address,
         tunnel_prefix=chosen_prefix,
-        included_routes=list(DEFAULT_IOS_INCLUDED_ROUTES),
-        excluded_routes=list(DEFAULT_IOS_EXCLUDED_ROUTES),
+        included_routes=list(DEFAULT_INCLUDED_ROUTES),
+        excluded_routes=list(DEFAULT_EXCLUDED_ROUTES),
         tunnel_address6=chosen_address6,
         tunnel_prefix6=chosen_prefix6,
-        included_routes6=list(DEFAULT_IOS_INCLUDED_ROUTES6) if chosen_address6 else [],
-        excluded_routes6=list(DEFAULT_IOS_EXCLUDED_ROUTES6) if chosen_address6 else [],
+        included_routes6=list(DEFAULT_INCLUDED_ROUTES6) if chosen_address6 else [],
+        excluded_routes6=list(DEFAULT_EXCLUDED_ROUTES6) if chosen_address6 else [],
         dns_servers=list(dns_servers or ["1.1.1.1"]),
         mtu=int(mtu),
+        ),
     )
 
 
@@ -329,8 +384,11 @@ def m3_tunnel_config_from_profile(
     if transport not in _TRANSPORT_PEER_KEYS:
         raise ValueError(f"unsupported M3 transport: {transport}")
     host_key, port_key = _TRANSPORT_PEER_KEYS[transport]
-    peer_host = _required_string(ob_cfg.get(host_key), host_key)
+    peer_host = _required_string(_normalize_bootstrap_peer_host(ob_cfg.get(host_key)), host_key)
     peer_port = _validate_port(ob_cfg.get(port_key), port_key)
+
+    runtime_config = dict(ob_cfg)
+    runtime_config["iOS_TUN_connector"] = normalized_ios_tun_connector_config(runtime_config)
 
     settings = network or M3NetworkSettings()
     _validate_network_settings(settings)
@@ -342,7 +400,7 @@ def m3_tunnel_config_from_profile(
         peer_host=peer_host,
         peer_port=peer_port,
         server_address=f"{peer_host}:{peer_port}",
-        runtime_config=dict(ob_cfg),
+        runtime_config=runtime_config,
         network=settings,
     )
 

@@ -83,6 +83,8 @@
         <nav class="nav-tabs" aria-label="Main navigation">
           <button class="nav-tab" data-tab="home" type="button">Home</button>
           <button class="nav-tab active" data-tab="status" type="button">Status</button>
+          <button class="nav-tab" data-tab="connections" type="button">Connections</button>
+          <button class="nav-tab" data-tab="tun-routing" type="button">TUN / Routing</button>
           <button class="nav-tab" data-tab="secure-link" type="button">Secure-Link</button>
           <button class="nav-tab" data-tab="configuration" type="button">Configuration</button>
           <button class="nav-tab" data-tab="logs" type="button">Debug Logs</button>
@@ -156,11 +158,29 @@
             </div>
           </section>
 
+        </section>
+
+        <section id="tab-connections" class="tab-panel">
+          <section class="section-block card">
+            <div class="section-header">
+              <div>
+                <h2>Connections</h2>
+                <p>Service-level TCP and UDP mappings separated from peer health and TUN routing state.</p>
+              </div>
+            </div>
+            <div class="kv-list">
+              <div class="kv-row"><span>UDP Open</span><strong id="udpOpen">0</strong></div>
+              <div class="kv-row"><span>UDP Listening</span><strong id="udpListening">0</strong></div>
+              <div class="kv-row"><span>TCP Open</span><strong id="tcpOpen">0</strong></div>
+              <div class="kv-row"><span>TCP Listening</span><strong id="tcpListening">0</strong></div>
+            </div>
+          </section>
+
           <section class="section-block">
             <div class="section-header">
               <div>
                 <h2>UDP Connections</h2>
-                <p>Current UDP mappings and client transports · Open: <strong id="udpOpen">0</strong> · Listening: <strong id="udpListening">0</strong></p>
+                <p>Current UDP mappings and client transports</p>
               </div>
             </div>
             <div class="table-card card">
@@ -181,11 +201,12 @@
                       <th>TX Bytes</th>
                       <th>RX Msgs</th>
                       <th>TX Msgs</th>
+                      <th>Throttle</th>
                     </tr>
                   </thead>
                   <tbody id="udpConnectionsBody">
                     <tr class="empty-row">
-                      <td colspan="13">No UDP connections</td>
+                      <td colspan="14">No UDP connections</td>
                     </tr>
                   </tbody>
                 </table>
@@ -197,7 +218,7 @@
             <div class="section-header">
               <div>
                 <h2>TCP Connections</h2>
-                <p>Current TCP mappings and active streams · Open: <strong id="tcpOpen">0</strong> · Listening: <strong id="tcpListening">0</strong></p>
+                <p>Current TCP mappings and active streams</p>
               </div>
             </div>
             <div class="table-card card">
@@ -218,23 +239,74 @@
                       <th>TX Bytes</th>
                       <th>RX Msgs</th>
                       <th>TX Msgs</th>
+                      <th>Throttle</th>
                     </tr>
                   </thead>
                   <tbody id="tcpConnectionsBody">
                     <tr class="empty-row">
-                      <td colspan="13">No TCP connections</td>
+                      <td colspan="14">No TCP connections</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
             </div>
-          </section>        
+          </section>
+        </section>
+
+        <section id="tab-tun-routing" class="tab-panel">
+          <section class="section-block card">
+            <div class="section-header">
+              <div>
+                <h2>TUN / Routing</h2>
+                <p>Dedicated visibility for TUN interfaces, shared ownership, and routing selections</p>
+              </div>
+            </div>
+            <div class="kv-list">
+              <div class="kv-row"><span>TUN Open</span><strong id="tunRoutingOpen">0</strong></div>
+              <div class="kv-row"><span>TUN Listening</span><strong id="tunRoutingListening">0</strong></div>
+              <div class="kv-row"><span>Shared Services</span><strong id="tunRoutingSharedServices">0</strong></div>
+              <div class="kv-row"><span>Active Peer Bindings</span><strong id="tunRoutingActiveBindings">0</strong></div>
+            </div>
+          </section>
 
           <section class="section-block">
             <div class="section-header">
               <div>
-                <h2>TUN Connections</h2>
-                <p>Current TUN interfaces and active packet channels · Open: <strong id="tunOpen">0</strong> · Listening: <strong id="tunListening">0</strong></p>
+                <h2>Effective Routes</h2>
+                <p>Active include and exclude route sets after overlay peer exclusions are merged in</p>
+              </div>
+            </div>
+            <div class="table-card card">
+              <div class="table-wrap tun-route-wrap">
+                <table class="conn-table tun-route-table">
+                  <tbody>
+                    <tr>
+                      <td>Included IPv4</td>
+                      <td id="tunRoutingIncludedRoutes" class="mono tun-route-value">n/a</td>
+                    </tr>
+                    <tr>
+                      <td>Excluded IPv4</td>
+                      <td id="tunRoutingExcludedRoutes" class="mono tun-route-value">n/a</td>
+                    </tr>
+                    <tr>
+                      <td>Included IPv6</td>
+                      <td id="tunRoutingIncludedRoutes6" class="mono tun-route-value">n/a</td>
+                    </tr>
+                    <tr>
+                      <td>Excluded IPv6</td>
+                      <td id="tunRoutingExcludedRoutes6" class="mono tun-route-value">n/a</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <section class="section-block">
+            <div class="section-header">
+              <div>
+                <h2>TUN Interfaces</h2>
+                <p>Current TUN interfaces and active packet channels</p>
               </div>
             </div>
             <div class="table-card card">
@@ -251,23 +323,52 @@
                       <th>Interface</th>
                       <th>MTU</th>
                       <th>Remote Interface</th>
+                      <th>Shared</th>
                       <th>RX Bytes</th>
                       <th>TX Bytes</th>
                       <th>RX Msgs</th>
                       <th>TX Msgs</th>
+                      <th>Throttle</th>
                     </tr>
                   </thead>
-                  <tbody id="tunConnectionsBody">
+                  <tbody id="tunRoutingConnectionsBody">
                     <tr class="empty-row">
-                      <td colspan="13">No TUN connections</td>
+                      <td colspan="15">No TUN interfaces</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
             </div>
           </section>
-                  
-        
+
+          <section class="section-block">
+            <div class="section-header">
+              <div>
+                <h2>Shared Ownership</h2>
+                <p>Per-service peer ownership maps and active channel bindings</p>
+              </div>
+            </div>
+            <div class="table-card card">
+              <div class="table-wrap">
+                <table class="conn-table">
+                  <thead>
+                    <tr>
+                      <th>Svc</th>
+                      <th>Name</th>
+                      <th>Interface</th>
+                      <th>Ownership</th>
+                      <th>Active Bindings</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tunRoutingSharedBody">
+                    <tr class="empty-row">
+                      <td colspan="5">No shared TUN routing state</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
         </section>
 
         <section id="tab-secure-link" class="tab-panel">
@@ -526,13 +627,78 @@
           <p>I will guide you to generate a new invite token step by step.</p>
         </div>
         <div id="tokenGeneratorStep2" class="onboarding-step hidden">
-          <h3>Connection Profile</h3>
+          <h3>Connection Profile And Invite Name</h3>
+          <p>Choose the connection profile and enter the name that should be included in the invite token as <span class="mono">admin_web_name</span>.</p>
           <label class="service-field">
             <span>Select connection profile</span>
             <select id="onboardingConnectionSelect" class="config-editor mono"></select>
           </label>
+          <label class="service-field">
+            <span>Name To Include In Invite Token</span>
+            <input id="onboardingTokenAdminName" class="config-editor mono" type="text" autocomplete="off" placeholder="Enter the name peers should see for this instance" />
+          </label>
         </div>
         <div id="tokenGeneratorStep3" class="onboarding-step hidden">
+          <h3>TUN Routing For Invite Token</h3>
+          <p>Define the TUN routing values that should be embedded into the invite token. These values are only used for token generation and do not modify the local configuration.</p>
+          <div class="onboarding-grid manual-params-grid">
+            <label class="service-field">
+              <span>IPv4 tunnel address</span>
+              <input id="tokenTunAddress" class="config-editor mono" type="text" autocomplete="off" placeholder="192.168.106.1" />
+            </label>
+            <label class="service-field">
+              <span>IPv4 prefix</span>
+              <input id="tokenTunPrefix" class="config-editor mono" type="number" min="0" max="32" placeholder="30" />
+            </label>
+            <label class="service-field">
+              <span>IPv4 peer gateway</span>
+              <input id="tokenTunGateway" class="config-editor mono" type="text" autocomplete="off" placeholder="192.168.106.2" />
+            </label>
+            <label class="service-field">
+              <span>IPv6 tunnel address</span>
+              <input id="tokenTunAddress6" class="config-editor mono" type="text" autocomplete="off" placeholder="fd20:106::1" />
+            </label>
+            <label class="service-field">
+              <span>IPv6 prefix</span>
+              <input id="tokenTunPrefix6" class="config-editor mono" type="number" min="0" max="128" placeholder="126" />
+            </label>
+            <label class="service-field">
+              <span>IPv6 peer gateway</span>
+              <input id="tokenTunGateway6" class="config-editor mono" type="text" autocomplete="off" placeholder="fd20:106::2" />
+            </label>
+            <label class="service-field">
+              <span>MTU</span>
+              <input id="tokenTunMtu" class="config-editor mono" type="number" min="1" max="65535" placeholder="1600" />
+            </label>
+            <label class="service-field">
+              <span>DNS servers</span>
+              <input id="tokenTunDnsServers" class="config-editor mono" type="text" autocomplete="off" placeholder="1.1.1.1, 9.9.9.9" />
+            </label>
+            <label class="service-field">
+              <span>Log level</span>
+              <input id="tokenTunLogLevel" class="config-editor mono" type="text" autocomplete="off" placeholder="CRITICAL" />
+            </label>
+          </div>
+          <div class="onboarding-grid manual-params-grid">
+            <label class="service-field">
+              <span>Included IPv4 routes</span>
+              <textarea id="tokenTunIncludedRoutes" class="config-editor config-editor-textarea mono" rows="3" placeholder="0.0.0.0/0"></textarea>
+            </label>
+            <label class="service-field">
+              <span>Excluded IPv4 routes</span>
+              <textarea id="tokenTunExcludedRoutes" class="config-editor config-editor-textarea mono" rows="3" placeholder="127.0.0.0/8"></textarea>
+            </label>
+            <label class="service-field">
+              <span>Included IPv6 routes</span>
+              <textarea id="tokenTunIncludedRoutes6" class="config-editor config-editor-textarea mono" rows="3" placeholder="::/0"></textarea>
+            </label>
+            <label class="service-field">
+              <span>Excluded IPv6 routes</span>
+              <textarea id="tokenTunExcludedRoutes6" class="config-editor config-editor-textarea mono" rows="3" placeholder="::1/128"></textarea>
+            </label>
+          </div>
+        </div>
+        <div id="tokenGeneratorStep4" class="onboarding-step hidden">
           <h3>Own Service Definition</h3>
           <div class="quick-actions">
             <button id="onboardingLoadServicesBtn" class="btn btn-secondary" type="button">Load Services From Config</button>
@@ -547,14 +713,14 @@
           </div>
           <div id="onboardingOwnServicesList" class="service-catalog-items"></div>
         </div>
-        <div id="tokenGeneratorStep4" class="onboarding-step hidden">
+        <div id="tokenGeneratorStep5" class="onboarding-step hidden">
           <h3>Remote Service Definition</h3>
           <div class="quick-actions">
             <button id="onboardingAddRemoteServiceBtn" class="btn btn-secondary" type="button">Add Remote Service</button>
           </div>
           <div id="onboardingRemoteServicesList" class="service-catalog-items"></div>
         </div>
-        <div id="tokenGeneratorStep5" class="onboarding-step hidden">
+        <div id="tokenGeneratorStep6" class="onboarding-step hidden">
           <h3>Generate Invite Token</h3>
           <div id="tokenGeneratorReview" class="onboarding-preview"></div>
           <label class="service-field">

@@ -1,19 +1,20 @@
 from __future__ import annotations
 
-from . import bridge as _bridge
+import concurrent.futures
+import copy
+import threading
 
-globals().update({
-    key: value
-    for key, value in _bridge.__dict__.items()
-    if key not in {"__builtins__", "__name__", "__package__", "__file__", "__cached__", "__doc__", "__spec__", "__loader__"}
-})
+from ._bridge_import import export_bridge_globals
+from .bridge_tun_routing import TunRoutingSettings, auto_overlay_peer_excluded_routes
+
+_bridge = export_bridge_globals(globals())
 
 class AdminWebUI:
     AUTH_CHALLENGE_TTL_SEC = 90
     AUTH_SESSION_TTL_SEC = 8 * 60 * 60
     CONFIG_CHALLENGE_TTL_SEC = 90
     LIVE_WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-    LIVE_TOPICS = ("status", "connections", "peers", "meta")
+    LIVE_TOPICS = ("status", "connections", "peers", "tun_routing", "meta")
     ONBOARDING_TOKEN_PREFIX = "ob1."
 
     @staticmethod
@@ -106,6 +107,15 @@ class AdminWebUI:
         self.args = args
         self.runner = runner
         self.server = None
+        self._server_loop = None
+        self._server_thread = None
+        self._runner_loop = None
+        self._runner_thread = None
+        self._server_started = threading.Event()
+        self._server_stopped = threading.Event()
+        self._server_start_error: Optional[BaseException] = None
+        self._snapshot_cache_lock = threading.Lock()
+        self._snapshot_cache: Dict[str, dict] = {}
         self.log = logging.getLogger("admin_web")
         DebugLoggingConfigurator.debug_logger_status(self.log)
         self.started_monotonic = time.monotonic()
@@ -115,24 +125,105 @@ class AdminWebUI:
         self._secret_reveal_challenges: Dict[str, dict] = {}
         self._active_client_writers: Set[Any] = set()
 
+    @staticmethod
+    def _make_listener_socket(host: str, port: int) -> socket.socket:
+        infos = socket.getaddrinfo(
+            host,
+            port,
+            family=socket.AF_UNSPEC,
+            type=socket.SOCK_STREAM,
+            proto=socket.IPPROTO_TCP,
+            flags=socket.AI_PASSIVE,
+        )
+        if not infos:
+            raise OSError(f"getaddrinfo() returned no results for {host}:{port}")
+        last_error = None
+        for family, socktype, proto, _canonname, sockaddr in infos:
+            sock = None
+            try:
+                sock = socket.socket(family, socktype, proto)
+                sock.setblocking(False)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if hasattr(socket, "SO_NOSIGPIPE"):
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_NOSIGPIPE, 1)
+                sock.bind(sockaddr)
+                sock.listen(socket.SOMAXCONN)
+                return sock
+            except Exception as exc:
+                last_error = exc
+                if sock is not None:
+                    with contextlib.suppress(Exception):
+                        sock.close()
+        if last_error is not None:
+            raise last_error
+        raise OSError(f"Could not create admin web listener for {host}:{port}")
+
     async def start(self):
         if not getattr(self.args, "admin_web", False):
             return
-
-        self.server = await asyncio.start_server(
-            self._handle_client,
-            host=self.args.admin_web_bind,
-            port=self.args.admin_web_port,
+        if self._server_thread is not None:
+            return
+        self._runner_loop = asyncio.get_running_loop()
+        self._runner_thread = threading.current_thread()
+        self._server_started.clear()
+        self._server_stopped.clear()
+        self._server_start_error = None
+        self._server_thread = threading.Thread(
+            target=self._server_thread_main,
+            name="ObstacleBridgeAdminWeb",
+            daemon=True,
         )
-
-        self.log.info(
-            "Admin web UI listening on http://%s:%d%s",
-            self.args.admin_web_bind,
-            self.args.admin_web_port,
-            self.args.admin_web_path,
-        )
+        self._server_thread.start()
+        started = await asyncio.to_thread(self._server_started.wait, 5.0)
+        if not started:
+            raise RuntimeError("admin web thread did not report startup within 5 seconds")
+        if self._server_start_error is not None:
+            err = self._server_start_error
+            self._server_thread = None
+            raise RuntimeError(f"admin web failed to start: {err!r}") from err
 
     async def stop(self):
+        loop = self._server_loop
+        thread = self._server_thread
+        if loop is None or thread is None:
+            self.server = None
+            self._server_loop = None
+            self._server_thread = None
+            return
+        waiter: concurrent.futures.Future[None] = concurrent.futures.Future()
+
+        async def _stop_and_quit() -> None:
+            try:
+                await self._stop_server_current_loop()
+            finally:
+                asyncio.get_running_loop().stop()
+
+        def _schedule_stop() -> None:
+            task = loop.create_task(_stop_and_quit())
+
+            def _done(done_task: asyncio.Task) -> None:
+                try:
+                    done_task.result()
+                except Exception as exc:
+                    if not waiter.done():
+                        waiter.set_exception(exc)
+                else:
+                    if not waiter.done():
+                        waiter.set_result(None)
+
+            task.add_done_callback(_done)
+
+        loop.call_soon_threadsafe(_schedule_stop)
+        try:
+            await asyncio.to_thread(waiter.result, 3.0)
+        except concurrent.futures.TimeoutError:
+            self.log.warning("Admin web UI stop timed out waiting for thread-side shutdown")
+        await asyncio.to_thread(thread.join, 3.0)
+        self.server = None
+        self._server_loop = None
+        self._server_thread = None
+
+    async def _stop_server_current_loop(self):
         self.log.info("Admin web UI stopping")
         server = self.server
         self.server = None
@@ -181,6 +272,130 @@ class AdminWebUI:
                 "Admin web UI stop phase=client_close_done active_clients=0 total_duration_ms=%.1f",
                 (time.monotonic() - stop_started) * 1000.0,
             )
+
+    async def _start_server_current_loop(self) -> None:
+        listener_sock = self._make_listener_socket(
+            str(self.args.admin_web_bind),
+            int(self.args.admin_web_port),
+        )
+        self.server = await asyncio.start_server(
+            self._handle_client,
+            sock=listener_sock,
+        )
+
+        self.log.info(
+            "Admin web UI listening on http://%s:%d%s",
+            self.args.admin_web_bind,
+            self.args.admin_web_port,
+            self.args.admin_web_path,
+        )
+
+    def _server_thread_main(self) -> None:
+        loop = asyncio.new_event_loop()
+        self._server_loop = loop
+        asyncio.set_event_loop(loop)
+        try:
+            try:
+                loop.run_until_complete(self._start_server_current_loop())
+            except BaseException as exc:
+                self._server_start_error = exc
+            finally:
+                self._server_started.set()
+            if self._server_start_error is None:
+                loop.run_forever()
+        finally:
+            with contextlib.suppress(Exception):
+                if self.server is not None:
+                    loop.run_until_complete(self._stop_server_current_loop())
+            with contextlib.suppress(Exception):
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            with contextlib.suppress(Exception):
+                loop.run_until_complete(loop.shutdown_default_executor())
+            self._server_loop = None
+            self._server_stopped.set()
+            loop.close()
+
+    def _call_runner(self, func, *args, timeout: float = 0.5, **kwargs):
+        runner_loop = self._runner_loop
+        if runner_loop is None or threading.current_thread() is self._runner_thread:
+            return func(*args, **kwargs)
+        fut: concurrent.futures.Future[Any] = concurrent.futures.Future()
+
+        def _invoke() -> None:
+            try:
+                fut.set_result(func(*args, **kwargs))
+            except Exception as exc:
+                fut.set_exception(exc)
+
+        runner_loop.call_soon_threadsafe(_invoke)
+        return fut.result(timeout=timeout)
+
+    def _call_runner_soon(self, func, *args, **kwargs) -> None:
+        runner_loop = self._runner_loop
+        if runner_loop is None or threading.current_thread() is self._runner_thread:
+            func(*args, **kwargs)
+            return
+
+        def _invoke() -> None:
+            with contextlib.suppress(Exception):
+                func(*args, **kwargs)
+
+        runner_loop.call_soon_threadsafe(_invoke)
+
+    def _cache_snapshot(self, topic: str, payload: dict) -> None:
+        with self._snapshot_cache_lock:
+            self._snapshot_cache[str(topic)] = {
+                "payload": copy.deepcopy(payload),
+                "updated_monotonic": time.monotonic(),
+            }
+
+    def _cached_snapshot_payload(self, topic: str, *, error: str) -> dict:
+        with self._snapshot_cache_lock:
+            cached = copy.deepcopy(self._snapshot_cache.get(str(topic), {}))
+        payload = cached.get("payload") if isinstance(cached.get("payload"), dict) else {}
+        age_sec = None
+        updated_monotonic = cached.get("updated_monotonic")
+        if updated_monotonic is not None:
+            with contextlib.suppress(Exception):
+                age_sec = max(0.0, time.monotonic() - float(updated_monotonic))
+        if not payload:
+            payload = {"ok": False}
+        async_diag_fn = getattr(self.runner, "get_async_diagnostics_snapshot", None)
+        if callable(async_diag_fn):
+            with contextlib.suppress(Exception):
+                payload["runner_async_diagnostics"] = async_diag_fn()
+        payload["admin_web_snapshot"] = {
+            "stale": True,
+            "error": str(error or "runner unavailable"),
+            "age_sec": age_sec,
+        }
+        return payload
+
+    def _fresh_snapshot_payload(self, topic: str, payload: dict) -> dict:
+        out = copy.deepcopy(payload)
+        async_diag_fn = getattr(self.runner, "get_async_diagnostics_snapshot", None)
+        if callable(async_diag_fn):
+            with contextlib.suppress(Exception):
+                out["runner_async_diagnostics"] = async_diag_fn()
+        out["admin_web_snapshot"] = {
+            "stale": False,
+            "error": "",
+            "age_sec": 0.0,
+        }
+        self._cache_snapshot(topic, out)
+        return out
+
+    def _run_snapshot_builder(self, topic: str, builder: Callable[[], dict], *, timeout: float = 0.35) -> dict:
+        try:
+            payload = self._call_runner(builder, timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            return self._cached_snapshot_payload(topic, error="runner_loop_timeout")
+        except Exception as exc:
+            self.log.warning("Admin web snapshot topic=%s failed: %r", topic, exc)
+            return self._cached_snapshot_payload(topic, error=type(exc).__name__)
+        if not isinstance(payload, dict):
+            payload = {"ok": False, "error": "invalid snapshot payload"}
+        return self._fresh_snapshot_payload(topic, payload)
 
     async def _handle_client(self, reader, writer):
         self._active_client_writers.add(writer)
@@ -309,6 +524,10 @@ class AdminWebUI:
                 await self._handle_connections(writer)
                 return
 
+            if path == "/api/tun-routing/status":
+                await self._handle_tun_routing_status(writer)
+                return
+
             if path == "/api/onboarding/connection-profiles":
                 await self._handle_onboarding_connection_profiles(writer, method)
                 return
@@ -349,15 +568,91 @@ class AdminWebUI:
                 writer.close()
                 await writer.wait_closed()
 
-    def _build_connections_payload(self) -> dict:
+    def _build_connections_payload_now(self) -> dict:
         payload = self.runner.get_connections_snapshot()
         payload["app"] = "udp-bidirectional-mux"
         payload["milestone"] = "C"
         return payload
 
+    def _build_connections_payload(self) -> dict:
+        return self._run_snapshot_builder("connections", self._build_connections_payload_now)
+
     async def _handle_connections(self, writer):
         payload = self._build_connections_payload()
         self._log_api_response("/api/connections", 200, payload)
+        await self._send_json(writer, 200, payload)
+
+    def _build_tun_routing_payload_now(self) -> dict:
+        snapshot = self.runner.get_connections_snapshot() or {}
+        tun_rows = list(snapshot.get("tun") or [])
+        shared_rows_by_key: dict[tuple, dict] = {}
+        for row in tun_rows:
+            if not isinstance(row.get("shared_tun_ownership"), dict):
+                continue
+            row_copy = dict(row)
+            local = row_copy.get("local") or {}
+            if not isinstance(local, dict):
+                local = {}
+            key = (
+                row_copy.get("svc_owner_peer_id"),
+                row_copy.get("svc_id"),
+                local.get("ifname") or row_copy.get("local_bind"),
+                local.get("mtu") or row_copy.get("local_port"),
+            )
+            existing = shared_rows_by_key.get(key)
+            existing_state = str((existing or {}).get("state", "")).lower()
+            row_state = str(row_copy.get("state", "")).lower()
+            if existing is None or (existing_state == "listening" and row_state != "listening"):
+                shared_rows_by_key[key] = row_copy
+        shared_rows = list(shared_rows_by_key.values())
+        active_bindings_total = 0
+        shared_drop_total = 0
+        tun_routing_effective = {}
+        with contextlib.suppress(Exception):
+            tun_cfg = TunRoutingSettings.from_mapping(vars(self.args))
+            extra4, extra6 = auto_overlay_peer_excluded_routes(vars(self.args))
+            tun_routing_effective = {
+                "included_routes": list(tun_cfg.included_routes),
+                "excluded_routes": list(dict.fromkeys([*list(tun_cfg.excluded_routes), *list(extra4)])),
+                "included_routes6": list(tun_cfg.included_routes6),
+                "excluded_routes6": list(dict.fromkeys([*list(tun_cfg.excluded_routes6), *list(extra6)])),
+            }
+        for row in shared_rows:
+            ownership = dict(row.get("shared_tun_ownership") or {})
+            active_bindings = list(ownership.get("active_peer_bindings") or [])
+            active_bindings_total += len(active_bindings)
+            drop_counters = dict(ownership.get("drop_counters") or {})
+            shared_drop_total += int(drop_counters.get("total", 0) or 0)
+        payload = {
+            "tun": tun_rows,
+            "shared_tun": shared_rows,
+            "summary": {
+                "tun_total": len(tun_rows),
+                "tun_open": sum(
+                    1 for row in tun_rows
+                    if row.get("chan_id") is not None
+                    and str(row.get("state", "connected")).lower() != "listening"
+                ),
+                "tun_listening": sum(
+                    1 for row in tun_rows
+                    if str(row.get("state", "connected")).lower() == "listening"
+                ),
+                "shared_services": len(shared_rows),
+                "shared_active_peer_bindings": int(active_bindings_total),
+                "shared_drop_total": int(shared_drop_total),
+            },
+            "app": "udp-bidirectional-mux",
+            "milestone": "C",
+        }
+        payload.update(tun_routing_effective)
+        return payload
+
+    def _build_tun_routing_payload(self) -> dict:
+        return self._run_snapshot_builder("tun_routing", self._build_tun_routing_payload_now)
+
+    async def _handle_tun_routing_status(self, writer):
+        payload = self._build_tun_routing_payload()
+        self._log_api_response("/api/tun-routing/status", 200, payload)
         await self._send_json(writer, 200, payload)
 
     @staticmethod
@@ -623,10 +918,36 @@ class AdminWebUI:
         if secure_mode in {"off", "none", "psk", "cert"}:
             updates["secure_link_mode"] = "off" if secure_mode in {"off", "none"} else secure_mode
             updates["secure_link"] = secure_mode not in {"off", "none"}
+        admin_web_name = str(payload.get("admin_web_name", "") or "").strip()
+        if admin_web_name:
+            updates["admin_web_name"] = admin_web_name
+        if "compress_layer" in payload:
+            updates["compress_layer"] = bool(payload.get("compress_layer"))
+        for key in (
+            "compress_layer_algo",
+            "compress_layer_level",
+            "compress_layer_min_bytes",
+            "compress_layer_types",
+        ):
+            if key in payload:
+                updates[key] = payload.get(key)
+        tun_routing = payload.get("TUN_routing")
+        if isinstance(tun_routing, dict) and tun_routing:
+            updates["TUN_routing"] = tun_routing
         psk_value = payload.get("secure_link_psk")
         if isinstance(psk_value, str) and psk_value.strip():
-            with contextlib.suppress(Exception):
-                updates["secure_link_psk"] = str(_decrypt_config_secret(psk_value) or "")
+            plain_psk = ""
+            try:
+                plain_psk = str(_decrypt_config_secret(psk_value) or "")
+            except Exception:
+                if psk_value.startswith(CONFIG_SECRET_PREFIX):
+                    raise ValueError(
+                        "invite token carries a legacy encrypted secure_link_psk that cannot be decrypted on this device; generate a fresh invite token"
+                    )
+            if not plain_psk:
+                plain_psk = psk_value
+            if plain_psk:
+                updates["secure_link_psk"] = plain_psk
         own = AdminWebUI._sanitize_onboarding_services(payload.get("own_servers"))
         remote = AdminWebUI._sanitize_onboarding_services(payload.get("remote_servers"))
         if own:
@@ -676,14 +997,23 @@ class AdminWebUI:
         secure_mode = str(getattr(self.args, "secure_link_mode", "off") or "off").strip().lower()
         own_services = self._sanitize_onboarding_services(req.get("own_servers", getattr(self.args, "own_servers", [])))
         remote_services = self._sanitize_onboarding_services(req.get("remote_servers", getattr(self.args, "remote_servers", [])))
+        selected_admin_web_name = str(req.get("admin_web_name", getattr(self.args, "admin_web_name", "")) or "").strip()
+        selected_tun_routing = dict(req.get("TUN_routing", getattr(self.args, "TUN_routing", {})) or {})
         payload_doc = {
             "version": 1,
             "generated_unix_ts": int(time.time()),
-            "generated_by": str(getattr(self.args, "admin_web_name", "") or ""),
+            "generated_by": selected_admin_web_name,
+            "admin_web_name": selected_admin_web_name,
             "connection": selected or {},
             "secure_link_mode": secure_mode if secure_mode in {"off", "none", "psk", "cert"} else "off",
-            "secure_link_psk": _encrypt_config_secret(str(getattr(self.args, "secure_link_psk", "") or "")),
+            "secure_link_psk": str(getattr(self.args, "secure_link_psk", "") or ""),
             "secure_link_required": bool(getattr(self.args, "secure_link_require", False)),
+            "compress_layer": bool(getattr(self.args, "compress_layer", True)),
+            "compress_layer_algo": str(getattr(self.args, "compress_layer_algo", "zlib") or "zlib"),
+            "compress_layer_level": int(getattr(self.args, "compress_layer_level", 3) or 3),
+            "compress_layer_min_bytes": int(getattr(self.args, "compress_layer_min_bytes", 64) or 64),
+            "compress_layer_types": str(getattr(self.args, "compress_layer_types", "data,data_frag") or "data,data_frag"),
+            "TUN_routing": selected_tun_routing,
             "admin_auth_recommended": True,
             "own_servers": own_services,
             "remote_servers": remote_services,
@@ -711,7 +1041,11 @@ class AdminWebUI:
         except Exception as exc:
             await self._send_json(writer, 400, {"ok": False, "error": str(exc)})
             return
-        updates = self._onboarding_updates_from_invite(payload_doc)
+        try:
+            updates = self._onboarding_updates_from_invite(payload_doc)
+        except Exception as exc:
+            await self._send_json(writer, 400, {"ok": False, "error": str(exc)})
+            return
         preview_doc = dict(payload_doc)
         if isinstance(preview_doc.get("secure_link_psk"), str) and preview_doc.get("secure_link_psk"):
             preview_doc["secure_link_psk"] = "***hidden***"
@@ -729,7 +1063,7 @@ class AdminWebUI:
         self._log_api_response("/api/onboarding/blueprints", 200, payload, summary=f"count={len(blueprints)}")
         await self._send_json(writer, 200, payload)
 
-    def _build_meta_payload(self) -> dict:
+    def _build_meta_payload_now(self) -> dict:
         platform = _admin_ui_platform()
         return {
             "app": "udp-bidirectional-mux",
@@ -743,6 +1077,9 @@ class AdminWebUI:
             "runtime_dependencies": _runtime_dependency_status_for_platform(platform),
         }
 
+    def _build_meta_payload(self) -> dict:
+        return self._run_snapshot_builder("meta", self._build_meta_payload_now)
+
     async def _handle_meta(self, writer):
         payload = self._build_meta_payload()
         self._log_api_response("/api/meta", 200, payload)
@@ -750,11 +1087,18 @@ class AdminWebUI:
 
     async def _handle_config(self, writer, method: str, body: bytes):
         if method == "GET":
-            payload = {
-                "ok": True,
-                "config": self.runner.get_config_snapshot(),
-                "schema": self.runner.get_config_schema_snapshot(),
-            }
+            try:
+                payload = self._call_runner(
+                    lambda: {
+                        "ok": True,
+                        "config": self.runner.get_config_snapshot(),
+                        "schema": self.runner.get_config_schema_snapshot(),
+                    },
+                    timeout=0.5,
+                )
+            except concurrent.futures.TimeoutError:
+                await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
+                return
             self._log_api_response("/api/config", 200, payload, summary="config snapshot")
             await self._send_json(writer, 200, payload)
             return
@@ -797,7 +1141,11 @@ class AdminWebUI:
             if proof != expected:
                 await self._send_json(writer, 403, {"ok": False, "error": "configuration change confirmation failed"})
                 return
-        ok, err = self.runner.update_config(updates)
+        try:
+            ok, err = self._call_runner(self.runner.update_config, updates, timeout=1.0)
+        except concurrent.futures.TimeoutError:
+            await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
+            return
         if not ok:
             logging.getLogger("obstacle_bridge.admin_web").error(
                 "configuration update failed error=%s updates_keys=%s crypto_extract=%r build=%r",
@@ -811,9 +1159,13 @@ class AdminWebUI:
         if any(key in AdminWebUI._secret_config_keys() or key in {"admin_web_auth_disable", "admin_web_username"} for key in updates.keys()):
             self.reset_auth_state()
         delay_restart = bool(self.runner._restart_requires_delay()) if restart_after_save else False
+        try:
+            config_snapshot = self._call_runner(self.runner.get_config_snapshot, timeout=0.5)
+        except concurrent.futures.TimeoutError:
+            config_snapshot = {"_stale": True}
         payload = {
             "ok": True,
-            "config": self.runner.get_config_snapshot(),
+            "config": config_snapshot,
             "restart_requested": bool(restart_after_save),
             "restart_mode": "delayed" if delay_restart else ("immediate" if restart_after_save else ""),
             "restart_delay_sec": 40 if delay_restart else 0,
@@ -826,7 +1178,7 @@ class AdminWebUI:
         )
         await self._send_json(writer, 200, payload)
         if restart_after_save:
-            self.runner.request_restart()
+            self._call_runner_soon(self.runner.request_restart, reason="admin_web:/api/config restart_after_save")
 
     async def _handle_logs(self, writer, raw_path: str):
         limit = 400
@@ -840,7 +1192,11 @@ class AdminWebUI:
                     if k == "limit":
                         limit = int(v)
                         break
-        lines = self.runner.get_debug_logs(limit=limit)
+        try:
+            lines = self._call_runner(self.runner.get_debug_logs, limit=limit, timeout=0.5)
+        except concurrent.futures.TimeoutError:
+            await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
+            return
         payload = {"ok": True, "lines": lines, "count": len(lines)}
         self._log_api_response("/api/logs", 200, payload, summary=f"count={len(lines)}")
         await self._send_json(writer, 200, payload)
@@ -858,7 +1214,11 @@ class AdminWebUI:
         if not target_peer_id:
             await self._send_json(writer, 400, {"ok": False, "error": "peer_id is required"})
             return
-        payload = self.runner.request_secure_link_rekey(target_peer_id=target_peer_id)
+        try:
+            payload = self._call_runner(self.runner.request_secure_link_rekey, target_peer_id=target_peer_id, timeout=1.0)
+        except concurrent.futures.TimeoutError:
+            await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
+            return
         code = 200 if bool(payload.get("ok")) else 409
         self._log_api_response(
             "/api/secure-link/rekey",
@@ -882,7 +1242,16 @@ class AdminWebUI:
             await self._send_json(writer, 400, {"ok": False, "error": "scope must be one of revocation, local_identity, all"})
             return
         target_peer_id = str(req.get("peer_id", "") or "").strip()
-        payload = self.runner.request_secure_link_reload(scope=scope, target_peer_id=target_peer_id or None)
+        try:
+            payload = self._call_runner(
+                self.runner.request_secure_link_reload,
+                scope=scope,
+                target_peer_id=target_peer_id or None,
+                timeout=1.0,
+            )
+        except concurrent.futures.TimeoutError:
+            await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
+            return
         code = 200 if bool(payload.get("ok")) else 409
         self._log_api_response(
             "/api/secure-link/reload",
@@ -892,10 +1261,13 @@ class AdminWebUI:
         )
         await self._send_json(writer, code, payload)
 
-    def _build_peers_payload(self) -> dict:
+    def _build_peers_payload_now(self) -> dict:
         payload = self.runner.get_peer_connections_snapshot()
         payload["ok"] = True
         return payload
+
+    def _build_peers_payload(self) -> dict:
+        return self._run_snapshot_builder("peers", self._build_peers_payload_now)
 
     async def _handle_peers(self, writer):
         payload = self._build_peers_payload()
@@ -946,7 +1318,7 @@ class AdminWebUI:
                 if inspect.isawaitable(result):
                     asyncio.create_task(result)
             return
-        self.runner.request_restart()
+        self._call_runner_soon(self.runner.request_restart, reason="admin_web:/api/restart")
 
     async def _handle_reconnect(self, writer, method, headers, body: bytes):
         if method != "POST":
@@ -969,7 +1341,11 @@ class AdminWebUI:
                 await self._send_json(writer, 400, {"ok": False, "error": "invalid JSON body"})
                 return
         target_peer_id = str(req.get("peer_id", "") or "").strip() or None
-        payload = self.runner.request_overlay_reconnect(target_peer_id=target_peer_id)
+        try:
+            payload = self._call_runner(self.runner.request_overlay_reconnect, target_peer_id=target_peer_id, timeout=1.0)
+        except concurrent.futures.TimeoutError:
+            await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
+            return
         code = 200 if bool(payload.get("ok")) else (404 if payload.get("reason") == "unknown_peer_id" else 409)
         self._log_api_response(
             "/api/reconnect",
@@ -1000,8 +1376,8 @@ class AdminWebUI:
         self._log_api_response("/api/shutdown", 200, payload)
         await self._send_json(writer, 200, payload)
 
-        # let response flush before stopping (non-restart exit code)
-        asyncio.get_running_loop().call_soon(self.runner.request_shutdown, 76)
+        # Let the response flush on the admin-web loop before signaling the runner loop.
+        self._call_runner_soon(self.runner.request_shutdown, 76, "admin_web:/api/shutdown")
 
     @staticmethod
     def _secret_config_keys() -> Set[str]:
@@ -1520,7 +1896,7 @@ class AdminWebUI:
             ctype or "application/octet-stream",
         )
 
-    def _build_status_payload(self) -> dict:
+    def _build_status_payload_now(self) -> dict:
         payload = self.runner.get_status_snapshot()
         for aggregate_key in ("open_connections", "traffic", "compress_layer"):
             payload.pop(aggregate_key, None)
@@ -1532,6 +1908,9 @@ class AdminWebUI:
         payload["security_advisor"] = self._build_security_advisor_payload()
         payload["build"] = _detect_build_info()
         return payload
+
+    def _build_status_payload(self) -> dict:
+        return self._run_snapshot_builder("status", self._build_status_payload_now)
 
     async def _handle_status(self, writer):
         payload = self._build_status_payload()
@@ -1550,6 +1929,8 @@ class AdminWebUI:
             return self._build_status_payload()
         if t == "connections":
             return self._build_connections_payload()
+        if t == "tun_routing":
+            return self._build_tun_routing_payload()
         if t == "peers":
             return self._build_peers_payload()
         if t == "meta":
@@ -1622,6 +2003,8 @@ class AdminWebUI:
                     next_topics: Set[str] = {"status"}
                     if "status" in active_tabs:
                         next_topics.update({"connections", "peers"})
+                    if "tun-routing" in active_tabs:
+                        next_topics.add("tun_routing")
                     if "misc" in active_tabs:
                         next_topics.add("meta")
                     topics = next_topics

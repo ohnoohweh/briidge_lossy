@@ -21,8 +21,8 @@ from obstacle_bridge.core import ObstacleBridgeClient
 
 ROOT = Path(__file__).resolve().parents[2]
 IOS_DIR = ROOT / "ios"
-IOS_E2E_APP_NAME = "obstacle_bridge_ios_e2e"
-IOS_E2E_BUNDLE_ID = "com.obstaclebridge.obstacle-bridge-ios-e2e"
+IOS_APP_NAME = "obstacle_bridge_ios"
+IOS_APP_BUNDLE_ID = "com.obstaclebridge.obstacle-bridge-ios"
 IOS_WS_UDP_REQUEST = b"\x01ios-simulator-ws-udp"
 IOS_WS_UDP_RESPONSE = b"\x02ios-simulator-ws-udp"
 IOS_SECURE_LINK_PSK = "ios-simulator-secure-link-psk"
@@ -251,7 +251,7 @@ def _extract_json_object(output: str, *, probe: str) -> dict[str, Any]:
             continue
         if (
             isinstance(value, dict)
-            and value.get("app") == IOS_E2E_APP_NAME
+            and value.get("app") == "obstacle_bridge_ios_e2e"
             and value.get("probe") == probe
         ):
             return value
@@ -260,7 +260,7 @@ def _extract_json_object(output: str, *, probe: str) -> dict[str, Any]:
 
 def _read_e2e_app_probe_report(*, probe: str) -> dict[str, Any]:
     completed = subprocess.run(
-        ["xcrun", "simctl", "get_app_container", "booted", IOS_E2E_BUNDLE_ID, "data"],
+        ["xcrun", "simctl", "get_app_container", "booted", IOS_APP_BUNDLE_ID, "data"],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -310,7 +310,7 @@ def _briefcase_command(app_args: list[str]) -> list[str]:
         "run",
         "iOS",
         "-a",
-        IOS_E2E_APP_NAME,
+        IOS_APP_NAME,
         "-u",
         "-r",
         "--no-input",
@@ -408,7 +408,7 @@ def test_ios_simulator_app_connects_to_macos_host_websocket_echo() -> None:
         raise AssertionError(completed.stdout)
     assert report["ok"] is True
     assert report["url"] == probe_url
-    assert report["app"] == IOS_E2E_APP_NAME
+    assert report["app"] == "obstacle_bridge_ios_e2e"
     assert report["received"]["message"] == "obstaclebridge-ios-e2e-probe"
     assert host.messages == [report["sent"]]
 

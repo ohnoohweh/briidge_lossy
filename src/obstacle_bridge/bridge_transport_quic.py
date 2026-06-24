@@ -10,13 +10,16 @@ import struct
 import time
 from typing import Any, Callable, Dict, Optional, Tuple
 
-from . import bridge as _bridge
+from ._bridge_import import resolve_bridge_module
 from .bridge_transport_common import (
+    EgressThroughputTracker,
     StreamRTT,
     StreamRTTRuntime,
     _resolve_cli_peer,
     _strip_brackets,
 )
+
+_bridge = resolve_bridge_module()
 
 ISession = _bridge.ISession
 SessionMetrics = _bridge.SessionMetrics
@@ -86,6 +89,14 @@ class QuicSession(ISession):
             p.add_argument('--quic-peer', default=None, help='QUIC peer IP/FQDN')
         if not _has('--quic-peer-port'):
             p.add_argument('--quic-peer-port', type=int, default=443, help='QUIC peer overlay port')
+        if not _has('--quic-peer-resolve-family'):
+            p.add_argument(
+                '--quic-peer-resolve-family',
+                dest='quic_peer_resolve_family',
+                choices=['prefer-ipv6', 'ipv4', 'ipv6'],
+                default='prefer-ipv6',
+                help='QUIC peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.'
+            )
 
         if not _has('--quic-alpn'):
             p.add_argument('--quic-alpn', default='hq-29',
@@ -138,6 +149,7 @@ class QuicSession(ISession):
             args,
             peer_attr="quic_peer",
             peer_port_attr="quic_peer_port",
+            resolve_attr="quic_peer_resolve_family",
             bind_host=self._listen_host,
             socktype=socket.SOCK_DGRAM,
         )
@@ -198,6 +210,7 @@ class QuicSession(ISession):
         self._overlay_connected: bool = False
         self._probe_id = f"{id(self)&0xFFFF:04x}"
         self._app_payload_passthrough: bool = False
+        self._egress_tracker = EgressThroughputTracker()
 
         # TLS/ALPN
         self._alpn = getattr(args, "quic_alpn", "hq-29") or "hq-29"
@@ -296,10 +309,17 @@ class QuicSession(ISession):
     def get_metrics(self) -> SessionMetrics:
         try:
             r = self._rtt
+            rtt_est_ms = getattr(r, "rtt_est_ms", None)
+            tracker = getattr(self, "_egress_tracker", None)
+            prev_bytes, curr_bytes = tracker.snapshot() if tracker is not None else (0, 0)
             return SessionMetrics(
                 rtt_sample_ms=getattr(r, "rtt_sample_ms", None),
-                rtt_est_ms=getattr(r, "rtt_est_ms", None),
+                rtt_est_ms=rtt_est_ms,
+                transmit_delay_est_ms=(0.5 * float(rtt_est_ms)) if rtt_est_ms is not None else None,
                 last_rtt_ok_ns=getattr(r, "last_rtt_ok_ns", None),
+                waiting_count=(1 if len(getattr(self, "_early_buf", [])) > 0 else 0),
+                egress_prev_window_bytes=prev_bytes,
+                egress_curr_window_bytes=curr_bytes,
             )
         except Exception:
             return SessionMetrics()
@@ -317,6 +337,19 @@ class QuicSession(ISession):
             if not host_s:
                 return None
             return f"[{host_s}]:{port_i}" if ":" in host_s and not host_s.startswith("[") else f"{host_s}:{port_i}"
+        except Exception:
+            return None
+
+    @staticmethod
+    def _format_peer_endpoint(host: Optional[object], port: Optional[object]) -> Optional[dict]:
+        try:
+            if host is None or port is None:
+                return None
+            host_s = str(host)
+            port_i = int(port)
+            if not host_s:
+                return None
+            return {"host": host_s, "port": port_i}
         except Exception:
             return None
 
@@ -346,7 +379,7 @@ class QuicSession(ISession):
                 "peer_id": 0,
                 "connected": bool(self.is_connected()),
                 "state": "connected" if self.is_connected() else "connecting",
-                "peer": self._format_peer_label(self._peer_host, self._peer_port),
+                "peer": self._format_peer_endpoint(self._peer_host, self._peer_port),
                 "mux_chans": [],
                 "rtt_est_ms": getattr(self._rtt, "rtt_est_ms", None),
                 "last_incoming_age_seconds": _monotonic_age_seconds_from_ns(
@@ -383,7 +416,7 @@ class QuicSession(ISession):
                 host, port = self._extract_quic_peer_addr(proto)
                 if host is not None and port is not None:
                     ctx["peer_host"], ctx["peer_port"] = host, port
-            peer_label = self._format_peer_label(host, port)
+            peer_endpoint = self._format_peer_endpoint(host, port)
             rtt = ctx.get("rtt") if isinstance(ctx, dict) else None
             last_incoming_age_seconds = None
             if isinstance(ctx, dict):
@@ -398,7 +431,7 @@ class QuicSession(ISession):
                 "peer_id": peer_id,
                 "connected": bool(peer_id in self._server_peers),
                 "state": "connected" if peer_id in self._server_peers else "connecting",
-                "peer": peer_label,
+                "peer": peer_endpoint,
                 "mux_chans": sorted(mux_by_peer.get(peer_id, [])),
                 "rtt_est_ms": getattr(rtt, "rtt_est_ms", None),
                 "last_incoming_age_seconds": last_incoming_age_seconds,
@@ -519,6 +552,7 @@ class QuicSession(ISession):
                 wire = self._LEN.pack(len(payload) + 1) + bytes([self._K_APP]) + payload
                 if not self._send_wire_ctx(ctx, wire):
                     return 0
+                self._egress_tracker.record(len(payload))
                 return len(payload)
             target = self._resolve_server_send_target(payload, peer_id=peer_id)
             if target is None:
@@ -531,6 +565,7 @@ class QuicSession(ISession):
             wire = self._LEN.pack(len(routed_payload) + 1) + bytes([self._K_APP]) + routed_payload
             if not self._send_wire_ctx(ctx, wire):
                 return 0
+            self._egress_tracker.record(len(routed_payload))
             return len(payload)
         body = bytes([self._K_APP]) + payload
         wire = self._LEN.pack(len(body)) + body
@@ -548,6 +583,7 @@ class QuicSession(ISession):
             if self._on_peer_tx:
                 try: self._on_peer_tx(len(wire))
                 except Exception: pass
+            self._egress_tracker.record(len(payload))
             return len(payload)
         except Exception as e:
             self._log.info(f"[QUIC/TX] ({self._probe_id}) write error: {e!r}")
@@ -724,10 +760,6 @@ class QuicSession(ISession):
             )
         finally:
             self._connecting_task = None
-            
-        """
-    Client role: establish QUIC connection to (host, port).
-       """
  
     # ---- accept / on-connection ----
     def _on_accept(self, proto: Any) -> None:

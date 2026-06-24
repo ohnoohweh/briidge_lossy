@@ -1,20 +1,24 @@
 from __future__ import annotations
 
+import errno
 import struct
+import ipaddress
 
-from . import bridge as _bridge
+from ._bridge_import import export_bridge_globals
 from .bridge_transport_common import (
+    EgressThroughputTracker,
+    _bind_family_constraint,
+    _family_preference_rank,
     _listener_family_for_host,
+    _peer_resolve_mode,
+    _resolve_peer_candidates,
     _resolve_cli_peer,
+    _split_configured_peer_hosts,
     _strip_brackets,
     _wildcard_host_for_family,
 )
 
-globals().update({
-    key: value
-    for key, value in _bridge.__dict__.items()
-    if key not in {"__builtins__", "__name__", "__package__", "__file__", "__cached__", "__doc__", "__spec__", "__loader__"}
-})
+_bridge = export_bridge_globals(globals())
 
 _MUX_HDR = struct.Struct(">HHBBH")
 
@@ -99,7 +103,9 @@ CONTROL_FIXED_BASE = 2 + 2 + 2 # last(2) + highest(2) + num_missed(2)
 # -------------------- Timers / RTT / Keepalive --------------------
 RETRANSMIT_UNCONFIRMED_MS = 25
 RTT_EWMA_ALPHA = 0.125
+TRANSMIT_DELAY_EWMA_ALPHA = RTT_EWMA_ALPHA
 RETRANS_MULTIPLIER = 1.5
+PERSISTENT_MISSING_RETRANS_MULTIPLIER = 1.0
 IDLE_AFTER_MS = 2000
 IDLE_CHECK_MS = 200
 class Protocol:
@@ -128,6 +134,7 @@ class Protocol:
         self.rtt_sample_ms: float = 0.0
         self.last_rtt_ok_ns: int = 0
         self.last_send_ns: int = 0
+        self._last_built_tx_ns: int = 0
         self._last_rx_tx_ns: int = 0
         self._last_rx_wall_ns: int = 0
         self.idle_after_ns: int = int(IDLE_AFTER_MS * 1e6)
@@ -161,6 +168,7 @@ class Protocol:
             payload
         )
         frame = self.frame.build_envelope(inner)
+        self._last_built_tx_ns = tx_ns
         self.on_data_sent(tx_ns)
         return frame
     def parse_frame_with_times(
@@ -550,11 +558,13 @@ class SendPort:
         log: logging.Logger,
         initial_peer: Optional[Tuple[str, int]] = None,
         on_bytes_sent: Optional[Callable[[int], None]] = None,
+        allow_ipv4_mapped_send: bool = False,
     ):
         self.udp_transport = udp_transport
         self.log = log
         self.peer_addr: Optional[Tuple[str, int]] = initial_peer
         self._on_bytes_sent = on_bytes_sent
+        self._allow_ipv4_mapped_send = bool(allow_ipv4_mapped_send)
 
     @staticmethod
     def _pretty(addr) -> str:
@@ -582,21 +592,32 @@ class SendPort:
 
         src = self.udp_transport.get_extra_info("sockname") if self.udp_transport else None
         dst = self.peer_addr
+        send_dst = dst
+        if isinstance(dst, tuple) and len(dst) >= 2:
+            try:
+                sock = self.udp_transport.get_extra_info("socket") if self.udp_transport else None
+                family = sock.family if sock is not None else None
+                host, port = str(dst[0]), int(dst[1])
+                if self._allow_ipv4_mapped_send and family == socket.AF_INET6 and ":" not in host:
+                    ipaddress.IPv4Address(host)
+                    send_dst = (f"::ffff:{host}", port, 0, 0)
+            except Exception:
+                send_dst = dst
 
         if self.log.isEnabledFor(logging.DEBUG):
             self.log.debug(
                 "[SENDPORT] send peer_addr=%r len=%d",
-                dst,
+                send_dst,
                 len(data),
             )
 
-        if dst is None:
+        if send_dst is None:
             if self.log.isEnabledFor(logging.DEBUG):
                 self.log.debug("[PEER/TX] drop %dB: no learned peer yet", len(data))
             return
 
         try:
-            self.udp_transport.sendto(data, dst)
+            self.udp_transport.sendto(data, send_dst)
             if self._on_bytes_sent:
                 self._on_bytes_sent(len(data))
             if self.log.isEnabledFor(logging.DEBUG):
@@ -604,34 +625,42 @@ class SendPort:
                     "[PEER/TX] %dB -> %s -> %s",
                     len(data),
                     SendPort._pretty(src),
-                    SendPort._pretty(dst),
+                    SendPort._pretty(send_dst),
                 )
         except Exception as e:
             self.log.error("[PEER/TX] send failed: %r", e)
             raise            
 # -------------------- Session --------------------
 OutgoingSegment = Tuple[int, int, bytes]
+QueuedSegment = Tuple[OutgoingSegment, int]
 class Session:
     def __init__(self, max_in_flight: int = 32767, proto: Optional[Protocol] = None):
         self.proto = proto or PROTO
         self.next_ctr = 1
         self.send_buf: Dict[int, bytes] = {}
         self.send_meta: Dict[int, OutgoingSegment] = {}
+        # Start of the local send path, including queue wait before first emission.
+        self.send_path_start_ns: Dict[int, int] = {}
+        # First on-wire tx_time_ns stamped into the protocol header on initial emission.
         self.send_txns: Dict[int, int] = {}
         self.last_retx_ns: Dict[int, int] = {}
         self.send_attempts: Dict[int, int] = {}
         self.data_pkt_flags: Dict[int, bool] = {}
+        self.peer_reported_missing: Set[int] = set()
         self.stats_hist = {
             "once": 0, "twice": 0, "thrice": 0, "gt3": 0,
             "confirmed_total": 0, "created_total": 0,
         }
         self.max_in_flight = max(1, min(32767, int(max_in_flight)))
-        self.wait_queue: Deque[OutgoingSegment] = deque()
+        self.wait_queue: Deque[QueuedSegment] = deque()
         self.expected = 1
         self.pending: Dict[int, DataPacket] = {}
         self.missing: Set[int] = set()
+        self._pending_highest: Optional[int] = None
         self.reass: Optional[Reassembly] = None
         # RTT mirrors read from Protocol (source of truth)
+        self.transmit_delay_sample_ms: float = 0.0
+        self.transmit_delay_est_ms: float = 0.0
         self.last_sent_ctr = 0
         self.last_ack_peer = 0
         self.peer_missed_count = 0
@@ -697,19 +726,25 @@ class Session:
         if ctr == 0:
             return
         self.send_attempts[ctr] = self.send_attempts.get(ctr, 0) + 1
-    def _emit_now(self, seg: OutgoingSegment, transport: Any) -> None:
+    def _rebuild_data_frame(self, ctr: int, meta: OutgoingSegment) -> bytes:
+        frame_type, off_or_len, chunk = meta
+        payload = DataPacket.build_payload(ctr, frame_type, off_or_len, chunk)
+        return self.proto.build_frame(PTYPE_DATA, payload)
+
+    def _emit_now(self, seg: OutgoingSegment, transport: Any, queued_at_ns: Optional[int] = None) -> None:
         frame_type, off_or_len, chunk = seg
+        path_start_ns = int(queued_at_ns or 0)
         ctr = self.reserve_ctr()
-        tx = now_ns()
         self._record_created_if_appdata(ctr, chunk)
         try:
-            payload = DataPacket.build_payload(ctr, frame_type, off_or_len, chunk, tx)
-            frame = self.proto.build_frame(PTYPE_DATA, payload)
+            frame = self._rebuild_data_frame(ctr, seg)
+            tx = int(getattr(self.proto, "_last_built_tx_ns", 0) or 0) or now_ns()
             transport.sendto(frame)
         except Exception:
-            self.wait_queue.appendleft(seg)
+            self.wait_queue.appendleft((seg, path_start_ns or now_ns()))
             return
         self.send_meta[ctr] = (frame_type, off_or_len, chunk)
+        self.send_path_start_ns[ctr] = min(path_start_ns, tx) if path_start_ns > 0 else tx
         self.send_buf[ctr] = frame
         self.send_txns[ctr] = tx
         self.last_sent_ctr = ctr
@@ -721,9 +756,9 @@ class Session:
     def try_flush_send_queue(self, transport: Any) -> int:
         emitted = 0
         while self.in_flight() < self.max_in_flight and self.wait_queue:
-            seg = self.wait_queue.popleft()
+            seg, queued_at_ns = self.wait_queue.popleft()
             self._last_emit_trigger = "flush_queue"
-            self._emit_now(seg, transport)
+            self._emit_now(seg, transport, queued_at_ns=queued_at_ns)
             emitted += 1
         self._last_emit_trigger = "app_send"
         return emitted
@@ -732,7 +767,8 @@ class Session:
             self._last_emit_trigger = "app_send"
             self._emit_now(seg, transport)
         else:
-            self.wait_queue.append(seg)
+            queued_at_ns = now_ns()
+            self.wait_queue.append((seg, queued_at_ns))
             if self.log.isEnabledFor(logging.DEBUG):
                 self.log.debug(f"[TX] QUEUE type={seg[0]} off/len={seg[1]} chunk_len={len(seg[2])} inflight={len(self.send_buf)} queued={len(self.wait_queue)}")
     def _finalize_stats_for(self, cnt: int) -> None:
@@ -751,27 +787,60 @@ class Session:
             self.stats_hist["gt3"] += 1
         if self.log.isEnabledFor(logging.DEBUG):
             self.log.debug(f"[ACK] confirmed ctr={cnt} attempts={attempts}")
+
+    def _record_transmit_delay_sample_for(self, cnt: int, ack_now_ns: int) -> None:
+        path_start_ns = int(self.send_path_start_ns.get(cnt, 0) or 0)
+        if path_start_ns <= 0:
+            path_start_ns = int(self.send_txns.get(cnt, 0) or 0)
+        if path_start_ns <= 0 or ack_now_ns <= path_start_ns:
+            return
+        elapsed_ms = (ack_now_ns - path_start_ns) / 1e6
+        rtt_est_ms = float(getattr(self.proto, "rtt_est_ms", 0.0) or 0.0)
+        sample_ms = max(0.0, elapsed_ms - (0.5 * rtt_est_ms if rtt_est_ms > 0.0 else 0.0))
+        self.transmit_delay_sample_ms = sample_ms
+        if self.transmit_delay_est_ms <= 0.0:
+            self.transmit_delay_est_ms = sample_ms
+        elif self.transmit_delay_est_ms < sample_ms:
+            self.transmit_delay_est_ms = sample_ms
+        else:
+            self.transmit_delay_est_ms = (
+                (1 - TRANSMIT_DELAY_EWMA_ALPHA) * self.transmit_delay_est_ms
+                + TRANSMIT_DELAY_EWMA_ALPHA * sample_ms
+            )
+        if self.log.isEnabledFor(logging.DEBUG):
+            self.log.debug(
+                "[TXDLY] ctr=%d sample_ms=%.3f est_ms=%.3f elapsed_ms=%.3f rtt_est_ms=%.3f",
+                cnt,
+                self.transmit_delay_sample_ms,
+                self.transmit_delay_est_ms,
+                elapsed_ms,
+                rtt_est_ms,
+            )
     # ------------- ACK/feedback (no timers/retrans scheduling here) -------------
     def confirm_with_feedback(self, last_in_order: int, highest: int, missed: List[int]) -> None:
         if last_in_order == 0 and highest == 0 and len(missed) == 0:
             return
+        ack_now_ns = now_ns()
         missed_set = set(missed)
-        full_list = len(missed) >= CONTROL_MAX_MISSED
+        list_at_capacity = len(missed) >= CONTROL_MAX_MISSED
         if self.log.isEnabledFor(logging.DEBUG):
-            self.log.debug(f"[CTL<-] LIO={last_in_order} HI={highest} missed_count={len(missed)} full_list={full_list}")
+            self.log.debug(f"[CTL<-] LIO={last_in_order} HI={highest} missed_count={len(missed)} full_list={list_at_capacity}")
         # delete <= last_in_order
         to_del = [cnt for cnt in list(self.send_buf.keys())
                   if ring_cmp(last_in_order, cnt) >= 0]
         for cnt in to_del:
+            self._record_transmit_delay_sample_for(cnt, ack_now_ns)
             self._finalize_stats_for(cnt)
             self.send_buf.pop(cnt, None)
+            self.send_path_start_ns.pop(cnt, None)
             self.send_txns.pop(cnt, None)
             self.last_retx_ns.pop(cnt, None)
             self.send_meta.pop(cnt, None)
+            self.peer_reported_missing.discard(cnt)
         if self.log.isEnabledFor(logging.DEBUG) and to_del:
             self.log.debug(f"[ACK] drop <= LIO: {to_del[:20]}{'…' if len(to_del)>20 else ''}")
         ref = last_in_order if last_in_order != 0 else 1
-        if full_list and missed:
+        if list_at_capacity and missed:
             max_missed = highest_ring(missed, ref)
             upper_bound = max_missed if max_missed is not None else last_in_order
         else:
@@ -781,16 +850,25 @@ class Session:
             d = ahead_distance(x, ref)
             return 0 < d <= max_span
         to_del2 = [cnt for cnt in list(self.send_buf.keys())
-                   if in_range(cnt) and cnt not in missed_set]
+                   if in_range(cnt) and cnt not in missed_set and cnt not in self.peer_reported_missing]
         for cnt in to_del2:
+            self._record_transmit_delay_sample_for(cnt, ack_now_ns)
             self._finalize_stats_for(cnt)
             self.send_buf.pop(cnt, None)
+            self.send_path_start_ns.pop(cnt, None)
             self.send_txns.pop(cnt, None)
             self.last_retx_ns.pop(cnt, None)
             self.send_meta.pop(cnt, None)
+            self.peer_reported_missing.discard(cnt)
         if self.log.isEnabledFor(logging.DEBUG) and to_del2:
             self.log.debug(f"[ACK] drop within span(non-missed): {to_del2[:20]}{'…' if len(to_del2)>20 else ''}")
+        self.peer_reported_missing.intersection_update(self.send_buf.keys())
+        self.peer_reported_missing.update(cnt for cnt in missed_set if cnt in self.send_buf and cnt != 0)
         self.last_ack_peer = last_in_order
+        if not self.send_buf:
+            rtt_est_ms = float(getattr(self.proto, "rtt_est_ms", 0.0) or 0.0)
+            if rtt_est_ms > 0.0:
+                self.transmit_delay_est_ms = 0.5 * rtt_est_ms
     # ------------- RTT mirrors -------------
     @property
     def rtt_est_ms(self) -> float:
@@ -801,21 +879,29 @@ class Session:
     @property
     def last_rtt_ok_ns(self) -> int:
         return self.proto.last_rtt_ok_ns
-    def update_rtt(self, echo_tx_ns: int) -> None:
+    def update_rtt(self, echo_tx_ns: int, *, from_idle: bool = False) -> None:
         before = (self.proto.rtt_sample_ms, self.proto.rtt_est_ms)
         self.proto.on_control_echo(echo_tx_ns)
+        rtt_est_ms = float(getattr(self.proto, "rtt_est_ms", 0.0) or 0.0)
+        if from_idle and rtt_est_ms > 0.0:
+            self.transmit_delay_est_ms = 0.5 * rtt_est_ms
         if self.log.isEnabledFor(logging.DEBUG):
             self.log.debug(f"[RTT] sample_ms={self.proto.rtt_sample_ms:.3f} est_ms={self.proto.rtt_est_ms:.3f} (prev {before[0]:.3f}/{before[1]:.3f})")
     # ------------- RX side (DATA) -------------
     def identify_missing(self):
         pendingkeylist = [k for k in self.pending.keys() if k != 0]
         self.missing.clear()
+        self._pending_highest = None
         if pendingkeylist:
             hi = highest_ring(pendingkeylist, self.expected)
             if hi is not None:
+                self._pending_highest = hi
                 for m in c16_range(self.expected, hi):
                     if m not in self.pending:
                         self.missing.add(m)
+        self._log_missing_state()
+
+    def _log_missing_state(self) -> None:
         if self.log.isEnabledFor(logging.DEBUG):
             try:
                 pend = sorted(self.pending.keys())[:12]
@@ -823,6 +909,26 @@ class Session:
                 self.log.debug(f"[RX] pending={pend}{'…' if len(self.pending)>12 else ''} missing={miss}{'…' if len(self.missing)>12 else ''} expected={self.expected}")
             except Exception:
                 pass
+
+    def _enqueue_out_of_order_packet(self, pkt: DataPacket) -> None:
+        ctr = pkt.pkt_counter
+        already_pending = ctr in self.pending
+        self.pending[ctr] = pkt
+        if not already_pending:
+            if ctr in self.missing:
+                self.missing.discard(ctr)
+            else:
+                gap_start = self.expected
+                if self._pending_highest is not None and ring_cmp(ctr, self._pending_highest) > 0:
+                    gap_start = c16_inc(self._pending_highest)
+                if self._pending_highest is None or ring_cmp(ctr, self._pending_highest) > 0:
+                    for missing_ctr in c16_range(gap_start, ctr):
+                        if missing_ctr not in self.pending:
+                            self.missing.add(missing_ctr)
+                self.missing.discard(ctr)
+            if self._pending_highest is None or ring_cmp(ctr, self._pending_highest) > 0:
+                self._pending_highest = ctr
+        self._log_missing_state()
     def process_data(self, pkt: DataPacket) -> Tuple[bool, List[bytes]]:
         if pkt.pkt_counter == 0:
             return False, []
@@ -840,8 +946,7 @@ class Session:
             if self.log.isEnabledFor(logging.DEBUG):
                 self.log.debug(f"[RX] ctr={X} IN-ORDER -> advance expected={self.expected}")
         else:
-            self.pending[X] = pkt
-            self.identify_missing()
+            self._enqueue_out_of_order_packet(pkt)
             if self.log.isEnabledFor(logging.DEBUG):
                 self.log.debug(f"[RX] ctr={X} QUEUED (gap); frame_type={pkt.frame_type} off/len={pkt.len_or_offset} chunk_len={pkt.chunk_len}")
             return adv, completed
@@ -901,7 +1006,12 @@ class Session:
                             pass
                     self.reass = None
                     self._reass_ctrs = set()
-            self.identify_missing()
+            if self.pending:
+                self.identify_missing()
+            else:
+                self._pending_highest = None
+                self.missing.clear()
+                self._log_missing_state()
         return adv, completed
     # ------------- API -------------
     def send_application_payload(self, data: bytes, transport: Any) -> int:
@@ -927,20 +1037,29 @@ class Session:
     def reset_sender(self) -> None:
         self.send_buf.clear()
         self.send_meta.clear()
+        self.send_path_start_ns.clear()
         self.send_txns.clear()
         self.last_retx_ns.clear()
+        self.peer_reported_missing.clear()
         self.wait_queue.clear()
         self.send_attempts.clear()
         self.data_pkt_flags.clear()
         self.next_ctr = 1
-        self.expected = 1
-        self.pending.clear()
-        self.missing.clear()
-        self.reass = None
         self.last_sent_ctr = 0
         self.last_ack_peer = 0
         self.peer_missed_count = 0
         self.last_send_ns = 0
+        self.transmit_delay_sample_ms = 0.0
+        self.transmit_delay_est_ms = 0.0
+
+    def reset_transport_epoch(self) -> None:
+        self.reset_sender()
+        self.expected = 1
+        self.pending.clear()
+        self.missing.clear()
+        self._pending_highest = None
+        self.reass = None
+        self._reass_ctrs.clear()
 # -------------------- PeerProtocol --------------------
 FRAME_FIRST = 0x01
 FRAME_CONT = 0x02
@@ -966,6 +1085,8 @@ class PeerProtocol(asyncio.DatagramProtocol):
         on_peer_tx_bytes: Optional[Callable[[int], None]] = None,
         on_rtt_success: Optional[Callable[[int], None]] = None,
         on_state_change: Optional[Callable[[bool], None]] = None,
+        on_send_error: Optional[Callable[[Exception], None]] = None,
+        allow_ipv4_mapped_send: bool = False,
     ):
         self.session = session
         self.proto = proto or getattr(session, "proto", PROTO)
@@ -979,6 +1100,8 @@ class PeerProtocol(asyncio.DatagramProtocol):
         self._on_peer_tx_bytes = on_peer_tx_bytes
         self._on_rtt_success = on_rtt_success
         self._on_state_change = on_state_change
+        self._on_send_error = on_send_error
+        self._allow_ipv4_mapped_send = bool(allow_ipv4_mapped_send)
         super().__init__()
         self._last_control_sent_ns = 0
         self._last_sent_last_in_order = 0
@@ -990,6 +1113,16 @@ class PeerProtocol(asyncio.DatagramProtocol):
         self._ctl_task = None
         self._retx_task = None
         self._move_grace_ns = int(3 * 1e9)  # 3 seconds
+        self._rx_pending: Deque[Tuple[bytes, Any]] = deque()
+        self._rx_pending_scheduled = False
+        self._completed_pending: Deque[bytes] = deque()
+        self._completed_pending_scheduled = False
+        self._rx_yield_count = 0
+        self._rx_last_yield_gap_ms = 0.0
+        self._rx_max_yield_gap_ms = 0.0
+        self._completed_yield_count = 0
+        self._completed_last_yield_gap_ms = 0.0
+        self._completed_max_yield_gap_ms = 0.0
 
     @property
     def unidentified_frames(self) -> int:
@@ -1031,6 +1164,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
             self.session.log,
             initial_peer=forced_peer,
             on_bytes_sent=self._on_peer_tx_bytes,
+            allow_ipv4_mapped_send=self._allow_ipv4_mapped_send,
         )
 
         self.controltimerstart()
@@ -1051,8 +1185,23 @@ class PeerProtocol(asyncio.DatagramProtocol):
         self.controltimerstop()
         self.retxtimerstop()
 
+    def reset_transport_epoch_runtime(self) -> None:
+        self._last_control_sent_ns = 0
+        self._last_sent_last_in_order = 0
+        self._established_ns = 0
+        self._rx_pending.clear()
+        self._rx_pending_scheduled = False
+        self._completed_pending.clear()
+        self._completed_pending_scheduled = False
+
     def error_received(self, exc):
         self.session.log.debug("[UDP/PROTO] error_received exc=%r", exc)
+        if exc is None or self._on_send_error is None:
+            return
+        try:
+            self._on_send_error(exc)
+        except Exception:
+            self.session.log.debug("[UDP/PROTO] on_send_error callback failed", exc_info=True)
 
 
     def notify_send_port_ready(self) -> None:
@@ -1233,96 +1382,144 @@ class PeerProtocol(asyncio.DatagramProtocol):
             if elapsed:
                 self._emit_control(now_t, reason="timer_paced_with_missing")
     # ---- loss mitigation (owner: PeerProtocol) ----
+    def _retrans_window_ns(self, multiplier: float) -> int:
+        return max(1, int(self.session.rtt_est_ms * 1e6 * float(multiplier)))
+
+    def _retransmit_counters(self, counters: List[int], *, reason: str, window_ns: int, use_first_tx_when_no_retx: bool) -> List[int]:
+        if self.send_port is None or not counters:
+            return []
+        s = self.session
+        now = now_ns()
+        retx_list: List[int] = []
+        seen: Set[int] = set()
+        for cnt in counters:
+            if cnt == 0 or cnt in seen:
+                continue
+            seen.add(cnt)
+            meta = s.send_meta.get(cnt)
+            if meta is None:
+                if self.session.log.isEnabledFor(logging.DEBUG):
+                    self.session.log.debug("[RTX] skip cnt=%d reason=no_send_meta", cnt)
+                continue
+            last_retx = s.last_retx_ns.get(cnt, 0)
+            first_tx = s.send_txns.get(cnt, 0) if use_first_tx_when_no_retx else 0
+            anchor = last_retx or first_tx
+            if anchor and (now - anchor) < window_ns:
+                continue
+            frame = s._rebuild_data_frame(cnt, meta)
+            try:
+                self.send_port.sendto(frame)
+            except Exception:
+                continue
+            s.send_buf[cnt] = frame
+            s.last_retx_ns[cnt] = now
+            s.last_send_ns = now
+            s._bump_attempt(cnt)
+            retx_list.append(cnt)
+        if self.session.log.isEnabledFor(logging.DEBUG) and retx_list:
+            self.session.log.debug(
+                f"[RTX] {reason} cnts={sorted(retx_list)[:32]}{'…' if len(retx_list)>32 else ''} "
+                f"window_ms={window_ns / 1e6:.2f}"
+            )
+        return retx_list
+
     def _schedule_retrans(self, missed: List[int]) -> None:
         if self.send_port is None or not missed:
             self.session.peer_missed_count = len(missed)
             return
         s = self.session
         s.peer_missed_count = len(missed)
-        now = now_ns()
-        window = int(s.rtt_est_ms * 1e6 * RETRANS_MULTIPLIER)
-        retx_list: List[int] = []
-        for cnt in missed:
-            if cnt == 0:
-                continue
-            meta = s.send_meta.get(cnt)
-            if not meta:
-                raw = s.send_buf.get(cnt)
-                if not raw:
-                    continue
-                last = s.last_retx_ns.get(cnt, 0)
-                if last and (now - last) < window:
-                    continue
-                try:
-                    self.send_port.sendto(raw)
-                except Exception:
-                    continue
-                s.last_retx_ns[cnt] = now
-                s.last_send_ns = now
-                s._bump_attempt(cnt)
-                retx_list.append(cnt)
-                continue
-            last = s.last_retx_ns.get(cnt, 0)
-            if last and (now - last) < window:
-                continue
-            frame_type, off_or_len, chunk = meta
-            payload = DataPacket.build_payload(cnt, frame_type, off_or_len, chunk, now)
-            frame = self.proto.build_frame(PTYPE_DATA, payload)
-            try:
-                self.send_port.sendto(frame)
-            except Exception:
-                continue
-            s.send_buf[cnt] = frame
-            s.last_retx_ns[cnt] = now
-            s.last_send_ns = now
-            s._bump_attempt(cnt)
-            retx_list.append(cnt)
-        if self.session.log.isEnabledFor(logging.DEBUG) and retx_list:
-            self.session.log.debug(f"[RTX] due_to_control cnts={sorted(retx_list)[:32]}{'…' if len(retx_list)>32 else ''} window_ms={s.rtt_est_ms*RETRANS_MULTIPLIER:.2f}")
+        self._retransmit_counters(
+            missed,
+            reason="due_to_control",
+            window_ns=self._retrans_window_ns(PERSISTENT_MISSING_RETRANS_MULTIPLIER),
+            use_first_tx_when_no_retx=False,
+        )
+
+    def _retx_sweep_reported_missing(self) -> None:
+        if self.send_port is None:
+            return
+        s = self.session
+        if not s.peer_reported_missing:
+            return
+        missing_counters = sorted(cnt for cnt in s.peer_reported_missing if cnt in s.send_buf and cnt != 0)
+        s.peer_reported_missing.intersection_update(missing_counters)
+        self._retransmit_counters(
+            missing_counters,
+            reason="persistent_missing",
+            window_ns=self._retrans_window_ns(PERSISTENT_MISSING_RETRANS_MULTIPLIER),
+            use_first_tx_when_no_retx=True,
+        )
+
     def _retx_sweep_unconfirmed(self) -> None:
         if self.send_port is None:
             return
         s = self.session
         if not s.send_buf:
             return
-        now = now_ns()
-        window = int(s.rtt_est_ms * 1e6 * RETRANS_MULTIPLIER)
-        retx_list: List[int] = []
-        for cnt, raw in list(s.send_buf.items()):
-            if cnt == 0:
-                continue
-            last_retx = s.last_retx_ns.get(cnt, 0)
-            first_tx = s.send_txns.get(cnt, 0)
-            last_any = max(last_retx, first_tx)
-            if window and (now - last_any) < window:
-                continue
-            meta = s.send_meta.get(cnt)
-            if meta is None:
-                try:
-                    self.send_port.sendto(raw)
-                except Exception:
-                    continue
-                s.last_retx_ns[cnt] = now
-                s.last_send_ns = now
-                s._bump_attempt(cnt)
-                retx_list.append(cnt)
-                continue
-            frame_type, off_or_len, chunk = meta
-            payload = DataPacket.build_payload(cnt, frame_type, off_or_len, chunk, now)
-            frame = self.proto.build_frame(PTYPE_DATA, payload)
-            try:
-                self.send_port.sendto(frame)
-            except Exception:
-                continue
-            s.send_buf[cnt] = frame
-            s.last_retx_ns[cnt] = now
-            s.last_send_ns = now
-            s._bump_attempt(cnt)
-            retx_list.append(cnt)
-        if self.session.log.isEnabledFor(logging.DEBUG) and retx_list:
-            self.session.log.debug(f"[RTX] timeout_sweep cnts={sorted(retx_list)[:32]}{'…' if len(retx_list)>32 else ''} window_ms={s.rtt_est_ms*RETRANS_MULTIPLIER:.2f}")
+        self._retransmit_counters(
+            list(s.send_buf.keys()),
+            reason="timeout_sweep",
+            window_ns=self._retrans_window_ns(RETRANS_MULTIPLIER),
+            use_first_tx_when_no_retx=True,
+        )
     # ---- asyncio protocol ----
-    def datagram_received(self, data: bytes, addr):
+    def _schedule_rx_pending(self) -> None:
+        if self._rx_pending_scheduled:
+            return
+        self._rx_pending_scheduled = True
+        scheduled_at = time.perf_counter()
+
+        def _run() -> None:
+            self._rx_pending_scheduled = False
+            self._record_yield_gap("_rx", scheduled_at, "myudp_rx_datagram")
+            self._process_one_rx_datagram()
+
+        try:
+            asyncio.get_running_loop().call_soon(_run)
+        except RuntimeError:
+            _run()
+
+    def _schedule_completed_pending(self) -> None:
+        if self._completed_pending_scheduled:
+            return
+        self._completed_pending_scheduled = True
+        scheduled_at = time.perf_counter()
+
+        def _run() -> None:
+            self._completed_pending_scheduled = False
+            self._record_yield_gap("_completed", scheduled_at, "myudp_completed_payload")
+            self._process_one_completed_payload()
+
+        try:
+            asyncio.get_running_loop().call_soon(_run)
+        except RuntimeError:
+            _run()
+
+    def _record_yield_gap(self, prefix: str, scheduled_at: float, stage: str) -> None:
+        gap_ms = max(0.0, (time.perf_counter() - float(scheduled_at)) * 1000.0)
+        count_attr = f"{prefix}_yield_count"
+        last_attr = f"{prefix}_last_yield_gap_ms"
+        max_attr = f"{prefix}_max_yield_gap_ms"
+        count = int(getattr(self, count_attr, 0) or 0) + 1
+        setattr(self, count_attr, count)
+        setattr(self, last_attr, gap_ms)
+        setattr(self, max_attr, max(float(getattr(self, max_attr, 0.0) or 0.0), gap_ms))
+        if gap_ms >= 20.0 or count <= 3 or (count % 256) == 0:
+            self.session.log.info("[UDP/YIELD] stage=%s count=%s gap_ms=%.3f", stage, count, gap_ms)
+
+    def _process_one_completed_payload(self) -> None:
+        if not self._completed_pending:
+            return
+        payload = self._completed_pending.popleft()
+        self.on_complete(payload)
+        if self._completed_pending:
+            self._schedule_completed_pending()
+
+    def _process_one_rx_datagram(self) -> None:
+        if not self._rx_pending:
+            return
+        data, addr = self._rx_pending.popleft()
         self.session.log.debug(
             "[PEER/RX/RAW-SOCKET] len=%d from=%r transport_sock=%r transport_peer=%r",
             len(data),
@@ -1410,7 +1607,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
                 prev_sample,
                 prev_est,
             )
-            self.session.update_rtt(echo_ns)
+            self.session.update_rtt(echo_ns, from_idle=(kind == "idle"))
             self.session.log.debug(
                 "[PEER/RX/RTT] action=updated from=%r sample_ms=%.3f est_ms=%.3f last_rtt_ok_ns=%d",
                 addr,
@@ -1453,6 +1650,8 @@ class PeerProtocol(asyncio.DatagramProtocol):
                 "[IDLE/DECISION] from=%r echo_ns=%d will_reflect=%s",
                 addr, echo_ns, echo_ns == 0
             )                    
+            if self._rx_pending:
+                self._schedule_rx_pending()
             return
         if kind == "data" and pkt:
             prev_missing = set(self.session.missing)
@@ -1463,7 +1662,11 @@ class PeerProtocol(asyncio.DatagramProtocol):
             self._evaluate_control_policy_inbound(grew_missing)
             for c in completed:
                 self.session.log.debug(f"[PeerProtocol] On Complete  on session id=%x", id(self))
-                self.on_complete(c)
+                self._completed_pending.append(c)
+            if self._completed_pending:
+                self._schedule_completed_pending()
+            if self._rx_pending:
+                self._schedule_rx_pending()
             return
         if kind == "control" and pkt:
             cp: ControlPacket = pkt
@@ -1472,6 +1675,12 @@ class PeerProtocol(asyncio.DatagramProtocol):
             if self.send_port:
                 self.session.try_flush_send_queue(self.send_port)
             self._evaluate_control_policy_inbound(False)
+        if self._rx_pending:
+            self._schedule_rx_pending()
+
+    def datagram_received(self, data: bytes, addr):
+        self._rx_pending.append((bytes(data), addr))
+        self._schedule_rx_pending()
 
     # ---- timers (PeerProtocol ownership) ----
     def controltimerstart(self):
@@ -1511,6 +1720,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
         try:
             while True:
                 await asyncio.sleep(RETRANSMIT_UNCONFIRMED_MS / 1000.0)
+                self._retx_sweep_reported_missing()
                 self._retx_sweep_unconfirmed()
         except asyncio.CancelledError:
             return
@@ -1555,6 +1765,9 @@ class UdpSession(ISession):
         self._server_next_mux_chan: int = 1
         self._app_payload_passthrough: bool = False
         self._listener_peer_cleanup_task: Optional[asyncio.Task] = None
+        self._peer_candidates: List[Tuple[str, int, int]] = []
+        self._peer_candidate_index: int = 0
+        self._peer_candidate_fallback_task: Optional[asyncio.Task] = None
 
         # Inner reliability/session engine remains the same one from base module.
         self.inner_session = Session(max_in_flight=args.max_inflight, proto=self._proto_state)
@@ -1573,6 +1786,7 @@ class UdpSession(ISession):
         self._peer_mirror_out: Optional[Callable[[bytes], None]] = None
         self._peer_mirror_in: Optional[Callable[[bytes], None]] = None
         self._peer_mirror_installed: bool = False
+        self._egress_tracker = EgressThroughputTracker()
 
     # ---------- CLI integration ----------
     @staticmethod
@@ -1592,12 +1806,13 @@ class UdpSession(ISession):
             p.add_argument('--udp-own-port', dest='udp_own_port', type=int, default=4433, help='overlay own port')
         if not _has('--udp-peer'):
             p.add_argument('--udp-peer', '--peer', dest='udp_peer', default=None,
-                           help="peer IP/FQDN (IPv4 or IPv6 literal; IPv6 may be in [brackets])")
+                           help="peer IP/FQDN, or comma-separated IPv4/IPv6 alternatives (IPv6 may be in [brackets])")
         if not _has('--udp-peer-port'):
             p.add_argument('--udp-peer-port', '--peer-port', dest='udp_peer_port', type=int, default=4433, help='peer overlay port')
-        if not _has('--peer-resolve-family'):
+        if not _has('--udp-peer-resolve-family'):
             p.add_argument(
-                '--peer-resolve-family',
+                '--udp-peer-resolve-family',
+                dest='udp_peer_resolve_family',
                 choices=['prefer-ipv6', 'ipv4', 'ipv6'],
                 default='prefer-ipv6',
                 help='Peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.'
@@ -1653,15 +1868,22 @@ class UdpSession(ISession):
     def get_metrics(self) -> SessionMetrics:
         if self._listener_mode and self._server_peers:
             try:
+                prev_bytes, curr_bytes = self._egress_tracker.snapshot()
                 sessions = [ctx["session"] for ctx in self._server_peers.values() if isinstance(ctx, dict) and ctx.get("session") is not None]
                 rtt_candidates = [float(getattr(s, "rtt_est_ms", 0.0) or 0.0) for s in sessions if getattr(s, "last_rtt_ok_ns", 0)]
+                transmit_delay_sample_candidates = [float(getattr(s, "transmit_delay_sample_ms", 0.0) or 0.0) for s in sessions if float(getattr(s, "transmit_delay_sample_ms", 0.0) or 0.0) > 0.0]
+                transmit_delay_est_candidates = [float(getattr(s, "transmit_delay_est_ms", 0.0) or 0.0) for s in sessions if float(getattr(s, "transmit_delay_est_ms", 0.0) or 0.0) > 0.0]
                 last_rtt_ok = max((int(getattr(s, "last_rtt_ok_ns", 0) or 0) for s in sessions), default=0)
                 return SessionMetrics(
                     rtt_est_ms=max(rtt_candidates) if rtt_candidates else None,
+                    transmit_delay_sample_ms=max(transmit_delay_sample_candidates) if transmit_delay_sample_candidates else None,
+                    transmit_delay_est_ms=max(transmit_delay_est_candidates) if transmit_delay_est_candidates else None,
                     last_rtt_ok_ns=last_rtt_ok or None,
                     inflight=sum(int(s.in_flight()) for s in sessions if hasattr(s, "in_flight")),
                     max_inflight=sum(int(getattr(s, "max_in_flight", 0) or 0) for s in sessions),
                     waiting_count=sum(int(s.waiting_count()) for s in sessions if hasattr(s, "waiting_count")),
+                    egress_prev_window_bytes=prev_bytes,
+                    egress_curr_window_bytes=curr_bytes,
                     peer_missed_count=sum(int(getattr(s, "peer_missed_count", 0) or 0) for s in sessions),
                     our_missed_count=sum(len(getattr(s, "missing", [])) for s in sessions if hasattr(s, "missing")),
                 )
@@ -1669,13 +1891,18 @@ class UdpSession(ISession):
                 self._log.debug("[UdpSession] aggregated get_metrics failed %r", e)
         s = self.inner_session
         try:
+            prev_bytes, curr_bytes = self._egress_tracker.snapshot()
             return SessionMetrics(
                 rtt_sample_ms     = getattr(s, "rtt_sample_ms", None),
                 rtt_est_ms        = getattr(s, "rtt_est_ms", None),
+                transmit_delay_sample_ms = (getattr(s, "transmit_delay_sample_ms", None) or None),
+                transmit_delay_est_ms = (getattr(s, "transmit_delay_est_ms", None) or None),
                 last_rtt_ok_ns    = getattr(s, "last_rtt_ok_ns", None),
                 inflight          = int(s.in_flight()) if hasattr(s, "in_flight") else None,
                 max_inflight      = getattr(s, "max_in_flight", None),
                 waiting_count     = int(s.waiting_count()) if hasattr(s, "waiting_count") else None,
+                egress_prev_window_bytes=prev_bytes,
+                egress_curr_window_bytes=curr_bytes,
                 last_ack_peer     = getattr(s, "last_ack_peer", None),
                 last_sent_ctr     = getattr(s, "last_sent_ctr", None),
                 expected          = getattr(s, "expected", None),
@@ -1699,6 +1926,19 @@ class UdpSession(ISession):
             if not host_s:
                 return None
             return f"[{host_s}]:{port_i}" if ":" in host_s and not host_s.startswith("[") else f"{host_s}:{port_i}"
+        except Exception:
+            return None
+
+    @staticmethod
+    def _format_peer_endpoint(host: Optional[object], port: Optional[object]) -> Optional[dict]:
+        try:
+            if host is None or port is None:
+                return None
+            host_s = str(host)
+            port_i = int(port)
+            if not host_s:
+                return None
+            return {"host": host_s, "port": port_i}
         except Exception:
             return None
 
@@ -1759,24 +1999,24 @@ class UdpSession(ISession):
                 rows.append({
                     "peer_id": peer_id,
                     "connected": bool(ctx.get("connected")) if isinstance(ctx, dict) else False,
-                    "peer": self._format_peer_label(host, port),
+                    "peer": self._format_peer_endpoint(host, port),
                     "mux_chans": sorted(mux_by_peer.get(peer_id, [])),
                     "rtt_est_ms": getattr(session, "rtt_est_ms", None),
                     "last_incoming_age_seconds": last_incoming_age_seconds,
                 })
             return rows
-        peer_label = None
+        peer_endpoint = None
         with contextlib.suppress(Exception):
             if self._proto is not None and self._proto.send_port is not None:
                 peer = getattr(self._proto.send_port, "peer_addr", None)
                 if isinstance(peer, tuple) and len(peer) >= 2:
-                    peer_label = self._format_peer_label(peer[0], peer[1])
-        if not peer_label:
-            peer_label = self._format_peer_label(self._peer_host, self._peer_port)
+                    peer_endpoint = self._format_peer_endpoint(peer[0], peer[1])
+        if not peer_endpoint:
+            peer_endpoint = self._format_peer_endpoint(self._peer_host, self._peer_port)
         return [{
             "peer_id": 0,
             "connected": bool(self.is_connected()),
-            "peer": peer_label,
+            "peer": peer_endpoint,
             "mux_chans": [],
             "rtt_est_ms": getattr(self.inner_session, "rtt_est_ms", None),
             "last_incoming_age_seconds": _monotonic_age_seconds_from_ns(
@@ -1790,18 +2030,28 @@ class UdpSession(ISession):
         self._loop = asyncio.get_running_loop()
         listen_host = _strip_brackets(getattr(self._args, "udp_bind", "::"))
         listen_port = int(getattr(self._args, "udp_own_port", 4433))
+        self._peer_candidates = self._resolve_configured_peer_candidates(listen_host)
+        self._peer_candidate_index = 0
         peer_info = _resolve_cli_peer(
             self._args,
             peer_attr="udp_peer",
             peer_port_attr="udp_peer_port",
+            resolve_attr="udp_peer_resolve_family",
             bind_host=listen_host,
             socktype=socket.SOCK_DGRAM,
         )
         peer = None
         peer_family = socket.AF_UNSPEC
+        resolve_mode = _peer_resolve_mode(self._args, "udp_peer_resolve_family")
+        allow_ipv4_mapped_send = resolve_mode in {"ipv6", "prefer-ipv6"}
         if peer_info is not None:
             peer_host, peer_port, peer_family = peer_info
             peer = (peer_host, peer_port)
+            if self._peer_candidates:
+                for idx, candidate in enumerate(self._peer_candidates):
+                    if candidate == peer_info:
+                        self._peer_candidate_index = idx
+                        break
         self._listener_mode = peer is None
 
         if (
@@ -1832,6 +2082,8 @@ class UdpSession(ISession):
                 on_peer_tx_bytes=self._on_peer_tx_bytes,
                 on_rtt_success=self._on_rtt_success,
                 on_state_change=self._on_state_change,
+                on_send_error=self._on_peer_send_error,
+                allow_ipv4_mapped_send=allow_ipv4_mapped_send,
             )
 
         sock = None
@@ -1847,6 +2099,9 @@ class UdpSession(ISession):
                 )
                 sock = socket.socket(win_family, socket.SOCK_DGRAM)
                 sock.setblocking(False)
+                if win_family == socket.AF_INET6 and hasattr(socket, "IPV6_V6ONLY"):
+                    with contextlib.suppress(Exception):
+                        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
                 sock.bind(listen)
                 try:
                     sock.ioctl(socket.SIO_UDP_CONNRESET, False)
@@ -1863,16 +2118,43 @@ class UdpSession(ISession):
                     sock=sock,
                 )
             else:
-                self._log.debug(
-                    "[UDP/SESSION] Initiate unconnected Data Endpoint local=%r initial_peer=%r",
-                    listen,
-                    peer,
-                )
-                transport, protocol = await self._loop.create_datagram_endpoint(
-                    _factory,
-                    local_addr=listen,
-                    family=family,
-                )
+                use_prebuilt_socket = hasattr(socket, "SO_NOSIGPIPE") or family == socket.AF_INET6
+                if use_prebuilt_socket:
+                    sock_family = family if family != socket.AF_UNSPEC else (
+                        socket.AF_INET6 if ":" in listen_host else socket.AF_INET
+                    )
+                    sock = socket.socket(sock_family, socket.SOCK_DGRAM)
+                    sock.setblocking(False)
+                    if sock_family == socket.AF_INET6 and hasattr(socket, "IPV6_V6ONLY"):
+                        with contextlib.suppress(Exception):
+                            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                    try:
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_NOSIGPIPE, 1)
+                    except Exception as e:
+                        self._log.warning("Could not enable SO_NOSIGPIPE: %r", e)
+                    sock.bind(listen)
+                    self._log.debug(
+                        "[UDP/SESSION] Initiate unconnected Data Endpoint via prebuilt socket "
+                        "local=%r initial_peer=%r so_nosigpipe=%s",
+                        listen,
+                        peer,
+                        True,
+                    )
+                    transport, protocol = await self._loop.create_datagram_endpoint(
+                        _factory,
+                        sock=sock,
+                    )
+                else:
+                    self._log.debug(
+                        "[UDP/SESSION] Initiate unconnected Data Endpoint local=%r initial_peer=%r",
+                        listen,
+                        peer,
+                    )
+                    transport, protocol = await self._loop.create_datagram_endpoint(
+                        _factory,
+                        local_addr=listen,
+                        family=family,
+                    )
         except Exception as e:
             self._log.error(
                 "[UdpSession] Create Data Endpoint %r family=%r failed: %r",
@@ -1907,9 +2189,16 @@ class UdpSession(ISession):
                     sp.set_peer((host, port))
             except Exception as e:
                 self._log.debug("[UdpSession] start failed on set_peer %r", e)
+            if len(self._peer_candidates) > 1 and self._peer_candidate_fallback_task is None:
+                self._peer_candidate_fallback_task = self._loop.create_task(self._peer_candidate_fallback_loop())
 
     async def stop(self) -> None:
         try:
+            if self._peer_candidate_fallback_task is not None:
+                self._peer_candidate_fallback_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._peer_candidate_fallback_task
+                self._peer_candidate_fallback_task = None
             if self._listener_peer_cleanup_task is not None:
                 self._listener_peer_cleanup_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -1956,7 +2245,10 @@ class UdpSession(ISession):
                 session = ctx.get("session")
                 if proto is None or session is None or getattr(proto, "send_port", None) is None:
                     return 0
-                return session.send_application_payload(payload, proto.send_port)
+                sent = session.send_application_payload(payload, proto.send_port)
+                if sent > 0:
+                    self._egress_tracker.record(int(sent))
+                return sent
             target = self._resolve_server_send_target(payload, peer_id=peer_id)
             if target is None:
                 return 0
@@ -1968,10 +2260,16 @@ class UdpSession(ISession):
             session = ctx.get("session")
             if proto is None or session is None or getattr(proto, "send_port", None) is None:
                 return 0
-            return session.send_application_payload(routed_payload, proto.send_port)
+            sent = session.send_application_payload(routed_payload, proto.send_port)
+            if sent > 0:
+                self._egress_tracker.record(int(sent))
+            return sent
         if not self._proto or not self._proto.send_port:
             return 0
-        return self.inner_session.send_application_payload(payload, self._proto.send_port)
+        sent = self.inner_session.send_application_payload(payload, self._proto.send_port)
+        if sent > 0:
+            self._egress_tracker.record(int(sent))
+        return sent
 
     # ---- Internals (callbacks given to PeerProtocol) ----
     def _on_control_needed(self) -> None:
@@ -2090,6 +2388,120 @@ class UdpSession(ISession):
             except Exception as e:
                 self._log.debug("[UDP/SESSION/STATE] _on_state_change failed on _on_state %r", e)
 
+    def _resolve_configured_peer_candidates(self, bind_host: str) -> List[Tuple[str, int, int]]:
+        raw_peer = getattr(self._args, "udp_peer", None)
+        if not raw_peer:
+            return []
+        configured_hosts = _split_configured_peer_hosts(str(raw_peer))
+        if len(configured_hosts) <= 1:
+            peer_info = _resolve_cli_peer(
+                self._args,
+                peer_attr="udp_peer",
+                peer_port_attr="udp_peer_port",
+                resolve_attr="udp_peer_resolve_family",
+                bind_host=bind_host,
+                socktype=socket.SOCK_DGRAM,
+            )
+            return [peer_info] if peer_info is not None else []
+        resolve_mode = _peer_resolve_mode(self._args, "udp_peer_resolve_family")
+        peer_port = int(getattr(self._args, "udp_peer_port", 4433) or 4433)
+        candidates: List[Tuple[str, int, int]] = []
+        for candidate_host in configured_hosts:
+            try:
+                candidates.extend(
+                    _resolve_peer_candidates(
+                        candidate_host,
+                        peer_port,
+                        resolve_mode=resolve_mode,
+                        socktype=socket.SOCK_DGRAM,
+                        strict_family=False,
+                    )
+                )
+            except RuntimeError:
+                continue
+        deduped: List[Tuple[str, int, int]] = []
+        for candidate in candidates:
+            if candidate not in deduped:
+                deduped.append(candidate)
+        deduped.sort(key=lambda item: _family_preference_rank(item[2], resolve_mode))
+        bind_family = _bind_family_constraint(bind_host)
+        if bind_family is not None:
+            matching = [item for item in deduped if item[2] == bind_family]
+            if matching:
+                deduped = matching
+        return deduped
+
+    def _rotate_to_next_peer_candidate(self) -> bool:
+        if self._listener_mode or self._proto is None or self._proto.send_port is None:
+            return False
+        next_index = self._peer_candidate_index + 1
+        if next_index >= len(self._peer_candidates):
+            return False
+        old_peer = self._peer_candidates[self._peer_candidate_index]
+        new_peer = self._peer_candidates[next_index]
+        self._peer_candidate_index = next_index
+        self._log.warning(
+            "[UDP/SESSION] no liveness on preferred peer %r, falling back to %r",
+            old_peer[:2],
+            new_peer[:2],
+        )
+        self.inner_session.reset_transport_epoch()
+        with contextlib.suppress(Exception):
+            self._proto_state.rtt_est_ms = 0.0
+            self._proto_state.rtt_sample_ms = 0.0
+            self._proto_state.last_rtt_ok_ns = 0
+            self._proto_state._last_rx_tx_ns = 0
+            self._proto_state._last_rx_wall_ns = 0
+        host, port, _family = new_peer
+        self._on_peer_set(host, port)
+        self._proto.send_port.set_peer((host, port))
+        with contextlib.suppress(Exception):
+            self._proto._proto_rt._conn_evt.clear()
+            self._proto._proto_rt._conn_state = False
+            self._proto._proto_rt._next_probe_due_ns = 0
+            self._proto._proto_rt._send_idle_probe(initial=True)
+        return True
+
+    def _on_peer_send_error(self, exc: Exception) -> None:
+        err = getattr(exc, "errno", None)
+        if err not in {errno.ENETUNREACH, errno.EHOSTUNREACH, errno.EADDRNOTAVAIL}:
+            return
+        if self._listener_mode or len(self._peer_candidates) <= 1:
+            return
+        current = None
+        if self._proto is not None and getattr(self._proto, "send_port", None) is not None:
+            current = self._proto.send_port.peer_addr
+        resolve_mode = _peer_resolve_mode(self._args, "udp_peer_resolve_family").strip().lower()
+        current_family = None
+        with contextlib.suppress(Exception):
+            current_family = self._peer_candidates[self._peer_candidate_index][2]
+        if resolve_mode == "prefer-ipv6" and current_family == socket.AF_INET6:
+            self._log.warning(
+                "[UDP/SESSION] peer send error err=%r current_peer=%r retaining preferred IPv6 candidate until liveness fallback",
+                err,
+                current,
+            )
+            return
+        self._log.warning(
+            "[UDP/SESSION] peer send error err=%r current_peer=%r attempting immediate fallback",
+            err,
+            current,
+        )
+        self._rotate_to_next_peer_candidate()
+
+    async def _peer_candidate_fallback_loop(self) -> None:
+        try:
+            while not self._listener_mode and self._peer_candidate_index < (len(self._peer_candidates) - 1):
+                await asyncio.sleep(3.0)
+                if self.is_connected():
+                    return
+                if getattr(self._proto_state, "last_rtt_ok_ns", 0):
+                    return
+                if not self._rotate_to_next_peer_candidate():
+                    return
+        except asyncio.CancelledError:
+            return
+
     def _on_state_change_for_peer(self, peer_id: int, connected: bool) -> None:
         ctx = self._server_peers.get(peer_id)
         if ctx is not None:
@@ -2147,6 +2559,7 @@ class UdpSession(ISession):
                 on_peer_tx_bytes=self._on_peer_tx_bytes,
                 on_rtt_success=lambda echo_tx_ns, _peer_id=peer_id: self._on_rtt_success_for_peer(_peer_id, echo_tx_ns),
                 on_state_change=lambda connected, _peer_id=peer_id: self._on_state_change_for_peer(_peer_id, connected),
+                allow_ipv4_mapped_send=False,
             )
             self._server_peers[peer_id] = {
                 "peer_id": peer_id,
@@ -2368,6 +2781,28 @@ class UdpSession(ISession):
                 continue
             with contextlib.suppress(Exception):
                 sess.reset_sender()
+
+    def reset_transport_epoch(self) -> None:
+        # Transport reconnects must start with a fresh reliability epoch in both
+        # directions so stale missing/pending feedback cannot leak into the new session.
+        with contextlib.suppress(Exception):
+            self.inner_session.reset_transport_epoch()
+        with contextlib.suppress(Exception):
+            if self._proto is not None:
+                self._proto.reset_transport_epoch_runtime()
+        for ctx in self._server_peers.values():
+            if not isinstance(ctx, dict):
+                continue
+            sess = ctx.get("session")
+            if sess is None:
+                continue
+            with contextlib.suppress(Exception):
+                sess.reset_transport_epoch()
+            pp = ctx.get("peer_proto")
+            if pp is None:
+                continue
+            with contextlib.suppress(Exception):
+                pp.reset_transport_epoch_runtime()
 
 # -----------------------------------------------------------------------------
 

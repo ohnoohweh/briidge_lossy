@@ -15,6 +15,22 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from obstacle_bridge import bridge_tun_ios
+from obstacle_bridge.bridge_tun_routing import (
+    DEFAULT_EXCLUDED_ROUTES,
+    DEFAULT_EXCLUDED_ROUTES6,
+    DEFAULT_INCLUDED_ROUTES,
+    DEFAULT_INCLUDED_ROUTES6,
+    DEFAULT_TUNNEL_ADDRESS,
+    DEFAULT_TUNNEL_ADDRESS6,
+    DEFAULT_TUNNEL_GATEWAY,
+    DEFAULT_TUNNEL_GATEWAY6,
+    DEFAULT_TUNNEL_MTU,
+    DEFAULT_TUNNEL_PREFIX,
+    DEFAULT_TUNNEL_PREFIX6,
+    DEFAULT_TUN_ROUTING_LOG,
+)
+
 from .m3_tunnel import network_settings_from_runtime_config
 
 ConfigAwareCLI: Any = None
@@ -25,7 +41,7 @@ from .diagnostics import (
     snapshot as diagnostics_snapshot,
 )
 from .profiles import ProfileStore
-from .tunnel_control import harvest_shared_logs, ipserver_tunnel_status, start_ipserver_tunnel
+from .tunnel_control import harvest_runtime_logs, runtime_status, start_runtime
 
 try:
     import toga
@@ -33,7 +49,7 @@ except Exception:  # pragma: no cover - exercised in iOS build/runtime, not unit
     toga = None
 
 
-WEBADMIN_DEFAULT_BIND = "0.0.0.0"
+WEBADMIN_DEFAULT_BIND = "127.0.0.1"
 WEBADMIN_DEFAULT_PORT = 18080
 WEBADMIN_DEFAULT_PATH = "/"
 
@@ -90,7 +106,7 @@ def _ios_documents_root() -> Path:
         root.mkdir(parents=True, exist_ok=True)
         return root
 
-    root = Path.home() / "Documents" / "ObstacleBridge"
+    root = Path.home() / "Documents"
     try:
         root.mkdir(parents=True, exist_ok=True)
         return root
@@ -119,19 +135,62 @@ def _source_dir_candidates(name: str) -> list[Path]:
     return candidates
 
 
+def _migrate_legacy_ios_documents_root(target_root: Path) -> None:
+    """Flatten the short-lived nested iOS Documents/ObstacleBridge layout."""
+    if sys.platform != "ios":
+        return
+
+    legacy_root = Path.home() / "Documents" / "ObstacleBridge"
+    try:
+        if legacy_root.resolve() == target_root.resolve():
+            return
+    except OSError:
+        return
+
+    for name in (
+        "config",
+        "profiles",
+        "logs",
+        "admin_web",
+        "web",
+        "README.txt",
+        "documents-manifest.json",
+    ):
+        source = legacy_root / name
+        destination = target_root / name
+        if not source.exists() or destination.exists():
+            continue
+        try:
+            if source.is_dir():
+                shutil.copytree(
+                    source,
+                    destination,
+                    dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
+                )
+            else:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+        except Exception:
+            pass
+
+
 def _copy_document_tree(source_name: str, target: Path) -> bool:
     for candidate in _source_dir_candidates(source_name):
         if candidate.resolve() == target.resolve():
             return target.is_dir()
         if (candidate / "index.html").is_file():
             target.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(
-                candidate,
-                target,
-                dirs_exist_ok=True,
-                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
-            )
-            return True
+            try:
+                shutil.copytree(
+                    candidate,
+                    target,
+                    dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
+                )
+                return True
+            except (OSError, shutil.Error):
+                return False
     target.mkdir(parents=True, exist_ok=True)
     return False
 
@@ -169,6 +228,34 @@ def _default_ios_grouped_config(root: Path) -> dict[str, Any]:
             "log_file": str(root / "logs" / "obstaclebridge.log"),
             "log_file_max_bytes": 1_048_576,
             "log_file_backup_count": 5,
+        },
+        "channel_mux": {
+            "own_servers": [],
+            "remote_servers": [],
+        },
+        "iOS_TUN_connector": {
+            "packetflow_connector": "swift_udp",
+            "bind_host": bridge_tun_ios.DEFAULT_IOS_PACKETFLOW_BIND_HOST,
+            "bind_port": bridge_tun_ios.DEFAULT_IOS_PACKETFLOW_BIND_PORT,
+            "peer_host": bridge_tun_ios.DEFAULT_IOS_SWIFT_UDP_SHIM_HOST,
+            "peer_port": bridge_tun_ios.DEFAULT_IOS_PACKETFLOW_BIND_PORT + 1,
+            "ifname": bridge_tun_ios.DEFAULT_IOS_PACKETFLOW_IFNAME,
+            "mtu": bridge_tun_ios.DEFAULT_IOS_PACKETFLOW_MTU,
+        },
+        "TUN_routing": {
+            "tunnel_address": DEFAULT_TUNNEL_ADDRESS,
+            "tunnel_prefix": DEFAULT_TUNNEL_PREFIX,
+            "tunnel_gateway": DEFAULT_TUNNEL_GATEWAY,
+            "included_routes": list(DEFAULT_INCLUDED_ROUTES),
+            "excluded_routes": list(DEFAULT_EXCLUDED_ROUTES),
+            "tunnel_address6": DEFAULT_TUNNEL_ADDRESS6,
+            "tunnel_prefix6": DEFAULT_TUNNEL_PREFIX6,
+            "tunnel_gateway6": DEFAULT_TUNNEL_GATEWAY6,
+            "included_routes6": list(DEFAULT_INCLUDED_ROUTES6),
+            "excluded_routes6": list(DEFAULT_EXCLUDED_ROUTES6),
+            "dns_servers": ["1.1.1.1"],
+            "mtu": DEFAULT_TUNNEL_MTU,
+            "log_TUN_routing": DEFAULT_TUN_ROUTING_LOG,
         },
         "ws_session": {
             "ws_static_dir": str(root / "web"),
@@ -223,8 +310,21 @@ def _flatten_grouped_runtime_config(config: Mapping[str, Any]) -> dict[str, Any]
     return flattened
 
 
+def _runtime_mode_from_grouped_config(config: Mapping[str, Any]) -> str:
+    mode = bridge_tun_ios.packetflow_connector_mode_from_config(config)
+    return mode or "swift_udp"
+
+
+def _runtime_owner_from_mode(mode: str) -> str:
+    if mode == "swift_host_runner":
+        return "ObstacleBridgeApp swift_host_runner"
+    return "IPServer Network Extension"
+
+
 def _write_default_config_file(root: Path) -> Path:
     path = root / "config" / "ObstacleBridge.cfg"
+    if sys.platform == "ios":
+        return path
     if not path.exists():
         payload = _default_ios_grouped_config(root)
         path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -233,40 +333,50 @@ def _write_default_config_file(root: Path) -> Path:
 
 def _write_startup_artifacts(root: Path | None = None) -> Path:
     """Create USB-visible folders early so Finder/iTunes can expose them."""
+    explicit_root = root is not None
     root = _ios_documents_root() if root is None else Path(root)
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "config").mkdir(parents=True, exist_ok=True)
-    (root / "profiles").mkdir(parents=True, exist_ok=True)
-    (root / "logs").mkdir(parents=True, exist_ok=True)
-    admin_web_copied = _copy_document_tree("admin_web", root / "admin_web")
-    web_copied = _copy_document_tree("web", root / "web")
-    _write_default_config_file(root)
-    readme = root / "README.txt"
-    if not readme.exists():
-        readme.write_text(
-            "ObstacleBridge iOS shared files.\n"
-            "config/: editable runtime configuration\n"
-            "profiles/: saved configuration files\n"
-            "logs/: runtime and startup logs\n"
-            "admin_web/: editable WebAdmin files served by the app runtime\n"
-            "web/: editable static web files for websocket/static-file use\n",
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        _migrate_legacy_ios_documents_root(root)
+        (root / "config").mkdir(parents=True, exist_ok=True)
+        (root / "profiles").mkdir(parents=True, exist_ok=True)
+        (root / "logs").mkdir(parents=True, exist_ok=True)
+        admin_web_copied = _copy_document_tree("admin_web", root / "admin_web")
+        web_copied = _copy_document_tree("web", root / "web")
+        _write_default_config_file(root)
+        readme = root / "README.txt"
+        if not readme.exists():
+            readme.write_text(
+                "ObstacleBridge iOS shared files.\n"
+                "config/: editable runtime configuration\n"
+                "profiles/: saved configuration files\n"
+                "logs/: runtime and startup logs\n"
+                "admin_web/: editable WebAdmin files served by the app runtime\n"
+                "web/: editable static web files for websocket/static-file use\n",
+                encoding="utf-8",
+            )
+        manifest = {
+            "documents_root": str(root),
+            "config_file": str(root / "config" / "ObstacleBridge.cfg"),
+            "log_file": str(root / "logs" / "obstaclebridge.log"),
+            "diagnostics_file": str(root / "logs" / "ios-diagnostics.jsonl"),
+            "admin_web_dir": str(root / "admin_web"),
+            "admin_web_files_copied": admin_web_copied,
+            "web_dir": str(root / "web"),
+            "web_files_copied": web_copied,
+        }
+        (root / "documents-manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-    manifest = {
-        "documents_root": str(root),
-        "config_file": str(root / "config" / "ObstacleBridge.cfg"),
-        "log_file": str(root / "logs" / "obstaclebridge.log"),
-        "diagnostics_file": str(root / "logs" / "ios-diagnostics.jsonl"),
-        "admin_web_dir": str(root / "admin_web"),
-        "admin_web_files_copied": admin_web_copied,
-        "web_dir": str(root / "web"),
-        "web_files_copied": web_copied,
-    }
-    (root / "documents-manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    return root
+        return root
+    except OSError:
+        if explicit_root or sys.platform == "ios" or os.environ.get("OBSTACLEBRIDGE_IOS_DOCUMENTS_ROOT"):
+            raise
+        fallback = Path.cwd() / ".obstaclebridge-ios-documents"
+        if fallback.resolve() == root.resolve():
+            raise
+        return _write_startup_artifacts(fallback)
 
 
 def _append_startup_crash_log(exc: BaseException) -> None:
@@ -289,7 +399,7 @@ class ObstacleBridgeIOSApp:
     WEBADMIN_DEFAULT_BIND = WEBADMIN_DEFAULT_BIND
     WEBADMIN_DEFAULT_PORT = WEBADMIN_DEFAULT_PORT
     WEBADMIN_DEFAULT_PATH = WEBADMIN_DEFAULT_PATH
-    DOCUMENTS_ROOT = _ios_documents_root()
+    DOCUMENTS_ROOT = _EARLY_DOCUMENTS_ROOT
     CONFIG_DIR = DOCUMENTS_ROOT / "config"
     CONFIG_FILE = CONFIG_DIR / "ObstacleBridge.cfg"
     PROFILES_DIR = DOCUMENTS_ROOT / "profiles"
@@ -301,7 +411,14 @@ class ObstacleBridgeIOSApp:
     def __init__(self) -> None:
         _write_startup_artifacts(self.DOCUMENTS_ROOT)
         install_crash_hooks(self.DOCUMENTS_ROOT)
-        log_event(self.DOCUMENTS_ROOT, "ios_app.facade_init", runtime_owner="IPServer Network Extension")
+        runtime_cfg = _load_grouped_runtime_config(self.DOCUMENTS_ROOT)
+        runtime_mode = _runtime_mode_from_grouped_config(runtime_cfg)
+        log_event(
+            self.DOCUMENTS_ROOT,
+            "ios_app.facade_init",
+            runtime_mode=runtime_mode,
+            runtime_owner=_runtime_owner_from_mode(runtime_mode),
+        )
         self.profile_store = ProfileStore(self.PROFILES_DIR)
         self._active_profile_id: Optional[str] = None
 
@@ -324,11 +441,7 @@ class ObstacleBridgeIOSApp:
         if not path.startswith("/"):
             path = "/" + path
         if bind in {"0.0.0.0", "::", "*", "localhost"}:
-            host = (
-                network_settings_from_runtime_config(config).tunnel_address
-                if sys.platform == "ios"
-                else "127.0.0.1"
-            )
+            host = "127.0.0.1"
         else:
             host = bind
         return f"http://{host}:{port}{path}"
@@ -338,9 +451,11 @@ class ObstacleBridgeIOSApp:
 
     def connection_snapshot(self) -> dict[str, Any]:
         runtime_cfg = _load_grouped_runtime_config(self.DOCUMENTS_ROOT)
+        runtime_mode = _runtime_mode_from_grouped_config(runtime_cfg)
         return {
             "started": False,
-            "runtime_owner": "IPServer Network Extension",
+            "runtime_mode": runtime_mode,
+            "runtime_owner": _runtime_owner_from_mode(runtime_mode),
             "active_profile_id": self._active_profile_id,
             "config": runtime_cfg,
             "webadmin_url": self.webadmin_url_from_config(_flatten_grouped_runtime_config(runtime_cfg)),
@@ -352,7 +467,28 @@ class ObstacleBridgeIOSApp:
         return payload
 
 
-def main():
+def _run_probe_mode(argv: list[str]) -> int | None:
+    probe_flags = {
+        "--host-websocket-probe",
+        "--ws-udp-echo-probe",
+        "--ws-secure-link-probe",
+        "--runtime-config",
+        "--embedded-webadmin-probe",
+        "--webadmin-http-probe",
+    }
+    if not any(flag in argv for flag in probe_flags):
+        return None
+
+    from obstacle_bridge_ios_e2e.__main__ import main as e2e_main
+
+    return int(e2e_main(argv))
+
+
+def main(argv: list[str] | None = None):
+    args = list(sys.argv[1:] if argv is None else argv)
+    probe_exit_code = _run_probe_mode(args)
+    if probe_exit_code is not None:
+        return probe_exit_code
     try:
         if toga is None:
             raise RuntimeError("Toga is required to run the iOS app UI")
@@ -470,18 +606,19 @@ def main():
                     log_event(
                         ObstacleBridgeIOSApp.DOCUMENTS_ROOT,
                         "toga.ui_ready_runtime_not_started",
-                        runtime_owner="IPServer Network Extension",
+                        runtime_mode=bridge_app.connection_snapshot().get("runtime_mode", ""),
+                        runtime_owner=bridge_app.connection_snapshot().get("runtime_owner", ""),
                     )
-                    harvested_logs = harvest_shared_logs()
+                    harvested_logs = harvest_runtime_logs()
                     log_event(
                         ObstacleBridgeIOSApp.DOCUMENTS_ROOT,
-                        "toga.ipserver_shared_logs_harvested",
+                        "toga.runtime_logs_harvested",
                         result=harvested_logs,
                     )
-                    tunnel_start = start_ipserver_tunnel()
+                    tunnel_start = start_runtime()
                     log_event(
                         ObstacleBridgeIOSApp.DOCUMENTS_ROOT,
-                        "toga.ipserver_tunnel_start_requested",
+                        "toga.runtime_start_requested",
                         result=tunnel_start,
                     )
                     _refresh_webadmin()
@@ -490,8 +627,8 @@ def main():
                         await asyncio.sleep(3.0)
                         log_event(
                             ObstacleBridgeIOSApp.DOCUMENTS_ROOT,
-                            "toga.ipserver_tunnel_status_after_start",
-                            result=ipserver_tunnel_status(),
+                            "toga.runtime_status_after_start",
+                            result=runtime_status(),
                         )
 
                     async def _on_running(app, **kwargs) -> None:
@@ -512,8 +649,8 @@ def main():
                         log_event(ObstacleBridgeIOSApp.DOCUMENTS_ROOT, "toga.on_resume")
                         log_event(
                             ObstacleBridgeIOSApp.DOCUMENTS_ROOT,
-                            "toga.ipserver_tunnel_status",
-                            result=ipserver_tunnel_status(),
+                            "toga.runtime_status",
+                            result=runtime_status(),
                         )
                         _schedule_webadmin_refresh()
 

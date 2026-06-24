@@ -101,6 +101,9 @@ class _RunnerStub:
                     "state": "connected",
                     "connected": True,
                     "peer": "127.0.0.1:1234",
+                    "rtt_est_ms": 42.0,
+                    "transmit_delay_sample_ms": 101.0,
+                    "transmit_delay_est_ms": 123.0,
                     "secure_link": {
                         "enabled": True,
                         "mode": "psk",
@@ -138,8 +141,103 @@ class _RunnerStub:
                         "decompress_ok_total": 9,
                         "decompress_fail_total": 0,
                     },
+                    "throttle": {
+                        "applicable": True,
+                        "active": True,
+                        "stalled": False,
+                        "backpressure_active": True,
+                        "disabled": False,
+                        "budget_bytes": 12000,
+                        "used_bytes": 10800,
+                        "remaining_bytes": 1200,
+                        "aggregate": {
+                            "scope_id": "aggregate",
+                            "budget_bytes": 12000,
+                            "used_bytes": 10800,
+                            "remaining_bytes": 1200,
+                            "prev_window_bytes": 13333,
+                            "throttle_drop_count": 0,
+                        },
+                        "scope": {
+                            "scope_id": "udp:client:301",
+                            "budget_bytes": 12000,
+                            "used_bytes": 10800,
+                            "remaining_bytes": 1200,
+                            "prev_window_bytes": 13333,
+                            "throttle_drop_count": 0,
+                        },
+                    },
                 }
             ],
+        }
+
+    def get_connections_snapshot(self):
+        return {
+            "udp": [],
+            "tcp": [],
+            "tun": [
+                {
+                    "peer_id": "0:1",
+                    "protocol": "tun",
+                    "role": "server",
+                    "state": "listening",
+                    "chan_id": None,
+                    "svc_id": 3,
+                    "service_name": "shared-tun",
+                    "local": {"ifname": "obtun0", "mtu": 1500},
+                    "remote_destination": {"ifname": "obtun1", "mtu": 1500},
+                    "stats": {"rx_bytes": 0, "tx_bytes": 0, "rx_msgs": 0, "tx_msgs": 0},
+                    "shared_tun_ownership": {
+                        "mode": "server_shared",
+                        "peer_count": 2,
+                        "address_count": 4,
+                        "peer_refs": ["linux-client", "ios-client"],
+                        "peers": [
+                            {"peer_ref": "linux-client", "ipv4": ["192.168.107.2"], "ipv6": ["fd20:107::2"]},
+                            {"peer_ref": "ios-client", "ipv4": ["192.168.107.4"], "ipv6": ["fd20:107::4"]},
+                        ],
+                        "active_peer_bindings": [
+                            {
+                                "peer_id": 7,
+                                "peer_ref": "linux-client",
+                                "preferred_chan_id": 301,
+                                "bound_chan_ids": [301],
+                                "ipv4": ["192.168.107.2"],
+                                "ipv6": ["fd20:107::2"],
+                                "address_count": 2,
+                            },
+                        ],
+                        "drop_counters": {
+                            "total": 3,
+                            "by_reason": {
+                                "unknown_destination": 2,
+                                "source_not_owned_by_peer": 1,
+                            },
+                        },
+                        "recent_drops": [
+                            {
+                                "reason": "unknown_destination",
+                                "direction": "local_to_peer",
+                                "peer_id": None,
+                                "chan_id": None,
+                                "ip_version": 4,
+                                "source_ip": None,
+                                "destination_ip": "192.168.107.9",
+                                "route_class": "unicast",
+                                "packet_bytes": 21,
+                            }
+                        ],
+                    },
+                }
+            ],
+            "counts": {
+                "udp": 0,
+                "tcp": 0,
+                "tun": 0,
+                "udp_listening": 0,
+                "tcp_listening": 0,
+                "tun_listening": 1,
+            },
         }
 
     def _restart_requires_delay(self):
@@ -267,7 +365,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         ui.server = server
         ui._active_client_writers.update({writer_a, writer_b})
 
-        asyncio.run(ui.stop())
+        asyncio.run(ui._stop_server_current_loop())
 
         self.assertTrue(server.closed)
         self.assertEqual(server.wait_closed_calls, 0)
@@ -303,6 +401,20 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertTrue(base.is_dir())
         self.assertTrue((base / "index.html").is_file())
         self.assertEqual(base.name, "admin_web")
+
+    def test_token_generator_ui_requires_admin_web_name_before_generation(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        index_html = (repo_root / "admin_web" / "index.html").read_text(encoding="utf-8")
+        app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("Name To Include In Invite Token", index_html)
+        self.assertIn('id="onboardingTokenAdminName"', index_html)
+        self.assertIn("TUN Routing For Invite Token", index_html)
+        self.assertIn('id="tokenTunAddress"', index_html)
+        self.assertIn("Enter the name to include in the invite token before continuing.", app_js)
+        self.assertIn("Enter the name to include in the invite token before generating it.", app_js)
+        self.assertIn("admin_web_name: tokenAdminName", app_js)
+        self.assertIn("TUN_routing: tunRouting", app_js)
 
     def test_config_snapshot_hides_secure_link_psk_and_marks_it_read_only(self):
         args = argparse.Namespace(
@@ -443,6 +555,132 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertTrue(payload["admin_ui"]["runtime_dependencies"]["ok"])
         self.assertEqual(payload["admin_ui"]["runtime_dependencies"]["install_hint"], "")
 
+    def test_build_tun_routing_payload_exposes_dedicated_shared_tun_view(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+        )
+        ui = AdminWebUI(args, _RunnerStub())
+
+        payload = ui._build_tun_routing_payload()
+
+        self.assertEqual(payload["summary"]["tun_total"], 1)
+        self.assertEqual(payload["summary"]["tun_open"], 0)
+        self.assertEqual(payload["summary"]["tun_listening"], 1)
+        self.assertEqual(payload["summary"]["shared_services"], 1)
+        self.assertEqual(payload["summary"]["shared_active_peer_bindings"], 1)
+        self.assertEqual(payload["summary"]["shared_drop_total"], 3)
+        self.assertEqual(len(payload["shared_tun"]), 1)
+        self.assertEqual(payload["shared_tun"][0]["service_name"], "shared-tun")
+        self.assertEqual(payload["shared_tun"][0]["shared_tun_ownership"]["peer_count"], 2)
+        self.assertEqual(payload["shared_tun"][0]["shared_tun_ownership"]["drop_counters"]["by_reason"]["unknown_destination"], 2)
+
+    def test_build_tun_routing_payload_deduplicates_shared_tun_listener_and_open_row(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+        )
+        runner = _RunnerStub()
+        shared = {
+            "mode": "server_shared",
+            "peer_count": 1,
+            "active_peer_bindings": [{"peer_id": 7}],
+            "drop_counters": {"total": 0, "by_reason": {}},
+        }
+        runner.get_connections_snapshot = lambda: {
+            "udp": [],
+            "tcp": [],
+            "tun": [
+                {
+                    "protocol": "tun",
+                    "state": "connected",
+                    "chan_id": 11,
+                    "svc_id": 1,
+                    "service_name": "shared-tun",
+                    "local": {"ifname": "obtun0", "mtu": 1600},
+                    "shared_tun_ownership": dict(shared),
+                },
+                {
+                    "protocol": "tun",
+                    "state": "listening",
+                    "chan_id": None,
+                    "svc_id": 1,
+                    "service_name": "shared-tun",
+                    "local": {"ifname": "obtun0", "mtu": 1600},
+                    "shared_tun_ownership": {**shared, "active_peer_bindings": []},
+                },
+            ],
+            "counts": {"udp": 0, "tcp": 0, "tun": 1, "udp_listening": 0, "tcp_listening": 0, "tun_listening": 1},
+        }
+        ui = AdminWebUI(args, runner)
+
+        payload = ui._build_tun_routing_payload()
+
+        self.assertEqual(payload["summary"]["tun_total"], 2)
+        self.assertEqual(payload["summary"]["tun_open"], 1)
+        self.assertEqual(payload["summary"]["tun_listening"], 1)
+        self.assertEqual(payload["summary"]["shared_services"], 1)
+        self.assertEqual(payload["summary"]["shared_active_peer_bindings"], 1)
+        self.assertEqual(len(payload["shared_tun"]), 1)
+        self.assertEqual(payload["shared_tun"][0]["state"], "connected")
+
+    def test_build_tun_routing_payload_exposes_effective_overlay_peer_excluded_routes(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="ws",
+            ws_peer="38.180.143.5",
+            ws_peer_port=8080,
+            ws_bind="::",
+            ws_peer_resolve_family="ipv4",
+            dashboard=False,
+            included_routes=["0.0.0.0/0"],
+            excluded_routes=["127.0.0.0/8"],
+            included_routes6=["::/0"],
+            excluded_routes6=["::1/128"],
+            tunnel_address="192.168.106.2",
+            tunnel_prefix=24,
+            tunnel_gateway="192.168.106.1",
+            tunnel_address6="fd20:106::2",
+            tunnel_prefix6=64,
+            tunnel_gateway6="fd20:106::1",
+            dns_servers=["1.1.1.1"],
+            mtu=1600,
+        )
+        ui = AdminWebUI(args, _RunnerStub())
+
+        payload = ui._build_tun_routing_payload()
+
+        self.assertEqual(payload["included_routes"], ["0.0.0.0/0"])
+        self.assertEqual(payload["excluded_routes"], ["127.0.0.0/8", "38.180.143.5/32"])
+        self.assertEqual(payload["included_routes6"], ["::/0"])
+        self.assertEqual(payload["excluded_routes6"], ["::1/128", "::ffff:38.180.143.5/128"])
+
     def test_meta_payload_suppresses_runtime_dependency_warnings_on_ios(self):
         args = argparse.Namespace(
             admin_web=True,
@@ -472,6 +710,39 @@ class AdminWebPayloadTests(unittest.TestCase):
                 text = app_path.read_text(encoding="utf-8")
                 self.assertIn("const missing = Array.isArray(deps?.missing) ? deps.missing : [];", text)
                 self.assertNotIn("platform === 'ios'", text)
+
+    def test_status_frontend_renders_transmit_delay_next_to_rtt(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        for app_path in self._canonical_webadmin_paths():
+            with self.subTest(app_path=str(app_path.relative_to(repo_root))):
+                text = app_path.read_text(encoding="utf-8")
+                self.assertIn("renderMetric('RTT Est (ms)', fmtNumber(row.rtt_est_ms))", text)
+                self.assertIn("renderMetric('Transmit Delay Est (ms)', fmtNumber(row.transmit_delay_est_ms))", text)
+                self.assertIn("renderMetric('Throttle', fmtThrottleSummary(row.throttle))", text)
+
+    def test_tun_routing_frontend_uses_dedicated_tab_and_api(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        index_html = (repo_root / "admin_web" / "index.html").read_text(encoding="utf-8")
+        app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('data-tab="tun-routing"', index_html)
+        self.assertIn('id="tab-tun-routing"', index_html)
+        self.assertIn('id="tunRoutingConnectionsBody"', index_html)
+        self.assertIn('id="tunRoutingSharedBody"', index_html)
+        self.assertIn('id="tunRoutingIncludedRoutes"', index_html)
+        self.assertIn('id="tunRoutingExcludedRoutes"', index_html)
+        self.assertIn('id="tunRoutingIncludedRoutes6"', index_html)
+        self.assertIn('id="tunRoutingExcludedRoutes6"', index_html)
+        self.assertNotIn('id="tunConnectionsBody"', index_html)
+        self.assertNotIn('id="tunOpen"', index_html)
+        self.assertIn("apiFetch('/api/tun-routing/status'", app_js)
+        self.assertIn("applyTunRoutingDoc(j);", app_js)
+        self.assertIn("setText('tunRoutingIncludedRoutes', fmtTunRoutingRouteList(j.included_routes));", app_js)
+        self.assertIn("setText('tunRoutingExcludedRoutes', fmtTunRoutingRouteList(j.excluded_routes));", app_js)
+        self.assertIn("setText('tunRoutingIncludedRoutes6', fmtTunRoutingRouteList(j.included_routes6));", app_js)
+        self.assertIn("setText('tunRoutingExcludedRoutes6', fmtTunRoutingRouteList(j.excluded_routes6));", app_js)
+        self.assertIn("topics.push('tun_routing')", app_js)
+        self.assertNotIn("applyTunRoutingConfigSummary(", app_js)
 
     def test_restart_endpoint_uses_immediate_mode_for_embedded_restart(self):
         args = argparse.Namespace(
@@ -733,6 +1004,12 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(peer["secure_link"]["handshake_attempts_total"], 1)
         self.assertEqual(peer["secure_link"]["authenticated_sessions_total"], 1)
         self.assertEqual(peer["secure_link"]["connected_since_unix_ts"], 1699999900.0)
+        self.assertEqual(peer["rtt_est_ms"], 42.0)
+        self.assertEqual(peer["transmit_delay_sample_ms"], 101.0)
+        self.assertEqual(peer["transmit_delay_est_ms"], 123.0)
+        self.assertTrue(peer["throttle"]["applicable"])
+        self.assertTrue(peer["throttle"]["active"])
+        self.assertEqual(peer["throttle"]["remaining_bytes"], 1200)
         self.assertTrue(peer["compress_layer"]["enabled"])
         self.assertEqual(peer["compress_layer"]["algorithm"], "zlib")
         self.assertEqual(peer["compress_layer"]["compress_applied_total"], 7)
@@ -806,7 +1083,14 @@ class AdminWebPayloadTests(unittest.TestCase):
                 "endpoint_host": "bridge.example.net",
                 "endpoint_port": 4433,
             },
+            "admin_web_name": "Bridge Peer",
             "secure_link_mode": "psk",
+            "compress_layer": True,
+            "compress_layer_algo": "zlib",
+            "compress_layer_level": 4,
+            "compress_layer_min_bytes": 96,
+            "compress_layer_types": "data,data_ack",
+            "TUN_routing": {"dns_servers": ["1.1.1.1"]},
             "own_servers": [
                 {
                     "name": "api",
@@ -824,6 +1108,13 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(updates["tcp_peer"], "bridge.example.net")
         self.assertEqual(updates["tcp_peer_port"], 4433)
         self.assertEqual(updates["secure_link_mode"], "psk")
+        self.assertEqual(updates["admin_web_name"], "Bridge Peer")
+        self.assertTrue(updates["compress_layer"])
+        self.assertEqual(updates["compress_layer_algo"], "zlib")
+        self.assertEqual(updates["compress_layer_level"], 4)
+        self.assertEqual(updates["compress_layer_min_bytes"], 96)
+        self.assertEqual(updates["compress_layer_types"], "data,data_ack")
+        self.assertEqual(updates["TUN_routing"]["dns_servers"], ["1.1.1.1"])
         self.assertIn("own_servers", updates)
 
     def test_onboarding_blueprints_group_active_peer_connections(self):
@@ -888,12 +1179,30 @@ class AdminWebPayloadTests(unittest.TestCase):
             await ui._handle_onboarding_invite_generate(
                 generate_writer,
                 "POST",
-                json.dumps({"connection_id": profile_id}).encode("utf-8"),
+                json.dumps(
+                    {
+                        "connection_id": profile_id,
+                        "admin_web_name": "Token Alias",
+                        "TUN_routing": {
+                            "dns_servers": ["9.9.9.9"],
+                            "tunnel_address": ["192.168.250.1"],
+                            "tunnel_prefix": 30,
+                            "tunnel_gateway": "192.168.250.2",
+                        },
+                    }
+                ).encode("utf-8"),
             )
             generated = _http_json_body(generate_writer)
             self.assertTrue(generated["ok"])
             invite_token = str(generated.get("invite_token", "") or "")
             self.assertTrue(invite_token)
+            self.assertEqual(generated["preview"].get("generated_by"), "Token Alias")
+            self.assertEqual(generated["preview"].get("admin_web_name"), "Token Alias")
+            self.assertTrue(generated["preview"].get("compress_layer"))
+            self.assertEqual(generated["preview"].get("compress_layer_algo"), "zlib")
+            self.assertIn("TUN_routing", generated["preview"])
+            self.assertEqual(generated["preview"]["TUN_routing"]["dns_servers"], ["9.9.9.9"])
+            self.assertEqual(generated["preview"]["TUN_routing"]["tunnel_gateway"], "192.168.250.2")
 
             preview_writer = _WriterStub()
             await ui._handle_onboarding_invite_preview(
@@ -906,5 +1215,7 @@ class AdminWebPayloadTests(unittest.TestCase):
             self.assertEqual(preview["preview"].get("secure_link_psk"), "***hidden***")
             self.assertTrue(preview["preview"].get("secure_link_psk_present"))
             self.assertEqual(preview["suggested_updates"].get("secure_link_psk"), "lab-secret-12345")
+            self.assertEqual(preview["suggested_updates"].get("admin_web_name"), "Token Alias")
+            self.assertEqual(preview["suggested_updates"]["TUN_routing"]["dns_servers"], ["9.9.9.9"])
 
         asyncio.run(run_flow())

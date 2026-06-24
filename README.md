@@ -1,6 +1,13 @@
 # ObstacleBridge
 ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for barrier-resilient networking. It can run over multiple overlay transports (`myudp`, `tcp`, `quic`, `ws`), expose local TCP/UDP listener services through a reliable overlay, and host an admin UI for monitoring active channels.
 
+The project currently has two macOS product paths:
+
+- **macOS Python CLI/runtime**: the normal Python product running on macOS, including the Python TUN path and shell hook based routing.
+- **macOS Swift app**: the native app bundle and Swift host runner, sharing protocol behavior with Python while owning macOS app lifecycle and native packet/routing integration.
+
+iOS is a third native product path built around the packet tunnel extension.
+
 ## Reader guide
 
 - User: start with `Why this project was developed` and `Quick start (Setup Wizard)`
@@ -650,8 +657,9 @@ The examples below use repo-local script paths (`./scripts/...`) for development
 What the scripts automate:
 
 - Server: assign `10.20.0.2/30` to `obtun1`, bring the interface up, enable IPv4 forwarding, add forwarding rules between `obtun1` and `eth0`, add NAT for `10.20.0.0/30`, optionally add TCP MSS clamping, and clean those rules up on disconnect.
-- Client: assign `10.20.0.1/30` to `obtun0`, bring the interface up, auto-detect or preserve the route to the overlay server public IP outside the tunnel, replace the default route via `10.20.0.2 dev obtun0`, set tunnel DNS, and restore the previous default route on disconnect.
+- Client: assign `10.20.0.1/30` to `obtun0`, bring the interface up, auto-detect or preserve the route to the overlay server public IP outside the tunnel, preserve excluded local subnets on their original interfaces when full-tunnel routes are installed, replace the default route via `10.20.0.2 dev obtun0`, set tunnel DNS, and restore the previous default route on disconnect.
 - Client environment: the client hook script auto-detects the original default gateway/interface and reads the resolved overlay peer address from `OB_OVERLAY_PEER_HOST`, so the hook config only needs tunnel-specific values such as TUN addresses, gateway, optional DNS, and optional explicit underlay overrides.
+- Dual-stack note: Linux and Darwin route exclusion helpers also filter IPv4-mapped IPv6 loopback or host forms such as `::ffff:127.0.0.1/128` so listener self-reachability exclusions do not get duplicated across families.
 
 Single peer-client config assumptions:
 
@@ -1169,7 +1177,7 @@ API fallback for details not fully surfaced in WebAdmin yet:
   - `failure_code=1`
   - `failure_reason=bad_psk`
   - repeated client-side retries show increasing `consecutive_failures`, a bounded `retry_backoff_sec`, a populated `next_retry_unix_ts`, a populated `failure_session_id`, increasing `handshake_attempts_total`, and `last_event=retry_scheduled`
-- if an already-authenticated client-side secure-link session later fails closed, the client schedules lower-transport reconnect recovery and reports `recovery_enabled`, `recovery_delay_sec`, `recovery_reconnect_sec`, `next_recovery_reconnect_unix_ts`, and `last_event=recovery_reconnect_scheduled`
+- if an already-authenticated client-side secure-link session later fails closed, the client schedules lower-transport reconnect recovery that survives runner reset/epoch cleanup and reports `recovery_enabled`, `recovery_delay_sec`, `recovery_reconnect_sec`, `next_recovery_reconnect_unix_ts`, and recovery scheduling/starting `last_event` values; cert local-identity reloads use the same reconnect/re-authentication boundary instead of continuing on the superseded transport epoch
 
 Current WebAdmin gap to close in a future update:
 
@@ -1360,32 +1368,65 @@ Optional operations follow-up:
 - User use-cases in the README: [README.md](README.md)
 - System boundary and assumptions: [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md)
 - Requirements: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)
+- MyUDP transport design: [docs/MYUDP_DESIGN.md](docs/MYUDP_DESIGN.md)
 - Security design and threat scenarios: [docs/SECURITY_DESIGN.md](docs/SECURITY_DESIGN.md)
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
 - Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
-Testing statistics (see [docs/README_TESTING.md](docs/README_TESTING.md)): `156` integration tests, `215` unit tests, and `41` iOS-focused tests in `ios/tests/`. Latest focused validation for the canonical WebAdmin packaging path used `pytest -q ios/tests/test_m3_native_sources.py tests/unit/test_admin_web_payloads.py` and completed with `30 passed, 4 subtests passed`; this slice guards the repo-top `admin_web/` source, iOS Briefcase source staging, and bundled WebAdmin fallback resolution. The latest iOS tunnel milestone also revalidated the config-derived dual-stack packet-tunnel path with `python3 scripts/check_requirements_guard.py --base-ref origin/main`, `python3 scripts/check_readme_testing_guard.py --base-ref origin/main`, and `./ios/scripts/build_ios_app.sh` before the physical-device run that reached real Safari IPv4/IPv6 tunnel egress. Earlier focused validation includes unit requirement-gap closure for Admin Web authentication gates, multi-listener peer snapshot identity, IPv4/IPv6 UDP peer labeling, and core `myudp` reliability invariants, plus the iOS Documents-backed WebAdmin/config/log slice, compression/admin/lifecycle, SecureLink PSK, WebSocket SecureLink PSK reconnect stale-buffer recovery, WebSocket listener peer traffic statistics, SecureLink authenticated failure reconnect recovery, SecureLink revocation metadata and myudp stale-row guard fixes, config persistence, peer-traffic/concurrent-listener, TUN WebAdmin/hook, WebAdmin service-editor/service-name, WebAdmin PSK reveal, launcher dependency-assistance, and the embedded iOS restart/AdminWeb shutdown slice documented in [docs/README_TESTING.md](docs/README_TESTING.md).
+Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot. In that report, `python` means the Python CLI/runtime product across supported host operating systems, including macOS Python; `macos` means the macOS Swift app product.
 
-The latest CI-stability hardening on `ios-packet-tunnel-e2e` also revalidated the host-side iOS E2E lane under xdist with `pytest -q -n 16 tests/integration/test_ios_e2e.py` (`4 passed`) after replacing probe-and-release test ports with worker-partitioned TCP/UDP port allocation.
-The latest Windows CI recovery on `ios-packet-tunnel-e2e` also revalidated the `windows_only` integration lane with `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"` (`2 passed`) after restoring missing `ctypes`/`wintypes` imports in the split WebSocket transport module for WinHTTP/SSPI Negotiate proxy auth.
-For changes that touch `src/obstacle_bridge/bridge.py`, the most important regression signal after opening a pull request is the Linux shared integration lane in GitHub CI. Windows-local integration execution is still useful for targeted investigation, but it is not currently the most reliable green/red indicator for broad regression confidence on this branch history.
+### Current coverage snapshot
+Current snapshot from `python3 scripts/report_product_traceability.py`:
 
-The shared integration harness now generates localhost TLS test certificates in a temporary directory outside the repository and uses availability-aware loopback port allocation when materializing test cases. This keeps private key material out of version control and makes the Linux shared `xdist` run resilient to host services that already occupy uncommon local ports.
+#### Suite statistics
 
-### Current requirements coverage
-Current snapshot from `python scripts/report_requirements_coverage.py`:
+| Product | Test files | Test defs |
+| --- | ---: | ---: |
+| Python CLI/runtime, including macOS Python | `36` | `633` |
+| macOS Swift app | `1` | `47` |
+| iOS app/extension | `23` | `144` |
 
-- Integration-covered: `79/84 = 94.0%`
-- Unit-covered: `84/84 = 100.0%`
-- Any-test-covered: `84/84 = 100.0%`
-- Tracked in manifest: `84/84 = 100.0%`
-- Requirements without integration coverage: `REQ-ADM-011`, `REQ-ADM-012`, `REQ-LIFE-009`, `REQ-LIFE-010`, `REQ-RUN-001`
+#### Requirement traceability
 
-The supporting product-requirement traceability manifest used for this snapshot is maintained in `.github/requirements_traceability.yaml`.
+| Product | Integration covered | Unit covered | Any covered |
+| --- | ---: | ---: | ---: |
+| Python CLI/runtime, including macOS Python | `80/88 = 90.9%` | `85/88 = 96.6%` | `85/88 = 96.6%` |
+| macOS Swift app | `2/88 = 2.3%` | `5/88 = 5.7%` | `7/88 = 8.0%` |
+| iOS app/extension | `8/88 = 9.1%` | `9/88 = 10.2%` | `14/88 = 15.9%` |
 
-The related architecture decomposition is linked to tests through `.github/architecture_traceability.yaml`.
+#### Architecture traceability
 
-This top-level section is a compact coverage snapshot. Update the counts and supporting links here when requirements, implementation, or the test set changes. Keep detailed behavior, rationale, and traceability discussion in `docs/REQUIREMENTS.md`, `docs/ARCHITECTURE.md`, `docs/SYSTEM_BOUNDARY.md`, and `docs/README_TESTING.md`.
+| Product | Integration covered | Unit covered | Any covered |
+| --- | ---: | ---: | ---: |
+| Python CLI/runtime, including macOS Python | `7/7 = 100.0%` | `7/7 = 100.0%` | `7/7 = 100.0%` |
+| macOS Swift app | `1/7 = 14.3%` | `3/7 = 42.9%` | `3/7 = 42.9%` |
+| iOS app/extension | `4/7 = 57.1%` | `3/7 = 42.9%` | `4/7 = 57.1%` |
+
+The supporting manifests remain shared:
+
+- product-requirement traceability: [.github/requirements_traceability.yaml](.github/requirements_traceability.yaml)
+- architecture traceability: [.github/architecture_traceability.yaml](.github/architecture_traceability.yaml)
+
+This top-level section is intentionally compact and honest. Keep the detailed behavior, rationale, and scenario-level discussion in [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md), and [docs/README_TESTING.md](docs/README_TESTING.md).
+
+### Python/Swift drift indicator
+Current snapshot from `python3 scripts/report_python_swift_drift.py`:
+
+This section is intentionally narrower than product coverage. It shows the evidence we have that Python and Swift are functionally aligned, not a claim that the two implementations are fully equivalent.
+
+| Evidence lane | Meaning | Integration covered | Unit covered | Any covered |
+| --- | --- | ---: | ---: | ---: |
+| Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `119` | `119` |
+| Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `4` | `0` | `4` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `47` | `0` | `47` |
+| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `22` | `22` |
+| Total parity-oriented evidence | Sum of the lanes above | `51` | `141` | `192` |
+
+Important caveat:
+
+- this is evidence of drift resistance, not proof of full equivalence
+- physical-device iOS behavior is still not covered by a full automated parity lane
+- new Swift-only features still need explicit parity or interop tests before they should be considered aligned by default
 
 ### CI split note
 
@@ -1425,6 +1466,12 @@ Debugging in a project like this can be difficult because the behavior emerges f
 - Run the regular pytest suite during normal development to cover unit, integration, and overlay harness regression paths.
 - Use the parallel overlay harness for frequent end-to-end validation when transport and socket behavior matter most.
 - Keep reconnect, listener, and concurrent multi-peer coverage in the regular regression flow instead of treating them as occasional manual checks.
+- Keep UDP multi-peer resolution coverage aligned with dual-stack behavior, including `prefer-ipv6` retention across immediate send errors and IPv4 fallback through IPv4-mapped sends when the active socket is IPv6.
+- Keep the Python and Swift `prefer-ipv6` peer-resolution contract pinned for native IPv4 literals: resolution should keep the IPv4 host identity intact, while IPv4-mapped notation is reserved for IPv6 socket send compatibility.
+- Keep reconnect waits aligned with expected process self-restarts, so a freshly relaunched peer gets a bounded chance to reconnect before the integration harness reports failure.
+- Keep secure-link multi-peer listener probes gated on authenticated peer state before expecting client-published services to accept traffic.
+- Keep WebSocket reconnect coverage in that same regression flow, including secure-link cases that must emit a fresh connected edge after transport-epoch restart instead of inheriting stale connected state from the previous socket.
+- Keep Linux TUN-hook regression coverage aligned with real route behavior, including exact excluded-route snapshotting so local subnets remain bound to their original interfaces during full-tunnel setup.
 - The full testing catalog, commands, and scenario-by-scenario criteria are documented in [docs/README_TESTING.md](docs/README_TESTING.md).
 
 ### Repository layout
