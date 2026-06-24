@@ -2043,7 +2043,7 @@ class UdpSession(ISession):
         peer = None
         peer_family = socket.AF_UNSPEC
         resolve_mode = _peer_resolve_mode(self._args, "udp_peer_resolve_family")
-        allow_ipv4_mapped_send = resolve_mode == "ipv6"
+        allow_ipv4_mapped_send = resolve_mode in {"ipv6", "prefer-ipv6"}
         if peer_info is not None:
             peer_host, peer_port, peer_family = peer_info
             peer = (peer_host, peer_port)
@@ -2099,6 +2099,9 @@ class UdpSession(ISession):
                 )
                 sock = socket.socket(win_family, socket.SOCK_DGRAM)
                 sock.setblocking(False)
+                if win_family == socket.AF_INET6 and hasattr(socket, "IPV6_V6ONLY"):
+                    with contextlib.suppress(Exception):
+                        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
                 sock.bind(listen)
                 try:
                     sock.ioctl(socket.SIO_UDP_CONNRESET, False)
@@ -2115,13 +2118,16 @@ class UdpSession(ISession):
                     sock=sock,
                 )
             else:
-                use_prebuilt_socket = hasattr(socket, "SO_NOSIGPIPE")
+                use_prebuilt_socket = hasattr(socket, "SO_NOSIGPIPE") or family == socket.AF_INET6
                 if use_prebuilt_socket:
                     sock_family = family if family != socket.AF_UNSPEC else (
                         socket.AF_INET6 if ":" in listen_host else socket.AF_INET
                     )
                     sock = socket.socket(sock_family, socket.SOCK_DGRAM)
                     sock.setblocking(False)
+                    if sock_family == socket.AF_INET6 and hasattr(socket, "IPV6_V6ONLY"):
+                        with contextlib.suppress(Exception):
+                            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
                     try:
                         sock.setsockopt(socket.SOL_SOCKET, socket.SO_NOSIGPIPE, 1)
                     except Exception as e:
@@ -2465,6 +2471,17 @@ class UdpSession(ISession):
         current = None
         if self._proto is not None and getattr(self._proto, "send_port", None) is not None:
             current = self._proto.send_port.peer_addr
+        resolve_mode = _peer_resolve_mode(self._args, "udp_peer_resolve_family").strip().lower()
+        current_family = None
+        with contextlib.suppress(Exception):
+            current_family = self._peer_candidates[self._peer_candidate_index][2]
+        if resolve_mode == "prefer-ipv6" and current_family == socket.AF_INET6:
+            self._log.warning(
+                "[UDP/SESSION] peer send error err=%r current_peer=%r retaining preferred IPv6 candidate until liveness fallback",
+                err,
+                current,
+            )
+            return
         self._log.warning(
             "[UDP/SESSION] peer send error err=%r current_peer=%r attempting immediate fallback",
             err,

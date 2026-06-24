@@ -60,7 +60,8 @@ REQ-OVL-007:
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_immediately_rotates_after_unreachable_ipv6_send_error
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_resolves_multi_host_peer_with_family_preference
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_rotates_to_next_peer_candidate_after_idle_timeout
-    - tests/unit/test_peer_resolution.py::test_udp_session_immediately_falls_back_to_ipv4_on_unreachable_ipv6_send_error
+    - tests/unit/test_peer_resolution.py::test_udp_session_prefer_ipv6_keeps_candidate_on_immediate_send_error
+    - tests/unit/test_peer_resolution.py::test_send_port_prefer_ipv6_allows_ipv4_mapped_destination_on_ipv6_socket
     - tests/unit/test_peer_resolution.py::test_resolve_localhost_ipv4_uses_loopback_fallback_on_gaierror
     - tests/unit/test_peer_resolution.py::test_resolve_localhost_ipv6_uses_loopback_fallback_on_gaierror
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv6_literal_when_available

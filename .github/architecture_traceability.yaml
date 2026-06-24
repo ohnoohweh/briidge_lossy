@@ -168,7 +168,8 @@ ARC-CMP-004:
   # Process orchestration coverage includes bounded reconnect waits across
   # expected self-restart relaunches in the integration harness.
   unit_tests:
-    - tests/unit/test_peer_resolution.py::test_udp_session_immediately_falls_back_to_ipv4_on_unreachable_ipv6_send_error
+    - tests/unit/test_peer_resolution.py::test_udp_session_prefer_ipv6_keeps_candidate_on_immediate_send_error
+    - tests/unit/test_peer_resolution.py::test_send_port_prefer_ipv6_allows_ipv4_mapped_destination_on_ipv6_socket
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv6_literal_when_available
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_falls_back_to_ipv4_when_ipv6_candidate_fails
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_honors_bind_family_constraint

@@ -75,7 +75,7 @@ def test_resolve_multi_peer_honors_bind_family_constraint() -> None:
     assert (host, port, family) == ("192.0.2.10", 443, socket.AF_INET)
 
 
-def test_udp_session_immediately_falls_back_to_ipv4_on_unreachable_ipv6_send_error() -> None:
+def test_udp_session_prefer_ipv6_keeps_candidate_on_immediate_send_error() -> None:
     args = argparse.Namespace(
         max_inflight=32,
         udp_bind="::",
@@ -118,6 +118,14 @@ def test_udp_session_immediately_falls_back_to_ipv4_on_unreachable_ipv6_send_err
 
     session._on_peer_send_error(OSError(errno.ENETUNREACH, "Network is unreachable"))
 
+    assert session._peer_candidate_index == 0
+    assert fake_send_port.peer_addr == ("2001:db8::10", 4433)
+    assert learned == []
+    assert fake_runtime._conn_state is True
+    assert fake_runtime._next_probe_due_ns == 123
+    assert fake_runtime.sent_initial is False
+
+    assert session._rotate_to_next_peer_candidate() is True
     assert session._peer_candidate_index == 1
     assert fake_send_port.peer_addr == ("192.0.2.10", 4433)
     assert learned == [("192.0.2.10", 4433)]
@@ -158,6 +166,20 @@ def test_send_port_prefer_ipv6_keeps_native_ipv4_destination() -> None:
 
 
 def test_send_port_ipv6_mode_allows_ipv4_mapped_destination() -> None:
+    transport = _FakeTransport()
+    send_port = SendPort(
+        transport,
+        logging.getLogger("test"),
+        initial_peer=("192.0.2.10", 4433),
+        allow_ipv4_mapped_send=True,
+    )
+
+    send_port.sendto(b"payload")
+
+    assert transport.sent == [(b"payload", ("::ffff:192.0.2.10", 4433, 0, 0))]
+
+
+def test_send_port_prefer_ipv6_allows_ipv4_mapped_destination_on_ipv6_socket() -> None:
     transport = _FakeTransport()
     send_port = SendPort(
         transport,
