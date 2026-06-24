@@ -3357,7 +3357,12 @@ def wait_peer_secure_link_state(
     expected_state_norm = str(expected_state or '').strip().lower()
     expected_reason = None if failure_reason is None else str(failure_reason).strip().lower()
     while time.time() < end:
-        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
+        try:
+            _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
+        except (OSError, urllib.error.URLError) as exc:
+            last_doc = {"error": str(exc)}
+            time.sleep(0.25)
+            continue
         last_doc = doc
         for row in list(doc.get('peers') or []):
             if normalized_transport and str(row.get('transport', '')).strip().lower() != normalized_transport:
@@ -3403,11 +3408,16 @@ def wait_peer_secure_link_state_auth(
     expected_state_norm = str(expected_state or '').strip().lower()
     expected_reason = None if failure_reason is None else str(failure_reason).strip().lower()
     while time.time() < end:
-        code, doc = fetch_json_auth(
-            f'http://127.0.0.1:{admin_port}/api/peers',
-            timeout=1.5,
-            opener=opener,
-        )
+        try:
+            code, doc = fetch_json_auth(
+                f'http://127.0.0.1:{admin_port}/api/peers',
+                timeout=1.5,
+                opener=opener,
+            )
+        except (OSError, urllib.error.URLError) as exc:
+            last_doc = {"error": str(exc)}
+            time.sleep(0.25)
+            continue
         if code != 200:
             time.sleep(0.25)
             continue

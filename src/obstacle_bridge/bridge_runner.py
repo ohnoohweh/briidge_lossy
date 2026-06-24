@@ -1671,6 +1671,15 @@ class Runner:
                     and str(secure_link_status.get("failure_reason") or "").strip().lower() == "revoked_serial"
                 ):
                     continue
+                if (
+                    bool(secure_link_status.get("recovery_enabled"))
+                    and (
+                        secure_link_status.get("next_recovery_reconnect_unix_ts") is not None
+                        or str(secure_link_status.get("last_event") or "").strip().lower()
+                        in {"recovery_reconnect_scheduled", "recovery_reconnect_started"}
+                    )
+                ):
+                    continue
 
                 # No disconnect timestamp yet -> initialize defensively
                 if self._last_disconnected_monotonic is None:

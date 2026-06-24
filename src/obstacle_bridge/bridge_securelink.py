@@ -1415,6 +1415,30 @@ class SecureLinkPskSession(ISession):
         self._client_retry_not_before_unix_ts = None
         self._begin_client_handshake()
 
+    def _maybe_begin_client_recovery_handshake_after_reconnect(self) -> bool:
+        if not self._client_mode or not self._started:
+            return False
+        if not bool(getattr(self._inner, "is_connected", lambda: False)()):
+            return False
+        if any(int(state.auth_fail_code or 0) == self._SL_AUTH_FAIL_REVOKED_SERIAL for state in self._peer_states.values()):
+            return False
+        if int(self._last_terminal_failure_code or 0) == self._SL_AUTH_FAIL_REVOKED_SERIAL:
+            return False
+        should_recover = bool(
+            self._client_recovery_not_before_mono > 0.0
+            or self._client_recovery_not_before_unix_ts is not None
+            or any(
+                str(state.last_event or "").strip().lower() == "recovery_reconnect_started"
+                for state in self._peer_states.values()
+            )
+        )
+        if not should_recover:
+            return False
+        self._cancel_client_retry_task(clear_schedule=True)
+        self._cancel_client_recovery_task(clear_schedule=True)
+        self._begin_client_handshake()
+        return True
+
     @staticmethod
     def _clear_pending_rekey(state: _SecureLinkPeerState) -> None:
         state.pending_session_id = 0
@@ -1574,6 +1598,7 @@ class SecureLinkPskSession(ISession):
             self._client_mode
             and self._started
             and str(reason or "") != "revocation_applied"
+            and str(reason or "") != "local_identity_reloaded"
             and bool(getattr(self._inner, "is_connected", lambda: False)())
         ):
             self._maybe_begin_client_handshake()
@@ -1672,7 +1697,7 @@ class SecureLinkPskSession(ISession):
                     state.last_event_unix_ts = time.time()
                     self._record_secure_link_event("recovery_reconnect_started", state.last_event_unix_ts)
                     if not self.request_reconnect() and bool(getattr(self._inner, "is_connected", lambda: False)()):
-                        self._maybe_begin_client_handshake()
+                        self._maybe_begin_client_recovery_handshake_after_reconnect()
         expected_dropped_total = dropped_total_before + int(dropped or 0)
         if int(self._secure_link_peers_dropped_total or 0) < expected_dropped_total:
             self._secure_link_peers_dropped_total = expected_dropped_total
@@ -1983,10 +2008,26 @@ class SecureLinkPskSession(ISession):
                 "trust_failure_reason": str(state.trust_failure_reason or "") if state is not None else "",
                 "trust_failure_detail": str(state.trust_failure_detail or "") if state is not None else "",
                 "active_material_generation": int(state.active_material_generation or 0) if state is not None else int(self._active_material_generation or 0),
-                "last_material_reload_unix_ts": state.last_material_reload_unix_ts if state is not None else self._last_material_reload_unix_ts,
-                "last_material_reload_scope": str(state.last_material_reload_scope or "") if state is not None else str(self._last_material_reload_scope or ""),
-                "last_material_reload_result": str(state.last_material_reload_result or "") if state is not None else str(self._last_material_reload_result or ""),
-                "last_material_reload_detail": str(state.last_material_reload_detail or "") if state is not None else str(self._last_material_reload_detail or ""),
+                "last_material_reload_unix_ts": (
+                    state.last_material_reload_unix_ts
+                    if state is not None and state.last_material_reload_unix_ts is not None
+                    else self._last_material_reload_unix_ts
+                ),
+                "last_material_reload_scope": (
+                    str(state.last_material_reload_scope or self._last_material_reload_scope or "")
+                    if state is not None
+                    else str(self._last_material_reload_scope or "")
+                ),
+                "last_material_reload_result": (
+                    str(state.last_material_reload_result or self._last_material_reload_result or "")
+                    if state is not None
+                    else str(self._last_material_reload_result or "")
+                ),
+                "last_material_reload_detail": (
+                    str(state.last_material_reload_detail or self._last_material_reload_detail or "")
+                    if state is not None
+                    else str(self._last_material_reload_detail or "")
+                ),
                 "trust_enforced_unix_ts": state.trust_enforced_unix_ts if state is not None else self._trust_enforced_unix_ts,
                 "disconnect_reason": (
                     str(state.disconnect_reason or "")
@@ -2248,6 +2289,11 @@ class SecureLinkPskSession(ISession):
 
     def _begin_client_handshake(self) -> None:
         self._cancel_client_retry_task(clear_schedule=True)
+        self._last_auth_fail_code = 0
+        self._last_auth_fail_reason = ""
+        self._last_auth_fail_detail = ""
+        self._last_auth_fail_unix_ts = None
+        self._last_auth_fail_session_id = None
         self._handshake_attempts_total += 1
         state = _SecureLinkPeerState(
             session_id=self._new_session_id(),
@@ -2313,6 +2359,8 @@ class SecureLinkPskSession(ISession):
             self._clear_all_states()
             return
         if self._client_mode and self._started:
+            if self._maybe_begin_client_recovery_handshake_after_reconnect():
+                return
             self._maybe_begin_client_handshake()
 
     def _on_inner_transport_epoch_change(self, epoch: int) -> None:

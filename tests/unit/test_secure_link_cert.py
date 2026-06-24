@@ -30,6 +30,7 @@ class FakeInnerSession:
         self._on_app_from_peer_bytes = None
         self._on_transport_epoch_change = None
         self.sent = []
+        self.reconnect_requests = 0
         self._passthrough_enabled = False
 
     def connect_peer(self, peer):
@@ -48,6 +49,13 @@ class FakeInnerSession:
 
     def is_connected(self):
         return self._connected
+
+    def request_reconnect(self):
+        self.reconnect_requests += 1
+        self._connected = False
+        if callable(self._on_state):
+            self._on_state(False)
+        return True
 
     def send_app(self, payload: bytes, peer_id=None):
         self.sent.append((bytes(payload), peer_id))
@@ -91,6 +99,10 @@ class FakeInnerSession:
         if callable(self._on_state):
             self._on_state(connected)
 
+    def emit_transport_epoch(self, epoch: int):
+        if callable(self._on_transport_epoch_change):
+            self._on_transport_epoch_change(epoch)
+
 
 def _args(**overrides):
     base = dict(
@@ -120,6 +132,14 @@ class SecureLinkCertSessionTests(unittest.IsolatedAsyncioTestCase):
         from obstacle_bridge.bridge import ChannelMux
         hdr = ChannelMux.MUX_HDR
         return hdr.pack(chan_id, 1, counter, 1, len(data)) + data
+
+    @staticmethod
+    def _count_frame_type(session: SecureLinkPskSession, sent_rows, sl_type: int) -> int:
+        return sum(
+            1
+            for payload, _peer_id in list(sent_rows or [])
+            if (frame := session._parse_frame(payload)) and frame[0] == sl_type
+        )
 
     async def _start_pair(self, client_args: argparse.Namespace, server_args: argparse.Namespace):
         client_inner = FakeInnerSession()
@@ -419,7 +439,7 @@ class SecureLinkCertSessionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_local_identity_reload_applies_and_reauthenticates(self):
         temp_root = self._copy_fixture_dir()
-        client, server, _client_inner, _server_inner = await self._start_pair(
+        client, server, client_inner, _server_inner = await self._start_pair(
             _args(
                 tcp_peer="127.0.0.1",
                 secure_link_cert_body=str(temp_root / "client_valid_cert_body.json"),
@@ -443,12 +463,24 @@ class SecureLinkCertSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["scope"], "local_identity")
         self.assertGreaterEqual(result["dropped"], 1)
+        self.assertEqual(client_inner.reconnect_requests, 1)
+
+        reconnecting = client.get_secure_link_status_snapshot()
+        self.assertEqual(reconnecting["state"], "failed")
+        self.assertEqual(reconnecting["disconnect_reason"], "local_identity_reloaded")
+        hello_count_after_reload = self._count_frame_type(client, client_inner.sent, client._SL_TYPE_CLIENT_HELLO)
+
+        client_inner.emit_transport_epoch(2)
+        client_inner.emit_state(True)
+        for _ in range(8):
+            await asyncio.sleep(0)
+        self.assertGreater(self._count_frame_type(client, client_inner.sent, client._SL_TYPE_CLIENT_HELLO), hello_count_after_reload)
 
         status = client.get_secure_link_status_snapshot()
         self.assertEqual(status["last_material_reload_scope"], "local_identity")
         self.assertEqual(status["last_material_reload_result"], "applied")
         self.assertGreater(int(status["active_material_generation"] or 0), old_generation)
-        self.assertEqual(status["disconnect_reason"], "local_identity_reloaded")
+        self.assertNotEqual(status["state"], "failed")
         self.assertGreaterEqual(int(status["authenticated_sessions_total"] or 0), old_sessions)
 
 

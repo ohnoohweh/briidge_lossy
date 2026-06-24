@@ -355,6 +355,7 @@ REQ-AUT-019:
   unit_tests:
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
     - tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_cert_identity_and_trust_fields
+    - tests/unit/test_secure_link_cert.py::test_local_identity_reload_applies_and_reauthenticates
     - tests/unit/test_runner_overlay_transports.py::test_request_secure_link_reload_targets_matching_peer_id_only
     - tests/unit/test_runner_overlay_transports.py::test_request_secure_link_reload_rejects_unknown_peer_id
 REQ-AUT-020:
