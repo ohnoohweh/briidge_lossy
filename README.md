@@ -1466,6 +1466,7 @@ Debugging in a project like this can be difficult because the behavior emerges f
 - Run the regular pytest suite during normal development to cover unit, integration, and overlay harness regression paths.
 - Use the parallel overlay harness for frequent end-to-end validation when transport and socket behavior matter most.
 - Keep reconnect, listener, and concurrent multi-peer coverage in the regular regression flow instead of treating them as occasional manual checks.
+- Keep reconnect waits aligned with expected process self-restarts, so a freshly relaunched peer gets a bounded chance to reconnect before the integration harness reports failure.
 - Keep WebSocket reconnect coverage in that same regression flow, including secure-link cases that must emit a fresh connected edge after transport-epoch restart instead of inheriting stale connected state from the previous socket.
 - Keep Linux TUN-hook regression coverage aligned with real route behavior, including exact excluded-route snapshotting so local subnets remain bound to their original interfaces during full-tunnel setup.
 - The full testing catalog, commands, and scenario-by-scenario criteria are documented in [docs/README_TESTING.md](docs/README_TESTING.md).

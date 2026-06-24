@@ -163,6 +163,8 @@ ARC-CMP-003:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener
 
 ARC-CMP-004:
+  # Process orchestration coverage includes bounded reconnect waits across
+  # expected self-restart relaunches in the integration harness.
   unit_tests:
     - tests/unit/test_peer_resolution.py::test_udp_session_immediately_falls_back_to_ipv4_on_unreachable_ipv6_send_error
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv6_literal_when_available

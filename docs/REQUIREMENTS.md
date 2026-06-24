@@ -147,7 +147,7 @@ Current implementation note:
 ## Reconnect and restart requirements
 
 - `REQ-LIFE-001`: When one side disconnects or is restarted, the remaining side shall eventually report the overlay as not connected.
-- `REQ-LIFE-002`: When the disconnected side returns, the overlay shall reconnect automatically when the configured topology supports reconnection. Reconnect handling shall reject stale Python and Swift WebSocket callback activity from superseded sockets, and a fresh reconnect attempt shall not inherit stale RTT-connected state or allow overlapping client connect attempts to promote more than one active WebSocket at a time.
+- `REQ-LIFE-002`: When the disconnected side returns, the overlay shall reconnect automatically when the configured topology supports reconnection. Reconnect handling shall reject stale Python and Swift WebSocket callback activity from superseded sockets, and a fresh reconnect attempt shall not inherit stale RTT-connected state or allow overlapping client connect attempts to promote more than one active WebSocket at a time. The integration harness shall treat expected self-restart relaunches as part of the bounded reconnect wait window so reconnect validation observes the fresh process instead of timing out against the prior deadline.
 - `REQ-LIFE-003`: After reconnection, traffic forwarding shall resume and probes shall again succeed.
 - `REQ-LIFE-004`: Restart-specific regressions for concurrent channel cases shall remain covered so existing functionality does not silently erode.
 - `REQ-LIFE-005`: Repeated failed reconnect attempts shall be throttled by a configurable minimum retry delay so client overlays do not hammer connection setup continuously while a peer remains unavailable.

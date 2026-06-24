@@ -6089,8 +6089,11 @@ def wait_both_connected(
     client_proc: Proc,
     log_dir: Path,
     timeout: float = 30.0,
+    restart_grace: float = 15.0,
+    max_restart_extensions: int = 2,
 ) -> tuple[Proc, Proc]:
     end = time.time() + timeout
+    restart_extensions_left = max(0, int(max_restart_extensions))
 
     last_server_rendered = None
     last_client_rendered = None
@@ -6098,8 +6101,24 @@ def wait_both_connected(
     last_client = None
 
     while time.time() < end:
+        previous_server_proc = server_proc
+        previous_client_proc = client_proc
         server_proc = ensure_proc_up(server_proc, log_dir)
         client_proc = ensure_proc_up(client_proc, log_dir)
+
+        if (
+            restart_extensions_left > 0
+            and (server_proc is not previous_server_proc or client_proc is not previous_client_proc)
+        ):
+            restart_extensions_left -= 1
+            extended_until = time.time() + max(0.0, float(restart_grace))
+            if extended_until > end:
+                end = extended_until
+                log.info(
+                    '[STATUS] expected process self-restart observed; '
+                    'extended CONNECTED wait by %.1fs',
+                    float(restart_grace),
+                )
 
         try:
             last_server = try_get_status(server_proc.admin_port or 0)

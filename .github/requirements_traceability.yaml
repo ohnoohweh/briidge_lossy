@@ -470,6 +470,8 @@ REQ-LIFE-001:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_peer_protocol_epoch_reset_drops_queued_datagrams_and_control_state
 
 REQ-LIFE-002:
+  # The reconnect integration coverage includes bounded wait handling for
+  # expected self-restart relaunches during reconnect validation.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly
