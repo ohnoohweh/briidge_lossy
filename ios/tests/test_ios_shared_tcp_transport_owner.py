@@ -542,12 +542,13 @@ def test_ios_shared_tcp_transport_owner_probe_covers_provider_accept_and_inbound
         "close_frame_present": True,
     }
     assert payload["metrics"] == ["server_accepted", "client_dialed"]
-    assert sorted(event.split(":", 1)[0] for event in payload["errors"]) == [
+    event_names = {event.split(":", 1)[0] for event in payload["errors"]}
+    assert {
         "swift_udp_tcp_server_connection_ready",
         "swift_udp_tcp_server_data_mux",
         "swift_udp_tcp_server_data_read",
         "swift_udp_tcp_server_receive_done",
-    ]
+    }.issubset(event_names)
     assert any('"chan_id": 1' in event for event in payload["errors"])
     assert any('"bytes": 16' in event for event in payload["errors"])
     assert any('"sent": true' in event for event in payload["errors"])

@@ -2355,6 +2355,13 @@ def test_ios_packet_tunnel_provider_probe_secure_link_overlay_runtime_bootstraps
                             }}) else {{
                                 throw ProbeError.timeout("overlay_established")
                             }}
+                            guard waitForCondition(timeout: 8.0, {{
+                                let status = bridge.secureLinkStatus()
+                                return (status["authenticated"] as? Bool ?? false)
+                                    && (status["auth_fail_code"] as? Int ?? 0) == 0
+                            }}) else {{
+                                throw ProbeError.timeout("secure_link_authenticated")
+                            }}
 
                             let snapshot = bridge.bridgeSnapshot()
                             let secureLink = bridge.secureLinkStatus()

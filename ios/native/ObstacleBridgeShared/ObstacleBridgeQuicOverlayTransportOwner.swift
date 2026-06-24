@@ -6,6 +6,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
     private static let queueSpecificKey = DispatchSpecificKey<Int>()
+    private static let maxNetworkFrameworkWriteBytes = 1024
 
     private let peerHost: String
     private let peerPort: Int
@@ -40,7 +41,10 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     private var pendingOutboundWires: [Data] = []
     private var outboundSendInFlight = false
     private var overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
-    private var outboundContextSeq: UInt64 = 0
+    private let outboundContentContext = NWConnection.ContentContext(
+        identifier: "obstaclebridge-quic-overlay-stream",
+        metadata: []
+    )
     private var started = false
     private var reconnectAttempts = 0
     private var reconnectScheduled = false
@@ -177,7 +181,6 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         pendingOutboundWires.removeAll(keepingCapacity: false)
         outboundSendInFlight = false
         overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
-        outboundContextSeq = 0
         startupMuxFramesSent = false
     }
 
@@ -460,20 +463,8 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     }
 
     private func handleOverlayPayload(_ payload: Data) {
-        let inboundPayloads: [Data]
-        if let adapter = overlayLayerTransportAdapter {
-            let snapshot = adapter.handleInboundFrame(payload)
-            inboundPayloads = snapshot.deliveredPayloads
-            if !snapshot.emittedFrames.isEmpty {
-                sendTransportFrames(snapshot.emittedFrames)
-            }
-        } else {
-            inboundPayloads = [payload]
-        }
-        for item in inboundPayloads {
-            receiveBuffer.append(item)
-            drainReceiveBuffer()
-        }
+        receiveBuffer.append(payload)
+        drainReceiveBuffer()
     }
 
     private func drainReceiveBuffer() {
@@ -481,15 +472,31 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         guard snapshot.consumedBytes > 0 else { return }
         receiveBuffer.removeFirst(snapshot.consumedBytes)
         for payload in snapshot.completedPayloads {
-            guard let frame = ObstacleBridgeChannelMuxCodec.unpackMux(payload) else {
-                eventSink?("quic_overlay_invalid_mux_frame", ["bytes": payload.count])
-                continue
+            let inboundPayloads: [Data]
+            if let adapter = overlayLayerTransportAdapter {
+                let adapterSnapshot = adapter.handleInboundFrame(payload)
+                inboundPayloads = adapterSnapshot.deliveredPayloads
+                if !adapterSnapshot.emittedFrames.isEmpty {
+                    sendTransportFrames(adapterSnapshot.emittedFrames)
+                }
+            } else {
+                inboundPayloads = [payload]
             }
-            if frame.proto == .tun {
-                handleInboundTunMuxFrame(frame)
-            } else if frame.proto == .tcp {
-                tcpTransportOwner.handleInboundMuxFrame(frame)
+            for inboundPayload in inboundPayloads {
+                handleInboundMuxPayload(inboundPayload)
             }
+        }
+    }
+
+    private func handleInboundMuxPayload(_ payload: Data) {
+        guard let frame = ObstacleBridgeChannelMuxCodec.unpackMux(payload) else {
+            eventSink?("quic_overlay_invalid_mux_frame", ["bytes": payload.count])
+            return
+        }
+        if frame.proto == .tun {
+            handleInboundTunMuxFrame(frame)
+        } else if frame.proto == .tcp {
+            tcpTransportOwner.handleInboundMuxFrame(frame)
         }
     }
 
@@ -545,12 +552,31 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
 
     private func enqueueOutboundWire(_ wire: Data) {
         guard !wire.isEmpty else { return }
-        pendingOutboundWires.append(wire)
-        ObstacleBridgeOverlayChannelCore.recordOverlayEgress(
-            bytes: wire.count,
-            state: &overlayEgressWindow
-        )
+        // Network.framework QUIC has been observed to stall large single stream writes
+        // in the mixed Swift/Python service-forwarding path. Keep this transport-level
+        // chunking in place unless docs/QUIC_DESIGN.md has been updated with a new proof.
+        for chunk in Self.networkFrameworkWriteChunks(wire) {
+            pendingOutboundWires.append(chunk)
+            ObstacleBridgeOverlayChannelCore.recordOverlayEgress(
+                bytes: chunk.count,
+                state: &overlayEgressWindow
+            )
+        }
         flushNextOutboundWireIfNeeded()
+    }
+
+    private static func networkFrameworkWriteChunks(_ wire: Data) -> [Data] {
+        guard wire.count > maxNetworkFrameworkWriteBytes else {
+            return [wire]
+        }
+        var chunks: [Data] = []
+        var offset = 0
+        while offset < wire.count {
+            let end = min(offset + maxNetworkFrameworkWriteBytes, wire.count)
+            chunks.append(wire.subdata(in: offset..<end))
+            offset = end
+        }
+        return chunks
     }
 
     private func flushNextOutboundWireIfNeeded() {
@@ -559,14 +585,9 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         }
         outboundSendInFlight = true
         let wire = pendingOutboundWires.removeFirst()
-        outboundContextSeq &+= 1
-        let context = NWConnection.ContentContext(
-            identifier: "quic-wire-\(outboundContextSeq)",
-            metadata: []
-        )
         connection.send(
             content: wire,
-            contentContext: context,
+            contentContext: outboundContentContext,
             isComplete: false,
             completion: .contentProcessed { [weak self] error in
                 guard let self else { return }

@@ -130,6 +130,7 @@ final class ObstacleBridgeHostRunner {
     private let serviceStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Services")
     private let authStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Auth")
     private let adminSnapshotQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.AdminSnapshots")
+    private let controlActionQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.ControlActions")
     private var controlServer: ObstacleBridgeWebAdminServer?
     private var bootstrapState: [String: Any] = [:]
     private var restartCount = 0
@@ -324,7 +325,7 @@ final class ObstacleBridgeHostRunner {
             fallbackIndexTitle: "ObstacleBridge macOS Swift Host Runner",
             fallbackIndexSubtitle: "Swift-only bootstrap and status surface for host-side E2E harnessing.",
             statusProvider: { [weak self] in
-                self?.snapshot() ?? [:]
+                self?.adminStatusSnapshot() ?? [:]
             },
             apiProvider: { [weak self] method, path, headers, body in
                 guard let self else {
@@ -403,7 +404,7 @@ final class ObstacleBridgeHostRunner {
         timer.resume()
     }
 
-    private func refreshAdminSnapshotCache() {
+    private func refreshAdminSnapshotCache(sync: Bool = false) {
         let status = snapshotUncached()
         let connections = connectionsSnapshotUncached()
         let peers = peersSnapshotUncached(connections: connections, transportRuntime: status["transport_runtime"] as? [String: Any])
@@ -420,12 +421,17 @@ final class ObstacleBridgeHostRunner {
             tunRouting["included_routes6"] = tunRoutingConfig.includedRoutes6 ?? []
             tunRouting["excluded_routes6"] = effectiveExcluded.ipv6
         }
-        adminSnapshotQueue.async { [weak self] in
+        let updateCache = { [weak self] in
             self?.cachedStatusSnapshot = status
             self?.cachedConnectionsSnapshot = connections
             self?.cachedPeersSnapshot = peers
             self?.cachedMetaSnapshot = meta
             self?.cachedTunRoutingSnapshot = tunRouting
+        }
+        if sync {
+            adminSnapshotQueue.sync(execute: updateCache)
+        } else {
+            adminSnapshotQueue.async(execute: updateCache)
         }
     }
 
@@ -1301,6 +1307,12 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func controlActionSnapshot() -> [String: Any] {
+        controlActionQueue.sync {
+            controlActionSnapshotLocked()
+        }
+    }
+
+    private func controlActionSnapshotLocked() -> [String: Any] {
         [
             "restart_supported": true,
             "reconnect_supported": true,
@@ -1310,6 +1322,27 @@ final class ObstacleBridgeHostRunner {
             "shutdown_requested": shutdownRequestedAt != nil,
             "shutdown_requested_unix_ts": shutdownRequestedAt.map { Int($0.timeIntervalSince1970) } ?? NSNull(),
         ]
+    }
+
+    private func recordRestartControlAction() -> [String: Any] {
+        controlActionQueue.sync {
+            restartCount += 1
+            return controlActionSnapshotLocked()
+        }
+    }
+
+    private func recordReconnectControlAction() -> [String: Any] {
+        controlActionQueue.sync {
+            reconnectCount += 1
+            return controlActionSnapshotLocked()
+        }
+    }
+
+    private func recordShutdownControlAction() -> [String: Any] {
+        controlActionQueue.sync {
+            shutdownRequestedAt = Date()
+            return controlActionSnapshotLocked()
+        }
     }
 
     private func adminRuntimeDependenciesPayload() -> [String: Any] {
@@ -1422,7 +1455,7 @@ final class ObstacleBridgeHostRunner {
                 "control_actions": controlActionSnapshot(),
             ]
         }
-        restartCount += 1
+        let controlActions = recordRestartControlAction()
         return [
             "ok": true,
             "restart_requested": true,
@@ -1430,7 +1463,7 @@ final class ObstacleBridgeHostRunner {
             "restart_delay_sec": 0,
             "restart_mode": "immediate",
             "restart_embedded": true,
-            "control_actions": controlActionSnapshot(),
+            "control_actions": controlActions,
             "bootstrap_state": bootstrapState,
         ]
     }
@@ -1446,26 +1479,26 @@ final class ObstacleBridgeHostRunner {
                 "control_actions": controlActionSnapshot(),
             ]
         }
-        reconnectCount += 1
+        let controlActions = recordReconnectControlAction()
         return [
             "ok": true,
             "reconnect_requested": true,
             "reconnect_supported": true,
             "restart_embedded": true,
-            "control_actions": controlActionSnapshot(),
+            "control_actions": controlActions,
             "bootstrap_state": bootstrapState,
         ]
     }
 
     private func requestShutdown() -> [String: Any] {
-        shutdownRequestedAt = Date()
+        let controlActions = recordShutdownControlAction()
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) {
             exit(0)
         }
         return [
             "ok": true,
             "shutdown_requested": true,
-            "control_actions": controlActionSnapshot(),
+            "control_actions": controlActions,
         ]
     }
 
@@ -2407,23 +2440,28 @@ final class ObstacleBridgeHostRunner {
 
 extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
     func adminStatusSnapshot() -> [String: Any] {
-        snapshot()
+        refreshAdminSnapshotCache(sync: true)
+        return snapshot()
     }
 
     func adminConnectionsSnapshot() -> [String: Any] {
-        connectionsSnapshot()
+        refreshAdminSnapshotCache(sync: true)
+        return connectionsSnapshot()
     }
 
     func adminTunRoutingSnapshot() -> [String: Any] {
-        cachedTunRoutingOrBuild()
+        refreshAdminSnapshotCache(sync: true)
+        return cachedTunRoutingOrBuild()
     }
 
     func adminPeersSnapshot() -> [[String: Any]] {
-        peersSnapshot()
+        refreshAdminSnapshotCache(sync: true)
+        return peersSnapshot()
     }
 
     func adminMetaSnapshot() -> [String: Any] {
-        metaSnapshot()
+        refreshAdminSnapshotCache(sync: true)
+        return metaSnapshot()
     }
 
     func adminConfigSnapshot() -> [String: Any] {
