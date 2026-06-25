@@ -196,7 +196,7 @@ iOS integration testing is shaped differently from the desktop/Linux E2E harness
 
 Current iOS lanes:
 
-- `ios/tests/*`: Python-level unit/facade tests for the iOS companion-app modules. These do not launch an iOS app.
+- `ios/tests/*`: Python-level unit/facade tests for the iOS companion-app modules. These do not launch an iOS app. The source-guard slice also pins iOS packaging metadata such as local-networking App Transport Security allowance for the WebAdmin WebView.
 - [tests/integration/test_ios_e2e.py](../tests/integration/test_ios_e2e.py): host-side integration for the M3 packet-flow contract. It starts a loopback TCP packet-frame peer on macOS and runs a simulated `NEPacketTunnelFlow` adapter in Python. It also starts a host-side ObstacleBridge WS listener plus stimulation targets, then runs the standalone iOS E2E harness code to validate both WS-overlay UDP carriage and WS SecureLink PSK authentication against the host listener. These cases prove app/native provider configuration and iOS-harness bridge behavior without requiring Apple Network Extension entitlements.
 - [tests/integration/test_ios_simulator_e2e.py](../tests/integration/test_ios_simulator_e2e.py): opt-in simulator integration. Pytest starts host-side stimulation services on macOS, builds/updates the standalone Briefcase iOS E2E app, installs that test application into the simulator, launches it, and reads the probe report from the E2E app data container. The implemented simulator probes are host WebSocket reachability, WS overlay UDP service to host UDP echo, and WS SecureLink PSK authentication that is confirmed through the host WebAdmin API.
 

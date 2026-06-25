@@ -871,6 +871,7 @@ REQ-ADM-001:
     - tests/unit/test_runner_events.py::test_get_debug_logs_falls_back_to_log_file_when_ring_is_empty
     - tests/unit/test_debug_logging_aliases.py::test_log_file_moves_previous_session_to_lastsession_on_start
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
+    - ios/tests/test_m3_native_sources.py::test_ios_packaging_config_includes_native_bridge_and_local_webadmin_ats
 
 
 REQ-ADM-009:
