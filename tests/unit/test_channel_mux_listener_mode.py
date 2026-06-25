@@ -60,6 +60,27 @@ class _FakeSession:
         return self._metrics
 
 
+class _FakeDatagramTransport:
+    def __init__(self, *, sockname=("127.0.0.1", 30000), peername=("127.0.0.1", 16666)):
+        self.sent = []
+        self.sockname = sockname
+        self.peername = peername
+        self.closed = False
+
+    def sendto(self, data, addr=None):
+        self.sent.append((bytes(data), addr))
+
+    def get_extra_info(self, name):
+        if name == "sockname":
+            return self.sockname
+        if name == "peername":
+            return self.peername
+        return None
+
+    def close(self):
+        self.closed = True
+
+
 def _ipv4_packet(src: str, dst: str, payload: bytes = b"x") -> bytes:
     src_b = ipaddress.IPv4Address(src).packed
     dst_b = ipaddress.IPv4Address(dst).packed
@@ -2198,6 +2219,48 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
             with patch.object(mux, '_send_mux') as send_mux:
                 mux._on_local_udp_datagram(spec, svc_key, b'abcdef', ('127.0.0.1', 32000))
                 send_mux.assert_not_called()
+        finally:
+            mux.loop.close()
+
+    def test_local_udp_datagram_emits_debug_level_direction_diagnostic(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._overlay_connected = True
+            mux._accepting_enabled = True
+            spec = ChannelMux.ServiceSpec(1, 'udp', '0.0.0.0', 16666, 'udp', '127.0.0.1', 16666)
+            svc_key = ('local', 0, 1)
+            mux._svc_udp_servers[svc_key] = _FakeDatagramTransport(sockname=('0.0.0.0', 16666))
+
+            with self.assertLogs('channel_mux', level='DEBUG') as logs:
+                mux._on_local_udp_datagram(spec, svc_key, b'wg-handshake', ('127.0.0.1', 51820))
+
+            text = "\n".join(logs.output)
+            self.assertIn("[UDP/DIAG]", text)
+            self.assertIn("direction=local->overlay", text)
+            self.assertIn("path=127.0.0.1:51820->0.0.0.0:16666", text)
+            self.assertIn("remote_target=127.0.0.1:16666", text)
+        finally:
+            mux.loop.close()
+
+    def test_overlay_udp_to_target_emits_debug_level_direction_diagnostic(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            transport = _FakeDatagramTransport(
+                sockname=('127.0.0.1', 40000),
+                peername=('127.0.0.1', 16666),
+            )
+            mux._udp_client_transports[7] = transport
+
+            with self.assertLogs('channel_mux', level='DEBUG') as logs:
+                mux._rx_udp_data(7, b'wg-target')
+
+            text = "\n".join(logs.output)
+            self.assertIn("[UDP/DIAG]", text)
+            self.assertIn("direction=overlay->target", text)
+            self.assertIn("path=127.0.0.1:40000->127.0.0.1:16666", text)
+            self.assertEqual(transport.sent, [(b'wg-target', None)])
         finally:
             mux.loop.close()
 

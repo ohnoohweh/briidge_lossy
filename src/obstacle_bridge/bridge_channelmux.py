@@ -2168,6 +2168,16 @@ class ChannelMux:
             )
             return
         self._record_local_udp_forward(len(data), now_ns=now_ns, scope_key=scope_key)
+        self._log_udp_diag(
+            "server",
+            chan,
+            "local->overlay",
+            data,
+            src=src,
+            dst=dst,
+            remote_target=(spec.r_host, int(spec.r_port)),
+            sample_count=ctr.msgs_in,
+        )
         self._send_mux(chan, ChannelMux.Proto.UDP, ChannelMux.MType.DATA, data)
 
     # ---------- UDP idle sweeper (both roles) ----------
@@ -4952,6 +4962,14 @@ class ChannelMux:
                     ctr.msgs_out += 1
                     ctr.bytes_out += len(data)
                     srv_tr.sendto(data, addr)
+                    self._log_udp_diag(
+                        "server",
+                        chan,
+                        "overlay->local",
+                        data,
+                        dst=(addr[0], int(addr[1])),
+                        sample_count=ctr.msgs_out,
+                    )
                     # Touch activity
                     key = (svc_key, addr)
                     if key in self._udp_by_client:
@@ -5006,6 +5024,15 @@ class ChannelMux:
             p_sock = tr.get_extra_info("peername")
             src = (l_sock[0], int(l_sock[1])) if isinstance(l_sock, tuple) and len(l_sock) >= 2 else None
             dst = (p_sock[0], int(p_sock[1])) if isinstance(p_sock, tuple) and len(p_sock) >= 2 else None
+            self._log_udp_diag(
+                "client",
+                chan,
+                "overlay->target",
+                data,
+                src=src,
+                dst=dst,
+                sample_count=ctr.msgs_out,
+            )
             # NOTE: pass "UDP*" (no trailing colon) to avoid "UDP*::1" tag
             self._log_conn("->", "UDP/CLI", chan, data, src=src, dst=dst)
         except Exception as e:
@@ -5077,8 +5104,17 @@ class ChannelMux:
                 dst = (l_sock[0], int(l_sock[1])) if isinstance(l_sock, tuple) and len(l_sock) >= 2 else None
 
                 self.parent._log_conn("<-", "UDP/CLI:", self.chan, data, src=src, dst=dst)
+                self.parent._log_udp_diag(
+                    "client",
+                    self.chan,
+                    "target->overlay",
+                    data,
+                    src=src,
+                    dst=dst,
+                    sample_count=ctr.msgs_out,
+                )
             except Exception as e:
-                self.log.debug(f"[NET] logging failed : %r",e)
+                self.parent.log.debug(f"[NET] logging failed : %r",e)
                 pass
             now_ns = time.monotonic_ns()
             scope_key = ("udp", "client", int(self.chan))
@@ -5667,6 +5703,59 @@ class ChannelMux:
         return out
 
     # ---------- Logging helpers ----------
+
+    def _udp_diag_stats(self, chan_id: int) -> str:
+        c = self._chan_stats.get((int(chan_id), ChannelMux.Proto.UDP))
+        if c is None:
+            return "stats=rx_msgs=0 tx_msgs=0 rx_bytes=0 tx_bytes=0"
+        return (
+            "stats="
+            f"rx_msgs={int(getattr(c, 'msgs_in', 0) or 0)} "
+            f"tx_msgs={int(getattr(c, 'msgs_out', 0) or 0)} "
+            f"rx_bytes={int(getattr(c, 'bytes_in', 0) or 0)} "
+            f"tx_bytes={int(getattr(c, 'bytes_out', 0) or 0)}"
+        )
+
+    @staticmethod
+    def _udp_diag_should_log(sample_count: int) -> bool:
+        count = int(sample_count or 0)
+        return count <= 3 or count in (10, 25, 50) or (count > 0 and count % 100 == 0)
+
+    def _log_udp_diag(
+        self,
+        role: str,
+        chan_id: int,
+        direction: str,
+        data: bytes,
+        *,
+        src: Optional[tuple[str, int]] = None,
+        dst: Optional[tuple[str, int]] = None,
+        remote_target: Optional[tuple[str, int]] = None,
+        sample_count: int = 0,
+    ) -> None:
+        if not self._udp_diag_should_log(sample_count):
+            return
+        path = "-"
+        if src and dst:
+            path = f"{src[0]}:{src[1]}->{dst[0]}:{dst[1]}"
+        elif src:
+            path = f"{src[0]}:{src[1]}->?"
+        elif dst:
+            path = f"?->{dst[0]}:{dst[1]}"
+        target = ""
+        if remote_target:
+            target = f" remote_target={remote_target[0]}:{int(remote_target[1])}"
+        self.log.debug(
+            "[UDP/DIAG] role=%s chan=%s direction=%s len=%s path=%s%s %s preview=%s",
+            role,
+            chan_id,
+            direction,
+            len(data),
+            path,
+            target,
+            self._udp_diag_stats(chan_id),
+            data[:8].hex().upper(),
+        )
 
     def _log_app_msg(self, dir: str, data: bytes) -> None:
         checker = getattr(self.log, "isEnabledFor", None)
