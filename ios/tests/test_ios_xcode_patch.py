@@ -237,6 +237,11 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "SWIFT_VERSION = 5.0;" in patched
     assert 'CODE_SIGN_ENTITLEMENTS = "../../../../native/ObstacleBridgeApp/ObstacleBridge.entitlements";' in patched
     assert 'export EXPANDED_CODE_SIGN_IDENTITY=-' in patched
+    assert "PYTHON_STDLIB=" in patched
+    assert "python/lib/python3.14" in patched
+    assert "app_packages/bin" in patched
+    assert "_testcapi _testclinic" in patched
+    assert "_remote_debugging xxlimited" in patched
     assert "Process Python libraries for IPServer" not in patched
     assert "ObstacleBridgePythonBridge.m" not in patched
     assert "IPServer-Bridging-Header.h" not in patched

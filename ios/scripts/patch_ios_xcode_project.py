@@ -23,6 +23,35 @@ GENERATED_PACKET_TUNNEL_PROVIDER_RELATIVE = Path("GeneratedSources") / "IPServer
 GENERATED_APP_BUILD_STAMP_RELATIVE = Path("..") / ".." / ".." / "generated" / "ObstacleBridgeGeneratedBuildStamp.swift"
 REPO_PACKET_TUNNEL_PROVIDER = Path(__file__).resolve().parents[1] / "native" / "IPServer" / "PacketTunnelProvider.swift"
 
+PYTHON_APP_STORE_CLEANUP_SCRIPT = (
+    "\n"
+    "# Strip CPython test/support payloads that are not needed by ObstacleBridge and\n"
+    "# can cause App Store/TestFlight packaging validation to reject the archive.\n"
+    'PYTHON_STDLIB="$CODESIGNING_FOLDER_PATH/python/lib/python3.14"\n'
+    'rm -rf "$PYTHON_STDLIB/test" "$PYTHON_STDLIB/idlelib" "$PYTHON_STDLIB/tkinter" "$PYTHON_STDLIB/turtledemo"\n'
+    'rm -rf "$CODESIGNING_FOLDER_PATH/app_packages/bin"\n'
+    "for framework in _ctypes_test _testbuffer _testcapi _testclinic _testclinic_limited _testimportmultiple _testinternalcapi _testlimitedcapi _testmultiphase _testsinglephase _xxtestfuzz _remote_debugging xxlimited xxlimited_35 xxsubtype\n"
+    "do\n"
+    '    rm -rf "$CODESIGNING_FOLDER_PATH/Frameworks/$framework.framework"\n'
+    "done\n"
+)
+
+MALFORMED_PYTHON_APP_STORE_CLEANUP_SCRIPT = (
+    "\n"
+    "# Strip CPython test/support payloads that are not needed by ObstacleBridge and\n"
+    "# can cause App Store/TestFlight packaging validation to reject the archive.\n"
+    'PYTHON_STDLIB="$CODESIGNING_FOLDER_PATH/python/lib/python3.14"\n'
+    'rm -rf "$PYTHON_STDLIB/test" "$PYTHON_STDLIB/idlelib" "$PYTHON_STDLIB/tkinter" "$PYTHON_STDLIB/turtledemo"\n'
+    'rm -rf "$CODESIGNING_FOLDER_PATH/app_packages/bin"\n'
+    "for framework in \\\n"
+    "    _ctypes_test _testbuffer _testcapi _testclinic _testclinic_limited \\\n"
+    "    _testimportmultiple _testinternalcapi _testlimitedcapi _testmultiphase \\\n"
+    "    _testsinglephase _xxtestfuzz _remote_debugging xxlimited xxlimited_35 xxsubtype\n"
+    "do\n"
+    '    rm -rf "$CODESIGNING_FOLDER_PATH/Frameworks/$framework.framework"\n'
+    "done\n"
+)
+
 IPSERVER_SHARED_SWIFT_SOURCES = [
     ("71C500000000000000000001", "71C500000000000000000101", "ObstacleBridgeAdminAPI.swift"),
     ("71C500000000000000000017", "71C500000000000000000117", "ObstacleBridgeAdminAuth.swift"),
@@ -399,36 +428,76 @@ def add_ipserver_shared_swift_sources(text: str) -> str:
 
 
 def patch_python_build_script(text: str) -> str:
-    script_variants = (
+    cleanup_variants = (
+        PYTHON_APP_STORE_CLEANUP_SCRIPT,
+        PYTHON_APP_STORE_CLEANUP_SCRIPT.replace("\n", "\\n").replace('"', '\\"'),
+    )
+    text = text.replace(
+        "source $PROJECT_DIR/Support/Python.xcframework/build/utils.sh\\n\\n"
+        "source $PROJECT_DIR/Support/Python.xcframework/build/utils.sh\\n\\n",
+        "source $PROJECT_DIR/Support/Python.xcframework/build/utils.sh\\n\\n",
+    )
+    text = text.replace(
+        "source $PROJECT_DIR/Support/Python.xcframework/build/utils.sh\n\n"
+        "source $PROJECT_DIR/Support/Python.xcframework/build/utils.sh\n\n",
+        "source $PROJECT_DIR/Support/Python.xcframework/build/utils.sh\n\n",
+    )
+    for malformed_cleanup in (
+        MALFORMED_PYTHON_APP_STORE_CLEANUP_SCRIPT,
+        MALFORMED_PYTHON_APP_STORE_CLEANUP_SCRIPT.replace("\n", "\\n").replace('"', '\\"'),
+    ):
+        text = text.replace(malformed_cleanup, "")
+    identity_variants = (
         (
-            'if [ \\"$EFFECTIVE_PLATFORM_NAME\\" = \\"-iphonesimulator\\" ]; then\\n',
-            'source $PROJECT_DIR/Support/Python.xcframework/build/utils.sh\\n\\n'
             'if [ -z \\"${EXPANDED_CODE_SIGN_IDENTITY:-}\\" ]; then\\n'
             '    export EXPANDED_CODE_SIGN_IDENTITY=-\\n'
             '    export EXPANDED_CODE_SIGN_IDENTITY_NAME=\\"Ad Hoc\\"\\n'
-            'fi\\n\\n'
+            'fi\\n\\n',
+            'source $PROJECT_DIR/Support/Python.xcframework/build/utils.sh\\n\\n',
             'if [ \\"$EFFECTIVE_PLATFORM_NAME\\" = \\"-iphonesimulator\\" ]; then\\n',
         ),
         (
-            'if [ "$EFFECTIVE_PLATFORM_NAME" = "-iphonesimulator" ]; then\n',
-            'source $PROJECT_DIR/Support/Python.xcframework/build/utils.sh\n\n'
             'if [ -z "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then\n'
             '    export EXPANDED_CODE_SIGN_IDENTITY=-\n'
             '    export EXPANDED_CODE_SIGN_IDENTITY_NAME="Ad Hoc"\n'
-            'fi\n\n'
+            'fi\n\n',
+            'source $PROJECT_DIR/Support/Python.xcframework/build/utils.sh\n\n',
             'if [ "$EFFECTIVE_PLATFORM_NAME" = "-iphonesimulator" ]; then\n',
         ),
     )
 
-    for old, new in script_variants:
-        if new in text:
-            return text
-        if old in text:
-            return text.replace(old, new, 1)
+    for identity, source_line, platform_check in identity_variants:
+        if identity in text:
+            break
+        source_then_check = source_line + platform_check
+        if source_then_check in text:
+            text = text.replace(source_then_check, source_line + identity + platform_check, 1)
+            break
+        if platform_check in text:
+            text = text.replace(platform_check, source_line + identity + platform_check, 1)
+            break
 
     if 'name = "Process Python libraries";' not in text:
         return text
-    raise ValueError("Process Python libraries shell script not found")
+    if not any(cleanup in text for cleanup in cleanup_variants):
+        install_python_variants = (
+            "install_python Support/Python.xcframework app app_packages\n",
+            "install_python Support/Python.xcframework app app_packages\\n",
+        )
+        for install_python in install_python_variants:
+            if install_python in text:
+                cleanup = (
+                    PYTHON_APP_STORE_CLEANUP_SCRIPT.replace("\n", "\\n").replace('"', '\\"')
+                    if "\\n" in install_python
+                    else PYTHON_APP_STORE_CLEANUP_SCRIPT
+                )
+                text = text.replace(install_python, install_python + cleanup, 1)
+                break
+        else:
+            raise ValueError("Process Python libraries install_python command not found")
+    if not any(marker in text for marker in ('source $PROJECT_DIR/Support/Python.xcframework/build/utils.sh', 'source $PROJECT_DIR/Support/Python.xcframework/build/utils.sh\\n')):
+        raise ValueError("Process Python libraries shell script not found")
+    return text
 
 def add_app_network_extension_framework(text: str) -> str:
     build_file = (
