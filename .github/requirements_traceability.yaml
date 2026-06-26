@@ -928,6 +928,7 @@ REQ-ADM-006:
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_active_tun_channel_as_open
+    - tests/unit/test_admin_web_payloads.py::test_runner_peer_snapshot_coalesces_null_overlay_metrics
     - tests/unit/test_admin_web_payloads.py::test_status_frontend_renders_transmit_delay_next_to_rtt
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_peers_payload_preserves_throttle_summary
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_preserves_throttle_summary
@@ -948,6 +949,7 @@ REQ-ADM-006:
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_tun_routing_route_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_tun_routing_matches_python
     - ios/tests/test_m3_native_sources.py::test_macos_swift_host_runner_source_exists
+    - ios/tests/test_macos_swift_host_runner.py::test_swift_stream_transports_report_throttle_metrics_like_python
 
 REQ-ADM-007:
   integration_tests:

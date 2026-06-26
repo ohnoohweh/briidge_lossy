@@ -286,6 +286,7 @@ ARC-CMP-005:
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_listeners_when_no_clients_connected
     - tests/unit/test_connection_snapshots.py::test_snapshot_mixed_listeners_and_active_connections
     - tests/unit/test_connection_snapshots.py::test_status_snapshot_includes_tun_open_connection_count
+    - tests/unit/test_admin_web_payloads.py::test_runner_peer_snapshot_coalesces_null_overlay_metrics
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_dedicated_shared_tun_view
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_effective_overlay_peer_excluded_routes
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_frontend_uses_dedicated_tab_and_api
@@ -304,6 +305,7 @@ ARC-CMP-005:
     - tests/unit/test_requirements_unit_gaps.py::test_listener_peer_snapshot_preserves_distinct_peers_across_listener_transports
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
     - tests/unit/test_admin_web_payloads.py::test_status_frontend_renders_transmit_delay_next_to_rtt
+    - ios/tests/test_macos_swift_host_runner.py::test_swift_stream_transports_report_throttle_metrics_like_python
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_direct_preflight_requires_http_200_before_upgrade
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path

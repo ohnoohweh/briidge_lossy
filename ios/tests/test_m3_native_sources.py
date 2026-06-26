@@ -768,8 +768,9 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert '"restart_mode": "immediate"' in host_runner
     assert '"restart_embedded": true' in host_runner
     assert '"reconnect_supported": true' in host_runner
-    assert '"rtt_est_ms": myudpRuntime["rtt_est_ms"] ?? NSNull()' in host_runner
-    assert '"confirmed_total": protocolStats["confirmed_total"] ?? 0' in host_runner
+    assert "ObstacleBridgeAdminSnapshotSupport.selectedProtocolStats(" in host_runner
+    assert 'ObstacleBridgeAdminSnapshotSupport.peerMetric(\n                "rtt_est_ms"' in host_runner
+    assert '"confirmed_total": myudpProtocolStats["confirmed_total"] ?? 0' in host_runner
     assert "let tunService = ownServerSpecs.first { $0.listenProtocol == \"tun\" && $0.targetProtocol == \"tun\" }" in host_runner
     assert "tunIfname: tunService?.listenBind" in host_runner
     assert "tunPacketSink: { [weak self] packet in" in host_runner

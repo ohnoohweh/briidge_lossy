@@ -568,11 +568,14 @@ final class ObstacleBridgeHostRunner {
     ) -> [[String: Any]] {
         let connections = connections ?? connectionsSnapshotUncached()
         let counts = connections["counts"] as? [String: Any] ?? [:]
-        let transport = bootstrapState["transport"] ?? (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp")
+        let transport = Self.stringValue(from: bootstrapState["transport"]) ?? (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp")
         let peerEndpoint = peerEndpointSnapshot()
         let transportRuntime = suppliedTransportRuntime ?? transportRuntimeSnapshot()
         let myudpRuntime = transportRuntime["myudp"] as? [String: Any] ?? [:]
-        let protocolStats = myudpRuntime["protocol_stats"] as? [String: Any] ?? [:]
+        let protocolStats = ObstacleBridgeAdminSnapshotSupport.selectedProtocolStats(
+            from: transportRuntime,
+            preferredKind: transport
+        )
         let trafficTotals = peerTrafficTotals(from: connections)
         let overlayConnected = overlayCurrentlyConnected() ?? false
         let stateText: String
@@ -591,9 +594,20 @@ final class ObstacleBridgeHostRunner {
             "peer": peerEndpoint,
             "decode_errors": 0,
             "inflight": protocolStats["inflight"] ?? 0,
-            "last_incoming_age_seconds": lastIncomingAgeSeconds(from: myudpRuntime),
-            "rtt_est_ms": myudpRuntime["rtt_est_ms"] ?? NSNull(),
-            "transmit_delay_est_ms": myudpRuntime["transmit_delay_est_ms"] ?? NSNull(),
+            "last_incoming_age_seconds": ObstacleBridgeAdminSnapshotSupport.peerLastIncomingAgeSeconds(
+                from: transportRuntime,
+                preferredKind: transport
+            ),
+            "rtt_est_ms": ObstacleBridgeAdminSnapshotSupport.peerMetric(
+                "rtt_est_ms",
+                from: transportRuntime,
+                preferredKind: transport
+            ),
+            "transmit_delay_est_ms": ObstacleBridgeAdminSnapshotSupport.peerMetric(
+                "transmit_delay_est_ms",
+                from: transportRuntime,
+                preferredKind: transport
+            ),
             "traffic": trafficSnapshot(peerID: "1", rxBytes: trafficTotals.rxBytes, txBytes: trafficTotals.txBytes),
             "open_connections": [
                 "udp": counts["udp"] ?? 0,
@@ -614,13 +628,14 @@ final class ObstacleBridgeHostRunner {
             "throttle": ObstacleBridgeAdminSnapshotSupport.peerThrottleSnapshot(peerID: 1, connectionsSnapshot: connections),
             "runtime": transportRuntime,
         ]
-        if let myudp = bootstrapState["transport"] as? String, myudp == "myudp" {
+        if transport == "myudp" {
+            let myudpProtocolStats = myudpRuntime["protocol_stats"] as? [String: Any] ?? [:]
             peer["myudp"] = [
-                "buffered_frames": protocolStats["buffered_frames"] ?? 0,
-                "first_pass": protocolStats["first_pass"] ?? 0,
-                "repeated_once": protocolStats["repeated_once"] ?? 0,
-                "repeated_multiple": protocolStats["repeated_multiple"] ?? 0,
-                "confirmed_total": protocolStats["confirmed_total"] ?? 0,
+                "buffered_frames": myudpProtocolStats["buffered_frames"] ?? 0,
+                "first_pass": myudpProtocolStats["first_pass"] ?? 0,
+                "repeated_once": myudpProtocolStats["repeated_once"] ?? 0,
+                "repeated_multiple": myudpProtocolStats["repeated_multiple"] ?? 0,
+                "confirmed_total": myudpProtocolStats["confirmed_total"] ?? 0,
             ]
         }
         return [peer]
@@ -668,10 +683,6 @@ final class ObstacleBridgeHostRunner {
             "rx_bytes_per_sec": rxRate,
             "tx_bytes_per_sec": txRate,
         ]
-    }
-
-    private func lastIncomingAgeSeconds(from runtime: [String: Any]) -> Any {
-        ObstacleBridgeAdminSnapshotSupport.lastIncomingAgeSeconds(from: runtime)
     }
 
     private func peerEndpointSnapshot() -> Any {
