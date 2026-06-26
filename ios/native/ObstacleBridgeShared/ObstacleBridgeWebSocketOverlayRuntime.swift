@@ -210,6 +210,14 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
         return .string(encoded as? String ?? "")
     }
 
+    func encodeClientPing(txNS: UInt64, echoNS: UInt64) throws -> URLSessionWebSocketTask.Message {
+        let encoded = try payloadCodec.encode(buildPingWire(txNS: txNS, echoNS: echoNS))
+        if let data = encoded as? Data {
+            return .data(data)
+        }
+        return .string(encoded as? String ?? "")
+    }
+
     func decodeClientMessage(_ message: URLSessionWebSocketTask.Message) throws -> Data {
         switch try decodeClientFrame(message) {
         case .app(let payload):
@@ -396,6 +404,14 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
         var wire = Data(capacity: 9)
         wire.append(Self.pongKind)
         appendUInt64BE(echoTxNS, to: &wire)
+        return wire
+    }
+
+    private func buildPingWire(txNS: UInt64, echoNS: UInt64) -> Data {
+        var wire = Data(capacity: 17)
+        wire.append(Self.pingKind)
+        appendUInt64BE(txNS, to: &wire)
+        appendUInt64BE(echoNS, to: &wire)
         return wire
     }
 

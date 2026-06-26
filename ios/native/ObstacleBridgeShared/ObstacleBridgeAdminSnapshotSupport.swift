@@ -125,6 +125,55 @@ enum ObstacleBridgeAdminSnapshotSupport {
         return Double(now - lastRxWall) / 1_000_000_000.0
     }
 
+    static func selectedTransportRuntime(from transportRuntime: [String: Any], preferredKind: String? = nil) -> [String: Any] {
+        let kind = (preferredKind ?? stringValue(transportRuntime["kind"]) ?? "myudp").lowercased()
+        let key: String
+        switch kind {
+        case "ws", "websocket":
+            key = "websocket"
+        case "tcp":
+            key = "tcp"
+        case "quic":
+            key = "quic"
+        default:
+            key = "myudp"
+        }
+        return transportRuntime[key] as? [String: Any] ?? transportRuntime
+    }
+
+    static func selectedProtocolStats(from transportRuntime: [String: Any], preferredKind: String? = nil) -> [String: Any] {
+        let selected = selectedTransportRuntime(from: transportRuntime, preferredKind: preferredKind)
+        return selected["protocol_stats"] as? [String: Any]
+            ?? transportRuntime["protocol_stats"] as? [String: Any]
+            ?? [:]
+    }
+
+    static func peerMetric(_ key: String, from transportRuntime: [String: Any], preferredKind: String? = nil) -> Any {
+        let selected = selectedTransportRuntime(from: transportRuntime, preferredKind: preferredKind)
+        if let value = nonNullValue(selected[key]) {
+            return value
+        }
+        let protocolStats = selectedProtocolStats(from: transportRuntime, preferredKind: preferredKind)
+        if let value = nonNullValue(protocolStats[key]) {
+            return value
+        }
+        if key == "rtt_est_ms",
+           let transmitDelay = doubleValue(protocolStats["transmit_delay_est_ms"] ?? selected["transmit_delay_est_ms"]),
+           transmitDelay > 0.0 {
+            return max(0.0, transmitDelay * 2.0)
+        }
+        return NSNull()
+    }
+
+    static func peerLastIncomingAgeSeconds(from transportRuntime: [String: Any], preferredKind: String? = nil) -> Any {
+        let selected = selectedTransportRuntime(from: transportRuntime, preferredKind: preferredKind)
+        let selectedAge = lastIncomingAgeSeconds(from: selected)
+        if !(selectedAge is NSNull) {
+            return selectedAge
+        }
+        return lastIncomingAgeSeconds(from: transportRuntime)
+    }
+
     static func peerThrottleSnapshot(peerID: Int, connectionsSnapshot: [String: Any]) -> [String: Any] {
         var summary: [String: Any]? = nil
         for key in ["udp", "tcp", "tun"] {
@@ -289,6 +338,45 @@ enum ObstacleBridgeAdminSnapshotSupport {
             return ["1", "true", "yes", "on"].contains(lowered)
         }
         return false
+    }
+
+    private static func nonNullValue(_ value: Any?) -> Any? {
+        guard let value, !(value is NSNull) else {
+            return nil
+        }
+        return value
+    }
+
+    private static func doubleValue(_ value: Any?) -> Double? {
+        if let value = value as? Double {
+            return value
+        }
+        if let value = value as? Float {
+            return Double(value)
+        }
+        if let value = value as? Int {
+            return Double(value)
+        }
+        if let value = value as? UInt64 {
+            return Double(value)
+        }
+        if let value = value as? NSNumber {
+            return value.doubleValue
+        }
+        if let value = value as? String {
+            return Double(value)
+        }
+        return nil
+    }
+
+    private static func stringValue(_ value: Any?) -> String? {
+        if let value = value as? String {
+            return value
+        }
+        if let value = value as? NSNumber {
+            return value.stringValue
+        }
+        return nil
     }
 
     private static func uint64Value(_ value: Any?) -> UInt64? {

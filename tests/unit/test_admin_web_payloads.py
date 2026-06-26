@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from obstacle_bridge.bridge import AdminWebUI
+from obstacle_bridge import bridge_runner
 
 
 class _RunnerStub:
@@ -1013,6 +1014,101 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertTrue(peer["compress_layer"]["enabled"])
         self.assertEqual(peer["compress_layer"]["algorithm"], "zlib")
         self.assertEqual(peer["compress_layer"]["compress_applied_total"], 7)
+
+    def test_runner_peer_snapshot_coalesces_null_overlay_metrics(self):
+        class _Mux:
+            def snapshot_connections(self):
+                return {"udp": [], "tcp": [], "tun": [], "counts": {}}
+
+        class _Session:
+            _last_rx_wall_ns = time.monotonic_ns()
+
+            def get_metrics(self):
+                return bridge_runner.SessionMetrics(
+                    rtt_est_ms=42.0,
+                    transmit_delay_sample_ms=101.0,
+                    transmit_delay_est_ms=123.0,
+                    inflight=0,
+                )
+
+            def get_overlay_peers_snapshot(self):
+                return [
+                    {
+                        "peer_id": 1,
+                        "connected": True,
+                        "state": "connected",
+                        "peer": ("127.0.0.1", 1234),
+                        "rtt_est_ms": None,
+                        "transmit_delay_sample_ms": None,
+                        "transmit_delay_est_ms": None,
+                        "last_incoming_age_seconds": None,
+                    }
+                ]
+
+            def is_connected(self):
+                return True
+
+        runner = bridge_runner.Runner.__new__(bridge_runner.Runner)
+        runner.args = argparse.Namespace()
+        runner._sessions = [_Session()]
+        runner._muxes = [_Mux()]
+        runner._session_labels = ["ws"]
+        runner._peer_traffic_rate_state = {}
+
+        payload = runner.get_peer_connections_snapshot()
+        peer = payload["peers"][0]
+        self.assertEqual(peer["rtt_est_ms"], 42.0)
+        self.assertEqual(peer["transmit_delay_sample_ms"], 101.0)
+        self.assertEqual(peer["transmit_delay_est_ms"], 123.0)
+        self.assertIsNotNone(peer["last_incoming_age_seconds"])
+
+    def test_runner_peer_snapshot_preserves_null_listener_overlay_metrics(self):
+        class _Mux:
+            def snapshot_connections(self):
+                return {"udp": [], "tcp": [], "tun": [], "counts": {}}
+
+        class _InnerSession:
+            def get_metrics(self):
+                return bridge_runner.SessionMetrics(
+                    rtt_est_ms=42.0,
+                    transmit_delay_sample_ms=101.0,
+                    transmit_delay_est_ms=123.0,
+                    inflight=0,
+                )
+
+        class _Session:
+            inner_session = _InnerSession()
+
+            def get_overlay_peers_snapshot(self):
+                return [
+                    {
+                        "peer_id": -1,
+                        "listening": True,
+                        "rtt_est_ms": None,
+                        "transmit_delay_sample_ms": None,
+                        "transmit_delay_est_ms": None,
+                        "last_incoming_age_seconds": None,
+                    }
+                ]
+
+            def is_connected(self):
+                return False
+
+        runner = bridge_runner.Runner.__new__(bridge_runner.Runner)
+        runner.args = argparse.Namespace()
+        runner._sessions = [_Session()]
+        runner._muxes = [_Mux()]
+        runner._session_labels = ["myudp"]
+        runner._peer_traffic_rate_state = {}
+
+        payload = runner.get_peer_connections_snapshot()
+        peer = payload["peers"][0]
+        self.assertFalse(peer["connected"])
+        self.assertEqual(peer["state"], "listening")
+        self.assertIsNone(peer["rtt_est_ms"])
+        self.assertIsNone(peer["transmit_delay_sample_ms"])
+        self.assertIsNone(peer["transmit_delay_est_ms"])
+        self.assertIsNone(peer["last_incoming_age_seconds"])
 
     def test_build_peers_payload_includes_cert_identity_and_trust_fields(self):
         args = argparse.Namespace(

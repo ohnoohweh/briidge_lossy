@@ -215,6 +215,10 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "native/ObstacleBridgeShared/ObstacleBridgeChannelMuxUdpRuntime.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTunRuntime.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift" in patched
+    assert "native/ObstacleBridgeShared/ObstacleBridgeAdminAPI.swift" in patched
+    assert "native/ObstacleBridgeShared/ObstacleBridgeChannelMuxCodec.swift" in patched
+    assert "native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift" in patched
+    assert "native/ObstacleBridgeShared/ObstacleBridgeOverlayStackPlanner.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift" in patched
@@ -224,6 +228,10 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "native/ObstacleBridgeShared/ObstacleBridgeOnboarding.swift" in patched
     assert "ObstacleBridgeNativeCrypto.swift in Sources" in patched
     assert "ObstacleBridgeNativeCrypto.swift in IPServer Sources" in patched
+    assert "ObstacleBridgeAdminAPI.swift in Sources" in patched
+    assert "ObstacleBridgeChannelMuxCodec.swift in Sources" in patched
+    assert "ObstacleBridgeRuntimeConfig.swift in Sources" in patched
+    assert "ObstacleBridgeOverlayStackPlanner.swift in Sources" in patched
     assert "ObstacleBridgeWebAdminServer.swift in Sources" in patched
     assert "ObstacleBridgeWebSocketOverlayTransportOwner.swift in Sources" in patched
     assert "ObstacleBridgeQuicOverlayRuntime.swift in Sources" in patched

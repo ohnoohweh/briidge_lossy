@@ -1134,7 +1134,11 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         let endpoint = adminPeerEndpoint(runtimeConfig: runtimeConfig)
         let transportRuntime = adminTransportRuntimeSnapshot(bridgeSnapshot: bridgeSnapshot)
         let myudpRuntime = transportRuntime["myudp"] as? [String: Any] ?? [:]
-        let protocolStats = myudpRuntime["protocol_stats"] as? [String: Any] ?? [:]
+        let protocolStats = ObstacleBridgeAdminSnapshotSupport.selectedProtocolStats(
+            from: transportRuntime,
+            preferredKind: transport
+        )
+        let myudpProtocolStats = myudpRuntime["protocol_stats"] as? [String: Any] ?? [:]
         return [[
             "id": 1,
             "transport": transport,
@@ -1143,9 +1147,20 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "peer": endpoint,
             "decode_errors": 0,
             "inflight": protocolStats["inflight"] ?? 0,
-            "last_incoming_age_seconds": adminLastIncomingAgeSeconds(runtime: myudpRuntime),
-            "rtt_est_ms": myudpRuntime["rtt_est_ms"] ?? NSNull(),
-            "transmit_delay_est_ms": myudpRuntime["transmit_delay_est_ms"] ?? NSNull(),
+            "last_incoming_age_seconds": ObstacleBridgeAdminSnapshotSupport.peerLastIncomingAgeSeconds(
+                from: transportRuntime,
+                preferredKind: transport
+            ),
+            "rtt_est_ms": ObstacleBridgeAdminSnapshotSupport.peerMetric(
+                "rtt_est_ms",
+                from: transportRuntime,
+                preferredKind: transport
+            ),
+            "transmit_delay_est_ms": ObstacleBridgeAdminSnapshotSupport.peerMetric(
+                "transmit_delay_est_ms",
+                from: transportRuntime,
+                preferredKind: transport
+            ),
             "traffic": traffic,
             "open_connections": openConnections,
             "secure_link": adminSecureLinkSnapshot(state: state),
@@ -1153,11 +1168,11 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "throttle": ObstacleBridgeAdminSnapshotSupport.peerThrottleSnapshot(peerID: 1, connectionsSnapshot: connections),
             "runtime": transportRuntime,
             "myudp": [
-                "buffered_frames": protocolStats["buffered_frames"] ?? 0,
-                "first_pass": protocolStats["first_pass"] ?? 0,
-                "repeated_once": protocolStats["repeated_once"] ?? 0,
-                "repeated_multiple": protocolStats["repeated_multiple"] ?? 0,
-                "confirmed_total": protocolStats["confirmed_total"] ?? 0,
+                "buffered_frames": myudpProtocolStats["buffered_frames"] ?? 0,
+                "first_pass": myudpProtocolStats["first_pass"] ?? 0,
+                "repeated_once": myudpProtocolStats["repeated_once"] ?? 0,
+                "repeated_multiple": myudpProtocolStats["repeated_multiple"] ?? 0,
+                "confirmed_total": myudpProtocolStats["confirmed_total"] ?? 0,
             ],
         ]]
     }
@@ -1177,10 +1192,6 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             lastRxWallNSValue: myudpRuntime["last_rx_wall_ns"],
             fallbackConnected: adminBoolValue(myudpRuntime["connected"])
         )
-    }
-
-    private func adminLastIncomingAgeSeconds(runtime: [String: Any]) -> Any {
-        ObstacleBridgeAdminSnapshotSupport.lastIncomingAgeSeconds(from: runtime)
     }
 
     func adminMetaSnapshot() -> [String: Any] {

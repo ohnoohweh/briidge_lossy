@@ -41,6 +41,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private var pendingOutboundWires: [Data] = []
     private var outboundSendInFlight = false
     private var overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
+    private var lastOverlayRxWallNS: UInt64 = 0
     private var udpServerConnections: [Int: NWConnection] = [:]
     private var udpClientConnections: [Int: NWConnection] = [:]
     private var udpClientDrivers: [Int: ObstacleBridgeUDPClientConnectionDriver] = [:]
@@ -221,7 +222,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
 
     func transportSnapshot() -> [String: Any] {
         withOwnerQueue {
-            [
+            let protocolStats = overlayProtocolStats()
+            return [
                 "overlay_connected": overlayConnected,
                 "overlay_bind_host": bindHost,
                 "overlay_bind_port": bindPort,
@@ -238,7 +240,10 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
                 "client_udp_channels": udpConnectionStates.count,
                 "tun_channels": activeTunChanIDs.count,
                 "tun_stats": tunStats,
-                "protocol_stats": overlayProtocolStats(),
+                "last_rx_wall_ns": lastOverlayRxWallNS,
+                "rtt_est_ms": ObstacleBridgeAdminSnapshotSupport.peerMetric("rtt_est_ms", from: ["protocol_stats": protocolStats]),
+                "transmit_delay_est_ms": protocolStats["transmit_delay_est_ms"] ?? 0.0,
+                "protocol_stats": protocolStats,
             ]
         }
     }
@@ -569,6 +574,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     private func handleOverlayTransportPayload(_ payload: Data) {
+        lastOverlayRxWallNS = DispatchTime.now().uptimeNanoseconds
         if let adapter = overlayLayerTransportAdapter {
             let snapshot = adapter.handleInboundFrame(payload)
             for frame in snapshot.emittedFrames {

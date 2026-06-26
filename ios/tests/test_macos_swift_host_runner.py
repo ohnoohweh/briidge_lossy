@@ -142,6 +142,7 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
 
 def test_swift_stream_transports_report_throttle_metrics_like_python() -> None:
     core = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
+    snapshot_support = (SHARED_NATIVE_DIR / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")
     tcp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8")
     ws_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
     quic_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeQuicOverlayTransportOwner.swift").read_text(encoding="utf-8")
@@ -153,16 +154,29 @@ def test_swift_stream_transports_report_throttle_metrics_like_python() -> None:
     assert '"max_inflight": max(0, maxInflight)' in core
     assert '"egress_prev_window_bytes": max(0, egressWindow.previousBytes)' in core
     assert '"egress_curr_window_bytes": max(0, egressWindow.currentBytes)' in core
+    assert "static func selectedTransportRuntime(" in snapshot_support
+    assert "static func selectedProtocolStats(" in snapshot_support
+    assert "static func peerMetric(_ key: String" in snapshot_support
+    assert "static func peerLastIncomingAgeSeconds(" in snapshot_support
 
     for source in (tcp_owner, ws_owner, quic_owner):
+        assert "private var lastOverlayRxWallNS: UInt64 = 0" in source
+        assert '"last_rx_wall_ns": lastOverlayRxWallNS' in source
         assert "private func overlayWaitingCount() -> Int" in source
         assert "private func overlayBackpressureSnapshot() -> ObstacleBridgeChannelMuxTunRuntime.OverlayBackpressureSnapshot" in source
         assert "private func overlayProtocolStats() -> [String: Any]" in source
-        assert '"protocol_stats": overlayProtocolStats()' in source
+        assert '"protocol_stats": protocolStats' in source
         assert "bufferedFrames: overlayWaitingCount()" in source
         assert "backpressure: overlayBackpressureSnapshot()" in source
         assert "maxInflight: 1" in source
         assert "ObstacleBridgeOverlayChannelCore.recordOverlayEgress(" in source
+    assert "private var rttEstMS: Double?" in ws_owner
+    assert "func encodeClientPing(txNS: UInt64, echoNS: UInt64)" in (
+        SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift"
+    ).read_text(encoding="utf-8")
+    assert "scheduleNextRTTPing(for: webSocketTask)" in ws_owner
+    assert '"rtt_est_ms": rttEstMS ?? NSNull()' in ws_owner
+    assert '"transmit_delay_est_ms": transmitDelayEstMSValue() ?? NSNull()' in ws_owner
 
 
 def test_swift_udp_status_reports_inflight_separately_from_buffered_frames() -> None:

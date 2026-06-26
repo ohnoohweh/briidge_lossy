@@ -55,6 +55,10 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private var pendingOutboundMessages: [URLSessionWebSocketTask.Message] = []
     private var outboundSendInFlight = false
     private var overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
+    private var lastOverlayRxWallNS: UInt64 = 0
+    private var lastPeerPingTxNS: UInt64 = 0
+    private var lastRttOkNS: UInt64 = 0
+    private var rttEstMS: Double?
     private var tunDebugLocalForwards = 0
     private var tunDebugLocalDrops = 0
     private var tunDebugInboundDelivers = 0
@@ -219,7 +223,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
 
     func transportSnapshot() -> [String: Any] {
         withOwnerQueue {
-            [
+            let protocolStats = overlayProtocolStats()
+            return [
                 "overlay_connected": overlayConnected,
                 "overlay_host": peerHost,
                 "overlay_port": peerPort,
@@ -238,7 +243,11 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 "client_udp_channels": udpConnectionStates.count,
                 "tun_channels": activeTunChanIDs.count,
                 "tun_stats": tunStats,
-                "protocol_stats": overlayProtocolStats(),
+                "last_rx_wall_ns": lastOverlayRxWallNS,
+                "last_rtt_ok_ns": lastRttOkNS,
+                "rtt_est_ms": rttEstMS ?? NSNull(),
+                "transmit_delay_est_ms": transmitDelayEstMSValue() ?? NSNull(),
+                "protocol_stats": protocolStats,
             ]
         }
     }
@@ -391,6 +400,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             self.outboundSendInFlight = false
             self.maybePrimeSecureLinkHandshake()
             self.maybeSendStartupMuxFrames()
+            self.scheduleNextRTTPing(for: webSocketTask)
             self.receiveFromOverlay()
         }
     }
@@ -508,12 +518,17 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         case .app(let payload):
             handleOverlayTransportPayload(payload)
         case .ping(let txNS, let echoNS):
+            lastPeerPingTxNS = txNS
             eventSink?("ws_overlay_ping_received", [
                 "tx_ns": String(txNS),
                 "echo_ns": String(echoNS),
             ])
+            if echoNS > 0 {
+                recordRTTPong(echoTxNS: echoNS)
+            }
             sendWebSocketControlPong(echoTxNS: txNS)
         case .pong(let echoTxNS):
+            recordRTTPong(echoTxNS: echoTxNS)
             eventSink?("ws_overlay_pong_received", [
                 "echo_tx_ns": String(echoTxNS),
             ])
@@ -521,6 +536,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     }
 
     private func handleOverlayTransportPayload(_ payload: Data) {
+        lastOverlayRxWallNS = DispatchTime.now().uptimeNanoseconds
         if let adapter = overlayLayerTransportAdapter {
             let snapshot = adapter.handleInboundFrame(payload)
             for frame in snapshot.emittedFrames {
@@ -557,6 +573,9 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         pendingOutboundMessages.removeAll(keepingCapacity: false)
         outboundSendInFlight = false
         overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
+        lastPeerPingTxNS = 0
+        lastRttOkNS = 0
+        rttEstMS = nil
     }
 
     private func maybeSendStartupMuxFrames() {
@@ -717,6 +736,54 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         }
     }
 
+    private func scheduleNextRTTPing(for task: URLSessionWebSocketTask) {
+        queue.asyncAfter(deadline: .now() + .seconds(1)) { [weak self, weak task] in
+            guard let self, let task else { return }
+            self.sendRTTPingAndReschedule(for: task)
+        }
+    }
+
+    private func sendRTTPingAndReschedule(for task: URLSessionWebSocketTask) {
+        guard started, overlayConnected, websocketTask === task else { return }
+        let txNS = DispatchTime.now().uptimeNanoseconds
+        do {
+            let message = try overlayRuntime.encodeClientPing(txNS: txNS, echoNS: lastPeerPingTxNS)
+            task.send(message) { [weak self, weak task] error in
+                self?.queue.async {
+                    guard let self, let task, self.websocketTask === task else { return }
+                    if let error {
+                        self.eventSink?("ws_overlay_ping_send_failed", [
+                            "tx_ns": String(txNS),
+                            "error": error.localizedDescription,
+                        ])
+                    }
+                    self.scheduleNextRTTPing(for: task)
+                }
+            }
+        } catch {
+            eventSink?("ws_overlay_control_encode_failed", ["error": error.localizedDescription])
+            scheduleNextRTTPing(for: task)
+        }
+    }
+
+    private func recordRTTPong(echoTxNS: UInt64) {
+        guard echoTxNS > 0 else { return }
+        let nowNS = DispatchTime.now().uptimeNanoseconds
+        guard nowNS >= echoTxNS else { return }
+        let sampleMS = Double(nowNS - echoTxNS) / 1_000_000.0
+        if let current = rttEstMS {
+            rttEstMS = (current * 0.875) + (sampleMS * 0.125)
+        } else {
+            rttEstMS = sampleMS
+        }
+        lastRttOkNS = nowNS
+    }
+
+    private func transmitDelayEstMSValue() -> Double? {
+        guard let rttEstMS else { return nil }
+        return max(0.0, rttEstMS * 0.5)
+    }
+
     private func sendRawOverlayWire(_ wire: Data) {
         guard started, overlayConnected, let task = websocketTask else { return }
         do {
@@ -761,17 +828,22 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             waitingCount: overlayWaitingCount(),
             inflight: outboundSendInFlight ? 1 : 0,
             maxInflight: 1,
-            egressWindow: overlayEgressWindow
+            egressWindow: overlayEgressWindow,
+            transmitDelayEstMS: transmitDelayEstMSValue() ?? 0.0
         )
     }
 
     private func overlayProtocolStats() -> [String: Any] {
-        ObstacleBridgeOverlayChannelCore.overlayProtocolStats(
+        var snapshot = ObstacleBridgeOverlayChannelCore.overlayProtocolStats(
             waitingCount: overlayWaitingCount(),
             inflight: outboundSendInFlight ? 1 : 0,
             maxInflight: 1,
-            egressWindow: overlayEgressWindow
+            egressWindow: overlayEgressWindow,
+            transmitDelayEstMS: transmitDelayEstMSValue() ?? 0.0
         )
+        snapshot["rtt_est_ms"] = rttEstMS ?? NSNull()
+        snapshot["last_rtt_ok_ns"] = lastRttOkNS
+        return snapshot
     }
 
     private func handleOverlayPayload(_ payload: Data) {
