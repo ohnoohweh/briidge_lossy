@@ -65,6 +65,7 @@ Representative anchors for those areas:
   - [tests/unit/test_admin_web_component_parity.py](../tests/unit/test_admin_web_component_parity.py)
   - [ios/tests/test_m3_native_sources.py](../ios/tests/test_m3_native_sources.py)
   - [ios/tests/test_macos_swift_host_runner.py](../ios/tests/test_macos_swift_host_runner.py)
+- current Admin Web payload coverage includes Python peer-metric fallback parity for connected rows while preserving null transport metrics on passive listener rows
 
 Use Git history for rollout chronology. Keep this document focused on what to run, what each lane proves, and where the active coverage lives.
 

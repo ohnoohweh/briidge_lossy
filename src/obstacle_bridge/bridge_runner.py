@@ -1184,17 +1184,17 @@ class Runner:
                             "connected": False,
                             "listen": listen_endpoint,
                             "peer": RunnerMuxAggregate._peer_label_for_ui(p.get("peer")),
-                            "rtt_est_ms": self._first_non_null(p.get("rtt_est_ms"), listener_metrics.rtt_est_ms),
-                            "transmit_delay_sample_ms": self._first_non_null(
-                                p.get("transmit_delay_sample_ms"),
+                            "rtt_est_ms": p.get("rtt_est_ms", listener_metrics.rtt_est_ms),
+                            "transmit_delay_sample_ms": p.get(
+                                "transmit_delay_sample_ms",
                                 listener_metrics.transmit_delay_sample_ms,
                             ),
-                            "transmit_delay_est_ms": self._first_non_null(
-                                p.get("transmit_delay_est_ms"),
+                            "transmit_delay_est_ms": p.get(
+                                "transmit_delay_est_ms",
                                 listener_metrics.transmit_delay_est_ms,
                             ),
-                            "last_incoming_age_seconds": self._first_non_null(
-                                p.get("last_incoming_age_seconds"),
+                            "last_incoming_age_seconds": p.get(
+                                "last_incoming_age_seconds",
                                 self._session_last_incoming_age_seconds(listener_session),
                             ),
                             "inflight": listener_metrics.inflight,
