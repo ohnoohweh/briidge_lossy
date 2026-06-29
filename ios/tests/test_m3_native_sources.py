@@ -324,6 +324,18 @@ def test_webadmin_server_source_exists() -> None:
     assert '"tun_routing"' in runtime
 
 
+def test_proxy_server_source_exists() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeProxyServer.swift").read_text(encoding="utf-8")
+
+    assert "final class ObstacleBridgeProxyServer" in runtime
+    assert "NWListener" in runtime
+    assert "NWConnection" in runtime
+    assert "CONNECT" in runtime
+    assert "parseSOCKS5ConnectRequest" in runtime
+    assert "Proxy-Authenticate" in runtime
+    assert "UDP ASSOCIATE" not in runtime
+
+
 def test_admin_api_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeAdminAPI.swift").read_text(encoding="utf-8")
 
