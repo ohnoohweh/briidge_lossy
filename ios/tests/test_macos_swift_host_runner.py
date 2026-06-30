@@ -1977,7 +1977,13 @@ def test_macos_swift_host_runner_bootstraps_ws_stack_and_serves_status(tmp_path:
         assert {"ws_bind", "ws_own_port", "ws_peer", "ws_peer_port", "ws_path"}.issubset(ws_session_keys)
         assert "overlay_transport" not in ws_session_keys
         channel_mux_keys = {str(item["key"]) for item in config["schema"]["channel_mux"]}
-        assert channel_mux_keys == {"own_servers", "remote_servers"}
+        assert channel_mux_keys == {
+            "own_servers",
+            "remote_servers",
+            "mux_tcp_bp_threshold",
+            "mux_tcp_bp_latency_ms",
+            "mux_tcp_bp_poll_interval_ms",
+        }
         proxy_provider_keys = {str(item["key"]) for item in config["schema"]["proxy_provider"]}
         assert {
             "proxy_provider_enabled",
