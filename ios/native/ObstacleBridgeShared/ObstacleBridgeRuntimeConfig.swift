@@ -392,7 +392,7 @@ enum ObstacleBridgeRuntimeConfig {
                 schemaItem(key: "udp_peer", description: "peer IP/FQDN, or comma-separated IPv4/IPv6 alternatives (IPv6 may be in [brackets])", defaultValue: NSNull()),
                 schemaItem(key: "udp_peer_port", description: "peer overlay port", defaultValue: 4433),
                 schemaItem(key: "udp_peer_resolve_family", description: "Peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only.", defaultValue: "prefer-ipv6", choices: ["prefer-ipv6", "ipv4", "ipv6"]),
-                schemaItem(key: "max_inflight", description: "Maximum myUDP DATA frames allowed in flight before excess frames are queued.", defaultValue: 32767),
+                schemaItem(key: "max_inflight", description: "Maximum myUDP DATA frames allowed in flight before excess frames are queued.", defaultValue: 200),
             ],
             "tcp_session": [
                 schemaItem(key: "tcp_bind", description: "TCP overlay bind address", defaultValue: "::"),
@@ -466,6 +466,9 @@ enum ObstacleBridgeRuntimeConfig {
             "channel_mux": [
                 schemaItem(key: "own_servers", description: "Service catalog for local listeners in client mode. Use structured service objects with listen/target fields.", defaultValue: []),
                 schemaItem(key: "remote_servers", description: "Service catalog pushed to the connected peer in client mode. Use structured service objects with listen/target fields.", defaultValue: []),
+                schemaItem(key: "mux_tcp_bp_threshold", description: "Mux TCP write-buffer threshold in bytes before drain is triggered.", defaultValue: 1),
+                schemaItem(key: "mux_tcp_bp_latency_ms", description: "Mux TCP latency threshold before pending writers are drained.", defaultValue: 300),
+                schemaItem(key: "mux_tcp_bp_poll_interval_ms", description: "Mux TCP polling interval for time-based backpressure.", defaultValue: 50),
             ],
             "proxy_provider": [
                 schemaItem(key: "proxy_provider_enabled", description: "Enable the explicit HTTP CONNECT and SOCKS5 proxy provider.", defaultValue: false),
@@ -548,7 +551,7 @@ enum ObstacleBridgeRuntimeConfig {
     }
 
     static func overlayMaxInflight(from payload: [String: Any]) -> Int {
-        let configured = intValue(from: payload["max_inflight"]) ?? 32767
+        let configured = intValue(from: payload["max_inflight"]) ?? 200
         return min(32767, max(1, configured))
     }
 

@@ -99,7 +99,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         peerPort: Int? = nil,
         peerResolveFamily: String = "prefer-ipv6",
         sessionMaxAppPayload: Int = 65535,
-        maxInFlight: Int = 32767,
+        maxInFlight: Int = 200,
         overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter? = nil,
         startupMuxFrames: [Data] = [],
         queue: DispatchQueue = DispatchQueue(label: "ObstacleBridgeUdpOverlayTransportOwner"),

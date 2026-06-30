@@ -1746,7 +1746,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
         }
         let runtime = ObstacleBridgeUdpOverlayPeerRuntime(
             nextCounter: nextCounter.intValue,
-            maxInFlight: (request["max_inflight"] as? NSNumber)?.intValue ?? 32767
+            maxInFlight: (request["max_inflight"] as? NSNumber)?.intValue ?? 200
         )
         let snapshot = try runtime.sendApplicationPayload(payload, nowNS: nowNS.uint64Value, echoNS: echoNS.uint64Value)
         return [

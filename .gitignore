@@ -18,4 +18,6 @@ Cert_SecureLink/
 /.tmp-ios-docs/
 /ios/.pytest-documents/
 /ios/.logs/
+/ios/.device-config/
+/ios/.device-config.bak/
 /logs/

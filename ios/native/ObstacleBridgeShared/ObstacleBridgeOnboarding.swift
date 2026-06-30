@@ -8,8 +8,20 @@ enum ObstacleBridgeOnboarding {
         if !adminWebName.isEmpty {
             effective["admin_web_name"] = adminWebName
         }
+        if let adminWebPort = ObstacleBridgeRuntimeConfig.intValue(from: requestPayload["admin_web_port"]),
+           (0...65535).contains(adminWebPort) {
+            effective["admin_web_port"] = adminWebPort
+        }
         if let tunRouting = requestPayload["TUN_routing"] as? [String: Any], !tunRouting.isEmpty {
             effective["TUN_routing"] = tunRouting
+        }
+        for key in ["mux_tcp_bp_threshold", "mux_tcp_bp_latency_ms", "mux_tcp_bp_poll_interval_ms"] {
+            if let value = ObstacleBridgeRuntimeConfig.intValue(from: requestPayload[key]) {
+                effective[key] = value
+            }
+        }
+        if let proxyProvider = sanitizeProxyProvider(requestPayload["proxy_provider"]), !proxyProvider.isEmpty {
+            effective["proxy_provider"] = proxyProvider
         }
         return effective
     }
@@ -144,6 +156,70 @@ enum ObstacleBridgeOnboarding {
         return out
     }
 
+    static func sanitizeProxyProvider(_ value: Any?) -> [String: Any]? {
+        guard var raw = value as? [String: Any] else {
+            return nil
+        }
+        let aliases = [
+            "proxy_provider_enabled": "enabled",
+            "proxy_provider_bind": "bind",
+            "proxy_provider_http_port": "http_port",
+            "proxy_provider_socks5_port": "socks5_port",
+            "proxy_provider_protocols": "protocols",
+            "proxy_provider_auth": "auth",
+            "proxy_provider_egress": "egress",
+            "proxy_provider_policy": "policy",
+        ]
+        for (source, destination) in aliases where raw[destination] == nil {
+            if let value = raw[source] {
+                raw[destination] = value
+            }
+        }
+
+        var out: [String: Any] = [:]
+        if let enabled = ObstacleBridgeRuntimeConfig.boolValue(from: raw["enabled"]) {
+            out["enabled"] = enabled
+        }
+        if let bind = ObstacleBridgeRuntimeConfig.stringValue(from: raw["bind"])?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !bind.isEmpty {
+            out["bind"] = bind
+        }
+        for key in ["http_port", "socks5_port"] {
+            if let port = ObstacleBridgeRuntimeConfig.intValue(from: raw[key]), (0...65535).contains(port) {
+                out[key] = port
+            }
+        }
+        let rawProtocols: [Any]
+        if let protocols = raw["protocols"] as? [Any] {
+            rawProtocols = protocols
+        } else if let protocols = ObstacleBridgeRuntimeConfig.stringValue(from: raw["protocols"]) {
+            rawProtocols = protocols.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        } else {
+            rawProtocols = []
+        }
+        let allowedProtocols = Set(["http-connect", "socks5-connect", "http", "socks5"])
+        var protocols: [String] = []
+        for item in rawProtocols {
+            let candidate = String(describing: item).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if allowedProtocols.contains(candidate), !protocols.contains(candidate) {
+                protocols.append(candidate)
+            }
+        }
+        if !protocols.isEmpty {
+            out["protocols"] = protocols
+        }
+        for key in ["auth", "egress", "policy"] {
+            if let branch = raw[key] as? [String: Any] {
+                out[key] = branch
+            }
+        }
+        if let logProxyProvider = raw["log_proxy_provider"] {
+            out["log_proxy_provider"] = logProxyProvider
+        }
+        return out
+    }
+
     static func tokenPayload(
         runtimeConfig: [String: Any],
         connection: [String: Any],
@@ -156,12 +232,17 @@ enum ObstacleBridgeOnboarding {
             .lowercased()
         let plainPSK = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["secure_link_psk"]) ?? ""
         let adminWebName = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_name"]) ?? ""
+        let adminWebPort = ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["admin_web_port"]) ?? 18080
         let tunRouting = ObstacleBridgeRuntimeConfig.groupedSectionPayload("TUN_routing", runtimeConfig: runtimeConfig)
+        let proxyProvider = sanitizeProxyProvider(
+            ObstacleBridgeRuntimeConfig.groupedSectionPayload("proxy_provider", runtimeConfig: runtimeConfig)
+        ) ?? [:]
         return [
             "version": 1,
             "generated_unix_ts": Int(Date().timeIntervalSince1970),
             "generated_by": adminWebName,
             "admin_web_name": adminWebName,
+            "admin_web_port": adminWebPort,
             "connection": connection,
             "secure_link_mode": ["off", "none", "psk", "cert"].contains(secureMode) ? secureMode : "off",
             "secure_link_psk": plainPSK,
@@ -172,6 +253,10 @@ enum ObstacleBridgeOnboarding {
             "compress_layer_min_bytes": ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["compress_layer_min_bytes"]) ?? 64,
             "compress_layer_types": ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["compress_layer_types"]) ?? "data,data_frag",
             "TUN_routing": tunRouting,
+            "mux_tcp_bp_threshold": ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["mux_tcp_bp_threshold"]) ?? 1,
+            "mux_tcp_bp_latency_ms": ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["mux_tcp_bp_latency_ms"]) ?? 300,
+            "mux_tcp_bp_poll_interval_ms": ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["mux_tcp_bp_poll_interval_ms"]) ?? 50,
+            "proxy_provider": proxyProvider,
             "admin_auth_recommended": true,
             "own_servers": ownServices,
             "remote_servers": remoteServices,
@@ -228,6 +313,10 @@ enum ObstacleBridgeOnboarding {
         if let adminWebName = ObstacleBridgeRuntimeConfig.stringValue(from: payload["admin_web_name"]), !adminWebName.isEmpty {
             updates["admin_web_name"] = adminWebName
         }
+        if let adminWebPort = ObstacleBridgeRuntimeConfig.intValue(from: payload["admin_web_port"]),
+           (0...65535).contains(adminWebPort) {
+            updates["admin_web_port"] = adminWebPort
+        }
         if payload["compress_layer"] != nil {
             updates["compress_layer"] = ObstacleBridgeRuntimeConfig.boolValue(from: payload["compress_layer"]) ?? false
         }
@@ -238,6 +327,14 @@ enum ObstacleBridgeOnboarding {
         }
         if let tunRouting = payload["TUN_routing"] as? [String: Any], !tunRouting.isEmpty {
             updates["TUN_routing"] = tunRouting
+        }
+        for key in ["mux_tcp_bp_threshold", "mux_tcp_bp_latency_ms", "mux_tcp_bp_poll_interval_ms"] {
+            if let value = ObstacleBridgeRuntimeConfig.intValue(from: payload[key]) {
+                updates[key] = value
+            }
+        }
+        if let proxyProvider = sanitizeProxyProvider(payload["proxy_provider"]), !proxyProvider.isEmpty {
+            updates["proxy_provider"] = proxyProvider
         }
         if let tokenPSK = ObstacleBridgeRuntimeConfig.stringValue(from: payload["secure_link_psk"]), !tokenPSK.isEmpty {
             var plainPSK = tokenPSK

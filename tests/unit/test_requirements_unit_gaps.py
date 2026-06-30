@@ -297,7 +297,7 @@ class ListenerPeerRequirementUnitTests(unittest.TestCase):
 
 
 class MyUdpReliabilityRequirementUnitTests(unittest.TestCase):
-    def _session_and_transport(self, max_in_flight=32767):
+    def _session_and_transport(self, max_in_flight=200):
         session = Session(max_in_flight=max_in_flight, proto=PROTO.__class__(BaseFrameV2))
         transport = _TransportStub()
         return session, transport
