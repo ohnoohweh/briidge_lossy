@@ -9,7 +9,18 @@
 # - keep architectural rationale in docs/ARCHITECTURE.md
 
 ARC-CMP-001:
+  integration_tests:
+    - tests/integration/test_proxy_provider_e2e.py::test_proxy_provider_e2e_python_http_https_and_socks5
   unit_tests:
+    - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_absolute_form_matches_pproxy_rewrite
+    - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_connect_authority_and_basic_auth_match_pproxy
+    - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_socks5_connect_forms_match_pproxy_address_parser
+    - tests/unit/test_embeddable_core.py::test_runner_schema_snapshot_includes_proxy_provider_fields
+    - tests/unit/test_embeddable_core.py::test_runner_starts_proxy_provider_and_exposes_status_snapshot
+    - tests/unit/test_proxy_server.py::test_python_proxy_server_rewrites_http_absolute_form
+    - tests/unit/test_proxy_server.py::test_python_proxy_server_rejects_missing_http_proxy_auth
+    - tests/unit/test_proxy_server.py::test_python_proxy_server_accepts_socks5_connect_with_user_password
+    - tests/unit/test_proxy_server.py::test_python_proxy_codec_basic_auth_header_matches_swift_shape
     - tests/unit/test_ws_payload_mode.py::test_connect_advertises_payload_mode_in_upgrade_request
     - tests/unit/test_ws_payload_mode.py::test_connect_refuses_upgrade_when_http_preflight_is_not_200
     - tests/unit/test_ws_payload_mode.py::test_connect_reports_dns_resolution_failures_as_failed
@@ -155,6 +166,7 @@ ARC-CMP-003:
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_listener_invalid_sender_expires_before_stale_window
     - tests/integration/test_ios_e2e.py::test_ios_e2e_app_ws_overlay_udp_service_reaches_linux_peer_udp_echo
     - tests/integration/test_ios_e2e.py::test_ios_m3_packet_tunnel_poc_provider_config_round_trips_packets
     - tests/integration/test_ios_simulator_e2e.py::test_ios_simulator_e2e_app_ws_overlay_udp_service_reaches_macos_peer_udp_echo
@@ -170,6 +182,8 @@ ARC-CMP-004:
   # Process orchestration coverage includes bounded reconnect waits across
   # expected self-restart relaunches in the integration harness.
   unit_tests:
+    - ios/tests/test_m3_native_sources.py::test_proxy_server_source_exists
+    - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_resolves_multi_host_peer_with_family_preference
     - tests/unit/test_peer_resolution.py::test_udp_session_prefer_ipv6_keeps_candidate_on_immediate_send_error
     - tests/unit/test_peer_resolution.py::test_send_port_prefer_ipv6_allows_ipv4_mapped_destination_on_ipv6_socket
     - tests/unit/test_peer_resolution.py::test_resolve_prefer_ipv6_keeps_native_ipv4_literal_until_ipv6_socket_send_mapping
@@ -291,6 +305,8 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_dedicated_shared_tun_view
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_effective_overlay_peer_excluded_routes
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_frontend_uses_dedicated_tab_and_api
+    - tests/unit/test_admin_web_payloads.py::test_admin_web_navigation_uses_operator_labels_for_peer_and_udp_tcp_tabs
+    - tests/unit/test_admin_web_payloads.py::test_admin_web_proxy_tab_renders_config_runtime_and_throughput
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_ui_payload_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_security_advisor_payload_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_tun_routing_snapshot_matches_python

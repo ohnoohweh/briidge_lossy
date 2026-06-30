@@ -154,6 +154,7 @@ const uiState = {
   initialTabApplied: false,
   setupAssistantAutoOpened: false,
   runtimeDependencies: null,
+  proxyRateState: {},
   onboarding: {
     initialized: false,
     mode: 'connect',
@@ -1340,6 +1341,121 @@ function renderMetricStack(lines) {
       ${lines.map((line) => renderMetricLine(line)).join('')}
     </div>
   `;
+}
+
+function proxyConfigSnapshot() {
+  const root = configState.config || {};
+  const cfg = root.proxy_provider && typeof root.proxy_provider === 'object' ? root.proxy_provider : {};
+  const auth = cfg.auth && typeof cfg.auth === 'object'
+    ? cfg.auth
+    : (root.proxy_provider_auth && typeof root.proxy_provider_auth === 'object' ? root.proxy_provider_auth : {});
+  const protocols = Array.isArray(cfg.protocols)
+    ? cfg.protocols
+    : (Array.isArray(root.proxy_provider_protocols) ? root.proxy_provider_protocols : []);
+  return {
+    enabled: Boolean(cfg.enabled ?? root.proxy_provider_enabled),
+    bind: cfg.bind ?? root.proxy_provider_bind ?? '127.0.0.1',
+    http_port: cfg.http_port ?? root.proxy_provider_http_port ?? 13881,
+    socks5_port: cfg.socks5_port ?? root.proxy_provider_socks5_port ?? 13882,
+    protocols,
+    auth,
+  };
+}
+
+function proxyListenerRows(statusDoc) {
+  const provider = statusDoc?.proxy_provider || {};
+  const listeners = provider.listeners && typeof provider.listeners === 'object' ? provider.listeners : {};
+  return Object.keys(listeners).sort().map((name) => ({
+    name,
+    snapshot: listeners[name] || {},
+  }));
+}
+
+function proxyListenerRate(listenerName, snapshot) {
+  const now = Date.now() / 1000;
+  const rx = Number(snapshot?.rx_bytes || 0);
+  const tx = Number(snapshot?.tx_bytes || 0);
+  const previous = uiState.proxyRateState[listenerName];
+  let rxRate = 0;
+  let txRate = 0;
+  if (previous && now > previous.ts) {
+    const elapsed = Math.max(0.001, now - previous.ts);
+    rxRate = Math.max(0, (rx - previous.rx) / elapsed);
+    txRate = Math.max(0, (tx - previous.tx) / elapsed);
+  }
+  uiState.proxyRateState[listenerName] = { ts: now, rx, tx };
+  return { rxRate, txRate };
+}
+
+function renderProxyListeners(rows) {
+  const tbody = document.getElementById('proxyListenersBody');
+  if (!tbody) return { active: 0, accepted: 0, completed: 0, failed: 0, rx: 0, tx: 0, rxRate: 0, txRate: 0, lastError: '' };
+  if (!rows.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="14">No proxy listeners</td></tr>';
+    return { active: 0, accepted: 0, completed: 0, failed: 0, rx: 0, tx: 0, rxRate: 0, txRate: 0, lastError: '' };
+  }
+  const totals = { active: 0, accepted: 0, completed: 0, failed: 0, rx: 0, tx: 0, rxRate: 0, txRate: 0, lastError: '' };
+  tbody.innerHTML = rows.map(({ name, snapshot }) => {
+    const rates = proxyListenerRate(name, snapshot);
+    const active = Number(snapshot.active_connections || 0);
+    const accepted = Number(snapshot.accepted_connections || 0);
+    const completed = Number(snapshot.completed_connections || 0);
+    const failed = Number(snapshot.failed_connections || 0);
+    const rx = Number(snapshot.rx_bytes || 0);
+    const tx = Number(snapshot.tx_bytes || 0);
+    const lastError = String(snapshot.last_error || '').trim();
+    totals.active += active;
+    totals.accepted += accepted;
+    totals.completed += completed;
+    totals.failed += failed;
+    totals.rx += rx;
+    totals.tx += tx;
+    totals.rxRate += rates.rxRate;
+    totals.txRate += rates.txRate;
+    if (lastError) totals.lastError = lastError;
+    return `
+      <tr>
+        <td class="mono">${escapeHtml(name)}</td>
+        <td class="mono">${escapeHtml(fmtEndpoint({ host: snapshot.bind_host, port: snapshot.port }))}</td>
+        <td>${escapeHtml(fmtBool(snapshot.http_enabled))}</td>
+        <td>${escapeHtml(fmtBool(snapshot.socks5_enabled))}</td>
+        <td>${escapeHtml(fmtBool(snapshot.auth_required))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(active))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(accepted))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(completed))}</td>
+        <td class="mono">${escapeHtml(fmtInteger(failed))}</td>
+        <td class="mono">${escapeHtml(fmtBytes(rx))}</td>
+        <td class="mono">${escapeHtml(fmtBytes(tx))}</td>
+        <td class="mono">${escapeHtml(fmtBytesPerSecond(rates.rxRate))}</td>
+        <td class="mono">${escapeHtml(fmtBytesPerSecond(rates.txRate))}</td>
+        <td class="mono">${escapeHtml(lastError || 'n/a')}</td>
+      </tr>
+    `;
+  }).join('');
+  return totals;
+}
+
+function applyProxyDoc() {
+  const cfg = proxyConfigSnapshot();
+  const statusDoc = uiState.statusDoc || {};
+  const provider = statusDoc.proxy_provider || {};
+  const rows = proxyListenerRows(statusDoc);
+  const totals = renderProxyListeners(rows);
+  const authMode = String(cfg.auth?.mode || 'none').trim() || 'none';
+  const authUser = String(cfg.auth?.username || '').trim();
+  setText('proxyConfigured', cfg.enabled ? 'enabled' : 'disabled');
+  setText('proxyRuntime', provider.enabled || rows.length ? 'active' : 'inactive');
+  setText('proxyBind', fmtText(cfg.bind));
+  setText('proxyHttpPort', fmtInteger(cfg.http_port));
+  setText('proxySocks5Port', fmtInteger(cfg.socks5_port));
+  setText('proxyProtocols', cfg.protocols.length ? cfg.protocols.join(', ') : 'n/a');
+  setText('proxyAuth', authMode === 'none' ? 'none' : `${authMode}${authUser ? `:${authUser}` : ''}`);
+  setText('proxyActiveConnections', fmtInteger(totals.active));
+  setText('proxyAcceptedConnections', fmtInteger(totals.accepted));
+  setText('proxyFailedConnections', fmtInteger(totals.failed));
+  setText('proxyRxRate', fmtBytesPerSecond(totals.rxRate));
+  setText('proxyTxRate', fmtBytesPerSecond(totals.txRate));
+  setText('proxyLastError', totals.lastError || 'n/a');
 }
 
 function renderPeerRateBars(rxBytesPerSec, txBytesPerSec) {
@@ -2681,6 +2797,13 @@ async function loadConnections() {
   }
 }
 
+async function loadProxy() {
+  if (!Object.keys(configState.config || {}).length) {
+    await loadConfig();
+  }
+  await loadStatus();
+}
+
 async function loadPeers() {
   try {
     const r = await apiFetch('/api/peers', { cache: 'no-store' });
@@ -2745,6 +2868,7 @@ function applyStatusDoc(j) {
   setText('secureLinkLastReloadResult', fmtText(j.secure_link_last_reload_result));
   setText('secureLinkLastReloadDetail', fmtText(j.secure_link_last_reload_detail));
   setText('secureLinkPeersDroppedTotal', fmtInteger(j.secure_link_peers_dropped_total));
+  applyProxyDoc();
 }
 
 function applyConnectionsDoc(j) {
@@ -2787,6 +2911,7 @@ async function loadConfig() {
     };
     applyAdminInstanceName(configState.config.admin_web_name);
     renderConfigSections(configState.schema, configState.config);
+    applyProxyDoc();
     if (uiState.onboarding.initialized) {
       if ((uiState.onboarding.ownServersDraft || []).length === 0) {
         uiState.onboarding.ownServersDraft = sanitizeServiceSpecs(configState.config?.own_servers || []);
@@ -3914,6 +4039,9 @@ function initTabs() {
       if (target === 'connections' && !liveState.connected) {
         loadConnections();
       }
+      if (target === 'proxy') {
+        loadProxy();
+      }
       if (target === 'tun-routing' && !liveState.connected) {
         loadTunRouting();
       }
@@ -3937,6 +4065,9 @@ function currentLiveTopics() {
   if (isTabActive('connections')) {
     topics.push('connections');
   }
+  if (isTabActive('proxy')) {
+    topics.push('status');
+  }
   if (isTabActive('tun-routing')) {
     topics.push('tun_routing');
   }
@@ -3957,6 +4088,7 @@ function updateLiveSubscriptions() {
   const activeTabs = [];
   if (isTabActive('status')) activeTabs.push('status');
   if (isTabActive('connections')) activeTabs.push('connections');
+  if (isTabActive('proxy')) activeTabs.push('proxy');
   if (isTabActive('tun-routing')) activeTabs.push('tun-routing');
   if (isTabActive('misc')) activeTabs.push('misc');
   sendLiveMessage({
@@ -3986,6 +4118,10 @@ function startHttpPollingFallback() {
     startPolling(async () => {
       if (!isTabActive('status') && !isTabActive('connections')) return;
       await loadConnections();
+    }, 1000),
+    startPolling(async () => {
+      if (!isTabActive('proxy')) return;
+      await loadProxy();
     }, 1000),
     startPolling(async () => {
       if (!isTabActive('status')) return;
@@ -4156,6 +4292,7 @@ async function startAdminApp() {
     loadStatus();
     loadConnections();
     loadPeers();
+    loadProxy();
     loadTunRouting();
     loadMeta();
     loadConfig();
@@ -4175,6 +4312,10 @@ async function startAdminApp() {
   }
   if (isTabActive('connections') && !liveState.connected) {
     await loadConnections();
+    return;
+  }
+  if (isTabActive('proxy')) {
+    await loadProxy();
     return;
   }
   if (isTabActive('tun-routing') && !liveState.connected) {

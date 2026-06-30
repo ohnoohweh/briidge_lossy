@@ -184,6 +184,7 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayStackPlanner.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgePacketTunnelConfiguration.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebAdminServer.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeProxyServer.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketPayloadCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift"),
@@ -845,12 +846,32 @@ def test_ios_packet_tunnel_provider_probe_grouped_own_services_survive_admin_sna
                                         "mtu": 1600,
                                     ],
                                 ],
-                            ],
-                            "remote_servers": [],
                         ],
-                    ]
+                        "remote_servers": [],
+                    ],
+                    "proxy_provider": [
+                        "enabled": true,
+                        "bind": "127.0.0.1",
+                        "http_port": 13881,
+                        "socks5_port": 13882,
+                        "protocols": ["http-connect", "socks5-connect"],
+                        "auth": [
+                            "mode": "token",
+                            "username": "ios-proxy",
+                            "token": "ios-token",
+                        ],
+                        "egress": [
+                            "mode": "direct",
+                            "address_families": ["ipv4", "ipv6"],
+                        ],
+                        "policy": [
+                            "allow_private_destinations": false,
+                            "blocked_host_patterns": [],
+                        ],
+                    ],
+                ]
 
-                    let config = ObstacleBridgeRuntimeConfig.maskedConfigSnapshot(
+                let config = ObstacleBridgeRuntimeConfig.maskedConfigSnapshot(
                         ObstacleBridgeRuntimeConfig.flatten(runtimeConfig)
                     )
                     let connections = bridge.adminConnectionsSnapshot(runtimeConfig: ObstacleBridgeRuntimeConfig.flatten(runtimeConfig))
@@ -891,6 +912,15 @@ def test_ios_packet_tunnel_provider_probe_grouped_own_services_survive_admin_sna
     assert any(row["service_name"] == "WebAdmin remote" and row["state"] == "listening" for row in payload["connections"]["tcp"])
     assert any(row["service_name"] == "WireGuard" and row["state"] == "listening" for row in payload["connections"]["udp"])
     assert any(row["service_name"] == "iOS FullTunnel" and row["state"] == "listening" for row in payload["connections"]["tun"])
+    assert payload["config"]["proxy_provider_enabled"] is True
+    assert payload["config"]["proxy_provider_bind"] == "127.0.0.1"
+    assert payload["config"]["proxy_provider_http_port"] == 13881
+    assert payload["config"]["proxy_provider_socks5_port"] == 13882
+    assert payload["config"]["proxy_provider_protocols"] == ["http-connect", "socks5-connect"]
+    assert payload["config"]["proxy_provider_auth"]["mode"] == "token"
+    assert payload["config"]["proxy_provider_auth"]["username"] == "ios-proxy"
+    assert payload["config"]["proxy_provider_egress"]["mode"] == "direct"
+    assert payload["config"]["proxy_provider_policy"]["allow_private_destinations"] is False
 
 
 @pytest.mark.parametrize("transport", ["tcp", "myudp", "ws", "quic"])
@@ -1782,6 +1812,163 @@ def test_ios_packet_tunnel_provider_probe_decrypts_embedded_runtime_config(tmp_p
     assert payload["psk"] == "correct horse battery staple"
     assert payload["udp_peer"] == "38.180.143.5"
     assert payload["udp_peer_port"] == 4433
+
+
+def test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and_compression(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "PacketTunnelProviderInviteImportProbe.swift"
+    binary_path = tmp_path / "packet-tunnel-provider-invite-import-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            enum ProbeError: Error {
+                case invalidResponse
+                case missingToken
+                case missingUpdates
+            }
+
+            func jsonPayload(_ response: ObstacleBridgeAdminAPIResponse) throws -> [String: Any] {
+                guard let payload = try JSONSerialization.jsonObject(with: response.body) as? [String: Any] else {
+                    throw ProbeError.invalidResponse
+                }
+                return payload
+            }
+
+            @main
+            struct PacketTunnelProviderInviteImportProbeMain {
+                static func main() throws {
+                    let sourceRawConfig: [String: Any] = [
+                        "admin_web": [
+                            "admin_web_name": "iOS Source",
+                        ] as [String: Any],
+                        "runner": [
+                            "overlay_transport": "ws",
+                        ] as [String: Any],
+                        "ws_session": [
+                            "ws_peer": "bridge.example.net",
+                            "ws_peer_port": 9443,
+                            "ws_path": "/ob",
+                            "ws_payload_mode": "binary",
+                        ] as [String: Any],
+                        "secure_link": [
+                            "secure_link": true,
+                            "secure_link_mode": "psk",
+                            "secure_link_psk": "ios-invite-psk",
+                        ] as [String: Any],
+                        "compress_layer": [
+                            "compress_layer": true,
+                            "compress_layer_algo": "zlib",
+                            "compress_layer_level": 5,
+                            "compress_layer_min_bytes": 96,
+                            "compress_layer_types": "data,data_ack",
+                        ] as [String: Any],
+                    ]
+                    let sourceRuntimeConfig = ObstacleBridgeRuntimeConfig.flatten(sourceRawConfig)
+                    let profiles = ObstacleBridgeOnboarding.connectionProfiles(runtimeConfig: sourceRuntimeConfig)
+                    guard let profileID = profiles.first?["id"] as? String else {
+                        throw ProbeError.missingToken
+                    }
+                    let generateBody = try JSONSerialization.data(
+                        withJSONObject: [
+                            "connection_id": profileID,
+                            "admin_web_name": "Imported iOS Node",
+                        ],
+                        options: [.sortedKeys]
+                    )
+                    let generated = try jsonPayload(ObstacleBridgeAdminConfigSupport.inviteGenerateResponse(
+                        method: "POST",
+                        body: generateBody,
+                        runtimeConfig: sourceRuntimeConfig,
+                        profiles: profiles,
+                        encryptSecrets: ObstacleBridgeConfigSecretCodec.encryptPayload
+                    ))
+                    guard let token = generated["invite_token"] as? String, !token.isEmpty else {
+                        throw ProbeError.missingToken
+                    }
+
+                    let previewBody = try JSONSerialization.data(withJSONObject: ["invite_token": token], options: [.sortedKeys])
+                    let preview = try jsonPayload(ObstacleBridgeAdminConfigSupport.invitePreviewResponse(
+                        method: "POST",
+                        body: previewBody,
+                        decryptSecrets: ObstacleBridgeConfigSecretCodec.decryptPayload
+                    ))
+                    guard let updates = preview["suggested_updates"] as? [String: Any] else {
+                        throw ProbeError.missingUpdates
+                    }
+
+                    let freshRawConfig: [String: Any] = [
+                        "admin_web": [
+                            "admin_web_name": "Fresh iOS",
+                        ] as [String: Any],
+                        "runner": [
+                            "overlay_transport": "myudp",
+                        ] as [String: Any],
+                        "ws_session": [
+                            "ws_peer": "",
+                            "ws_peer_port": 8080,
+                        ] as [String: Any],
+                    ]
+                    let saved = try ObstacleBridgeAdminConfigSupport.validatedNextRawConfig(
+                        currentRawConfig: freshRawConfig,
+                        currentRuntimeConfig: ObstacleBridgeRuntimeConfig.flatten(freshRawConfig),
+                        updates: updates
+                    )
+                    let persisted = try ObstacleBridgeConfigSecretCodec.encryptPayload(saved.nextRawConfig)
+                    let restored = try ObstacleBridgeConfigSecretCodec.decryptPayload(persisted)
+                    let flatSaved = ObstacleBridgeRuntimeConfig.flatten(saved.nextRawConfig)
+                    let masked = ObstacleBridgeRuntimeConfig.maskedConfigSnapshot(flatSaved)
+                    let secureSection = persisted["secure_link"] as? [String: Any] ?? [:]
+                    let compressSection = restored["compress_layer"] as? [String: Any] ?? [:]
+                    let output: [String: Any] = [
+                        "suggested_updates": updates,
+                        "secure_section": secureSection,
+                        "compress_section": compressSection,
+                        "masked": masked,
+                        "normalized_keys": saved.normalizedKeys,
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_packet_tunnel_provider_probe(source_path, binary_path)
+    completed = subprocess.run(
+        [str(binary_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"invite import probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout)
+    updates = payload["suggested_updates"]
+    assert updates["secure_link"] is True
+    assert updates["secure_link_mode"] == "psk"
+    assert updates["secure_link_psk"] == "ios-invite-psk"
+    assert updates["compress_layer"] is True
+    assert updates["compress_layer_level"] == 5
+    assert updates["compress_layer_min_bytes"] == 96
+    assert updates["compress_layer_types"] == "data,data_ack"
+    assert payload["secure_section"]["secure_link"] is True
+    assert payload["secure_section"]["secure_link_mode"] == "psk"
+    assert payload["secure_section"]["secure_link_psk"].startswith("enc:v1:")
+    assert payload["compress_section"]["compress_layer"] is True
+    assert payload["compress_section"]["compress_layer_level"] == 5
+    assert payload["masked"]["secure_link"] is True
+    assert payload["masked"]["secure_link_mode"] == "psk"
+    assert payload["masked"]["secure_link_psk"] == ""
+    assert payload["masked"]["compress_layer"] is True
+    assert payload["masked"]["compress_layer_level"] == 5
 
 
 def test_ios_packet_tunnel_provider_probe_exposes_myudp_runtime_stats(tmp_path: Path) -> None:

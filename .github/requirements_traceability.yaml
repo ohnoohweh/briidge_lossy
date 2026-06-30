@@ -149,6 +149,7 @@ REQ-AUT-004:
     - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_unwraps_secure_link_wrapper_for_myudp_stats
     - tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_secure_link_rows
     - tests/unit/test_admin_web_payloads.py::test_resolve_static_base_falls_back_to_packaged_admin_web
+    - tests/unit/test_admin_web_payloads.py::test_admin_web_navigation_uses_operator_labels_for_peer_and_udp_tcp_tabs
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_prevents_authenticated_session
     - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session
@@ -476,6 +477,22 @@ REQ-WSP-012:
     - tests/unit/test_ws_payload_mode.py::test_connect_reports_dns_resolution_failures_as_failed
     - tests/unit/test_ws_payload_mode.py::test_connect_reports_proxy_negotiation_failures_as_failed
 
+REQ-PRX-001:
+  integration_tests:
+    - tests/integration/test_proxy_provider_e2e.py::test_proxy_provider_e2e_python_http_https_and_socks5
+  unit_tests:
+    - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_absolute_form_matches_pproxy_rewrite
+    - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_connect_authority_and_basic_auth_match_pproxy
+    - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_socks5_connect_forms_match_pproxy_address_parser
+    - tests/unit/test_embeddable_core.py::test_runner_schema_snapshot_includes_proxy_provider_fields
+    - tests/unit/test_embeddable_core.py::test_runner_starts_proxy_provider_and_exposes_status_snapshot
+    - tests/unit/test_proxy_server.py::test_python_proxy_server_rewrites_http_absolute_form
+    - tests/unit/test_proxy_server.py::test_python_proxy_server_rejects_missing_http_proxy_auth
+    - tests/unit/test_proxy_server.py::test_python_proxy_server_accepts_socks5_connect_with_user_password
+    - tests/unit/test_proxy_server.py::test_python_proxy_codec_basic_auth_header_matches_swift_shape
+    - ios/tests/test_m3_native_sources.py::test_proxy_server_source_exists
+    - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_resolves_multi_host_peer_with_family_preference
+
 REQ-LIFE-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
@@ -618,6 +635,7 @@ REQ-LST-005:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_two_clients
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_listener_invalid_sender_expires_before_stale_window
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_listener_peer_snapshot_preserves_distinct_peers_across_listener_transports
 
@@ -868,6 +886,8 @@ REQ-ADM-001:
     - tests/unit/test_admin_web_payloads.py::test_setup_build_stages_admin_web_assets_from_repo_root
     - tests/unit/test_admin_web_payloads.py::test_onboarding_connection_profiles_expose_configured_transports
     - tests/unit/test_admin_web_payloads.py::test_onboarding_blueprints_group_active_peer_connections
+    - tests/unit/test_admin_web_payloads.py::test_admin_web_navigation_uses_operator_labels_for_peer_and_udp_tcp_tabs
+    - tests/unit/test_admin_web_payloads.py::test_admin_web_proxy_tab_renders_config_runtime_and_throughput
     - tests/unit/test_runner_events.py::test_get_debug_logs_falls_back_to_log_file_when_ring_is_empty
     - tests/unit/test_debug_logging_aliases.py::test_log_file_moves_previous_session_to_lastsession_on_start
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
@@ -915,6 +935,7 @@ REQ-ADM-006:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_two_clients
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_listener_invalid_sender_expires_before_stale_window
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_when_auth_disabled
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_unavailable_without_correct_auth
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_after_correct_auth

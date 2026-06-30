@@ -82,8 +82,9 @@
       <aside class="sidebar card">
         <nav class="nav-tabs" aria-label="Main navigation">
           <button class="nav-tab" data-tab="home" type="button">Home</button>
-          <button class="nav-tab active" data-tab="status" type="button">Status</button>
-          <button class="nav-tab" data-tab="connections" type="button">Connections</button>
+          <button class="nav-tab active" data-tab="status" type="button">Peers</button>
+          <button class="nav-tab" data-tab="connections" type="button">UDP / TCP</button>
+          <button class="nav-tab" data-tab="proxy" type="button">Proxy</button>
           <button class="nav-tab" data-tab="tun-routing" type="button">TUN / Routing</button>
           <button class="nav-tab" data-tab="secure-link" type="button">Secure-Link</button>
           <button class="nav-tab" data-tab="configuration" type="button">Configuration</button>
@@ -113,7 +114,7 @@
             </div>
             <label class="home-toggle">
               <input id="homeOpenStatusOnStartup" type="checkbox" />
-              <span>Open Status on startup</span>
+              <span>Open Peers on startup</span>
             </label>
           </section>
           <section class="section-block card">
@@ -136,7 +137,7 @@
           <section class="section-block">
             <div class="section-header">
               <div>
-                <h2>Peer Connections</h2>
+                <h2>Peers</h2>
                 <p>All active overlay peer sessions and per-peer health metrics</p>
               </div>
             </div>
@@ -164,7 +165,7 @@
           <section class="section-block card">
             <div class="section-header">
               <div>
-                <h2>Connections</h2>
+                <h2>UDP / TCP</h2>
                 <p>Service-level TCP and UDP mappings separated from peer health and TUN routing state.</p>
               </div>
             </div>
@@ -246,6 +247,68 @@
                     <tr class="empty-row">
                       <td colspan="14">No TCP connections</td>
                     </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section id="tab-proxy" class="tab-panel">
+          <section class="section-block card">
+            <div class="section-header">
+              <div>
+                <h2>Proxy</h2>
+                <p>Explicit HTTP/CONNECT and SOCKS5 proxy listener state.</p>
+              </div>
+            </div>
+            <div class="kv-list">
+              <div class="kv-row"><span>Configured</span><strong id="proxyConfigured">n/a</strong></div>
+              <div class="kv-row"><span>Runtime</span><strong id="proxyRuntime">n/a</strong></div>
+              <div class="kv-row"><span>Bind</span><strong id="proxyBind">n/a</strong></div>
+              <div class="kv-row"><span>HTTP / CONNECT Port</span><strong id="proxyHttpPort">n/a</strong></div>
+              <div class="kv-row"><span>SOCKS5 Port</span><strong id="proxySocks5Port">n/a</strong></div>
+              <div class="kv-row"><span>Protocols</span><strong id="proxyProtocols">n/a</strong></div>
+              <div class="kv-row"><span>Auth</span><strong id="proxyAuth">n/a</strong></div>
+              <div class="kv-row"><span>Active Connections</span><strong id="proxyActiveConnections">0</strong></div>
+              <div class="kv-row"><span>Accepted Connections</span><strong id="proxyAcceptedConnections">0</strong></div>
+              <div class="kv-row"><span>Failed Connections</span><strong id="proxyFailedConnections">0</strong></div>
+              <div class="kv-row"><span>RX Throughput</span><strong id="proxyRxRate">0 B/s</strong></div>
+              <div class="kv-row"><span>TX Throughput</span><strong id="proxyTxRate">0 B/s</strong></div>
+              <div class="kv-row"><span>Last Error</span><strong id="proxyLastError">n/a</strong></div>
+            </div>
+          </section>
+
+          <section class="section-block">
+            <div class="section-header">
+              <div>
+                <h2>Proxy Listeners</h2>
+                <p>Per-listener counters reported by the active runtime.</p>
+              </div>
+            </div>
+            <div class="table-card card">
+              <div class="table-wrap">
+                <table class="conn-table">
+                  <thead>
+                    <tr>
+                      <th>Listener</th>
+                      <th>Endpoint</th>
+                      <th>HTTP</th>
+                      <th>SOCKS5</th>
+                      <th>Auth</th>
+                      <th>Active</th>
+                      <th>Accepted</th>
+                      <th>Completed</th>
+                      <th>Failed</th>
+                      <th>RX Bytes</th>
+                      <th>TX Bytes</th>
+                      <th>RX/s</th>
+                      <th>TX/s</th>
+                      <th>Last Error</th>
+                    </tr>
+                  </thead>
+                  <tbody id="proxyListenersBody">
+                    <tr class="empty-row"><td colspan="14">No proxy listeners</td></tr>
                   </tbody>
                 </table>
               </div>

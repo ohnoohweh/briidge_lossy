@@ -150,6 +150,8 @@ class Runner:
         self._sessions: List[ISession] = []
         self._muxes: List["ChannelMux"] = []
         self._session_labels: List[str] = []
+        self._proxy_provider_servers: Dict[str, ObstacleBridgeProxyServer] = {}
+        self._proxy_provider_last_error: str = ""
         self.stats = StatsBoard(args )
         self.admin_web = None
         self._restart_requested: Optional[asyncio.Event] = None
@@ -321,6 +323,118 @@ class Runner:
         if self._restart_requested_flag:
             self._restart_requested.set()
 
+    def _proxy_provider_config_snapshot(self) -> dict:
+        def _int_config(name: str, default: int) -> int:
+            value = getattr(self.args, name, default)
+            if value is None or value == "":
+                return default
+            return int(value)
+
+        raw_auth = getattr(self.args, "proxy_provider_auth", None)
+        auth = dict(raw_auth) if isinstance(raw_auth, Mapping) else {}
+        raw_egress = getattr(self.args, "proxy_provider_egress", None)
+        egress = dict(raw_egress) if isinstance(raw_egress, Mapping) else {}
+        raw_policy = getattr(self.args, "proxy_provider_policy", None)
+        policy = dict(raw_policy) if isinstance(raw_policy, Mapping) else {}
+        protocols = getattr(self.args, "proxy_provider_protocols", None)
+        if isinstance(protocols, str):
+            protocols = [p.strip() for p in protocols.split(",") if p.strip()]
+        if not isinstance(protocols, list):
+            protocols = []
+        return {
+            "enabled": bool(getattr(self.args, "proxy_provider_enabled", False)),
+            "bind": str(getattr(self.args, "proxy_provider_bind", "127.0.0.1") or "127.0.0.1"),
+            "http_port": _int_config("proxy_provider_http_port", 13881),
+            "socks5_port": _int_config("proxy_provider_socks5_port", 13882),
+            "protocols": [str(p).strip().lower() for p in protocols if str(p).strip()],
+            "auth": auth,
+            "egress": egress,
+            "policy": policy,
+        }
+
+    @staticmethod
+    def _proxy_provider_credentials(auth: Mapping[str, Any]) -> Optional[ProxyCredentials]:
+        mode = str(auth.get("mode") or "none").strip().lower()
+        if mode in {"", "none", "off", "disabled"}:
+            return None
+        username = str(auth.get("username") or "").strip()
+        password = str(auth.get("token") or auth.get("password") or "").strip()
+        if not username or not password:
+            return None
+        return ProxyCredentials(username, password)
+
+    async def _start_proxy_provider(self) -> None:
+        cfg = self._proxy_provider_config_snapshot()
+        log = logging.getLogger("proxy_provider")
+        log.info(
+            "[PROXY] provider config enabled=%s bind=%s http_port=%s socks5_port=%s protocols=%r auth_mode=%s",
+            cfg["enabled"],
+            cfg["bind"],
+            cfg["http_port"],
+            cfg["socks5_port"],
+            cfg["protocols"],
+            (cfg.get("auth") or {}).get("mode", "none"),
+        )
+        if not cfg["enabled"]:
+            log.info("[PROXY] provider disabled; listeners will not be started")
+            return
+        protocols = set(cfg["protocols"] or [])
+        http_enabled = bool({"http", "http-connect"} & protocols)
+        socks_enabled = bool({"socks5", "socks5-connect"} & protocols)
+        if not http_enabled and not socks_enabled:
+            self._proxy_provider_last_error = "no proxy protocols enabled"
+            log.warning("[PROXY] provider enabled but no supported protocols are configured")
+            return
+        credentials = self._proxy_provider_credentials(cfg.get("auth") or {})
+        if (cfg.get("auth") or {}).get("mode") not in (None, "", "none") and credentials is None:
+            log.warning("[PROXY] auth mode requested but username/token are incomplete; proxy starts without auth")
+        listener_specs: list[tuple[str, int, bool, bool]] = []
+        if http_enabled:
+            listener_specs.append(("http", int(cfg["http_port"]), True, False))
+        if socks_enabled:
+            listener_specs.append(("socks5", int(cfg["socks5_port"]), False, True))
+        for name, port, allow_http, allow_socks5 in listener_specs:
+            server = ObstacleBridgeProxyServer(
+                ObstacleBridgeProxyServerConfig(
+                    bind_host=str(cfg["bind"]),
+                    port=int(port),
+                    credentials=credentials,
+                    allow_http=allow_http,
+                    allow_socks5=allow_socks5,
+                )
+            )
+            try:
+                await self._await_with_async_diag(f"proxy_provider.{name}.start", server.start())
+            except Exception as exc:
+                self._proxy_provider_last_error = f"{name}:{type(exc).__name__}:{exc}"
+                log.exception("[PROXY] failed to start %s listener bind=%s port=%s", name, cfg["bind"], port)
+                raise
+            self._proxy_provider_servers[name] = server
+        self._proxy_provider_last_error = ""
+        log.info("[PROXY] provider started listeners=%s", sorted(self._proxy_provider_servers.keys()))
+
+    async def _stop_proxy_provider(self) -> None:
+        log = logging.getLogger("proxy_provider")
+        for name, server in list(self._proxy_provider_servers.items()):
+            try:
+                await self._await_with_async_diag(f"proxy_provider.{name}.stop", server.stop())
+            except Exception:
+                log.exception("[PROXY] failed to stop %s listener", name)
+            finally:
+                self._proxy_provider_servers.pop(name, None)
+
+    def _proxy_provider_snapshot(self) -> dict:
+        cfg = self._proxy_provider_config_snapshot()
+        return {
+            "enabled": bool(cfg["enabled"]),
+            "configured": cfg,
+            "listeners": {
+                name: server.snapshot()
+                for name, server in sorted(self._proxy_provider_servers.items())
+            },
+            "last_error": self._proxy_provider_last_error,
+        }
+
     async def start(self) -> None:
         ios_admin_ui = str(_admin_ui_platform()).strip().lower() == "ios"
         self._loop = asyncio.get_running_loop()
@@ -332,6 +446,7 @@ class Runner:
             available_crypto_extract(),
         )
         self._ensure_runtime_events()
+        await self._start_proxy_provider()
 
         # Make the local admin UI available before overlay/session startup can
         # block on network state. This is especially important for iOS packet
@@ -496,6 +611,9 @@ class Runner:
             self.admin_web = None        
         if self._stop is not None:
             self._stop.set()
+
+        self.log.debug("[RUNNER] stop: entering proxy_provider.stop")
+        await _run_stop_step("proxy_provider.stop", self._stop_proxy_provider(), timeout_s=3.0)
 
         self.log.debug("[RUNNER] stop: entering stats.stop")
         await _run_stop_step("stats.stop", self.stats.stop(), timeout_s=2.0)
@@ -700,6 +818,7 @@ class Runner:
             "decompress_fail_total": sum(int(s.get("decompress_fail_total") or 0) for s in compress_enabled),
             "compression_saving_ratio": savings_ratio,
         }
+        payload["proxy_provider"] = self._proxy_provider_snapshot()
         return payload
 
     def get_connections_snapshot(self) -> dict:
@@ -1843,6 +1962,12 @@ class Runner:
 # ------------ Admin Webinterface ------------
 
 from .bridge_tun_ios import IOSTUNConnectorSettings, IOS_TUN_CONNECTOR_SECTION
+from .bridge_proxy_server import (
+    ObstacleBridgeProxyProviderSettings,
+    ObstacleBridgeProxyServer,
+    ObstacleBridgeProxyServerConfig,
+    ProxyCredentials,
+)
 from .bridge_tun_routing import TUN_ROUTING_SECTION, TunRoutingSettings
 from .bridge_webadmin import AdminWebUI
 
@@ -2329,17 +2454,29 @@ class ConfigAwareCLI:
     def _apply_config_defaults_from_json(self, parser: argparse.ArgumentParser, cfg: Dict[str, Any]) -> None:
         actions = self._scan_actions(parser)
         flat: Dict[str, Any] = {}
+        nested_dest_aliases = {
+            "proxy_provider": {
+                "enabled": "proxy_provider_enabled",
+                "bind": "proxy_provider_bind",
+                "http_port": "proxy_provider_http_port",
+                "socks5_port": "proxy_provider_socks5_port",
+                "protocols": "proxy_provider_protocols",
+                "auth": "proxy_provider_auth",
+                "egress": "proxy_provider_egress",
+                "policy": "proxy_provider_policy",
+            }
+        }
         # Prefer grouped section values over legacy duplicate root keys.
         for section in self._sections.keys():
             value = cfg.get(section)
             if not isinstance(value, dict):
                 continue
             for kk, vv in value.items():
-                flat[kk] = vv
+                flat[nested_dest_aliases.get(section, {}).get(kk, kk)] = vv
         for k, v in cfg.items():
             if isinstance(v, dict):
                 for kk, vv in v.items():
-                    flat.setdefault(kk, vv)
+                    flat.setdefault(nested_dest_aliases.get(k, {}).get(kk, kk), vv)
             else:
                 flat.setdefault(k, v)
         # Coerce/validate and set defaults
@@ -2363,6 +2500,7 @@ def default_runtime_registrars() -> List[Tuple[str, Callable[[argparse.ArgumentP
     return [
         ("admin_web",          AdminWebUI.register_cli),
         ("channel_mux",        ChannelMux.register_cli),
+        ("proxy_provider",     ObstacleBridgeProxyProviderSettings.register_cli),
         (IOS_TUN_CONNECTOR_SECTION, IOSTUNConnectorSettings.register_cli),
         (TUN_ROUTING_SECTION,   TunRoutingSettings.register_cli),
         ("runner",             Runner.register_overlay_cli),
@@ -2386,6 +2524,23 @@ def _attach_runtime_cli_metadata(args: argparse.Namespace, cli: ConfigAwareCLI) 
     return args
 
 
+def _attach_proxy_provider_aliases(args: argparse.Namespace) -> argparse.Namespace:
+    aliases = {
+        "enabled": "proxy_provider_enabled",
+        "bind": "proxy_provider_bind",
+        "http_port": "proxy_provider_http_port",
+        "socks5_port": "proxy_provider_socks5_port",
+        "protocols": "proxy_provider_protocols",
+        "auth": "proxy_provider_auth",
+        "egress": "proxy_provider_egress",
+        "policy": "proxy_provider_policy",
+    }
+    for legacy, canonical in aliases.items():
+        if hasattr(args, canonical) and not hasattr(args, legacy):
+            setattr(args, legacy, getattr(args, canonical))
+    return args
+
+
 def parse_runtime_args(
     argv: Optional[List[str]] = None,
     *,
@@ -2394,6 +2549,7 @@ def parse_runtime_args(
     cli = ConfigAwareCLI(description=RUNTIME_CLI_DESCRIPTION)
     args = cli.parse_args(argv, default_runtime_registrars())
     _attach_runtime_cli_metadata(args, cli)
+    _attach_proxy_provider_aliases(args)
     if apply_logging:
         DebugLoggingConfigurator.from_args(args).apply()
     return args
@@ -2468,6 +2624,7 @@ def build_runtime_args_from_config(
     args._first_start_detected = cli._first_start_detected
     args._config_path = str(pathlib.Path(persisted_config_path).expanduser().resolve()) if persisted_config_path else ""
     _attach_runtime_cli_metadata(args, cli)
+    _attach_proxy_provider_aliases(args)
     cli._apply_per_section_overrides(args)
     if apply_logging:
         DebugLoggingConfigurator.from_args(args).apply()

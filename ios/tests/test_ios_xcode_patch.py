@@ -225,6 +225,7 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayRuntime.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeWebAdminServer.swift" in patched
+    assert "native/ObstacleBridgeShared/ObstacleBridgeProxyServer.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeOnboarding.swift" in patched
     assert "ObstacleBridgeNativeCrypto.swift in Sources" in patched
     assert "ObstacleBridgeNativeCrypto.swift in IPServer Sources" in patched
@@ -236,6 +237,7 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "ObstacleBridgeWebSocketOverlayTransportOwner.swift in Sources" in patched
     assert "ObstacleBridgeQuicOverlayRuntime.swift in Sources" in patched
     assert "ObstacleBridgeQuicOverlayTransportOwner.swift in Sources" in patched
+    assert "ObstacleBridgeProxyServer.swift in Sources" in patched
     assert "ObstacleBridgeOnboarding.swift in Sources" in patched
     assert "native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift" in patched
     assert "build/generated/ObstacleBridgeGeneratedBuildStamp.swift" in patched

@@ -3263,6 +3263,47 @@ def wait_peer_row_visible(
     )
 
 
+def wait_peer_row_decode_errors_at_least(
+    admin_port: int,
+    *,
+    transport: str,
+    peer: Optional[str] = None,
+    state: Optional[str] = None,
+    minimum_decode_errors: int = 1,
+    timeout: float = 12.0,
+    label: str = '',
+) -> tuple[dict, dict]:
+    end = time.time() + timeout
+    last_doc = None
+    last_row = None
+    normalized_transport = str(transport or '').strip().lower()
+    expected_peer = str(peer or '').strip()
+    expected_state = str(state or '').strip().lower()
+    while time.time() < end:
+        _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
+        last_doc = doc
+        for row in list(doc.get('peers') or []):
+            if str(row.get('transport', '')).strip().lower() != normalized_transport:
+                continue
+            if expected_peer and peer_endpoint_text(row.get('peer')) != expected_peer:
+                continue
+            if expected_state and str(row.get('state', '')).strip().lower() != expected_state:
+                continue
+            last_row = row
+            if int(row.get('decode_errors') or 0) < minimum_decode_errors:
+                continue
+            who = f' {label}' if label else ''
+            log.info(f'[PEERS]{who} port={admin_port} matched_row_with_decode_errors={row!r}')
+            return doc, row
+        time.sleep(0.25)
+    raise RuntimeError(
+        f'/api/peers did not expose a matching peer row with decode_errors>={minimum_decode_errors} '
+        f'for transport={normalized_transport} peer={expected_peer or "*"} '
+        f'state={expected_state or "*"} on port {admin_port}; '
+        f'last_row={last_row!r} last={last_doc!r}'
+    )
+
+
 def wait_peer_row_absent(
     admin_port: int,
     *,
@@ -6833,15 +6874,15 @@ def test_overlay_e2e_myudp_listener_invalid_sender_expires_before_stale_window(t
             attacker_peer = f'{loopback_v4}:{attacker.getsockname()[1]}'
 
         phase('3. Verify /api/peers exposes the connecting junk sender with age and decode data')
-        _doc, row = wait_peer_row_visible(
+        _doc, row = wait_peer_row_decode_errors_at_least(
             admin_port,
             transport='myudp',
             peer=attacker_peer,
             state='connecting',
+            minimum_decode_errors=1,
             timeout=8.0,
             label='listener',
         )
-        assert int(row.get('decode_errors') or 0) >= 1
         age = row.get('last_incoming_age_seconds')
         assert isinstance(age, (int, float))
         assert 0 <= float(age) < 5.0

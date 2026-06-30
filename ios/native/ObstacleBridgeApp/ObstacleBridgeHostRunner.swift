@@ -154,6 +154,8 @@ final class ObstacleBridgeHostRunner {
     private var sharedTcpOverlayTransportOwner: ObstacleBridgeTcpOverlayTransportOwner?
     private var sharedQuicOverlayTransportOwner: ObstacleBridgeQuicOverlayTransportOwner?
     private var sharedUdpOverlayTransportOwner: ObstacleBridgeUdpOverlayTransportOwner?
+    private var proxyServers: [String: ObstacleBridgeProxyServer] = [:]
+    private var proxyProviderLastError = ""
     private var sharedMacOSTunAdapter: ObstacleBridgeMacOSTunAdapter?
     private var macOSTunChannelConnectedHookFired = false
     private var macOSOverlayUnderlayGatewayV4 = ""
@@ -305,8 +307,10 @@ final class ObstacleBridgeHostRunner {
 
     private func reloadRuntimeStateForControlAction() throws {
         try reloadRuntimeConfigFromDisk()
+        stopProxyProvider()
         stopOwnServers()
         prepareSharedOverlayBootstrap()
+        try startProxyProviderIfConfigured()
         try startOwnServers()
         startSharedWebSocketOverlayTransportOwnerIfNeeded()
         startSharedTCPOverlayTransportOwnerIfNeeded()
@@ -358,6 +362,7 @@ final class ObstacleBridgeHostRunner {
         try ensureControlServerStarted()
         prepareSharedOverlayBootstrap()
         do {
+            try startProxyProviderIfConfigured()
             try startOwnServers()
             startSharedWebSocketOverlayTransportOwnerIfNeeded()
             startSharedTCPOverlayTransportOwnerIfNeeded()
@@ -387,9 +392,175 @@ final class ObstacleBridgeHostRunner {
         sharedQuicOverlayTransportOwner = nil
         sharedUdpOverlayTransportOwner?.stop()
         sharedUdpOverlayTransportOwner = nil
+        stopProxyProvider()
         stopOwnServers()
         controlServer?.stop()
         controlServer = nil
+    }
+
+    private func startProxyProviderIfConfigured() throws {
+        stopProxyProvider()
+        let config = proxyProviderConfiguration()
+        guard config.enabled else {
+            proxyProviderLastError = ""
+            return
+        }
+
+        var started: [String: ObstacleBridgeProxyServer] = [:]
+        do {
+            if config.httpEnabled {
+                let server = try ObstacleBridgeProxyServer(
+                    configuration: ObstacleBridgeProxyServer.Configuration(
+                        bindHost: config.bindHost,
+                        port: config.httpPort,
+                        credentials: config.credentials,
+                        allowHTTP: true,
+                        allowSOCKS5: config.socks5Enabled && config.socks5Port == config.httpPort
+                    )
+                )
+                server.start()
+                started["http"] = server
+            }
+            if config.socks5Enabled && (!config.httpEnabled || config.socks5Port != config.httpPort) {
+                let server = try ObstacleBridgeProxyServer(
+                    configuration: ObstacleBridgeProxyServer.Configuration(
+                        bindHost: config.bindHost,
+                        port: config.socks5Port,
+                        credentials: config.credentials,
+                        allowHTTP: false,
+                        allowSOCKS5: true
+                    )
+                )
+                server.start()
+                started["socks5"] = server
+            }
+        } catch {
+            for server in started.values {
+                server.stop()
+            }
+            proxyProviderLastError = error.localizedDescription
+            throw error
+        }
+
+        proxyServers = started
+        proxyProviderLastError = ""
+        if !started.isEmpty {
+            bootstrapState["proxy_provider"] = "ready"
+        }
+    }
+
+    private func stopProxyProvider() {
+        guard !proxyServers.isEmpty else {
+            return
+        }
+        for server in proxyServers.values {
+            server.stop()
+        }
+        proxyServers.removeAll()
+    }
+
+    private func proxyProviderSnapshot() -> [String: Any] {
+        let config = proxyProviderConfiguration()
+        var listeners: [String: Any] = [:]
+        for key in proxyServers.keys.sorted() {
+            if let server = proxyServers[key] {
+                listeners[key] = server.snapshot()
+            }
+        }
+        return [
+            "enabled": !proxyServers.isEmpty,
+            "configured": config.configuredPayload(),
+            "listeners": listeners,
+            "last_error": proxyProviderLastError,
+        ]
+    }
+
+    private struct ProxyProviderConfig {
+        let enabled: Bool
+        let bindHost: String
+        let httpPort: Int
+        let socks5Port: Int
+        let protocols: [String]
+        let auth: [String: Any]
+        let egress: [String: Any]
+        let policy: [String: Any]
+        let credentials: ObstacleBridgeProxyServer.Credentials?
+
+        var httpEnabled: Bool {
+            protocols.contains("http-connect") || protocols.contains("http")
+        }
+
+        var socks5Enabled: Bool {
+            protocols.contains("socks5-connect") || protocols.contains("socks5")
+        }
+
+        func configuredPayload() -> [String: Any] {
+            [
+                "enabled": enabled,
+                "bind": bindHost,
+                "http_port": httpPort,
+                "socks5_port": socks5Port,
+                "protocols": protocols,
+                "auth": auth,
+                "egress": egress,
+                "policy": policy,
+            ]
+        }
+    }
+
+    private func proxyProviderConfiguration() -> ProxyProviderConfig {
+        let section = runtimeConfigRaw["proxy_provider"] as? [String: Any]
+        let enabled = ObstacleBridgeRuntimeConfig.boolValue(from: section?["enabled"] ?? runtimeConfig["proxy_provider_enabled"]) ?? false
+        let bindHost = ObstacleBridgeRuntimeConfig.stringValue(from: section?["bind"] ?? runtimeConfig["proxy_provider_bind"]) ?? "127.0.0.1"
+        let httpPort = ObstacleBridgeRuntimeConfig.intValue(from: section?["http_port"] ?? runtimeConfig["proxy_provider_http_port"]) ?? 13881
+        let socks5Port = ObstacleBridgeRuntimeConfig.intValue(from: section?["socks5_port"] ?? runtimeConfig["proxy_provider_socks5_port"]) ?? 13882
+        let protocols = Self.proxyProviderProtocols(section?["protocols"] ?? runtimeConfig["proxy_provider_protocols"])
+        let auth = (section?["auth"] ?? runtimeConfig["proxy_provider_auth"]) as? [String: Any] ?? [
+            "mode": "none",
+            "username": "",
+            "token": "",
+        ]
+        let egress = (section?["egress"] ?? runtimeConfig["proxy_provider_egress"]) as? [String: Any] ?? [
+            "mode": "direct",
+            "address_families": ["ipv4", "ipv6"],
+        ]
+        let policy = (section?["policy"] ?? runtimeConfig["proxy_provider_policy"]) as? [String: Any] ?? [
+            "allow_private_destinations": false,
+            "blocked_host_patterns": [],
+        ]
+        let authMode = (ObstacleBridgeRuntimeConfig.stringValue(from: auth["mode"] ?? runtimeConfig["proxy_provider_auth_mode"]) ?? "none").lowercased()
+        let username = ObstacleBridgeRuntimeConfig.stringValue(from: auth["username"] ?? runtimeConfig["proxy_provider_username"]) ?? ""
+        let password = ObstacleBridgeRuntimeConfig.stringValue(from: auth["token"] ?? auth["password"] ?? runtimeConfig["proxy_provider_token"] ?? runtimeConfig["proxy_provider_password"]) ?? ""
+        let credentials: ObstacleBridgeProxyServer.Credentials?
+        if authMode == "token" || authMode == "basic" || authMode == "password" {
+            credentials = username.isEmpty || password.isEmpty ? nil : ObstacleBridgeProxyServer.Credentials(username: username, password: password)
+        } else {
+            credentials = nil
+        }
+        return ProxyProviderConfig(
+            enabled: enabled,
+            bindHost: bindHost,
+            httpPort: httpPort,
+            socks5Port: socks5Port,
+            protocols: protocols,
+            auth: auth,
+            egress: egress,
+            policy: policy,
+            credentials: credentials
+        )
+    }
+
+    private static func proxyProviderProtocols(_ value: Any?) -> [String] {
+        let values: [String]
+        if let array = value as? [Any] {
+            values = array.compactMap { ObstacleBridgeRuntimeConfig.stringValue(from: $0)?.lowercased() }
+        } else if let text = ObstacleBridgeRuntimeConfig.stringValue(from: value) {
+            values = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        } else {
+            values = ["http-connect", "socks5-connect"]
+        }
+        let filtered = values.filter { !$0.isEmpty }
+        return filtered.isEmpty ? ["http-connect", "socks5-connect"] : filtered
     }
 
     private func startAdminSnapshotPublisher() {
@@ -516,6 +687,7 @@ final class ObstacleBridgeHostRunner {
             "control_actions": controlActionSnapshot(),
             "transport_runtime": transportRuntimeSnapshot(),
             "compress_layer": compressLayerSnapshot(peerID: nil) ?? NSNull(),
+            "proxy_provider": proxyProviderSnapshot(),
             "secure_link_material_generation": 0,
             "secure_link_last_reload_unix_ts": NSNull(),
             "secure_link_last_reload_scope": "",

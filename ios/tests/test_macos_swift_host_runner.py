@@ -1808,6 +1808,8 @@ def test_macos_swift_host_runner_bootstraps_ws_stack_and_serves_status(tmp_path:
     binary_path = artifact.binary_path
 
     status_port = _unused_tcp_port()
+    proxy_http_port = _unused_tcp_port()
+    proxy_socks5_port = _unused_tcp_port()
     runtime_config_path = tmp_path / "runtime.json"
     runtime_config_path.write_text(
         json.dumps(
@@ -1828,6 +1830,26 @@ def test_macos_swift_host_runner_bootstraps_ws_stack_and_serves_status(tmp_path:
                 "admin_web": True,
                 "admin_web_bind": "127.0.0.1",
                 "admin_web_port": status_port,
+                "proxy_provider": {
+                    "enabled": True,
+                    "bind": "127.0.0.1",
+                    "http_port": proxy_http_port,
+                    "socks5_port": proxy_socks5_port,
+                    "protocols": ["http-connect", "socks5-connect"],
+                    "auth": {
+                        "mode": "token",
+                        "username": "obproxy",
+                        "token": "obproxy-local-test",
+                    },
+                    "egress": {
+                        "mode": "direct",
+                        "address_families": ["ipv4", "ipv6"],
+                    },
+                    "policy": {
+                        "allow_private_destinations": False,
+                        "blocked_host_patterns": [],
+                    },
+                },
             },
             sort_keys=True,
         ),
@@ -1879,6 +1901,28 @@ def test_macos_swift_host_runner_bootstraps_ws_stack_and_serves_status(tmp_path:
         assert status["transport_runtime"]["websocket"]["payload_mode"] == "base64"
         assert status["compress_layer"]["algorithm"] == "zlib"
         assert status["compress_layer"]["min_bytes"] == 96
+        assert status["proxy_provider"]["enabled"] is True
+        assert status["proxy_provider"]["configured"]["enabled"] is True
+        assert status["proxy_provider"]["configured"]["bind"] == "127.0.0.1"
+        assert status["proxy_provider"]["configured"]["http_port"] == proxy_http_port
+        assert status["proxy_provider"]["configured"]["socks5_port"] == proxy_socks5_port
+        assert status["proxy_provider"]["configured"]["protocols"] == ["http-connect", "socks5-connect"]
+        assert status["proxy_provider"]["configured"]["auth"]["mode"] == "token"
+        assert status["proxy_provider"]["configured"]["auth"]["username"] == "obproxy"
+        assert status["proxy_provider"]["last_error"] == ""
+        assert set(status["proxy_provider"]["listeners"]) == {"http", "socks5"}
+        assert status["proxy_provider"]["listeners"]["http"]["bind_host"] == "127.0.0.1"
+        assert status["proxy_provider"]["listeners"]["http"]["port"] == proxy_http_port
+        assert status["proxy_provider"]["listeners"]["http"]["http_enabled"] is True
+        assert status["proxy_provider"]["listeners"]["http"]["socks5_enabled"] is False
+        assert status["proxy_provider"]["listeners"]["http"]["auth_required"] is True
+        assert status["proxy_provider"]["listeners"]["socks5"]["bind_host"] == "127.0.0.1"
+        assert status["proxy_provider"]["listeners"]["socks5"]["port"] == proxy_socks5_port
+        assert status["proxy_provider"]["listeners"]["socks5"]["http_enabled"] is False
+        assert status["proxy_provider"]["listeners"]["socks5"]["socks5_enabled"] is True
+        assert status["proxy_provider"]["listeners"]["socks5"]["auth_required"] is True
+        assert isinstance(status["proxy_provider"]["listeners"]["http"]["rx_bytes"], int)
+        assert isinstance(status["proxy_provider"]["listeners"]["socks5"]["tx_bytes"], int)
         bootstrap = status["bootstrap_state"]
         assert bootstrap["status"] == "prepared"
         assert bootstrap["transport"] == "ws"
@@ -1908,11 +1952,21 @@ def test_macos_swift_host_runner_bootstraps_ws_stack_and_serves_status(tmp_path:
         assert peers["peers"][0]["runtime"]["websocket"]["proxy_mode"] == "off"
         assert peers["peers"][0]["compress_layer"]["enabled"] is False
         assert config["config"]["overlay_transport"] == "ws"
+        assert config["config"]["proxy_provider_enabled"] is True
+        assert config["config"]["proxy_provider_bind"] == "127.0.0.1"
+        assert config["config"]["proxy_provider_http_port"] == proxy_http_port
+        assert config["config"]["proxy_provider_socks5_port"] == proxy_socks5_port
+        assert config["config"]["proxy_provider_protocols"] == ["http-connect", "socks5-connect"]
+        assert config["config"]["proxy_provider_auth"]["mode"] == "token"
+        assert config["config"]["proxy_provider_auth"]["username"] == "obproxy"
+        assert config["config"]["proxy_provider_egress"]["mode"] == "direct"
+        assert config["config"]["proxy_provider_policy"]["allow_private_destinations"] is False
         assert "admin_web" in config["schema"]
         assert "runner" in config["schema"]
         assert "udp_session" in config["schema"]
         assert "tcp_session" in config["schema"]
         assert "channel_mux" in config["schema"]
+        assert "proxy_provider" in config["schema"]
         runner_keys = {str(item["key"]) for item in config["schema"]["runner"]}
         assert {"overlay_transport", "client_restart_if_disconnected", "overlay_reconnect_retry_delay_ms"}.issubset(runner_keys)
         udp_session_keys = {str(item["key"]) for item in config["schema"]["udp_session"]}
@@ -1924,6 +1978,18 @@ def test_macos_swift_host_runner_bootstraps_ws_stack_and_serves_status(tmp_path:
         assert "overlay_transport" not in ws_session_keys
         channel_mux_keys = {str(item["key"]) for item in config["schema"]["channel_mux"]}
         assert channel_mux_keys == {"own_servers", "remote_servers"}
+        proxy_provider_keys = {str(item["key"]) for item in config["schema"]["proxy_provider"]}
+        assert {
+            "proxy_provider_enabled",
+            "proxy_provider_bind",
+            "proxy_provider_http_port",
+            "proxy_provider_socks5_port",
+            "proxy_provider_protocols",
+            "proxy_provider_auth",
+            "proxy_provider_egress",
+            "proxy_provider_policy",
+            "log_proxy_provider",
+        }.issubset(proxy_provider_keys)
         assert config["config"]["udp_bind"] == "::"
         assert config["config"]["udp_own_port"] == 4433
         assert config["config"]["udp_peer"] is None

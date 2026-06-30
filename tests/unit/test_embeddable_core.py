@@ -147,6 +147,72 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
             ["", "udp", "direct", "simple_udp_peer", "swift_udp", "swift_udp_peer", "swift_host_runner"],
         )
 
+    def test_runner_schema_snapshot_includes_proxy_provider_fields(self) -> None:
+        args = build_runtime_args_from_config(
+            {
+                "proxy_provider": {
+                    "enabled": True,
+                    "bind": "127.0.0.1",
+                    "http_port": 13181,
+                    "socks5_port": 13182,
+                    "protocols": ["http-connect", "socks5-connect"],
+                    "auth": {
+                        "mode": "token",
+                        "username": "obproxy",
+                        "token": "local-token",
+                    },
+                    "egress": {
+                        "mode": "direct",
+                        "address_families": ["ipv4", "ipv6"],
+                    },
+                    "policy": {
+                        "allow_private_destinations": False,
+                        "blocked_host_patterns": [],
+                    },
+                }
+            }
+        )
+        runner = Runner.__new__(Runner)
+        runner.args = args
+
+        self.assertTrue(args.proxy_provider_enabled)
+        self.assertEqual(args.proxy_provider_bind, "127.0.0.1")
+        self.assertEqual(args.proxy_provider_http_port, 13181)
+        self.assertEqual(args.proxy_provider_socks5_port, 13182)
+        self.assertEqual(args.proxy_provider_protocols, ["http-connect", "socks5-connect"])
+        self.assertEqual(args.proxy_provider_auth["username"], "obproxy")
+        self.assertTrue(args.enabled)
+        self.assertEqual(args.http_port, 13181)
+
+        config = runner.get_config_snapshot()
+        schema = runner.get_config_schema_snapshot()
+        proxy_provider_rows = {row["key"]: row for row in schema["proxy_provider"]}
+
+        self.assertTrue(config["proxy_provider_enabled"])
+        self.assertEqual(config["proxy_provider_http_port"], 13181)
+        self.assertEqual(config["proxy_provider_socks5_port"], 13182)
+        self.assertEqual(config["proxy_provider_auth"]["token"], "local-token")
+        self.assertTrue(
+            {
+                "proxy_provider_enabled",
+                "proxy_provider_bind",
+                "proxy_provider_http_port",
+                "proxy_provider_socks5_port",
+                "proxy_provider_protocols",
+                "proxy_provider_auth",
+                "proxy_provider_egress",
+                "proxy_provider_policy",
+            }.issubset(set(proxy_provider_rows.keys())),
+        )
+        self.assertIn("log_proxy_provider", proxy_provider_rows)
+        self.assertEqual(proxy_provider_rows["proxy_provider_enabled"]["default"], False)
+        self.assertEqual(proxy_provider_rows["proxy_provider_http_port"]["default"], 13881)
+        self.assertEqual(proxy_provider_rows["proxy_provider_socks5_port"]["default"], 13882)
+        self.assertEqual(
+            proxy_provider_rows["proxy_provider_protocols"]["choices"],
+            ["http-connect", "socks5-connect", "http", "socks5"],
+        )
+
     def test_build_runtime_args_preserves_explicit_config_path_for_embedders(self) -> None:
         args = build_runtime_args_from_config(
             {"admin_web": True},
@@ -165,6 +231,35 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         self.assertEqual(args.overlay_transport, "tcp")
         self.assertIn("admin_web", args._config_sections)
         self.assertIn("overlay_transport", args._config_defaults)
+
+
+class ProxyProviderRunnerLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_runner_starts_proxy_provider_and_exposes_status_snapshot(self) -> None:
+        args = build_runtime_args_from_config(
+            {
+                "proxy_provider": {
+                    "enabled": True,
+                    "bind": "127.0.0.1",
+                    "http_port": 0,
+                    "socks5_port": 0,
+                    "protocols": ["http-connect", "socks5-connect"],
+                    "auth": {"mode": "none", "username": "", "token": ""},
+                }
+            }
+        )
+        runner = Runner(args)
+
+        await runner._start_proxy_provider()
+        try:
+            snapshot = runner.get_status_snapshot()["proxy_provider"]
+            self.assertTrue(snapshot["enabled"])
+            self.assertEqual(set(snapshot["listeners"].keys()), {"http", "socks5"})
+            self.assertTrue(snapshot["listeners"]["http"]["http_enabled"])
+            self.assertFalse(snapshot["listeners"]["http"]["socks5_enabled"])
+            self.assertFalse(snapshot["listeners"]["socks5"]["http_enabled"])
+            self.assertTrue(snapshot["listeners"]["socks5"]["socks5_enabled"])
+        finally:
+            await runner._stop_proxy_provider()
 
 
 class PacketIOTests(unittest.IsolatedAsyncioTestCase):
