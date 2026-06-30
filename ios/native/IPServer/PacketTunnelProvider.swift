@@ -50,6 +50,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var sharedTcpOverlayRuntime: ObstacleBridgeTcpOverlayRuntime?
     private var controlServer: ObstacleBridgeWebAdminServer?
     private var proxyServers: [String: ObstacleBridgeProxyServer] = [:]
+    private var proxyProviderLastError = ""
     private var providerStartedAt = Date().timeIntervalSince1970
     private var runtimeReloadInProgress = false
     private var peerTrafficRateState: (timestamp: TimeInterval, rxBytes: Int, txBytes: Int)?
@@ -198,9 +199,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func startProxyProviderIfConfigured(providerConfiguration: [String: Any]?) throws {
         stopProxyProvider()
-        guard let config = proxyProviderConfiguration(providerConfiguration: providerConfiguration),
-              config.enabled
-        else {
+        let config = proxyProviderConfiguration(providerConfiguration: providerConfiguration)
+        guard config.enabled else {
+            proxyProviderLastError = ""
             return
         }
 
@@ -236,9 +237,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             for server in started.values {
                 server.stop()
             }
+            proxyProviderLastError = error.localizedDescription
             throw error
         }
         proxyServers = started
+        proxyProviderLastError = ""
         if !started.isEmpty {
             recordNativeEvent("proxy_provider_started", fields: proxyProviderSnapshot())
             updateProviderState("proxy_provider_started")
@@ -257,9 +260,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func proxyProviderSnapshot() -> [String: Any] {
-        guard !proxyServers.isEmpty else {
-            return [:]
-        }
+        let config = proxyProviderConfiguration(providerConfiguration: nil)
         var listeners: [String: Any] = [:]
         for key in proxyServers.keys.sorted() {
             if let server = proxyServers[key] {
@@ -267,8 +268,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
         }
         return [
-            "enabled": true,
+            "enabled": !proxyServers.isEmpty,
+            "configured": config.configuredPayload(),
             "listeners": listeners,
+            "last_error": proxyProviderLastError,
         ]
     }
 
@@ -277,27 +280,59 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let bindHost: String
         let httpPort: Int
         let socks5Port: Int
-        let httpEnabled: Bool
-        let socks5Enabled: Bool
+        let protocols: [String]
+        let auth: [String: Any]
+        let egress: [String: Any]
+        let policy: [String: Any]
         let credentials: ObstacleBridgeProxyServer.Credentials?
+
+        var httpEnabled: Bool {
+            protocols.contains("http-connect") || protocols.contains("http")
+        }
+
+        var socks5Enabled: Bool {
+            protocols.contains("socks5-connect") || protocols.contains("socks5")
+        }
+
+        func configuredPayload() -> [String: Any] {
+            [
+                "enabled": enabled,
+                "bind": bindHost,
+                "http_port": httpPort,
+                "socks5_port": socks5Port,
+                "protocols": protocols,
+                "auth": auth,
+                "egress": egress,
+                "policy": policy,
+            ]
+        }
     }
 
-    private func proxyProviderConfiguration(providerConfiguration: [String: Any]?) -> ProxyProviderConfig? {
+    private func proxyProviderConfiguration(providerConfiguration: [String: Any]?) -> ProxyProviderConfig {
         let rawPayload = rawRuntimeConfigPayload(providerConfiguration: providerConfiguration) ?? [:]
         let flatPayload = runtimeConfigPayload(providerConfiguration: providerConfiguration) ?? [:]
         let section = rawPayload["proxy_provider"] as? [String: Any]
         let enabled = ObstacleBridgeRuntimeConfig.boolValue(from: section?["enabled"] ?? flatPayload["proxy_provider_enabled"]) ?? false
-        guard enabled else {
-            return nil
-        }
         let bindHost = ObstacleBridgeRuntimeConfig.stringValue(from: section?["bind"] ?? flatPayload["proxy_provider_bind"]) ?? "127.0.0.1"
         let httpPort = ObstacleBridgeRuntimeConfig.intValue(from: section?["http_port"] ?? flatPayload["proxy_provider_http_port"]) ?? 13881
         let socks5Port = ObstacleBridgeRuntimeConfig.intValue(from: section?["socks5_port"] ?? flatPayload["proxy_provider_socks5_port"]) ?? 13882
         let protocols = Self.proxyProviderProtocols(section?["protocols"] ?? flatPayload["proxy_provider_protocols"])
-        let auth = section?["auth"] as? [String: Any]
-        let authMode = (ObstacleBridgeRuntimeConfig.stringValue(from: auth?["mode"] ?? flatPayload["proxy_provider_auth_mode"]) ?? "none").lowercased()
-        let username = ObstacleBridgeRuntimeConfig.stringValue(from: auth?["username"] ?? flatPayload["proxy_provider_username"]) ?? ""
-        let password = ObstacleBridgeRuntimeConfig.stringValue(from: auth?["token"] ?? auth?["password"] ?? flatPayload["proxy_provider_token"] ?? flatPayload["proxy_provider_password"]) ?? ""
+        let auth = (section?["auth"] ?? flatPayload["proxy_provider_auth"]) as? [String: Any] ?? [
+            "mode": "none",
+            "username": "",
+            "token": "",
+        ]
+        let egress = (section?["egress"] ?? flatPayload["proxy_provider_egress"]) as? [String: Any] ?? [
+            "mode": "direct",
+            "address_families": ["ipv4", "ipv6"],
+        ]
+        let policy = (section?["policy"] ?? flatPayload["proxy_provider_policy"]) as? [String: Any] ?? [
+            "allow_private_destinations": false,
+            "blocked_host_patterns": [],
+        ]
+        let authMode = (ObstacleBridgeRuntimeConfig.stringValue(from: auth["mode"] ?? flatPayload["proxy_provider_auth_mode"]) ?? "none").lowercased()
+        let username = ObstacleBridgeRuntimeConfig.stringValue(from: auth["username"] ?? flatPayload["proxy_provider_username"]) ?? ""
+        let password = ObstacleBridgeRuntimeConfig.stringValue(from: auth["token"] ?? auth["password"] ?? flatPayload["proxy_provider_token"] ?? flatPayload["proxy_provider_password"]) ?? ""
         let credentials: ObstacleBridgeProxyServer.Credentials?
         if authMode == "token" || authMode == "basic" || authMode == "password" {
             credentials = username.isEmpty || password.isEmpty ? nil : ObstacleBridgeProxyServer.Credentials(username: username, password: password)
@@ -309,20 +344,25 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             bindHost: bindHost,
             httpPort: httpPort,
             socks5Port: socks5Port,
-            httpEnabled: protocols.contains("http-connect") || protocols.contains("http"),
-            socks5Enabled: protocols.contains("socks5-connect") || protocols.contains("socks5"),
+            protocols: protocols,
+            auth: auth,
+            egress: egress,
+            policy: policy,
             credentials: credentials
         )
     }
 
-    private static func proxyProviderProtocols(_ value: Any?) -> Set<String> {
+    private static func proxyProviderProtocols(_ value: Any?) -> [String] {
+        let values: [String]
         if let array = value as? [Any] {
-            return Set(array.compactMap { ObstacleBridgeRuntimeConfig.stringValue(from: $0)?.lowercased() })
+            values = array.compactMap { ObstacleBridgeRuntimeConfig.stringValue(from: $0)?.lowercased() }
+        } else if let text = ObstacleBridgeRuntimeConfig.stringValue(from: value) {
+            values = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        } else {
+            values = ["http-connect", "socks5-connect"]
         }
-        if let text = ObstacleBridgeRuntimeConfig.stringValue(from: value) {
-            return Set(text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
-        }
-        return ["http-connect"]
+        let filtered = values.filter { !$0.isEmpty }
+        return filtered.isEmpty ? ["http-connect", "socks5-connect"] : filtered
     }
 
     private func nativeAppMessageResponse(for payload: [String: Any]) throws -> [String: Any] {
@@ -1380,6 +1420,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 "shutdown_supported": false,
                 ],
                 "secure_link": adminSecureLinkSnapshot(state: packetPumpRunning ? "connected" : "idle"),
+                "proxy_provider": proxyProviderSnapshot(),
             ]
         )
     }

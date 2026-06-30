@@ -1344,14 +1344,21 @@ function renderMetricStack(lines) {
 }
 
 function proxyConfigSnapshot() {
-  const cfg = configState.config || {};
+  const root = configState.config || {};
+  const cfg = root.proxy_provider && typeof root.proxy_provider === 'object' ? root.proxy_provider : {};
+  const auth = cfg.auth && typeof cfg.auth === 'object'
+    ? cfg.auth
+    : (root.proxy_provider_auth && typeof root.proxy_provider_auth === 'object' ? root.proxy_provider_auth : {});
+  const protocols = Array.isArray(cfg.protocols)
+    ? cfg.protocols
+    : (Array.isArray(root.proxy_provider_protocols) ? root.proxy_provider_protocols : []);
   return {
-    enabled: Boolean(cfg.enabled),
-    bind: cfg.bind ?? '127.0.0.1',
-    http_port: cfg.http_port ?? 13881,
-    socks5_port: cfg.socks5_port ?? 13882,
-    protocols: Array.isArray(cfg.protocols) ? cfg.protocols : [],
-    auth: cfg.auth && typeof cfg.auth === 'object' ? cfg.auth : {},
+    enabled: Boolean(cfg.enabled ?? root.proxy_provider_enabled),
+    bind: cfg.bind ?? root.proxy_provider_bind ?? '127.0.0.1',
+    http_port: cfg.http_port ?? root.proxy_provider_http_port ?? 13881,
+    socks5_port: cfg.socks5_port ?? root.proxy_provider_socks5_port ?? 13882,
+    protocols,
+    auth,
   };
 }
 

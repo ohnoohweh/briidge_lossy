@@ -105,11 +105,12 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert 'schemaItem(key: "ws_own_port"' in runtime_config
     assert 'schemaItem(key: "ws_path"' in runtime_config
     assert '"proxy_provider"' in runtime_config
-    assert 'schemaItem(key: "enabled", description: "Enable the extension-owned explicit proxy provider."' in runtime_config
-    assert 'schemaItem(key: "http_port", description: "Local HTTP/CONNECT proxy listener port."' in runtime_config
-    assert 'schemaItem(key: "socks5_port", description: "Local SOCKS5 CONNECT proxy listener port."' in runtime_config
-    assert 'schemaItem(key: "http_port", description: "Local HTTP/CONNECT proxy listener port.", defaultValue: 13881)' in runtime_config
-    assert 'schemaItem(key: "socks5_port", description: "Local SOCKS5 CONNECT proxy listener port.", defaultValue: 13882)' in runtime_config
+    assert 'schemaItem(key: "proxy_provider_enabled", description: "Enable the explicit HTTP CONNECT and SOCKS5 proxy provider."' in runtime_config
+    assert 'schemaItem(key: "proxy_provider_http_port", description: "Local HTTP/CONNECT proxy listener port."' in runtime_config
+    assert 'schemaItem(key: "proxy_provider_socks5_port", description: "Local SOCKS5 CONNECT proxy listener port."' in runtime_config
+    assert 'schemaItem(key: "proxy_provider_http_port", description: "Local HTTP/CONNECT proxy listener port.", defaultValue: 13881)' in runtime_config
+    assert 'schemaItem(key: "proxy_provider_socks5_port", description: "Local SOCKS5 CONNECT proxy listener port.", defaultValue: 13882)' in runtime_config
+    assert 'schemaItem(key: "log_proxy_provider", description: "Proxy provider log level override."' in runtime_config
     assert 'flatPayload["proxy_provider_http_port"]) ?? 13881' in provider
     assert 'flatPayload["proxy_provider_socks5_port"]) ?? 13882' in provider
 
@@ -349,10 +350,16 @@ def test_proxy_server_source_exists() -> None:
     assert "Proxy-Authenticate" in runtime
     assert "UDP ASSOCIATE" not in runtime
     assert "private var proxyServers: [String: ObstacleBridgeProxyServer]" in provider
+    assert "private var proxyProviderLastError" in provider
     assert "startProxyProviderIfConfigured(providerConfiguration:" in provider
     assert "stopProxyProvider()" in provider
     assert "proxyProviderSnapshot()" in provider
     assert '"proxy_provider"' in provider
+    assert '"configured": config.configuredPayload()' in provider
+    assert '"last_error": proxyProviderLastError' in provider
+    assert 'flatPayload["proxy_provider_auth"]) as? [String: Any]' in provider
+    assert 'flatPayload["proxy_provider_egress"]) as? [String: Any]' in provider
+    assert 'flatPayload["proxy_provider_policy"]) as? [String: Any]' in provider
     assert "class ObstacleBridgeProxyProtocolCodec" in python_runtime
     assert "class ObstacleBridgeProxyServer" in python_runtime
     assert "parse_http_request_head" in python_runtime

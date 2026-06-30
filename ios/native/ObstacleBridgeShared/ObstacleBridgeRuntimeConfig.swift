@@ -344,6 +344,16 @@ enum ObstacleBridgeRuntimeConfig {
     ]
     private static let secureLinkFrameHeaderSize = 20
     private static let secureLinkAEADTagSize = 16
+    private static let proxyProviderCompatibilityAliases = [
+        "enabled": "proxy_provider_enabled",
+        "bind": "proxy_provider_bind",
+        "http_port": "proxy_provider_http_port",
+        "socks5_port": "proxy_provider_socks5_port",
+        "protocols": "proxy_provider_protocols",
+        "auth": "proxy_provider_auth",
+        "egress": "proxy_provider_egress",
+        "policy": "proxy_provider_policy",
+    ]
 
     static func configSchemaSnapshot() -> [String: Any] {
         [
@@ -458,24 +468,25 @@ enum ObstacleBridgeRuntimeConfig {
                 schemaItem(key: "remote_servers", description: "Service catalog pushed to the connected peer in client mode. Use structured service objects with listen/target fields.", defaultValue: []),
             ],
             "proxy_provider": [
-                schemaItem(key: "enabled", description: "Enable the extension-owned explicit proxy provider.", defaultValue: false),
-                schemaItem(key: "bind", description: "Local bind address for the proxy listener inside the packet-tunnel extension.", defaultValue: "127.0.0.1"),
-                schemaItem(key: "http_port", description: "Local HTTP/CONNECT proxy listener port.", defaultValue: 13881),
-                schemaItem(key: "socks5_port", description: "Local SOCKS5 CONNECT proxy listener port.", defaultValue: 13882),
-                schemaItem(key: "protocols", description: "Enabled proxy protocol families.", defaultValue: ["http-connect", "socks5-connect"]),
-                schemaItem(key: "auth", description: "Proxy authentication object. Use mode token/basic/password with username and token/password.", defaultValue: [
+                schemaItem(key: "proxy_provider_enabled", description: "Enable the explicit HTTP CONNECT and SOCKS5 proxy provider.", defaultValue: false),
+                schemaItem(key: "proxy_provider_bind", description: "Local bind address for the proxy listeners.", defaultValue: "127.0.0.1"),
+                schemaItem(key: "proxy_provider_http_port", description: "Local HTTP/CONNECT proxy listener port.", defaultValue: 13881),
+                schemaItem(key: "proxy_provider_socks5_port", description: "Local SOCKS5 CONNECT proxy listener port.", defaultValue: 13882),
+                schemaItem(key: "proxy_provider_protocols", description: "Enabled proxy protocol families.", defaultValue: ["http-connect", "socks5-connect"]),
+                schemaItem(key: "proxy_provider_auth", description: "Proxy authentication object. Use mode token/basic/password with username and token/password.", defaultValue: [
                     "mode": "none",
                     "username": "",
                     "token": "",
                 ]),
-                schemaItem(key: "egress", description: "Proxy egress policy object for direct outbound connection behavior.", defaultValue: [
+                schemaItem(key: "proxy_provider_egress", description: "Proxy egress policy object for direct outbound connection behavior.", defaultValue: [
                     "mode": "direct",
                     "address_families": ["ipv4", "ipv6"],
                 ]),
-                schemaItem(key: "policy", description: "Proxy destination policy object.", defaultValue: [
+                schemaItem(key: "proxy_provider_policy", description: "Proxy destination policy object.", defaultValue: [
                     "allow_private_destinations": false,
                     "blocked_host_patterns": [],
                 ]),
+                schemaItem(key: "log_proxy_provider", description: "Proxy provider log level override.", defaultValue: NSNull(), choices: ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"]),
             ],
         ]
     }
@@ -619,6 +630,43 @@ enum ObstacleBridgeRuntimeConfig {
         if payload["remote_servers"] == nil {
             payload["remote_servers"] = []
         }
+        if payload["proxy_provider_enabled"] == nil {
+            payload["proxy_provider_enabled"] = false
+        }
+        if payload["proxy_provider_bind"] == nil {
+            payload["proxy_provider_bind"] = "127.0.0.1"
+        }
+        if payload["proxy_provider_http_port"] == nil {
+            payload["proxy_provider_http_port"] = 13881
+        }
+        if payload["proxy_provider_socks5_port"] == nil {
+            payload["proxy_provider_socks5_port"] = 13882
+        }
+        if payload["proxy_provider_protocols"] == nil {
+            payload["proxy_provider_protocols"] = ["http-connect", "socks5-connect"]
+        }
+        if payload["proxy_provider_auth"] == nil {
+            payload["proxy_provider_auth"] = [
+                "mode": "none",
+                "username": "",
+                "token": "",
+            ]
+        }
+        if payload["proxy_provider_egress"] == nil {
+            payload["proxy_provider_egress"] = [
+                "mode": "direct",
+                "address_families": ["ipv4", "ipv6"],
+            ]
+        }
+        if payload["proxy_provider_policy"] == nil {
+            payload["proxy_provider_policy"] = [
+                "allow_private_destinations": false,
+                "blocked_host_patterns": [],
+            ]
+        }
+        if payload["log_proxy_provider"] == nil {
+            payload["log_proxy_provider"] = NSNull()
+        }
         if payload["quic_bind"] == nil {
             payload["quic_bind"] = "::"
         }
@@ -652,6 +700,30 @@ enum ObstacleBridgeRuntimeConfig {
         if payload["ws_peer_resolve_family"] == nil {
             payload["ws_peer_resolve_family"] = "prefer-ipv6"
         }
+        if payload["secure_link"] == nil {
+            payload["secure_link"] = false
+        }
+        if payload["secure_link_mode"] == nil {
+            payload["secure_link_mode"] = "off"
+        }
+        if payload["secure_link_psk"] == nil {
+            payload["secure_link_psk"] = ""
+        }
+        if payload["compress_layer"] == nil {
+            payload["compress_layer"] = false
+        }
+        if payload["compress_layer_algo"] == nil {
+            payload["compress_layer_algo"] = "zlib"
+        }
+        if payload["compress_layer_level"] == nil {
+            payload["compress_layer_level"] = 3
+        }
+        if payload["compress_layer_min_bytes"] == nil {
+            payload["compress_layer_min_bytes"] = 64
+        }
+        if payload["compress_layer_types"] == nil {
+            payload["compress_layer_types"] = "data,data_frag"
+        }
         for key in ["admin_web_password", "secure_link_psk"] where payload[key] != nil {
             payload[key] = ""
         }
@@ -663,6 +735,12 @@ enum ObstacleBridgeRuntimeConfig {
             return payload
         }
         var normalized = payload
+        if sectionName == "proxy_provider" {
+            applyCompatibilityAliases(to: &normalized)
+            for alias in proxyProviderCompatibilityAliases.keys {
+                normalized.removeValue(forKey: alias)
+            }
+        }
         for row in rows {
             let key = String(describing: row["key"] ?? "")
             guard !key.isEmpty, let rawValue = normalized[key] else {
@@ -692,6 +770,11 @@ enum ObstacleBridgeRuntimeConfig {
     private static func applyCompatibilityAliases(to payload: inout [String: Any]) {
         if payload["udp_peer_resolve_family"] == nil, let value = payload["peer_resolve_family"] {
             payload["udp_peer_resolve_family"] = value
+        }
+        for (alias, canonical) in proxyProviderCompatibilityAliases where payload[canonical] == nil {
+            if let value = payload[alias] {
+                payload[canonical] = value
+            }
         }
     }
 
@@ -752,7 +835,9 @@ enum ObstacleBridgeRuntimeConfig {
     }
 
     static func looksGrouped(_ payload: [String: Any]) -> Bool {
-        payload.values.contains { $0 is [String: Any] }
+        payload.values.contains { value in
+            value is [String: Any] || Mirror(reflecting: value).displayStyle == .dictionary
+        }
     }
 
     static func tunnelRoutingOverride(from payload: [String: Any]) -> ObstacleBridgeTunnelRoutingOverride? {
