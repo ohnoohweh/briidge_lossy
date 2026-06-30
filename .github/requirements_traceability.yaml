@@ -635,6 +635,7 @@ REQ-LST-005:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_two_clients
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_listener_invalid_sender_expires_before_stale_window
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_listener_peer_snapshot_preserves_distinct_peers_across_listener_transports
 
@@ -934,6 +935,7 @@ REQ-ADM-006:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_two_clients
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_listener_invalid_sender_expires_before_stale_window
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_when_auth_disabled
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_unavailable_without_correct_auth
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_after_correct_auth
