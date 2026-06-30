@@ -640,10 +640,10 @@ configure the service, but the extension hosts the networking runtime.
 
 Recommended first implementation:
 
-- add an extension-owned local TCP listener, for example `127.0.0.1:18081`
+- add an extension-owned local TCP listener, for example `127.0.0.1:13881`
 - support HTTP proxy requests and HTTP `CONNECT`
 - optionally add SOCKS5 TCP `CONNECT` on a separate port, for example
-  `127.0.0.1:18082`
+  `127.0.0.1:13882`
 - publish the chosen proxy listener to `S` through `remote_servers`
 - require proxy authentication when the published listener on `S` is reachable
   by anything other than a trusted local process
@@ -899,8 +899,8 @@ Conceptual config:
   "proxy_provider": {
     "enabled": true,
     "bind": "127.0.0.1",
-    "http_port": 18081,
-    "socks5_port": 18082,
+    "http_port": 13881,
+    "socks5_port": 13882,
     "protocols": ["http-connect", "socks5-connect"],
     "auth": {
       "mode": "token",

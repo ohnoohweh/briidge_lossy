@@ -340,6 +340,7 @@ enum ObstacleBridgeRuntimeConfig {
         "debug_logging",
         "channel_mux",
         "iOS_TUN_connector",
+        "proxy_provider",
     ]
     private static let secureLinkFrameHeaderSize = 20
     private static let secureLinkAEADTagSize = 16
@@ -455,6 +456,26 @@ enum ObstacleBridgeRuntimeConfig {
             "channel_mux": [
                 schemaItem(key: "own_servers", description: "Service catalog for local listeners in client mode. Use structured service objects with listen/target fields.", defaultValue: []),
                 schemaItem(key: "remote_servers", description: "Service catalog pushed to the connected peer in client mode. Use structured service objects with listen/target fields.", defaultValue: []),
+            ],
+            "proxy_provider": [
+                schemaItem(key: "enabled", description: "Enable the extension-owned explicit proxy provider.", defaultValue: false),
+                schemaItem(key: "bind", description: "Local bind address for the proxy listener inside the packet-tunnel extension.", defaultValue: "127.0.0.1"),
+                schemaItem(key: "http_port", description: "Local HTTP/CONNECT proxy listener port.", defaultValue: 13881),
+                schemaItem(key: "socks5_port", description: "Local SOCKS5 CONNECT proxy listener port.", defaultValue: 13882),
+                schemaItem(key: "protocols", description: "Enabled proxy protocol families.", defaultValue: ["http-connect", "socks5-connect"]),
+                schemaItem(key: "auth", description: "Proxy authentication object. Use mode token/basic/password with username and token/password.", defaultValue: [
+                    "mode": "none",
+                    "username": "",
+                    "token": "",
+                ]),
+                schemaItem(key: "egress", description: "Proxy egress policy object for direct outbound connection behavior.", defaultValue: [
+                    "mode": "direct",
+                    "address_families": ["ipv4", "ipv6"],
+                ]),
+                schemaItem(key: "policy", description: "Proxy destination policy object.", defaultValue: [
+                    "allow_private_destinations": false,
+                    "blocked_host_patterns": [],
+                ]),
             ],
         ]
     }

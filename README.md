@@ -936,6 +936,126 @@ Operational notes:
 - The server script uses `iptables -C` checks before adding rules, so repeated `up` hooks do not create duplicate firewall rules.
 - Use `listener.on_stopped` for route/firewall teardown because it runs for service-level shutdown caused by overlay disconnect, peer disconnect, catalog replacement, or process shutdown. `on_channel_closed` remains useful for per-channel cleanup, but `on_stopped` is the deterministic safety net for full-tunnel routing.
 
+### Proxy provider
+| Option(s) | Default | Description |
+|---|---:|---|
+| `--proxy-provider-enabled`, `--no-proxy-provider-enabled` | `False` | Enable the local explicit proxy provider. |
+| `--proxy-provider-bind` | `127.0.0.1` | Local bind address for proxy listeners. Keep this on loopback unless you intentionally want LAN clients to use this proxy. |
+| `--proxy-provider-http-port` | `13881` | Local HTTP and HTTPS `CONNECT` proxy listener port. |
+| `--proxy-provider-socks5-port` | `13882` | Local SOCKS5 TCP `CONNECT` proxy listener port. |
+| `--proxy-provider-protocols` | `http-connect socks5-connect` | Enabled proxy protocol families. Supported values are `http-connect`, `socks5-connect`, `http`, and `socks5`. |
+| `--proxy-provider-auth` | `{"mode":"none","username":"","token":""}` | JSON auth object. Use `mode` `token`, `basic`, or `password` plus `username` and `token` or `password` to require proxy authentication. |
+| `--proxy-provider-egress` | `{"mode":"direct","address_families":["ipv4","ipv6"]}` | JSON egress policy object for outbound proxy connections. |
+| `--proxy-provider-policy` | `{"allow_private_destinations":false,"blocked_host_patterns":[]}` | JSON destination policy object. |
+| `--log-proxy-provider` | inherited | Override the proxy provider logger level, for example `INFO` or `DEBUG`. |
+
+#### Browser setup for HTTP, HTTPS, and SOCKS
+
+ObstacleBridge can expose a first-party local proxy provider for browser or application traffic. The provider is separate from the overlay peer connection: it listens on local loopback ports, accepts explicit proxy clients, and then opens direct outbound connections from the ObstacleBridge runtime.
+
+The default local ports are:
+
+- HTTP and HTTPS proxy traffic through HTTP absolute-form and `CONNECT`: `127.0.0.1:13881`
+- SOCKS5 TCP `CONNECT`: `127.0.0.1:13882`
+
+Paste-ready config fragment:
+
+```json
+{
+  "proxy_provider": {
+    "enabled": true,
+    "bind": "127.0.0.1",
+    "http_port": 13881,
+    "socks5_port": 13882,
+    "protocols": ["http-connect", "socks5-connect"],
+    "auth": {
+      "mode": "none",
+      "username": "",
+      "token": ""
+    },
+    "egress": {
+      "mode": "direct",
+      "address_families": ["ipv4", "ipv6"]
+    },
+    "policy": {
+      "allow_private_destinations": false,
+      "blocked_host_patterns": []
+    },
+    "log_proxy_provider": "INFO"
+  }
+}
+```
+
+Equivalent CLI example:
+
+```bash
+python -m obstacle_bridge \
+  --proxy-provider-enabled \
+  --proxy-provider-bind 127.0.0.1 \
+  --proxy-provider-http-port 13881 \
+  --proxy-provider-socks5-port 13882 \
+  --proxy-provider-protocols http-connect socks5-connect \
+  --log-proxy-provider INFO
+```
+
+To require proxy authentication, set `auth.mode` to `token`, `basic`, or `password` and provide both `username` and `token` or `password`. HTTP clients use Basic proxy authentication; SOCKS5 clients use username/password authentication.
+
+Always bypass the ObstacleBridge overlay peer host or IP in browser and operating-system proxy settings. Otherwise the bridge may try to carry its own peer connection through the local proxy, which can loop or deadlock the tunnel. Include at least:
+
+```text
+localhost
+127.0.0.1
+<your-overlay-peer-host-or-ip>
+```
+
+If the config uses multiple transports or both hostname and resolved IP forms, add all of them to the bypass list.
+
+Command-line smoke tests:
+
+```bash
+curl --proxy http://127.0.0.1:13881 http://example.com/
+curl --proxy http://127.0.0.1:13881 https://example.com/
+curl --socks5-hostname 127.0.0.1:13882 http://example.com/
+curl --socks5-hostname 127.0.0.1:13882 https://example.com/
+```
+
+WebAdmin shows the provider on the Proxy page, including configured ports, listener state, active connections, byte counters, throughput, and last error.
+
+macOS setup:
+
+1. Open System Settings.
+2. Go to Network.
+3. Select the active interface, such as Ethernet or Wi-Fi.
+4. Open Details, then Proxies.
+5. Enable Web Proxy (HTTP) with server `127.0.0.1` and port `13881`.
+6. Enable Secure Web Proxy (HTTPS) with server `127.0.0.1` and port `13881`.
+7. Optionally enable SOCKS Proxy with server `127.0.0.1` and port `13882`.
+8. In "Bypass proxy settings for these Hosts & Domains", add `localhost`, `127.0.0.1`, and the ObstacleBridge peer hostname or IP.
+
+Linux Firefox setup:
+
+1. Open Settings.
+2. Search for Network Settings.
+3. Choose Manual proxy configuration.
+4. Set HTTP Proxy to `127.0.0.1`, port `13881`.
+5. Set HTTPS Proxy to `127.0.0.1`, port `13881`.
+6. Set SOCKS Host to `127.0.0.1`, port `13882`, and choose SOCKS v5 if you want Firefox to use SOCKS for selected flows.
+7. Add `localhost`, `127.0.0.1`, and the ObstacleBridge peer hostname or IP to "No proxy for".
+
+Linux Chrome/Chromium setup:
+
+- Chrome usually follows the desktop environment proxy settings. On GNOME, use Settings, Network, Network Proxy, Manual, then set HTTP and HTTPS to `127.0.0.1:13881`, SOCKS to `127.0.0.1:13882`, and add the peer host/IP plus localhost entries to ignored hosts.
+- For a single Chrome test instance, start it with explicit flags:
+
+```bash
+google-chrome \
+  --user-data-dir=/tmp/obstaclebridge-chrome-proxy-test \
+  --proxy-server="http=127.0.0.1:13881;https=127.0.0.1:13881;socks5=127.0.0.1:13882" \
+  --proxy-bypass-list="localhost;127.0.0.1;<your-overlay-peer-host-or-ip>"
+```
+
+Use `chromium` or `chromium-browser` instead of `google-chrome` if that is the installed binary on your distribution.
+
 ### Admin web
 | Option(s) | Default | Description |
 |---|---:|---|
@@ -1382,17 +1502,17 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `36` | `637` |
+| Python CLI/runtime, including macOS Python | `38` | `642` |
 | macOS Swift app | `1` | `47` |
-| iOS app/extension | `23` | `144` |
+| iOS app/extension | `24` | `148` |
 
 #### Requirement traceability
 
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `80/88 = 90.9%` | `85/88 = 96.6%` | `85/88 = 96.6%` |
-| macOS Swift app | `2/88 = 2.3%` | `5/88 = 5.7%` | `7/88 = 8.0%` |
-| iOS app/extension | `8/88 = 9.1%` | `9/88 = 10.2%` | `14/88 = 15.9%` |
+| Python CLI/runtime, including macOS Python | `81/89 = 91.0%` | `86/89 = 96.6%` | `86/89 = 96.6%` |
+| macOS Swift app | `2/89 = 2.2%` | `5/89 = 5.6%` | `7/89 = 7.9%` |
+| iOS app/extension | `8/89 = 9.0%` | `10/89 = 11.2%` | `15/89 = 16.9%` |
 
 #### Architecture traceability
 
@@ -1400,7 +1520,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `7/7 = 100.0%` | `7/7 = 100.0%` | `7/7 = 100.0%` |
 | macOS Swift app | `1/7 = 14.3%` | `3/7 = 42.9%` | `3/7 = 42.9%` |
-| iOS app/extension | `4/7 = 57.1%` | `3/7 = 42.9%` | `4/7 = 57.1%` |
+| iOS app/extension | `4/7 = 57.1%` | `4/7 = 57.1%` | `5/7 = 71.4%` |
 
 The supporting manifests remain shared:
 

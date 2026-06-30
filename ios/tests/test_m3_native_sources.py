@@ -104,6 +104,14 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert 'schemaItem(key: "ws_bind"' in runtime_config
     assert 'schemaItem(key: "ws_own_port"' in runtime_config
     assert 'schemaItem(key: "ws_path"' in runtime_config
+    assert '"proxy_provider"' in runtime_config
+    assert 'schemaItem(key: "enabled", description: "Enable the extension-owned explicit proxy provider."' in runtime_config
+    assert 'schemaItem(key: "http_port", description: "Local HTTP/CONNECT proxy listener port."' in runtime_config
+    assert 'schemaItem(key: "socks5_port", description: "Local SOCKS5 CONNECT proxy listener port."' in runtime_config
+    assert 'schemaItem(key: "http_port", description: "Local HTTP/CONNECT proxy listener port.", defaultValue: 13881)' in runtime_config
+    assert 'schemaItem(key: "socks5_port", description: "Local SOCKS5 CONNECT proxy listener port.", defaultValue: 13882)' in runtime_config
+    assert 'flatPayload["proxy_provider_http_port"]) ?? 13881' in provider
+    assert 'flatPayload["proxy_provider_socks5_port"]) ?? 13882' in provider
 
 
 def test_native_packet_flow_bridge_source_exists() -> None:
@@ -326,14 +334,30 @@ def test_webadmin_server_source_exists() -> None:
 
 def test_proxy_server_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeProxyServer.swift").read_text(encoding="utf-8")
+    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    python_runtime = (ROOT / "src" / "obstacle_bridge" / "bridge_proxy_server.py").read_text(encoding="utf-8")
 
+    assert "enum ObstacleBridgeProxyProtocolCodec" in runtime
     assert "final class ObstacleBridgeProxyServer" in runtime
     assert "NWListener" in runtime
     assert "NWConnection" in runtime
     assert "CONNECT" in runtime
+    assert "parseHTTPRequestHead" in runtime
+    assert "rewriteHTTPRequestForOriginServer" in runtime
     assert "parseSOCKS5ConnectRequest" in runtime
+    assert "basicAuthorizationHeader" in runtime
     assert "Proxy-Authenticate" in runtime
     assert "UDP ASSOCIATE" not in runtime
+    assert "private var proxyServers: [String: ObstacleBridgeProxyServer]" in provider
+    assert "startProxyProviderIfConfigured(providerConfiguration:" in provider
+    assert "stopProxyProvider()" in provider
+    assert "proxyProviderSnapshot()" in provider
+    assert '"proxy_provider"' in provider
+    assert "class ObstacleBridgeProxyProtocolCodec" in python_runtime
+    assert "class ObstacleBridgeProxyServer" in python_runtime
+    assert "parse_http_request_head" in python_runtime
+    assert "rewrite_http_request_for_origin_server" in python_runtime
+    assert "parse_socks5_connect_request" in python_runtime
 
 
 def test_admin_api_source_exists() -> None:

@@ -745,6 +745,41 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn("topics.push('tun_routing')", app_js)
         self.assertNotIn("applyTunRoutingConfigSummary(", app_js)
 
+    def test_admin_web_navigation_uses_operator_labels_for_peer_and_udp_tcp_tabs(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        index_html = (repo_root / "admin_web" / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn('<button class="nav-tab active" data-tab="status" type="button">Peers</button>', index_html)
+        self.assertIn('<button class="nav-tab" data-tab="connections" type="button">UDP / TCP</button>', index_html)
+        self.assertIn('<button class="nav-tab" data-tab="proxy" type="button">Proxy</button>', index_html)
+        self.assertIn("<span>Open Peers on startup</span>", index_html)
+        self.assertIn("<h2>Peers</h2>", index_html)
+        self.assertIn("<h2>UDP / TCP</h2>", index_html)
+        self.assertNotIn('data-tab="status" type="button">Status</button>', index_html)
+        self.assertNotIn('data-tab="connections" type="button">Connections</button>', index_html)
+
+    def test_admin_web_proxy_tab_renders_config_runtime_and_throughput(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        index_html = (repo_root / "admin_web" / "index.html").read_text(encoding="utf-8")
+        app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="tab-proxy"', index_html)
+        self.assertIn('id="proxyHttpPort"', index_html)
+        self.assertIn('id="proxySocks5Port"', index_html)
+        self.assertIn('id="proxyActiveConnections"', index_html)
+        self.assertIn('id="proxyRxRate"', index_html)
+        self.assertIn('id="proxyTxRate"', index_html)
+        self.assertIn('id="proxyListenersBody"', index_html)
+        self.assertIn("function applyProxyDoc()", app_js)
+        self.assertIn("function proxyListenerRate(listenerName, snapshot)", app_js)
+        self.assertIn("setText('proxyHttpPort', fmtInteger(cfg.http_port));", app_js)
+        self.assertIn("setText('proxySocks5Port', fmtInteger(cfg.socks5_port));", app_js)
+        self.assertIn("setText('proxyActiveConnections', fmtInteger(totals.active));", app_js)
+        self.assertIn("setText('proxyRxRate', fmtBytesPerSecond(totals.rxRate));", app_js)
+        self.assertIn("setText('proxyTxRate', fmtBytesPerSecond(totals.txRate));", app_js)
+        self.assertIn("if (isTabActive('proxy')) activeTabs.push('proxy');", app_js)
+        self.assertIn("if (!isTabActive('proxy')) return;", app_js)
+
     def test_restart_endpoint_uses_immediate_mode_for_embedded_restart(self):
         args = argparse.Namespace(
             admin_web=True,
