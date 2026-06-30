@@ -921,6 +921,10 @@ class AdminWebUI:
         admin_web_name = str(payload.get("admin_web_name", "") or "").strip()
         if admin_web_name:
             updates["admin_web_name"] = admin_web_name
+        with contextlib.suppress(Exception):
+            admin_web_port = int(payload.get("admin_web_port"))
+            if 0 <= admin_web_port <= 65535:
+                updates["admin_web_port"] = admin_web_port
         if "compress_layer" in payload:
             updates["compress_layer"] = bool(payload.get("compress_layer"))
         for key in (
@@ -934,6 +938,17 @@ class AdminWebUI:
         tun_routing = payload.get("TUN_routing")
         if isinstance(tun_routing, dict) and tun_routing:
             updates["TUN_routing"] = tun_routing
+        for key in (
+            "mux_tcp_bp_threshold",
+            "mux_tcp_bp_latency_ms",
+            "mux_tcp_bp_poll_interval_ms",
+        ):
+            if key in payload:
+                with contextlib.suppress(Exception):
+                    updates[key] = int(payload.get(key))
+        proxy_provider = AdminWebUI._sanitize_onboarding_proxy_provider(payload.get("proxy_provider"))
+        if proxy_provider:
+            updates["proxy_provider"] = proxy_provider
         psk_value = payload.get("secure_link_psk")
         if isinstance(psk_value, str) and psk_value.strip():
             plain_psk = ""
@@ -955,6 +970,71 @@ class AdminWebUI:
         if remote:
             updates["remote_servers"] = remote
         return updates
+
+    @staticmethod
+    def _sanitize_onboarding_proxy_provider(value: Any) -> dict:
+        if not isinstance(value, dict):
+            return {}
+        aliases = {
+            "proxy_provider_enabled": "enabled",
+            "proxy_provider_bind": "bind",
+            "proxy_provider_http_port": "http_port",
+            "proxy_provider_socks5_port": "socks5_port",
+            "proxy_provider_protocols": "protocols",
+            "proxy_provider_auth": "auth",
+            "proxy_provider_egress": "egress",
+            "proxy_provider_policy": "policy",
+        }
+        raw = dict(value)
+        for source, dest in aliases.items():
+            if dest not in raw and source in raw:
+                raw[dest] = raw[source]
+
+        out: dict = {}
+        if "enabled" in raw:
+            out["enabled"] = bool(raw.get("enabled"))
+        bind = str(raw.get("bind", "") or "").strip()
+        if bind:
+            out["bind"] = bind
+        for key in ("http_port", "socks5_port"):
+            with contextlib.suppress(Exception):
+                port = int(raw.get(key))
+                if 0 <= port <= 65535:
+                    out[key] = port
+        protocols = raw.get("protocols")
+        if isinstance(protocols, str):
+            protocols = [part.strip() for part in protocols.split(",")]
+        if isinstance(protocols, list):
+            allowed = {"http-connect", "socks5-connect", "http", "socks5"}
+            selected = []
+            for item in protocols:
+                protocol = str(item or "").strip().lower()
+                if protocol in allowed and protocol not in selected:
+                    selected.append(protocol)
+            if selected:
+                out["protocols"] = selected
+        for key in ("auth", "egress", "policy"):
+            if isinstance(raw.get(key), dict):
+                out[key] = dict(raw[key])
+        if "log_proxy_provider" in raw:
+            out["log_proxy_provider"] = raw.get("log_proxy_provider")
+        return out
+
+    @classmethod
+    def _onboarding_proxy_provider_from_args(cls, args: Any) -> dict:
+        raw = {
+            "enabled": getattr(args, "proxy_provider_enabled", False),
+            "bind": getattr(args, "proxy_provider_bind", "127.0.0.1"),
+            "http_port": getattr(args, "proxy_provider_http_port", 13881),
+            "socks5_port": getattr(args, "proxy_provider_socks5_port", 13882),
+            "protocols": getattr(args, "proxy_provider_protocols", ["http-connect", "socks5-connect"]),
+            "auth": getattr(args, "proxy_provider_auth", {"mode": "none", "username": "", "token": ""}),
+            "egress": getattr(args, "proxy_provider_egress", {"mode": "direct", "address_families": ["ipv4", "ipv6"]}),
+            "policy": getattr(args, "proxy_provider_policy", {"allow_private_destinations": False, "blocked_host_patterns": []}),
+        }
+        if hasattr(args, "log_proxy_provider"):
+            raw["log_proxy_provider"] = getattr(args, "log_proxy_provider")
+        return cls._sanitize_onboarding_proxy_provider(raw)
 
     async def _handle_onboarding_connection_profiles(self, writer, method: str):
         if method != "GET":
@@ -998,12 +1078,26 @@ class AdminWebUI:
         own_services = self._sanitize_onboarding_services(req.get("own_servers", getattr(self.args, "own_servers", [])))
         remote_services = self._sanitize_onboarding_services(req.get("remote_servers", getattr(self.args, "remote_servers", [])))
         selected_admin_web_name = str(req.get("admin_web_name", getattr(self.args, "admin_web_name", "")) or "").strip()
+        selected_admin_web_port = int(req.get("admin_web_port", getattr(self.args, "admin_web_port", 18080)) or 18080)
         selected_tun_routing = dict(req.get("TUN_routing", getattr(self.args, "TUN_routing", {})) or {})
+        selected_mux_tcp_bp_threshold = int(
+            req.get("mux_tcp_bp_threshold", getattr(self.args, "mux_tcp_bp_threshold", 1)) or 1
+        )
+        selected_mux_tcp_bp_latency_ms = int(
+            req.get("mux_tcp_bp_latency_ms", getattr(self.args, "mux_tcp_bp_latency_ms", 300)) or 300
+        )
+        selected_mux_tcp_bp_poll_interval_ms = int(
+            req.get("mux_tcp_bp_poll_interval_ms", getattr(self.args, "mux_tcp_bp_poll_interval_ms", 50)) or 50
+        )
+        selected_proxy_provider = self._sanitize_onboarding_proxy_provider(
+            req.get("proxy_provider", self._onboarding_proxy_provider_from_args(self.args))
+        )
         payload_doc = {
             "version": 1,
             "generated_unix_ts": int(time.time()),
             "generated_by": selected_admin_web_name,
             "admin_web_name": selected_admin_web_name,
+            "admin_web_port": selected_admin_web_port,
             "connection": selected or {},
             "secure_link_mode": secure_mode if secure_mode in {"off", "none", "psk", "cert"} else "off",
             "secure_link_psk": str(getattr(self.args, "secure_link_psk", "") or ""),
@@ -1014,6 +1108,10 @@ class AdminWebUI:
             "compress_layer_min_bytes": int(getattr(self.args, "compress_layer_min_bytes", 64) or 64),
             "compress_layer_types": str(getattr(self.args, "compress_layer_types", "data,data_frag") or "data,data_frag"),
             "TUN_routing": selected_tun_routing,
+            "mux_tcp_bp_threshold": selected_mux_tcp_bp_threshold,
+            "mux_tcp_bp_latency_ms": selected_mux_tcp_bp_latency_ms,
+            "mux_tcp_bp_poll_interval_ms": selected_mux_tcp_bp_poll_interval_ms,
+            "proxy_provider": selected_proxy_provider,
             "admin_auth_recommended": True,
             "own_servers": own_services,
             "remote_servers": remote_services,

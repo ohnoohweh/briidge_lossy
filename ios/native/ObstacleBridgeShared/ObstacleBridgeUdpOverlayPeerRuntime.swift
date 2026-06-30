@@ -131,7 +131,7 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
         peerMissedCount: Int = 0,
         lastSendNS: UInt64 = 0,
         nextCounter: Int = 1,
-        maxInFlight: Int = 32767
+        maxInFlight: Int = 200
     ) {
         self.sendBuffer = sendBuffer.sorted()
         self.sendMeta = sendMeta

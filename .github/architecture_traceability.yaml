@@ -307,6 +307,8 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_frontend_uses_dedicated_tab_and_api
     - tests/unit/test_admin_web_payloads.py::test_admin_web_navigation_uses_operator_labels_for_peer_and_udp_tcp_tabs
     - tests/unit/test_admin_web_payloads.py::test_admin_web_proxy_tab_renders_config_runtime_and_throughput
+    - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_roundtrip_and_suggested_updates
+    - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_preview_hides_psk_and_updates_keep_plaintext
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_ui_payload_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_security_advisor_payload_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_tun_routing_snapshot_matches_python
@@ -317,6 +319,7 @@ ARC-CMP-005:
     - ios/tests/test_m3_native_sources.py::test_macos_swift_host_runner_source_exists
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists
     - ios/tests/test_m3_native_sources.py::test_ios_packaging_config_includes_native_bridge_and_local_webadmin_ats
+    - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and_compression
     - tests/unit/test_requirements_unit_gaps.py::test_auth_disabled_reports_authenticated_without_session
     - tests/unit/test_requirements_unit_gaps.py::test_auth_required_rejects_bad_login_and_accepts_challenge_proof
     - tests/unit/test_requirements_unit_gaps.py::test_admin_auth_sessions_are_cookie_scoped_per_client

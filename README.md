@@ -113,7 +113,7 @@ The wizard is designed for typical peer onboarding:
 - Step 4: Review
 - Step 5: Apply + restart
 
-The onboarding flow accepts either an invite token or a paste-ready configuration snippet for the initial setup. Both paths can carry transport and service-definition onboarding data (`own_servers`, `remote_servers`, secure-link mode/PSK envelope, and peer endpoint settings). Admin credentials are entered locally in the wizard and are not sourced from the invite token.
+The onboarding flow accepts either an invite token or a paste-ready configuration snippet for the initial setup. Both paths can carry transport and service-definition onboarding data (`own_servers`, `remote_servers`, secure-link mode/PSK envelope, peer endpoint settings, TUN routing, compression, admin web port, mux TCP backpressure knobs, and proxy-provider settings). Admin credentials are entered locally in the wizard and are not sourced from the invite token.
 
 ### Manual/advanced startup (optional)
 If you prefer file-based bootstrap from the command line, use JSON config files:

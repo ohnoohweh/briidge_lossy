@@ -634,7 +634,7 @@ class SendPort:
 OutgoingSegment = Tuple[int, int, bytes]
 QueuedSegment = Tuple[OutgoingSegment, int]
 class Session:
-    def __init__(self, max_in_flight: int = 32767, proto: Optional[Protocol] = None):
+    def __init__(self, max_in_flight: int = 200, proto: Optional[Protocol] = None):
         self.proto = proto or PROTO
         self.next_ctr = 1
         self.send_buf: Dict[int, bytes] = {}
@@ -1820,7 +1820,7 @@ class UdpSession(ISession):
 
         # Session window
         if not _has('--max-inflight'):
-            p.add_argument('--max-inflight', type=int, default=32767,
+            p.add_argument('--max-inflight', type=int, default=200,
                            help='max DATA frames allowed in flight (1..32767). Excess frames are queued.')
 
     @staticmethod

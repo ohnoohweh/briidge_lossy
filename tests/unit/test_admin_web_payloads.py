@@ -349,7 +349,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         args = argparse.Namespace(
             admin_web=True,
             admin_web_bind="127.0.0.1",
-            admin_web_port=18080,
+            admin_web_port=18090,
             admin_web_path="/",
             admin_web_dir="./admin_web",
             admin_web_name="Lab Node",
@@ -1218,6 +1218,7 @@ class AdminWebPayloadTests(unittest.TestCase):
                 "endpoint_port": 4433,
             },
             "admin_web_name": "Bridge Peer",
+            "admin_web_port": 18090,
             "secure_link_mode": "psk",
             "compress_layer": True,
             "compress_layer_algo": "zlib",
@@ -1225,6 +1226,19 @@ class AdminWebPayloadTests(unittest.TestCase):
             "compress_layer_min_bytes": 96,
             "compress_layer_types": "data,data_ack",
             "TUN_routing": {"dns_servers": ["1.1.1.1"]},
+            "mux_tcp_bp_threshold": 2,
+            "mux_tcp_bp_latency_ms": 250,
+            "mux_tcp_bp_poll_interval_ms": 40,
+            "proxy_provider": {
+                "enabled": True,
+                "bind": "127.0.0.1",
+                "http_port": 18181,
+                "socks5_port": 18182,
+                "protocols": ["http-connect", "socks5-connect"],
+                "auth": {"mode": "token", "username": "obproxy", "token": "local-token"},
+                "egress": {"mode": "direct", "address_families": ["ipv4", "ipv6"]},
+                "policy": {"allow_private_destinations": False, "blocked_host_patterns": []},
+            },
             "own_servers": [
                 {
                     "name": "api",
@@ -1243,19 +1257,27 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(updates["tcp_peer_port"], 4433)
         self.assertEqual(updates["secure_link_mode"], "psk")
         self.assertEqual(updates["admin_web_name"], "Bridge Peer")
+        self.assertEqual(updates["admin_web_port"], 18090)
         self.assertTrue(updates["compress_layer"])
         self.assertEqual(updates["compress_layer_algo"], "zlib")
         self.assertEqual(updates["compress_layer_level"], 4)
         self.assertEqual(updates["compress_layer_min_bytes"], 96)
         self.assertEqual(updates["compress_layer_types"], "data,data_ack")
         self.assertEqual(updates["TUN_routing"]["dns_servers"], ["1.1.1.1"])
+        self.assertEqual(updates["mux_tcp_bp_threshold"], 2)
+        self.assertEqual(updates["mux_tcp_bp_latency_ms"], 250)
+        self.assertEqual(updates["mux_tcp_bp_poll_interval_ms"], 40)
+        self.assertTrue(updates["proxy_provider"]["enabled"])
+        self.assertEqual(updates["proxy_provider"]["http_port"], 18181)
+        self.assertEqual(updates["proxy_provider"]["socks5_port"], 18182)
+        self.assertEqual(updates["proxy_provider"]["auth"]["username"], "obproxy")
         self.assertIn("own_servers", updates)
 
     def test_onboarding_blueprints_group_active_peer_connections(self):
         args = argparse.Namespace(
             admin_web=True,
             admin_web_bind="127.0.0.1",
-            admin_web_port=18080,
+            admin_web_port=18090,
             admin_web_path="/",
             admin_web_dir="./admin_web",
             admin_web_name="Lab Node",
@@ -1295,7 +1317,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         args = argparse.Namespace(
             admin_web=True,
             admin_web_bind="127.0.0.1",
-            admin_web_port=18080,
+            admin_web_port=18090,
             admin_web_path="/",
             admin_web_dir="./admin_web",
             admin_web_name="Lab Node",
@@ -1303,6 +1325,18 @@ class AdminWebPayloadTests(unittest.TestCase):
             secure_link_mode="psk",
             secure_link_psk="lab-secret-12345",
             secure_link_require=False,
+            mux_tcp_bp_threshold=2,
+            mux_tcp_bp_latency_ms=250,
+            mux_tcp_bp_poll_interval_ms=40,
+            proxy_provider_enabled=True,
+            proxy_provider_bind="127.0.0.1",
+            proxy_provider_http_port=18181,
+            proxy_provider_socks5_port=18182,
+            proxy_provider_protocols=["http-connect", "socks5-connect"],
+            proxy_provider_auth={"mode": "token", "username": "obproxy", "token": "local-token"},
+            proxy_provider_egress={"mode": "direct", "address_families": ["ipv4", "ipv6"]},
+            proxy_provider_policy={"allow_private_destinations": False, "blocked_host_patterns": []},
+            log_proxy_provider="INFO",
             admin_web_username="admin",
         )
         ui = AdminWebUI(args, _RunnerStub())
@@ -1332,11 +1366,20 @@ class AdminWebPayloadTests(unittest.TestCase):
             self.assertTrue(invite_token)
             self.assertEqual(generated["preview"].get("generated_by"), "Token Alias")
             self.assertEqual(generated["preview"].get("admin_web_name"), "Token Alias")
+            self.assertEqual(generated["preview"].get("admin_web_port"), 18090)
             self.assertTrue(generated["preview"].get("compress_layer"))
             self.assertEqual(generated["preview"].get("compress_layer_algo"), "zlib")
             self.assertIn("TUN_routing", generated["preview"])
             self.assertEqual(generated["preview"]["TUN_routing"]["dns_servers"], ["9.9.9.9"])
             self.assertEqual(generated["preview"]["TUN_routing"]["tunnel_gateway"], "192.168.250.2")
+            self.assertEqual(generated["preview"]["mux_tcp_bp_threshold"], 2)
+            self.assertEqual(generated["preview"]["mux_tcp_bp_latency_ms"], 250)
+            self.assertEqual(generated["preview"]["mux_tcp_bp_poll_interval_ms"], 40)
+            self.assertTrue(generated["preview"]["proxy_provider"]["enabled"])
+            self.assertEqual(generated["preview"]["proxy_provider"]["http_port"], 18181)
+            self.assertEqual(generated["preview"]["proxy_provider"]["socks5_port"], 18182)
+            self.assertEqual(generated["preview"]["proxy_provider"]["auth"]["username"], "obproxy")
+            self.assertEqual(generated["preview"]["proxy_provider"]["log_proxy_provider"], "INFO")
 
             preview_writer = _WriterStub()
             await ui._handle_onboarding_invite_preview(
@@ -1350,6 +1393,13 @@ class AdminWebPayloadTests(unittest.TestCase):
             self.assertTrue(preview["preview"].get("secure_link_psk_present"))
             self.assertEqual(preview["suggested_updates"].get("secure_link_psk"), "lab-secret-12345")
             self.assertEqual(preview["suggested_updates"].get("admin_web_name"), "Token Alias")
+            self.assertEqual(preview["suggested_updates"].get("admin_web_port"), 18090)
             self.assertEqual(preview["suggested_updates"]["TUN_routing"]["dns_servers"], ["9.9.9.9"])
+            self.assertEqual(preview["suggested_updates"]["mux_tcp_bp_threshold"], 2)
+            self.assertEqual(preview["suggested_updates"]["mux_tcp_bp_latency_ms"], 250)
+            self.assertEqual(preview["suggested_updates"]["mux_tcp_bp_poll_interval_ms"], 40)
+            self.assertTrue(preview["suggested_updates"]["proxy_provider"]["enabled"])
+            self.assertEqual(preview["suggested_updates"]["proxy_provider"]["http_port"], 18181)
+            self.assertEqual(preview["suggested_updates"]["proxy_provider"]["auth"]["token"], "local-token")
 
         asyncio.run(run_flow())

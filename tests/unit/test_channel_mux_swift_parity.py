@@ -1863,7 +1863,7 @@ def _python_peer_runtime_send_payload_summary(
     now_ns: int,
     echo_ns: int,
     next_counter: int,
-    max_in_flight: int = 32767,
+    max_in_flight: int = 200,
 ) -> dict[str, object]:
     transport = _FakeDatagramTransport()
     session = Session(max_in_flight=max_in_flight, proto=Protocol(BaseFrameV2))

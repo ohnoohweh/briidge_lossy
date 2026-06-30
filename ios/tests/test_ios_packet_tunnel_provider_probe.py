@@ -1843,6 +1843,7 @@ def test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and
                     let sourceRawConfig: [String: Any] = [
                         "admin_web": [
                             "admin_web_name": "iOS Source",
+                            "admin_web_port": 18090,
                         ] as [String: Any],
                         "runner": [
                             "overlay_transport": "ws",
@@ -1864,6 +1865,32 @@ def test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and
                             "compress_layer_level": 5,
                             "compress_layer_min_bytes": 96,
                             "compress_layer_types": "data,data_ack",
+                        ] as [String: Any],
+                        "channel_mux": [
+                            "mux_tcp_bp_threshold": 2,
+                            "mux_tcp_bp_latency_ms": 250,
+                            "mux_tcp_bp_poll_interval_ms": 40,
+                        ] as [String: Any],
+                        "proxy_provider": [
+                            "enabled": true,
+                            "bind": "127.0.0.1",
+                            "http_port": 18181,
+                            "socks5_port": 18182,
+                            "protocols": ["http-connect", "socks5-connect"],
+                            "auth": [
+                                "mode": "token",
+                                "username": "obproxy",
+                                "token": "local-token",
+                            ],
+                            "egress": [
+                                "mode": "direct",
+                                "address_families": ["ipv4", "ipv6"],
+                            ],
+                            "policy": [
+                                "allow_private_destinations": false,
+                                "blocked_host_patterns": [],
+                            ],
+                            "log_proxy_provider": "INFO",
                         ] as [String: Any],
                     ]
                     let sourceRuntimeConfig = ObstacleBridgeRuntimeConfig.flatten(sourceRawConfig)
@@ -1922,10 +1949,16 @@ def test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and
                     let masked = ObstacleBridgeRuntimeConfig.maskedConfigSnapshot(flatSaved)
                     let secureSection = persisted["secure_link"] as? [String: Any] ?? [:]
                     let compressSection = restored["compress_layer"] as? [String: Any] ?? [:]
+                    let adminSection = restored["admin_web"] as? [String: Any] ?? [:]
+                    let channelMuxSection = restored["channel_mux"] as? [String: Any] ?? [:]
+                    let proxySection = restored["proxy_provider"] as? [String: Any] ?? [:]
                     let output: [String: Any] = [
                         "suggested_updates": updates,
                         "secure_section": secureSection,
                         "compress_section": compressSection,
+                        "admin_section": adminSection,
+                        "channel_mux_section": channelMuxSection,
+                        "proxy_section": proxySection,
                         "masked": masked,
                         "normalized_keys": saved.normalizedKeys,
                     ]
@@ -1955,15 +1988,35 @@ def test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and
     assert updates["secure_link"] is True
     assert updates["secure_link_mode"] == "psk"
     assert updates["secure_link_psk"] == "ios-invite-psk"
+    assert updates["admin_web_port"] == 18090
     assert updates["compress_layer"] is True
     assert updates["compress_layer_level"] == 5
     assert updates["compress_layer_min_bytes"] == 96
     assert updates["compress_layer_types"] == "data,data_ack"
+    assert updates["mux_tcp_bp_threshold"] == 2
+    assert updates["mux_tcp_bp_latency_ms"] == 250
+    assert updates["mux_tcp_bp_poll_interval_ms"] == 40
+    assert updates["proxy_provider"]["enabled"] is True
+    assert updates["proxy_provider"]["http_port"] == 18181
+    assert updates["proxy_provider"]["socks5_port"] == 18182
+    assert updates["proxy_provider"]["auth"]["username"] == "obproxy"
+    assert updates["proxy_provider"]["auth"]["token"] == "local-token"
+    assert updates["proxy_provider"]["log_proxy_provider"] == "INFO"
     assert payload["secure_section"]["secure_link"] is True
     assert payload["secure_section"]["secure_link_mode"] == "psk"
     assert payload["secure_section"]["secure_link_psk"].startswith("enc:v1:")
     assert payload["compress_section"]["compress_layer"] is True
     assert payload["compress_section"]["compress_layer_level"] == 5
+    assert payload["admin_section"]["admin_web_port"] == 18090
+    assert payload["channel_mux_section"]["mux_tcp_bp_threshold"] == 2
+    assert payload["channel_mux_section"]["mux_tcp_bp_latency_ms"] == 250
+    assert payload["channel_mux_section"]["mux_tcp_bp_poll_interval_ms"] == 40
+    assert payload["proxy_section"]["proxy_provider_enabled"] is True
+    assert payload["proxy_section"]["proxy_provider_http_port"] == 18181
+    assert payload["proxy_section"]["proxy_provider_socks5_port"] == 18182
+    assert payload["proxy_section"]["proxy_provider_auth"]["username"] == "obproxy"
+    assert payload["proxy_section"]["proxy_provider_auth"]["token"] == "local-token"
+    assert payload["proxy_section"]["log_proxy_provider"] == "INFO"
     assert payload["masked"]["secure_link"] is True
     assert payload["masked"]["secure_link_mode"] == "psk"
     assert payload["masked"]["secure_link_psk"] == ""
