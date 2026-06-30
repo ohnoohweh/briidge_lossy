@@ -38,3 +38,4 @@ requires = [
 [tool.briefcase.app.obstacle_bridge_ios.iOS.info]
 UIFileSharingEnabled = true
 LSSupportsOpeningDocumentsInPlace = true
+NSAppTransportSecurity = { NSAllowsLocalNetworking = true }
