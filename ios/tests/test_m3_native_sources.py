@@ -656,14 +656,16 @@ def test_udp_overlay_peer_runtime_source_exists() -> None:
     assert "noteControlSent(" in runtime
 
 
-def test_ios_packaging_config_includes_rubicon_for_native_crypto_bridge() -> None:
+def test_ios_packaging_config_includes_native_bridge_and_local_webadmin_ats() -> None:
     pyproject = tomllib.loads((ROOT / "ios" / "pyproject.toml").read_text(encoding="utf-8"))
 
     app_sources = pyproject["tool"]["briefcase"]["app"]["obstacle_bridge_ios"]["sources"]
     app_requires = pyproject["tool"]["briefcase"]["app"]["obstacle_bridge_ios"]["requires"]
+    ios_info = pyproject["tool"]["briefcase"]["app"]["obstacle_bridge_ios"]["iOS"]["info"]
 
     assert "../admin_web" in app_sources
     assert "rubicon-objc>=0.5.3" in app_requires
+    assert ios_info["NSAppTransportSecurity"] == {"NSAllowsLocalNetworking": True}
 
 
 def test_ipserver_extension_sources_are_swift_only() -> None:

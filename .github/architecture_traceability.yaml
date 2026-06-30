@@ -315,6 +315,7 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_preserves_throttle_summary
     - ios/tests/test_m3_native_sources.py::test_macos_swift_host_runner_source_exists
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists
+    - ios/tests/test_m3_native_sources.py::test_ios_packaging_config_includes_native_bridge_and_local_webadmin_ats
     - tests/unit/test_requirements_unit_gaps.py::test_auth_disabled_reports_authenticated_without_session
     - tests/unit/test_requirements_unit_gaps.py::test_auth_required_rejects_bad_login_and_accepts_challenge_proof
     - tests/unit/test_requirements_unit_gaps.py::test_admin_auth_sessions_are_cookie_scoped_per_client
