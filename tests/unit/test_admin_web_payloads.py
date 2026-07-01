@@ -1014,6 +1014,15 @@ class AdminWebPayloadTests(unittest.TestCase):
                 self.assertIn("if (!syncServiceCatalogEditor(key)) return;", text)
                 self.assertNotIn('sink.value = \'"__invalid_service_catalog__"\'', text)
 
+    def test_service_catalog_remove_does_not_resync_stale_modal_values(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        for app_path in self._canonical_webadmin_paths():
+            with self.subTest(app_path=str(app_path.relative_to(repo_root))):
+                text = app_path.read_text(encoding="utf-8")
+                self.assertIn("function closeServiceCatalogModal(root, key, { rerender = true, syncBeforeClose = true } = {})", text)
+                self.assertIn("closeServiceCatalogModal(root, key, { rerender: false, syncBeforeClose: false });", text)
+                self.assertIn("renderServiceCatalogModal(root, key, Math.min(rowIndex, specs.length - 1));", text)
+
     def test_build_peers_payload_includes_secure_link_rows(self):
         args = argparse.Namespace(
             admin_web=True,

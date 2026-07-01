@@ -3716,10 +3716,10 @@ function resetServiceCatalogEditorValue(key) {
   syncServiceCatalogEditor(key);
 }
 
-function closeServiceCatalogModal(root, key, { rerender = true } = {}) {
+function closeServiceCatalogModal(root, key, { rerender = true, syncBeforeClose = true } = {}) {
   const modal = root.querySelector(`[data-service-modal="${CSS.escape(key)}"]`);
   if (!modal) return;
-  if (!syncServiceCatalogEditor(key)) return;
+  if (syncBeforeClose && !syncServiceCatalogEditor(key)) return;
   modal.classList.add('hidden');
   modal.removeAttribute('data-service-active-index');
   modal.innerHTML = '';
@@ -3803,10 +3803,15 @@ function initServiceCatalogEditor(root, key) {
         specs.splice(rowIndex, 1);
         writeServiceCatalogSpecsToSink(root, key, specs);
         renderServiceCatalogItems(root, key, specs);
-        closeServiceCatalogModal(root, key, { rerender: false });
-        initServiceCatalogEditor(root, key);
-        syncServiceCatalogEditor(key);
         refreshConfigPreview(key);
+        if (specs.length) {
+          renderServiceCatalogModal(root, key, Math.min(rowIndex, specs.length - 1));
+          syncServiceCatalogEditor(key);
+        } else {
+          closeServiceCatalogModal(root, key, { rerender: false, syncBeforeClose: false });
+          initServiceCatalogEditor(root, key);
+          syncServiceCatalogEditor(key);
+        }
       });
     });
   };
