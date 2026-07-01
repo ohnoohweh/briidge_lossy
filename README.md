@@ -1,12 +1,12 @@
 # ObstacleBridge
-ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for barrier-resilient networking. It can run over multiple overlay transports (`myudp`, `tcp`, `quic`, `ws`), expose local TCP/UDP listener services through a reliable overlay, and host an admin UI for monitoring active channels.
+ObstacleBridge is a cross-platform overlay and channel-multiplexing toolkit for barrier-resilient networking, with actively maintained Python and Swift implementations. It can run over multiple overlay transports (`myudp`, `tcp`, `quic`, `ws`), expose local TCP/UDP listener services through a reliable overlay, provide an HTTP(S)/SOCKS5 proxy server, host an admin UI for monitoring active channels, and provide TUN/full-tunnel paths on the supported operating systems.
 
-The project currently has two macOS product paths:
+The project currently targets four platform families:
 
-- **macOS Python CLI/runtime**: the normal Python product running on macOS, including the Python TUN path and shell hook based routing.
-- **macOS Swift app**: the native app bundle and Swift host runner, sharing protocol behavior with Python while owning macOS app lifecycle and native packet/routing integration.
-
-iOS is a third native product path built around the packet tunnel extension.
+- **Linux Python CLI/runtime**: the primary server and automation-friendly runtime, including `/dev/net/tun`, lifecycle hook based routing, proxy egress, and elevated integration coverage.
+- **Windows Python CLI/runtime**: the Python runtime with WinTun support, Windows proxy/PAC integration, and Windows-specific elevated TUN coverage.
+- **macOS Python CLI/runtime and Swift app**: macOS can run the normal Python product, while the native Swift app and host runner share protocol behavior with Python and own macOS app lifecycle plus native packet/routing integration.
+- **iOS Swift app/extension**: the native companion app and packet tunnel extension provide the iOS product path, with protocol parity and interop checked against the Python implementation.
 
 ## Reader guide
 
@@ -28,6 +28,8 @@ The complete whitepaper is available as a rendered preview at [`docs/WHITEPAPER.
 
 ### Similar projects
 - [chisel](https://github.com/jpillora/chisel) — a well-known TCP/UDP tunnel over HTTP/WebSocket implemented in Go.
+- [WireGuard](https://www.wireguard.com/) — a modern VPN protocol and implementation with strong kernel/native platform integration.
+- [pproxy](https://github.com/qwj/python-proxy) — a Python proxy server and forwarding toolkit supporting HTTP, SOCKS, and related proxy modes.
 
 ### Why this project was developed
 - `chisel` is implemented in Go, and using/building it on Synology NAS environments can be difficult in practice.
@@ -373,18 +375,25 @@ ChannelMux can expose a local TUN interface as a muxed packet service. For impor
   "udp_peer": "bridge.example.com",
   "udp_peer_port": 4443,
   "udp_own_port": 0,
+  "TUN_routing": {
+    "tunnel_address": "10.20.0.1",
+    "tunnel_prefix": 30,
+    "tunnel_gateway": "10.20.0.2",
+    "included_routes": ["10.20.0.0/30"],
+    "excluded_routes": ["127.0.0.0/8"],
+    "dns_servers": ["1.1.1.1", "8.8.8.8"],
+    "mtu": 1400
+  },
   "own_servers": [
     {
       "name": "site-a-tun-local",
       "listen": {
         "protocol": "tun",
-        "ifname": "obtun0",
-        "mtu": 1400
+        "ifname": "obtun0"
       },
       "target": {
         "protocol": "tun",
-        "ifname": "obtun1",
-        "mtu": 1400
+        "ifname": "obtun1"
       }
     }
   ],
@@ -393,13 +402,11 @@ ChannelMux can expose a local TUN interface as a muxed packet service. For impor
       "name": "site-a-tun-remote",
       "listen": {
         "protocol": "tun",
-        "ifname": "obtun1",
-        "mtu": 1400
+        "ifname": "obtun1"
       },
       "target": {
         "protocol": "tun",
-        "ifname": "obtun0",
-        "mtu": 1400
+        "ifname": "obtun0"
       }
     }
   ]
@@ -412,13 +419,14 @@ Interpretation:
 - `own_servers[0].target.ifname` is the interface name the peer-client expects on the remote side
 - `remote_servers[0].listen.ifname` is the interface created on the peer-server side
 - `remote_servers[0].target.ifname` mirrors the peer-client side so both tunnel ends describe the same routed pair
+- `TUN_routing` is the shared source for the tunnel MTU, address/gateway, DNS, included/excluded routes, and generated hook environment. A TUN service may still set a service-level `mtu` when it intentionally needs an override, but ordinary configs should inherit `TUN_routing.mtu`.
 
 The listener/server snippet stays transport-focused because listener mode does not use local `own_servers` editing the same way a peer client does. The client snippet above carries both the local TUN service and the remote TUN request in one importable JSON document.
 
 Linux (native) notes
 
 - Linux uses `/dev/net/tun` and the standard Python library.
-- The process needs permission to create and configure TUN devices; ObstacleBridge brings the interface up and applies MTU, but it does not assign IP addresses for you.
+- The process needs permission to create and configure TUN devices; ObstacleBridge creates the interface and applies the MTU from `TUN_routing.mtu` unless the TUN service explicitly overrides it. Address, route, DNS, and firewall setup is normally handled by lifecycle hooks using environment generated from `TUN_routing`.
 
 Example Linux IP assignment (run as root):
 
@@ -619,7 +627,7 @@ Current websocket payload forms:
 |---|---:|---|
 | `--own-servers` | `None` | Service catalog for client mode. Define `own_servers` as structured JSON service objects with `listen` and `target` blocks. Listener instances ignore `--own-servers` because multiple overlay peers make the target ambiguous. |
 | `--remote-servers` | `None` | Service catalog applied on the connected overlay peer in client mode. Define `remote_servers` as structured JSON service objects with `listen` and `target` blocks. |
-| `--channel-mux-egress` | `{"mode":"direct"}` | JSON target-side egress policy object for ChannelMux client dials. Use `{"mode":"system"}` on Python/Windows to resolve the same system proxy/PAC settings for TCP target connections. UDP targets remain direct because WinHTTP/PAC selects HTTP CONNECT-style proxies, not a UDP relay. |
+| `--channel-mux-egress` | `{"mode":"system"}` | JSON target-side egress policy object for ChannelMux client dials. System mode uses WinHTTP/PAC on Windows and `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` on Linux/POSIX for TCP target connections. UDP targets remain direct because HTTP CONNECT-style proxies are not UDP relays. |
 | `--mux-tcp-bp-threshold` | `1` | Mux TCP: size threshold (bytes) to trigger drain() (default 1). |
 | `--mux-tcp-bp-latency-ms` | `300` | Mux TCP: if > 0, drain writers after this ms when bytes pending. |
 | `--mux-tcp-bp-poll-interval-ms` | `50` | Mux TCP: polling interval for time-based backpressure (ms). |
@@ -661,37 +669,50 @@ What the scripts automate:
 
 - Server: assign `10.20.0.2/30` to `obtun1`, bring the interface up, enable IPv4 forwarding, add forwarding rules between `obtun1` and `eth0`, add NAT for `10.20.0.0/30`, optionally add TCP MSS clamping, and clean those rules up on disconnect.
 - Client: assign `10.20.0.1/30` to `obtun0`, bring the interface up, auto-detect or preserve the route to the overlay server public IP outside the tunnel, preserve excluded local subnets on their original interfaces when full-tunnel routes are installed, replace the default route via `10.20.0.2 dev obtun0`, set tunnel DNS, and restore the previous default route on disconnect.
-- Client environment: the client hook script auto-detects the original default gateway/interface and reads the resolved overlay peer address from `OB_OVERLAY_PEER_HOST`, so the hook config only needs tunnel-specific values such as TUN addresses, gateway, optional DNS, and optional explicit underlay overrides.
+- TUN routing environment: the runtime generates `MTU`, `TUN_ADDR`, `TUN_GW`, `TUN_ADDR6`, `TUN_GW6`, `PEER_ADDR`, `PEER_ADDR6`, `TUN_SUBNET`, `TUN_SUBNET6`, `DNS1`, `DNS2`, `INCLUDED_ROUTES`, `EXCLUDED_ROUTES`, `ENABLE_TCPMSS`, and optional tcpdump variables from the top-level `TUN_routing` section. Hook-level `env` should be reserved for machine-local values such as `WAN_IF` or deliberate per-event overrides.
+- Client environment: the client hook script auto-detects the original default gateway/interface and reads the resolved overlay peer address from `OB_OVERLAY_PEER_HOST`, so the hook config usually does not need explicit underlay values.
 - Dual-stack note: Linux and Darwin route exclusion helpers also filter IPv4-mapped IPv6 loopback or host forms such as `::ffff:127.0.0.1/128` so listener self-reachability exclusions do not get duplicated across families.
 
 Single peer-client config assumptions:
 
 - Client TUN interface: `obtun0`
-- Client tunnel address: `192.168.105.1/30`
-- Client IPv6 tunnel address: `fd20:105::1/126`
 - Server TUN interface: `obtun1`
-- Server tunnel address: `192.168.105.2/30`
-- Server IPv6 tunnel address: `fd20:105::2/126`
+- Client tunnel address from `TUN_routing`: `192.168.105.1/30`
+- Server tunnel gateway from `TUN_routing`: `192.168.105.2`
+- Client IPv6 tunnel address from `TUN_routing`: `fd20:105::1/126`
+- Server IPv6 tunnel gateway from `TUN_routing`: `fd20:105::2`
 - Server WAN interface: `eth0`
-- Client underlay interface/gateway: `auto`, or explicit values such as `eth0` and `192.168.1.1`
-- DNS servers: `1.1.1.1` and `8.8.8.8`
+- DNS servers from `TUN_routing`: `1.1.1.1` and `8.8.8.8`
 
 Combined peer-client config fragment:
 
 ```json
 {
+  "TUN_routing": {
+    "tunnel_address": "192.168.105.1",
+    "tunnel_prefix": 30,
+    "tunnel_gateway": "192.168.105.2",
+    "tunnel_address6": "fd20:105::1",
+    "tunnel_prefix6": 126,
+    "tunnel_gateway6": "fd20:105::2",
+    "included_routes": ["0.0.0.0/0"],
+    "excluded_routes": ["127.0.0.0/8"],
+    "included_routes6": ["::/0"],
+    "excluded_routes6": ["::1/128"],
+    "dns_servers": ["1.1.1.1", "8.8.8.8"],
+    "mtu": 1400,
+    "enable_tcpmss": true
+  },
   "own_servers": [
     {
       "name": "site-a-tun-local",
       "listen": {
         "protocol": "tun",
-        "ifname": "obtun0",
-        "mtu": 1400
+        "ifname": "obtun0"
       },
       "target": {
         "protocol": "tun",
-        "ifname": "obtun1",
-        "mtu": 1400
+        "ifname": "obtun1"
       },
       "lifecycle_hooks": {
         "listener": {
@@ -699,50 +720,20 @@ Combined peer-client config fragment:
             "argv": {
               "linux": ["./scripts/client-tun-hook.sh", "up", "{ifname}"]
             },
-              "env": {
-                "TUN_ADDR": "192.168.105.1/30",
-                "TUN_GW": "192.168.105.2",
-                "TUN_ADDR6": "fd20:105::1/126",
-                "TUN_GW6": "fd20:105::2",
-                "UNDERLAY_IF": "auto",
-                "UNDERLAY_GW": "auto",
-                "DNS1": "1.1.1.1",
-                "DNS2": "8.8.8.8"
-              },
-              "timeout_ms": 15000
-            },
+            "timeout_ms": 15000
+          },
           "on_channel_connected": {
             "argv": {
               "linux": ["./scripts/client-tun-hook.sh", "up", "{ifname}"]
             },
-              "env": {
-                "TUN_ADDR": "192.168.105.1/30",
-                "TUN_GW": "192.168.105.2",
-                "TUN_ADDR6": "fd20:105::1/126",
-                "TUN_GW6": "fd20:105::2",
-                "UNDERLAY_IF": "auto",
-                "UNDERLAY_GW": "auto",
-                "DNS1": "1.1.1.1",
-                "DNS2": "8.8.8.8"
-              },
-              "timeout_ms": 15000
-            },
+            "timeout_ms": 15000
+          },
           "on_stopped": {
             "argv": {
               "linux": ["./scripts/client-tun-hook.sh", "down", "{ifname}"]
             },
-              "env": {
-                "TUN_ADDR": "192.168.105.1/30",
-                "TUN_GW": "192.168.105.2",
-                "TUN_ADDR6": "fd20:105::1/126",
-                "TUN_GW6": "fd20:105::2",
-                "UNDERLAY_IF": "auto",
-                "UNDERLAY_GW": "auto",
-                "DNS1": "1.1.1.1",
-                "DNS2": "8.8.8.8"
-              },
-              "timeout_ms": 15000
-            }
+            "timeout_ms": 15000
+          }
         }
       }
     }
@@ -752,13 +743,11 @@ Combined peer-client config fragment:
       "name": "site-b-tun-remote",
       "listen": {
         "protocol": "tun",
-        "ifname": "obtun1",
-        "mtu": 1400
+        "ifname": "obtun1"
       },
       "target": {
         "protocol": "tun",
-        "ifname": "obtun0",
-        "mtu": 1400
+        "ifname": "obtun0"
       },
       "lifecycle_hooks": {
         "listener": {
@@ -767,14 +756,7 @@ Combined peer-client config fragment:
               "linux": ["./scripts/server-tun-hook.sh", "up", "{ifname}"]
             },
             "env": {
-              "TUN_ADDR": "192.168.105.2/30",
-              "PEER_ADDR": "192.168.105.1",
-              "TUN_ADDR6": "fd20:105::2/126",
-              "PEER_ADDR6": "fd20:105::1",
-              "WAN_IF": "eth0",
-              "TUN_SUBNET": "192.168.105.0/30",
-              "TUN_SUBNET6": "fd20:105::/126",
-              "ENABLE_TCPMSS": "1"
+              "WAN_IF": "eth0"
             },
             "timeout_ms": 15000
           },
@@ -783,14 +765,7 @@ Combined peer-client config fragment:
               "linux": ["./scripts/server-tun-hook.sh", "up", "{ifname}"]
             },
             "env": {
-              "TUN_ADDR": "192.168.105.2/30",
-              "PEER_ADDR": "192.168.105.1",
-              "TUN_ADDR6": "fd20:105::2/126",
-              "PEER_ADDR6": "fd20:105::1",
-              "WAN_IF": "eth0",
-              "TUN_SUBNET": "192.168.105.0/30",
-              "TUN_SUBNET6": "fd20:105::/126",
-              "ENABLE_TCPMSS": "1"
+              "WAN_IF": "eth0"
             },
             "timeout_ms": 15000
           },
@@ -799,14 +774,7 @@ Combined peer-client config fragment:
               "linux": ["./scripts/server-tun-hook.sh", "down", "{ifname}"]
             },
             "env": {
-              "TUN_ADDR": "192.168.105.2/30",
-              "PEER_ADDR": "192.168.105.1",
-              "TUN_ADDR6": "fd20:105::2/126",
-              "PEER_ADDR6": "fd20:105::1",
-              "WAN_IF": "eth0",
-              "TUN_SUBNET": "192.168.105.0/30",
-              "TUN_SUBNET6": "fd20:105::/126",
-              "ENABLE_TCPMSS": "1"
+              "WAN_IF": "eth0"
             },
             "timeout_ms": 15000
           }
@@ -828,35 +796,40 @@ A second peer can also use the same peer server as an Internet-exit TUN gateway,
 | Peer client A | `obtun0` | `obtun1` | `192.168.105.1/30` | `192.168.105.2/30` | `fd20:105::1/126` | `fd20:105::2/126` |
 | Peer client B | `obtun0` | `obtun2` | `192.168.105.5/30` | `192.168.105.6/30` | `fd20:105::5/126` | `fd20:105::6/126` |
 
-For the second peer client, keep the client-side `own_servers` shape the same, but change its hook environment:
+For the second peer client, keep the client-side `own_servers` hook shape the same, but give that peer its own `TUN_routing` values:
 
 ```json
 {
-  "TUN_ADDR": "192.168.105.5/30",
-  "TUN_GW": "192.168.105.6",
-  "TUN_ADDR6": "fd20:105::5/126",
-  "TUN_GW6": "fd20:105::6",
-  "UNDERLAY_IF": "auto",
-  "UNDERLAY_GW": "auto",
-  "DNS1": "1.1.1.1",
-  "DNS2": "8.8.8.8"
+  "TUN_routing": {
+    "tunnel_address": "192.168.105.5",
+    "tunnel_prefix": 30,
+    "tunnel_gateway": "192.168.105.6",
+    "tunnel_address6": "fd20:105::5",
+    "tunnel_prefix6": 126,
+    "tunnel_gateway6": "fd20:105::6",
+    "included_routes": ["0.0.0.0/0"],
+    "excluded_routes": ["127.0.0.0/8"],
+    "included_routes6": ["::/0"],
+    "excluded_routes6": ["::1/128"],
+    "dns_servers": ["1.1.1.1", "8.8.8.8"],
+    "mtu": 1400,
+    "enable_tcpmss": true
+  }
 }
 ```
 
-Also change the second peer client's `remote_servers` TUN listener to use a different server-side interface and subnet:
+Also change the second peer client's `remote_servers` TUN listener to use a different server-side interface. The server-side hook receives the corresponding peer/server addresses and subnets from the same `TUN_routing` block; only `WAN_IF` remains as a server-local hook environment value for the provided NAT script:
 
 ```json
 {
   "name": "site-b-tun-remote-client-b",
   "listen": {
     "protocol": "tun",
-    "ifname": "obtun2",
-    "mtu": 1400
+    "ifname": "obtun2"
   },
   "target": {
     "protocol": "tun",
-    "ifname": "obtun0",
-    "mtu": 1400
+    "ifname": "obtun0"
   },
   "lifecycle_hooks": {
     "listener": {
@@ -865,14 +838,7 @@ Also change the second peer client's `remote_servers` TUN listener to use a diff
           "linux": ["./scripts/server-tun-hook.sh", "up", "{ifname}"]
         },
         "env": {
-          "TUN_ADDR": "192.168.105.6/30",
-          "PEER_ADDR": "192.168.105.5",
-          "TUN_ADDR6": "fd20:105::6/126",
-          "PEER_ADDR6": "fd20:105::5",
-          "WAN_IF": "eth0",
-          "TUN_SUBNET": "192.168.105.4/30",
-          "TUN_SUBNET6": "fd20:105::4/126",
-          "ENABLE_TCPMSS": "1"
+          "WAN_IF": "eth0"
         },
         "timeout_ms": 15000
       },
@@ -881,14 +847,7 @@ Also change the second peer client's `remote_servers` TUN listener to use a diff
           "linux": ["./scripts/server-tun-hook.sh", "up", "{ifname}"]
         },
         "env": {
-          "TUN_ADDR": "192.168.105.6/30",
-          "PEER_ADDR": "192.168.105.5",
-          "TUN_ADDR6": "fd20:105::6/126",
-          "PEER_ADDR6": "fd20:105::5",
-          "WAN_IF": "eth0",
-          "TUN_SUBNET": "192.168.105.4/30",
-          "TUN_SUBNET6": "fd20:105::4/126",
-          "ENABLE_TCPMSS": "1"
+          "WAN_IF": "eth0"
         },
         "timeout_ms": 15000
       },
@@ -897,14 +856,7 @@ Also change the second peer client's `remote_servers` TUN listener to use a diff
           "linux": ["./scripts/server-tun-hook.sh", "down", "{ifname}"]
         },
         "env": {
-          "TUN_ADDR": "192.168.105.6/30",
-          "PEER_ADDR": "192.168.105.5",
-          "TUN_ADDR6": "fd20:105::6/126",
-          "PEER_ADDR6": "fd20:105::5",
-          "WAN_IF": "eth0",
-          "TUN_SUBNET": "192.168.105.4/30",
-          "TUN_SUBNET6": "fd20:105::4/126",
-          "ENABLE_TCPMSS": "1"
+          "WAN_IF": "eth0"
         },
         "timeout_ms": 15000
       }
@@ -934,8 +886,8 @@ Operational notes:
 - Verify interface names before hardcoding `eth0`: `ip route get 1.1.1.1`.
 - Preserve the overlay peer route on the client. The provided client hook uses `OB_OVERLAY_PEER_HOST` from the runtime to add the host route via the original gateway; without that route, the tunnel may try to carry its own transport packets and collapse.
 - DNS can explain cases where `ping` works but web pages do not. The client script uses `resolvectl`; adapt that part if the system does not use `systemd-resolved`.
-- IPv6 full-tunnel routing is opt-in. Set `TUN_ADDR6` and `TUN_GW6` on the client hook, and set `TUN_ADDR6`, `PEER_ADDR6`, and `TUN_SUBNET6` on the server hook. The server script enables IPv6 forwarding and adds an `ip6tables` MASQUERADE rule for `TUN_SUBNET6`, which is NAT66. NAT66 is not the ideal IPv6 design, but it is useful when the server has IPv6 Internet access and you do not have a routed IPv6 prefix for the tunnel.
-- Keep TCP MSS clamping enabled on the server (`ENABLE_TCPMSS=1`) when tunneling full-path traffic over a reduced MTU.
+- IPv6 full-tunnel routing is opt-in. Set `tunnel_address6`, `tunnel_prefix6`, `tunnel_gateway6`, `included_routes6`, and `excluded_routes6` in `TUN_routing`; the runtime carries those values into hook variables such as `TUN_ADDR6`, `TUN_GW6`, `PEER_ADDR6`, and `TUN_SUBNET6`. The server script enables IPv6 forwarding and adds an `ip6tables` MASQUERADE rule for `TUN_SUBNET6`, which is NAT66. NAT66 is not the ideal IPv6 design, but it is useful when the server has IPv6 Internet access and you do not have a routed IPv6 prefix for the tunnel.
+- Keep TCP MSS clamping enabled through `TUN_routing.enable_tcpmss=true` when tunneling full-path traffic over a reduced MTU.
 - The server script uses `iptables -C` checks before adding rules, so repeated `up` hooks do not create duplicate firewall rules.
 - Use `listener.on_stopped` for route/firewall teardown because it runs for service-level shutdown caused by overlay disconnect, peer disconnect, catalog replacement, or process shutdown. `on_channel_closed` remains useful for per-channel cleanup, but `on_stopped` is the deterministic safety net for full-tunnel routing.
 
@@ -948,7 +900,7 @@ Operational notes:
 | `--proxy-provider-socks5-port` | `13882` | Local SOCKS5 TCP `CONNECT` proxy listener port. |
 | `--proxy-provider-protocols` | `http-connect socks5-connect` | Enabled proxy protocol families. Supported values are `http-connect`, `socks5-connect`, `http`, and `socks5`. |
 | `--proxy-provider-auth` | `{"mode":"none","username":"","token":""}` | JSON auth object. Use `mode` `token`, `basic`, or `password` plus `username` and `token` or `password` to require proxy authentication. |
-| `--proxy-provider-egress` | `{"mode":"direct","address_families":["ipv4","ipv6"]}` | JSON egress policy object for outbound proxy connections. |
+| `--proxy-provider-egress` | `{"mode":"system","address_families":["ipv4","ipv6"]}` | JSON egress policy object for outbound proxy connections. System mode uses WinHTTP/PAC on Windows and `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` on Linux/POSIX. |
 | `--proxy-provider-policy` | `{"allow_private_destinations":false,"blocked_host_patterns":[]}` | JSON destination policy object. |
 | `--log-proxy-provider` | inherited | Override the proxy provider logger level, for example `INFO` or `DEBUG`. |
 
@@ -977,7 +929,7 @@ Paste-ready config fragment:
       "token": ""
     },
     "egress": {
-      "mode": "direct",
+      "mode": "system",
       "address_families": ["ipv4", "ipv6"]
     },
     "policy": {
@@ -1078,9 +1030,9 @@ When `--admin-web-username` and `--admin-web-password` are configured and auth i
 
 On the WebSocket peer-client path, failed proxy-tunnel bootstrap attempts continue to surface as normal connection-failure state in status/admin views. If a timed-out proxy helper finishes only after the timeout path has already cancelled it, that late cleanup is treated as expected cancellation rather than as a separate unhandled asyncio callback error.
 
-The local proxy provider also understands `proxy_provider_egress.mode="system"` on Python runtimes. In that mode, outbound HTTP and SOCKS5 proxy-provider traffic resolves the same Windows system proxy/PAC settings used by the WebSocket client path, then opens an upstream CONNECT tunnel when WinHTTP selects a proxy; destinations with no selected upstream proxy still connect directly.
+The local proxy provider defaults to `proxy_provider_egress.mode="system"` on Python runtimes. In that mode, outbound HTTP and SOCKS5 proxy-provider traffic resolves Windows system proxy/PAC settings on Windows, and honors `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` on Linux/POSIX. When no upstream proxy is selected, destinations still connect directly.
 
-ChannelMux target-side TCP dials can use the same resolver with `channel_mux_egress.mode="system"` (or nested config `channel_mux.egress.mode="system"`). This covers remote service targets such as `remote_servers[].target.host` values outside localhost; UDP service targets stay on direct UDP until a UDP-capable proxy relay is added.
+ChannelMux target-side TCP dials use the same resolver by default with `channel_mux_egress.mode="system"` (or nested config `channel_mux.egress.mode="system"`). This covers remote service targets such as `remote_servers[].target.host` values outside localhost; UDP service targets stay on direct UDP until a UDP-capable proxy relay is added.
 
 Saving configuration changes uses a second challenge-response confirmation bound to the exact update block, so the current admin password must be re-entered before the server applies guarded config writes.
 
@@ -1511,9 +1463,9 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `38` | `642` |
+| Python CLI/runtime, including macOS Python | `38` | `663` |
 | macOS Swift app | `1` | `47` |
-| iOS app/extension | `24` | `148` |
+| iOS app/extension | `24` | `149` |
 
 #### Requirement traceability
 
@@ -1521,7 +1473,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `81/89 = 91.0%` | `86/89 = 96.6%` | `86/89 = 96.6%` |
 | macOS Swift app | `2/89 = 2.2%` | `5/89 = 5.6%` | `7/89 = 7.9%` |
-| iOS app/extension | `8/89 = 9.0%` | `10/89 = 11.2%` | `15/89 = 16.9%` |
+| iOS app/extension | `8/89 = 9.0%` | `11/89 = 12.4%` | `16/89 = 18.0%` |
 
 #### Architecture traceability
 

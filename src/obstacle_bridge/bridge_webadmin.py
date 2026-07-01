@@ -1029,7 +1029,7 @@ class AdminWebUI:
             "socks5_port": getattr(args, "proxy_provider_socks5_port", 13882),
             "protocols": getattr(args, "proxy_provider_protocols", ["http-connect", "socks5-connect"]),
             "auth": getattr(args, "proxy_provider_auth", {"mode": "none", "username": "", "token": ""}),
-            "egress": getattr(args, "proxy_provider_egress", {"mode": "direct", "address_families": ["ipv4", "ipv6"]}),
+            "egress": getattr(args, "proxy_provider_egress", {"mode": "system", "address_families": ["ipv4", "ipv6"]}),
             "policy": getattr(args, "proxy_provider_policy", {"allow_private_destinations": False, "blocked_host_patterns": []}),
         }
         if hasattr(args, "log_proxy_provider"):

@@ -323,7 +323,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             "token": "",
         ]
         let egress = (section?["egress"] ?? flatPayload["proxy_provider_egress"]) as? [String: Any] ?? [
-            "mode": "direct",
+            "mode": "system",
             "address_families": ["ipv4", "ipv6"],
         ]
         let policy = (section?["policy"] ?? flatPayload["proxy_provider_policy"]) as? [String: Any] ?? [

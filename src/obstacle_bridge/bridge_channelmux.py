@@ -265,10 +265,11 @@ class ChannelMux:
                 '--channel-mux-egress',
                 dest='channel_mux_egress',
                 type=_json_cli_value,
-                default={"mode": "direct"},
+                default={"mode": "system"},
                 help=(
                     "ChannelMux target-side egress policy object. "
-                    "Use mode direct or system; system uses the platform proxy resolver on Windows for TCP target dials."
+                    "Use mode system, direct, or manual; system uses WinHTTP on Windows and "
+                    "HTTP_PROXY/HTTPS_PROXY/NO_PROXY on Linux/POSIX for TCP target dials."
                 ),
             )
         # Keep backpressure knobs (apply to local TCP writers we own)
@@ -2107,11 +2108,11 @@ class ChannelMux:
         return dict(raw) if isinstance(raw, Mapping) else {}
 
     def _channel_mux_egress_mode(self) -> str:
-        return str(self._channel_mux_egress_config().get("mode") or "direct").strip().lower()
+        return str(self._channel_mux_egress_config().get("mode") or "system").strip().lower()
 
     def _channel_mux_egress_proxy_auth(self) -> str:
         egress = self._channel_mux_egress_config()
-        default = "negotiate" if self._channel_mux_egress_mode() == "system" else "none"
+        default = "negotiate" if self._channel_mux_egress_mode() == "system" and sys.platform == "win32" else "none"
         return str(egress.get("proxy_auth") or egress.get("auth") or default).strip().lower()
 
     def _channel_mux_egress_connect_timeout(self) -> float:
@@ -2176,12 +2177,32 @@ class ChannelMux:
         mode = self._channel_mux_egress_mode()
         if mode in {"", "direct", "off", "none"} or self._channel_mux_udp_proxy_warned:
             return
+        egress = self._channel_mux_egress_config()
+        try:
+            endpoint = resolve_proxy_endpoint(
+                mode=mode,
+                target_host=str(host),
+                target_port=int(port),
+                secure=False,
+                manual_host=str(egress.get("proxy_host") or egress.get("host") or ""),
+                manual_port=int(egress.get("proxy_port") or egress.get("port") or 0),
+                feature_enabled=True,
+                log=self.log,
+                log_prefix="[MUX-EGRESS]",
+            )
+        except Exception as exc:
+            self.log.debug("[MUX-EGRESS] UDP proxy-limit note skipped for %s:%d: %r", host, int(port), exc)
+            return
+        if endpoint is None:
+            return
         self._channel_mux_udp_proxy_warned = True
         self.log.info(
-            "[MUX-EGRESS] UDP target=%s:%d uses direct UDP; configured egress mode=%s resolves HTTP CONNECT-style proxies, not a UDP relay",
+            "[MUX-EGRESS] UDP target=%s:%d uses direct UDP; configured egress mode=%s resolves upstream proxy=%s:%d, but HTTP CONNECT-style proxies are not UDP relays",
             host,
             int(port),
             mode,
+            endpoint[0],
+            int(endpoint[1]),
         )
 
     # ---------- UDP server (unconnected; multi-origin) ----------

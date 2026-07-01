@@ -521,7 +521,7 @@ final class ObstacleBridgeHostRunner {
             "token": "",
         ]
         let egress = (section?["egress"] ?? runtimeConfig["proxy_provider_egress"]) as? [String: Any] ?? [
-            "mode": "direct",
+            "mode": "system",
             "address_families": ["ipv4", "ipv6"],
         ]
         let policy = (section?["policy"] ?? runtimeConfig["proxy_provider_policy"]) as? [String: Any] ?? [

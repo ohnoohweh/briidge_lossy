@@ -178,7 +178,7 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
                         "token": "local-token",
                     },
                     "egress": {
-                        "mode": "direct",
+                        "mode": "system",
                         "address_families": ["ipv4", "ipv6"],
                     },
                     "policy": {

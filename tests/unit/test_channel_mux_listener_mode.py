@@ -174,6 +174,93 @@ def _ipv6_packet(src: str, dst: str, payload: bytes = b"x") -> bytes:
 
 
 class ChannelMuxListenerModeTests(unittest.TestCase):
+    def test_channel_mux_default_system_egress_auth_is_platform_scoped(self):
+        mux = ChannelMux(_FakeSession(connected=True), argparse.Namespace())
+
+        with patch("sys.platform", "linux"):
+            self.assertEqual(mux._channel_mux_egress_proxy_auth(), "none")
+        with patch("sys.platform", "win32"):
+            self.assertEqual(mux._channel_mux_egress_proxy_auth(), "negotiate")
+
+    def test_tcp_target_connection_defaults_to_system_proxy_egress_on_linux(self):
+        asyncio.run(self._test_tcp_target_connection_defaults_to_system_proxy_egress_on_linux())
+
+    async def _test_tcp_target_connection_defaults_to_system_proxy_egress_on_linux(self):
+        target_server, target_port, captured_target = await _start_tcp_capture_server()
+        upstream_server, upstream_port, captured_upstream = await _start_connect_proxy()
+        mux = ChannelMux(_FakeSession(connected=True), asyncio.get_running_loop())
+        mux.args = argparse.Namespace()
+
+        with patch.dict(
+            "os.environ",
+            {
+                "HTTP_PROXY": f"http://127.0.0.1:{upstream_port}",
+                "http_proxy": f"http://127.0.0.1:{upstream_port}",
+                "NO_PROXY": "",
+                "no_proxy": "",
+            },
+            clear=False,
+        ):
+            with patch("obstacle_bridge.bridge_proxy_common.urllib.request.proxy_bypass", return_value=False):
+                try:
+                    reader, writer = await mux._open_tcp_target_connection("127.0.0.1", target_port)
+                    writer.write(b"hello-default-system-channelmux")
+                    await writer.drain()
+                    response = await reader.read(4096)
+                    writer.close()
+                    await writer.wait_closed()
+
+                    self.assertEqual(response, b"mux-target-ok")
+                    self.assertEqual(captured_target, [b"hello-default-system-channelmux"])
+                    self.assertTrue(captured_upstream)
+                    self.assertTrue(
+                        captured_upstream[0].startswith(
+                            f"CONNECT 127.0.0.1:{target_port} HTTP/1.1\r\n".encode()
+                        )
+                    )
+                finally:
+                    upstream_server.close()
+                    await upstream_server.wait_closed()
+                    target_server.close()
+                    await target_server.wait_closed()
+
+    def test_tcp_target_connection_default_system_honors_no_proxy_on_linux(self):
+        asyncio.run(self._test_tcp_target_connection_default_system_honors_no_proxy_on_linux())
+
+    async def _test_tcp_target_connection_default_system_honors_no_proxy_on_linux(self):
+        target_server, target_port, captured_target = await _start_tcp_capture_server()
+        upstream_server, upstream_port, captured_upstream = await _start_connect_proxy()
+        mux = ChannelMux(_FakeSession(connected=True), asyncio.get_running_loop())
+        mux.args = argparse.Namespace()
+
+        with patch.dict(
+            "os.environ",
+            {
+                "HTTP_PROXY": f"http://127.0.0.1:{upstream_port}",
+                "http_proxy": f"http://127.0.0.1:{upstream_port}",
+                "NO_PROXY": "127.0.0.1",
+                "no_proxy": "127.0.0.1",
+            },
+            clear=False,
+        ):
+            with patch("obstacle_bridge.bridge_proxy_common.urllib.request.proxy_bypass", return_value=True):
+                try:
+                    reader, writer = await mux._open_tcp_target_connection("127.0.0.1", target_port)
+                    writer.write(b"hello-no-proxy-channelmux")
+                    await writer.drain()
+                    response = await reader.read(4096)
+                    writer.close()
+                    await writer.wait_closed()
+
+                    self.assertEqual(response, b"mux-target-ok")
+                    self.assertEqual(captured_target, [b"hello-no-proxy-channelmux"])
+                    self.assertEqual(captured_upstream, [])
+                finally:
+                    upstream_server.close()
+                    await upstream_server.wait_closed()
+                    target_server.close()
+                    await target_server.wait_closed()
+
     def test_tcp_target_connection_uses_system_proxy_egress(self):
         asyncio.run(self._test_tcp_target_connection_uses_system_proxy_egress())
 

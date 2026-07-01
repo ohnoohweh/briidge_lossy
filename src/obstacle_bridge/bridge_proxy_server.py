@@ -5,6 +5,7 @@ import asyncio
 import base64
 import json
 import logging
+import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional
 from urllib.parse import urlsplit
@@ -244,8 +245,11 @@ class ObstacleBridgeProxyProviderSettings:
             "--proxy-provider-egress",
             dest="proxy_provider_egress",
             type=_json_cli_value,
-            default={"mode": "direct", "address_families": ["ipv4", "ipv6"]},
-            help="Proxy egress policy object. Use mode direct or system; system uses the platform proxy resolver on Windows.",
+            default={"mode": "system", "address_families": ["ipv4", "ipv6"]},
+            help=(
+                "Proxy egress policy object. Use mode system, direct, or manual; "
+                "system uses WinHTTP on Windows and HTTP_PROXY/HTTPS_PROXY/NO_PROXY on Linux/POSIX."
+            ),
         )
         parser.add_argument(
             "--proxy-provider-policy",
@@ -334,11 +338,11 @@ class ObstacleBridgeProxyServer:
         return dict(raw) if isinstance(raw, Mapping) else {}
 
     def _egress_mode(self) -> str:
-        return str(self._egress_config().get("mode") or "direct").strip().lower()
+        return str(self._egress_config().get("mode") or "system").strip().lower()
 
     def _egress_proxy_auth(self) -> str:
         egress = self._egress_config()
-        default = "negotiate" if self._egress_mode() == "system" else "none"
+        default = "negotiate" if self._egress_mode() == "system" and sys.platform == "win32" else "none"
         return str(egress.get("proxy_auth") or egress.get("auth") or default).strip().lower()
 
     def _egress_connect_timeout(self) -> float:

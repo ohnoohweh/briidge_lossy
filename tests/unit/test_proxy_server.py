@@ -11,6 +11,21 @@ from obstacle_bridge.bridge_proxy_server import (
 )
 
 
+def test_python_proxy_server_default_egress_mode_is_system() -> None:
+    proxy = ObstacleBridgeProxyServer(ObstacleBridgeProxyServerConfig(bind_host="127.0.0.1", port=0))
+
+    assert proxy.snapshot()["egress_mode"] == "system"
+
+
+def test_python_proxy_server_default_system_egress_auth_is_platform_scoped() -> None:
+    proxy = ObstacleBridgeProxyServer(ObstacleBridgeProxyServerConfig(bind_host="127.0.0.1", port=0))
+
+    with mock.patch("sys.platform", "linux"):
+        assert proxy._egress_proxy_auth() == "none"
+    with mock.patch("sys.platform", "win32"):
+        assert proxy._egress_proxy_auth() == "negotiate"
+
+
 async def _start_capture_server() -> tuple[asyncio.AbstractServer, int, list[bytes]]:
     captured: list[bytes] = []
 

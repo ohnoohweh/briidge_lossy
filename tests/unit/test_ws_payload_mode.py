@@ -10,6 +10,7 @@ import unittest
 from unittest import mock
 
 from obstacle_bridge.bridge import WebSocketSession
+from obstacle_bridge.bridge_proxy_common import resolve_proxy_endpoint
 
 
 def _args(ws_payload_mode: str) -> argparse.Namespace:
@@ -1103,7 +1104,7 @@ class WebSocketProxyHelpersTests(unittest.TestCase):
         session._log = mock.Mock()
 
         with mock.patch.object(sys, "platform", "win32"):
-            with mock.patch.object(session, "_win_get_proxy_for_url", return_value=None):
+            with mock.patch("obstacle_bridge.bridge_proxy_common.win_get_proxy_for_url", return_value=None):
                 endpoint = session._get_ws_proxy_endpoint("overlay.example", 54321)
 
         self.assertIsNone(endpoint)
@@ -1153,6 +1154,36 @@ class WebSocketProxyHelpersTests(unittest.TestCase):
         with mock.patch("obstacle_bridge.bridge_proxy_common.urllib.request.proxy_bypass", return_value=True):
             with mock.patch("obstacle_bridge.bridge_proxy_common.urllib.request.getproxies", return_value={"http": "http://proxy.example:8080"}):
                 endpoint = session._get_ws_proxy_endpoint("overlay.example", 54321)
+
+        self.assertIsNone(endpoint)
+
+    def test_system_proxy_mode_on_linux_uses_http_proxy_env(self):
+        with mock.patch("obstacle_bridge.bridge_proxy_common.urllib.request.proxy_bypass", return_value=False):
+            with mock.patch(
+                "obstacle_bridge.bridge_proxy_common.urllib.request.getproxies",
+                return_value={"http": "http://proxy.example:8080"},
+            ):
+                endpoint = resolve_proxy_endpoint(
+                    mode="system",
+                    target_host="overlay.example",
+                    target_port=54321,
+                    platform="linux",
+                )
+
+        self.assertEqual(endpoint, ("proxy.example", 8080))
+
+    def test_system_proxy_mode_on_linux_honors_no_proxy_env(self):
+        with mock.patch("obstacle_bridge.bridge_proxy_common.urllib.request.proxy_bypass", return_value=True):
+            with mock.patch(
+                "obstacle_bridge.bridge_proxy_common.urllib.request.getproxies",
+                return_value={"http": "http://proxy.example:8080"},
+            ):
+                endpoint = resolve_proxy_endpoint(
+                    mode="system",
+                    target_host="overlay.example",
+                    target_port=54321,
+                    platform="linux",
+                )
 
         self.assertIsNone(endpoint)
 

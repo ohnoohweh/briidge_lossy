@@ -908,7 +908,7 @@ Conceptual config:
       "token_ref": "proxy_provider_token"
     },
     "egress": {
-      "mode": "direct",
+      "mode": "system",
       "address_families": ["ipv4", "ipv6"]
     },
     "policy": {

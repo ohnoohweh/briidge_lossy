@@ -319,8 +319,15 @@ def resolve_proxy_endpoint(
             return test_override
         if platform_name != "win32":
             if log:
-                log.debug("%s rejecting proxy lookup on unsupported platform=%s", log_prefix, platform_name)
-            raise RuntimeError("system proxy support is currently available on Windows only")
+                log.debug("%s system proxy lookup delegates to environment on platform=%s", log_prefix, platform_name)
+            endpoint = env_get_proxy_for_target(target_host, secure=secure, log=log, log_prefix=log_prefix)
+            if endpoint is None:
+                if log:
+                    log.debug("%s system/env proxy lookup returned no endpoint", log_prefix)
+                return None
+            if log:
+                log.debug("%s system/env proxy selected endpoint=%s:%d", log_prefix, endpoint[0], int(endpoint[1]))
+            return endpoint
         lookup_url = f"{'https' if secure else 'http'}://{format_connect_authority(target_host, target_port)}"
         if log:
             log.debug("%s system proxy lookup url=%s secure=%s", log_prefix, lookup_url, secure)
