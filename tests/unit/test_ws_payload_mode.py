@@ -870,6 +870,50 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["last_event"], "connect_failed")
         connect.assert_not_awaited()
 
+    async def test_connect_proxy_open_timeout_cancels_without_asyncio_callback_error(self):
+        args = _args("binary")
+        args.ws_peer = "127.0.0.1"
+        args.ws_peer_port = 54321
+        args.ws_proxy_mode = "manual"
+        args.ws_proxy_host = "proxy.example"
+        args.ws_proxy_port = 8080
+        session = WebSocketSession(args)
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+        session._peer_tuple = ("127.0.0.1", 54321)
+        session._peer_name_host = "overlay.example"
+        session._peer_name_port = 54321
+        session._ws_connect_timeout_s = 0.01
+
+        connect = mock.AsyncMock()
+        fake_websockets = types.SimpleNamespace(connect=connect)
+        loop = asyncio.get_running_loop()
+        captured_contexts = []
+        previous_handler = loop.get_exception_handler()
+
+        async def never_open_proxy(_host, _port):
+            await asyncio.Future()
+
+        def capture_exception(_loop, context):
+            captured_contexts.append(context)
+
+        loop.set_exception_handler(capture_exception)
+        try:
+            with mock.patch.dict(sys.modules, {"websockets": fake_websockets}):
+                with mock.patch.object(session, "_get_ws_proxy_endpoint", return_value=("proxy.example", 8080)):
+                    with mock.patch.object(session, "_open_ws_proxy_socket", side_effect=never_open_proxy):
+                        await session._connect_to("127.0.0.1", 54321)
+            await asyncio.sleep(0)
+        finally:
+            loop.set_exception_handler(previous_handler)
+
+        snapshot = session.get_connection_failure_snapshot()
+        self.assertTrue(snapshot["failed"])
+        self.assertEqual(snapshot["reason"], "proxy_negotiation_failed")
+        self.assertIn("timed out opening proxy tunnel", snapshot["detail"])
+        self.assertEqual(captured_contexts, [])
+        connect.assert_not_awaited()
+
 
 class WebSocketProxyHelpersTests(unittest.TestCase):
     def test_register_cli_defaults_ws_proxy_mode_to_env_on_linux(self):

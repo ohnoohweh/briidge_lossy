@@ -2245,6 +2245,8 @@ class WebSocketSession(ISession):
                             proxy_open_task.cancel()
 
                             def _cleanup_late_proxy_socket(task: asyncio.Task[socket.socket]) -> None:
+                                if task.cancelled():
+                                    return
                                 with contextlib.suppress(Exception):
                                     late_sock = task.result()
                                     late_sock.close()

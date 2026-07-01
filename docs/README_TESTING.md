@@ -53,6 +53,7 @@ Representative anchors for those areas:
   - [tests/unit/test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py)
   - [tests/unit/test_swift_ws_transport_owner_source_guards.py](../tests/unit/test_swift_ws_transport_owner_source_guards.py)
   - [ios/tests/test_ios_secure_link_transport_adapter.py](../ios/tests/test_ios_secure_link_transport_adapter.py)
+- current WebSocket bootstrap coverage also pins timed-out proxy-tunnel cleanup so a cancelled late proxy-open helper remains a normal `proxy_negotiation_failed` path instead of leaking an unhandled asyncio callback error
 - TUN routing, shared-TUN behavior, and hook contracts:
   - [tests/unit/test_tun_hook_scripts.py](../tests/unit/test_tun_hook_scripts.py)
   - [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py)
