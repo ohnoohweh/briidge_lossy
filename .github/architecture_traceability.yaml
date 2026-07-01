@@ -18,14 +18,18 @@ ARC-CMP-001:
     - tests/unit/test_embeddable_core.py::test_runner_schema_snapshot_includes_proxy_provider_fields
     - tests/unit/test_embeddable_core.py::test_runner_starts_proxy_provider_and_exposes_status_snapshot
     - tests/unit/test_proxy_server.py::test_python_proxy_server_rewrites_http_absolute_form
+    - tests/unit/test_proxy_server.py::test_python_proxy_server_system_egress_uses_upstream_connect_proxy
     - tests/unit/test_proxy_server.py::test_python_proxy_server_rejects_missing_http_proxy_auth
     - tests/unit/test_proxy_server.py::test_python_proxy_server_accepts_socks5_connect_with_user_password
     - tests/unit/test_proxy_server.py::test_python_proxy_codec_basic_auth_header_matches_swift_shape
+    - tests/unit/test_ws_payload_mode.py::test_start_server_ipv6_wildcard_uses_dual_stack_socket
     - tests/unit/test_ws_payload_mode.py::test_connect_advertises_payload_mode_in_upgrade_request
     - tests/unit/test_ws_payload_mode.py::test_connect_refuses_upgrade_when_http_preflight_is_not_200
     - tests/unit/test_ws_payload_mode.py::test_connect_reports_dns_resolution_failures_as_failed
     - tests/unit/test_ws_payload_mode.py::test_connect_reports_proxy_negotiation_failures_as_failed
     - tests/unit/test_ws_payload_mode.py::test_connect_proxy_open_timeout_cancels_without_asyncio_callback_error
+    - tests/unit/test_ws_payload_mode.py::test_connect_multi_ws_peer_uses_resolved_candidate_for_uri_and_preflight
+    - tests/unit/test_ws_payload_mode.py::test_proxy_multi_ws_peer_uses_resolved_candidate_for_lookup_and_connect
     - tests/unit/test_ws_payload_mode.py::test_client_accept_resets_stale_rtt_state_before_new_transport_establishes
     - tests/unit/test_ws_payload_mode.py::test_client_accept_rejects_overlapping_websocket_without_closing_active
     - tests/unit/test_ws_payload_mode.py::test_stale_client_rx_pump_does_not_clear_newer_websocket
@@ -81,6 +85,7 @@ ARC-CMP-003:
   # local subnet routes stay attached to their original interfaces.
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_opens_channel_and_sends_data
+    - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_uses_system_proxy_egress
     - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
     - tests/unit/test_channel_mux_listener_mode.py::test_process_shared_tun_registry_reuses_prestarted_server_owned_tun
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
@@ -189,9 +194,11 @@ ARC-CMP-004:
     - tests/unit/test_peer_resolution.py::test_send_port_prefer_ipv6_allows_ipv4_mapped_destination_on_ipv6_socket
     - tests/unit/test_peer_resolution.py::test_resolve_prefer_ipv6_keeps_native_ipv4_literal_until_ipv6_socket_send_mapping
     - ios/tests/test_macos_swift_host_runner.py::test_swift_peer_resolution_prefer_ipv6_keeps_ipv4_literal_native_until_socket_normalization
+    - tests/unit/test_ws_payload_mode.py::test_connect_multi_ws_peer_uses_resolved_candidate_for_uri_and_preflight
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv6_literal_when_available
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_falls_back_to_ipv4_when_ipv6_candidate_fails
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_honors_bind_family_constraint
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_accepts_channel_mux_egress_alias
     - tests/unit/test_runner_config_persistence.py::test_runtime_config_encrypts_secret_fields_and_loads_them_back
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_psk
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_cert
@@ -300,6 +307,8 @@ ARC-CMP-005:
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_active_tun_channel_as_open
     - tests/unit/test_connection_snapshots.py::test_snapshot_collapses_tun_channel_aliases_into_one_logical_connection
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_listeners_when_no_clients_connected
+    - tests/unit/test_connection_snapshots.py::test_snapshot_exposes_requested_remote_servers_as_client_listeners
+    - tests/unit/test_connection_snapshots.py::test_snapshot_hides_requested_remote_servers_when_overlay_disconnected
     - tests/unit/test_connection_snapshots.py::test_snapshot_mixed_listeners_and_active_connections
     - tests/unit/test_connection_snapshots.py::test_status_snapshot_includes_tun_open_connection_count
     - tests/unit/test_admin_web_payloads.py::test_runner_peer_snapshot_coalesces_null_overlay_metrics

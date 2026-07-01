@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest import mock
 
 from obstacle_bridge.bridge_proxy_server import (
     ObstacleBridgeProxyProtocolCodec,
@@ -20,6 +21,43 @@ async def _start_capture_server() -> tuple[asyncio.AbstractServer, int, list[byt
         await writer.drain()
         writer.close()
         await writer.wait_closed()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    return server, int(port), captured
+
+
+async def _start_connect_proxy() -> tuple[asyncio.AbstractServer, int, list[bytes]]:
+    captured: list[bytes] = []
+
+    async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            while True:
+                data = await reader.read(16 * 1024)
+                if not data:
+                    break
+                writer.write(data)
+                await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        header = await reader.readuntil(b"\r\n\r\n")
+        captured.append(header)
+        request_line = header.decode("latin1", "replace").split("\r\n", 1)[0]
+        parts = request_line.split(" ")
+        destination = ObstacleBridgeProxyProtocolCodec.parse_authority(parts[1], default_port=443) if len(parts) >= 2 else None
+        if destination is None:
+            writer.write(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+            return
+        outbound_reader, outbound_writer = await asyncio.open_connection(destination[0], destination[1])
+        writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        await writer.drain()
+        await asyncio.gather(_pipe(reader, outbound_writer), _pipe(outbound_reader, writer))
 
     server = await asyncio.start_server(handle, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
@@ -69,6 +107,61 @@ async def _test_python_proxy_server_rewrites_http_absolute_form() -> None:
         await proxy.stop()
         target_server.close()
         await target_server.wait_closed()
+
+
+def test_python_proxy_server_system_egress_uses_upstream_connect_proxy() -> None:
+    asyncio.run(_test_python_proxy_server_system_egress_uses_upstream_connect_proxy())
+
+
+async def _test_python_proxy_server_system_egress_uses_upstream_connect_proxy() -> None:
+    target_server, target_port, captured_target = await _start_capture_server()
+    upstream_server, upstream_port, captured_upstream = await _start_connect_proxy()
+    proxy = ObstacleBridgeProxyServer(
+        ObstacleBridgeProxyServerConfig(
+            bind_host="127.0.0.1",
+            port=0,
+            allow_socks5=False,
+            egress={"mode": "system", "proxy_auth": "none"},
+        )
+    )
+    with mock.patch.dict(
+        "os.environ",
+        {"OBSTACLEBRIDGE_TEST_SYSTEM_PROXY": f"http=127.0.0.1:{upstream_port}"},
+        clear=False,
+    ):
+        await proxy.start()
+        proxy_port = proxy._server.sockets[0].getsockname()[1]
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", proxy_port)
+            writer.write(
+                (
+                    f"GET http://127.0.0.1:{target_port}/via-system HTTP/1.1\r\n"
+                    f"Host: 127.0.0.1:{target_port}\r\n"
+                    "\r\n"
+                ).encode()
+            )
+            await writer.drain()
+            response = await reader.read(4096)
+            writer.close()
+            await writer.wait_closed()
+
+            assert response.startswith(b"HTTP/1.1 200 OK")
+            assert captured_target == [
+                (
+                    f"GET /via-system HTTP/1.1\r\n"
+                    f"Host: 127.0.0.1:{target_port}\r\n"
+                    "\r\n"
+                ).encode()
+            ]
+            assert captured_upstream
+            assert captured_upstream[0].startswith(f"CONNECT 127.0.0.1:{target_port} HTTP/1.1\r\n".encode())
+            assert proxy.snapshot()["egress_mode"] == "system"
+        finally:
+            await proxy.stop()
+            upstream_server.close()
+            await upstream_server.wait_closed()
+            target_server.close()
+            await target_server.wait_closed()
 
 
 def test_python_proxy_server_rejects_missing_http_proxy_auth() -> None:

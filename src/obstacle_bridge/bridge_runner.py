@@ -401,6 +401,7 @@ class Runner:
                     credentials=credentials,
                     allow_http=allow_http,
                     allow_socks5=allow_socks5,
+                    egress=cfg.get("egress") if isinstance(cfg.get("egress"), dict) else None,
                 )
             )
             try:
@@ -2455,6 +2456,9 @@ class ConfigAwareCLI:
         actions = self._scan_actions(parser)
         flat: Dict[str, Any] = {}
         nested_dest_aliases = {
+            "channel_mux": {
+                "egress": "channel_mux_egress",
+            },
             "proxy_provider": {
                 "enabled": "proxy_provider_enabled",
                 "bind": "proxy_provider_bind",

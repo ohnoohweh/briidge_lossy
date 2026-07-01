@@ -52,6 +52,22 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         self.assertIn("tcp_peer", args._config_sections["tcp_session"])
         self.assertNotIn("tcp_peer", args._config_sections["runner"])
 
+    def test_build_runtime_args_accepts_channel_mux_egress_alias(self) -> None:
+        args = build_runtime_args_from_config(
+            {
+                "channel_mux": {
+                    "egress": {
+                        "mode": "system",
+                        "proxy_auth": "none",
+                    }
+                }
+            }
+        )
+
+        self.assertEqual(args.channel_mux_egress["mode"], "system")
+        self.assertEqual(args.channel_mux_egress["proxy_auth"], "none")
+        self.assertIn("channel_mux_egress", args._config_sections["channel_mux"])
+
     def test_build_runtime_args_prefers_runner_overlay_transport_over_legacy_root_value(self) -> None:
         args = build_runtime_args_from_config(
             {

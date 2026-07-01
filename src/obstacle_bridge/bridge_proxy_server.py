@@ -6,8 +6,10 @@ import base64
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 from urllib.parse import urlsplit
+
+from .bridge_proxy_common import open_http_connect_tunnel, resolve_proxy_endpoint
 
 
 @dataclass(frozen=True)
@@ -180,6 +182,7 @@ class ObstacleBridgeProxyServerConfig:
     allow_http: bool = True
     allow_socks5: bool = True
     max_header_bytes: int = 64 * 1024
+    egress: Optional[dict[str, Any]] = None
 
 
 def _json_cli_value(value: Any) -> Any:
@@ -242,7 +245,7 @@ class ObstacleBridgeProxyProviderSettings:
             dest="proxy_provider_egress",
             type=_json_cli_value,
             default={"mode": "direct", "address_families": ["ipv4", "ipv6"]},
-            help="Proxy egress policy object for direct outbound connection behavior.",
+            help="Proxy egress policy object. Use mode direct or system; system uses the platform proxy resolver on Windows.",
         )
         parser.add_argument(
             "--proxy-provider-policy",
@@ -314,6 +317,7 @@ class ObstacleBridgeProxyServer:
             "http_enabled": self.config.allow_http,
             "socks5_enabled": self.config.allow_socks5,
             "auth_required": self.config.credentials is not None,
+            "egress_mode": self._egress_mode(),
         }
 
     @staticmethod
@@ -324,6 +328,54 @@ class ObstacleBridgeProxyServer:
         if host == "localhost":
             return "127.0.0.1"
         return bind_host.strip()
+
+    def _egress_config(self) -> dict[str, Any]:
+        raw = self.config.egress
+        return dict(raw) if isinstance(raw, Mapping) else {}
+
+    def _egress_mode(self) -> str:
+        return str(self._egress_config().get("mode") or "direct").strip().lower()
+
+    def _egress_proxy_auth(self) -> str:
+        egress = self._egress_config()
+        default = "negotiate" if self._egress_mode() == "system" else "none"
+        return str(egress.get("proxy_auth") or egress.get("auth") or default).strip().lower()
+
+    def _egress_connect_timeout(self) -> float:
+        value = self._egress_config().get("connect_timeout_seconds", 5.0)
+        try:
+            return max(0.1, float(value))
+        except Exception:
+            return 5.0
+
+    def _resolve_egress_proxy(self, host: str, port: int, *, secure: bool = False) -> Optional[tuple[str, int]]:
+        mode = self._egress_mode()
+        if mode in {"", "direct", "off", "none"}:
+            return None
+        egress = self._egress_config()
+        endpoint = resolve_proxy_endpoint(
+            mode=mode,
+            target_host=host,
+            target_port=int(port),
+            secure=secure,
+            manual_host=str(egress.get("proxy_host") or egress.get("host") or ""),
+            manual_port=int(egress.get("proxy_port") or egress.get("port") or 0),
+            feature_enabled=True,
+            log=self._log,
+            log_prefix="[PROXY-EGRESS]",
+        )
+        if endpoint is None:
+            self._log.debug("[PROXY-EGRESS] direct destination=%s:%d mode=%s", host, int(port), mode)
+            return None
+        self._log.debug(
+            "[PROXY-EGRESS] upstream proxy selected destination=%s:%d via=%s:%d mode=%s",
+            host,
+            int(port),
+            endpoint[0],
+            int(endpoint[1]),
+            mode,
+        )
+        return endpoint
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         task = asyncio.current_task()
@@ -420,7 +472,7 @@ class _ProxySession:
             if destination is None:
                 await self._send_http_error("400 Bad Request", "invalid CONNECT authority")
                 return
-            await self._connect_outbound(*destination)
+            await self._connect_outbound(*destination, secure=True)
             self.inbound_writer.write(b"HTTP/1.1 200 Connection Established\r\nProxy-Agent: ObstacleBridge\r\n\r\n")
             await self.inbound_writer.drain()
             await self._start_tunnel(self.buffer[request.header_length :])
@@ -430,7 +482,7 @@ class _ProxySession:
             await self._send_http_error("400 Bad Request", "absolute-form HTTP target required")
             return
         port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
-        await self._connect_outbound(parsed.hostname, port)
+        await self._connect_outbound(parsed.hostname, port, secure=parsed.scheme.lower() == "https")
         forwarded = (
             ObstacleBridgeProxyProtocolCodec.rewrite_http_request_for_origin_server(request)
             + self.buffer[request.header_length :]
@@ -503,15 +555,30 @@ class _ProxySession:
         if parsed.command != 0x01:
             await self._send_socks5_reply(0x07)
             raise RuntimeError("unsupported socks5 command")
-        await self._connect_outbound(parsed.host, parsed.port)
+        await self._connect_outbound(parsed.host, parsed.port, secure=parsed.port == 443)
         await self._send_socks5_reply(0x00)
         await self._start_tunnel(self.buffer[parsed.consumed :])
 
-    async def _connect_outbound(self, host: str, port: int) -> None:
+    async def _connect_outbound(self, host: str, port: int, *, secure: bool = False) -> None:
         if port <= 0 or port > 65535:
             await self._send_http_error("400 Bad Request", "invalid destination port")
             raise RuntimeError("invalid destination port")
-        self.outbound_reader, self.outbound_writer = await self.server._open_connection(host=host, port=port)
+        upstream_proxy = self.server._resolve_egress_proxy(host, port, secure=secure)
+        if upstream_proxy is None:
+            self.outbound_reader, self.outbound_writer = await self.server._open_connection(host=host, port=port)
+            return
+        sock = await asyncio.to_thread(
+            open_http_connect_tunnel,
+            target_host=host,
+            target_port=int(port),
+            proxy=upstream_proxy,
+            auth_mode=self.server._egress_proxy_auth(),
+            timeout=self.server._egress_connect_timeout(),
+            log=self.server._log,
+            log_prefix="[PROXY-EGRESS]",
+            user_agent="ObstacleBridge-proxy-provider/1.0",
+        )
+        self.outbound_reader, self.outbound_writer = await asyncio.open_connection(sock=sock)
 
     async def _start_tunnel(self, pending_inbound_data: bytes) -> None:
         assert self.outbound_reader is not None

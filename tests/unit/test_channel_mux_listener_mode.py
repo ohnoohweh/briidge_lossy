@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from obstacle_bridge.bridge import ChannelMux, ProcessSharedTunRegistry, SessionMetrics
+from obstacle_bridge.bridge_proxy_server import ObstacleBridgeProxyProtocolCodec
 from obstacle_bridge.bridge_tun_routing import TunRoutingSettings
 
 
@@ -81,6 +82,59 @@ class _FakeDatagramTransport:
         self.closed = True
 
 
+async def _start_tcp_capture_server() -> tuple[asyncio.AbstractServer, int, list[bytes]]:
+    captured: list[bytes] = []
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        data = await reader.read(4096)
+        captured.append(data)
+        writer.write(b"mux-target-ok")
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    return server, int(port), captured
+
+
+async def _start_connect_proxy() -> tuple[asyncio.AbstractServer, int, list[bytes]]:
+    captured: list[bytes] = []
+
+    async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            while True:
+                data = await reader.read(16 * 1024)
+                if not data:
+                    break
+                writer.write(data)
+                await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        header = await reader.readuntil(b"\r\n\r\n")
+        captured.append(header)
+        request_line = header.decode("latin1", "replace").split("\r\n", 1)[0]
+        parts = request_line.split(" ")
+        destination = ObstacleBridgeProxyProtocolCodec.parse_authority(parts[1], default_port=443) if len(parts) >= 2 else None
+        if destination is None:
+            writer.write(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+            return
+        outbound_reader, outbound_writer = await asyncio.open_connection(destination[0], destination[1])
+        writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        await writer.drain()
+        await asyncio.gather(_pipe(reader, outbound_writer), _pipe(outbound_reader, writer))
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    return server, int(port), captured
+
+
 def _ipv4_packet(src: str, dst: str, payload: bytes = b"x") -> bytes:
     src_b = ipaddress.IPv4Address(src).packed
     dst_b = ipaddress.IPv4Address(dst).packed
@@ -120,6 +174,44 @@ def _ipv6_packet(src: str, dst: str, payload: bytes = b"x") -> bytes:
 
 
 class ChannelMuxListenerModeTests(unittest.TestCase):
+    def test_tcp_target_connection_uses_system_proxy_egress(self):
+        asyncio.run(self._test_tcp_target_connection_uses_system_proxy_egress())
+
+    async def _test_tcp_target_connection_uses_system_proxy_egress(self):
+        target_server, target_port, captured_target = await _start_tcp_capture_server()
+        upstream_server, upstream_port, captured_upstream = await _start_connect_proxy()
+        mux = ChannelMux(_FakeSession(connected=True), asyncio.get_running_loop())
+        mux.args = argparse.Namespace(
+            channel_mux_egress={"mode": "system", "proxy_auth": "none"},
+        )
+
+        with patch.dict(
+            "os.environ",
+            {"OBSTACLEBRIDGE_TEST_SYSTEM_PROXY": f"http=127.0.0.1:{upstream_port}"},
+            clear=False,
+        ):
+            try:
+                reader, writer = await mux._open_tcp_target_connection("127.0.0.1", target_port)
+                writer.write(b"hello-channelmux")
+                await writer.drain()
+                response = await reader.read(4096)
+                writer.close()
+                await writer.wait_closed()
+
+                self.assertEqual(response, b"mux-target-ok")
+                self.assertEqual(captured_target, [b"hello-channelmux"])
+                self.assertTrue(captured_upstream)
+                self.assertTrue(
+                    captured_upstream[0].startswith(
+                        f"CONNECT 127.0.0.1:{target_port} HTTP/1.1\r\n".encode()
+                    )
+                )
+            finally:
+                upstream_server.close()
+                await upstream_server.wait_closed()
+                target_server.close()
+                await target_server.wait_closed()
+
     def test_unified_ingress_throttle_applies_to_udp_from_transport_metrics(self):
         now_ns = 5_000_000_000
         sess = _FakeSession(

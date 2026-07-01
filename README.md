@@ -555,9 +555,9 @@ The tables below are generated from the current parser registrations in `bridge.
 | Option(s) | Default | Description |
 |---|---:|---|
 | `--ws-path` | `/` | WebSocket HTTP path (default /) |
-| `--ws-bind` | `::` | WS overlay bind address |
+| `--ws-bind` | `::` | WS overlay bind address; `::` listens dual-stack for IPv6 and IPv4-mapped clients where supported, while `0.0.0.0` is IPv4-only |
 | `--ws-own-port` | `8080` | WS overlay own port |
-| `--ws-peer` | `None` | WS peer IP/FQDN |
+| `--ws-peer` | `None` | WS peer IP/FQDN; comma-separated IPv4/IPv6 alternatives are accepted |
 | `--ws-peer-port` | `8080` | WS peer overlay port |
 | `--ws-subprotocol` | `None` | Optional WebSocket subprotocol (e.g. mux2) |
 | `--ws-tls` | `False` | Use TLS (wss://). Provide cert/key via your deployment. |
@@ -579,6 +579,8 @@ WebSocket proxy tunneling is currently scoped narrowly:
 - HTTP proxy traversal via `CONNECT`
 
 Current direct WebSocket peer-client bootstrap also performs a separate `GET /` preflight on a separate TCP connection before the later WebSocket upgrade attempt. That preflight must return `200 OK`, the client downloads the full response body before continuing, and the later WebSocket upgrade is refused when the preflight status is not `200`. The proxy-tunneled path skips this preflight.
+
+When `--ws-peer` contains comma-separated IPv4/IPv6 alternatives, the client resolves the configured list first and uses the selected candidate for the websocket URL authority, PAC/system-proxy lookup, proxy CONNECT target, and direct preflight host header. This avoids passing the raw comma-separated list to Windows proxy discovery or HTTP bootstrap code.
 
 Current websocket payload forms:
 
@@ -617,6 +619,7 @@ Current websocket payload forms:
 |---|---:|---|
 | `--own-servers` | `None` | Service catalog for client mode. Define `own_servers` as structured JSON service objects with `listen` and `target` blocks. Listener instances ignore `--own-servers` because multiple overlay peers make the target ambiguous. |
 | `--remote-servers` | `None` | Service catalog applied on the connected overlay peer in client mode. Define `remote_servers` as structured JSON service objects with `listen` and `target` blocks. |
+| `--channel-mux-egress` | `{"mode":"direct"}` | JSON target-side egress policy object for ChannelMux client dials. Use `{"mode":"system"}` on Python/Windows to resolve the same system proxy/PAC settings for TCP target connections. UDP targets remain direct because WinHTTP/PAC selects HTTP CONNECT-style proxies, not a UDP relay. |
 | `--mux-tcp-bp-threshold` | `1` | Mux TCP: size threshold (bytes) to trigger drain() (default 1). |
 | `--mux-tcp-bp-latency-ms` | `300` | Mux TCP: if > 0, drain writers after this ms when bytes pending. |
 | `--mux-tcp-bp-poll-interval-ms` | `50` | Mux TCP: polling interval for time-based backpressure (ms). |
@@ -1075,6 +1078,10 @@ When `--admin-web-username` and `--admin-web-password` are configured and auth i
 
 On the WebSocket peer-client path, failed proxy-tunnel bootstrap attempts continue to surface as normal connection-failure state in status/admin views. If a timed-out proxy helper finishes only after the timeout path has already cancelled it, that late cleanup is treated as expected cancellation rather than as a separate unhandled asyncio callback error.
 
+The local proxy provider also understands `proxy_provider_egress.mode="system"` on Python runtimes. In that mode, outbound HTTP and SOCKS5 proxy-provider traffic resolves the same Windows system proxy/PAC settings used by the WebSocket client path, then opens an upstream CONNECT tunnel when WinHTTP selects a proxy; destinations with no selected upstream proxy still connect directly.
+
+ChannelMux target-side TCP dials can use the same resolver with `channel_mux_egress.mode="system"` (or nested config `channel_mux.egress.mode="system"`). This covers remote service targets such as `remote_servers[].target.host` values outside localhost; UDP service targets stay on direct UDP until a UDP-capable proxy relay is added.
+
 Saving configuration changes uses a second challenge-response confirmation bound to the exact update block, so the current admin password must be re-entered before the server applies guarded config writes.
 
 The Configuration tab normally keeps `secure_link_psk` write-only. When admin authentication is enabled, the row also offers a small reveal action: the operator must re-enter the current admin password, the server verifies a fresh reveal proof, returns only an encrypted envelope, and the browser decrypts the PSK locally in the popup. The displayed value disappears when the popup is closed. Because that local decryption uses browser Web Crypto, remote HTTP origins cannot reveal the PSK in browsers that require a secure context; prefer exposing the admin endpoint through the own-server/server-role overlay path, or use HTTPS, localhost, a VPN/TUN route, or an SSH tunnel for remote reveal workflows.
@@ -1088,7 +1095,7 @@ What the admin web shows:
 - A summary row with the currently open UDP, TCP, and TUN channel counts.
 - Traffic cards for app-side RX/TX and peer-side RX/TX rates.
 - A peer-session table that now groups each peer into connection, protocol, security, and lifecycle rows so secure-link state stays with the peer it belongs to.
-- UDP, TCP, and TUN connection tables that show open/listening summaries, configured service names, current mappings or interfaces, local listening state, remote endpoints, and per-channel byte/message counters.
+- UDP, TCP, and TUN connection tables that show open/listening summaries, configured service names, current mappings or interfaces, local listening state, requested remote TCP/UDP listeners, remote endpoints, and per-channel byte/message counters.
 - A peer-scoped rekey action inside each peer security block for operator-triggered secure-link rotation on authenticated client-side sessions.
 - A configuration tab that exposes the live runtime options such as overlay transports, listener ports, `--remote-servers`, admin web settings, and log levels.
 - Structured service editors for `own_servers` and `remote_servers`, so the JSON preview opens a focused per-service popup with protocol-aware fields, add/remove controls, and left/right navigation. Removing a service commits immediately and, when another entry remains, keeps the popup open on the next valid service so multi-entry cleanup stays fast.

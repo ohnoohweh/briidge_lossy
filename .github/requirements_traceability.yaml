@@ -50,6 +50,7 @@ REQ-OVL-006:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_udp_peer_labels_bracket_ipv6_and_plain_ipv4
+    - tests/unit/test_ws_payload_mode.py::test_start_server_ipv6_wildcard_uses_dual_stack_socket
 
 REQ-OVL-007:
   # Includes dual-stack peer-resolution parity: native IPv4 literals remain native
@@ -68,6 +69,7 @@ REQ-OVL-007:
     - ios/tests/test_macos_swift_host_runner.py::test_swift_peer_resolution_prefer_ipv6_keeps_ipv4_literal_native_until_socket_normalization
     - tests/unit/test_peer_resolution.py::test_resolve_localhost_ipv4_uses_loopback_fallback_on_gaierror
     - tests/unit/test_peer_resolution.py::test_resolve_localhost_ipv6_uses_loopback_fallback_on_gaierror
+    - tests/unit/test_ws_payload_mode.py::test_connect_multi_ws_peer_uses_resolved_candidate_for_uri_and_preflight
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv6_literal_when_available
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_falls_back_to_ipv4_when_ipv6_candidate_fails
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_honors_bind_family_constraint
@@ -419,6 +421,7 @@ REQ-WSP-006:
     - tests/unit/test_ws_payload_mode.py::test_register_cli_defaults_ws_proxy_mode_to_system_on_windows
     - tests/unit/test_ws_payload_mode.py::test_missing_ws_proxy_mode_uses_platform_default_in_constructor
     - tests/unit/test_ws_payload_mode.py::test_system_proxy_mode_falls_back_to_direct_when_no_endpoint_is_found
+    - tests/unit/test_ws_payload_mode.py::test_proxy_multi_ws_peer_uses_resolved_candidate_for_lookup_and_connect
 
 REQ-WSP-007:
   integration_tests:
@@ -488,6 +491,7 @@ REQ-PRX-001:
     - tests/unit/test_embeddable_core.py::test_runner_schema_snapshot_includes_proxy_provider_fields
     - tests/unit/test_embeddable_core.py::test_runner_starts_proxy_provider_and_exposes_status_snapshot
     - tests/unit/test_proxy_server.py::test_python_proxy_server_rewrites_http_absolute_form
+    - tests/unit/test_proxy_server.py::test_python_proxy_server_system_egress_uses_upstream_connect_proxy
     - tests/unit/test_proxy_server.py::test_python_proxy_server_rejects_missing_http_proxy_auth
     - tests/unit/test_proxy_server.py::test_python_proxy_server_accepts_socks5_connect_with_user_password
     - tests/unit/test_proxy_server.py::test_python_proxy_codec_basic_auth_header_matches_swift_shape
@@ -735,6 +739,8 @@ REQ-MUX-009:
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_disconnect_cleanup_rebinds_peer
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_parse_remote_servers_accepts_structured_specs
+    - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_uses_system_proxy_egress
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_accepts_channel_mux_egress_alias
     - tests/unit/test_channel_mux_listener_mode.py::test_select_hook_argv_uses_platform_specific_mapping
     - tests/unit/test_channel_mux_listener_mode.py::test_resolve_hook_argv_resolves_relative_executable_against_base_dir
     - tests/unit/test_channel_mux_listener_mode.py::test_render_hook_value_replaces_known_placeholders
@@ -958,6 +964,8 @@ REQ-ADM-006:
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_preserves_throttle_summary
     - tests/unit/test_connection_snapshots.py::test_snapshot_collapses_tun_channel_aliases_into_one_logical_connection
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_listeners_when_no_clients_connected
+    - tests/unit/test_connection_snapshots.py::test_snapshot_exposes_requested_remote_servers_as_client_listeners
+    - tests/unit/test_connection_snapshots.py::test_snapshot_hides_requested_remote_servers_when_overlay_disconnected
     - tests/unit/test_connection_snapshots.py::test_snapshot_mixed_listeners_and_active_connections
     - tests/unit/test_connection_snapshots.py::test_status_snapshot_includes_tun_open_connection_count
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip

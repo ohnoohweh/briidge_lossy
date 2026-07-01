@@ -4,7 +4,6 @@ import argparse
 import asyncio
 import base64
 import contextlib
-import ctypes
 import hashlib
 import importlib.util
 import inspect
@@ -17,19 +16,31 @@ import ssl
 import struct
 import sys
 import time
-import urllib.parse
 from collections import deque
 from contextlib import contextmanager
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
-from ctypes import wintypes
 
 from ._bridge_import import resolve_bridge_module
+from .bridge_proxy_common import (
+    build_proxy_connect_request,
+    build_windows_negotiate_spn,
+    env_get_proxy_for_target,
+    open_http_connect_tunnel,
+    parse_proxy_authority,
+    parse_proxy_spec,
+    read_http_proxy_response,
+    resolve_proxy_endpoint,
+    test_system_proxy_override,
+    win_build_negotiate_token,
+    win_get_proxy_for_url,
+)
 from .bridge_transport_common import (
     EgressThroughputTracker,
     StreamRTT,
     StreamRTTRuntime,
     _listener_family_for_host,
     _resolve_cli_peer,
+    _split_configured_peer_hosts,
     _strip_brackets,
 )
 
@@ -605,7 +616,7 @@ class WebSocketSession(ISession):
                 transmit_delay_est_ms=(0.5 * float(rtt_est_ms)) if rtt_est_ms is not None else None,
                 last_rtt_ok_ns=getattr(r, "last_rtt_ok_ns", None),
                 last_rx_ns=getattr(self, "_last_rx_ns", 0) or None,
-                waiting_count=self.waiting_count() if hasattr(self, "_send_queue") else 0,
+                waiting_count=self.waiting_count() if hasattr(self, "_tx_queue") else 0,
                 egress_prev_window_bytes=prev_bytes,
                 egress_curr_window_bytes=curr_bytes,
             )
@@ -944,78 +955,22 @@ class WebSocketSession(ISession):
 
     @staticmethod
     def _parse_proxy_authority(value: str, default_port: int = 8080) -> Optional[Tuple[str, int]]:
-        text = str(value or "").strip()
-        if not text:
-            return None
-        if "://" in text:
-            text = text.split("://", 1)[1]
-        text = text.split("/", 1)[0].strip()
-        if not text:
-            return None
-        host = text
-        port = int(default_port)
-        if text.startswith("["):
-            end = text.find("]")
-            if end == -1:
-                return None
-            host = text[1:end]
-            rest = text[end + 1:]
-            if rest.startswith(":") and rest[1:].isdigit():
-                port = int(rest[1:])
-        elif text.count(":") == 1:
-            base, maybe_port = text.rsplit(":", 1)
-            if maybe_port.isdigit():
-                host = base
-                port = int(maybe_port)
-        return (_strip_brackets(host), int(port)) if host else None
+        return parse_proxy_authority(value, default_port=default_port)
 
     @classmethod
     def _parse_proxy_spec(cls, spec: str, secure: bool = False) -> Optional[Tuple[str, int]]:
-        preferred = ("https", "wss") if secure else ("http", "ws")
-        fallback = None
-        for raw_item in str(spec or "").split(";"):
-            item = raw_item.strip()
-            if not item:
-                continue
-            if "=" not in item:
-                parsed = cls._parse_proxy_authority(item)
-                if parsed:
-                    fallback = parsed
-                continue
-            scheme, value = item.split("=", 1)
-            scheme = scheme.strip().lower()
-            parsed = cls._parse_proxy_authority(value)
-            if not parsed:
-                continue
-            if scheme in preferred:
-                return parsed
-            if fallback is None:
-                fallback = parsed
-        return fallback
+        return parse_proxy_spec(spec, secure=secure)
 
     def _build_windows_negotiate_spn(self, host: str) -> str:
-        host_s = _strip_brackets(str(host or "")).strip()
-        if not host_s:
-            raise RuntimeError("empty proxy host for Negotiate target name")
-        upper = host_s.upper()
-        if "." in upper:
-            parts = upper.split(".")
-            domain = ".".join(parts[-2:]) if len(parts) >= 2 else upper
-            return f"HTTP/{host_s}@{domain}"
-        return f"HTTP/{host_s}"
+        return build_windows_negotiate_spn(host)
 
     def _build_proxy_connect_request(self, target_host: str, target_port: int, auth_header: Optional[str] = None) -> bytes:
-        authority = self._format_connect_authority(target_host, target_port)
-        lines = [
-            f"CONNECT {authority} HTTP/1.1",
-            f"Host: {authority}",
-            "Connection: keep-alive",
-            "Proxy-Connection: keep-alive",
-            "User-Agent: ObstacleBridge-ws-proxy/1.0",
-        ]
-        if auth_header:
-            lines.append(f"Proxy-Authorization: {auth_header}")
-        return ("\r\n".join(lines) + "\r\n\r\n").encode("ascii")
+        return build_proxy_connect_request(
+            target_host,
+            target_port,
+            auth_header=auth_header,
+            user_agent="ObstacleBridge-ws-proxy/1.0",
+        )
 
     def _proxy_feature_enabled(self) -> bool:
         return bool(self._peer_tuple) and self._ws_proxy_mode != "off"
@@ -1041,433 +996,71 @@ class WebSocketSession(ISession):
                     os.environ[key] = value
 
     def _env_get_proxy_for_target(self, target_host: str, secure: bool = False) -> Optional[Tuple[str, int]]:
-        host = _strip_brackets(str(target_host or "")).strip()
-        if not host:
-            return None
-        if urllib.request.proxy_bypass(host):
-            self._log.debug("[WS-PROXY] (%s) env bypass matched host=%s", self._probe_id, host)
-            return None
-        proxies = urllib.request.getproxies()
-        proxy_url = proxies.get("https" if secure else "http")
-        if not proxy_url:
-            self._log.debug("[WS-PROXY] (%s) env mode found no %s proxy", self._probe_id, "HTTPS_PROXY" if secure else "HTTP_PROXY")
-            return None
-        parsed = urllib.parse.urlsplit(proxy_url)
-        if parsed.scheme and parsed.scheme.lower() not in ("http", "https", "ws", "wss"):
-            raise RuntimeError(f"unsupported websocket proxy scheme in environment: {parsed.scheme}")
-        if parsed.hostname:
-            return _strip_brackets(parsed.hostname), int(parsed.port or 8080)
-        return self._parse_proxy_authority(proxy_url)
+        return env_get_proxy_for_target(
+            target_host,
+            secure=secure,
+            log=self._log,
+            log_prefix=f"[WS-PROXY] ({self._probe_id})",
+        )
 
     def _test_system_proxy_override(self, secure: bool = False) -> Optional[Tuple[str, int]]:
-        spec = str(os.environ.get("OBSTACLEBRIDGE_TEST_SYSTEM_PROXY", "") or "").strip()
-        if not spec:
-            return None
-        parsed = self._parse_proxy_spec(spec, secure=secure)
-        if parsed is None:
-            raise RuntimeError("invalid OBSTACLEBRIDGE_TEST_SYSTEM_PROXY value")
-        self._log.debug(
-            "[WS-PROXY] (%s) using test system proxy override endpoint=%s:%d",
-            self._probe_id,
-            parsed[0],
-            int(parsed[1]),
+        return test_system_proxy_override(
+            secure=secure,
+            log=self._log,
+            log_prefix=f"[WS-PROXY] ({self._probe_id})",
         )
-        return parsed
 
     def _get_ws_proxy_endpoint(self, target_host: str, target_port: int) -> Optional[Tuple[str, int]]:
-        self._log.debug(
-            "[WS-PROXY] (%s) endpoint lookup target=%s mode=%s peer_configured=%s platform=%s tls=%s",
-            self._probe_id,
-            self._format_connect_authority(target_host, target_port),
-            self._ws_proxy_mode,
-            bool(self._peer_tuple),
-            sys.platform,
-            self._use_tls,
-        )
-        if not self._proxy_feature_enabled():
-            self._log.debug("[WS-PROXY] (%s) proxy feature disabled", self._probe_id)
-            return None
-        if self._ws_proxy_mode == "env":
-            endpoint = self._env_get_proxy_for_target(target_host, secure=self._use_tls)
-            if endpoint is None:
-                self._log.debug("[WS-PROXY] (%s) env proxy lookup returned no endpoint", self._probe_id)
-                return None
-            self._log.debug("[WS-PROXY] (%s) env proxy selected endpoint=%s:%d", self._probe_id, endpoint[0], int(endpoint[1]))
-            return endpoint
-        if self._ws_proxy_mode == "manual":
-            if not self._ws_proxy_host or self._ws_proxy_port <= 0:
-                self._log.debug(
-                    "[WS-PROXY] (%s) manual mode missing host/port host=%r port=%s",
-                    self._probe_id,
-                    self._ws_proxy_host,
-                    self._ws_proxy_port,
-                )
-                raise RuntimeError("manual WebSocket proxy mode requires --ws-proxy-host and --ws-proxy-port")
-            self._log.debug(
-                "[WS-PROXY] (%s) manual proxy selected endpoint=%s:%d",
-                self._probe_id,
-                self._ws_proxy_host,
-                int(self._ws_proxy_port),
-            )
-            return self._ws_proxy_host, int(self._ws_proxy_port)
-        if self._ws_proxy_mode == "system":
-            test_override = self._test_system_proxy_override(secure=self._use_tls)
-            if test_override is not None:
-                return test_override
-        if sys.platform != "win32":
-            self._log.debug("[WS-PROXY] (%s) rejecting proxy lookup on unsupported platform=%s", self._probe_id, sys.platform)
-            raise RuntimeError("WebSocket proxy support is currently available on Windows only")
-        if self._ws_proxy_mode == "system":
-            lookup_url = f"http://{self._format_connect_authority(target_host, target_port)}"
-            self._log.debug("[WS-PROXY] (%s) system proxy lookup url=%s secure=%s", self._probe_id, lookup_url, self._use_tls)
-            endpoint = self._win_get_proxy_for_url(
-                lookup_url,
+        try:
+            return resolve_proxy_endpoint(
+                mode=self._ws_proxy_mode,
+                target_host=target_host,
+                target_port=target_port,
                 secure=self._use_tls,
+                manual_host=self._ws_proxy_host,
+                manual_port=self._ws_proxy_port,
+                feature_enabled=self._proxy_feature_enabled(),
+                platform=sys.platform,
+                log=self._log,
+                log_prefix=f"[WS-PROXY] ({self._probe_id})",
             )
-            if endpoint is None:
-                self._log.debug("[WS-PROXY] (%s) system proxy lookup returned no endpoint", self._probe_id)
-                return None
-            self._log.debug("[WS-PROXY] (%s) system proxy selected endpoint=%s:%d", self._probe_id, endpoint[0], int(endpoint[1]))
-            return endpoint
-        self._log.debug("[WS-PROXY] (%s) unsupported mode=%s", self._probe_id, self._ws_proxy_mode)
-        raise RuntimeError(f"unsupported --ws-proxy-mode: {self._ws_proxy_mode}")
+        except RuntimeError as exc:
+            if str(exc) == "manual proxy mode requires proxy host and port":
+                raise RuntimeError("manual WebSocket proxy mode requires --ws-proxy-host and --ws-proxy-port") from exc
+            if str(exc) == "system proxy support is currently available on Windows only":
+                raise RuntimeError("WebSocket proxy support is currently available on Windows only") from exc
+            if str(exc).startswith("unsupported proxy mode:"):
+                raise RuntimeError(f"unsupported --ws-proxy-mode: {self._ws_proxy_mode}") from exc
+            raise
 
     def _win_get_proxy_for_url(self, url: str, secure: bool = False) -> Optional[Tuple[str, int]]:
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        winhttp = ctypes.WinDLL("winhttp", use_last_error=True)
-        HINTERNET = ctypes.c_void_p
-
-        winhttp.WinHttpGetIEProxyConfigForCurrentUser.restype = wintypes.BOOL
-        winhttp.WinHttpGetIEProxyConfigForCurrentUser.argtypes = [ctypes.c_void_p]
-        winhttp.WinHttpOpen.restype = HINTERNET
-        winhttp.WinHttpOpen.argtypes = [
-            wintypes.LPCWSTR,
-            wintypes.DWORD,
-            wintypes.LPCWSTR,
-            wintypes.LPCWSTR,
-            wintypes.DWORD,
-        ]
-        winhttp.WinHttpGetProxyForUrl.restype = wintypes.BOOL
-        winhttp.WinHttpGetProxyForUrl.argtypes = [
-            HINTERNET,
-            wintypes.LPCWSTR,
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-        ]
-        winhttp.WinHttpCloseHandle.restype = wintypes.BOOL
-        winhttp.WinHttpCloseHandle.argtypes = [HINTERNET]
-
-        class WINHTTP_CURRENT_USER_IE_PROXY_CONFIG(ctypes.Structure):
-            _fields_ = [
-                ("fAutoDetect", wintypes.BOOL),
-                ("lpszAutoConfigUrl", ctypes.c_void_p),
-                ("lpszProxy", ctypes.c_void_p),
-                ("lpszProxyBypass", ctypes.c_void_p),
-            ]
-
-        class WINHTTP_AUTOPROXY_OPTIONS(ctypes.Structure):
-            _fields_ = [
-                ("dwFlags", wintypes.DWORD),
-                ("dwAutoDetectFlags", wintypes.DWORD),
-                ("lpszAutoConfigUrl", wintypes.LPCWSTR),
-                ("lpvReserved", wintypes.LPVOID),
-                ("dwReserved", wintypes.DWORD),
-                ("fAutoLogonIfChallenged", wintypes.BOOL),
-            ]
-
-        class WINHTTP_PROXY_INFO(ctypes.Structure):
-            _fields_ = [
-                ("dwAccessType", wintypes.DWORD),
-                ("lpszProxy", ctypes.c_void_p),
-                ("lpszProxyBypass", ctypes.c_void_p),
-            ]
-
-        WINHTTP_ACCESS_TYPE_NO_PROXY = 1
-        WINHTTP_ACCESS_TYPE_NAMED_PROXY = 3
-        WINHTTP_AUTOPROXY_AUTO_DETECT = 0x00000001
-        WINHTTP_AUTOPROXY_CONFIG_URL = 0x00000002
-        WINHTTP_AUTO_DETECT_TYPE_DHCP = 0x00000001
-        WINHTTP_AUTO_DETECT_TYPE_DNS_A = 0x00000002
-
-        def _wide(ptr: int) -> str:
-            return ctypes.wstring_at(ptr) if ptr else ""
-
-        def _free(ptr: int) -> None:
-            if ptr:
-                kernel32.GlobalFree(ctypes.c_void_p(ptr))
-
-        manual_proxy = ""
-        auto_url = ""
-        auto_detect = True
-        ie_cfg = WINHTTP_CURRENT_USER_IE_PROXY_CONFIG()
-        try:
-            if bool(winhttp.WinHttpGetIEProxyConfigForCurrentUser(ctypes.byref(ie_cfg))):
-                auto_detect = bool(ie_cfg.fAutoDetect)
-                manual_proxy = _wide(ie_cfg.lpszProxy)
-                auto_url = _wide(ie_cfg.lpszAutoConfigUrl)
-                self._log.debug(
-                    "[WS-PROXY] (%s) IE proxy config auto_detect=%s auto_config_url=%r manual_proxy=%r",
-                    self._probe_id,
-                    auto_detect,
-                    auto_url,
-                    manual_proxy,
-                )
-            else:
-                self._log.debug(
-                    "[WS-PROXY] (%s) WinHttpGetIEProxyConfigForCurrentUser failed last_error=%s",
-                    self._probe_id,
-                    ctypes.get_last_error(),
-                )
-            parsed = self._parse_proxy_spec(manual_proxy, secure=secure)
-            if parsed:
-                self._log.debug(
-                    "[WS-PROXY] (%s) using manual IE proxy endpoint=%s:%d",
-                    self._probe_id,
-                    parsed[0],
-                    int(parsed[1]),
-                )
-                return parsed
-        finally:
-            _free(getattr(ie_cfg, "lpszAutoConfigUrl", 0))
-            _free(getattr(ie_cfg, "lpszProxy", 0))
-            _free(getattr(ie_cfg, "lpszProxyBypass", 0))
-
-        session = winhttp.WinHttpOpen(
-            "ObstacleBridge/1.0",
-            WINHTTP_ACCESS_TYPE_NO_PROXY,
-            None,
-            None,
-            0,
+        return win_get_proxy_for_url(
+            url,
+            secure=secure,
+            log=self._log,
+            log_prefix=f"[WS-PROXY] ({self._probe_id})",
         )
-        if not session:
-            raise RuntimeError(f"WinHttpOpen failed: {ctypes.get_last_error()}")
-        try:
-            opts = WINHTTP_AUTOPROXY_OPTIONS()
-            if auto_url:
-                opts.dwFlags = WINHTTP_AUTOPROXY_CONFIG_URL
-                opts.lpszAutoConfigUrl = auto_url
-                self._log.debug("[WS-PROXY] (%s) WinHTTP auto-proxy using PAC url=%r for %s", self._probe_id, auto_url, url)
-            else:
-                opts.dwFlags = WINHTTP_AUTOPROXY_AUTO_DETECT
-                opts.dwAutoDetectFlags = WINHTTP_AUTO_DETECT_TYPE_DHCP | WINHTTP_AUTO_DETECT_TYPE_DNS_A
-                self._log.debug(
-                    "[WS-PROXY] (%s) WinHTTP auto-proxy using auto_detect=%s flags=DHCP|DNS_A for %s",
-                    self._probe_id,
-                    auto_detect,
-                    url,
-                )
-            opts.fAutoLogonIfChallenged = True
-            info = WINHTTP_PROXY_INFO()
-            if not bool(winhttp.WinHttpGetProxyForUrl(session, str(url), ctypes.byref(opts), ctypes.byref(info))):
-                self._log.debug(
-                    "[WS-PROXY] (%s) WinHttpGetProxyForUrl returned no proxy last_error=%s url=%s",
-                    self._probe_id,
-                    ctypes.get_last_error(),
-                    url,
-                )
-                return None
-            try:
-                raw_proxy = _wide(info.lpszProxy)
-                self._log.debug(
-                    "[WS-PROXY] (%s) WinHttpGetProxyForUrl access_type=%s raw_proxy=%r",
-                    self._probe_id,
-                    int(info.dwAccessType),
-                    raw_proxy,
-                )
-                if int(info.dwAccessType) != WINHTTP_ACCESS_TYPE_NAMED_PROXY:
-                    self._log.debug("[WS-PROXY] (%s) WinHTTP access type is not named proxy", self._probe_id)
-                    return None
-                parsed = self._parse_proxy_spec(raw_proxy, secure=secure)
-                self._log.debug("[WS-PROXY] (%s) parsed WinHTTP proxy endpoint=%r", self._probe_id, parsed)
-                return parsed
-            finally:
-                _free(getattr(info, "lpszProxy", 0))
-                _free(getattr(info, "lpszProxyBypass", 0))
-        finally:
-            winhttp.WinHttpCloseHandle(session)
 
     def _win_build_negotiate_token(self, target_name: str, challenge: Optional[bytes] = None) -> str:
-        secur32 = ctypes.WinDLL("secur32", use_last_error=True)
-
-        class CredHandle(ctypes.Structure):
-            _fields_ = [("dwLower", ctypes.c_void_p), ("dwUpper", ctypes.c_void_p)]
-
-        class CtxtHandle(ctypes.Structure):
-            _fields_ = [("dwLower", ctypes.c_void_p), ("dwUpper", ctypes.c_void_p)]
-
-        class TimeStamp(ctypes.Structure):
-            _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", wintypes.DWORD)]
-
-        class SecBuffer(ctypes.Structure):
-            _fields_ = [
-                ("cbBuffer", wintypes.ULONG),
-                ("BufferType", wintypes.ULONG),
-                ("pvBuffer", ctypes.c_void_p),
-            ]
-
-        class SecBufferDesc(ctypes.Structure):
-            _fields_ = [
-                ("ulVersion", wintypes.ULONG),
-                ("cBuffers", wintypes.ULONG),
-                ("pBuffers", ctypes.POINTER(SecBuffer)),
-            ]
-
-        SECPKG_CRED_OUTBOUND = 2
-        SECURITY_NATIVE_DREP = 0x00000010
-        ISC_REQ_CONFIDENTIALITY = 0x00000010
-        SECBUFFER_VERSION = 0
-        SECBUFFER_TOKEN = 2
-        SEC_E_OK = 0x00000000
-        SEC_I_CONTINUE_NEEDED = 0x00090312
-
-        expiry = TimeStamp()
-        cred = CredHandle()
-        status = secur32.AcquireCredentialsHandleW(
-            None,
-            "Negotiate",
-            SECPKG_CRED_OUTBOUND,
-            None,
-            None,
-            None,
-            None,
-            ctypes.byref(cred),
-            ctypes.byref(expiry),
-        )
-        if int(status) != SEC_E_OK:
-            raise RuntimeError(f"AcquireCredentialsHandleW failed: 0x{int(status) & 0xFFFFFFFF:08x}")
-
-        ctx = CtxtHandle()
-        attrs = wintypes.ULONG()
-        out_buf_raw = ctypes.create_string_buffer(65536)
-        out_buf = SecBuffer(len(out_buf_raw), SECBUFFER_TOKEN, ctypes.cast(out_buf_raw, ctypes.c_void_p))
-        out_desc = SecBufferDesc(SECBUFFER_VERSION, 1, ctypes.pointer(out_buf))
-
-        # Keep this aligned with the existing Windows sample's narrow behavior:
-        # generate an outbound Negotiate token from the current logon context.
-        # A full multi-round SSPI challenge exchange can be added later if needed.
-        _ignored_challenge = challenge
-        in_desc_ptr = None
-
-        try:
-            status = secur32.InitializeSecurityContextW(
-                ctypes.byref(cred),
-                None,
-                ctypes.c_wchar_p(target_name),
-                ISC_REQ_CONFIDENTIALITY,
-                0,
-                SECURITY_NATIVE_DREP,
-                in_desc_ptr,
-                0,
-                ctypes.byref(ctx),
-                ctypes.byref(out_desc),
-                ctypes.byref(attrs),
-                ctypes.byref(expiry),
-            )
-            if int(status) not in (SEC_E_OK, SEC_I_CONTINUE_NEEDED):
-                raise RuntimeError(f"InitializeSecurityContextW failed: 0x{int(status) & 0xFFFFFFFF:08x}")
-            if int(out_buf.cbBuffer) <= 0:
-                raise RuntimeError("InitializeSecurityContextW returned no token")
-            return base64.b64encode(out_buf_raw.raw[: int(out_buf.cbBuffer)]).decode("ascii")
-        finally:
-            with contextlib.suppress(Exception):
-                if ctx.dwLower or ctx.dwUpper:
-                    secur32.DeleteSecurityContext(ctypes.byref(ctx))
-            with contextlib.suppress(Exception):
-                secur32.FreeCredentialsHandle(ctypes.byref(cred))
+        return win_build_negotiate_token(target_name, challenge=challenge)
 
     def _read_http_proxy_response(self, sock: socket.socket) -> Tuple[int, Dict[str, List[str]]]:
-        data = b""
-        while b"\r\n\r\n" not in data:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            data += chunk
-            if len(data) > 65536:
-                raise RuntimeError("proxy response headers too large")
-        header_blob, _, _rest = data.partition(b"\r\n\r\n")
-        lines = header_blob.decode("iso-8859-1", "replace").split("\r\n")
-        if not lines or len(lines[0].split(" ")) < 2:
-            raise RuntimeError("invalid proxy response")
-        parts = lines[0].split(" ", 2)
-        status_code = int(parts[1]) if parts[1].isdigit() else 0
-        headers: Dict[str, List[str]] = {}
-        for line in lines[1:]:
-            if ":" not in line:
-                continue
-            key, value = line.split(":", 1)
-            headers.setdefault(key.strip().lower(), []).append(value.strip())
-        return status_code, headers
+        return read_http_proxy_response(sock)
 
     def _open_ws_proxy_socket_blocking(self, target_host: str, target_port: int) -> socket.socket:
         proxy = self._get_ws_proxy_endpoint(target_host, target_port)
         if proxy is None:
             raise RuntimeError("no proxy endpoint available")
-        proxy_host, proxy_port = proxy
-        auth_mode = self._ws_proxy_auth
-        challenge_blob = None
-        attempts = 0
-        self._log.debug(
-            "[WS-PROXY] (%s) opening proxy tunnel target=%s via=%s:%d auth=%s",
-            self._probe_id,
-            self._format_connect_authority(target_host, target_port),
-            proxy_host,
-            int(proxy_port),
-            auth_mode,
+        return open_http_connect_tunnel(
+            target_host=target_host,
+            target_port=int(target_port),
+            proxy=proxy,
+            auth_mode=self._ws_proxy_auth,
+            timeout=self._ws_connect_timeout_s,
+            log=self._log,
+            log_prefix=f"[WS-PROXY] ({self._probe_id})",
+            user_agent="ObstacleBridge-ws-proxy/1.0",
         )
-        while attempts < 3:
-            attempts += 1
-            self._log.debug("[WS-PROXY] (%s) CONNECT attempt=%d proxy=%s:%d", self._probe_id, attempts, proxy_host, int(proxy_port))
-            sock = socket.create_connection(
-                (proxy_host, int(proxy_port)),
-                timeout=self._ws_connect_timeout_s,
-            )
-            try:
-                auth_header = None
-                if auth_mode == "negotiate" and attempts > 1:
-                    self._log.debug(
-                        "[WS-PROXY] (%s) building Negotiate token challenge_present=%s",
-                        self._probe_id,
-                        challenge_blob is not None,
-                    )
-                    auth_header = "Negotiate " + self._win_build_negotiate_token(
-                        self._build_windows_negotiate_spn(proxy_host),
-                        challenge=challenge_blob,
-                    )
-                request = self._build_proxy_connect_request(target_host, target_port, auth_header=auth_header)
-                sock.sendall(request)
-                status_code, headers = self._read_http_proxy_response(sock)
-                self._log.debug(
-                    "[WS-PROXY] (%s) CONNECT response status=%s proxy_authenticate=%s",
-                    self._probe_id,
-                    status_code,
-                    headers.get("proxy-authenticate", []),
-                )
-                if status_code == 200:
-                    self._log.debug("[WS-PROXY] (%s) CONNECT tunnel established on attempt=%d", self._probe_id, attempts)
-                    sock.setblocking(False)
-                    return sock
-                if status_code != 407:
-                    raise RuntimeError(f"proxy CONNECT failed with HTTP {status_code}")
-                if auth_mode != "negotiate":
-                    raise RuntimeError("proxy requires authentication but --ws-proxy-auth is not negotiate")
-                negotiate_headers = []
-                for value in headers.get("proxy-authenticate", []):
-                    if value.lower().startswith("negotiate"):
-                        negotiate_headers.append(value)
-                if not negotiate_headers:
-                    raise RuntimeError("proxy does not offer Negotiate authentication")
-                challenge_blob = None
-                token = negotiate_headers[0][len("Negotiate"):].strip()
-                if token:
-                    self._log.debug("[WS-PROXY] (%s) proxy supplied Negotiate challenge token", self._probe_id)
-                    challenge_blob = base64.b64decode(token)
-                else:
-                    self._log.debug("[WS-PROXY] (%s) proxy requested Negotiate without challenge token", self._probe_id)
-            except Exception:
-                sock.close()
-                raise
-            sock.close()
-        raise RuntimeError("proxy authentication failed after multiple attempts")
 
     async def _open_ws_proxy_socket(self, target_host: str, target_port: int) -> socket.socket:
         return await asyncio.to_thread(self._open_ws_proxy_socket_blocking, target_host, int(target_port))
@@ -1985,28 +1578,68 @@ class WebSocketSession(ISession):
                         writer.close()
                         await writer.wait_closed()
 
+        listen_sock = None
         try:
-            family = _listener_family_for_host(self._listen_host)
-            self._server = await asyncio.start_server(
-                _handle_client,
-                host=self._listen_host,
-                port=self._listen_port,
-                ssl=ssl_ctx,
-                family=family,
-            )
+            if _strip_brackets(self._listen_host) == "::":
+                listen_sock = self._create_dual_stack_listen_socket(self._listen_host, self._listen_port)
+                self._server = await asyncio.start_server(
+                    _handle_client,
+                    sock=listen_sock,
+                    ssl=ssl_ctx,
+                )
+                listen_sock = None
+            else:
+                family = _listener_family_for_host(self._listen_host)
+                self._server = await asyncio.start_server(
+                    _handle_client,
+                    host=self._listen_host,
+                    port=self._listen_port,
+                    ssl=ssl_ctx,
+                    family=family,
+                )
         except TypeError:
+            if listen_sock is not None:
+                with contextlib.suppress(Exception):
+                    listen_sock.close()
+                listen_sock = None
             self._server = await asyncio.start_server(
                 _handle_client,
                 host=self._listen_host,
                 port=self._listen_port,
                 ssl=ssl_ctx,
             )
+        except Exception:
+            if listen_sock is not None:
+                with contextlib.suppress(Exception):
+                    listen_sock.close()
+            raise
 
         sockets = ", ".join(str(s.getsockname()) for s in (self._server.sockets or []))
         self._log.info(
             f"[WS-SESSION] ({self._probe_id}) server listening on {sockets} path={self._ws_path}"
             + ("" if not static_root else f" (static={static_root})")
         )
+
+    def _create_dual_stack_listen_socket(self, host: str, port: int) -> socket.socket:
+        sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        try:
+            with contextlib.suppress(Exception):
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if hasattr(socket, "IPV6_V6ONLY"):
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            sock.bind((_strip_brackets(host) or "::", int(port)))
+            sock.setblocking(False)
+            self._log.debug(
+                "[WS-SESSION] (%s) prepared dual-stack IPv6 listen socket host=%s port=%s",
+                self._probe_id,
+                host,
+                int(port),
+            )
+            return sock
+        except Exception:
+            with contextlib.suppress(Exception):
+                sock.close()
+            raise
                 
     def _ensure_connect_once(self) -> None:
         if self._connecting_task is not None or not self._peer_tuple or not self._run_flag:
@@ -2214,7 +1847,13 @@ class WebSocketSession(ISession):
                 import ssl
                 ssl_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
 
-            uri_host = _strip_brackets(self._peer_name_host or host)
+            selected_target_host = _strip_brackets(str(host or ""))
+            configured_peer_hosts = _split_configured_peer_hosts(self._peer_name_host)
+            configured_peer_is_multi = len(configured_peer_hosts) > 1
+            configured_uri_host = _strip_brackets(self._peer_name_host or "")
+            logical_target_host = selected_target_host if configured_peer_is_multi else (configured_uri_host or selected_target_host)
+
+            uri_host = logical_target_host
             if ":" in uri_host:
                 uri_host = f"[{uri_host}]"
             uri_port = int(self._peer_name_port or port)
@@ -2222,7 +1861,7 @@ class WebSocketSession(ISession):
             subprotocols = [self._ws_subprotocol] if self._ws_subprotocol else None
             connect_kwargs = {}
             proxy_sock = None
-            proxy_target_host = _strip_brackets(self._peer_name_host or host)
+            proxy_target_host = selected_target_host if configured_peer_is_multi else logical_target_host
             proxy_target_port = uri_port
             proxy_endpoint = None
             if self._proxy_feature_enabled():
@@ -2271,11 +1910,11 @@ class WebSocketSession(ISession):
                         ) from exc
                     if ssl_ctx is not None:
                         connect_kwargs["server_hostname"] = proxy_target_host
-                elif self._peer_name_host and (self._peer_name_host != host or uri_port != int(port)):
-                    connect_kwargs["host"] = host
+                elif self._peer_name_host and (configured_peer_is_multi or self._peer_name_host != host or uri_port != int(port)):
+                    connect_kwargs["host"] = selected_target_host
                     connect_kwargs["port"] = int(port)
                     if ssl_ctx is not None:
-                        connect_kwargs["server_hostname"] = self._peer_name_host
+                        connect_kwargs["server_hostname"] = logical_target_host
 
                 had_previous_connection = self.connection_epoch > 0
                 if connect_kwargs.get("sock") is not None:
