@@ -1627,6 +1627,8 @@ class WebSocketSession(ISession):
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             if hasattr(socket, "IPV6_V6ONLY"):
                 sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            # Intentional overlay behavior: ws_bind="::" is an operator-selected
+            # all-interface dual-stack listener. Bind a specific address to restrict exposure.
             sock.bind((_strip_brackets(host) or "::", int(port)))
             sock.setblocking(False)
             self._log.debug(

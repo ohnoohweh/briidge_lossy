@@ -563,7 +563,7 @@ The tables below are generated from the current parser registrations in `bridge.
 | Option(s) | Default | Description |
 |---|---:|---|
 | `--ws-path` | `/` | WebSocket HTTP path (default /) |
-| `--ws-bind` | `::` | WS overlay bind address; `::` listens dual-stack for IPv6 and IPv4-mapped clients where supported, while `0.0.0.0` is IPv4-only |
+| `--ws-bind` | `::` | WS overlay bind address. `::` intentionally listens on all interfaces with dual-stack IPv6 plus IPv4-mapped clients where supported; bind a specific address to restrict exposure. `0.0.0.0` is IPv4-only all-interface bind. |
 | `--ws-own-port` | `8080` | WS overlay own port |
 | `--ws-peer` | `None` | WS peer IP/FQDN; comma-separated IPv4/IPv6 alternatives are accepted |
 | `--ws-peer-port` | `8080` | WS peer overlay port |
