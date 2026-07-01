@@ -1089,7 +1089,7 @@ What the admin web shows:
 - UDP, TCP, and TUN connection tables that show open/listening summaries, configured service names, current mappings or interfaces, local listening state, remote endpoints, and per-channel byte/message counters.
 - A peer-scoped rekey action inside each peer security block for operator-triggered secure-link rotation on authenticated client-side sessions.
 - A configuration tab that exposes the live runtime options such as overlay transports, listener ports, `--remote-servers`, admin web settings, and log levels.
-- Structured service editors for `own_servers` and `remote_servers`, so the JSON preview opens a focused per-service popup with protocol-aware fields, add/remove controls, and left/right navigation.
+- Structured service editors for `own_servers` and `remote_servers`, so the JSON preview opens a focused per-service popup with protocol-aware fields, add/remove controls, and left/right navigation. Removing a service commits immediately and, when another entry remains, keeps the popup open on the next valid service so multi-entry cleanup stays fast.
 - A debug log tab with recent in-memory log lines, which is especially useful while investigating channel setup, backpressure, reconnects, and late-data cases.
 
 ### Logging

@@ -1001,6 +1001,7 @@ REQ-ADM-011:
   unit_tests:
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_roundtrip_and_suggested_updates
     - tests/unit/test_admin_web_payloads.py::test_service_catalog_modal_preserves_last_valid_draft_on_validation_error
+    - tests/unit/test_admin_web_payloads.py::test_service_catalog_remove_does_not_resync_stale_modal_values
 
 REQ-ADM-012:
   unit_tests:

@@ -66,6 +66,7 @@ Representative anchors for those areas:
   - [ios/tests/test_m3_native_sources.py](../ios/tests/test_m3_native_sources.py)
   - [ios/tests/test_macos_swift_host_runner.py](../ios/tests/test_macos_swift_host_runner.py)
 - current Admin Web payload coverage includes Python peer-metric fallback parity for connected rows while preserving null transport metrics on passive listener rows
+- current Admin Web source-level coverage also pins the service-catalog remove flow so deleting one structured `own_servers` or `remote_servers` entry neither replays stale modal state nor forces the operator to reopen the popup before continuing with the next remaining entry
 - current onboarding invite coverage includes Python and Swift parity for carrying admin web port, compression, TUN routing, mux TCP backpressure knobs, proxy-provider settings, service catalogs, and secure-link PSK material while masking the PSK in preview output
 - iOS proxy-provider parity:
   - [tests/integration/test_proxy_provider_e2e.py](../tests/integration/test_proxy_provider_e2e.py)
