@@ -428,7 +428,7 @@ The listener/server snippet stays transport-focused because listener mode does n
 Linux (native) notes
 
 - Linux uses `/dev/net/tun` and the standard Python library.
-- The process needs permission to create and configure TUN devices; ObstacleBridge creates the interface and applies the MTU from `TUN_routing.mtu` unless the TUN service explicitly overrides it. Address, route, DNS, and firewall setup is normally handled by lifecycle hooks using environment generated from `TUN_routing`.
+- The process needs permission to create and configure TUN devices; ObstacleBridge creates the interface and applies the MTU from `TUN_routing.mtu` unless the TUN service explicitly overrides it. When a local `tun` service is configured from an unprivileged Linux session, `python -m obstacle_bridge` now relaunches itself through `sudo`, preserves the runtime Python environment markers it needs, and warns before `sudo` asks for a password. Address, route, DNS, and firewall setup is normally handled by lifecycle hooks using environment generated from `TUN_routing`.
 
 Example Linux IP assignment (run as root):
 
@@ -443,6 +443,7 @@ Windows (WinTun) notes — tested path
 
 - ObstacleBridge uses a WinTun adapter on Windows. This requires the Wintun driver (tested with Wintun 0.14.1 from https://www.wintun.net/).
 - Administrative privileges are required to install the Wintun driver and to create or configure virtual interfaces.
+- When a local `tun` service is configured and the process starts from a regular user session, `python -m obstacle_bridge` now asks Windows for UAC elevation and relaunches the same Python runtime path so WinTun adapter creation can proceed without a separate manual restart. The relaunch carries the per-process `WINTUN_DIR` setting forward explicitly, so a user-scoped WinTun DLL location can still be used after elevation.
 - The default and tested Windows runtime path in this repository is direct ctypes binding to `wintun.dll`.
 
 How to use a downloaded Wintun folder with this project
@@ -485,7 +486,7 @@ python -c "import struct; print(struct.calcsize('P')*8)"  # prints 64 or 32
 
 - If autodetection loads the wrong architecture or the wrong DLL, set `WINTUN_DIR` to the specific folder that holds the desired `wintun.dll`, for example `...\\bin\\amd64`, and restart the process.
 
-Running example (PowerShell, run as Administrator when creating adapters):
+Running example (PowerShell; a regular user session should trigger a UAC prompt when local TUN services are configured):
 
 ```powershell
 $env:WINTUN_DIR = 'C:\\path\\to\\wintun\\bin\\amd64'  # or setx as shown above
@@ -523,13 +524,13 @@ Runtime behavior and caveats
 
 - The default runtime path on Windows binds directly to `wintun.dll` using ctypes.
 - The ctypes path requires only `wintun.dll` and the driver; no project-specific files need to be added to the downloaded Wintun folder for runtime use.
-- Creating adapters and manipulating virtual interfaces requires Administrator privileges; run the process elevated when exercising adapter creation.
+- Creating adapters and manipulating virtual interfaces requires Administrator privileges. ObstacleBridge requests UAC elevation automatically for local WinTun-backed `tun` services, but the elevation prompt still needs to be approved and a usable WinTun installation still needs to be present.
 
 ## Entry points
 - runtime launcher: `python -m obstacle_bridge`
 - direct bridge CLI help: `python -m obstacle_bridge.bridge --help`
 
-If your configuration includes any `tun,...` service entries, start ObstacleBridge with elevated operating-system privileges. On Linux that normally means root or equivalent permission to manage `/dev/net/tun`; on Windows that means an Administrator session plus a usable WinTun installation.
+If your configuration includes any `tun,...` service entries, start ObstacleBridge with elevated operating-system privileges. On Linux and macOS, `python -m obstacle_bridge` now warns before relaunching itself through `sudo` for local desktop TUN startup when needed. On Windows that means a usable WinTun installation and either an Administrator session or approval of the automatic UAC relaunch.
 
 ## Configuration
 

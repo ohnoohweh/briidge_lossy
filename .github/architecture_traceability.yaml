@@ -205,6 +205,11 @@ ARC-CMP-004:
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_honors_bind_family_constraint
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_accepts_channel_mux_egress_alias
     - tests/unit/test_runner_config_persistence.py::test_runtime_config_encrypts_secret_fields_and_loads_them_back
+    - tests/unit/test_runner_events.py::test_linux_tun_elevation_exec_argv_preserves_runtime_env_names
+    - tests/unit/test_runner_events.py::test_main_reexecs_with_linux_tun_privileges_when_local_tun_requires_root
+    - tests/unit/test_runner_events.py::test_macos_tun_reexec_prints_notice_before_sudo_password_prompt
+    - tests/unit/test_runner_events.py::test_main_reexecs_with_windows_tun_privileges_when_local_tun_requires_admin
+    - tests/unit/test_runner_events.py::test_main_skips_windows_reexec_when_already_admin
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_psk
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_cert
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_compress_layer
