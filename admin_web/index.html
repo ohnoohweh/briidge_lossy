@@ -262,20 +262,81 @@
                 <p>Explicit HTTP/CONNECT and SOCKS5 proxy listener state.</p>
               </div>
             </div>
-            <div class="kv-list">
-              <div class="kv-row"><span>Configured</span><strong id="proxyConfigured">n/a</strong></div>
-              <div class="kv-row"><span>Runtime</span><strong id="proxyRuntime">n/a</strong></div>
-              <div class="kv-row"><span>Bind</span><strong id="proxyBind">n/a</strong></div>
-              <div class="kv-row"><span>HTTP / CONNECT Port</span><strong id="proxyHttpPort">n/a</strong></div>
-              <div class="kv-row"><span>SOCKS5 Port</span><strong id="proxySocks5Port">n/a</strong></div>
-              <div class="kv-row"><span>Protocols</span><strong id="proxyProtocols">n/a</strong></div>
-              <div class="kv-row"><span>Auth</span><strong id="proxyAuth">n/a</strong></div>
-              <div class="kv-row"><span>Active Connections</span><strong id="proxyActiveConnections">0</strong></div>
-              <div class="kv-row"><span>Accepted Connections</span><strong id="proxyAcceptedConnections">0</strong></div>
-              <div class="kv-row"><span>Failed Connections</span><strong id="proxyFailedConnections">0</strong></div>
-              <div class="kv-row"><span>RX Throughput</span><strong id="proxyRxRate">0 B/s</strong></div>
-              <div class="kv-row"><span>TX Throughput</span><strong id="proxyTxRate">0 B/s</strong></div>
-              <div class="kv-row"><span>Last Error</span><strong id="proxyLastError">n/a</strong></div>
+            <div class="proxy-summary-grid">
+              <div class="proxy-summary-row proxy-summary-row-status">
+                <div class="proxy-stat-card">
+                  <span>Configured</span>
+                  <strong id="proxyConfigured">n/a</strong>
+                </div>
+                <div class="proxy-stat-card">
+                  <span>Runtime</span>
+                  <strong id="proxyRuntime">n/a</strong>
+                </div>
+              </div>
+              <div class="proxy-summary-row proxy-summary-row-endpoints">
+                <div class="proxy-stat-card">
+                  <span>Bind</span>
+                  <strong id="proxyBind">n/a</strong>
+                </div>
+                <div class="proxy-stat-card proxy-protocol-card">
+                  <span>Protocol sockets</span>
+                  <div id="proxyProtocolSockets" class="proxy-mini-grid proxy-protocol-grid">
+                    <div>
+                      <span>HTTP / CONNECT</span>
+                      <strong class="mono">n/a</strong>
+                    </div>
+                    <div>
+                      <span>SOCKS5</span>
+                      <strong class="mono">n/a</strong>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="proxy-summary-row proxy-summary-row-counters">
+                <div class="proxy-stat-card">
+                  <span>Auth</span>
+                  <strong id="proxyAuth">n/a</strong>
+                </div>
+                <div class="proxy-stat-card">
+                  <span>Active</span>
+                  <strong id="proxyActiveConnections">0</strong>
+                </div>
+                <div class="proxy-stat-card">
+                  <span>Accepted</span>
+                  <strong id="proxyAcceptedConnections">0</strong>
+                </div>
+                <div class="proxy-stat-card">
+                  <span>Failed</span>
+                  <strong id="proxyFailedConnections">0</strong>
+                </div>
+              </div>
+              <div class="proxy-summary-row proxy-summary-row-error">
+                <div class="proxy-stat-card proxy-error-card">
+                  <span>Last Error</span>
+                  <strong id="proxyLastError">n/a</strong>
+                </div>
+              </div>
+              <div class="proxy-summary-row proxy-summary-row-throughput">
+                <div class="proxy-stat-card proxy-throughput-card">
+                  <span>Throughput</span>
+                  <div class="proxy-rate-pair">
+                    <div class="proxy-rate-box">
+                      <span>RX/s</span>
+                      <strong id="proxyRxRate">0 B/s</strong>
+                      <div class="proxy-rate-track">
+                        <div id="proxyRxRateFill" class="proxy-rate-fill proxy-rate-fill-rx"></div>
+                      </div>
+                    </div>
+                    <div class="proxy-rate-box">
+                      <span>TX/s</span>
+                      <strong id="proxyTxRate">0 B/s</strong>
+                      <div class="proxy-rate-track">
+                        <div id="proxyTxRateFill" class="proxy-rate-fill proxy-rate-fill-tx"></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -286,32 +347,8 @@
                 <p>Per-listener counters reported by the active runtime.</p>
               </div>
             </div>
-            <div class="table-card card">
-              <div class="table-wrap">
-                <table class="conn-table">
-                  <thead>
-                    <tr>
-                      <th>Listener</th>
-                      <th>Endpoint</th>
-                      <th>HTTP</th>
-                      <th>SOCKS5</th>
-                      <th>Auth</th>
-                      <th>Active</th>
-                      <th>Accepted</th>
-                      <th>Completed</th>
-                      <th>Failed</th>
-                      <th>RX Bytes</th>
-                      <th>TX Bytes</th>
-                      <th>RX/s</th>
-                      <th>TX/s</th>
-                      <th>Last Error</th>
-                    </tr>
-                  </thead>
-                  <tbody id="proxyListenersBody">
-                    <tr class="empty-row"><td colspan="14">No proxy listeners</td></tr>
-                  </tbody>
-                </table>
-              </div>
+            <div id="proxyListenersGrid" class="proxy-listener-grid">
+              <div class="empty-state card"><p>No proxy listeners</p></div>
             </div>
           </section>
         </section>
@@ -329,6 +366,7 @@
               <div class="kv-row"><span>TUN Listening</span><strong id="tunRoutingListening">0</strong></div>
               <div class="kv-row"><span>Shared Services</span><strong id="tunRoutingSharedServices">0</strong></div>
               <div class="kv-row"><span>Active Peer Bindings</span><strong id="tunRoutingActiveBindings">0</strong></div>
+              <div class="kv-row"><span>Shared Drops</span><strong id="tunRoutingSharedDrops">0</strong></div>
             </div>
           </section>
 
@@ -421,11 +459,13 @@
                       <th>Interface</th>
                       <th>Ownership</th>
                       <th>Active Bindings</th>
+                      <th>ChannelMux Flow</th>
+                      <th>Drop Diagnostics</th>
                     </tr>
                   </thead>
                   <tbody id="tunRoutingSharedBody">
                     <tr class="empty-row">
-                      <td colspan="5">No shared TUN routing state</td>
+                      <td colspan="7">No shared TUN routing state</td>
                     </tr>
                   </tbody>
                 </table>

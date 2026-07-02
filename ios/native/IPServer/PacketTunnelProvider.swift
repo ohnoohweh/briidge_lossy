@@ -323,7 +323,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             "token": "",
         ]
         let egress = (section?["egress"] ?? flatPayload["proxy_provider_egress"]) as? [String: Any] ?? [
-            "mode": "direct",
+            "mode": "system",
             "address_families": ["ipv4", "ipv6"],
         ]
         let policy = (section?["policy"] ?? flatPayload["proxy_provider_policy"]) as? [String: Any] ?? [
@@ -1970,6 +1970,8 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 "connected_since_unix_ts": NSNull(),
                 "authenticated_sessions_total": 0,
                 "rekeys_completed_total": 0,
+                "frames_passed_total": 0,
+                "frames_dropped_total": 0,
                 "peer_subject_id": "",
                 "peer_subject_name": "",
                 "peer_roles": [],
@@ -2044,6 +2046,8 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTS ?? nowUnixTS),
             "authenticated_sessions_total": displayAuthenticated ? 1 : 0,
             "rekeys_completed_total": 0,
+            "frames_passed_total": 0,
+            "frames_dropped_total": 0,
             "peer_subject_id": "",
             "peer_subject_name": "",
             "peer_roles": [],

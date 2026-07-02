@@ -107,6 +107,61 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         self.assertEqual(udp_listener[0]["service_name"], "lab-udp")
         self.assertEqual(tcp_listener[0]["service_name"], "lab-tcp")
 
+    def test_snapshot_exposes_requested_remote_servers_as_client_listeners(self):
+        remote_udp = ChannelMux.ServiceSpec(
+            4,
+            "udp",
+            "0.0.0.0",
+            4444,
+            "udp",
+            "10.20.30.40",
+            16666,
+            name="remote-udp",
+        )
+        remote_tcp = ChannelMux.ServiceSpec(
+            5,
+            "tcp",
+            "0.0.0.0",
+            5555,
+            "tcp",
+            "10.20.30.50",
+            18090,
+            name="remote-tcp",
+        )
+        self.mux._overlay_connected = True
+        self.mux._accepting_enabled = True
+        self.mux._remote_services_requested = [remote_udp, remote_tcp]
+
+        snap = self.mux.snapshot_connections()
+
+        self.assertEqual(snap["counts"]["udp"], 0)
+        self.assertEqual(snap["counts"]["tcp"], 0)
+        self.assertEqual(snap["counts"]["udp_listening"], 1)
+        self.assertEqual(snap["counts"]["tcp_listening"], 1)
+
+        udp_listener = next(row for row in snap["udp"] if row.get("service_name") == "remote-udp")
+        tcp_listener = next(row for row in snap["tcp"] if row.get("service_name") == "remote-tcp")
+        self.assertEqual(udp_listener["role"], "client")
+        self.assertEqual(tcp_listener["role"], "client")
+        self.assertEqual(udp_listener["state"], "listening")
+        self.assertEqual(tcp_listener["state"], "listening")
+        self.assertEqual(udp_listener["local_port"], 4444)
+        self.assertEqual(tcp_listener["local_port"], 5555)
+        self.assertEqual(udp_listener["remote_destination"], {"host": "10.20.30.40", "port": 16666})
+        self.assertEqual(tcp_listener["remote_destination"], {"host": "10.20.30.50", "port": 18090})
+
+    def test_snapshot_hides_requested_remote_servers_when_overlay_disconnected(self):
+        self.mux._overlay_connected = False
+        self.mux._accepting_enabled = False
+        self.mux._remote_services_requested = [
+            ChannelMux.ServiceSpec(4, "tcp", "0.0.0.0", 5555, "tcp", "10.20.30.50", 18090, name="remote-tcp"),
+        ]
+
+        snap = self.mux.snapshot_connections()
+
+        self.assertEqual(snap["tcp"], [])
+        self.assertEqual(snap["counts"]["tcp_listening"], 0)
+
     def test_snapshot_counts_idle_tun_interface_as_listening_not_open(self):
         self.mux._svc_tun_devices[self.tun_key] = ChannelMux.TunDevice(
             fd=-1,

@@ -126,6 +126,8 @@ class _RunnerStub:
                         "connected_since_unix_ts": 1699999900.0,
                         "authenticated_sessions_total": 1,
                         "rekeys_completed_total": 0,
+                        "frames_passed_total": 17,
+                        "frames_dropped_total": 3,
                         "transport": "tcp",
                     },
                     "compress_layer": {
@@ -730,6 +732,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn('id="tab-tun-routing"', index_html)
         self.assertIn('id="tunRoutingConnectionsBody"', index_html)
         self.assertIn('id="tunRoutingSharedBody"', index_html)
+        self.assertIn('id="tunRoutingSharedDrops"', index_html)
         self.assertIn('id="tunRoutingIncludedRoutes"', index_html)
         self.assertIn('id="tunRoutingExcludedRoutes"', index_html)
         self.assertIn('id="tunRoutingIncludedRoutes6"', index_html)
@@ -738,10 +741,15 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertNotIn('id="tunOpen"', index_html)
         self.assertIn("apiFetch('/api/tun-routing/status'", app_js)
         self.assertIn("applyTunRoutingDoc(j);", app_js)
+        self.assertIn("setText('tunRoutingSharedDrops', fmtInteger(j.summary?.shared_drop_total ?? 0));", app_js)
         self.assertIn("setText('tunRoutingIncludedRoutes', fmtTunRoutingRouteList(j.included_routes));", app_js)
         self.assertIn("setText('tunRoutingExcludedRoutes', fmtTunRoutingRouteList(j.excluded_routes));", app_js)
         self.assertIn("setText('tunRoutingIncludedRoutes6', fmtTunRoutingRouteList(j.included_routes6));", app_js)
         self.assertIn("setText('tunRoutingExcludedRoutes6', fmtTunRoutingRouteList(j.excluded_routes6));", app_js)
+        self.assertIn("function fmtTunFlowSummary(stats) {", app_js)
+        self.assertIn("function fmtDropDiagnostics(shared) {", app_js)
+        self.assertIn("<th>ChannelMux Flow</th>", index_html)
+        self.assertIn("<th>Drop Diagnostics</th>", index_html)
         self.assertIn("topics.push('tun_routing')", app_js)
         self.assertNotIn("applyTunRoutingConfigSummary(", app_js)
 
@@ -764,22 +772,36 @@ class AdminWebPayloadTests(unittest.TestCase):
         app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
 
         self.assertIn('id="tab-proxy"', index_html)
-        self.assertIn('id="proxyHttpPort"', index_html)
-        self.assertIn('id="proxySocks5Port"', index_html)
+        self.assertIn('proxy-summary-row-status', index_html)
+        self.assertIn('proxy-summary-row-endpoints', index_html)
+        self.assertIn('proxy-summary-row-counters', index_html)
+        self.assertIn('proxy-summary-row-error', index_html)
+        self.assertIn('proxy-summary-row-throughput', index_html)
+        self.assertIn('id="proxyProtocolSockets"', index_html)
+        self.assertIn('proxy-protocol-card', index_html)
         self.assertIn('id="proxyActiveConnections"', index_html)
         self.assertIn('id="proxyRxRate"', index_html)
         self.assertIn('id="proxyTxRate"', index_html)
-        self.assertIn('id="proxyListenersBody"', index_html)
+        self.assertIn('id="proxyRxRateFill"', index_html)
+        self.assertIn('id="proxyTxRateFill"', index_html)
+        self.assertIn('id="proxyListenersGrid"', index_html)
+        self.assertIn('class="proxy-rate-pair"', index_html)
         self.assertIn("function applyProxyDoc()", app_js)
         self.assertIn("function proxyListenerRate(listenerName, snapshot)", app_js)
+        self.assertIn("function proxyRatePercents(rxRate, txRate)", app_js)
+        self.assertIn("function renderProxyTrafficPair(rxBytes, txBytes, rxRate, txRate)", app_js)
+        self.assertIn('proxy-sockets-card', app_js)
+        self.assertIn('proxy-mini-grid', app_js)
         self.assertIn("root.proxy_provider_enabled", app_js)
         self.assertIn("root.proxy_provider_http_port", app_js)
         self.assertIn("root.proxy_provider_socks5_port", app_js)
-        self.assertIn("setText('proxyHttpPort', fmtInteger(cfg.http_port));", app_js)
-        self.assertIn("setText('proxySocks5Port', fmtInteger(cfg.socks5_port));", app_js)
+        self.assertIn("function renderProxyProtocolSockets(cfg)", app_js)
+        self.assertIn("protocolSockets.innerHTML = renderProxyProtocolSockets(cfg);", app_js)
         self.assertIn("setText('proxyActiveConnections', fmtInteger(totals.active));", app_js)
         self.assertIn("setText('proxyRxRate', fmtBytesPerSecond(totals.rxRate));", app_js)
         self.assertIn("setText('proxyTxRate', fmtBytesPerSecond(totals.txRate));", app_js)
+        self.assertIn("setPercentWidth('proxyRxRateFill', summaryRates.rxPct);", app_js)
+        self.assertIn("setPercentWidth('proxyTxRateFill', summaryRates.txPct);", app_js)
         self.assertIn("if (isTabActive('proxy')) activeTabs.push('proxy');", app_js)
         self.assertIn("if (!isTabActive('proxy')) return;", app_js)
 
@@ -1014,6 +1036,15 @@ class AdminWebPayloadTests(unittest.TestCase):
                 self.assertIn("if (!syncServiceCatalogEditor(key)) return;", text)
                 self.assertNotIn('sink.value = \'"__invalid_service_catalog__"\'', text)
 
+    def test_service_catalog_remove_does_not_resync_stale_modal_values(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        for app_path in self._canonical_webadmin_paths():
+            with self.subTest(app_path=str(app_path.relative_to(repo_root))):
+                text = app_path.read_text(encoding="utf-8")
+                self.assertIn("function closeServiceCatalogModal(root, key, { rerender = true, syncBeforeClose = true } = {})", text)
+                self.assertIn("closeServiceCatalogModal(root, key, { rerender: false, syncBeforeClose: false });", text)
+                self.assertIn("renderServiceCatalogModal(root, key, Math.min(rowIndex, specs.length - 1));", text)
+
     def test_build_peers_payload_includes_secure_link_rows(self):
         args = argparse.Namespace(
             admin_web=True,
@@ -1042,6 +1073,8 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(peer["secure_link"]["last_event"], "authenticated")
         self.assertEqual(peer["secure_link"]["handshake_attempts_total"], 1)
         self.assertEqual(peer["secure_link"]["authenticated_sessions_total"], 1)
+        self.assertEqual(peer["secure_link"]["frames_passed_total"], 17)
+        self.assertEqual(peer["secure_link"]["frames_dropped_total"], 3)
         self.assertEqual(peer["secure_link"]["connected_since_unix_ts"], 1699999900.0)
         self.assertEqual(peer["rtt_est_ms"], 42.0)
         self.assertEqual(peer["transmit_delay_sample_ms"], 101.0)
@@ -1050,6 +1083,10 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertTrue(peer["throttle"]["active"])
         self.assertEqual(peer["throttle"]["remaining_bytes"], 1200)
         self.assertTrue(peer["compress_layer"]["enabled"])
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("renderMetric('frames_passed_total', fmtInteger(secureLink.frames_passed_total))", app_js)
+        self.assertIn("renderMetric('frames_dropped_total', fmtInteger(secureLink.frames_dropped_total))", app_js)
         self.assertEqual(peer["compress_layer"]["algorithm"], "zlib")
         self.assertEqual(peer["compress_layer"]["compress_applied_total"], 7)
 

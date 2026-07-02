@@ -481,8 +481,8 @@ enum ObstacleBridgeRuntimeConfig {
                     "username": "",
                     "token": "",
                 ]),
-                schemaItem(key: "proxy_provider_egress", description: "Proxy egress policy object for direct outbound connection behavior.", defaultValue: [
-                    "mode": "direct",
+                schemaItem(key: "proxy_provider_egress", description: "Proxy egress policy object for outbound connection behavior.", defaultValue: [
+                    "mode": "system",
                     "address_families": ["ipv4", "ipv6"],
                 ]),
                 schemaItem(key: "proxy_provider_policy", description: "Proxy destination policy object.", defaultValue: [
@@ -657,7 +657,7 @@ enum ObstacleBridgeRuntimeConfig {
         }
         if payload["proxy_provider_egress"] == nil {
             payload["proxy_provider_egress"] = [
-                "mode": "direct",
+                "mode": "system",
                 "address_families": ["ipv4", "ipv6"],
             ]
         }

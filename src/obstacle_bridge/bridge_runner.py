@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from ._bridge_import import export_bridge_globals
+import base64
 import contextlib as _process_contextlib
+import ctypes
 import shutil
 import signal as _process_signal
 import threading
@@ -401,6 +403,7 @@ class Runner:
                     credentials=credentials,
                     allow_http=allow_http,
                     allow_socks5=allow_socks5,
+                    egress=cfg.get("egress") if isinstance(cfg.get("egress"), dict) else None,
                 )
             )
             try:
@@ -1711,7 +1714,30 @@ class Runner:
     def update_config(self, updates: dict) -> tuple[bool, str]:
         if not isinstance(updates, dict):
             return (False, "updates must be an object")
-        normalized_updates = dict(updates)
+        section_aliases = {
+            "channel_mux": {
+                "egress": "channel_mux_egress",
+            },
+            "proxy_provider": {
+                "enabled": "proxy_provider_enabled",
+                "bind": "proxy_provider_bind",
+                "http_port": "proxy_provider_http_port",
+                "socks5_port": "proxy_provider_socks5_port",
+                "protocols": "proxy_provider_protocols",
+                "auth": "proxy_provider_auth",
+                "egress": "proxy_provider_egress",
+                "policy": "proxy_provider_policy",
+            },
+        }
+        section_keys = set((getattr(self.args, "_config_sections", {}) or {}).keys())
+        normalized_updates: dict[str, Any] = {}
+        for key, value in dict(updates).items():
+            if key in section_keys and isinstance(value, dict):
+                alias_map = section_aliases.get(str(key), {})
+                for nested_key, nested_value in value.items():
+                    normalized_updates[str(alias_map.get(nested_key, nested_key))] = nested_value
+                continue
+            normalized_updates[str(key)] = value
         if normalized_updates.get("admin_web_auth_disable") is True:
             normalized_updates["admin_web_username"] = ""
             normalized_updates["admin_web_password"] = ""
@@ -2455,6 +2481,9 @@ class ConfigAwareCLI:
         actions = self._scan_actions(parser)
         flat: Dict[str, Any] = {}
         nested_dest_aliases = {
+            "channel_mux": {
+                "egress": "channel_mux_egress",
+            },
             "proxy_provider": {
                 "enabled": "proxy_provider_enabled",
                 "bind": "proxy_provider_bind",
@@ -2678,6 +2707,23 @@ def _configured_packetflow_connector_mode(args: argparse.Namespace) -> str:
     return str(getattr(args, "packetflow_connector", "") or "").strip().lower()
 
 
+def _needs_linux_tun_elevation(args: argparse.Namespace) -> bool:
+    if not sys.platform.startswith("linux"):
+        return False
+    geteuid = getattr(os, "geteuid", None)
+    if not callable(geteuid):
+        return False
+    if int(geteuid()) == 0:
+        return False
+    if str(os.environ.get("OBSTACLEBRIDGE_LINUX_TUN_ELEVATED", "") or "").strip():
+        return False
+    if not _configured_local_tun_services(args):
+        return False
+    if _configured_packetflow_connector_mode(args):
+        return False
+    return True
+
+
 def _needs_macos_tun_elevation(args: argparse.Namespace) -> bool:
     if not sys.platform.startswith("darwin"):
         return False
@@ -2695,16 +2741,115 @@ def _needs_macos_tun_elevation(args: argparse.Namespace) -> bool:
     return True
 
 
-def _macos_tun_elevation_exec_argv(argv: Optional[List[str]] = None) -> list[str]:
+def _is_windows_admin() -> bool:
+    if not sys.platform.startswith("win"):
+        return False
+    shell32 = getattr(getattr(ctypes, "windll", None), "shell32", None)
+    if shell32 is None:
+        return False
+    try:
+        return bool(shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def _needs_windows_tun_elevation(args: argparse.Namespace) -> bool:
+    if not sys.platform.startswith("win"):
+        return False
+    if _is_windows_admin():
+        return False
+    if str(os.environ.get("OBSTACLEBRIDGE_WINDOWS_TUN_ELEVATED", "") or "").strip():
+        return False
+    if not _configured_local_tun_services(args):
+        return False
+    if _configured_packetflow_connector_mode(args):
+        return False
+    return True
+
+
+def _sudo_tun_elevation_exec_argv(
+    argv: Optional[List[str]] = None,
+    *,
+    elevated_marker_env: str,
+) -> list[str]:
     runtime_argv = list(argv) if argv is not None else list(sys.argv[1:])
+    preserve_names = [
+        elevated_marker_env,
+        "OBSTACLEBRIDGE_MACOS_TUN_ELEVATED",
+        "OBSTACLEBRIDGE_LINUX_TUN_ELEVATED",
+        "PYTHONPATH",
+        "VIRTUAL_ENV",
+    ]
+    preserve_names = list(dict.fromkeys(preserve_names))
     return [
         "sudo",
         "-E",
+        f"--preserve-env={','.join(preserve_names)}",
         sys.executable,
         "-m",
         "obstacle_bridge.bridge_runner",
         *runtime_argv,
     ]
+
+
+def _macos_tun_elevation_exec_argv(argv: Optional[List[str]] = None) -> list[str]:
+    return _sudo_tun_elevation_exec_argv(
+        argv,
+        elevated_marker_env="OBSTACLEBRIDGE_MACOS_TUN_ELEVATED",
+    )
+
+
+def _linux_tun_elevation_exec_argv(argv: Optional[List[str]] = None) -> list[str]:
+    return _sudo_tun_elevation_exec_argv(
+        argv,
+        elevated_marker_env="OBSTACLEBRIDGE_LINUX_TUN_ELEVATED",
+    )
+
+
+def _maybe_reexec_with_sudo_tun_privileges(
+    *,
+    argv: Optional[List[str]],
+    log: logging.Logger,
+    notice: str,
+    marker_env: str,
+    cmd: list[str],
+    platform_name: str,
+) -> None:
+    sudo_path = shutil.which("sudo")
+    if not sudo_path:
+        raise RuntimeError(
+            f"{platform_name} local TUN services require elevated privileges, but sudo is not available. "
+            "Install sudo or run the runtime as root."
+        )
+    env = dict(os.environ)
+    env[marker_env] = "1"
+    print(notice, file=sys.stderr, flush=True)
+    log.warning(
+        "[RUNNER] re-executing with elevated privileges for %s local TUN service(s)",
+        platform_name,
+    )
+    os.execvpe(sudo_path, cmd, env)
+
+
+def _maybe_reexec_with_linux_tun_privileges(
+    args: argparse.Namespace,
+    *,
+    argv: Optional[List[str]],
+    log: logging.Logger,
+) -> None:
+    if not _needs_linux_tun_elevation(args):
+        return
+    _maybe_reexec_with_sudo_tun_privileges(
+        argv=argv,
+        log=log,
+        notice=(
+            "ObstacleBridge needs elevated privileges to create/configure the local Linux TUN device. "
+            "sudo may now ask for your password."
+        ),
+        marker_env="OBSTACLEBRIDGE_LINUX_TUN_ELEVATED",
+        cmd=_linux_tun_elevation_exec_argv(argv),
+        platform_name="Linux",
+    )
 
 
 def _maybe_reexec_with_macos_tun_privileges(
@@ -2715,26 +2860,86 @@ def _maybe_reexec_with_macos_tun_privileges(
 ) -> None:
     if not _needs_macos_tun_elevation(args):
         return
-    sudo_path = shutil.which("sudo")
-    if not sudo_path:
-        raise RuntimeError(
-            "macOS local TUN services require elevated privileges, but sudo is not available. "
-            "Install sudo or run the runtime as root."
-        )
-    cmd = _macos_tun_elevation_exec_argv(argv)
-    env = dict(os.environ)
-    env["OBSTACLEBRIDGE_MACOS_TUN_ELEVATED"] = "1"
-    log.warning(
-        "[RUNNER] re-executing with elevated privileges for macOS local TUN service(s); "
-        "this keeps the Python TUN lifecycle aligned with the Linux route/interface model"
+    _maybe_reexec_with_sudo_tun_privileges(
+        argv=argv,
+        log=log,
+        notice=(
+            "ObstacleBridge needs elevated privileges to create/configure the local macOS TUN device. "
+            "sudo may now ask for your password."
+        ),
+        marker_env="OBSTACLEBRIDGE_MACOS_TUN_ELEVATED",
+        cmd=_macos_tun_elevation_exec_argv(argv),
+        platform_name="macOS",
     )
-    os.execvpe(sudo_path, cmd, env)
+
+
+def _windows_tun_elevation_exec_argv(argv: Optional[List[str]] = None) -> list[str]:
+    runtime_argv = list(argv) if argv is not None else list(sys.argv[1:])
+    return [
+        "-m",
+        "obstacle_bridge.bridge_runner",
+        *runtime_argv,
+    ]
+
+
+def _powershell_single_quoted(text: str) -> str:
+    return "'" + str(text).replace("'", "''") + "'"
+
+
+def _windows_tun_elevation_shell_execute(
+    argv: Optional[List[str]] = None,
+) -> tuple[str, str]:
+    exec_argv = _windows_tun_elevation_exec_argv(argv)
+    script_lines = [
+        "$env:OBSTACLEBRIDGE_WINDOWS_TUN_ELEVATED = '1'",
+    ]
+    wintun_dir = str(os.environ.get("WINTUN_DIR", "") or "").strip()
+    if wintun_dir:
+        script_lines.append(f"$env:WINTUN_DIR = {_powershell_single_quoted(wintun_dir)}")
+    arg_list = ", ".join(_powershell_single_quoted(part) for part in exec_argv)
+    script_lines.append(f"& {_powershell_single_quoted(sys.executable)} @({arg_list})")
+    script = "\n".join(script_lines)
+    encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+    return (
+        "powershell.exe",
+        f"-NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}",
+    )
+
+
+def _maybe_reexec_with_windows_tun_privileges(
+    args: argparse.Namespace,
+    *,
+    argv: Optional[List[str]],
+    log: logging.Logger,
+) -> None:
+    if not _needs_windows_tun_elevation(args):
+        return
+    shell32 = getattr(getattr(ctypes, "windll", None), "shell32", None)
+    if shell32 is None:
+        raise RuntimeError(
+            "Windows local TUN services require Administrator privileges, but shell32 is not available "
+            "to request a UAC elevation prompt."
+        )
+    executable, params = _windows_tun_elevation_shell_execute(argv)
+    log.warning(
+        "[RUNNER] re-executing with elevated privileges for Windows local TUN service(s); "
+        "this prompts for UAC so the WinTun adapter can be created in the same Python runtime path"
+    )
+    rc = int(shell32.ShellExecuteW(None, "runas", executable, params, os.getcwd(), 1))
+    if rc <= 32:
+        raise RuntimeError(
+            "Windows local TUN services require Administrator privileges, but the elevation request "
+            f"failed or was cancelled (ShellExecuteW rc={rc})."
+        )
+    raise SystemExit(0)
 
 
 def main(argv: Optional[List[str]] = None) -> None:
     args = parse_runtime_args(argv, apply_logging=True)
     log = logging.getLogger("runner")
+    _maybe_reexec_with_linux_tun_privileges(args, argv=argv, log=log)
     _maybe_reexec_with_macos_tun_privileges(args, argv=argv, log=log)
+    _maybe_reexec_with_windows_tun_privileges(args, argv=argv, log=log)
     r = Runner(args)
     installed_signal_handlers = _install_process_signal_handlers(r, log)
     log.info("[RUNNER] process start pid=%s argv=%r", os.getpid(), list(argv) if argv is not None else sys.argv[1:])

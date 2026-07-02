@@ -1067,6 +1067,12 @@ function setProgress(id, value, maxScale = 256.0) {
   el.style.width = pct.toFixed(1) + '%';
 }
 
+function setPercentWidth(id, pct) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.width = `${Math.max(0, Math.min(100, Number(pct || 0))).toFixed(1)}%`;
+}
+
 function fmtEndpoint(ep) {
   if (!ep) return 'n/a';
   if (Array.isArray(ep) && ep.length >= 2) return `${ep[0]}:${ep[1]}`;
@@ -1106,6 +1112,34 @@ function fmtThrottleSummary(throttle) {
     return `${state} ${used}/${budget} rem ${remaining} agg ${aggregateRemaining} scope ${scopeRemaining}`;
   }
   return `${state} ${used}/${budget} rem ${remaining}`;
+}
+
+function fmtTunFlowSummary(stats) {
+  const rxMsgs = fmtInteger(stats?.rx_msgs ?? 0);
+  const txMsgs = fmtInteger(stats?.tx_msgs ?? 0);
+  const rxBytes = fmtBytes(stats?.rx_bytes ?? 0);
+  const txBytes = fmtBytes(stats?.tx_bytes ?? 0);
+  return `in ${rxMsgs} / ${rxBytes} · out ${txMsgs} / ${txBytes}`;
+}
+
+function fmtDropDiagnostics(shared) {
+  const dropCounters = shared?.drop_counters || {};
+  const total = fmtInteger(dropCounters.total ?? 0);
+  const byReason = dropCounters.by_reason && typeof dropCounters.by_reason === 'object'
+    ? Object.entries(dropCounters.by_reason)
+    : [];
+  const reasons = byReason.length
+    ? byReason
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+      .map(([reason, count]) => `${reason} ${fmtInteger(count)}`)
+      .join(' · ')
+    : 'none';
+  const recentDrops = Array.isArray(shared?.recent_drops) ? shared.recent_drops : [];
+  const latest = recentDrops.length ? recentDrops[recentDrops.length - 1] : null;
+  const latestText = latest
+    ? `last ${latest.reason || 'drop'} ${latest.direction || 'unknown'}${latest.destination_ip ? ` -> ${latest.destination_ip}` : ''}`
+    : 'last none';
+  return `total ${total} · ${reasons}\n${latestText}`;
 }
 
 function renderConnectionTable(tbodyId, rows, protocolLabel = 'Connection') {
@@ -1239,7 +1273,7 @@ function renderTunRoutingSharedTable(tbodyId, rows) {
   if (!tbody) return;
 
   if (!rows || rows.length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No shared TUN routing state</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No shared TUN routing state</td></tr>';
     return;
   }
 
@@ -1268,6 +1302,8 @@ function renderTunRoutingSharedTable(tbodyId, rows) {
           return parts.join(' · ');
         }).join('\n')
       : 'none';
+    const flowText = fmtTunFlowSummary(row.stats || {});
+    const dropText = fmtDropDiagnostics(shared);
     return `
       <tr>
         <td class="mono">${escapeHtml(fmtInteger(row.svc_id))}</td>
@@ -1275,6 +1311,8 @@ function renderTunRoutingSharedTable(tbodyId, rows) {
         <td class="mono">${escapeHtml(fmtText(row.local?.ifname))}</td>
         <td class="mono" style="white-space:pre-wrap;">${escapeHtml(ownershipText)}</td>
         <td class="mono" style="white-space:pre-wrap;">${escapeHtml(bindingText)}</td>
+        <td class="mono" style="white-space:pre-wrap;">${escapeHtml(flowText)}</td>
+        <td class="mono" style="white-space:pre-wrap;">${escapeHtml(dropText)}</td>
       </tr>
     `;
   }).join('');
@@ -1387,15 +1425,67 @@ function proxyListenerRate(listenerName, snapshot) {
   return { rxRate, txRate };
 }
 
+function renderProxyProtocolSockets(cfg) {
+  const protocols = Array.isArray(cfg?.protocols) ? cfg.protocols : [];
+  const hasHttp = protocols.includes('http-connect');
+  const hasSocks5 = protocols.includes('socks5-connect');
+  return `
+    <div>
+      <span>HTTP / CONNECT</span>
+      <strong class="mono">${escapeHtml(hasHttp ? fmtInteger(cfg.http_port) : 'disabled')}</strong>
+    </div>
+    <div>
+      <span>SOCKS5</span>
+      <strong class="mono">${escapeHtml(hasSocks5 ? fmtInteger(cfg.socks5_port) : 'disabled')}</strong>
+    </div>
+  `;
+}
+
+function proxyRatePercents(rxRate, txRate) {
+  const rx = Math.max(0, Number(rxRate || 0));
+  const tx = Math.max(0, Number(txRate || 0));
+  const scale = Math.max(rx, tx, 1);
+  return {
+    rx,
+    tx,
+    rxPct: Math.max(0, Math.min(100, (rx / scale) * 100)),
+    txPct: Math.max(0, Math.min(100, (tx / scale) * 100)),
+  };
+}
+
+function renderProxyTrafficPair(rxBytes, txBytes, rxRate, txRate) {
+  const rates = proxyRatePercents(rxRate, txRate);
+  return `
+    <div class="proxy-rate-pair proxy-rate-pair-stacked">
+      <div class="proxy-rate-box">
+        <span>RX</span>
+        <strong class="mono">${escapeHtml(fmtBytes(rxBytes))}</strong>
+        <em class="mono">${escapeHtml(fmtBytesPerSecond(rates.rx))}</em>
+        <div class="proxy-rate-track">
+          <div class="proxy-rate-fill proxy-rate-fill-rx" style="width: ${rates.rxPct.toFixed(1)}%"></div>
+        </div>
+      </div>
+      <div class="proxy-rate-box">
+        <span>TX</span>
+        <strong class="mono">${escapeHtml(fmtBytes(txBytes))}</strong>
+        <em class="mono">${escapeHtml(fmtBytesPerSecond(rates.tx))}</em>
+        <div class="proxy-rate-track">
+          <div class="proxy-rate-fill proxy-rate-fill-tx" style="width: ${rates.txPct.toFixed(1)}%"></div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderProxyListeners(rows) {
-  const tbody = document.getElementById('proxyListenersBody');
-  if (!tbody) return { active: 0, accepted: 0, completed: 0, failed: 0, rx: 0, tx: 0, rxRate: 0, txRate: 0, lastError: '' };
+  const grid = document.getElementById('proxyListenersGrid') || document.getElementById('proxyListenersBody');
+  if (!grid) return { active: 0, accepted: 0, completed: 0, failed: 0, rx: 0, tx: 0, rxRate: 0, txRate: 0, lastError: '' };
   if (!rows.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="14">No proxy listeners</td></tr>';
+    grid.innerHTML = '<div class="empty-state card"><p>No proxy listeners</p></div>';
     return { active: 0, accepted: 0, completed: 0, failed: 0, rx: 0, tx: 0, rxRate: 0, txRate: 0, lastError: '' };
   }
   const totals = { active: 0, accepted: 0, completed: 0, failed: 0, rx: 0, tx: 0, rxRate: 0, txRate: 0, lastError: '' };
-  tbody.innerHTML = rows.map(({ name, snapshot }) => {
+  grid.innerHTML = rows.map(({ name, snapshot }) => {
     const rates = proxyListenerRate(name, snapshot);
     const active = Number(snapshot.active_connections || 0);
     const accepted = Number(snapshot.accepted_connections || 0);
@@ -1414,22 +1504,57 @@ function renderProxyListeners(rows) {
     totals.txRate += rates.txRate;
     if (lastError) totals.lastError = lastError;
     return `
-      <tr>
-        <td class="mono">${escapeHtml(name)}</td>
-        <td class="mono">${escapeHtml(fmtEndpoint({ host: snapshot.bind_host, port: snapshot.port }))}</td>
-        <td>${escapeHtml(fmtBool(snapshot.http_enabled))}</td>
-        <td>${escapeHtml(fmtBool(snapshot.socks5_enabled))}</td>
-        <td>${escapeHtml(fmtBool(snapshot.auth_required))}</td>
-        <td class="mono">${escapeHtml(fmtInteger(active))}</td>
-        <td class="mono">${escapeHtml(fmtInteger(accepted))}</td>
-        <td class="mono">${escapeHtml(fmtInteger(completed))}</td>
-        <td class="mono">${escapeHtml(fmtInteger(failed))}</td>
-        <td class="mono">${escapeHtml(fmtBytes(rx))}</td>
-        <td class="mono">${escapeHtml(fmtBytes(tx))}</td>
-        <td class="mono">${escapeHtml(fmtBytesPerSecond(rates.rxRate))}</td>
-        <td class="mono">${escapeHtml(fmtBytesPerSecond(rates.txRate))}</td>
-        <td class="mono">${escapeHtml(lastError || 'n/a')}</td>
-      </tr>
+      <article class="proxy-listener-card card">
+        <div class="proxy-listener-head">
+          <div>
+            <span class="proxy-listener-label">Listener</span>
+            <strong class="mono">${escapeHtml(name)}</strong>
+          </div>
+          <span class="proxy-listener-endpoint mono">${escapeHtml(fmtEndpoint({ host: snapshot.bind_host, port: snapshot.port }))}</span>
+        </div>
+        <div class="proxy-listener-grid-inner">
+          <div class="proxy-stat-card">
+            <span>Protocols</span>
+            <strong>${escapeHtml([
+              snapshot.http_enabled ? 'HTTP' : '',
+              snapshot.socks5_enabled ? 'SOCKS5' : '',
+            ].filter(Boolean).join(' + ') || 'disabled')}</strong>
+          </div>
+          <div class="proxy-stat-card">
+            <span>Auth</span>
+            <strong>${escapeHtml(fmtBool(snapshot.auth_required))}</strong>
+          </div>
+          <div class="proxy-stat-card proxy-sockets-card">
+            <span>Sockets</span>
+            <div class="proxy-mini-grid">
+              <div>
+                <span>Active</span>
+                <strong class="mono">${escapeHtml(fmtInteger(active))}</strong>
+              </div>
+              <div>
+                <span>Accepted</span>
+                <strong class="mono">${escapeHtml(fmtInteger(accepted))}</strong>
+              </div>
+              <div>
+                <span>Completed</span>
+                <strong class="mono">${escapeHtml(fmtInteger(completed))}</strong>
+              </div>
+              <div>
+                <span>Failed</span>
+                <strong class="mono">${escapeHtml(fmtInteger(failed))}</strong>
+              </div>
+            </div>
+          </div>
+          <div class="proxy-stat-card proxy-listener-traffic-card">
+            <span>Traffic</span>
+            ${renderProxyTrafficPair(rx, tx, rates.rxRate, rates.txRate)}
+          </div>
+          <div class="proxy-stat-card proxy-error-card">
+            <span>Last Error</span>
+            <strong class="mono">${escapeHtml(lastError || 'n/a')}</strong>
+          </div>
+        </div>
+      </article>
     `;
   }).join('');
   return totals;
@@ -1446,15 +1571,17 @@ function applyProxyDoc() {
   setText('proxyConfigured', cfg.enabled ? 'enabled' : 'disabled');
   setText('proxyRuntime', provider.enabled || rows.length ? 'active' : 'inactive');
   setText('proxyBind', fmtText(cfg.bind));
-  setText('proxyHttpPort', fmtInteger(cfg.http_port));
-  setText('proxySocks5Port', fmtInteger(cfg.socks5_port));
-  setText('proxyProtocols', cfg.protocols.length ? cfg.protocols.join(', ') : 'n/a');
+  const protocolSockets = document.getElementById('proxyProtocolSockets');
+  if (protocolSockets) protocolSockets.innerHTML = renderProxyProtocolSockets(cfg);
   setText('proxyAuth', authMode === 'none' ? 'none' : `${authMode}${authUser ? `:${authUser}` : ''}`);
   setText('proxyActiveConnections', fmtInteger(totals.active));
   setText('proxyAcceptedConnections', fmtInteger(totals.accepted));
   setText('proxyFailedConnections', fmtInteger(totals.failed));
   setText('proxyRxRate', fmtBytesPerSecond(totals.rxRate));
   setText('proxyTxRate', fmtBytesPerSecond(totals.txRate));
+  const summaryRates = proxyRatePercents(totals.rxRate, totals.txRate);
+  setPercentWidth('proxyRxRateFill', summaryRates.rxPct);
+  setPercentWidth('proxyTxRateFill', summaryRates.txPct);
   setText('proxyLastError', totals.lastError || 'n/a');
 }
 
@@ -2714,14 +2841,20 @@ function renderPeerTable(rows) {
       }
     }
     const securityMetrics = showSecurityLifecycle ? renderMetricStack(securityLines) : '';
-    const lifecycleMetrics = showSecurityLifecycle ? [
-      renderMetric('last_event', secureLink.last_event),
-      renderMetric('last_event_unix_ts', fmtDateTime(secureLink.last_event_unix_ts)),
-      renderMetric('last_authenticated_unix_ts', fmtDateTime(secureLink.last_authenticated_unix_ts)),
-      renderMetric('authenticated_sessions_total', fmtInteger(secureLink.authenticated_sessions_total)),
-      renderMetric('rekeys_completed_total', fmtInteger(secureLink.rekeys_completed_total)),
-      renderMetric('last_rekey_trigger', secureLink.last_rekey_trigger),
-      ...(isCertMode ? [
+    const lifecycleMetrics = showSecurityLifecycle ? renderMetricStack([
+      [
+        renderMetric('last_event', secureLink.last_event),
+        renderMetric('last_event_unix_ts', fmtDateTime(secureLink.last_event_unix_ts)),
+        renderMetric('last_authenticated_unix_ts', fmtDateTime(secureLink.last_authenticated_unix_ts)),
+        renderMetric('authenticated_sessions_total', fmtInteger(secureLink.authenticated_sessions_total)),
+        renderMetric('rekeys_completed_total', fmtInteger(secureLink.rekeys_completed_total)),
+        renderMetric('last_rekey_trigger', secureLink.last_rekey_trigger),
+      ],
+      [
+        renderMetric('frames_passed_total', fmtInteger(secureLink.frames_passed_total)),
+        renderMetric('frames_dropped_total', fmtInteger(secureLink.frames_dropped_total)),
+      ],
+      ...(isCertMode ? [[
         renderMetric('active_material_generation', fmtInteger(secureLink.active_material_generation)),
         renderMetric('last_material_reload_unix_ts', fmtDateTime(secureLink.last_material_reload_unix_ts)),
         renderMetric('last_material_reload_scope', secureLink.last_material_reload_scope),
@@ -2730,8 +2863,8 @@ function renderPeerTable(rows) {
         renderMetric('trust_enforced_unix_ts', fmtDateTime(secureLink.trust_enforced_unix_ts)),
         renderMetric('disconnect_reason', secureLink.disconnect_reason),
         renderMetric('disconnect_detail', secureLink.disconnect_detail),
-      ] : []),
-    ] : [];
+      ]] : []),
+    ]) : '';
     const rowSpan = 1
       + (showProtocolRow ? 1 : 0)
       + (showCompressionRow ? 1 : 0)
@@ -2778,7 +2911,12 @@ function renderPeerTable(rows) {
         </td>
       </tr>
       `);
-      detailRows.push(renderPeerDetailRow('Lifecycle', lifecycleMetrics, 'peer-detail-row-end'));
+      detailRows.push(`
+      <tr class="peer-detail-row peer-detail-row-end">
+        <td class="peer-detail-kind">Lifecycle</td>
+        <td>${lifecycleMetrics}</td>
+      </tr>
+      `);
     }
     return `
       ${detailRows.join('')}
@@ -2894,6 +3032,7 @@ function applyTunRoutingDoc(j) {
   setText('tunRoutingListening', fmtInteger(j.summary?.tun_listening ?? 0));
   setText('tunRoutingSharedServices', fmtInteger(j.summary?.shared_services ?? 0));
   setText('tunRoutingActiveBindings', fmtInteger(j.summary?.shared_active_peer_bindings ?? 0));
+  setText('tunRoutingSharedDrops', fmtInteger(j.summary?.shared_drop_total ?? 0));
   setText('tunRoutingIncludedRoutes', fmtTunRoutingRouteList(j.included_routes));
   setText('tunRoutingExcludedRoutes', fmtTunRoutingRouteList(j.excluded_routes));
   setText('tunRoutingIncludedRoutes6', fmtTunRoutingRouteList(j.included_routes6));
@@ -3716,10 +3855,10 @@ function resetServiceCatalogEditorValue(key) {
   syncServiceCatalogEditor(key);
 }
 
-function closeServiceCatalogModal(root, key, { rerender = true } = {}) {
+function closeServiceCatalogModal(root, key, { rerender = true, syncBeforeClose = true } = {}) {
   const modal = root.querySelector(`[data-service-modal="${CSS.escape(key)}"]`);
   if (!modal) return;
-  if (!syncServiceCatalogEditor(key)) return;
+  if (syncBeforeClose && !syncServiceCatalogEditor(key)) return;
   modal.classList.add('hidden');
   modal.removeAttribute('data-service-active-index');
   modal.innerHTML = '';
@@ -3803,10 +3942,15 @@ function initServiceCatalogEditor(root, key) {
         specs.splice(rowIndex, 1);
         writeServiceCatalogSpecsToSink(root, key, specs);
         renderServiceCatalogItems(root, key, specs);
-        closeServiceCatalogModal(root, key, { rerender: false });
-        initServiceCatalogEditor(root, key);
-        syncServiceCatalogEditor(key);
         refreshConfigPreview(key);
+        if (specs.length) {
+          renderServiceCatalogModal(root, key, Math.min(rowIndex, specs.length - 1));
+          syncServiceCatalogEditor(key);
+        } else {
+          closeServiceCatalogModal(root, key, { rerender: false, syncBeforeClose: false });
+          initServiceCatalogEditor(root, key);
+          syncServiceCatalogEditor(key);
+        }
       });
     });
   };

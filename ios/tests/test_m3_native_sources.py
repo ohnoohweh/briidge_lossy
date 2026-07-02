@@ -110,11 +110,17 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert 'schemaItem(key: "proxy_provider_socks5_port", description: "Local SOCKS5 CONNECT proxy listener port."' in runtime_config
     assert 'schemaItem(key: "proxy_provider_http_port", description: "Local HTTP/CONNECT proxy listener port.", defaultValue: 13881)' in runtime_config
     assert 'schemaItem(key: "proxy_provider_socks5_port", description: "Local SOCKS5 CONNECT proxy listener port.", defaultValue: 13882)' in runtime_config
+    assert 'schemaItem(key: "proxy_provider_egress", description: "Proxy egress policy object for outbound connection behavior.", defaultValue: [' in runtime_config
+    assert '"mode": "system"' in runtime_config
     assert 'schemaItem(key: "log_proxy_provider", description: "Proxy provider log level override."' in runtime_config
     assert 'schemaItem(key: "mux_tcp_bp_threshold", description: "Mux TCP write-buffer threshold in bytes before drain is triggered.", defaultValue: 1)' in runtime_config
     assert 'schemaItem(key: "max_inflight", description: "Maximum myUDP DATA frames allowed in flight before excess frames are queued.", defaultValue: 200)' in runtime_config
     assert 'flatPayload["proxy_provider_http_port"]) ?? 13881' in provider
     assert 'flatPayload["proxy_provider_socks5_port"]) ?? 13882' in provider
+    assert '"mode": "system"' in provider
+    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    assert 'let egress = (section?["egress"] ?? runtimeConfig["proxy_provider_egress"]) as? [String: Any] ?? [' in host_runner
+    assert '"mode": "system"' in host_runner
 
 
 def test_native_packet_flow_bridge_source_exists() -> None:
@@ -338,6 +344,7 @@ def test_webadmin_server_source_exists() -> None:
 def test_proxy_server_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeProxyServer.swift").read_text(encoding="utf-8")
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     python_runtime = (ROOT / "src" / "obstacle_bridge" / "bridge_proxy_server.py").read_text(encoding="utf-8")
 
     assert "enum ObstacleBridgeProxyProtocolCodec" in runtime
@@ -362,6 +369,10 @@ def test_proxy_server_source_exists() -> None:
     assert 'flatPayload["proxy_provider_auth"]) as? [String: Any]' in provider
     assert 'flatPayload["proxy_provider_egress"]) as? [String: Any]' in provider
     assert 'flatPayload["proxy_provider_policy"]) as? [String: Any]' in provider
+    assert '"frames_passed_total": 0' in host_runner
+    assert '"frames_dropped_total": 0' in host_runner
+    assert '"frames_passed_total": 0' in provider
+    assert '"frames_dropped_total": 0' in provider
     assert "class ObstacleBridgeProxyProtocolCodec" in python_runtime
     assert "class ObstacleBridgeProxyServer" in python_runtime
     assert "parse_http_request_head" in python_runtime

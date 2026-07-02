@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from ._bridge_import import export_bridge_globals
 
 _bridge = export_bridge_globals(globals())
@@ -16,6 +18,7 @@ else:
     _bridge_tun_platform = None
 
 from .bridge_tun_routing import TunRoutingSettings, auto_overlay_peer_excluded_routes
+from .bridge_proxy_common import open_http_connect_tunnel, resolve_proxy_endpoint
 
 class _ChanCtr:
     msgs_in: int = 0
@@ -233,6 +236,12 @@ class ChannelMux:
         def _has(opt: str) -> bool:
             try: return any(opt in a.option_strings for a in p._actions)
             except Exception: return False
+        def _json_cli_value(value: Any) -> Any:
+            if isinstance(value, (dict, list)):
+                return value
+            if value is None:
+                return None
+            return json.loads(str(value))
         if not _has('--own-servers'):
             p.add_argument(
                 '--own-servers', nargs='*', default=None,
@@ -250,6 +259,18 @@ class ChannelMux:
                       "Listener instances ignore --remote-servers because multiple overlay peers make the target ambiguous. "
                         "Example JSON item: "
                         """'{"listen":{"protocol":"udp","bind":"::","port":16666},"target":{"protocol":"udp","host":"127.0.0.1","port":16666}}'""")
+            )
+        if not _has('--channel-mux-egress'):
+            p.add_argument(
+                '--channel-mux-egress',
+                dest='channel_mux_egress',
+                type=_json_cli_value,
+                default={"mode": "system"},
+                help=(
+                    "ChannelMux target-side egress policy object. "
+                    "Use mode system, direct, or manual; system uses WinHTTP on Windows and "
+                    "HTTP_PROXY/HTTPS_PROXY/NO_PROXY on Linux/POSIX for TCP target dials."
+                ),
             )
         # Keep backpressure knobs (apply to local TCP writers we own)
         if not _has('--mux-tcp-bp-threshold'):
@@ -838,6 +859,7 @@ class ChannelMux:
         self._tcp_first_overlay_to_local_logged: set[int] = set()
         self._tcp_first_remote_to_overlay_logged: set[int] = set()
         self._tcp_pending_drain_logged: set[int] = set()
+        self._channel_mux_udp_proxy_warned: bool = False
         self._tun_open_key_by_chan: dict[int, tuple[int, int, int, str, int, int, str, int]] = {}
         self._tun_chan_by_open_key: dict[tuple[int, int, int, str, int, int, str, int], int] = {}
         self._tun_by_chan: dict[int, ChannelMux.TunDevice] = {}
@@ -2080,6 +2102,108 @@ class ChannelMux:
             except Exception: pass
         self._tcp_backpressure_tasks.clear()
         self._tcp_backpressure_evt.clear()
+
+    def _channel_mux_egress_config(self) -> dict[str, Any]:
+        raw = getattr(self.args, "channel_mux_egress", None) if self.args is not None else None
+        return dict(raw) if isinstance(raw, Mapping) else {}
+
+    def _channel_mux_egress_mode(self) -> str:
+        return str(self._channel_mux_egress_config().get("mode") or "system").strip().lower()
+
+    def _channel_mux_egress_proxy_auth(self) -> str:
+        egress = self._channel_mux_egress_config()
+        default = "negotiate" if self._channel_mux_egress_mode() == "system" and sys.platform == "win32" else "none"
+        return str(egress.get("proxy_auth") or egress.get("auth") or default).strip().lower()
+
+    def _channel_mux_egress_connect_timeout(self) -> float:
+        value = self._channel_mux_egress_config().get("connect_timeout_seconds", 5.0)
+        try:
+            return max(0.1, float(value))
+        except Exception:
+            return 5.0
+
+    def _resolve_channel_mux_egress_proxy(self, host: str, port: int) -> Optional[tuple[str, int]]:
+        mode = self._channel_mux_egress_mode()
+        if mode in {"", "direct", "off", "none"}:
+            return None
+        egress = self._channel_mux_egress_config()
+        endpoint = resolve_proxy_endpoint(
+            mode=mode,
+            target_host=str(host),
+            target_port=int(port),
+            secure=False,
+            manual_host=str(egress.get("proxy_host") or egress.get("host") or ""),
+            manual_port=int(egress.get("proxy_port") or egress.get("port") or 0),
+            feature_enabled=True,
+            log=self.log,
+            log_prefix="[MUX-EGRESS]",
+        )
+        if endpoint is None:
+            self.log.debug("[MUX-EGRESS] direct TCP target=%s:%d mode=%s", host, int(port), mode)
+            return None
+        self.log.debug(
+            "[MUX-EGRESS] upstream proxy selected TCP target=%s:%d via=%s:%d mode=%s",
+            host,
+            int(port),
+            endpoint[0],
+            int(endpoint[1]),
+            mode,
+        )
+        return endpoint
+
+    async def _open_tcp_target_connection(self, host: str, port: int) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        upstream_proxy = self._resolve_channel_mux_egress_proxy(host, int(port))
+        if upstream_proxy is None:
+            return await asyncio.open_connection(host=host, port=int(port))
+
+        sock = await asyncio.to_thread(
+            open_http_connect_tunnel,
+            target_host=str(host),
+            target_port=int(port),
+            proxy=upstream_proxy,
+            auth_mode=self._channel_mux_egress_proxy_auth(),
+            timeout=self._channel_mux_egress_connect_timeout(),
+            log=self.log,
+            log_prefix="[MUX-EGRESS]",
+            user_agent="ObstacleBridge-channelmux/1.0",
+        )
+        try:
+            return await asyncio.open_connection(sock=sock)
+        except Exception:
+            sock.close()
+            raise
+
+    def _note_udp_egress_proxy_limit(self, host: str, port: int) -> None:
+        mode = self._channel_mux_egress_mode()
+        if mode in {"", "direct", "off", "none"} or self._channel_mux_udp_proxy_warned:
+            return
+        egress = self._channel_mux_egress_config()
+        try:
+            endpoint = resolve_proxy_endpoint(
+                mode=mode,
+                target_host=str(host),
+                target_port=int(port),
+                secure=False,
+                manual_host=str(egress.get("proxy_host") or egress.get("host") or ""),
+                manual_port=int(egress.get("proxy_port") or egress.get("port") or 0),
+                feature_enabled=True,
+                log=self.log,
+                log_prefix="[MUX-EGRESS]",
+            )
+        except Exception as exc:
+            self.log.debug("[MUX-EGRESS] UDP proxy-limit note skipped for %s:%d: %r", host, int(port), exc)
+            return
+        if endpoint is None:
+            return
+        self._channel_mux_udp_proxy_warned = True
+        self.log.info(
+            "[MUX-EGRESS] UDP target=%s:%d uses direct UDP; configured egress mode=%s resolves upstream proxy=%s:%d, but HTTP CONNECT-style proxies are not UDP relays",
+            host,
+            int(port),
+            mode,
+            endpoint[0],
+            int(endpoint[1]),
+        )
 
     # ---------- UDP server (unconnected; multi-origin) ----------
     async def _start_udp_server_for(self, spec: ChannelMux.ServiceSpec, svc_key: "ChannelMux.ServiceKey"):
@@ -4872,6 +4996,7 @@ class ChannelMux:
         async def _mk():
             try:
                 await self._run_service_hook(peer_spec, None, "client", "before_connect", channel_id=chan, peer_id=peer_id)
+                self._note_udp_egress_proxy_limit(str(host), int(r_port))
                 family = _listener_family_for_host(host)
                 if family == socket.AF_INET6:
                     local_addr = ("::", 0)
@@ -5322,7 +5447,7 @@ class ChannelMux:
             try:
                 await self._run_service_hook(peer_spec, None, "client", "before_connect", channel_id=chan, peer_id=peer_id)
                 self.log.info("[TCP/CLI] chan=%s connecting -> %s:%s", chan, host, r_port)
-                reader, writer = await asyncio.open_connection(host=host, port=int(r_port))
+                reader, writer = await self._open_tcp_target_connection(str(host), int(r_port))
                 self._tcp_by_chan[chan] = (svc_id, writer)
                 self._tcp_by_writer[writer] = (svc_id, chan)
                 self._tcp_role_by_chan[chan] = "client"
@@ -5983,6 +6108,41 @@ class ChannelMux:
             "tx_bytes": int(getattr(c, "bytes_out", 0)),
         }
 
+    def _remote_requested_listener_rows(self, proto: "ChannelMux.ProtoName") -> list[dict]:
+        if not (self._overlay_connected and self._accepting_enabled):
+            return []
+        proto_name = str(proto or "").strip().lower()
+        if proto_name not in {"udp", "tcp"}:
+            return []
+        rows: list[dict] = []
+        for spec in list(self._remote_services_requested or []):
+            if str(getattr(spec, "l_proto", "") or "").lower() != proto_name:
+                continue
+            if str(getattr(spec, "r_proto", "") or "").lower() != proto_name:
+                continue
+            rows.append({
+                "protocol": proto_name,
+                "role": "client",
+                "state": "listening",
+                "chan_id": None,
+                "svc_id": int(spec.svc_id),
+                "service_name": str(spec.name) if spec.name else "",
+                "source": None,
+                "local": {"host": str(spec.l_bind), "port": int(spec.l_port)},
+                "local_port": int(spec.l_port),
+                "remote_destination": {"host": str(spec.r_host), "port": int(spec.r_port)},
+                "catalog": "remote_servers",
+                "listener_location": "remote_peer",
+                "throttle": {"applicable": False, "active": False, "reason": "remote_listening"},
+                "stats": {
+                    "rx_msgs": 0,
+                    "tx_msgs": 0,
+                    "rx_bytes": 0,
+                    "tx_bytes": 0,
+                },
+            })
+        return rows
+
     def snapshot_udp_connections(self) -> list[dict]:
         rows: list[dict] = []
         now_ns = time.monotonic_ns()
@@ -6087,6 +6247,8 @@ class ChannelMux:
                 })
             except Exception:
                 continue
+
+        rows.extend(self._remote_requested_listener_rows("udp"))
 
         rows.sort(
             key=lambda x: (
@@ -6303,6 +6465,8 @@ class ChannelMux:
             except Exception:
                 continue
 
+        rows.extend(self._remote_requested_listener_rows("udp"))
+
         rows.sort(
             key=lambda x: (
                 x["protocol"],
@@ -6396,6 +6560,8 @@ class ChannelMux:
                         "tx_bytes": 0,
                     },
                 })
+
+        rows.extend(self._remote_requested_listener_rows("tcp"))
 
         rows.sort(
             key=lambda x: (
