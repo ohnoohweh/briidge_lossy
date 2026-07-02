@@ -1114,6 +1114,34 @@ function fmtThrottleSummary(throttle) {
   return `${state} ${used}/${budget} rem ${remaining}`;
 }
 
+function fmtTunFlowSummary(stats) {
+  const rxMsgs = fmtInteger(stats?.rx_msgs ?? 0);
+  const txMsgs = fmtInteger(stats?.tx_msgs ?? 0);
+  const rxBytes = fmtBytes(stats?.rx_bytes ?? 0);
+  const txBytes = fmtBytes(stats?.tx_bytes ?? 0);
+  return `in ${rxMsgs} / ${rxBytes} · out ${txMsgs} / ${txBytes}`;
+}
+
+function fmtDropDiagnostics(shared) {
+  const dropCounters = shared?.drop_counters || {};
+  const total = fmtInteger(dropCounters.total ?? 0);
+  const byReason = dropCounters.by_reason && typeof dropCounters.by_reason === 'object'
+    ? Object.entries(dropCounters.by_reason)
+    : [];
+  const reasons = byReason.length
+    ? byReason
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+      .map(([reason, count]) => `${reason} ${fmtInteger(count)}`)
+      .join(' · ')
+    : 'none';
+  const recentDrops = Array.isArray(shared?.recent_drops) ? shared.recent_drops : [];
+  const latest = recentDrops.length ? recentDrops[recentDrops.length - 1] : null;
+  const latestText = latest
+    ? `last ${latest.reason || 'drop'} ${latest.direction || 'unknown'}${latest.destination_ip ? ` -> ${latest.destination_ip}` : ''}`
+    : 'last none';
+  return `total ${total} · ${reasons}\n${latestText}`;
+}
+
 function renderConnectionTable(tbodyId, rows, protocolLabel = 'Connection') {
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
@@ -1245,7 +1273,7 @@ function renderTunRoutingSharedTable(tbodyId, rows) {
   if (!tbody) return;
 
   if (!rows || rows.length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No shared TUN routing state</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No shared TUN routing state</td></tr>';
     return;
   }
 
@@ -1274,6 +1302,8 @@ function renderTunRoutingSharedTable(tbodyId, rows) {
           return parts.join(' · ');
         }).join('\n')
       : 'none';
+    const flowText = fmtTunFlowSummary(row.stats || {});
+    const dropText = fmtDropDiagnostics(shared);
     return `
       <tr>
         <td class="mono">${escapeHtml(fmtInteger(row.svc_id))}</td>
@@ -1281,6 +1311,8 @@ function renderTunRoutingSharedTable(tbodyId, rows) {
         <td class="mono">${escapeHtml(fmtText(row.local?.ifname))}</td>
         <td class="mono" style="white-space:pre-wrap;">${escapeHtml(ownershipText)}</td>
         <td class="mono" style="white-space:pre-wrap;">${escapeHtml(bindingText)}</td>
+        <td class="mono" style="white-space:pre-wrap;">${escapeHtml(flowText)}</td>
+        <td class="mono" style="white-space:pre-wrap;">${escapeHtml(dropText)}</td>
       </tr>
     `;
   }).join('');
@@ -2809,14 +2841,20 @@ function renderPeerTable(rows) {
       }
     }
     const securityMetrics = showSecurityLifecycle ? renderMetricStack(securityLines) : '';
-    const lifecycleMetrics = showSecurityLifecycle ? [
-      renderMetric('last_event', secureLink.last_event),
-      renderMetric('last_event_unix_ts', fmtDateTime(secureLink.last_event_unix_ts)),
-      renderMetric('last_authenticated_unix_ts', fmtDateTime(secureLink.last_authenticated_unix_ts)),
-      renderMetric('authenticated_sessions_total', fmtInteger(secureLink.authenticated_sessions_total)),
-      renderMetric('rekeys_completed_total', fmtInteger(secureLink.rekeys_completed_total)),
-      renderMetric('last_rekey_trigger', secureLink.last_rekey_trigger),
-      ...(isCertMode ? [
+    const lifecycleMetrics = showSecurityLifecycle ? renderMetricStack([
+      [
+        renderMetric('last_event', secureLink.last_event),
+        renderMetric('last_event_unix_ts', fmtDateTime(secureLink.last_event_unix_ts)),
+        renderMetric('last_authenticated_unix_ts', fmtDateTime(secureLink.last_authenticated_unix_ts)),
+        renderMetric('authenticated_sessions_total', fmtInteger(secureLink.authenticated_sessions_total)),
+        renderMetric('rekeys_completed_total', fmtInteger(secureLink.rekeys_completed_total)),
+        renderMetric('last_rekey_trigger', secureLink.last_rekey_trigger),
+      ],
+      [
+        renderMetric('frames_passed_total', fmtInteger(secureLink.frames_passed_total)),
+        renderMetric('frames_dropped_total', fmtInteger(secureLink.frames_dropped_total)),
+      ],
+      ...(isCertMode ? [[
         renderMetric('active_material_generation', fmtInteger(secureLink.active_material_generation)),
         renderMetric('last_material_reload_unix_ts', fmtDateTime(secureLink.last_material_reload_unix_ts)),
         renderMetric('last_material_reload_scope', secureLink.last_material_reload_scope),
@@ -2825,8 +2863,8 @@ function renderPeerTable(rows) {
         renderMetric('trust_enforced_unix_ts', fmtDateTime(secureLink.trust_enforced_unix_ts)),
         renderMetric('disconnect_reason', secureLink.disconnect_reason),
         renderMetric('disconnect_detail', secureLink.disconnect_detail),
-      ] : []),
-    ] : [];
+      ]] : []),
+    ]) : '';
     const rowSpan = 1
       + (showProtocolRow ? 1 : 0)
       + (showCompressionRow ? 1 : 0)
@@ -2873,7 +2911,12 @@ function renderPeerTable(rows) {
         </td>
       </tr>
       `);
-      detailRows.push(renderPeerDetailRow('Lifecycle', lifecycleMetrics, 'peer-detail-row-end'));
+      detailRows.push(`
+      <tr class="peer-detail-row peer-detail-row-end">
+        <td class="peer-detail-kind">Lifecycle</td>
+        <td>${lifecycleMetrics}</td>
+      </tr>
+      `);
     }
     return `
       ${detailRows.join('')}
@@ -2989,6 +3032,7 @@ function applyTunRoutingDoc(j) {
   setText('tunRoutingListening', fmtInteger(j.summary?.tun_listening ?? 0));
   setText('tunRoutingSharedServices', fmtInteger(j.summary?.shared_services ?? 0));
   setText('tunRoutingActiveBindings', fmtInteger(j.summary?.shared_active_peer_bindings ?? 0));
+  setText('tunRoutingSharedDrops', fmtInteger(j.summary?.shared_drop_total ?? 0));
   setText('tunRoutingIncludedRoutes', fmtTunRoutingRouteList(j.included_routes));
   setText('tunRoutingExcludedRoutes', fmtTunRoutingRouteList(j.excluded_routes));
   setText('tunRoutingIncludedRoutes6', fmtTunRoutingRouteList(j.included_routes6));

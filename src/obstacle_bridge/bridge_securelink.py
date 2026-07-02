@@ -220,6 +220,8 @@ class _SecureLinkPeerState:
     last_failure_session_id: Optional[int] = None
     authenticated_sessions_total: int = 0
     rekeys_completed_total: int = 0
+    frames_passed_total: int = 0
+    frames_dropped_total: int = 0
     local_ephemeral_private: Any = None
     pending_local_ephemeral_private: Any = None
     peer_subject_id: str = ""
@@ -874,6 +876,13 @@ class SecureLinkPskSession(ISession):
         if self._client_mode:
             return 0
         return int(peer_id) if peer_id is not None else 1
+
+    @staticmethod
+    def _inherit_peer_counters(dst: _SecureLinkPeerState, src: Optional[_SecureLinkPeerState]) -> None:
+        if src is None:
+            return
+        dst.frames_passed_total = int(src.frames_passed_total or 0)
+        dst.frames_dropped_total = int(src.frames_dropped_total or 0)
 
     def _compute_connected(self) -> bool:
         if any(state.authenticated for state in self._peer_states.values()):
@@ -1996,6 +2005,8 @@ class SecureLinkPskSession(ISession):
                 "connected_since_unix_ts": state.connected_since_unix_ts if state is not None else None,
                 "authenticated_sessions_total": int(state.authenticated_sessions_total or 0) if state is not None else 0,
                 "rekeys_completed_total": int(state.rekeys_completed_total or 0) if state is not None else 0,
+                "frames_passed_total": int(state.frames_passed_total or 0) if state is not None else 0,
+                "frames_dropped_total": int(state.frames_dropped_total or 0) if state is not None else 0,
                 "transport": self._transport_name,
                 "peer_subject_id": str(state.peer_subject_id or "") if state is not None else "",
                 "peer_subject_name": str(state.peer_subject_name or "") if state is not None else "",
@@ -2115,6 +2126,8 @@ class SecureLinkPskSession(ISession):
                         "connected_since_unix_ts": None,
                         "authenticated_sessions_total": int(self._authenticated_sessions_total or 0),
                         "rekeys_completed_total": int(self._rekeys_completed_total or 0),
+                        "frames_passed_total": 0,
+                        "frames_dropped_total": 0,
                         "transport": self._transport_name,
                         "peer_subject_id": "",
                         "peer_subject_name": "",
@@ -2281,6 +2294,15 @@ class SecureLinkPskSession(ISession):
             and (time.time() - float(self._last_transport_epoch_change_unix_ts)) <= 2.0
         ):
             return
+        key = self._peer_key(peer_id)
+        state = self._peer_states.get(key)
+        if state is None:
+            state = _SecureLinkPeerState(
+                session_id=int(session_id or 0),
+                client_nonce=b"",
+            )
+            self._peer_states[key] = state
+        state.frames_dropped_total = int(state.frames_dropped_total or 0) + 1
         self._mark_auth_fail(peer_id, session_id, code)
         try:
             self._inner.send_app(self._build_frame(self._SL_TYPE_AUTH_FAIL, session_id, 0, bytes([int(code) & 0xFF])), peer_id=peer_id)
@@ -2301,6 +2323,7 @@ class SecureLinkPskSession(ISession):
             consecutive_failures=int(self._client_retry_consecutive_failures or 0),
             handshake_attempts_total=int(self._handshake_attempts_total or 0),
         )
+        self._inherit_peer_counters(state, self._peer_states.get(0))
         state.last_event = "handshake_started"
         state.last_event_unix_ts = time.time()
         self._peer_states[0] = state
@@ -2586,6 +2609,7 @@ class SecureLinkPskSession(ISession):
                 s2c_key=s2c_key,
                 handshake_attempts_total=int(self._handshake_attempts_total or 0),
             )
+            self._inherit_peer_counters(state, previous_state)
             state.local_ephemeral_private = server_eph_private
             self._apply_peer_identity(state, remote_identity)
             if previous_state is not None and int(previous_state.auth_fail_code or 0) > 0 and not previous_state.authenticated:
@@ -2624,6 +2648,7 @@ class SecureLinkPskSession(ISession):
             s2c_key=s2c_key,
             handshake_attempts_total=int(self._handshake_attempts_total or 0),
         )
+        self._inherit_peer_counters(state, previous_state)
         if previous_state is not None and int(previous_state.auth_fail_code or 0) > 0 and not previous_state.authenticated:
             state.auth_fail_code = int(previous_state.auth_fail_code or 0)
             state.auth_fail_reason = str(previous_state.auth_fail_reason or "")
@@ -2996,6 +3021,7 @@ class SecureLinkPskSession(ISession):
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_BAD_PSK)
             return
         state.rx_counter = counter
+        state.frames_passed_total = int(state.frames_passed_total or 0) + 1
         newly_authenticated = False
         if not state.authenticated:
             self._record_authenticated_session(

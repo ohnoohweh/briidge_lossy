@@ -344,6 +344,7 @@ def test_webadmin_server_source_exists() -> None:
 def test_proxy_server_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeProxyServer.swift").read_text(encoding="utf-8")
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     python_runtime = (ROOT / "src" / "obstacle_bridge" / "bridge_proxy_server.py").read_text(encoding="utf-8")
 
     assert "enum ObstacleBridgeProxyProtocolCodec" in runtime
@@ -368,6 +369,10 @@ def test_proxy_server_source_exists() -> None:
     assert 'flatPayload["proxy_provider_auth"]) as? [String: Any]' in provider
     assert 'flatPayload["proxy_provider_egress"]) as? [String: Any]' in provider
     assert 'flatPayload["proxy_provider_policy"]) as? [String: Any]' in provider
+    assert '"frames_passed_total": 0' in host_runner
+    assert '"frames_dropped_total": 0' in host_runner
+    assert '"frames_passed_total": 0' in provider
+    assert '"frames_dropped_total": 0' in provider
     assert "class ObstacleBridgeProxyProtocolCodec" in python_runtime
     assert "class ObstacleBridgeProxyServer" in python_runtime
     assert "parse_http_request_head" in python_runtime

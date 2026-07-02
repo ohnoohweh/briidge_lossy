@@ -366,6 +366,7 @@
               <div class="kv-row"><span>TUN Listening</span><strong id="tunRoutingListening">0</strong></div>
               <div class="kv-row"><span>Shared Services</span><strong id="tunRoutingSharedServices">0</strong></div>
               <div class="kv-row"><span>Active Peer Bindings</span><strong id="tunRoutingActiveBindings">0</strong></div>
+              <div class="kv-row"><span>Shared Drops</span><strong id="tunRoutingSharedDrops">0</strong></div>
             </div>
           </section>
 
@@ -458,11 +459,13 @@
                       <th>Interface</th>
                       <th>Ownership</th>
                       <th>Active Bindings</th>
+                      <th>ChannelMux Flow</th>
+                      <th>Drop Diagnostics</th>
                     </tr>
                   </thead>
                   <tbody id="tunRoutingSharedBody">
                     <tr class="empty-row">
-                      <td colspan="5">No shared TUN routing state</td>
+                      <td colspan="7">No shared TUN routing state</td>
                     </tr>
                   </tbody>
                 </table>
