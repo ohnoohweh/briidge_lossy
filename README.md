@@ -117,6 +117,8 @@ The wizard is designed for typical peer onboarding:
 
 The onboarding flow accepts either an invite token or a paste-ready configuration snippet for the initial setup. Both paths can carry transport and service-definition onboarding data (`own_servers`, `remote_servers`, secure-link mode/PSK envelope, peer endpoint settings, TUN routing, compression, admin web port, mux TCP backpressure knobs, and proxy-provider settings). Admin credentials are entered locally in the wizard and are not sourced from the invite token.
 
+Invite-derived apply updates use the same grouped config shape as persisted runtime config, including grouped `TUN_routing` sections, so Python and Swift runtimes accept the same onboarding payload structure.
+
 ### Manual/advanced startup (optional)
 If you prefer file-based bootstrap from the command line, use JSON config files:
 

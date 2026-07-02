@@ -70,6 +70,7 @@ Representative anchors for those areas:
 - current TUN / Routing Admin Web coverage also pins shared-TUN diagnostics so the page continues to expose ChannelMux interface-facing flow counters, shared-drop totals, per-reason drop summaries, and latest-drop context without inventing a second backend-only diagnostic path
 - current Admin Web source-level coverage also pins the service-catalog remove flow so deleting one structured `own_servers` or `remote_servers` entry neither replays stale modal state nor forces the operator to reopen the popup before continuing with the next remaining entry
 - current onboarding invite coverage includes Python and Swift parity for carrying admin web port, compression, TUN routing, mux TCP backpressure knobs, proxy-provider settings, service catalogs, and secure-link PSK material while masking the PSK in preview output
+- current onboarding apply coverage also pins grouped-section updates such as `TUN_routing` so Python invite import accepts the same sectioned payload shape that Swift-backed runtimes already persist and apply
 - iOS proxy-provider parity:
   - [tests/integration/test_proxy_provider_e2e.py](../tests/integration/test_proxy_provider_e2e.py)
   - [ios/tests/test_proxy_server_swift_parity.py](../ios/tests/test_proxy_server_swift_parity.py)

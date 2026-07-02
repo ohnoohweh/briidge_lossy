@@ -1015,6 +1015,7 @@ REQ-ADM-010:
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_roundtrip_and_suggested_updates
     - tests/unit/test_admin_web_payloads.py::test_onboarding_blueprints_group_active_peer_connections
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_preview_hides_psk_and_updates_keep_plaintext
+    - tests/unit/test_runner_config_persistence.py::test_update_config_accepts_grouped_tun_routing_section
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and_compression
 
 REQ-ADM-011:

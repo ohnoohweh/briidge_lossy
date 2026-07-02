@@ -1712,7 +1712,30 @@ class Runner:
     def update_config(self, updates: dict) -> tuple[bool, str]:
         if not isinstance(updates, dict):
             return (False, "updates must be an object")
-        normalized_updates = dict(updates)
+        section_aliases = {
+            "channel_mux": {
+                "egress": "channel_mux_egress",
+            },
+            "proxy_provider": {
+                "enabled": "proxy_provider_enabled",
+                "bind": "proxy_provider_bind",
+                "http_port": "proxy_provider_http_port",
+                "socks5_port": "proxy_provider_socks5_port",
+                "protocols": "proxy_provider_protocols",
+                "auth": "proxy_provider_auth",
+                "egress": "proxy_provider_egress",
+                "policy": "proxy_provider_policy",
+            },
+        }
+        section_keys = set((getattr(self.args, "_config_sections", {}) or {}).keys())
+        normalized_updates: dict[str, Any] = {}
+        for key, value in dict(updates).items():
+            if key in section_keys and isinstance(value, dict):
+                alias_map = section_aliases.get(str(key), {})
+                for nested_key, nested_value in value.items():
+                    normalized_updates[str(alias_map.get(nested_key, nested_key))] = nested_value
+                continue
+            normalized_updates[str(key)] = value
         if normalized_updates.get("admin_web_auth_disable") is True:
             normalized_updates["admin_web_username"] = ""
             normalized_updates["admin_web_password"] = ""

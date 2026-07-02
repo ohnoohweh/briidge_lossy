@@ -327,6 +327,7 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_payloads.py::test_admin_web_proxy_tab_renders_config_runtime_and_throughput
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_roundtrip_and_suggested_updates
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_preview_hides_psk_and_updates_keep_plaintext
+    - tests/unit/test_runner_config_persistence.py::test_update_config_accepts_grouped_tun_routing_section
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_ui_payload_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_security_advisor_payload_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_tun_routing_snapshot_matches_python
