@@ -532,6 +532,8 @@ Runtime behavior and caveats
 
 If your configuration includes any `tun,...` service entries, start ObstacleBridge with elevated operating-system privileges. On Linux and macOS, `python -m obstacle_bridge` now warns before relaunching itself through `sudo` for local desktop TUN startup when needed. On Windows that means a usable WinTun installation and either an Administrator session or approval of the automatic UAC relaunch.
 
+The runtime config surface also now reserves a `tun_execution` section for Linux-first helper-backed TUN privilege splitting. At the current delivered stage helper mode starts an authenticated local helper control plane, reports helper state through runtime snapshots, and can route `ChannelMux` local TUN traffic through the helper-backed Linux in-memory backend; the normal desktop inline backend still remains the default path.
+
 ## Configuration
 
 ### Best practice for editing parameters
@@ -1164,6 +1166,7 @@ python -m obstacle_bridge --config ObstacleBridge.cfg
 
 Launcher options: `--interval` (seconds between restarts when the process exits with code 77), `--no-redirect`, and `--command`.
 Any unknown launcher options are forwarded to `bridge.py`.
+When the default redirected mode is active and startup fails early, the launcher now replays the hidden child stderr tail so issues such as an inaccessible `--log-file` path are still shown to the operator.
 
 #### Current secure-link quick start
 

@@ -82,6 +82,35 @@ Run the smallest meaningful test set that proves the change, plus any parity par
 
 Include the exact commands and short results in the final response or PR description.
 
+## Design And TODO Hygiene
+
+When a task touches a design document, planning note, or implementation roadmap
+such as `docs/*DESIGN*.md`, keep that document aligned with the actual repo
+state before finishing the turn.
+
+- When planned work is completed, remove or rewrite the outdated future-tense
+  plan items.
+- When TODOs or open activities move forward, update the document so it clearly
+  separates delivered work, current limitations, and remaining follow-ups.
+- Do not leave design docs describing already-landed work as if it were still a
+  proposed step.
+
+## Iteration Expectation
+
+When the user asks for the "next step", "go ahead", or similar forward motion,
+prefer continuing to the next meaningful implementation slice instead of
+stopping at scaffolding.
+
+- Keep iterating until the function exists in usable form and focused test
+  coverage exists for that slice, unless the user explicitly pauses or narrows
+  scope.
+- If only configuration, protocol, or design scaffolding exists but the
+  user-facing/runtime behavior is still missing, continue with the next
+  implementation step rather than reporting partial progress as done.
+- If the behavior is intentionally incomplete, make the limitation explicit in
+  the relevant design/requirements notes and cover the current boundary with
+  tests.
+
 ## PR Descriptions
 
 When generating a PR description, use `docs/PULL_REQUEST_TEMPLATE.md` as the structure. Fill every section with real content:

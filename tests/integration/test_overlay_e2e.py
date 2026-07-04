@@ -2348,6 +2348,10 @@ def _admin_host_for_port(admin_port: int) -> str:
     return _admin_loopback_hosts(admin_port)[0]
 
 
+def _admin_http_url(admin_port: int, path: str) -> str:
+    return f'http://{_admin_host_for_port(admin_port)}:{admin_port}{path}'
+
+
 def _rewrite_registered_admin_url(url: str) -> str:
     try:
         parsed = urllib.parse.urlsplit(str(url))
@@ -2658,9 +2662,9 @@ def assert_static_http_root_serves_repeatedly(url: str, *, attempts: int = 6, ti
 
 def get_health(admin_port: int) -> dict:
     urls = [
-        f'http://127.0.0.1:{admin_port}/api/health',
-        f'http://127.0.0.1:{admin_port}/healthz',
-        f'http://127.0.0.1:{admin_port}/api/status',
+        _admin_http_url(admin_port, '/api/health'),
+        _admin_http_url(admin_port, '/healthz'),
+        _admin_http_url(admin_port, '/api/status'),
     ]
     last_exc: Optional[Exception] = None
     for url in urls:
@@ -2678,7 +2682,7 @@ def get_health(admin_port: int) -> dict:
 
 def try_get_status(admin_port: int) -> Optional[dict]:
     try:
-        _code, body = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.5)
+        _code, body = fetch_json(_admin_http_url(admin_port, '/api/status'), timeout=1.5)
         return body
     except urllib.error.HTTPError as e:
         if e.code == 503:
@@ -2713,7 +2717,7 @@ def wait_admin_up(admin_port: int, timeout: float = 10.0) -> dict:
 def wait_admin_auth_up(admin_port: int, timeout: float = 10.0) -> dict:
     end = time.time() + timeout
     last_exc = None
-    url = f'http://127.0.0.1:{admin_port}/api/auth/state'
+    url = _admin_http_url(admin_port, '/api/auth/state')
     log.info(f'[HARNESS] wait_admin_auth_up using {url}')
     while time.time() < end:
         try:
@@ -2740,7 +2744,7 @@ def wait_status_connected_auth(
     last = None
     while time.time() < end:
         code, body = fetch_json_auth(
-            f'http://127.0.0.1:{admin_port}/api/status',
+            _admin_http_url(admin_port, '/api/status'),
             timeout=1.5,
             opener=opener,
         )
@@ -2763,7 +2767,7 @@ def admin_authenticate(
 ) -> tuple[int, dict, urllib.request.OpenerDirector]:
     op = opener or make_json_opener(with_cookies=True)
     code, challenge = request_json(
-        f'http://127.0.0.1:{admin_port}/api/auth/challenge',
+        _admin_http_url(admin_port, '/api/auth/challenge'),
         timeout=1.5,
         opener=op,
     )
@@ -2775,7 +2779,7 @@ def admin_authenticate(
     challenge_id = str(challenge.get('challenge_id') or '')
     proof = hashlib.sha256(f'{seed}:{username}:{password}'.encode('utf-8')).hexdigest()
     login_code, login_doc = request_json(
-        f'http://127.0.0.1:{admin_port}/api/auth/login',
+        _admin_http_url(admin_port, '/api/auth/login'),
         method='POST',
         payload={'challenge_id': challenge_id, 'proof': proof},
         timeout=1.5,
@@ -11299,6 +11303,40 @@ def test_overlay_e2e_alloc_admin_ports_isolates_xdist_workers(monkeypatch: pytes
     assert server_port < 65535
     assert client_port < 65535
     assert admin_args(server_port) == ['--admin-web', '--admin-web-bind', expected_admin_host, '--admin-web-port', str(server_port)]
+
+
+def test_overlay_e2e_get_health_uses_registered_admin_loopback_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    port = 61234
+    ADMIN_PORT_LOOPBACKS[port] = ("127.88.77.66", "::1")
+    seen_urls: list[str] = []
+
+    def _fake_fetch_json(url: str, timeout: float = 1.5):
+        seen_urls.append(url)
+        return 200, {"ok": True}
+
+    monkeypatch.setattr(sys.modules[__name__], "fetch_json", _fake_fetch_json)
+
+    body = get_health(port)
+
+    assert body == {"ok": True}
+    assert seen_urls == [f"http://127.88.77.66:{port}/api/health"]
+
+
+def test_overlay_e2e_try_get_status_uses_registered_admin_loopback_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    port = 61235
+    ADMIN_PORT_LOOPBACKS[port] = ("127.88.77.67", "::1")
+    seen_urls: list[str] = []
+
+    def _fake_fetch_json(url: str, timeout: float = 1.5):
+        seen_urls.append(url)
+        return 200, {"ok": True, "state": "CONNECTED"}
+
+    monkeypatch.setattr(sys.modules[__name__], "fetch_json", _fake_fetch_json)
+
+    body = try_get_status(port)
+
+    assert body == {"ok": True, "state": "CONNECTED"}
+    assert seen_urls == [f"http://127.88.77.67:{port}/api/status"]
 
 
 def test_overlay_e2e_case_port_offset_stays_in_range_for_many_workers(monkeypatch: pytest.MonkeyPatch) -> None:

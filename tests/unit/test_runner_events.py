@@ -198,6 +198,16 @@ class RunnerProcessBreadcrumbTests(unittest.TestCase):
         self.assertIn("--preserve-env=OBSTACLEBRIDGE_LINUX_TUN_ELEVATED", execvpe.call_args.args[1][2])
         self.assertEqual(execvpe.call_args.args[2]["OBSTACLEBRIDGE_LINUX_TUN_ELEVATED"], "1")
 
+    def test_linux_helper_mode_skips_whole_process_tun_reexec(self):
+        args = self._make_args()
+        args.tun_execution_mode = "helper"
+
+        with mock.patch.object(bridge_runner.sys, "platform", "linux"), \
+             mock.patch.object(bridge_runner.os, "geteuid", return_value=1000), \
+             mock.patch.object(bridge_runner, "_configured_local_tun_services", return_value=[object()]), \
+             mock.patch.object(bridge_runner, "_configured_packetflow_connector_mode", return_value=""):
+            self.assertFalse(bridge_runner._needs_linux_tun_elevation(args))
+
     def test_macos_tun_reexec_prints_notice_before_sudo_password_prompt(self):
         fake_log = mock.Mock()
         stderr = io.StringIO()

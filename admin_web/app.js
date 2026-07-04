@@ -1719,6 +1719,36 @@ async function reconnectPeer(peerId, triggerButton = null) {
   }
 }
 
+async function repairTunHelperState() {
+  const btn = document.getElementById('tunHelperRepairBtn');
+  try {
+    if (btn) btn.disabled = true;
+    const r = await apiFetch('/api/tun-helper/repair', { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(String(j.error || j.reason || ('HTTP ' + r.status)));
+    }
+    await loadTunRouting();
+    const verification = j.verification || {};
+    const remainingCount = Array.isArray(verification.remaining) ? verification.remaining.length : 0;
+    const skippedCount = Array.isArray(verification.skipped) ? verification.skipped.length : 0;
+    const verificationSummary = String(
+      verification.summary ||
+      (verification.stale_state_remaining
+        ? 'Post-repair verification could not confirm that all helper-owned host state was cleared.'
+        : 'Post-repair verification did not find remaining helper-owned host state.')
+    );
+    window.alert(
+      `TUN helper repair completed. Repaired steps: ${String((j.repaired || []).join(', ') || 'none')}. `
+      + `${verificationSummary} Remaining findings: ${remainingCount}. Unverified checks: ${skippedCount}.`
+    );
+  } catch (e) {
+    window.alert(`TUN helper repair failed: ${e}`);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function requestSecureLinkRekey(peerId) {
   const normalizedPeerId = String(peerId || '').trim();
   if (!normalizedPeerId) {
@@ -3037,6 +3067,51 @@ function applyTunRoutingDoc(j) {
   setText('tunRoutingExcludedRoutes', fmtTunRoutingRouteList(j.excluded_routes));
   setText('tunRoutingIncludedRoutes6', fmtTunRoutingRouteList(j.included_routes6));
   setText('tunRoutingExcludedRoutes6', fmtTunRoutingRouteList(j.excluded_routes6));
+  const helper = j.tun_helper || {};
+  const runtime = helper.runtime || {};
+  setText('tunHelperMode', helper.enabled ? String(helper.mode || 'helper') : 'inline');
+  setText('tunHelperBackend', String(helper.backend || runtime.backend || 'n/a'));
+  setText('tunHelperConnected', helper.connected ? 'yes' : 'no');
+  setText('tunHelperServerStarted', helper.server_started ? 'yes' : 'no');
+  setText('tunHelperApplyNetwork', helper.apply_network ? 'yes' : 'no');
+  setText('tunHelperSocket', String(helper.socket_path || 'n/a'));
+  setText('tunHelperIfname', String(runtime.ifname || 'n/a'));
+  setText('tunHelperMtu', fmtInteger(runtime.mtu ?? 0));
+  setText('tunHelperPacketsFromRuntime', fmtInteger(runtime.packets_from_runtime ?? 0));
+  setText('tunHelperPacketsToRuntime', fmtInteger(runtime.packets_to_runtime ?? 0));
+  setText('tunHelperLastError', String(helper.last_error || 'n/a'));
+  const helperRecovery = helper.recovery || {};
+  let helperRecoveryText = 'none';
+  if (helperRecovery && helperRecovery.needs_manual_cleanup) {
+    helperRecoveryText = String(
+      helperRecovery.summary ||
+      helperRecovery.repair_hint ||
+      'manual cleanup recommended'
+    );
+  }
+  setText('tunHelperRecovery', helperRecoveryText);
+  const helperLastRepair = helper.last_repair || {};
+  let helperLastRepairText = 'none';
+  if (helperLastRepair && helperLastRepair.attempted) {
+    const verification = helperLastRepair.verification || {};
+    const remainingCount = Array.isArray(verification.remaining) ? verification.remaining.length : 0;
+    const skippedCount = Array.isArray(verification.skipped) ? verification.skipped.length : 0;
+    helperLastRepairText = String(
+      helperLastRepair.summary ||
+      (helperLastRepair.stale_state_remaining
+        ? 'repair attempted but stale state may still remain'
+        : 'repair succeeded')
+    );
+    if (remainingCount || skippedCount) {
+      helperLastRepairText += ` (remaining findings: ${remainingCount}, unverified checks: ${skippedCount})`;
+    }
+  }
+  setText('tunHelperLastRepair', helperLastRepairText);
+  const helperRepairBtn = document.getElementById('tunHelperRepairBtn');
+  if (helperRepairBtn instanceof HTMLButtonElement) {
+    helperRepairBtn.classList.toggle('hidden', !(helperRecovery && helperRecovery.needs_manual_cleanup));
+    helperRepairBtn.disabled = !(helperRecovery && helperRecovery.needs_manual_cleanup);
+  }
 }
 
 async function loadConfig() {
@@ -4499,6 +4574,7 @@ function initMetaToggle() {
 }
 
 document.getElementById('restartBtn').addEventListener('click', restart);
+document.getElementById('tunHelperRepairBtn')?.addEventListener('click', repairTunHelperState);
 document.getElementById('logoutBtn')?.addEventListener('click', logoutAdmin);
 document.getElementById('exitBtn')?.addEventListener('click', exitProgram);
 document.getElementById('secureLinkReloadRevocationBtn')?.addEventListener('click', () => requestSecureLinkReload('revocation'));

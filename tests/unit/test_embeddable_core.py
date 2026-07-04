@@ -68,6 +68,30 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         self.assertEqual(args.channel_mux_egress["proxy_auth"], "none")
         self.assertIn("channel_mux_egress", args._config_sections["channel_mux"])
 
+    def test_build_runtime_args_preserves_tun_execution_section(self) -> None:
+        args = build_runtime_args_from_config(
+            {
+                "tun_execution": {
+                    "mode": "helper",
+                    "helper_backend": "linux-native",
+                    "helper_socket": "/run/user/1000/obstaclebridge/tun-helper.sock",
+                    "helper_apply_network": False,
+                    "helper_log_level": "debug",
+                }
+            }
+        )
+
+        self.assertEqual(args.tun_execution_mode, "helper")
+        self.assertEqual(args.tun_helper_backend, "linux-native")
+        self.assertEqual(
+            args.tun_helper_socket,
+            "/run/user/1000/obstaclebridge/tun-helper.sock",
+        )
+        self.assertFalse(args.tun_helper_apply_network)
+        self.assertEqual(args.tun_helper_log_level, "debug")
+        self.assertIn("tun_execution", args._config_sections)
+        self.assertIn("tun_execution_mode", args._config_sections["tun_execution"])
+
     def test_build_runtime_args_prefers_runner_overlay_transport_over_legacy_root_value(self) -> None:
         args = build_runtime_args_from_config(
             {
@@ -247,6 +271,22 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         self.assertEqual(args.overlay_transport, "tcp")
         self.assertIn("admin_web", args._config_sections)
         self.assertIn("overlay_transport", args._config_defaults)
+
+    def test_parse_runtime_args_exposes_tun_execution_cli_metadata(self) -> None:
+        args = parse_runtime_args(
+            [
+                "--tun-execution-mode",
+                "helper",
+                "--tun-helper-socket",
+                "/tmp/ob.sock",
+            ],
+            apply_logging=False,
+        )
+
+        self.assertIn("tun_execution", args._config_sections)
+        self.assertIn("tun_execution_mode", args._config_sections["tun_execution"])
+        self.assertEqual(args.tun_execution_mode, "helper")
+        self.assertEqual(args.tun_helper_socket, "/tmp/ob.sock")
 
 
 class ProxyProviderRunnerLifecycleTests(unittest.IsolatedAsyncioTestCase):

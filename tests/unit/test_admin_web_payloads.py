@@ -25,6 +25,56 @@ class _RunnerStub:
             secure_link_psk="bridge-secret",
         )
         self.restart_requested = False
+        self.tun_helper_repair_response = {
+            "ok": True,
+            "cleanup_ok": True,
+            "repaired": ["firewall", "included_routes"],
+            "failed": [],
+            "verification": {
+                "ok": True,
+                "checked": ["firewall", "included_routes"],
+                "remaining": [],
+                "skipped": [],
+                "stale_state_remaining": False,
+                "summary": "Post-repair verification did not find remaining helper-owned host state.",
+            },
+            "status": {
+                "enabled": True,
+                "mode": "helper",
+                "backend": "linux-native",
+                "apply_network": True,
+                "socket_path": "/run/user/1000/obstaclebridge/tun-helper.sock",
+                "connected": False,
+                "server_started": False,
+                "last_error": "TUN helper connection closed",
+                "recovery": {},
+                "last_repair": {
+                    "attempted": True,
+                    "ok": True,
+                    "cleanup_ok": True,
+                    "stale_state_remaining": False,
+                    "repaired": ["firewall", "included_routes"],
+                    "failed": [],
+                    "verification": {
+                        "ok": True,
+                        "checked": ["firewall", "included_routes"],
+                        "remaining": [],
+                        "skipped": [],
+                        "stale_state_remaining": False,
+                        "summary": "Post-repair verification did not find remaining helper-owned host state.",
+                    },
+                    "verified_state": "stale_state_cleared",
+                    "summary": "Repair succeeded and post-repair verification did not find remaining helper-owned state.",
+                },
+                "runtime": {
+                    "backend": "linux-native",
+                    "ifname": "obtun0",
+                    "firewall_manager": "",
+                    "applied_firewall_rules": [],
+                    "network_applied": False,
+                },
+            },
+        }
 
     def get_config_snapshot(self, include_secrets: bool = False):
         blocked = {"config", "dump_config", "save_config", "save_format", "force", "help"}
@@ -89,6 +139,53 @@ class _RunnerStub:
                 "decompress_ok_total": 9,
                 "decompress_fail_total": 0,
                 "compression_saving_ratio": 0.5,
+            },
+            "tun_helper": {
+                "enabled": True,
+                "mode": "helper",
+                "backend": "linux-python",
+                "apply_network": True,
+                "socket_path": "/run/user/1000/obstaclebridge/tun-helper.sock",
+                "connected": True,
+                "server_started": True,
+                "last_error": "",
+                "recovery": {},
+                "last_repair": {
+                    "attempted": True,
+                    "ok": True,
+                    "cleanup_ok": True,
+                    "stale_state_remaining": False,
+                    "repaired": ["firewall"],
+                    "failed": [],
+                    "verification": {
+                        "ok": True,
+                        "checked": ["firewall"],
+                        "remaining": [],
+                        "skipped": [],
+                        "stale_state_remaining": False,
+                        "summary": "Post-repair verification did not find remaining helper-owned host state.",
+                    },
+                    "verified_state": "stale_state_cleared",
+                    "summary": "Repair succeeded and post-repair verification did not find remaining helper-owned state.",
+                },
+                "runtime": {
+                    "backend": "linux-python-memory",
+                    "opened": True,
+                    "ifname": "obtun0",
+                    "mtu": 1500,
+                    "packets_from_runtime": 12,
+                    "packets_to_runtime": 9,
+                    "last_failure": {
+                        "operation": "apply_network",
+                        "stage": "dns_apply",
+                        "error_type": "CalledProcessError",
+                        "detail": "dns failed",
+                        "cleanup_attempted": True,
+                        "cleanup_ok": True,
+                        "unix_ts": 1700000300.0,
+                    },
+                    "stopped": False,
+                },
             },
         }
 
@@ -248,6 +345,9 @@ class _RunnerStub:
 
     def request_restart(self):
         self.restart_requested = True
+
+    def request_tun_helper_repair(self):
+        return dict(self.tun_helper_repair_response)
 
 
 class _RunnerCertStub(_RunnerStub):
@@ -582,6 +682,14 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["shared_services"], 1)
         self.assertEqual(payload["summary"]["shared_active_peer_bindings"], 1)
         self.assertEqual(payload["summary"]["shared_drop_total"], 3)
+        self.assertTrue(payload["tun_helper"]["enabled"])
+        self.assertEqual(payload["tun_helper"]["mode"], "helper")
+        self.assertEqual(payload["tun_helper"]["runtime"]["ifname"], "obtun0")
+        self.assertEqual(payload["tun_helper"]["runtime"]["packets_from_runtime"], 12)
+        self.assertEqual(payload["tun_helper"]["runtime"]["last_failure"]["stage"], "dns_apply")
+        self.assertEqual(payload["tun_helper"]["recovery"], {})
+        self.assertTrue(payload["tun_helper"]["last_repair"]["attempted"])
+        self.assertFalse(payload["tun_helper"]["last_repair"]["stale_state_remaining"])
         self.assertEqual(len(payload["shared_tun"]), 1)
         self.assertEqual(payload["shared_tun"][0]["service_name"], "shared-tun")
         self.assertEqual(payload["shared_tun"][0]["shared_tun_ownership"]["peer_count"], 2)
@@ -683,6 +791,51 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["excluded_routes"], ["127.0.0.0/8", "38.180.143.5/32"])
         self.assertEqual(payload["included_routes6"], ["::/0"])
         self.assertEqual(payload["excluded_routes6"], ["::1/128", "::ffff:38.180.143.5/128"])
+
+    def test_tun_routing_ui_binds_tun_helper_fields(self):
+        app_js = self._canonical_webadmin_paths()[0].read_text(encoding="utf-8")
+
+        self.assertIn("setText('tunHelperMode'", app_js)
+        self.assertIn("setText('tunHelperBackend'", app_js)
+        self.assertIn("setText('tunHelperConnected'", app_js)
+        self.assertIn("setText('tunHelperPacketsFromRuntime'", app_js)
+        self.assertIn("setText('tunHelperPacketsToRuntime'", app_js)
+        self.assertIn("setText('tunHelperLastError'", app_js)
+        self.assertIn("setText('tunHelperRecovery'", app_js)
+        self.assertIn("setText('tunHelperLastRepair'", app_js)
+        self.assertIn("apiFetch('/api/tun-helper/repair'", app_js)
+        self.assertIn("Remaining findings:", app_js)
+        self.assertIn("document.getElementById('tunHelperRepairBtn')", app_js)
+
+    def test_tun_helper_repair_endpoint_returns_runner_payload(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+            admin_web_token="",
+        )
+        runner = _RunnerStub()
+        ui = AdminWebUI(args, runner)
+
+        async def run_flow():
+            writer = _WriterStub()
+            await ui._handle_tun_helper_repair(writer, "POST", {})
+            doc = _http_json_body(writer)
+            self.assertTrue(doc["ok"])
+            self.assertTrue(doc["cleanup_ok"])
+            self.assertEqual(doc["repaired"], ["firewall", "included_routes"])
+            self.assertEqual(doc["failed"], [])
+            self.assertEqual(doc["verification"]["remaining"], [])
+
+        asyncio.run(run_flow())
 
     def test_meta_payload_suppresses_runtime_dependency_warnings_on_ios(self):
         args = argparse.Namespace(

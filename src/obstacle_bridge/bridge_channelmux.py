@@ -170,6 +170,8 @@ class ChannelMux:
         service_key: Optional["ChannelMux.ServiceKey"] = None
         reader_registered: bool = False
         chan_id: Optional[int] = None
+        helper_managed: bool = False
+        helper_network_applied: bool = False
 
     def _record_sync_diag(self, name: str, *, phase: str, error: str = "") -> None:
         cb = getattr(self, "_runner_sync_diag_cb", None)
@@ -291,6 +293,9 @@ class ChannelMux:
         mux.args = args
         with contextlib.suppress(Exception):
             mux._tun_routing_settings = TunRoutingSettings.from_mapping(vars(args))
+        mux._tun_helper_settings = getattr(args, "_tun_helper_settings", None)
+        mux._tun_helper_client = getattr(args, "_tun_helper_client", None)
+        mux._tun_helper_backend = getattr(args, "_tun_helper_backend", None)
         # Parse catalog
         services = ChannelMux._parse_own_servers(getattr(args, 'own_servers', None))
         remote_services = ChannelMux._parse_remote_servers(getattr(args, 'remote_servers', None))
@@ -788,6 +793,12 @@ class ChannelMux:
         self._overlay_peer_host = ""
         self._overlay_peer_port = 0
         self._process_shared_tun_registry: Optional[ProcessSharedTunRegistry] = None
+        self._tun_helper_settings = None
+        self._tun_helper_client = None
+        self._tun_helper_backend = None
+        self._tun_helper_reader_tasks: dict[int, asyncio.Task] = {}
+        self._tun_helper_remove_tasks: dict[int, asyncio.Task] = {}
+        self._tun_helper_devices: dict[int, ChannelMux.TunDevice] = {}
 
         # Overlay state gate
         self._overlay_connected: bool = self.session.is_connected()
@@ -1971,6 +1982,7 @@ class ChannelMux:
         self._ensure_task = self._sweeper_task = None
         await self._stop_all_services()
         await self._close_all_channels()
+        await self._await_tun_helper_remove_tasks()
         await self._drop_peer_installed_services(peer_id=None)
 
     # ---------- overlay state ----------
@@ -3105,8 +3117,15 @@ class ChannelMux:
                 if registry is not None:
                     close_dev = bool(registry.release(self, dev))
                 if close_dev:
-                    if spec is not None:
+                    if spec is not None and not self._helper_owns_tun_listener_network_lifecycle(spec, dev=dev):
                         await self._run_service_hook(spec, svc_key, "listener", "on_stopped")
+                    elif spec is not None:
+                        self.log.info(
+                            "[TUN/HELPER] helper owns listener on_stopped host-network lifecycle if=%s service=%s:%s",
+                            str(getattr(dev, "ifname", "") or ""),
+                            svc_key[0],
+                            spec.svc_id,
+                        )
                     self._close_tun_device(dev)
                 else:
                     self.log.info(
@@ -3400,6 +3419,29 @@ class ChannelMux:
         _bridge_tun_platform.require_tun_support(cls)
 
     def _open_tun_device(self, ifname: str, mtu: int, svc_key: Optional["ChannelMux.ServiceKey"] = None) -> "ChannelMux.TunDevice":
+        if self._tun_helper_active():
+            backend = self._tun_helper_backend
+            client = self._tun_helper_client
+            opened: dict[str, Any]
+            if backend is not None:
+                opener = getattr(backend, "local_open_tun", None)
+                if not callable(opener):
+                    raise RuntimeError("helper TUN backend does not support local_open_tun")
+                opened = dict(opener({"ifname": ifname, "mtu": mtu}) or {})
+            elif client is not None:
+                opened = {"ifname": ifname, "mtu": mtu, "backend": "helper-client"}
+            else:
+                raise RuntimeError("helper TUN mode is active but no helper backend or helper client is available")
+            dev = ChannelMux.TunDevice(
+                fd=-1,
+                ifname=str(opened.get("ifname") or ifname),
+                mtu=int(opened.get("mtu") or mtu),
+                service_key=svc_key,
+                helper_managed=True,
+            )
+            self._tun_helper_open_device(dev)
+            self._tun_helper_apply_network_for_device(dev)
+            return dev
         self._require_tun_support()
         try:
             return _bridge_tun_platform.open_tun_device(self, ifname, mtu, svc_key=svc_key)
@@ -3412,6 +3454,18 @@ class ChannelMux:
             raise
 
     def _register_tun_reader(self, dev: "ChannelMux.TunDevice", *, force_owner: bool = False) -> None:
+        if self._tun_helper_manages_device(dev):
+            current_owner = getattr(dev, "_reader_mux", None)
+            if dev.reader_registered and current_owner is self and not force_owner:
+                return
+            existing_task = self._tun_helper_reader_tasks.pop(id(dev), None)
+            if existing_task is not None:
+                existing_task.cancel()
+            dev.reader_registered = True
+            setattr(dev, "_reader_mux", self)
+            self._tun_helper_devices[id(dev)] = dev
+            self._tun_helper_reader_tasks[id(dev)] = self.loop.create_task(self._tun_helper_read_loop(dev))
+            return
         current_owner = getattr(dev, "_reader_mux", None)
         if dev.reader_registered and current_owner is self and not force_owner:
             return
@@ -3483,9 +3537,30 @@ class ChannelMux:
         self._schedule_tun_reader_registration(dev)
 
     def _close_tun_device(self, dev: "ChannelMux.TunDevice") -> None:
+        if self._tun_helper_manages_device(dev):
+            task = self._tun_helper_reader_tasks.pop(id(dev), None)
+            if task is not None:
+                task.cancel()
+            self._tun_helper_devices.pop(id(dev), None)
+            self._tun_helper_remove_network_for_device(dev)
+            dev.reader_registered = False
+            return
         _bridge_tun_platform.close_tun_device(self, dev)
 
     def _write_tun_packet(self, dev: "ChannelMux.TunDevice", data: bytes) -> None:
+        if self._tun_helper_manages_device(dev):
+            backend = self._tun_helper_backend
+            if backend is not None:
+                writer = getattr(backend, "local_write_packet", None)
+                if not callable(writer):
+                    raise RuntimeError("helper TUN backend does not support local_write_packet")
+                writer(data)
+                return
+            client = self._tun_helper_client
+            if client is None:
+                raise RuntimeError("helper TUN client is not available for packet write")
+            self.loop.create_task(self._tun_helper_write_packet(client, dev, data))
+            return
         if _bridge_tun_platform is not None:
             writer = getattr(_bridge_tun_platform, "write_tun_packet", None)
             if callable(writer):
@@ -3524,6 +3599,178 @@ class ChannelMux:
                         self._install_shared_tun_ownership_for_service(shared_svc_key, spec)
                 return attached
         return None
+
+    def _tun_helper_active(self) -> bool:
+        settings = self._tun_helper_settings
+        return bool(settings is not None and str(getattr(settings, "mode", "")).strip().lower() == "helper")
+
+    def _tun_helper_manages_device(self, dev: Optional["ChannelMux.TunDevice"]) -> bool:
+        return bool(dev is not None and getattr(dev, "helper_managed", False) and self._tun_helper_active())
+
+    def _tun_helper_network_payload(self, dev: "ChannelMux.TunDevice") -> dict[str, Any]:
+        service_key = getattr(dev, "service_key", None)
+        tun_routing = dict(vars(self._tun_routing_settings))
+        extra4, extra6 = auto_overlay_peer_excluded_routes(vars(self.args))
+        tun_routing["excluded_routes"] = list(
+            dict.fromkeys([*list(tun_routing.get("excluded_routes") or []), *list(extra4)])
+        )
+        tun_routing["excluded_routes6"] = list(
+            dict.fromkeys([*list(tun_routing.get("excluded_routes6") or []), *list(extra6)])
+        )
+        listener_hook_env: dict[str, str] = {}
+        spec = self._effective_services_by_id().get(service_key) if isinstance(service_key, tuple) else None
+        if spec is not None:
+            for event_name in ("on_created", "on_stopped"):
+                command_spec = self._hook_command_spec_for(spec, "listener", event_name)
+                env_values = command_spec.get("env") if isinstance(command_spec, dict) else None
+                if not isinstance(env_values, dict):
+                    continue
+                for key, value in env_values.items():
+                    text_key = str(key or "").strip()
+                    if not text_key:
+                        continue
+                    listener_hook_env[text_key] = str(value or "")
+        return {
+            "ifname": str(getattr(dev, "ifname", "") or ""),
+            "mtu": int(getattr(dev, "mtu", 0) or 0),
+            "service_key": list(service_key) if isinstance(service_key, tuple) else [],
+            "service_catalog": "own_servers" if isinstance(service_key, tuple) and str(service_key[0]) == "local" else "remote_servers",
+            "listener_hook_env": listener_hook_env,
+            "tun_routing": tun_routing,
+        }
+
+    def _helper_owns_tun_listener_network_lifecycle(
+        self,
+        spec: Optional["ChannelMux.ServiceSpec"],
+        *,
+        dev: Optional["ChannelMux.TunDevice"] = None,
+    ) -> bool:
+        if spec is None or str(getattr(spec, "l_proto", "") or "") != "tun":
+            return False
+        settings = self._tun_helper_settings
+        if not bool(getattr(settings, "helper_apply_network", False)):
+            return False
+        if dev is not None:
+            return self._tun_helper_manages_device(dev)
+        return False
+
+    def _tun_helper_open_device(self, dev: "ChannelMux.TunDevice") -> None:
+        client = self._tun_helper_client
+        if not self._tun_helper_manages_device(dev) or client is None:
+            return
+        self.loop.create_task(self._tun_helper_open_device_async(client, dev))
+
+    def _tun_helper_apply_network_for_device(self, dev: "ChannelMux.TunDevice") -> None:
+        settings = self._tun_helper_settings
+        if not self._tun_helper_manages_device(dev):
+            return
+        if not bool(getattr(settings, "helper_apply_network", False)):
+            return
+        backend = self._tun_helper_backend
+        if backend is not None:
+            apply_network = getattr(backend, "local_apply_network", None)
+            if not callable(apply_network):
+                self.log.warning("[TUN/HELPER] helper backend does not support local_apply_network for if=%s", dev.ifname)
+                return
+            apply_network(self._tun_helper_network_payload(dev))
+            dev.helper_network_applied = True
+            return
+        client = self._tun_helper_client
+        if client is None:
+            self.log.warning("[TUN/HELPER] helper client is not available for network apply if=%s", dev.ifname)
+            return
+        dev.helper_network_applied = True
+        self.loop.create_task(self._tun_helper_apply_network_async(client, dev))
+
+    def _tun_helper_remove_network_for_device(self, dev: "ChannelMux.TunDevice") -> None:
+        if not self._tun_helper_manages_device(dev):
+            return
+        if not bool(getattr(dev, "helper_network_applied", False)):
+            return
+        backend = self._tun_helper_backend
+        if backend is not None:
+            remove_network = getattr(backend, "local_remove_network", None)
+            if not callable(remove_network):
+                self.log.warning("[TUN/HELPER] helper backend does not support local_remove_network for if=%s", dev.ifname)
+                return
+            remove_network(self._tun_helper_network_payload(dev))
+            dev.helper_network_applied = False
+            return
+        client = self._tun_helper_client
+        if client is None:
+            self.log.warning("[TUN/HELPER] helper client is not available for network remove if=%s", dev.ifname)
+            return
+        dev.helper_network_applied = False
+        task = self.loop.create_task(self._tun_helper_remove_network_async(client, dev))
+        dev_id = id(dev)
+        self._tun_helper_remove_tasks[dev_id] = task
+        def _clear_done(_task: asyncio.Task, *, _dev_id: int = dev_id) -> None:
+            current = self._tun_helper_remove_tasks.get(_dev_id)
+            if current is _task:
+                self._tun_helper_remove_tasks.pop(_dev_id, None)
+        task.add_done_callback(_clear_done)
+
+    async def _await_tun_helper_remove_tasks(self) -> None:
+        pending = [task for task in self._tun_helper_remove_tasks.values() if not task.done()]
+        if not pending:
+            return
+        await asyncio.gather(*pending, return_exceptions=True)
+
+    async def _tun_helper_read_loop(self, dev: "ChannelMux.TunDevice") -> None:
+        try:
+            while True:
+                packet = await self._tun_helper_read_packet(dev)
+                if not isinstance(packet, (bytes, bytearray)):
+                    continue
+                self._on_local_tun_packet(dev, bytes(packet))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            dev.reader_registered = False
+            self.log.warning("[TUN/HELPER] helper-backed reader stopped if=%s err=%r", dev.ifname, exc)
+
+    async def _tun_helper_read_packet(self, dev: "ChannelMux.TunDevice") -> bytes:
+        backend = self._tun_helper_backend
+        if backend is not None:
+            reader = getattr(backend, "read_packet", None)
+            if not callable(reader):
+                raise RuntimeError(f"helper-backed reader unavailable for if={dev.ifname}")
+            return await reader()
+        client = self._tun_helper_client
+        if client is None:
+            raise RuntimeError(f"helper-backed reader unavailable for if={dev.ifname}")
+        return await client.read_packet()
+
+    async def _tun_helper_open_device_async(self, client: Any, dev: "ChannelMux.TunDevice") -> None:
+        try:
+            await client.open_tun({"ifname": dev.ifname, "mtu": dev.mtu})
+        except Exception as exc:
+            self.log.warning("[TUN/HELPER] helper open failed if=%s mtu=%s err=%r", dev.ifname, dev.mtu, exc)
+
+    async def _tun_helper_apply_network_async(self, client: Any, dev: "ChannelMux.TunDevice") -> None:
+        try:
+            await client.apply_network(self._tun_helper_network_payload(dev))
+            with contextlib.suppress(Exception):
+                await client.snapshot()
+        except Exception as exc:
+            dev.helper_network_applied = False
+            with contextlib.suppress(Exception):
+                await client.snapshot()
+            self.log.warning("[TUN/HELPER] helper apply_network failed if=%s err=%r", dev.ifname, exc)
+
+    async def _tun_helper_remove_network_async(self, client: Any, dev: "ChannelMux.TunDevice") -> None:
+        try:
+            await client.remove_network(self._tun_helper_network_payload(dev))
+        except Exception as exc:
+            with contextlib.suppress(Exception):
+                await client.snapshot()
+            self.log.warning("[TUN/HELPER] helper remove_network failed if=%s err=%r", dev.ifname, exc)
+
+    async def _tun_helper_write_packet(self, client: Any, dev: "ChannelMux.TunDevice", data: bytes) -> None:
+        try:
+            await client.write_packet(data)
+        except Exception as exc:
+            self.log.warning("[TUN/HELPER] helper write failed if=%s bytes=%s err=%r", dev.ifname, len(data), exc)
 
     def _shared_tun_open_requested(self, spec: "ChannelMux.ServiceSpec") -> bool:
         return self._shared_tun_ownership_snapshot_for_spec(spec) is not None
@@ -3606,7 +3853,15 @@ class ChannelMux:
         if self._is_server_shared_tun_service(spec) and registry is not None:
             registry.register(self, svc_key, dev)
         self.log.info("[TUN/SRV] service=%s:%s opened if=%s mtu=%s", svc_key[0], spec.svc_id, dev.ifname, dev.mtu)
-        self._schedule_service_hook(spec, svc_key, "listener", "on_created")
+        if self._helper_owns_tun_listener_network_lifecycle(spec, dev=dev):
+            self.log.info(
+                "[TUN/HELPER] helper owns listener on_created host-network lifecycle if=%s service=%s:%s",
+                dev.ifname,
+                svc_key[0],
+                spec.svc_id,
+            )
+        else:
+            self._schedule_service_hook(spec, svc_key, "listener", "on_created")
         if str(svc_key[0]) == "local":
             self._schedule_tun_reader_registration(dev)
         else:

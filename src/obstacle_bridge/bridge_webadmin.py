@@ -528,6 +528,10 @@ class AdminWebUI:
                 await self._handle_tun_routing_status(writer)
                 return
 
+            if path == "/api/tun-helper/repair":
+                await self._handle_tun_helper_repair(writer, method, headers)
+                return
+
             if path == "/api/onboarding/connection-profiles":
                 await self._handle_onboarding_connection_profiles(writer, method)
                 return
@@ -584,6 +588,7 @@ class AdminWebUI:
 
     def _build_tun_routing_payload_now(self) -> dict:
         snapshot = self.runner.get_connections_snapshot() or {}
+        status_snapshot = self.runner.get_status_snapshot() or {}
         tun_rows = list(snapshot.get("tun") or [])
         shared_rows_by_key: dict[tuple, dict] = {}
         for row in tun_rows:
@@ -626,6 +631,7 @@ class AdminWebUI:
         payload = {
             "tun": tun_rows,
             "shared_tun": shared_rows,
+            "tun_helper": dict(status_snapshot.get("tun_helper") or {}),
             "summary": {
                 "tun_total": len(tun_rows),
                 "tun_open": sum(
@@ -1454,6 +1460,33 @@ class AdminWebUI:
                 f"requested={payload.get('requested', 0)} sessions={payload.get('sessions', 0)} "
                 f"transports={','.join(payload.get('transports', []))}"
             ),
+        )
+        await self._send_json(writer, code, payload)
+
+    async def _handle_tun_helper_repair(self, writer, method, headers):
+        if method != "POST":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+
+        token = getattr(self.args, "admin_web_token", "") or ""
+        if token:
+            auth = headers.get("authorization", "")
+            expected = f"Bearer {token}"
+            if auth != expected:
+                await self._send(writer, 403, b"Forbidden", "text/plain; charset=utf-8")
+                return
+
+        try:
+            payload = self._call_runner(self.runner.request_tun_helper_repair, timeout=2.0)
+        except concurrent.futures.TimeoutError:
+            await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
+            return
+        code = 200 if bool(payload.get("ok")) else 409
+        self._log_api_response(
+            "/api/tun-helper/repair",
+            code,
+            payload,
+            summary=f"ok={payload.get('ok')} repaired={len(payload.get('repaired', []))} failed={len(payload.get('failed', []))}",
         )
         await self._send_json(writer, code, payload)
 

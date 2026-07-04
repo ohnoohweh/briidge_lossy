@@ -370,6 +370,33 @@
             </div>
           </section>
 
+          <section class="section-block card">
+            <div class="section-header">
+              <div>
+                <h2>TUN Helper</h2>
+                <p>Helper-mode execution state for the local TUN backend</p>
+              </div>
+              <div class="quick-actions">
+                <button id="tunHelperRepairBtn" class="btn btn-secondary hidden" type="button">Repair Stale Helper State</button>
+              </div>
+            </div>
+            <div class="kv-list">
+              <div class="kv-row"><span>Mode</span><strong id="tunHelperMode">inline</strong></div>
+              <div class="kv-row"><span>Backend</span><strong id="tunHelperBackend">n/a</strong></div>
+              <div class="kv-row"><span>Connected</span><strong id="tunHelperConnected">no</strong></div>
+              <div class="kv-row"><span>Server Started</span><strong id="tunHelperServerStarted">no</strong></div>
+              <div class="kv-row"><span>Apply Network</span><strong id="tunHelperApplyNetwork">no</strong></div>
+              <div class="kv-row"><span>Socket</span><strong id="tunHelperSocket" class="mono">n/a</strong></div>
+              <div class="kv-row"><span>Runtime Interface</span><strong id="tunHelperIfname" class="mono">n/a</strong></div>
+              <div class="kv-row"><span>Runtime MTU</span><strong id="tunHelperMtu">0</strong></div>
+              <div class="kv-row"><span>Packets From Runtime</span><strong id="tunHelperPacketsFromRuntime">0</strong></div>
+              <div class="kv-row"><span>Packets To Runtime</span><strong id="tunHelperPacketsToRuntime">0</strong></div>
+              <div class="kv-row"><span>Last Error</span><strong id="tunHelperLastError" class="mono">n/a</strong></div>
+              <div class="kv-row"><span>Recovery</span><strong id="tunHelperRecovery">none</strong></div>
+              <div class="kv-row"><span>Last Repair</span><strong id="tunHelperLastRepair">none</strong></div>
+            </div>
+          </section>
+
           <section class="section-block">
             <div class="section-header">
               <div>

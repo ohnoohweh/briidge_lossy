@@ -134,6 +134,23 @@ def test_launcher_continues_when_dependency_install_declined(monkeypatch) -> Non
     _assert_default_bridge_cmd_prefix(calls[0])
 
 
+def test_launcher_surfaces_hidden_child_stderr_when_redirected_startup_fails(monkeypatch, capsys) -> None:
+    def _fake_run(cmd, **kwargs):
+        stderr_handle = kwargs["stderr"]
+        stderr_handle.write(b"Failed to open log file /root/ObstacleBridge.log: [Errno 13] Permission denied\n")
+        stderr_handle.flush()
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr(launcher.subprocess, "run", _fake_run)
+
+    rc = launcher.main([])
+
+    assert rc == 1
+    stderr = capsys.readouterr().err
+    assert "Hidden child stderr follows" in stderr
+    assert "Failed to open log file /root/ObstacleBridge.log" in stderr
+
+
 def test_launcher_prints_webadmin_url_from_default_config(monkeypatch, tmp_path, capsys) -> None:
     config_path = tmp_path / "ObstacleBridge.cfg"
     config_path.write_text(

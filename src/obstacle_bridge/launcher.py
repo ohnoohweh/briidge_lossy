@@ -17,6 +17,7 @@ import shlex
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -344,17 +345,54 @@ def _run_process_once(
     devnull: Optional[Any],
     post_start_hook: Optional[Any] = None,
 ) -> int:
+    def _read_tail(handle: Any, limit: int = 4000) -> str:
+        try:
+            handle.flush()
+            handle.seek(0, os.SEEK_END)
+            size = int(handle.tell() or 0)
+            handle.seek(max(0, size - limit))
+            return handle.read().decode("utf-8", "replace").strip()
+        except Exception:
+            return ""
+
+    def _maybe_report_hidden_failure(stderr_handle: Any, rc: int) -> None:
+        if rc == 0:
+            return
+        stderr_tail = _read_tail(stderr_handle)
+        if not stderr_tail:
+            return
+        print(
+            "ObstacleBridge startup failed while launcher output redirection was active. "
+            "Hidden child stderr follows:",
+            file=sys.stderr,
+            flush=True,
+        )
+        print(stderr_tail, file=sys.stderr, flush=True)
+
     if post_start_hook is None:
         if devnull is not None:
-            result = subprocess.run(cmd, stdout=devnull, stderr=devnull)
+            with tempfile.TemporaryFile() as stdout_capture, tempfile.TemporaryFile() as stderr_capture:
+                result = subprocess.run(cmd, stdout=stdout_capture, stderr=stderr_capture)
+                rc = int(result.returncode)
+                _maybe_report_hidden_failure(stderr_capture, rc)
+                return rc
         else:
             result = subprocess.run(cmd)
         return int(result.returncode)
 
     popen_kwargs: Dict[str, Any] = {}
     if devnull is not None:
-        popen_kwargs["stdout"] = devnull
-        popen_kwargs["stderr"] = devnull
+        with tempfile.TemporaryFile() as stdout_capture, tempfile.TemporaryFile() as stderr_capture:
+            popen_kwargs["stdout"] = stdout_capture
+            popen_kwargs["stderr"] = stderr_capture
+            process = subprocess.Popen(cmd, **popen_kwargs)
+            try:
+                post_start_hook()
+            except Exception:
+                pass
+            rc = int(process.wait())
+            _maybe_report_hidden_failure(stderr_capture, rc)
+            return rc
 
     process = subprocess.Popen(cmd, **popen_kwargs)
     try:
