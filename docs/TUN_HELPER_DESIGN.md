@@ -7,9 +7,10 @@ TUN and route control boundary into a small privileged helper, while keeping the
 main ObstacleBridge runtime unprivileged.
 
 This document describes a Linux-first design because Linux offers the simplest
-deployment path for a narrow helper. The same conceptual split can later inform
-Windows and macOS, but those platforms need different packaging and privilege
-mechanisms.
+deployment path for a narrow helper. The same Python helper split should also
+support macOS by adding a Darwin backend that owns `utun` and runs the existing
+macOS TUN hook scripts, while the packaging and privilege mechanism remain
+platform-specific.
 
 ## Why
 
@@ -35,7 +36,7 @@ The desired end state is:
 
 ## Scope
 
-### In scope for the Linux-first helper
+### In scope for the Linux/macOS Python helper
 
 - create or open a configured local TUN device
 - configure link state and MTU
@@ -44,6 +45,15 @@ The desired end state is:
 - read packets from the TUN device
 - write packets to the TUN device
 - expose small diagnostics about helper state and failures
+
+Linux and macOS differ only at the host-network backend:
+
+- Linux opens `/dev/net/tun` and applies host state through `ip`,
+  `resolvectl`, and firewall tooling
+- macOS opens Darwin `utun`, writes/reads the four-byte utun address-family
+  header around raw IP packets, and applies host state through
+  `ifconfig`/`route`/`networksetup` or the existing
+  `scripts/client-tun-hook-macos.sh` and `scripts/server-tun-hook-macos.sh`
 
 ### Explicitly out of scope
 
@@ -134,9 +144,25 @@ than as a purely forward-looking plan.
   contract in `src/obstacle_bridge/bridge_tun_helper_server.py`
 - the TUN / Routing admin payload now carries helper status so the TUN page can
   show helper mode, backend, socket, and runtime packet counters
+- Python/macOS already has inline host TUN support in
+  `src/obstacle_bridge/bridge_tun_macos.py`, including real Darwin `utun`
+  creation, utun frame adaptation, packet read/write, and MTU/link-up handling
+  when the process has sufficient privilege
+- the repository already carries Darwin host-network hook scripts in
+  `scripts/client-tun-hook-macos.sh` and `scripts/server-tun-hook-macos.sh`;
+  the Python/macOS helper backend now invokes those scripts for helper-owned
+  network apply/remove rather than introducing a second hook contract
+- `src/obstacle_bridge/bridge_tun_helper_macos.py` now provides the
+  `darwin-native` helper backend: it owns the real `utun` fd from the elevated
+  helper subprocess, reuses the inline macOS packet frame adaptation, emits raw
+  IP packets over helper IPC, wraps runtime packets with the utun family header,
+  and runs the Darwin hook scripts from helper-side apply/remove operations
+- helper backend selection and runner launch now accept `darwin-native`; on
+  macOS helper mode skips whole-runtime `sudo` reexec and elevates only the
+  helper subprocess when the native backend needs privilege
 - focused unit coverage exists for settings, protocol framing, client/server
-  scaffolding, runner wiring, helper-backed ChannelMux TUN I/O, and the
-  selectable native Linux helper backend
+  scaffolding, runner wiring, helper-backed ChannelMux TUN I/O, the selectable
+  native Linux helper backend, and the selectable Darwin helper backend
 
 ### Important current limitation
 
@@ -150,19 +176,28 @@ Today the branch proves two different things:
   ownership split, ChannelMux backend swapping, and admin/status visibility
 - a selectable native Linux backend now proves that the helper-side backend API
   can own a real TUN fd and exchange packets through it
+- a selectable `darwin-native` backend now moves Python/macOS `utun` ownership,
+  utun/raw-IP packet adaptation, and Darwin hook execution behind the same
+  helper IPC boundary
 
 What is still not delivered is the broader hardening around that native helper
-deployment rather than the basic host-network ownership itself. The helper now
-owns interface address apply/remove, helper-merged excluded routes,
-non-default included routes, Linux policy-table full-tunnel default-route
-handling, helper-owned DNS through `resolvectl` when available, and Linux
-server-side forwarding/NAT/TCPMSS firewall lifecycle when helper-managed TUN
-services carry the same listener-side `WAN_IF` intent that previously drove
-`scripts/server-tun-hook.sh`. Elevated integration now covers packet carry,
-route-policy ownership, real helper-owned firewall apply/remove with teardown
-cleanup, and rollback after partial helper apply failure. The more meaningful
-remaining work is now stronger proof of helper-death cleanup handling and
-deployment hardening.
+deployment rather than the basic Linux host-network ownership itself. The
+Linux helper now owns interface address apply/remove, helper-merged excluded
+routes, non-default included routes, Linux policy-table full-tunnel
+default-route handling, helper-owned DNS through `resolvectl` when available,
+and Linux server-side forwarding/NAT/TCPMSS firewall lifecycle when
+helper-managed TUN services carry the same listener-side `WAN_IF` intent that
+previously drove `scripts/server-tun-hook.sh`. Elevated integration now covers
+packet carry, route-policy ownership, real helper-owned firewall apply/remove
+with teardown cleanup, and rollback after partial helper apply failure. The
+more meaningful remaining Linux work is now stronger proof of helper-death
+cleanup handling and deployment hardening. The macOS Python helper backend is
+now present and has both unit coverage plus a first elevated/live helper proof
+for privileged `darwin-native` launch, real `utun` creation, Darwin hook
+apply/remove, Admin Web helper runtime reporting, and interface teardown. It
+still needs broader elevated/live proof for packet carry through the real
+overlay, route/DNS behavior beyond the narrow hook-owned route case, and
+helper-death cleanup.
 
 ### Not delivered yet
 
@@ -173,6 +208,8 @@ deployment hardening.
   beyond packet carry, helper-managed route/DNS/firewall behavior, rollback
   after partial apply failure, post-start helper-loss observability, and
   operator-triggered stale-state repair after helper death
+- broader elevated/live Python/macOS helper proof for `darwin-native` beyond
+  the first helper launch, real `utun`, Darwin hook, and teardown lane
 - Swift/macOS parity for the helper split
 
 ## Linux-first architecture
@@ -220,6 +257,52 @@ Possible later hardening:
 
 The first version should optimize for correctness and observability, not for
 packaging sophistication.
+
+## macOS Python architecture
+
+The macOS Python path should use the same high-level helper topology as Linux:
+
+1. `python -m obstacle_bridge` starts as the normal unprivileged runtime.
+2. `Runner` detects a local desktop TUN service with
+   `tun_execution.mode=helper`.
+3. `Runner` starts an elevated helper subprocess instead of relaunching the
+   whole Python runtime through `sudo`.
+4. `ChannelMux` uses the same helper-backed packet adapter it uses on Linux.
+5. The helper selects a Darwin backend that owns `utun`, MTU/link setup, packet
+   framing, and helper-owned network apply/remove.
+
+The Darwin backend should reuse the existing Python `utun` code from
+`src/obstacle_bridge/bridge_tun_macos.py` rather than inventing a second packet
+adapter. macOS `utun` packets carry a four-byte address-family header on the fd
+while ChannelMux expects raw IP packets, so the helper backend must preserve the
+same packet wrapping/unwrapping behavior as the inline macOS adapter.
+
+For network apply/remove, the first Python helper implementation should call the
+existing Darwin hook scripts:
+
+- client/local TUN: `scripts/client-tun-hook-macos.sh`
+- listener/server TUN: `scripts/server-tun-hook-macos.sh`
+
+Those scripts already encode macOS route, DNS, underlay-preservation, and
+interface-address behavior. Keeping them as the helper-side script boundary
+lets helper mode reduce the runtime privilege footprint without creating a
+third macOS routing implementation.
+
+### macOS helper launch mode
+
+The near-term Python/macOS launch model can mirror the current Linux helper
+subprocess approach:
+
+- keep the helper as a Python module in the same repo
+- start only the helper through `sudo` when `darwin-native` needs privilege
+- keep the unprivileged parent runtime alive as the owner of overlay, mux,
+  Admin Web, and policy state
+- pass the same session token and helper socket path used by Linux helper mode
+
+Longer-term app packaging can still use the Swift/macOS direction from
+`docs/MACOSAPP_DESIGN.md`: a dedicated privileged helper managed through
+`SMAppService` with XPC. That is a packaging and app-lifecycle concern; the
+Python helper protocol and backend API should remain useful underneath it.
 
 ## Control protocol
 
@@ -344,7 +427,8 @@ The local IPC link must be treated as privileged control traffic.
 Minimum protections:
 
 - create the socket in a user-private directory
-- validate peer credentials with `SO_PEERCRED`
+- validate peer credentials with `SO_PEERCRED` on Linux or the platform
+  equivalent on macOS
 - require the connecting uid to match the launching uid
 - require a session token generated by the parent runtime
 - reject helper reuse from unrelated processes unless explicitly allowed later
@@ -380,8 +464,8 @@ Suggested snapshot fields:
 - helper connected
 - helper pid
 - helper mode: `inline` or `external`
-- helper backend: default `linux-native`, optional scaffold fallback
-  `linux-python`
+- helper backend: default `linux-native` on Linux, selectable
+  `darwin-native` on macOS, optional scaffold fallback `linux-python`
 - last helper error
 - helper reconnect attempts
 - packets read from helper TUN
@@ -411,7 +495,8 @@ Meaning:
 
 - `inline`: current behavior, local process owns TUN directly
 - `helper`: use a local helper when supported
-- `helper_backend`: future selector for Linux/Windows/macOS-specific helpers
+- `helper_backend`: platform-specific helper selector; current choices are
+  `linux-native`, `linux-python`, and `darwin-native`
 - `helper_socket`: optional explicit IPC path
 - `helper_apply_network`: whether the helper owns route/address/hook work
 
@@ -422,8 +507,10 @@ explicit opt-in.
 
 ## Status Summary
 
-The helper effort is currently between the original "protocol experiment" and
-the real privileged Linux implementation.
+The helper effort has moved beyond the original protocol experiment on Linux
+and macOS: the native Linux backend owns real privileged TUN and host-network
+work for the covered paths, and the native Darwin backend now owns the Python
+macOS helper API surface with mocked unit coverage.
 
 ### Completed milestones
 
@@ -442,52 +529,77 @@ the real privileged Linux implementation.
    cleanup on the real privileged path
 10. the selectable native backend is now a real helper-owned Linux TUN backend
     rather than only an in-process memory scaffold
+11. the selectable `darwin-native` backend now owns Python/macOS helper-side
+    `utun` open/read/write, utun frame adaptation, Darwin hook apply/remove,
+    server backend selection, and helper-subprocess-only macOS sudo launch
+    wiring under focused unit coverage
 
 ### Remaining milestones
 
-11. decide how much of the existing whole-process `sudo` relaunch remains as
-   the default inline fallback once helper mode becomes real
-12. add broader adverse elevated coverage for post-start helper loss and
+12. decide how much of the existing whole-process `sudo` relaunch remains as
+   the default inline fallback as helper mode matures
+13. add broader adverse elevated coverage for post-start helper loss and
     partial cleanup failure paths
+14. add elevated/live macOS tests or probes for `darwin-native` helper
+    subprocess launch, real `utun` packet carry, helper-side Darwin hook
+    route/DNS effects, status reporting, and teardown cleanup
 
-## Python/Swift parity note
+## Python/macOS and Swift parity note
 
-This document proposes a Linux-first experiment, not an immediate parity change.
+This document started as a Linux-first experiment, but the helper boundary now
+also applies to the Python/macOS runtime. The Python CLI can support macOS
+helper mode with the same helper protocol and a Darwin-specific backend before
+the Swift app adopts a final Apple-native helper package.
 
 Current parity situation:
 
 - Python desktop currently uses inline TUN ownership with whole-process
-  privilege handoff when needed
+  privilege handoff when needed on Linux and macOS
+- Python/macOS already proves real `utun` creation, packet carriage, and Darwin
+  hook behavior when the whole process is elevated
+- Python helper mode now moves that macOS `utun` and hook ownership into an
+  elevated helper subprocess path, matching the Linux privilege split while
+  keeping Darwin-specific host actions in a Darwin backend
 - macOS Swift already has a related privileged-host-runner discussion and
   partial helper direction in `docs/MACOSAPP_DESIGN.md`
 - iOS already has a platform-owned privileged packet boundary through
   `NEPacketTunnelProvider`
 
-If the Linux helper path becomes real product behavior rather than an
-experiment, Swift/macOS should gain an aligned control-plane concept:
+As helper mode becomes product behavior, Python/Linux, Python/macOS, and
+Swift/macOS should share the same responsibility split:
 
 - unprivileged UI/app/runtime owner
 - privileged local tunnel helper
-- narrow packet/control IPC seam
+- narrow packet/control IPC boundary
+- helper-owned host interface, route, DNS, and cleanup lifecycle
 
-The packaging will differ, but the responsibility split should stay conceptually
-aligned.
+The packaging will differ. Python/Linux and Python/macOS can use the local
+helper subprocess and Unix-domain-socket control plane. Swift/macOS should keep
+moving toward `SMAppService` plus XPC. The protocol concepts and observable
+state should stay aligned so Admin Web and runtime status mean the same thing
+across products.
 
 ## Current working model
 
 The current working model is:
 
-1. Linux only
-2. explicit opt-in config through `tun_execution.mode=helper`
-3. one helper-managed local TUN backend path at a time is the intended first
+1. Linux is the delivered helper implementation target today
+2. Python/macOS now has a helper backend using Darwin `utun` and the existing
+   macOS TUN hook scripts
+3. explicit opt-in config through `tun_execution.mode=helper`
+4. one helper-managed local TUN backend path at a time is the intended first
    practical target
-4. main runtime still owns all mux and overlay semantics
-5. helper visibility is exposed in runtime snapshots and on the TUN page
-6. the actual privileged TUN and route lifecycle still remains to be built
+5. main runtime still owns all mux and overlay semantics
+6. helper visibility is exposed in runtime snapshots and on the TUN page
+7. Linux native helper mode now proves actual privileged TUN and route
+   lifecycle ownership; macOS helper mode now has unit-covered Darwin backend
+   and helper-side hook execution, with elevated/live proof still remaining
 
-This means the branch answers "can the runtime be structured around a helper
-boundary?" but does not yet answer "can the product run with a genuinely
-reduced Linux privilege footprint end-to-end?"
+This means the branch now answers "can the Linux product run with a reduced
+helper-owned host-network boundary?" for the covered Linux paths, and "can
+Python/macOS use the same helper boundary without relaunching the whole runtime
+through sudo?" at the backend and runner wiring level. The next macOS question
+is live elevated proof on a real host.
 
 ## Concrete Implementation State
 
@@ -505,6 +617,9 @@ The current Python codebase already has a few useful insertion points:
   - already owns process startup, config loading, and current privilege handoff
 - `src/obstacle_bridge/bridge_channelmux.py`
   - already centralizes local TUN open/read/write and TUN channel ownership
+- `src/obstacle_bridge/bridge_tun_macos.py`
+  - already centralizes Python/macOS `utun` open/read/write and utun
+    frame/raw-packet adaptation that a Darwin helper backend should reuse
 - `src/obstacle_bridge/bridge_tun_routing.py`
   - already defines the effective routing settings that the helper needs
 - `src/obstacle_bridge/bridge_webadmin.py`
@@ -555,29 +670,54 @@ Purpose:
 
 Current owner:
 
-- currently used as a local Unix-socket helper server scaffold
-- not yet launched as a separate elevated child process
+- used by the spawned helper module entrypoint for Linux helper mode
+- now selects both the Linux backends and the Darwin backend for Python/macOS
+  helper mode
 
 #### `src/obstacle_bridge/bridge_tun_helper_linux.py`
 
 Current purpose:
 
-- Linux-specific helper backend stub used by the current branch
-- local open/read/write semantics for a memory-backed fake TUN path
-- local apply/remove control semantics for helper-owned network lifecycle
+- Linux-specific helper backends used by the current branch
+- native Linux open/read/write semantics for real `/dev/net/tun`
+- scaffold open/read/write semantics for the explicit `linux-python`
+  memory-backed path
+- native apply/remove control semantics for helper-owned Linux network
+  lifecycle
 - snapshot counters used by runtime and Admin Web diagnostics
 
 Still missing:
 
-- real `/dev/net/tun` ownership
-- route/address/DNS/firewall application
-- translation from helper commands into `bridge_tun_routing`-compatible host
-  actions
+- broader deployment hardening around native Linux helper cleanup and
+  privilege configuration
+- broader cross-platform hardening parity with the Darwin backend
 
 Why separate it:
 
 - keeps the generic server protocol clean
-- provides a clear place for future Windows/macOS backends to parallel
+- provides a clear pattern for platform-specific Darwin and Windows backends to
+  parallel
+
+#### `src/obstacle_bridge/bridge_tun_helper_macos.py`
+
+Purpose:
+
+- Darwin-specific helper backend for Python/macOS
+- opens and owns the real `utun` socket from the elevated helper process
+- preserves the existing macOS packet adaptation between utun frames and raw IP
+  packets
+- applies/removes helper-owned host network state by invoking
+  `scripts/client-tun-hook-macos.sh` or `scripts/server-tun-hook-macos.sh`
+  with the same `TUN_routing`-derived environment used by inline Python today
+- exposes structured runtime state for Admin Web, including actual utun ifname,
+  hook apply/remove status, packet counters, and last failure diagnostics
+
+Why separate it:
+
+- Linux `/dev/net/tun` and Darwin `utun` have different fd semantics and
+  packet framing
+- macOS route and DNS state is already captured in the Darwin hook scripts
+- keeping the backend separate lets the shared helper protocol stay stable
 
 #### `src/obstacle_bridge/bridge_tun_helper_settings.py`
 
@@ -599,16 +739,16 @@ Why:
 Current state:
 
 - helper settings registration and config-file mapping are implemented
-- helper launch/connect orchestration is implemented for the local in-process
-  scaffold
+- helper launch/connect orchestration is implemented for helper subprocesses
+  and the explicit in-memory scaffold fallback
 - `Runner` creates helper state before `ChannelMux.start()`
 - `Runner` exposes helper snapshot data to Admin Web
 - `Runner` stops helper client/server state during shutdown
 
 Still missing:
 
-- current privilege-reexec logic is not yet split so that `helper` mode launches
-  only the helper with elevation while the parent runtime stays unprivileged
+- helper-subprocess-only elevation exists for `linux-native` and
+  `darwin-native`
 
 #### `src/obstacle_bridge/bridge_channelmux.py`
 
@@ -622,8 +762,8 @@ Current state:
 
 Current limitation:
 
-- the helper-backed path currently talks to the in-process Linux memory backend
-  rather than a real external helper-owned device
+- the helper-backed path supports the native Linux helper-owned device, the
+  native Darwin helper-owned device, and the explicit Linux memory scaffold
 
 #### `src/obstacle_bridge/bridge_webadmin.py`
 
@@ -661,8 +801,8 @@ Proposed meanings:
   - `inline`: current behavior
   - `helper`: route local desktop TUN through a helper
 - `helper_backend`
-  - default: `linux-native`
-  - supported values: `linux-native`, `linux-python`
+  - Linux default: `linux-native`
+  - supported today: `linux-native`, `linux-python`, `darwin-native`
 - `helper_socket`
   - optional explicit Unix socket path
 - `helper_apply_network`
@@ -672,9 +812,12 @@ Proposed meanings:
 
 Recommendation for first implementation:
 
-- accept `helper` only on Linux
-- reject helper mode on Windows/macOS with a clear configuration error until
-  those backends exist
+- keep `inline` as the default on every platform
+- accept `helper` on Linux today
+- accept `helper` on macOS with `darwin-native` when the host can elevate the
+  helper subprocess
+- reject unsupported platform/backend combinations with clear configuration
+  errors
 
 ### Actual helper launch flow today
 
@@ -691,9 +834,9 @@ For Linux helper mode in the current branch:
 7. runtime authenticates and can send `OPEN_TUN`
 8. `ChannelMux` uses the helper-backed backend path for local TUN packet I/O
 
-### Target helper launch flow still to build
+### Target helper launch flow for new native backend hardening
 
-For the real Linux helper:
+For any native backend hardening still to build:
 
 1. unprivileged `Runner` loads config
 2. `Runner` generates a random session token
@@ -704,6 +847,12 @@ For the real Linux helper:
 6. runtime connects, authenticates, and sends `OPEN_TUN`
 7. helper returns the effective interface and state
 8. ChannelMux begins TUN packet exchange through helper IPC
+
+On macOS, the helper's `OPEN_TUN` implementation opens Darwin `utun` and the
+helper's `APPLY_NETWORK` / `REMOVE_NETWORK` implementations invoke the Darwin
+hook scripts with the same `TUN_routing`-derived environment that inline Python
+already uses. The remaining work is proving this flow under real elevated
+macOS execution.
 
 ### Suggested CLI surface
 
@@ -764,6 +913,7 @@ Current unit coverage includes:
 - `tests/unit/test_tun_helper_client_server.py`
 - `tests/unit/test_tun_helper_server_entrypoint.py`
 - `tests/unit/test_tun_helper_linux_backend.py`
+- `tests/unit/test_tun_helper_macos_backend.py`
 - `tests/unit/test_runner_tun_helper.py`
 - `tests/unit/test_channel_mux_tun_helper.py`
 - companion parser coverage in `tests/unit/test_embeddable_core.py`
@@ -782,10 +932,14 @@ Current helper-network control coverage includes:
 - runner tests that verify helper mode can launch the helper module as a real
   subprocess, still exchange helper control messages, suppress the old
   whole-process Linux `sudo` relaunch in helper mode, and invoke `sudo` only
-  for the native helper subprocess when privilege is needed
+  for the native Linux or macOS helper subprocess when privilege is needed
 - native-backend tests that verify Linux-only gating, `OPEN_TUN`, packet read
   delivery, packet write accounting, runtime snapshots, and backend shutdown
   against mocked Linux TUN syscalls
+- native Darwin backend tests that verify macOS-only gating, `OPEN_TUN`, utun
+  frame unwrap/wrap behavior, packet accounting, hook payload construction for
+  client/server Darwin scripts, and backend shutdown against mocked Darwin
+  syscalls
 
 ### Integration tests
 
@@ -828,14 +982,32 @@ claims that were previously still open:
 - helper death during partial cleanup after earlier remove steps have already
   run and before helper-owned firewall teardown completes
 
+Current elevated integration coverage also includes a first real helper-backed
+macOS lane in `tests/integration/test_macos_elevated.py`:
+
+- helper mode with `tun_execution.mode=helper`
+- `darwin-native` helper backend selection
+- helper subprocess elevation through the same Python helper entrypoint used by
+  normal macOS helper mode
+- real Darwin `utun` creation inside the helper subprocess
+- helper-owned invocation of `scripts/client-tun-hook-macos.sh` and
+  `scripts/server-tun-hook-macos.sh` for apply/remove lifecycle ownership
+- Admin Web helper runtime status reporting for the created `utun` interfaces
+- teardown cleanup that verifies the helper-owned `utun` interfaces disappear
+
 Remaining work is now broader hardening rather than one specific uncovered
-elevated integration lane.
+elevated integration lane on Linux, and broader packet-carry, route/DNS, and
+helper-death coverage on macOS beyond the first elevated `darwin-native` lane.
 
 The first elevated case should stay:
 
 - Linux only
 - single peer
 - single helper-backed TUN interface
+
+The first elevated/live Python/macOS helper proof now mirrors that narrow
+shape with a single-peer helper-backed `utun` lane and helper-side invocation
+of the Darwin hook scripts.
 
 ## Open TODOs
 
@@ -849,10 +1021,14 @@ These are the actionable next steps for the helper effort.
   for example partial-repair persistence, narrower per-resource repair actions,
   or richer live repair orchestration beyond the current post-repair
   verification/reporting pass
+- expand elevated/live Python/macOS coverage for `darwin-native` to prove real
+  packet carry, Darwin hook route/DNS effects beyond the first narrow route
+  lane, and helper-death cleanup
 
 ### Deliberately deferred
 
-- Swift/macOS parity for the helper split
+- Swift/macOS packaging parity for the helper split through the Apple-native
+  helper direction in `docs/MACOSAPP_DESIGN.md`
 - Windows helper/service design
 - richer helper logging transport and reconnect counters
 - any helper awareness of shared-TUN peer ownership beyond pure host-local

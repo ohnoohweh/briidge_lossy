@@ -631,13 +631,19 @@ class Runner:
         exec_argv = list(module_argv)
         backend_name = str(self._tun_helper_settings.helper_backend or DEFAULT_TUN_HELPER_BACKEND).strip().lower()
         geteuid = getattr(os, "geteuid", None)
-        needs_helper_privilege = bool(
+        needs_linux_helper_privilege = bool(
             sys.platform.startswith("linux")
             and backend_name in {"linux-native", "linux_native", "linux-real"}
             and callable(geteuid)
             and int(geteuid()) != 0
         )
-        if needs_helper_privilege and not _linux_native_tun_helper_can_launch_without_sudo(sys.executable):
+        needs_darwin_helper_privilege = bool(
+            sys.platform.startswith("darwin")
+            and backend_name in {"darwin-native", "darwin_native", "macos-native", "macos_native"}
+            and callable(geteuid)
+            and int(geteuid()) != 0
+        )
+        if needs_linux_helper_privilege and not _linux_native_tun_helper_can_launch_without_sudo(sys.executable):
             sudo_path = shutil.which("sudo")
             if not sudo_path:
                 raise RuntimeError(
@@ -652,8 +658,23 @@ class Runner:
             )
             self.log.warning("[RUNNER] launching elevated Linux TUN helper subprocess for native helper backend")
             exec_argv = _sudo_tun_helper_exec_argv(module_argv)
-        elif needs_helper_privilege:
+        elif needs_linux_helper_privilege:
             self.log.info("[RUNNER] launching native Linux TUN helper without sudo because CAP_NET_ADMIN/CAP_SYS_ADMIN is already available")
+        elif needs_darwin_helper_privilege:
+            sudo_path = shutil.which("sudo")
+            if not sudo_path:
+                raise RuntimeError(
+                    "macOS helper mode with the native backend needs elevated privileges, but sudo is not available. "
+                    "Install sudo, run as root, or select inline mode."
+                )
+            print(
+                "ObstacleBridge helper mode needs elevated privileges to create/configure the local macOS utun device. "
+                "sudo may now ask for your password for the helper subprocess only.",
+                file=sys.stderr,
+                flush=True,
+            )
+            self.log.warning("[RUNNER] launching elevated macOS TUN helper subprocess for native helper backend")
+            exec_argv = _sudo_tun_helper_exec_argv(module_argv)
         return await asyncio.create_subprocess_exec(
             *exec_argv,
             stdin=asyncio.subprocess.DEVNULL,
@@ -712,13 +733,21 @@ class Runner:
         settings = self._tun_helper_settings
         backend_name = str(getattr(settings, "helper_backend", "") or DEFAULT_TUN_HELPER_BACKEND).strip().lower()
         geteuid = getattr(os, "geteuid", None)
-        needs_helper_privilege = bool(
+        needs_linux_helper_privilege = bool(
             sys.platform.startswith("linux")
             and backend_name in {"linux-native", "linux_native", "linux-real"}
             and callable(geteuid)
             and int(geteuid()) != 0
         )
-        if needs_helper_privilege and not _linux_native_tun_helper_can_launch_without_sudo(sys.executable):
+        needs_darwin_helper_privilege = bool(
+            sys.platform.startswith("darwin")
+            and backend_name in {"darwin-native", "darwin_native", "macos-native", "macos_native"}
+            and callable(geteuid)
+            and int(geteuid()) != 0
+        )
+        if needs_linux_helper_privilege and not _linux_native_tun_helper_can_launch_without_sudo(sys.executable):
+            return 30.0
+        if needs_darwin_helper_privilege:
             return 30.0
         return 2.0
 
@@ -3174,6 +3203,8 @@ def _needs_macos_tun_elevation(args: argparse.Namespace) -> bool:
     if not _configured_local_tun_services(args):
         return False
     if _configured_packetflow_connector_mode(args):
+        return False
+    if _helper_mode_enabled(args):
         return False
     return True
 

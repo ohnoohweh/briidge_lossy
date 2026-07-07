@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 from obstacle_bridge.bridge_tun_helper_client import TunHelperClient
+from obstacle_bridge.bridge_tun_helper_macos import DarwinTunHelperBackend
 from obstacle_bridge.bridge_tun_helper_server import (
     TunHelperServer,
     _backend_from_name,
@@ -64,6 +65,9 @@ class TunHelperServerEntrypointTests(unittest.IsolatedAsyncioTestCase):
     def test_backend_factory_rejects_unknown_backend(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported tun helper backend"):
             _backend_from_name("mystery-backend")
+
+    def test_backend_factory_accepts_darwin_native_backend(self) -> None:
+        self.assertIsInstance(_backend_from_name("darwin-native"), DarwinTunHelperBackend)
 
     async def test_server_start_chowns_socket_back_to_invoking_user_when_sudo_env_is_present(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

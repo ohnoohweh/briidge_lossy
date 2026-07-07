@@ -67,7 +67,7 @@ class TunExecutionSettings:
         group.add_argument(
             "--tun-helper-backend",
             default=DEFAULT_TUN_HELPER_BACKEND,
-            help="Helper backend identifier for helper mode. Linux-first values include linux-native and linux-python.",
+            help="Helper backend identifier for helper mode. Values include linux-native, linux-python, and darwin-native.",
         )
         group.add_argument(
             "--tun-helper-socket",
@@ -133,14 +133,14 @@ class TunExecutionSettings:
         target = str(platform or sys.platform or "")
         if self.mode != "helper":
             return True
-        return target.startswith("linux")
+        return target.startswith("linux") or target.startswith("darwin")
 
     def ensure_supported_platform(self, *, platform: Optional[str] = None) -> None:
         if self.helper_mode_supported(platform=platform):
             return
         target = str(platform or sys.platform or "")
         raise RuntimeError(
-            f"tun_execution.mode=helper is currently supported only on Linux; current platform is {target!r}."
+            f"tun_execution.mode=helper is currently supported only on Linux and macOS; current platform is {target!r}."
         )
 
     def resolved_socket_path(self) -> str:

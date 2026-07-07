@@ -1470,7 +1470,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `38` | `663` |
+| Python CLI/runtime, including macOS Python | `47` | `759` |
 | macOS Swift app | `1` | `47` |
 | iOS app/extension | `24` | `149` |
 
@@ -1478,7 +1478,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `81/89 = 91.0%` | `86/89 = 96.6%` | `86/89 = 96.6%` |
+| Python CLI/runtime, including macOS Python | `82/89 = 92.1%` | `86/89 = 96.6%` | `86/89 = 96.6%` |
 | macOS Swift app | `2/89 = 2.2%` | `5/89 = 5.6%` | `7/89 = 7.9%` |
 | iOS app/extension | `8/89 = 9.0%` | `11/89 = 12.4%` | `16/89 = 18.0%` |
 
@@ -1507,8 +1507,8 @@ This section is intentionally narrower than product coverage. It shows the evide
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `119` | `119` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `4` | `0` | `4` |
 | Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `47` | `0` | `47` |
-| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `22` | `22` |
-| Total parity-oriented evidence | Sum of the lanes above | `51` | `141` | `192` |
+| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `23` | `23` |
+| Total parity-oriented evidence | Sum of the lanes above | `51` | `142` | `193` |
 
 Important caveat:
 
@@ -1520,6 +1520,7 @@ Important caveat:
 
 - Linux runs the OS-independent shared integration suite with `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`
 - Linux runs the elevated TUN subset separately with `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`
+- macOS runs the elevated TUN subset separately with `./scripts/run_macos_elevated_tests.sh`, including the GitHub `macos-latest` elevated TUN gate when passwordless `sudo` is available
 - Windows runs the Windows-specific non-elevated integration subset with `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"`
 - Windows runs the elevated TUN subset separately with `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`
 - The iOS E2E testing set is tracked separately from the bridge.py shared gate:

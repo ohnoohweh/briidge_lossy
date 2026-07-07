@@ -485,6 +485,51 @@ class ChannelMuxTunHelperTests(unittest.IsolatedAsyncioTestCase):
                 await client.close()
                 await server.stop()
 
+    async def test_helper_mode_applies_after_external_helper_reports_actual_ifname(self):
+        class _RenamingBackend(LinuxTunHelperInMemoryBackend):
+            def local_open_tun(self, payload):
+                opened = super().local_open_tun(payload)
+                self._ifname = "utun42"
+                opened["ifname"] = self._ifname
+                return opened
+
+        with tempfile.TemporaryDirectory() as tmp:
+            socket_path = os.path.join(tmp, "tun-helper.sock")
+            backend = _RenamingBackend()
+            server = TunHelperServer(backend=backend, session_token="secret")
+            await server.start(socket_path)
+            client = TunHelperClient(socket_path=socket_path, session_token="secret")
+            await client.connect()
+            try:
+                args = build_runtime_args_from_config(
+                    {
+                        "tun_execution": {
+                            "mode": "helper",
+                            "helper_backend": "linux-python",
+                            "helper_apply_network": True,
+                        }
+                    }
+                )
+                args._tun_helper_settings = TunExecutionSettings.from_mapping(vars(args))
+                args._tun_helper_client = client
+                session = _FakeSession(connected=True)
+                mux = ChannelMux.from_args(session, asyncio.get_running_loop(), args)
+
+                dev = mux._open_tun_device("requested0", 1600, svc_key=("local", 0, 15))
+                await asyncio.sleep(0.05)
+                mux._close_tun_device(dev)
+                await asyncio.sleep(0.05)
+
+                snapshot = await client.snapshot()
+                self.assertEqual(dev.ifname, "utun42")
+                self.assertEqual(snapshot["apply_calls"], 1)
+                self.assertEqual(snapshot["remove_calls"], 1)
+                self.assertEqual(snapshot["last_apply_payload"]["ifname"], "utun42")
+                self.assertEqual(snapshot["last_remove_payload"]["ifname"], "utun42")
+            finally:
+                await client.close()
+                await server.stop()
+
 
 if __name__ == "__main__":
     unittest.main()

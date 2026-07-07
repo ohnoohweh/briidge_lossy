@@ -10,10 +10,10 @@ IFNAME="${2:?missing ifname}"
 : "${TUN_GW:?missing TUN_GW}"
 TUN_ADDR6="${TUN_ADDR6:-}"
 TUN_GW6="${TUN_GW6:-}"
-INCLUDED_ROUTES="${INCLUDED_ROUTES:-0.0.0.0/0}"
-EXCLUDED_ROUTES="${EXCLUDED_ROUTES:-127.0.0.0/8}"
-INCLUDED_ROUTES6="${INCLUDED_ROUTES6:-::/0}"
-EXCLUDED_ROUTES6="${EXCLUDED_ROUTES6:-::1/128}"
+INCLUDED_ROUTES="${INCLUDED_ROUTES-0.0.0.0/0}"
+EXCLUDED_ROUTES="${EXCLUDED_ROUTES-127.0.0.0/8}"
+INCLUDED_ROUTES6="${INCLUDED_ROUTES6-::/0}"
+EXCLUDED_ROUTES6="${EXCLUDED_ROUTES6-::1/128}"
 OVERLAY_PEER_IP="${OVERLAY_PEER_IP:-${OB_OVERLAY_PEER_HOST:-}}"
 OVERLAY_UNDERLAY_GW="${OB_OVERLAY_UNDERLAY_GW:-}"
 OVERLAY_UNDERLAY_IF="${OB_OVERLAY_UNDERLAY_IF:-}"
@@ -348,6 +348,35 @@ is_overlay_peer_mapped_route_v6() {
   [[ "$(route_spec_addr "$route_spec")" == "::ffff:${normalized_ip}" ]]
 }
 
+is_loopback_route_v4() {
+  local route_spec="$1"
+  case "$route_spec" in
+    127.0.0.0/8|127.0.0.1/32|127.0.0.1)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+is_loopback_host_v4() {
+  local host="$1"
+  [[ "$host" == 127.* ]]
+}
+
+is_loopback_route_v6() {
+  local route_spec="$1"
+  case "$route_spec" in
+    ::1/128|::1)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 route_spec_probe_host_v4() {
   local route_spec="$1"
   case "$route_spec" in
@@ -567,6 +596,7 @@ overlay_peer_route_matches_underlay_v4() {
   normalized_ip="$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")"
   [[ -n "$normalized_ip" ]] || return 0
   [[ "$normalized_ip" == *.* && "$normalized_ip" != *:* ]] || return 0
+  is_loopback_host_v4 "$normalized_ip" && return 0
   route_matches_underlay_v4 "${normalized_ip}/32" "$expected_gw" "$expected_if"
 }
 
@@ -589,6 +619,10 @@ enforce_overlay_peer_underlay_v4() {
   normalized_ip="$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")"
   [[ -n "$normalized_ip" ]] || return 0
   [[ "$normalized_ip" == *.* && "$normalized_ip" != *:* ]] || return 0
+  if is_loopback_host_v4 "$normalized_ip"; then
+    log "skip overlay peer underlay preservation for loopback peer ${normalized_ip}; lo0 route already covers it"
+    return 0
+  fi
   local route_spec="${normalized_ip}/32"
   local attempt
   for attempt in 1 2 3; do
@@ -630,6 +664,10 @@ snapshot_excluded_routes_v4() {
   local route_spec probe gateway ifname
   while IFS= read -r route_spec; do
     [[ -z "$route_spec" ]] && continue
+    if is_loopback_route_v4 "$route_spec"; then
+      log "skip explicit loopback excluded route snapshot for ${route_spec}; kernel loopback routes already cover it"
+      continue
+    fi
     probe="$(route_spec_probe_host "$route_spec")"
     gateway="$(route -n get "$probe" 2>/dev/null | awk '/gateway:/{print $2; exit}')"
     ifname="$(route -n get "$probe" 2>/dev/null | awk '/interface:/{print $2; exit}')"
@@ -651,6 +689,10 @@ snapshot_excluded_routes_v6() {
   local route_spec probe gateway ifname
   while IFS= read -r route_spec; do
     [[ -z "$route_spec" ]] && continue
+    if is_loopback_route_v6 "$route_spec"; then
+      log "skip explicit IPv6 loopback excluded route snapshot for ${route_spec}; kernel loopback routes already cover it"
+      continue
+    fi
     probe="$(route_spec_probe_host "$route_spec")"
     gateway="$(route -n get -inet6 "$probe" 2>/dev/null | awk '/gateway:/{print $2; exit}')"
     ifname="$(route -n get -inet6 "$probe" 2>/dev/null | awk '/interface:/{print $2; exit}')"
@@ -998,8 +1040,10 @@ case "$ACTION" in
     add_excluded_routes_v6 "$local_underlay_gw6" "$local_underlay_if6"
 
     normalized_overlay_peer_ip="$(normalize_overlay_peer_ip "$OVERLAY_PEER_IP")"
-    if [[ "$normalized_overlay_peer_ip" == *.* && "$normalized_overlay_peer_ip" != *:* && -n "$local_underlay_gw" ]]; then
+    if [[ "$normalized_overlay_peer_ip" == *.* && "$normalized_overlay_peer_ip" != *:* && -n "$local_underlay_gw" ]] && ! is_loopback_host_v4 "$normalized_overlay_peer_ip"; then
       route_add_or_change_v4 "${normalized_overlay_peer_ip}/32" "$local_underlay_gw" "$local_underlay_if"
+    elif [[ "$normalized_overlay_peer_ip" == *.* && "$normalized_overlay_peer_ip" != *:* ]]; then
+      log "skip direct overlay peer route protect for loopback peer ${normalized_overlay_peer_ip}"
     fi
     log_route_snapshot "after-overlay-peer-protect"
 

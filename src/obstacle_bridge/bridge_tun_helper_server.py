@@ -20,6 +20,7 @@ from .bridge_tun_helper_protocol import (
     try_decode_frame,
 )
 from .bridge_tun_helper_linux import LinuxTunHelperBackend, LinuxTunHelperInMemoryBackend
+from .bridge_tun_helper_macos import DarwinTunHelperBackend
 from .bridge_tun_helper_settings import DEFAULT_TUN_HELPER_BACKEND
 
 
@@ -287,7 +288,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--backend",
         default=DEFAULT_TUN_HELPER_BACKEND,
-        help="Helper backend identifier. Supported values include linux-native and linux-python.",
+        help="Helper backend identifier. Supported values include linux-native, linux-python, and darwin-native.",
     )
     parser.add_argument(
         "--log-tun-helper",
@@ -333,6 +334,8 @@ def _backend_from_name(name: str) -> TunHelperBackend:
         return LinuxTunHelperInMemoryBackend()
     if normalized in {"linux-native", "linux_native", "linux-real"}:
         return LinuxTunHelperBackend()
+    if normalized in {"darwin-native", "darwin_native", "macos-native", "macos_native"}:
+        return DarwinTunHelperBackend()
     raise ValueError(f"unsupported tun helper backend: {name}")
 
 

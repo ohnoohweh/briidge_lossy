@@ -105,9 +105,9 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
         args = self._helper_args()
         runner = Runner(args)
 
-        with mock.patch.object(bridge_runner.sys, "platform", "darwin"), \
+        with mock.patch.object(bridge_runner.sys, "platform", "win32"), \
              mock.patch.object(bridge_runner.Runner, "build_sessions_from_overlay", return_value=[]):
-            with self.assertRaisesRegex(RuntimeError, "currently supported only on Linux"):
+            with self.assertRaisesRegex(RuntimeError, "currently supported only on Linux and macOS"):
                 await runner.start()
 
     async def test_launch_tun_helper_process_uses_sudo_for_native_backend_when_unprivileged(self):
@@ -161,6 +161,34 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("--config-path", cmd)
         runner._cleanup_tun_helper_launch_config()
 
+    async def test_launch_tun_helper_process_uses_sudo_for_darwin_native_backend_when_unprivileged(self):
+        args = self._helper_args()
+        args.tun_helper_backend = "darwin-native"
+        runner = Runner(args)
+        runner._tun_helper_socket_path = "/tmp/obstaclebridge-helper.sock"
+        runner._tun_helper_session_token = "secret-token"
+
+        fake_proc = mock.Mock()
+        with mock.patch.object(bridge_runner.sys, "platform", "darwin"), \
+             mock.patch.object(bridge_runner.os, "geteuid", return_value=501), \
+             mock.patch.object(bridge_runner.shutil, "which", return_value="/usr/bin/sudo"), \
+             mock.patch.object(bridge_runner.asyncio, "create_subprocess_exec", new=mock.AsyncMock(return_value=fake_proc)) as create_exec:
+            proc = await runner._launch_tun_helper_process()
+
+        self.assertIs(proc, fake_proc)
+        cmd = list(create_exec.await_args.args)
+        self.assertEqual(cmd[:2], ["sudo", "-E"])
+        self.assertIn("--preserve-env=PYTHONPATH,VIRTUAL_ENV,XDG_RUNTIME_DIR", cmd[2])
+        self.assertEqual(cmd[3:6], [bridge_runner.sys.executable, "-m", "obstacle_bridge.bridge_tun_helper_server"])
+        self.assertIn("--config-path", cmd)
+        config_path = cmd[cmd.index("--config-path") + 1]
+        with open(config_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        self.assertEqual(payload["backend"], "darwin-native")
+        self.assertEqual(payload["socket_path"], "/tmp/obstaclebridge-helper.sock")
+        self.assertEqual(payload["session_token"], "secret-token")
+        runner._cleanup_tun_helper_launch_config()
+
     def test_linux_native_tun_helper_can_launch_without_sudo_when_file_capabilities_present(self):
         with mock.patch.object(bridge_runner.sys, "platform", "linux"), \
              mock.patch.object(bridge_runner, "_linux_effective_capability_names", return_value=set()), \
@@ -192,6 +220,28 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
              mock.patch.object(bridge_runner.os, "geteuid", return_value=1000), \
              mock.patch.object(bridge_runner, "_linux_native_tun_helper_can_launch_without_sudo", return_value=True):
             self.assertEqual(runner._tun_helper_socket_ready_timeout_s(), 2.0)
+
+    def test_tun_helper_socket_ready_timeout_extends_for_darwin_sudo_prompt(self):
+        args = self._helper_args()
+        args.tun_helper_backend = "darwin-native"
+        runner = Runner(args)
+
+        with mock.patch.object(bridge_runner.sys, "platform", "darwin"), \
+             mock.patch.object(bridge_runner.os, "geteuid", return_value=501):
+            self.assertEqual(runner._tun_helper_socket_ready_timeout_s(), 30.0)
+
+    def test_macos_tun_elevation_skips_whole_runtime_reexec_when_helper_mode_enabled(self):
+        args = build_runtime_args_from_config(
+            {
+                "own_servers": [{"listen": {"protocol": "tun", "ifname": "obtun0"}}],
+                "tun_execution": {"mode": "helper", "helper_backend": "darwin-native"},
+            }
+        )
+
+        with mock.patch.object(bridge_runner.sys, "platform", "darwin"), \
+             mock.patch.object(bridge_runner.os, "geteuid", return_value=501), \
+             mock.patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(bridge_runner._needs_macos_tun_elevation(args))
 
     async def test_runner_status_reports_post_start_helper_disconnect(self):
         args = self._helper_args()

@@ -607,6 +607,7 @@ REQ-LIFE-010:
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_reports_post_start_helper_loss
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_programs_excluded_routes_and_full_tunnel_policy
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_programs_server_firewall_lifecycle
+    - tests/integration/test_macos_elevated.py::test_overlay_e2e_macos_elevated_tun_helper_native_creates_utun_and_applies_hooks
   unit_tests:
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_flat_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_sectioned_config
@@ -627,8 +628,8 @@ REQ-LIFE-010:
     - tests/unit/test_tun_helper_settings.py::test_register_cli_parses_defaults
     - tests/unit/test_tun_helper_settings.py::test_from_mapping_reads_sectioned_config
     - tests/unit/test_tun_helper_settings.py::test_from_mapping_accepts_cli_dest_names
-    - tests/unit/test_tun_helper_settings.py::test_helper_mode_supported_only_on_linux
-    - tests/unit/test_tun_helper_settings.py::test_ensure_supported_platform_raises_for_non_linux_helper_mode
+    - tests/unit/test_tun_helper_settings.py::test_helper_mode_supported_on_linux_and_macos
+    - tests/unit/test_tun_helper_settings.py::test_ensure_supported_platform_raises_for_unsupported_helper_mode
     - tests/unit/test_tun_helper_protocol.py::test_control_frame_round_trip
     - tests/unit/test_tun_helper_protocol.py::test_decode_control_payload_rejects_unknown_version
     - tests/unit/test_tun_helper_protocol.py::test_try_decode_frame_returns_none_for_incomplete_payload
@@ -638,6 +639,11 @@ REQ-LIFE-010:
     - tests/unit/test_tun_helper_client_server.py::test_client_apply_and_remove_network_round_trip
     - tests/unit/test_tun_helper_client_server.py::test_client_apply_failure_keeps_connection_open_for_snapshot
     - tests/unit/test_tun_helper_server_entrypoint.py::test_resolve_helper_launch_args_supports_compact_config_file
+    - tests/unit/test_tun_helper_server_entrypoint.py::test_backend_factory_accepts_darwin_native_backend
+    - tests/unit/test_tun_helper_macos_backend.py::test_open_write_read_and_stop_wraps_utun_frames
+    - tests/unit/test_tun_helper_macos_backend.py::test_open_rejects_non_macos_platform
+    - tests/unit/test_tun_helper_macos_backend.py::test_apply_and_remove_local_network_uses_client_macos_hook_env
+    - tests/unit/test_tun_helper_macos_backend.py::test_apply_server_network_uses_server_macos_hook_env
     - tests/unit/test_tun_helper_server_entrypoint.py::test_build_arg_parser_reads_entrypoint_args
     - tests/unit/test_tun_helper_server_entrypoint.py::test_backend_factory_rejects_unknown_backend
     - tests/unit/test_tun_helper_server_entrypoint.py::test_server_start_chowns_socket_back_to_invoking_user_when_sudo_env_is_present
@@ -679,6 +685,7 @@ REQ-LIFE-010:
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_stop_awaits_external_helper_remove_network
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_refreshes_helper_snapshot_after_apply_success
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_refreshes_helper_snapshot_after_apply_failure
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_applies_after_external_helper_reports_actual_ifname
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_start_skips_runtime_listener_on_created_hook
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_stop_skips_runtime_listener_on_stopped_hook
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_dedicated_shared_tun_view

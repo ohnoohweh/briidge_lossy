@@ -58,18 +58,18 @@ class TunHelperSettingsTests(unittest.TestCase):
         self.assertFalse(settings.helper_apply_network)
         self.assertEqual(settings.helper_log_level, "WARNING")
 
-    def test_helper_mode_supported_only_on_linux(self) -> None:
+    def test_helper_mode_supported_on_linux_and_macos(self) -> None:
         settings = TunExecutionSettings(mode="helper")
 
         self.assertTrue(settings.helper_mode_supported(platform="linux"))
-        self.assertFalse(settings.helper_mode_supported(platform="darwin"))
+        self.assertTrue(settings.helper_mode_supported(platform="darwin"))
         self.assertFalse(settings.helper_mode_supported(platform="win32"))
 
-    def test_ensure_supported_platform_raises_for_non_linux_helper_mode(self) -> None:
+    def test_ensure_supported_platform_raises_for_unsupported_helper_mode(self) -> None:
         settings = TunExecutionSettings(mode="helper")
 
-        with self.assertRaisesRegex(RuntimeError, "currently supported only on Linux"):
-            settings.ensure_supported_platform(platform="darwin")
+        with self.assertRaisesRegex(RuntimeError, "currently supported only on Linux and macOS"):
+            settings.ensure_supported_platform(platform="win32")
 
     def test_resolved_socket_path_defaults_to_process_unique_runtime_path(self) -> None:
         settings = TunExecutionSettings(mode="helper")

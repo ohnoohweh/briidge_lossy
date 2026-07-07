@@ -334,6 +334,10 @@ Several macOS-specific operational details were also proven:
   split routes instead of by deleting/replacing the system default route
 - the hook must treat `/32` and `/128` excludes as host routes, not generic
   network routes
+- the hook must not install explicit excluded routes for loopback ranges such
+  as `127.0.0.0/8`, `127.0.0.1/32`, or `::1/128`; macOS already owns those
+  through the kernel loopback route, and adding an underlay route for them can
+  make even `127.0.0.1` resolve through a physical interface such as `en0`
 - the Swift app passes `./scripts/client-tun-hook-macos.sh`, but the running
   app resolves that to the bundled copy inside
   `ObstacleBridge.app/Contents/Resources/scripts`
@@ -375,6 +379,66 @@ Swift must therefore treat kind `1` and kind `2` as WebSocket overlay control
 frames, not as corrupt app payload. The macOS app now answers kind `1` ping
 frames with kind `2` pong frames before app payload is passed into SecureLink
 and ChannelMux.
+
+## Python macOS helper learnings
+
+The Python `darwin-native` helper path added another useful macOS data point:
+the same helper split used on Linux can own a real Darwin `utun` fd and run the
+existing macOS hook scripts from the privileged side. The elevated test lane
+for that path is intentionally narrow, but it exposed several design rules that
+also apply to the Swift app/helper direction.
+
+First, `utun` names are realized by the kernel. A caller can request a symbolic
+or desired name, but the opened device may come back as `utun4`, `utun5`, or
+another concrete interface. The helper must return that actual name to the
+unprivileged runtime, and all later apply/remove operations must use the actual
+name rather than the requested one. Teardown and route-state lookup have the
+same rule.
+
+Second, helper-owned network apply must run only after `OPEN_TUN` has completed
+and the actual interface name is known. Scheduling `OPEN_TUN` and
+`APPLY_NETWORK` as independent client requests is fragile on macOS because the
+apply step may otherwise target a name that never existed. The Swift/XPC helper
+contract should preserve this ordering explicitly:
+
+- open `utun`
+- return actual interface name and MTU
+- apply addresses/routes/DNS using that actual interface
+- publish a runtime snapshot that includes `opened`, `network_applied`, hook
+  action, hook argv, and last failure details
+
+Third, route env vars need "unset" and "explicit empty" semantics. For example,
+the Python elevated lane intentionally passes an empty excluded-route list to
+avoid touching loopback or default DNS in a non-invasive test. Shell hooks must
+therefore use parameter expansion that distinguishes unset from empty
+(`${VAR-default}` rather than `${VAR:-default}`) when an empty value is a real
+operator/test intent.
+
+Fourth, loopback integrity is a hard preflight for macOS helper tests and app
+startup diagnostics. A bad route such as:
+
+- `route -n get 127.0.0.1` returning gateway `192.168.179.2` on `en0`
+
+means the machine's loopback route has been corrupted, often by a stale or
+over-broad excluded route. The healthy state is:
+
+- `route -n get 127.0.0.1` returns interface `lo0`
+
+The macOS elevated lane now repairs stale ObstacleBridge-created loopback route
+damage before starting, and skips if loopback cannot be restored. The app
+should use the same diagnostic shape when WebAdmin or localhost helper IPC
+appears unreachable: check loopback routing before assuming Admin Web failed.
+The route hooks must also treat a loopback overlay peer, such as
+`127.0.0.1`, as already underlay-protected; adding a more-specific
+`127.0.0.1/32` peer-preservation route through `en0` breaks local Admin Web,
+helper IPC, and loopback test probes.
+
+Finally, non-invasive elevated tests should avoid default-route and DNS changes
+unless that behavior is the subject of the test. A narrow helper launch test can
+prove privileged `utun` creation, hook invocation, Admin Web runtime reporting,
+and teardown cleanup with small host routes and empty DNS. Full-tunnel route and
+DNS behavior should live in separate, explicit tests because failures there can
+affect the developer machine's own reachability.
 
 ## Swift Packet Adapter Behavior Versus Python
 
@@ -438,10 +502,14 @@ This should now be interpreted as:
 - ChannelMux/service wiring is present
 - privilege-backed local TUN realization is present
 - route preservation for the overlay peer remains the fragile part
+- helper/app localhost diagnostics must also treat corrupted loopback routing
+  as a first-class failure mode, because WebAdmin can appear unreachable even
+  when the process is alive if `127.0.0.1` no longer routes through `lo0`
 
 That diagnosis is much better than the earlier uncertainty, because it gives a
 narrow next step: capture and preserve the overlay peer underlay route before
-the full-tunnel routes are installed.
+the full-tunnel routes are installed, while keeping loopback routes owned by
+the operating system rather than by ObstacleBridge hook exclusions.
 
 ## Further steps
 
@@ -450,11 +518,13 @@ the full-tunnel routes are installed.
    - real `utun` appears
    - routes are installed
    - underlay route is preserved
+   - loopback still routes through `lo0`
    - traffic exits through the remote peer
    - admin state shows a real TUN channel
 2. Introduce a dedicated privileged helper managed through `SMAppService`.
 3. Define an XPC contract for:
    - create local TUN
+   - report the actual kernel-assigned `utun` name
    - configure addressing and routes
    - preserve underlay route
    - teardown and cleanup

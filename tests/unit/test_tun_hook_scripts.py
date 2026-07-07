@@ -183,8 +183,10 @@ def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route(
     assert 'save_dns_state() {' in script
     assert 'apply_dns_servers() {' in script
     assert 'restore_dns_state() {' in script
-    assert 'EXCLUDED_ROUTES="${EXCLUDED_ROUTES:-127.0.0.0/8}"' in script
-    assert 'EXCLUDED_ROUTES6="${EXCLUDED_ROUTES6:-::1/128}"' in script
+    assert 'INCLUDED_ROUTES="${INCLUDED_ROUTES-0.0.0.0/0}"' in script
+    assert 'EXCLUDED_ROUTES="${EXCLUDED_ROUTES-127.0.0.0/8}"' in script
+    assert 'INCLUDED_ROUTES6="${INCLUDED_ROUTES6-::/0}"' in script
+    assert 'EXCLUDED_ROUTES6="${EXCLUDED_ROUTES6-::1/128}"' in script
     assert 'ifconfig "$IFNAME" inet "$TUN_ADDR_IP" "$TUN_GW" netmask "$(ipv4_prefix_to_netmask "$TUN_ADDR_PREFIX")" up' in script
     assert 'route -n get default' in script
     assert 'netstat -rn -f inet' in script
@@ -212,6 +214,13 @@ def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route(
     assert 'delete_excluded_routes_v6() {' in script
     assert 'snapshot_excluded_routes_v4() {' in script
     assert 'snapshot_excluded_routes_v6() {' in script
+    assert 'is_loopback_route_v4() {' in script
+    assert 'is_loopback_host_v4() {' in script
+    assert 'is_loopback_route_v6() {' in script
+    assert 'skip explicit loopback excluded route snapshot for ${route_spec}; kernel loopback routes already cover it' in script
+    assert 'skip explicit IPv6 loopback excluded route snapshot for ${route_spec}; kernel loopback routes already cover it' in script
+    assert 'skip overlay peer underlay preservation for loopback peer ${normalized_ip}; lo0 route already covers it' in script
+    assert 'skip direct overlay peer route protect for loopback peer ${normalized_overlay_peer_ip}' in script
     assert 'route_add_or_change_v4() {' in script
     assert 'route_add_or_change_v6() {' in script
     assert 'overlay_peer_route_matches_underlay_v4() {' in script

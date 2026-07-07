@@ -796,6 +796,7 @@ class ChannelMux:
         self._tun_helper_settings = None
         self._tun_helper_client = None
         self._tun_helper_backend = None
+        self._tun_helper_open_tasks: dict[int, asyncio.Task] = {}
         self._tun_helper_reader_tasks: dict[int, asyncio.Task] = {}
         self._tun_helper_remove_tasks: dict[int, asyncio.Task] = {}
         self._tun_helper_devices: dict[int, ChannelMux.TunDevice] = {}
@@ -2184,6 +2185,7 @@ class ChannelMux:
                 try: t.cancel()
                 except Exception: pass
         self._ensure_task = self._sweeper_task = None
+        await self._await_tun_helper_open_tasks()
         await self._stop_all_services()
         await self._close_all_channels()
         await self._await_tun_helper_remove_tasks()
@@ -3771,7 +3773,8 @@ class ChannelMux:
                 helper_managed=True,
             )
             self._tun_helper_open_device(dev)
-            self._tun_helper_apply_network_for_device(dev)
+            if backend is not None:
+                self._tun_helper_apply_network_for_device(dev)
             return dev
         self._require_tun_support()
         try:
@@ -3990,7 +3993,14 @@ class ChannelMux:
         client = self._tun_helper_client
         if not self._tun_helper_manages_device(dev) or client is None:
             return
-        self.loop.create_task(self._tun_helper_open_device_async(client, dev))
+        task = self.loop.create_task(self._tun_helper_open_device_async(client, dev))
+        dev_id = id(dev)
+        self._tun_helper_open_tasks[dev_id] = task
+        def _clear_done(_task: asyncio.Task, *, _dev_id: int = dev_id) -> None:
+            current = self._tun_helper_open_tasks.get(_dev_id)
+            if current is _task:
+                self._tun_helper_open_tasks.pop(_dev_id, None)
+        task.add_done_callback(_clear_done)
 
     def _tun_helper_apply_network_for_device(self, dev: "ChannelMux.TunDevice") -> None:
         settings = self._tun_helper_settings
@@ -4049,6 +4059,12 @@ class ChannelMux:
             return
         await asyncio.gather(*pending, return_exceptions=True)
 
+    async def _await_tun_helper_open_tasks(self) -> None:
+        pending = [task for task in self._tun_helper_open_tasks.values() if not task.done()]
+        if not pending:
+            return
+        await asyncio.gather(*pending, return_exceptions=True)
+
     async def _tun_helper_read_loop(self, dev: "ChannelMux.TunDevice") -> None:
         try:
             while True:
@@ -4076,7 +4092,15 @@ class ChannelMux:
 
     async def _tun_helper_open_device_async(self, client: Any, dev: "ChannelMux.TunDevice") -> None:
         try:
-            await client.open_tun({"ifname": dev.ifname, "mtu": dev.mtu})
+            opened = await client.open_tun({"ifname": dev.ifname, "mtu": dev.mtu})
+            if isinstance(opened, dict):
+                opened_ifname = str(opened.get("ifname") or "")
+                if opened_ifname:
+                    dev.ifname = opened_ifname
+                opened_mtu = opened.get("mtu")
+                if opened_mtu is not None:
+                    dev.mtu = int(opened_mtu)
+            self._tun_helper_apply_network_for_device(dev)
         except Exception as exc:
             self.log.warning("[TUN/HELPER] helper open failed if=%s mtu=%s err=%r", dev.ifname, dev.mtu, exc)
 
