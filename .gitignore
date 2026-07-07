@@ -21,3 +21,4 @@ Cert_SecureLink/
 /ios/.device-config/
 /ios/.device-config.bak/
 /logs/
+/ObstacleBridge*.log
