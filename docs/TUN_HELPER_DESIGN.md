@@ -192,12 +192,12 @@ packet carry, route-policy ownership, real helper-owned firewall apply/remove
 with teardown cleanup, and rollback after partial helper apply failure. The
 more meaningful remaining Linux work is now stronger proof of helper-death
 cleanup handling and deployment hardening. The macOS Python helper backend is
-now present and has both unit coverage plus a first elevated/live helper proof
-for privileged `darwin-native` launch, real `utun` creation, Darwin hook
-apply/remove, Admin Web helper runtime reporting, and interface teardown. It
-still needs broader elevated/live proof for packet carry through the real
-overlay, route/DNS behavior beyond the narrow hook-owned route case, and
-helper-death cleanup.
+now present and has unit coverage plus elevated/live helper proof for privileged
+`darwin-native` launch, real `utun` creation, Darwin hook apply/remove, Admin
+Web helper runtime reporting, packet carry through the real overlay, direct
+Darwin route/DNS hook effects on a live helper-owned `utun`, helper-death
+disconnect reporting, kernel cleanup of the helper-owned interface, and route
+teardown after helper loss.
 
 ### Not delivered yet
 
@@ -208,8 +208,6 @@ helper-death cleanup.
   beyond packet carry, helper-managed route/DNS/firewall behavior, rollback
   after partial apply failure, post-start helper-loss observability, and
   operator-triggered stale-state repair after helper death
-- broader elevated/live Python/macOS helper proof for `darwin-native` beyond
-  the first helper launch, real `utun`, Darwin hook, and teardown lane
 - Swift/macOS parity for the helper split
 
 ## Linux-first architecture
@@ -1021,9 +1019,9 @@ These are the actionable next steps for the helper effort.
   for example partial-repair persistence, narrower per-resource repair actions,
   or richer live repair orchestration beyond the current post-repair
   verification/reporting pass
-- expand elevated/live Python/macOS coverage for `darwin-native` to prove real
-  packet carry, Darwin hook route/DNS effects beyond the first narrow route
-  lane, and helper-death cleanup
+- broaden macOS helper-death recovery beyond kernel interface/route cleanup
+  into explicit repair UX if Darwin later grows persistent helper-owned state
+  that can survive helper process death
 
 ### Deliberately deferred
 

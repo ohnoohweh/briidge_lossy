@@ -200,7 +200,8 @@ class DarwinTunHelperBackend:
         self._last_hook_argv = list(argv)
         self._last_hook_env = dict(env)
         self._last_hook_action = "up"
-        return {
+        snapshot = self.local_snapshot()
+        snapshot.update({
             "applied": True,
             "backend": "darwin-native",
             "ifname": ifname,
@@ -208,7 +209,8 @@ class DarwinTunHelperBackend:
             "hook_argv": list(argv),
             "hook_env": dict(env),
             "last_failure": dict(self._last_failure),
-        }
+        })
+        return snapshot
 
     async def remove_network(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._remove_calls += 1
@@ -228,7 +230,8 @@ class DarwinTunHelperBackend:
         self._last_hook_argv = list(argv)
         self._last_hook_env = dict(env)
         self._last_hook_action = "down"
-        return {
+        snapshot = self.local_snapshot()
+        snapshot.update({
             "removed": True,
             "backend": "darwin-native",
             "ifname": ifname,
@@ -236,7 +239,8 @@ class DarwinTunHelperBackend:
             "hook_argv": list(argv),
             "hook_env": dict(env),
             "last_failure": dict(self._last_failure),
-        }
+        })
+        return snapshot
 
     async def stop(self) -> None:
         self._stopped = True

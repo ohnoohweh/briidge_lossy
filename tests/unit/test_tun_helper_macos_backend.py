@@ -118,6 +118,10 @@ class DarwinTunHelperBackendTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(applied["applied"])
         self.assertTrue(removed["removed"])
+        self.assertEqual(applied["mtu"], 1410)
+        self.assertEqual(applied["packets_from_runtime"], 0)
+        self.assertEqual(applied["packets_to_runtime"], 0)
+        self.assertEqual(removed["mtu"], 1410)
         self.assertEqual(calls[0][0][-2:], ["up", "utun4"])
         self.assertTrue(calls[0][0][0].endswith("scripts/client-tun-hook-macos.sh"))
         self.assertEqual(calls[0][1]["TUN_ADDR"], "10.20.0.1/30")

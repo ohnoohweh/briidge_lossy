@@ -87,6 +87,7 @@ class TunHelperClientServerTests(unittest.IsolatedAsyncioTestCase):
         opened = await client.open_tun({"ifname": "obtun0", "mtu": 1600})
         await client.write_packet(b"\x01\x02hello")
         echoed = await asyncio.wait_for(client.read_packet(), timeout=1.0)
+        cached_after_packets = client.cached_snapshot()
         snap = await client.snapshot()
         await client.close()
 
@@ -95,6 +96,8 @@ class TunHelperClientServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.backend.last_open_payload["ifname"], "obtun0")
         self.assertEqual(self.backend.written_packets, [b"\x01\x02hello"])
         self.assertEqual(echoed, b"echo:\x01\x02hello")
+        self.assertEqual(cached_after_packets["packets_from_runtime"], 1)
+        self.assertEqual(cached_after_packets["packets_to_runtime"], 1)
         self.assertEqual(snap["backend"], "fake")
         self.assertEqual(snap["open_calls"], 1)
         self.assertEqual(snap["written_packets"], 1)

@@ -1470,7 +1470,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `47` | `759` |
+| Python CLI/runtime, including macOS Python | `47` | `761` |
 | macOS Swift app | `1` | `47` |
 | iOS app/extension | `24` | `149` |
 

@@ -1,5 +1,7 @@
+import asyncio
 import json
 import os
+import signal
 import shutil
 import socket
 import subprocess
@@ -38,7 +40,7 @@ def _require_macos_elevated_runtime() -> None:
     geteuid = getattr(os, "geteuid", None)
     if not callable(geteuid) or int(geteuid()) != 0:
         pytest.skip("macos_elevated tests require root privileges")
-    for binary in ("ifconfig", "route"):
+    for binary in ("ifconfig", "networksetup", "route"):
         if shutil.which(binary) is None:
             pytest.skip(f"macos_elevated tests require the {binary} command")
 
@@ -131,6 +133,90 @@ def _route_get_interface(host: str) -> str:
         if "interface:" in line:
             return line.split("interface:", 1)[1].strip()
     return ""
+
+
+def _route_get_interface6(host: str) -> str:
+    result = subprocess.run(
+        ["route", "-n", "get", "-inet6", host],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=2.0,
+    )
+    for line in str(result.stdout or "").splitlines():
+        if "interface:" in line:
+            return line.split("interface:", 1)[1].strip()
+    return ""
+
+
+def _network_service_for_device(device: str) -> str:
+    if not device:
+        return ""
+    result = subprocess.run(
+        ["networksetup", "-listnetworkserviceorder"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=4.0,
+    )
+    service = ""
+    for raw_line in str(result.stdout or "").splitlines():
+        line = raw_line.strip()
+        if line.startswith("(") and ")" in line:
+            service = line.split(")", 1)[1].strip()
+            continue
+        if "Device:" in line:
+            current = line.split("Device:", 1)[1].split(")", 1)[0].strip()
+            if current == device:
+                return service
+    return ""
+
+
+def _dns_servers_for_service(service_name: str) -> list[str]:
+    if not service_name:
+        return []
+    result = subprocess.run(
+        ["networksetup", "-getdnsservers", service_name],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=4.0,
+    )
+    lines = [line.strip() for line in str(result.stdout or "").splitlines() if line.strip()]
+    if not lines or any("There aren't any DNS Servers set" in line for line in lines):
+        return []
+    return lines
+
+
+def _wait_route_interface(host: str, ifname: str, *, inet6: bool = False, timeout: float = 12.0) -> None:
+    end = time.time() + timeout
+    last = ""
+    while time.time() < end:
+        last = _route_get_interface6(host) if inet6 else _route_get_interface(host)
+        if last == ifname:
+            return
+        time.sleep(0.2)
+    family = "IPv6" if inet6 else "IPv4"
+    raise RuntimeError(f"{family} route to {host} did not use {ifname}; last interface={last!r}")
+
+
+def _wait_route_not_interface(host: str, ifname: str, *, inet6: bool = False, timeout: float = 12.0) -> None:
+    end = time.time() + timeout
+    last = ""
+    while time.time() < end:
+        last = _route_get_interface6(host) if inet6 else _route_get_interface(host)
+        if last != ifname:
+            return
+        time.sleep(0.2)
+    family = "IPv6" if inet6 else "IPv4"
+    raise RuntimeError(f"{family} route to {host} still uses {ifname}")
+
+
+def _send_udp(source_ip: str, dest_ip: str, payload: bytes, *, port: int) -> None:
+    family = socket.AF_INET6 if ":" in source_ip or ":" in dest_ip else socket.AF_INET
+    with socket.socket(family, socket.SOCK_DGRAM) as sock:
+        sock.bind((source_ip, 0))
+        sock.sendto(payload, (dest_ip, int(port)))
 
 
 def _repair_stale_loopback_route() -> None:
@@ -371,6 +457,52 @@ def _wait_tun_helper_runtime(
     raise RuntimeError(f"helper runtime did not reach expected state; last={last!r}")
 
 
+def _wait_tun_helper_runtime_counter(
+    admin_port: int,
+    counter_name: str,
+    before_value: int,
+    *,
+    timeout: float = 12.0,
+) -> dict:
+    end = time.time() + timeout
+    last: dict = {}
+    while time.time() < end:
+        status = _local_admin_json(admin_port, "/api/status")
+        helper = dict(status.get("tun_helper") or {})
+        runtime = dict(helper.get("runtime") or {})
+        last = runtime
+        if int(runtime.get(counter_name) or 0) > int(before_value):
+            return runtime
+        time.sleep(0.2)
+    raise RuntimeError(
+        f"helper runtime counter {counter_name} did not increase beyond {before_value}; last={last!r}"
+    )
+
+
+def _wait_tun_helper_disconnected_runtime(
+    admin_port: int,
+    *,
+    expected_ifname: str,
+    timeout: float = 20.0,
+) -> dict:
+    end = time.time() + timeout
+    last: dict = {}
+    while time.time() < end:
+        status = _local_admin_json(admin_port, "/api/status")
+        helper = dict(status.get("tun_helper") or {})
+        runtime = dict(helper.get("runtime") or {})
+        last = helper
+        if (
+            bool(helper.get("enabled"))
+            and not bool(helper.get("connected"))
+            and str(runtime.get("ifname") or "") == str(expected_ifname)
+            and helper.get("process_returncode") is not None
+        ):
+            return status
+        time.sleep(0.2)
+    raise RuntimeError(f"helper runtime did not report disconnect for {expected_ifname!r}; last={last!r}")
+
+
 def test_overlay_e2e_macos_elevated_tun_helper_native_creates_utun_and_applies_hooks(tmp_path: Path) -> None:
     _require_macos_elevated_runtime()
     _repair_stale_loopback_route()
@@ -441,9 +573,176 @@ def test_overlay_e2e_macos_elevated_tun_helper_native_creates_utun_and_applies_h
         assert str(server_runtime.get("last_hook_action") or "") == "up"
         assert "client-tun-hook-macos.sh" in " ".join(client_runtime.get("last_hook_argv") or [])
         assert "server-tun-hook-macos.sh" in " ".join(server_runtime.get("last_hook_argv") or [])
+
+        client_before = int(client_runtime.get("packets_to_runtime") or 0)
+        server_before = int(server_runtime.get("packets_from_runtime") or 0)
+        _send_udp("198.18.65.1", "198.18.65.2", b"darwin-native-packet-carry-501", port=50101)
+        _wait_tun_helper_runtime_counter(
+            pair.client_proc.admin_port or 0,
+            "packets_to_runtime",
+            client_before,
+        )
+        _wait_tun_helper_runtime_counter(
+            pair.server_proc.admin_port or 0,
+            "packets_from_runtime",
+            server_before,
+        )
     finally:
         pair.stop()
         if client_actual_ifname:
             _wait_interface_absent(client_actual_ifname)
         if server_actual_ifname:
             _wait_interface_absent(server_actual_ifname)
+
+
+def test_macos_elevated_darwin_native_helper_applies_routes_and_dns_live(tmp_path: Path) -> None:
+    _require_macos_elevated_runtime()
+    _repair_stale_loopback_route()
+    from obstacle_bridge.bridge_tun_helper_macos import DarwinTunHelperBackend
+
+    route_peer = "1.1.1.1"
+    underlay_if = _route_get_interface(route_peer)
+    underlay_service = _network_service_for_device(underlay_if)
+    original_dns = _dns_servers_for_service(underlay_service) if underlay_service else []
+    backend = DarwinTunHelperBackend()
+    actual_ifname = ""
+
+    async def _run() -> dict:
+        opened = await backend.open_tun({"ifname": _tun_name("mt502", "c"), "mtu": 1400})
+        payload = {
+            "ifname": str(opened.get("ifname") or ""),
+            "mtu": 1400,
+            "tun_routing": {
+                "tunnel_address": "198.18.66.1",
+                "tunnel_prefix": 24,
+                "tunnel_gateway": "198.18.66.2",
+                "tunnel_address6": "fd20:566::1",
+                "tunnel_prefix6": 64,
+                "tunnel_gateway6": "fd20:566::2",
+                "included_routes": ["198.18.166.0/24"],
+                "excluded_routes": ["127.0.0.0/8"],
+                "included_routes6": ["fd20:166::/64"],
+                "excluded_routes6": ["::1/128"],
+                "dns_servers": ["9.9.9.9", "149.112.112.112"],
+            },
+            "listener_hook_env": {
+                "OB_OVERLAY_PEER_HOST": route_peer,
+            },
+        }
+        await backend.apply_network(payload)
+        return backend.local_snapshot()
+
+    try:
+        snapshot = asyncio.run(_run())
+        actual_ifname = str(snapshot.get("ifname") or "")
+        assert actual_ifname.startswith("utun")
+        _wait_interface(actual_ifname)
+        _wait_interface_address(actual_ifname, "198.18.66.1")
+        _wait_interface_address(actual_ifname, "fd20:566::1")
+        _wait_route_interface("198.18.166.10", actual_ifname)
+        _wait_route_interface("fd20:166::10", actual_ifname, inet6=True)
+        hook_env = dict(snapshot.get("last_hook_env") or {})
+        assert hook_env.get("DNS1") == "9.9.9.9"
+        assert hook_env.get("DNS2") == "149.112.112.112"
+        if underlay_service:
+            end = time.time() + 12.0
+            while time.time() < end:
+                if _dns_servers_for_service(underlay_service) == ["9.9.9.9", "149.112.112.112"]:
+                    break
+                time.sleep(0.2)
+            else:
+                pytest.fail(
+                    f"DNS servers for {underlay_service!r} were not updated; "
+                    f"current={_dns_servers_for_service(underlay_service)!r}"
+                )
+    finally:
+        asyncio.run(backend.stop())
+        if actual_ifname:
+            _wait_interface_absent(actual_ifname)
+            _wait_route_not_interface("198.18.166.10", actual_ifname)
+            _wait_route_not_interface("fd20:166::10", actual_ifname, inet6=True)
+        if underlay_service:
+            end = time.time() + 12.0
+            while time.time() < end:
+                if _dns_servers_for_service(underlay_service) == original_dns:
+                    break
+                time.sleep(0.2)
+            else:
+                pytest.fail(
+                    f"DNS servers for {underlay_service!r} were not restored; "
+                    f"expected={original_dns!r} current={_dns_servers_for_service(underlay_service)!r}"
+                )
+
+
+def test_overlay_e2e_macos_elevated_tun_helper_native_reports_helper_death_cleanup(tmp_path: Path) -> None:
+    _require_macos_elevated_runtime()
+    _repair_stale_loopback_route()
+    case_tag = "mt503"
+    client_requested_ifname = _tun_name(case_tag, "c")
+    server_requested_ifname = _tun_name(case_tag, "s")
+    helper_args = [
+        "--tun-execution-mode", "helper",
+        "--tun-helper-backend", "darwin-native",
+        "--log-tun-helper", "DEBUG",
+    ]
+    client_routing_args = [
+        "--tunnel-address", "198.18.67.1",
+        "--tunnel-prefix", "24",
+        "--tunnel-gateway", "198.18.67.2",
+        "--included-routes", "198.18.167.0/24",
+        "--excluded-routes", "127.0.0.0/8",
+        "--included-routes6",
+        "--excluded-routes6",
+        "--dns-servers",
+    ]
+    server_routing_args = [
+        "--tunnel-address", "198.18.67.1",
+        "--tunnel-prefix", "24",
+        "--tunnel-gateway", "198.18.67.2",
+        "--included-routes", "198.18.67.1/32",
+        "--excluded-routes",
+        "--included-routes6",
+        "--excluded-routes6",
+        "--dns-servers",
+    ]
+    pair = _start_tun_bridge_pair(
+        base_case=overlay_e2e.CASES["case01_udp_over_own_udp_ipv4"],
+        tmp_path=tmp_path,
+        case_index=503,
+        client_ifname=client_requested_ifname,
+        server_ifname=server_requested_ifname,
+        mtu=1400,
+        server_extra_args=helper_args + server_routing_args,
+        client_extra_args=helper_args + client_routing_args,
+    )
+    client_actual_ifname = ""
+    try:
+        client_helper = _wait_tun_helper_runtime(
+            pair.client_proc.admin_port or 0,
+            expected_backend="darwin-native",
+        )
+        client_runtime = dict(client_helper.get("runtime") or {})
+        client_actual_ifname = str(client_runtime.get("ifname") or "")
+        helper_pid = int(client_helper.get("pid") or 0)
+        assert helper_pid > 0
+        _wait_interface(client_actual_ifname)
+        _wait_route_interface("198.18.167.10", client_actual_ifname)
+
+        os.kill(helper_pid, signal.SIGKILL)
+
+        disconnected = _wait_tun_helper_disconnected_runtime(
+            pair.client_proc.admin_port or 0,
+            expected_ifname=client_actual_ifname,
+        )
+        helper_after = dict(disconnected.get("tun_helper") or {})
+        runtime_after = dict(helper_after.get("runtime") or {})
+        assert runtime_after.get("backend") == "darwin-native"
+        assert runtime_after.get("ifname") == client_actual_ifname
+        last_error = str(helper_after.get("last_error") or "").lower()
+        assert "connection closed" in last_error or "connection reset" in last_error
+        _wait_interface_absent(client_actual_ifname)
+        _wait_route_not_interface("198.18.167.10", client_actual_ifname)
+    finally:
+        pair.stop()
+        if client_actual_ifname:
+            _wait_interface_absent(client_actual_ifname)

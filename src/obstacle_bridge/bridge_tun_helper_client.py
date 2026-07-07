@@ -114,6 +114,9 @@ class TunHelperClient:
         self._raise_if_read_failed()
         self._writer.write(encode_frame(TunHelperFrameKind.PACKET_TO_HELPER, bytes(packet)))
         await self._writer.drain()
+        self._last_runtime_snapshot["packets_from_runtime"] = int(
+            self._last_runtime_snapshot.get("packets_from_runtime") or 0
+        ) + 1
 
     async def snapshot(self) -> dict[str, Any]:
         message = await self.request("SNAPSHOT", {})
@@ -177,6 +180,9 @@ class TunHelperClient:
                     if kind == TunHelperFrameKind.CONTROL_RESPONSE:
                         await self._response_queue.put(decode_control_payload(payload))
                     elif kind == TunHelperFrameKind.PACKET_FROM_HELPER:
+                        self._last_runtime_snapshot["packets_to_runtime"] = int(
+                            self._last_runtime_snapshot.get("packets_to_runtime") or 0
+                        ) + 1
                         await self._packet_queue.put(bytes(payload))
                     elif kind == TunHelperFrameKind.EVENT:
                         await self._event_queue.put(payload.decode("utf-8", errors="replace"))
