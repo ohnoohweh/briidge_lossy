@@ -1520,7 +1520,7 @@ Important caveat:
 
 - Linux runs the OS-independent shared integration suite with `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`
 - Linux runs the elevated TUN subset separately with `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`
-- macOS runs the elevated TUN subset separately with `./scripts/run_macos_elevated_tests.sh`, including the GitHub `macos-latest` elevated TUN gate when passwordless `sudo` is available
+- macOS runs the elevated TUN subset separately with `./scripts/run_macos_elevated_tests.sh`, including the GitHub `macos-latest` elevated TUN gate when passwordless `sudo` is available; that subset now covers helper-owned Darwin route/DNS hook effects, packet carry, helper-death status, and the manual-cleanup warning when cached helper-owned network state may remain after process loss
 - Windows runs the Windows-specific non-elevated integration subset with `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"`
 - Windows runs the elevated TUN subset separately with `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`
 - The iOS E2E testing set is tracked separately from the bridge.py shared gate:

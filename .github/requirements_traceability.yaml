@@ -610,6 +610,7 @@ REQ-LIFE-010:
     - tests/integration/test_macos_elevated.py::test_macos_elevated_darwin_native_helper_applies_routes_and_dns_live
     - tests/integration/test_macos_elevated.py::test_overlay_e2e_macos_elevated_tun_helper_native_creates_utun_and_applies_hooks
     - tests/integration/test_macos_elevated.py::test_overlay_e2e_macos_elevated_tun_helper_native_reports_helper_death_cleanup
+    - tests/integration/test_macos_elevated.py::test_overlay_e2e_macos_elevated_tun_helper_native_reports_helper_death_with_route_dns_warning
   unit_tests:
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_flat_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_sectioned_config

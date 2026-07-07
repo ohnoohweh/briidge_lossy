@@ -991,11 +991,18 @@ macOS lane in `tests/integration/test_macos_elevated.py`:
 - helper-owned invocation of `scripts/client-tun-hook-macos.sh` and
   `scripts/server-tun-hook-macos.sh` for apply/remove lifecycle ownership
 - Admin Web helper runtime status reporting for the created `utun` interfaces
+- live packet-carry proof across the helper-backed overlay path
+- live route and DNS apply/remove proof on a real elevated Darwin path
+- post-start helper-death proof that preserves the last helper runtime snapshot
+  and raises the manual-cleanup warning when helper-owned route or DNS state
+  may still remain
 - teardown cleanup that verifies the helper-owned `utun` interfaces disappear
 
-Remaining work is now broader hardening rather than one specific uncovered
-elevated integration lane on Linux, and broader packet-carry, route/DNS, and
-helper-death coverage on macOS beyond the first elevated `darwin-native` lane.
+Remaining work is now broader hardening rather than an uncovered first-lane
+elevated helper scenario on either Linux or macOS. The main uncovered areas
+have narrowed to richer operator recovery and repair behavior, especially if a
+future Darwin helper starts owning persistent host state beyond what today's
+hook-driven route and DNS path can clean up during normal shutdown.
 
 The first elevated case should stay:
 

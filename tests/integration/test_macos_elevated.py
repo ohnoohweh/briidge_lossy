@@ -746,3 +746,117 @@ def test_overlay_e2e_macos_elevated_tun_helper_native_reports_helper_death_clean
         pair.stop()
         if client_actual_ifname:
             _wait_interface_absent(client_actual_ifname)
+
+
+def test_overlay_e2e_macos_elevated_tun_helper_native_reports_helper_death_with_route_dns_warning(tmp_path: Path) -> None:
+    _require_macos_elevated_runtime()
+    _repair_stale_loopback_route()
+    case_tag = "mt504"
+    client_requested_ifname = _tun_name(case_tag, "c")
+    server_requested_ifname = _tun_name(case_tag, "s")
+    helper_args = [
+        "--tun-execution-mode", "helper",
+        "--tun-helper-backend", "darwin-native",
+        "--log-tun-helper", "DEBUG",
+    ]
+    route_peer = "1.1.1.1"
+    underlay_if = _route_get_interface(route_peer)
+    underlay_service = _network_service_for_device(underlay_if)
+    original_dns = _dns_servers_for_service(underlay_service) if underlay_service else []
+    client_routing_args = [
+        "--tunnel-address", "198.18.68.1",
+        "--tunnel-prefix", "24",
+        "--tunnel-gateway", "198.18.68.2",
+        "--included-routes", "198.18.168.0/24",
+        "--excluded-routes", "127.0.0.0/8",
+        "--included-routes6", "fd20:168::/64",
+        "--excluded-routes6", "::1/128",
+        "--dns-servers", "9.9.9.9", "149.112.112.112",
+    ]
+    server_routing_args = [
+        "--tunnel-address", "198.18.68.1",
+        "--tunnel-prefix", "24",
+        "--tunnel-gateway", "198.18.68.2",
+        "--included-routes", "198.18.68.1/32",
+        "--excluded-routes",
+        "--included-routes6",
+        "--excluded-routes6",
+        "--dns-servers",
+    ]
+    pair = _start_tun_bridge_pair(
+        base_case=overlay_e2e.CASES["case01_udp_over_own_udp_ipv4"],
+        tmp_path=tmp_path,
+        case_index=504,
+        client_ifname=client_requested_ifname,
+        server_ifname=server_requested_ifname,
+        mtu=1400,
+        server_extra_args=helper_args + server_routing_args,
+        client_extra_args=helper_args + client_routing_args,
+    )
+    client_actual_ifname = ""
+    try:
+        client_helper = _wait_tun_helper_runtime(
+            pair.client_proc.admin_port or 0,
+            expected_backend="darwin-native",
+        )
+        client_runtime = dict(client_helper.get("runtime") or {})
+        client_actual_ifname = str(client_runtime.get("ifname") or "")
+        helper_pid = int(client_helper.get("pid") or 0)
+        assert helper_pid > 0
+        assert client_actual_ifname.startswith("utun")
+        _wait_interface(client_actual_ifname)
+        _wait_route_interface("198.18.168.10", client_actual_ifname)
+        _wait_route_interface("fd20:168::10", client_actual_ifname, inet6=True)
+        if underlay_service:
+            end = time.time() + 12.0
+            while time.time() < end:
+                if _dns_servers_for_service(underlay_service) == ["9.9.9.9", "149.112.112.112"]:
+                    break
+                time.sleep(0.2)
+            else:
+                pytest.fail(
+                    f"DNS servers for {underlay_service!r} were not updated before helper death; "
+                    f"current={_dns_servers_for_service(underlay_service)!r}"
+                )
+
+        os.kill(helper_pid, signal.SIGKILL)
+
+        disconnected = _wait_tun_helper_disconnected_runtime(
+            pair.client_proc.admin_port or 0,
+            expected_ifname=client_actual_ifname,
+        )
+        helper_after = dict(disconnected.get("tun_helper") or {})
+        runtime_after = dict(helper_after.get("runtime") or {})
+        recovery = dict(helper_after.get("recovery") or {})
+        assert runtime_after.get("backend") == "darwin-native"
+        assert runtime_after.get("ifname") == client_actual_ifname
+        assert recovery.get("needs_manual_cleanup") is True
+        assert recovery.get("stale_network_possible") is True
+        assert recovery.get("stale_firewall_possible") is False
+        warnings = list(recovery.get("warnings") or [])
+        assert "helper_owned_network_state_may_remain" in warnings
+        summary = str(recovery.get("summary") or "").lower()
+        assert "manual cleanup" in summary
+        repair_hint = str(recovery.get("repair_hint") or "").lower()
+        assert "dns" in repair_hint
+        assert "routes" in repair_hint
+        last_error = str(helper_after.get("last_error") or "").lower()
+        assert "connection closed" in last_error or "connection reset" in last_error
+        _wait_interface_absent(client_actual_ifname)
+        _wait_route_not_interface("198.18.168.10", client_actual_ifname)
+        _wait_route_not_interface("fd20:168::10", client_actual_ifname, inet6=True)
+    finally:
+        pair.stop()
+        if client_actual_ifname:
+            _wait_interface_absent(client_actual_ifname)
+        if underlay_service:
+            end = time.time() + 12.0
+            while time.time() < end:
+                if _dns_servers_for_service(underlay_service) == original_dns:
+                    break
+                time.sleep(0.2)
+            else:
+                pytest.fail(
+                    f"DNS servers for {underlay_service!r} were not restored after helper death; "
+                    f"expected={original_dns!r} current={_dns_servers_for_service(underlay_service)!r}"
+                )
