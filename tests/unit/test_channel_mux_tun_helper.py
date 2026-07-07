@@ -86,6 +86,62 @@ class ChannelMuxTunHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(snapshot["network_applied"])
         self.assertEqual(snapshot["last_remove_payload"]["ifname"], "obtun0")
 
+    async def test_helper_mode_records_critical_runtime_health_when_expected_tun_addresses_missing(self):
+        args = build_runtime_args_from_config(
+            {
+                "TUN_routing": {
+                    "tunnel_address": "192.168.106.2",
+                    "tunnel_prefix": 24,
+                    "tunnel_address6": "fd20:106::2",
+                    "tunnel_prefix6": 64,
+                },
+                "tun_execution": {
+                    "mode": "helper",
+                    "helper_backend": "linux-python",
+                },
+            }
+        )
+        args._tun_helper_settings = TunExecutionSettings.from_mapping(vars(args))
+        args._tun_helper_backend = LinuxTunHelperInMemoryBackend()
+        args._tun_helper_client = None
+        session = _FakeSession(connected=True)
+        mux = ChannelMux.from_args(session, asyncio.get_running_loop(), args)
+        svc_key = ("local", 0, 19)
+        spec = ChannelMux.ServiceSpec(
+            svc_id=19,
+            l_proto="tun",
+            l_bind="obtun0",
+            l_port=1600,
+            r_proto="tun",
+            r_host="obtun0",
+            r_port=1600,
+        )
+        mux._local_services[svc_key] = spec
+        dev = mux._open_tun_device("obtun0", 1600, svc_key=svc_key)
+        mux._svc_tun_devices[svc_key] = dev
+
+        with patch.object(
+            mux,
+            "_linux_tun_interface_addresses",
+            return_value={
+                "ipv4": [],
+                "ipv6": ["fe80::1/64"],
+                "stdout4": "",
+                "stdout6": "inet6 fe80::1/64 scope link",
+            },
+        ), patch.object(mux.log, "critical") as critical:
+            await mux._run_tun_runtime_health_check(dev, reason="unit-test", delay_s=0)
+
+        health = dict(mux._tun_runtime_health_by_service.get(svc_key) or {})
+        self.assertEqual(health["code"], "tun_addresses_missing")
+        self.assertEqual(health["severity"], "critical")
+        self.assertEqual(health["expected_ipv4"], "192.168.106.2")
+        self.assertEqual(health["expected_ipv6"], "fd20:106::2")
+        self.assertEqual(health["reason"], "unit-test")
+        critical.assert_called_once()
+        mux._close_tun_device(dev)
+        await asyncio.sleep(0)
+
     async def test_helper_mode_network_payload_merges_auto_excluded_overlay_routes(self):
         args = build_runtime_args_from_config(
             {

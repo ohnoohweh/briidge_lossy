@@ -118,6 +118,8 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_accepts_owned_ipv6_source
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_rejects_malformed_packet
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_binds_peer_ref_and_rejects_second_owner_claim
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_recovers_missing_chan_owner_from_bound_runtime_peer
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_reports_owned_source_when_chan_owner_cannot_be_recovered
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_open_requires_prestarted_server_owned_service
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_open_binds_to_prestarted_server_owned_service
     - tests/unit/test_channel_mux_listener_mode.py::test_listener_mode_retains_prestarted_server_owned_shared_tun_service
@@ -250,6 +252,7 @@ ARC-CMP-004:
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_server_firewall_rules
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_server_firewall_rules_for_remote_server_catalog
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_network_payload_carries_listener_hook_env
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_records_critical_runtime_health_when_expected_tun_addresses_missing
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_refreshes_helper_snapshot_after_apply_success
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_start_skips_runtime_listener_on_created_hook
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_stop_skips_runtime_listener_on_stopped_hook
@@ -268,14 +271,18 @@ ARC-CMP-004:
     - tests/unit/test_runner_tun_helper.py::test_runner_status_reports_helper_recovery_warning_when_cached_runtime_may_need_cleanup
     - tests/unit/test_runner_tun_helper.py::test_runner_request_tun_helper_repair_uses_linux_native_snapshot_cleanup
     - tests/unit/test_runner_tun_helper.py::test_runner_request_tun_helper_repair_reports_remaining_stale_state_when_cleanup_incomplete
+    - tests/unit/test_runner_tun_helper.py::test_runner_stop_keeps_helper_available_until_mux_stop_finishes
     - tests/unit/test_tun_helper_linux_backend.py::test_verify_runtime_snapshot_repaired_reports_remaining_and_skipped_state
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_opens_and_writes_through_backend
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_registers_reader_and_delivers_packets
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_removes_network_on_close
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_network_payload_merges_auto_excluded_overlay_routes
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_uses_client_when_backend_is_external
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_stop_awaits_external_helper_remove_network
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_refreshes_helper_snapshot_after_apply_failure
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_dedicated_shared_tun_view
+    - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_preserves_tun_runtime_health_warning
+    - tests/unit/test_admin_web_payloads.py::test_tun_routing_ui_binds_tun_helper_fields
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_psk
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_cert
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_compress_layer
@@ -387,14 +394,17 @@ ARC-CMP-005:
     - tests/unit/test_connection_snapshots.py::test_snapshot_exposes_requested_remote_servers_as_client_listeners
     - tests/unit/test_connection_snapshots.py::test_snapshot_hides_requested_remote_servers_when_overlay_disconnected
     - tests/unit/test_connection_snapshots.py::test_snapshot_mixed_listeners_and_active_connections
+    - tests/unit/test_connection_snapshots.py::test_wrapped_myudp_client_snapshot_uses_inner_configured_peer_endpoint
     - tests/unit/test_connection_snapshots.py::test_status_snapshot_includes_tun_open_connection_count
     - tests/unit/test_admin_web_payloads.py::test_runner_peer_snapshot_coalesces_null_overlay_metrics
     - tests/unit/test_admin_web_payloads.py::test_runner_peer_snapshot_preserves_null_listener_overlay_metrics
     # The dedicated TUN page keeps shared-drop totals and shared-TUN
     # ChannelMux flow/drop diagnostics in the same admin payload lane.
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_dedicated_shared_tun_view
+    - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_preserves_tun_runtime_health_warning
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_effective_overlay_peer_excluded_routes
     - tests/unit/test_admin_web_payloads.py::test_tun_helper_repair_endpoint_returns_runner_payload
+    - tests/unit/test_admin_web_payloads.py::test_tun_routing_ui_binds_tun_helper_fields
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_frontend_uses_dedicated_tab_and_api
     - tests/unit/test_admin_web_payloads.py::test_admin_web_navigation_uses_operator_labels_for_peer_and_udp_tcp_tabs
     - tests/unit/test_admin_web_payloads.py::test_admin_web_proxy_tab_renders_config_runtime_and_throughput

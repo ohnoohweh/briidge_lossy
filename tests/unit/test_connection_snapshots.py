@@ -730,6 +730,56 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(peer["open_connections"]["udp"], 0)
         self.assertEqual(peer["open_connections"]["tcp"], 0)
 
+    def test_wrapped_myudp_client_snapshot_uses_inner_configured_peer_endpoint(self):
+        class _EmptyMux:
+            def snapshot_connections(self):
+                return {
+                    "udp": [],
+                    "tcp": [],
+                    "tun": [],
+                    "counts": {"udp": 0, "tcp": 0, "udp_listening": 0, "tcp_listening": 0},
+                }
+
+        class _InnerSession:
+            def __init__(self):
+                self._args = argparse.Namespace(
+                    udp_bind="::",
+                    udp_own_port=0,
+                    udp_peer="38.180.143.5",
+                    udp_peer_port=4433,
+                )
+                self._peer_host = "38.180.143.5"
+                self._peer_port = 4433
+                self.peer_proto = None
+
+            def get_metrics(self):
+                return SessionMetrics()
+
+            def is_connected(self):
+                return False
+
+        class _WrappedSession:
+            def __init__(self):
+                self._inner = _InnerSession()
+
+            def get_metrics(self):
+                return SessionMetrics()
+
+            def is_connected(self):
+                return False
+
+        args = argparse.Namespace(no_dashboard=True, overlay_transport="myudp")
+        runner = Runner(args)
+        runner._sessions = [_WrappedSession()]
+        runner._muxes = [_EmptyMux()]
+        runner._session_labels = ["myudp"]
+
+        out = runner.get_peer_connections_snapshot()
+
+        self.assertEqual(len(out["peers"]), 1)
+        self.assertEqual(out["peers"][0]["state"], "connecting")
+        self.assertEqual(out["peers"][0]["peer"], {"host": "38.180.143.5", "port": 4433})
+
     def test_peer_snapshot_formats_structured_peer_endpoint_for_webadmin(self):
         class _StructuredPeerSession:
             def get_metrics(self):

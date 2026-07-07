@@ -167,6 +167,9 @@ class Runner:
         self._tun_helper_last_error: str = ""
         self._tun_helper_runtime_snapshot: dict[str, Any] = {}
         self._tun_helper_last_repair_snapshot: dict[str, Any] = {}
+        self._tun_helper_lifecycle_phase: str = (
+            "disabled" if self._tun_helper_settings.mode != "helper" else "idle"
+        )
         self.stats = StatsBoard(args )
         self.admin_web = None
         self._restart_requested: Optional[asyncio.Event] = None
@@ -454,18 +457,22 @@ class Runner:
     async def _start_tun_helper(self) -> None:
         settings = self._tun_helper_settings
         if settings.mode != "helper":
+            self._tun_helper_lifecycle_phase = "disabled"
             return
         settings.ensure_supported_platform()
         if self._tun_helper_process is not None and self._tun_helper_client is not None:
+            self._tun_helper_lifecycle_phase = "connected"
             return
         self._tun_helper_session_token = secrets.token_urlsafe(18)
         self._tun_helper_socket_path = settings.resolved_socket_path()
         self._tun_helper_backend = None
         try:
+            self._tun_helper_lifecycle_phase = "launching_process"
             self._tun_helper_process = await self._await_with_async_diag(
                 "tun_helper.process.start",
                 self._launch_tun_helper_process(),
             )
+            self._tun_helper_lifecycle_phase = "waiting_for_socket"
             await self._await_with_async_diag(
                 "tun_helper.process.ready",
                 self._wait_for_tun_helper_socket_ready(
@@ -477,6 +484,7 @@ class Runner:
                 session_token=self._tun_helper_session_token,
                 logger=logging.getLogger("tun_helper_client"),
             )
+            self._tun_helper_lifecycle_phase = "connecting_client"
             await self._await_with_async_diag(
                 "tun_helper.client.connect",
                 self._tun_helper_client.connect(),
@@ -484,8 +492,10 @@ class Runner:
             setattr(self.args, "_tun_helper_settings", settings)
             setattr(self.args, "_tun_helper_client", self._tun_helper_client)
             self._tun_helper_last_error = ""
+            self._tun_helper_lifecycle_phase = "connected"
         except Exception as exc:
             self._tun_helper_last_error = f"{type(exc).__name__}:{exc}"
+            self._tun_helper_lifecycle_phase = "start_failed"
             with contextlib.suppress(Exception):
                 if self._tun_helper_client is not None:
                     await self._tun_helper_client.close()
@@ -497,6 +507,8 @@ class Runner:
             raise
 
     async def _stop_tun_helper(self) -> None:
+        if self._tun_helper_settings.mode == "helper":
+            self._tun_helper_lifecycle_phase = "stopping"
         for attr in ("_tun_helper_settings", "_tun_helper_client", "_tun_helper_backend"):
             with contextlib.suppress(Exception):
                 delattr(self.args, attr)
@@ -516,6 +528,9 @@ class Runner:
         self._tun_helper_backend = None
         self._tun_helper_session_token = ""
         self._tun_helper_config_path = ""
+        self._tun_helper_lifecycle_phase = (
+            "disabled" if self._tun_helper_settings.mode != "helper" else "stopped"
+        )
 
     def _tun_helper_snapshot(self) -> dict:
         settings = self._tun_helper_settings
@@ -532,6 +547,7 @@ class Runner:
         payload: dict[str, Any] = {
             "enabled": settings.mode == "helper",
             "mode": settings.mode,
+            "lifecycle_phase": self._tun_helper_lifecycle_phase,
             "backend": settings.helper_backend,
             "apply_network": bool(settings.helper_apply_network),
             "socket_path": self._tun_helper_socket_path or settings.resolved_socket_path(),
@@ -548,6 +564,11 @@ class Runner:
                     self._tun_helper_runtime_snapshot = dict(getter() or {})
         if self._tun_helper_runtime_snapshot:
             payload["runtime"] = dict(self._tun_helper_runtime_snapshot)
+        if bool(payload.get("enabled")) and not bool(payload.get("connected")):
+            if bool(payload.get("server_started")):
+                payload["lifecycle_phase"] = "waiting_for_client"
+            elif isinstance(process_returncode, int) and self._tun_helper_lifecycle_phase == "connected":
+                payload["lifecycle_phase"] = "process_exited"
         recovery = self._tun_helper_recovery_snapshot(payload)
         if recovery:
             payload["recovery"] = recovery
@@ -1461,6 +1482,48 @@ class Runner:
             return f"{host}:{listen_port}"
         return None
 
+    def _session_peer_endpoint_for_ui(self, session_obj: Any, transport: Optional[str] = None) -> Optional[object]:
+        candidates: list[Any] = []
+        for candidate in (session_obj, self._unwrap_snapshot_session(session_obj)):
+            if candidate is None:
+                continue
+            if any(candidate is existing for existing in candidates):
+                continue
+            candidates.append(candidate)
+        for candidate in candidates:
+            with contextlib.suppress(Exception):
+                peer_proto = getattr(candidate, "peer_proto", None)
+                send_port = getattr(peer_proto, "send_port", None)
+                peer_addr = getattr(send_port, "peer_addr", None)
+                if isinstance(peer_addr, tuple) and len(peer_addr) >= 2 and peer_addr[0] and int(peer_addr[1]) > 0:
+                    return {"host": str(peer_addr[0]), "port": int(peer_addr[1])}
+            with contextlib.suppress(Exception):
+                host = str(getattr(candidate, "_peer_host") or "").strip()
+                port = int(getattr(candidate, "_peer_port") or 0)
+                if host and port > 0:
+                    return {"host": host, "port": port}
+            with contextlib.suppress(Exception):
+                getter = getattr(candidate, "get_overlay_peers_snapshot", None)
+                if callable(getter):
+                    for row in list(getter() or []):
+                        if bool(row.get("listening")):
+                            continue
+                        peer_value = RunnerMuxAggregate._peer_label_for_ui(row.get("peer"))
+                        if peer_value is not None:
+                            return peer_value
+        if transport:
+            source_args = getattr(session_obj, "_args", None) or self.args
+            with contextlib.suppress(Exception):
+                real_session = self._unwrap_snapshot_session(session_obj)
+                source_args = getattr(real_session, "_args", None) or source_args
+            with contextlib.suppress(Exception):
+                _, peer_attr, peer_port_attr, _ = _overlay_cli_attrs(str(transport or "myudp").strip().lower())
+                host = str(getattr(source_args, peer_attr, "") or "").strip()
+                port = int(getattr(source_args, peer_port_attr, 0) or 0)
+                if host and port > 0:
+                    return {"host": host, "port": port}
+        return None
+
     @staticmethod
     def _session_last_incoming_age_seconds(session: Any) -> Optional[float]:
         candidates = [
@@ -1648,6 +1711,11 @@ class Runner:
                 getter = getattr(session, "get_overlay_peers_snapshot", None)
                 if callable(getter):
                     overlay_rows = list(getter() or [])
+            if not overlay_rows and real_session is not session:
+                with contextlib.suppress(Exception):
+                    getter = getattr(real_session, "get_overlay_peers_snapshot", None)
+                    if callable(getter):
+                        overlay_rows = list(getter() or [])
 
             if overlay_rows:
                 for p in overlay_rows:
@@ -1803,21 +1871,10 @@ class Runner:
             for archived in peer_payload_totals.values():
                 rx_bytes += int(archived.get("rx_bytes", 0) or 0)
                 tx_bytes += int(archived.get("tx_bytes", 0) or 0)
-            peer_label = None
-            with contextlib.suppress(Exception):
-                if hasattr(session, "peer_proto") and getattr(session, "peer_proto"):
-                    pa = getattr(getattr(session, "peer_proto"), "send_port").peer_addr
-                    if pa:
-                        peer_label = f"{pa[0]}:{pa[1]}"
-            with contextlib.suppress(Exception):
-                if not peer_label and hasattr(session, "_peer_host") and hasattr(session, "_peer_port"):
-                    host = str(getattr(session, "_peer_host") or "")
-                    port = int(getattr(session, "_peer_port") or 0)
-                    if host and port > 0:
-                        peer_label = f"[{host}]:{port}" if ":" in host and not host.startswith("[") else f"{host}:{port}"
+            peer_label = self._session_peer_endpoint_for_ui(session, transport=label)
             decode_errors = 0
             with contextlib.suppress(Exception):
-                pp = getattr(session, "peer_proto", None)
+                pp = getattr(real_session, "peer_proto", None) or getattr(session, "peer_proto", None)
                 if pp is not None:
                     decode_errors = int(getattr(pp, "unidentified_frames", 0) or 0)
             peers.append({

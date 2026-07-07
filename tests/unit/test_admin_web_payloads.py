@@ -143,6 +143,7 @@ class _RunnerStub:
             "tun_helper": {
                 "enabled": True,
                 "mode": "helper",
+                "lifecycle_phase": "connected",
                 "backend": "linux-python",
                 "apply_network": True,
                 "socket_path": "/run/user/1000/obstaclebridge/tun-helper.sock",
@@ -287,6 +288,7 @@ class _RunnerStub:
                     "local": {"ifname": "obtun0", "mtu": 1500},
                     "remote_destination": {"ifname": "obtun1", "mtu": 1500},
                     "stats": {"rx_bytes": 0, "tx_bytes": 0, "rx_msgs": 0, "tx_msgs": 0},
+                    "runtime_health": {},
                     "shared_tun_ownership": {
                         "mode": "server_shared",
                         "peer_count": 2,
@@ -684,6 +686,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["shared_drop_total"], 3)
         self.assertTrue(payload["tun_helper"]["enabled"])
         self.assertEqual(payload["tun_helper"]["mode"], "helper")
+        self.assertEqual(payload["tun_helper"]["lifecycle_phase"], "connected")
         self.assertEqual(payload["tun_helper"]["runtime"]["ifname"], "obtun0")
         self.assertEqual(payload["tun_helper"]["runtime"]["packets_from_runtime"], 12)
         self.assertEqual(payload["tun_helper"]["runtime"]["last_failure"]["stage"], "dns_apply")
@@ -694,6 +697,36 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["shared_tun"][0]["service_name"], "shared-tun")
         self.assertEqual(payload["shared_tun"][0]["shared_tun_ownership"]["peer_count"], 2)
         self.assertEqual(payload["shared_tun"][0]["shared_tun_ownership"]["drop_counters"]["by_reason"]["unknown_destination"], 2)
+
+    def test_build_tun_routing_payload_preserves_tun_runtime_health_warning(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+        )
+        runner = _RunnerStub()
+        snapshot = runner.get_connections_snapshot()
+        snapshot["tun"][0]["runtime_health"] = {
+            "code": "tun_addresses_missing",
+            "severity": "critical",
+            "summary": "TUN interface obtun0 is up but expected tunnel addressing is missing.",
+            "detail": "Missing expected addresses after helper_apply_network: IPv4 192.168.106.2.",
+        }
+        runner.get_connections_snapshot = lambda: snapshot
+        ui = AdminWebUI(args, runner)
+
+        payload = ui._build_tun_routing_payload()
+
+        self.assertEqual(payload["tun"][0]["runtime_health"]["code"], "tun_addresses_missing")
+        self.assertEqual(payload["tun"][0]["runtime_health"]["severity"], "critical")
 
     def test_build_tun_routing_payload_deduplicates_shared_tun_listener_and_open_row(self):
         args = argparse.Namespace(
@@ -796,6 +829,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         app_js = self._canonical_webadmin_paths()[0].read_text(encoding="utf-8")
 
         self.assertIn("setText('tunHelperMode'", app_js)
+        self.assertIn("setText('tunHelperLifecyclePhase'", app_js)
         self.assertIn("setText('tunHelperBackend'", app_js)
         self.assertIn("setText('tunHelperConnected'", app_js)
         self.assertIn("setText('tunHelperPacketsFromRuntime'", app_js)
@@ -803,6 +837,8 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn("setText('tunHelperLastError'", app_js)
         self.assertIn("setText('tunHelperRecovery'", app_js)
         self.assertIn("setText('tunHelperLastRepair'", app_js)
+        self.assertIn("tunRoutingHealthWarning", app_js)
+        self.assertIn("summarizeTunRuntimeHealth", app_js)
         self.assertIn("apiFetch('/api/tun-helper/repair'", app_js)
         self.assertIn("Remaining findings:", app_js)
         self.assertIn("document.getElementById('tunHelperRepairBtn')", app_js)

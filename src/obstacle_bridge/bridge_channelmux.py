@@ -799,6 +799,8 @@ class ChannelMux:
         self._tun_helper_reader_tasks: dict[int, asyncio.Task] = {}
         self._tun_helper_remove_tasks: dict[int, asyncio.Task] = {}
         self._tun_helper_devices: dict[int, ChannelMux.TunDevice] = {}
+        self._tun_runtime_health_by_service: dict[ChannelMux.ServiceKey, dict[str, Any]] = {}
+        self._tun_runtime_health_tasks: dict[int, asyncio.Task] = {}
 
         # Overlay state gate
         self._overlay_connected: bool = self.session.is_connected()
@@ -1366,6 +1368,204 @@ class ChannelMux:
             )
         return self._tun_routing_settings
 
+    def _clear_tun_runtime_health(self, svc_key: Optional["ChannelMux.ServiceKey"]) -> None:
+        if isinstance(svc_key, tuple):
+            self._tun_runtime_health_by_service.pop(svc_key, None)
+
+    def _set_tun_runtime_health_warning(
+        self,
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        *,
+        code: str,
+        severity: str,
+        summary: str,
+        detail: str,
+        **extra: Any,
+    ) -> None:
+        if not isinstance(svc_key, tuple):
+            return
+        warning = {
+            "code": str(code or "").strip(),
+            "severity": str(severity or "warning").strip(),
+            "summary": str(summary or "").strip(),
+            "detail": str(detail or "").strip(),
+            "observed_at_unix_ts": float(time.time()),
+        }
+        for key, value in extra.items():
+            warning[str(key)] = value
+        self._tun_runtime_health_by_service[svc_key] = warning
+
+    def _clear_tun_runtime_health_codes(
+        self,
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        *codes: str,
+    ) -> None:
+        if not isinstance(svc_key, tuple):
+            return
+        current = dict(self._tun_runtime_health_by_service.get(svc_key) or {})
+        if not current:
+            return
+        if str(current.get("code") or "") not in {str(code or "") for code in codes if str(code or "")}:
+            return
+        self._tun_runtime_health_by_service.pop(svc_key, None)
+
+    def _cancel_tun_runtime_health_task(self, dev: Optional["ChannelMux.TunDevice"]) -> None:
+        if dev is None:
+            return
+        task = self._tun_runtime_health_tasks.pop(id(dev), None)
+        if task is not None:
+            task.cancel()
+
+    def _expected_tun_runtime_addresses(
+        self,
+        spec: Optional["ChannelMux.ServiceSpec"],
+    ) -> tuple[str, str]:
+        if spec is None or str(getattr(spec, "l_proto", "") or "") != "tun":
+            return "", ""
+        config = self._tun_routing_config()
+        return (
+            str(getattr(config, "tunnel_address", "") or "").strip(),
+            str(getattr(config, "tunnel_address6", "") or "").strip(),
+        )
+
+    @staticmethod
+    def _linux_tun_interface_addresses(ifname: str) -> dict[str, list[str] | str]:
+        out: dict[str, list[str] | str] = {
+            "ipv4": [],
+            "ipv6": [],
+            "stdout4": "",
+            "stdout6": "",
+        }
+        if not sys.platform.startswith("linux") or not str(ifname or "").strip():
+            return out
+        for family_flag, key, field in (
+            ("-4", "ipv4", "stdout4"),
+            ("-6", "ipv6", "stdout6"),
+        ):
+            result = subprocess.run(
+                ["ip", family_flag, "addr", "show", "dev", str(ifname)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=2.0,
+            )
+            stdout = str(getattr(result, "stdout", "") or "")
+            out[field] = stdout
+            values: list[str] = []
+            marker = "inet6 " if key == "ipv6" else "inet "
+            for line in stdout.splitlines():
+                row = str(line or "").strip()
+                if not row.startswith(marker):
+                    continue
+                token = row[len(marker) :].split(None, 1)[0].strip()
+                if token:
+                    values.append(token)
+            out[key] = values
+        return out
+
+    def _schedule_tun_runtime_health_check(
+        self,
+        dev: Optional["ChannelMux.TunDevice"],
+        *,
+        reason: str,
+        delay_s: float = 0.75,
+    ) -> None:
+        if dev is None or not self.loop.is_running():
+            return
+        svc_key = getattr(dev, "service_key", None)
+        spec = self._svc_spec_or_none(int(svc_key[2]), svc_key=svc_key) if isinstance(svc_key, tuple) and len(svc_key) >= 3 else None
+        expected4, expected6 = self._expected_tun_runtime_addresses(spec)
+        if not expected4 and not expected6:
+            self._clear_tun_runtime_health(svc_key)
+            return
+        self._cancel_tun_runtime_health_task(dev)
+        task = self.loop.create_task(self._run_tun_runtime_health_check(dev, reason=reason, delay_s=delay_s))
+        dev_id = id(dev)
+        self._tun_runtime_health_tasks[dev_id] = task
+
+        def _clear_done(done_task: asyncio.Task, *, _dev_id: int = dev_id) -> None:
+            current = self._tun_runtime_health_tasks.get(_dev_id)
+            if current is done_task:
+                self._tun_runtime_health_tasks.pop(_dev_id, None)
+
+        task.add_done_callback(_clear_done)
+
+    async def _run_tun_runtime_health_check(
+        self,
+        dev: "ChannelMux.TunDevice",
+        *,
+        reason: str,
+        delay_s: float,
+    ) -> None:
+        if delay_s > 0:
+            await asyncio.sleep(delay_s)
+        svc_key = getattr(dev, "service_key", None)
+        spec = self._svc_spec_or_none(int(svc_key[2]), svc_key=svc_key) if isinstance(svc_key, tuple) and len(svc_key) >= 3 else None
+        expected4, expected6 = self._expected_tun_runtime_addresses(spec)
+        if not expected4 and not expected6:
+            self._clear_tun_runtime_health(svc_key)
+            return
+        try:
+            observed = await asyncio.to_thread(self._linux_tun_interface_addresses, str(getattr(dev, "ifname", "") or ""))
+        except Exception as exc:
+            self.log.warning(
+                "[TUN/ADDR] runtime health check failed if=%s reason=%s err=%r",
+                str(getattr(dev, "ifname", "") or ""),
+                str(reason or ""),
+                exc,
+            )
+            return
+        observed4 = [str(v or "").strip() for v in list(observed.get("ipv4") or []) if str(v or "").strip()]
+        observed6 = [str(v or "").strip() for v in list(observed.get("ipv6") or []) if str(v or "").strip()]
+        missing4 = bool(expected4) and not any(str(addr).split("/", 1)[0] == expected4 for addr in observed4)
+        missing6 = bool(expected6) and not any(str(addr).split("/", 1)[0] == expected6 for addr in observed6)
+        if not missing4 and not missing6:
+            previous = dict(self._tun_runtime_health_by_service.get(svc_key) or {}) if isinstance(svc_key, tuple) else {}
+            self._clear_tun_runtime_health(svc_key)
+            if previous:
+                self.log.info(
+                    "[TUN/ADDR] tunnel address verification recovered if=%s reason=%s ipv4=%s ipv6=%s",
+                    str(getattr(dev, "ifname", "") or ""),
+                    str(reason or ""),
+                    expected4 or "-",
+                    expected6 or "-",
+                )
+            return
+        missing_labels: list[str] = []
+        if missing4:
+            missing_labels.append(f"IPv4 {expected4}")
+        if missing6:
+            missing_labels.append(f"IPv6 {expected6}")
+        warning = {
+            "code": "tun_addresses_missing",
+            "severity": "critical",
+            "summary": (
+                f"TUN interface {str(getattr(dev, 'ifname', '') or '')} is up but expected tunnel "
+                f"addressing is missing."
+            ),
+            "detail": f"Missing expected addresses after {reason}: {', '.join(missing_labels)}.",
+            "ifname": str(getattr(dev, "ifname", "") or ""),
+            "reason": str(reason or ""),
+            "expected_ipv4": expected4,
+            "expected_ipv6": expected6,
+            "observed_ipv4": observed4,
+            "observed_ipv6": observed6,
+            "observed_at_unix_ts": float(time.time()),
+        }
+        if isinstance(svc_key, tuple):
+            self._tun_runtime_health_by_service[svc_key] = warning
+        self.log.critical(
+            "[TUN/ADDR] expected tunnel addresses missing if=%s reason=%s missing_ipv4=%s missing_ipv6=%s observed_ipv4=%r observed_ipv6=%r ip4=%r ip6=%r",
+            str(getattr(dev, "ifname", "") or ""),
+            str(reason or ""),
+            expected4 if missing4 else "",
+            expected6 if missing6 else "",
+            observed4,
+            observed6,
+            str(observed.get("stdout4", "") or "")[-1200:],
+            str(observed.get("stdout6", "") or "")[-1200:],
+        )
+
     @staticmethod
     def _merge_hook_env_defaults(
         lifecycle_hooks: Optional[dict],
@@ -1521,6 +1721,10 @@ class ChannelMux:
                 stdout_tail,
                 stderr_tail,
             )
+            if str(spec.l_proto) == "tun" and role == "listener" and event == "on_created" and isinstance(svc_key, tuple):
+                dev = self._svc_tun_devices.get(svc_key)
+                if dev is not None:
+                    self._schedule_tun_runtime_health_check(dev, reason="listener_on_created", delay_s=0.25)
         except Exception as e:
             self.log.warning(
                 "[HOOK] failed role=%s event=%s svc=%s err=%r",
@@ -2707,6 +2911,68 @@ class ChannelMux:
         self._shared_tun_peer_id_by_ref[(svc_key, str(owner_ref))] = int(peer_id)
         return str(owner_ref)
 
+    def _shared_tun_owner_ref_for_source_ip(
+        self,
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        source_ip: str,
+    ) -> str:
+        if svc_key is None or not source_ip:
+            return ""
+        ownership = self._shared_tun_ownership_by_service.get(svc_key)
+        if not isinstance(ownership, dict):
+            return ""
+        owner_by_ipv4 = dict(ownership.get("owner_by_ipv4") or {})
+        owner_by_ipv6 = dict(ownership.get("owner_by_ipv6") or {})
+        return str(owner_by_ipv4.get(str(source_ip)) or owner_by_ipv6.get(str(source_ip)) or "")
+
+    def _recover_shared_tun_channel_owner(
+        self,
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        *,
+        chan: int,
+        source_ip: str,
+        owner_ref: str,
+    ) -> tuple[Optional[int], str]:
+        if svc_key is None or not owner_ref:
+            return None, "owner_unavailable"
+        owner_candidates: set[int] = set()
+        mapped_peer_id = self._shared_tun_peer_id_by_ref.get((svc_key, str(owner_ref)))
+        if mapped_peer_id is not None:
+            owner_candidates.add(int(mapped_peer_id))
+        for (mapped_svc_key, mapped_peer_id), mapped_peer_ref in self._shared_tun_peer_ref_by_peer.items():
+            if mapped_svc_key == svc_key and str(mapped_peer_ref) == str(owner_ref):
+                owner_candidates.add(int(mapped_peer_id))
+        bound_candidates: set[int] = set()
+        for (mapped_svc_key, mapped_peer_id), state in self._shared_tun_runtime_by_peer.items():
+            if mapped_svc_key != svc_key or not isinstance(state, dict):
+                continue
+            bound_chan_ids = [int(v) for v in list(state.get("bound_chan_ids") or [])]
+            if int(chan) in bound_chan_ids:
+                bound_candidates.add(int(mapped_peer_id))
+        selected: Optional[int] = None
+        detail = "no_candidate"
+        intersect = owner_candidates & bound_candidates
+        if len(intersect) == 1:
+            selected = next(iter(intersect))
+            detail = "owner_and_bound_match"
+        elif len(owner_candidates) == 1 and not bound_candidates:
+            selected = next(iter(owner_candidates))
+            detail = "owner_mapping_match"
+        elif len(bound_candidates) == 1 and not owner_candidates:
+            selected = next(iter(bound_candidates))
+            detail = "bound_channel_match"
+        elif len(bound_candidates) == 1 and len(owner_candidates) > 1 and next(iter(bound_candidates)) in owner_candidates:
+            selected = next(iter(bound_candidates))
+            detail = "bound_channel_with_ambiguous_owner_map"
+        if selected is None:
+            return None, detail
+        peer_key = (svc_key, int(selected))
+        self._chan_owner_peer_id[int(chan)] = int(selected)
+        self._shared_tun_peer_ref_by_peer[peer_key] = str(owner_ref)
+        self._shared_tun_peer_id_by_ref[(svc_key, str(owner_ref))] = int(selected)
+        self._record_shared_tun_peer_binding(svc_key, int(selected), int(chan))
+        return int(selected), detail
+
     @staticmethod
     def _shared_tun_plan_outbound_route(
         ownership: dict[str, Any],
@@ -2925,11 +3191,75 @@ class ChannelMux:
             return False, None, parse_error
         if self._tun_routing_config().shared_tun_disable_inflow_filter:
             return True, parsed, None
-        peer_id = self._chan_owner_peer_id.get(int(chan))
         source_ip = str(parsed.get("source_ip") or "")
+        owner_ref = self._shared_tun_owner_ref_for_source_ip(svc_key, source_ip)
+        peer_id = self._chan_owner_peer_id.get(int(chan))
+        if peer_id is None and owner_ref:
+            recovered_peer_id, recovery_detail = self._recover_shared_tun_channel_owner(
+                svc_key,
+                chan=int(chan),
+                source_ip=source_ip,
+                owner_ref=owner_ref,
+            )
+            if recovered_peer_id is not None:
+                peer_id = int(recovered_peer_id)
+                self._set_tun_runtime_health_warning(
+                    svc_key,
+                    code="shared_tun_channel_owner_recovered",
+                    severity="warning",
+                    summary="Shared-TUN peer identity was missing and had to be recovered from runtime binding state.",
+                    detail=(
+                        f"Recovered chan {int(chan)} -> peer {int(peer_id)} for source {source_ip} "
+                        f"owned by {owner_ref} using {recovery_detail}."
+                    ),
+                    ifname=str(getattr(dev, "ifname", "") or ""),
+                    chan_id=int(chan),
+                    peer_id=int(peer_id),
+                    source_ip=source_ip,
+                    owner_ref=str(owner_ref),
+                    recovery_detail=str(recovery_detail),
+                )
+                self.log.warning(
+                    "[TUN/SHARED] recovered missing chan owner if=%s chan=%s peer_id=%s owner_ref=%s source_ip=%s detail=%s",
+                    str(getattr(dev, "ifname", "") or ""),
+                    int(chan),
+                    int(peer_id),
+                    str(owner_ref),
+                    source_ip,
+                    str(recovery_detail),
+                )
+            else:
+                self._set_tun_runtime_health_warning(
+                    svc_key,
+                    code="shared_tun_channel_owner_missing",
+                    severity="critical",
+                    summary="Shared-TUN packet source is owned by a configured peer, but the inbound channel lost its peer identity.",
+                    detail=(
+                        f"Dropping chan {int(chan)} source {source_ip} owned by {owner_ref}: "
+                        f"could not recover chan->peer mapping ({recovery_detail})."
+                    ),
+                    ifname=str(getattr(dev, "ifname", "") or ""),
+                    chan_id=int(chan),
+                    source_ip=source_ip,
+                    owner_ref=str(owner_ref),
+                    recovery_detail=str(recovery_detail),
+                )
+                self.log.critical(
+                    "[TUN/SHARED] inbound channel missing peer identity if=%s chan=%s source_ip=%s owner_ref=%s detail=%s",
+                    str(getattr(dev, "ifname", "") or ""),
+                    int(chan),
+                    source_ip,
+                    str(owner_ref),
+                    str(recovery_detail),
+                )
+                return False, parsed, "source_peer_identity_missing"
         bound_peer_ref = self._shared_tun_bound_peer_ref_for_packet(svc_key, peer_id, source_ip)
         if bound_peer_ref is None:
             return False, parsed, "source_not_owned_by_peer"
+        self._clear_tun_runtime_health_codes(
+            svc_key,
+            "shared_tun_channel_owner_missing",
+        )
         return True, parsed, None
 
     def _next_ctrl_chunk_txid(self) -> int:
@@ -3110,6 +3440,7 @@ class ChannelMux:
             return
         if proto_name == "tun":
             dev = self._svc_tun_devices.pop(svc_key, None)
+            self._clear_tun_runtime_health(svc_key)
             if dev is not None:
                 self._unbind_all_tun_channels_for_device(dev)
                 close_dev = True
@@ -3537,6 +3868,7 @@ class ChannelMux:
         self._schedule_tun_reader_registration(dev)
 
     def _close_tun_device(self, dev: "ChannelMux.TunDevice") -> None:
+        self._cancel_tun_runtime_health_task(dev)
         if self._tun_helper_manages_device(dev):
             task = self._tun_helper_reader_tasks.pop(id(dev), None)
             if task is not None:
@@ -3674,6 +4006,7 @@ class ChannelMux:
                 return
             apply_network(self._tun_helper_network_payload(dev))
             dev.helper_network_applied = True
+            self._schedule_tun_runtime_health_check(dev, reason="helper_apply_network")
             return
         client = self._tun_helper_client
         if client is None:
@@ -3757,6 +4090,8 @@ class ChannelMux:
             with contextlib.suppress(Exception):
                 await client.snapshot()
             self.log.warning("[TUN/HELPER] helper apply_network failed if=%s err=%r", dev.ifname, exc)
+        finally:
+            self._schedule_tun_runtime_health_check(dev, reason="helper_apply_network")
 
     async def _tun_helper_remove_network_async(self, client: Any, dev: "ChannelMux.TunDevice") -> None:
         try:
@@ -3862,6 +4197,8 @@ class ChannelMux:
             )
         else:
             self._schedule_service_hook(spec, svc_key, "listener", "on_created")
+            if self._hook_command_spec_for(spec, "listener", "on_created") is None:
+                self._schedule_tun_runtime_health_check(dev, reason="listener_started_without_on_created_hook")
         if str(svc_key[0]) == "local":
             self._schedule_tun_reader_registration(dev)
         else:
@@ -6884,6 +7221,7 @@ class ChannelMux:
                     {"ifname": str(getattr(dev, "ifname", "") or ""), "mtu": int(getattr(dev, "mtu", 0) or 0)}
                 ),
                 "shared_tun_ownership": shared_snapshot,
+                "runtime_health": dict(self._tun_runtime_health_by_service.get(svc_key) or {}) if isinstance(svc_key, tuple) else {},
                 "throttle": throttle,
                 "stats": stats,
             })
@@ -6917,6 +7255,7 @@ class ChannelMux:
                     {"ifname": str(spec.r_host), "mtu": int(spec.r_port)} if spec else local
                 ),
                 "shared_tun_ownership": self._shared_tun_runtime_snapshot_for_service(svc_key),
+                "runtime_health": dict(self._tun_runtime_health_by_service.get(svc_key) or {}),
                 "throttle": {"applicable": False, "active": False, "reason": "listening"},
                 "stats": {
                     "rx_msgs": 0,

@@ -2108,6 +2108,87 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parsed["source_ip"], '192.168.107.2')
         self.assertEqual(self.mux._shared_tun_peer_id_by_ref[(svc_key, 'linux-client')], 88)
 
+    def test_shared_tun_guard_recovers_missing_chan_owner_from_bound_runtime_peer(self):
+        spec = ChannelMux.ServiceSpec(
+            2,
+            'tun',
+            'obtun1',
+            1500,
+            'tun',
+            'obtun0',
+            1500,
+            options={
+                'shared_tun_ownership': {
+                    'mode': 'server_shared',
+                    'peers': [
+                        {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                    ],
+                }
+            },
+        )
+        svc_key = ('local', 0, 2)
+        dev = ChannelMux.TunDevice(fd=44, ifname='obtun1', mtu=1500, service_key=svc_key)
+        self.mux._install_shared_tun_ownership_for_service(svc_key, spec)
+        self.mux._shared_tun_runtime_by_peer[(svc_key, 77)] = {
+            'preferred_chan_id': 1,
+            'bound_chan_ids': [1],
+        }
+        self.mux._shared_tun_peer_ref_by_peer[(svc_key, 77)] = 'linux-client'
+        self.mux._shared_tun_peer_id_by_ref[(svc_key, 'linux-client')] = 77
+
+        with patch.object(self.mux.log, "warning") as warning:
+            allowed, parsed, reason = self.mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=1,
+                packet=_ipv4_packet('192.168.107.2', '192.168.107.1'),
+            )
+
+        self.assertTrue(allowed)
+        self.assertIsNone(reason)
+        self.assertEqual(parsed["source_ip"], '192.168.107.2')
+        self.assertEqual(self.mux._chan_owner_peer_id[1], 77)
+        health = dict(self.mux._tun_runtime_health_by_service.get(svc_key) or {})
+        self.assertEqual(health.get("code"), "shared_tun_channel_owner_recovered")
+        self.assertEqual(health.get("peer_id"), 77)
+        warning.assert_called_once()
+
+    def test_shared_tun_guard_reports_owned_source_when_chan_owner_cannot_be_recovered(self):
+        spec = ChannelMux.ServiceSpec(
+            2,
+            'tun',
+            'obtun1',
+            1500,
+            'tun',
+            'obtun0',
+            1500,
+            options={
+                'shared_tun_ownership': {
+                    'mode': 'server_shared',
+                    'peers': [
+                        {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                    ],
+                }
+            },
+        )
+        svc_key = ('local', 0, 2)
+        dev = ChannelMux.TunDevice(fd=44, ifname='obtun1', mtu=1500, service_key=svc_key)
+        self.mux._install_shared_tun_ownership_for_service(svc_key, spec)
+
+        with patch.object(self.mux.log, "critical") as critical:
+            allowed, parsed, reason = self.mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=1,
+                packet=_ipv4_packet('192.168.107.2', '192.168.107.1'),
+            )
+
+        self.assertFalse(allowed)
+        self.assertEqual(parsed["source_ip"], '192.168.107.2')
+        self.assertEqual(reason, 'source_peer_identity_missing')
+        health = dict(self.mux._tun_runtime_health_by_service.get(svc_key) or {})
+        self.assertEqual(health.get("code"), "shared_tun_channel_owner_missing")
+        self.assertEqual(health.get("source_ip"), "192.168.107.2")
+        critical.assert_called_once()
+
     def test_shared_tun_open_requires_prestarted_server_owned_service(self):
         spec = ChannelMux.ServiceSpec(
             2,

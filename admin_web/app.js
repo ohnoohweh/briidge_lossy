@@ -1268,6 +1268,18 @@ function renderTunRoutingConnectionTable(tbodyId, rows) {
   }).join('');
 }
 
+function summarizeTunRuntimeHealth(rows) {
+  const issues = (rows || [])
+    .map((row) => row?.runtime_health || {})
+    .filter((health) => health && typeof health === 'object' && String(health.code || '').trim());
+  if (!issues.length) return '';
+  const first = issues[0];
+  const summary = String(first.summary || 'TUN runtime issue detected').trim();
+  const detail = String(first.detail || '').trim();
+  const suffix = issues.length > 1 ? ` ${issues.length} interfaces currently report a runtime health issue.` : '';
+  return detail ? `${summary} ${detail}${suffix}`.trim() : `${summary}${suffix}`.trim();
+}
+
 function renderTunRoutingSharedTable(tbodyId, rows) {
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
@@ -3067,9 +3079,16 @@ function applyTunRoutingDoc(j) {
   setText('tunRoutingExcludedRoutes', fmtTunRoutingRouteList(j.excluded_routes));
   setText('tunRoutingIncludedRoutes6', fmtTunRoutingRouteList(j.included_routes6));
   setText('tunRoutingExcludedRoutes6', fmtTunRoutingRouteList(j.excluded_routes6));
+  const tunRoutingHealthWarning = document.getElementById('tunRoutingHealthWarning');
+  if (tunRoutingHealthWarning) {
+    const warningText = summarizeTunRuntimeHealth(j.tun || []);
+    tunRoutingHealthWarning.textContent = warningText;
+    tunRoutingHealthWarning.classList.toggle('hidden', !warningText);
+  }
   const helper = j.tun_helper || {};
   const runtime = helper.runtime || {};
   setText('tunHelperMode', helper.enabled ? String(helper.mode || 'helper') : 'inline');
+  setText('tunHelperLifecyclePhase', String(helper.lifecycle_phase || (helper.enabled ? 'unknown' : 'disabled')));
   setText('tunHelperBackend', String(helper.backend || runtime.backend || 'n/a'));
   setText('tunHelperConnected', helper.connected ? 'yes' : 'no');
   setText('tunHelperServerStarted', helper.server_started ? 'yes' : 'no');

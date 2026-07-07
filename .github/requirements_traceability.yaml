@@ -669,16 +669,21 @@ REQ-LIFE-010:
     - tests/unit/test_runner_tun_helper.py::test_runner_status_reports_helper_recovery_warning_when_cached_runtime_may_need_cleanup
     - tests/unit/test_runner_tun_helper.py::test_runner_request_tun_helper_repair_uses_linux_native_snapshot_cleanup
     - tests/unit/test_runner_tun_helper.py::test_runner_request_tun_helper_repair_reports_remaining_stale_state_when_cleanup_incomplete
+    - tests/unit/test_runner_tun_helper.py::test_runner_stop_keeps_helper_available_until_mux_stop_finishes
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_opens_and_writes_through_backend
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_registers_reader_and_delivers_packets
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_removes_network_on_close
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_records_critical_runtime_health_when_expected_tun_addresses_missing
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_network_payload_merges_auto_excluded_overlay_routes
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_uses_client_when_backend_is_external
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_stop_awaits_external_helper_remove_network
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_refreshes_helper_snapshot_after_apply_success
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_refreshes_helper_snapshot_after_apply_failure
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_start_skips_runtime_listener_on_created_hook
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_stop_skips_runtime_listener_on_stopped_hook
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_dedicated_shared_tun_view
+    - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_preserves_tun_runtime_health_warning
+    - tests/unit/test_admin_web_payloads.py::test_tun_routing_ui_binds_tun_helper_fields
     - tests/unit/test_admin_web_payloads.py::test_tun_helper_repair_endpoint_returns_runner_payload
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
     - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_restart_reloads_runtime_config_from_disk
@@ -858,6 +863,8 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_accepts_owned_ipv6_source
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_rejects_malformed_packet
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_binds_peer_ref_and_rejects_second_owner_claim
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_recovers_missing_chan_owner_from_bound_runtime_peer
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_reports_owned_source_when_chan_owner_cannot_be_recovered
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_open_requires_prestarted_server_owned_service
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_open_binds_to_prestarted_server_owned_service
     - tests/unit/test_channel_mux_listener_mode.py::test_listener_mode_retains_prestarted_server_owned_shared_tun_service
@@ -1051,6 +1058,7 @@ REQ-ADM-006:
     - tests/unit/test_connection_snapshots.py::test_snapshot_exposes_requested_remote_servers_as_client_listeners
     - tests/unit/test_connection_snapshots.py::test_snapshot_hides_requested_remote_servers_when_overlay_disconnected
     - tests/unit/test_connection_snapshots.py::test_snapshot_mixed_listeners_and_active_connections
+    - tests/unit/test_connection_snapshots.py::test_wrapped_myudp_client_snapshot_uses_inner_configured_peer_endpoint
     - tests/unit/test_connection_snapshots.py::test_status_snapshot_includes_tun_open_connection_count
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
     - tests/unit/test_ws_multi_peer.py::test_server_peer_snapshot_includes_last_incoming_age_seconds
