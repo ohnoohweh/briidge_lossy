@@ -3079,6 +3079,17 @@ function applyTunRoutingDoc(j) {
   setText('tunRoutingExcludedRoutes', fmtTunRoutingRouteList(j.excluded_routes));
   setText('tunRoutingIncludedRoutes6', fmtTunRoutingRouteList(j.included_routes6));
   setText('tunRoutingExcludedRoutes6', fmtTunRoutingRouteList(j.excluded_routes6));
+  const verification = j.verification || {};
+  const configVerification = verification.tun_config || {};
+  const peerVerification = verification.tun_connectivity || {};
+  const globalVerification = verification.tun_global_connectivity || {};
+  setText('tunVerificationConfigSummary', String(configVerification.summary || 'pending'));
+  setText('tunVerificationConfigDetail', String(configVerification.detail || 'n/a'));
+  setText('tunVerificationPeerSummary', String(peerVerification.summary || 'pending'));
+  setText('tunVerificationPeerDetail', String(peerVerification.detail || 'n/a'));
+  setText('tunVerificationGlobalSummary', String(globalVerification.summary || 'pending'));
+  setText('tunVerificationGlobalDetail', String(globalVerification.detail || 'n/a'));
+  setText('tunVerificationGlobalHost', String(verification.global_connectivity_host || 'n/a'));
   const tunRoutingHealthWarning = document.getElementById('tunRoutingHealthWarning');
   if (tunRoutingHealthWarning) {
     const warningText = summarizeTunRuntimeHealth(j.tun || []);

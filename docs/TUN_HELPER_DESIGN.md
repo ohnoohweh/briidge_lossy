@@ -210,6 +210,43 @@ teardown after helper loss.
   operator-triggered stale-state repair after helper death
 - Swift/macOS parity for the helper split
 
+### Recent Linux learnings from live helper rollout
+
+The recent Linux-native helper rollout surfaced a few behaviors that are easy to
+miss in unit-only design work and should now shape the cross-platform helper
+contract.
+
+- `ip rule show` output is not canonical. Existing-rule detection must tolerate
+  host routes rendered without `/32` and default rules rendered without an
+  explicit `to 0.0.0.0/0` or `to ::/0` clause.
+- The failure mode for missed policy-rule reuse is severe but misleading: the
+  helper may open the TUN device successfully, then fail during route-policy
+  apply, roll back addresses, and leave the operator seeing an `UP` helper path
+  with missing tunnel addresses.
+- Admin Web helper snapshots need to stay cheap. Active verification probes
+  such as `ping` checks for local peer reachability or global connectivity must
+  run outside the timeout-sensitive snapshot builder so a healthy runtime is not
+  mislabeled as stale. The latest Linux fix now makes that contract explicit:
+  when the TUN payload is being built on the Admin server thread, peer/global
+  `ping` verification returns either a short-lived cached result or a `pending`
+  placeholder while a background refresh thread performs the blocking probe.
+  That keeps the TUN page responsive, avoids self-inflicted snapshot timeout
+  noise, and still gives operators a concrete freshness signal via
+  `cached`/`stale`/`refresh_in_flight` status fields.
+- Helper lifecycle must cover abnormal parent loss, not only normal stop.
+  Authenticated-client watchdog shutdown inside the helper and startup-time
+  stale-helper reaping in the runner are both required to prevent orphaned
+  helper processes from keeping a stale TUN device alive after bridge exit.
+- Operator-facing status is materially better when the TUN page distinguishes
+  configuration verification, peer-side tunnel connectivity verification, and
+  global connectivity verification, and when the global target remains a normal
+  configuration parameter rather than hard-coded policy.
+
+The current live Linux state after these fixes is the expected steady-state:
+helper connected, `obtun0` carrying both configured tunnel addresses, and the
+Admin Web verification payload reporting successful config, peer, and global
+connectivity checks.
+
 ## Linux-first architecture
 
 ### Process split
@@ -541,6 +578,57 @@ macOS helper API surface with mocked unit coverage.
 14. add elevated/live macOS tests or probes for `darwin-native` helper
     subprocess launch, real `utun` packet carry, helper-side Darwin hook
     route/DNS effects, status reporting, and teardown cleanup
+
+## Open parity activities for macOS Python and macOS Swift
+
+Recent Linux-native changes expanded the practical helper contract beyond basic
+packet I/O and route apply/remove. To keep macOS Python and macOS Swift aligned
+with that behavior, the following work remains open.
+
+### Python/macOS parity backlog
+
+1. Add elevated/live `darwin-native` coverage for parent-loss behavior so the
+  helper proves the same abnormal-exit cleanup expectations as Linux: helper
+  self-stop after authenticated client loss, kernel/interface teardown, and
+  hook-driven route/DNS cleanup verification.
+2. Mirror Linux helper observability in the Darwin runtime snapshot where it is
+  meaningful: authenticated-client count, structured `last_failure`, last
+  apply/remove payloads, and enough cleanup state to support post-failure
+  diagnosis without attaching to the helper process.
+3. Define whether Python/macOS needs the same startup stale-helper reaping flow
+  as Linux for helper sockets and orphan processes, or whether launchd/macOS
+  process semantics make a narrower cleanup path sufficient. The answer should
+  be explicit and tested rather than implicit.
+4. Prove that the Admin Web TUN verification model remains valid on macOS:
+  observed-address verification, peer gateway verification, and configurable
+  global-connectivity verification should all report consistently when the
+  Darwin helper backend is active.
+5. Review the Darwin hook scripts for idempotent cleanup behavior equivalent to
+  the Linux-native backend's replay and repair expectations, especially for
+  repeated apply/remove, partial failure rollback, and helper death after
+  network state was already applied.
+
+### Swift/macOS parity backlog
+
+1. Keep the Swift privileged-helper design aligned with the now-proven Linux
+  and Python/macOS responsibility split: unprivileged app/runtime owner,
+  narrow privileged tunnel helper, and helper-owned host interface, route,
+  DNS, and cleanup lifecycle.
+2. Carry over the same abnormal-lifecycle requirements into the Swift helper
+  design: authenticated session binding, parent/client-loss shutdown, orphan
+  cleanup expectations, and operator-visible stale-state diagnostics.
+3. Match the observable status model exposed by Python helper mode so the same
+  Admin/TUN concepts exist across products: helper connected state, backend or
+  packaging mode, packet counters, structured last failure, cleanup outcome,
+  and verification results for config, peer connectivity, and global
+  connectivity.
+4. Preserve configurability rather than platform-specific hard-coding for the
+  global connectivity target and any future verification probes so parity does
+  not drift into separate platform policies.
+5. Add Swift/macOS test and probe coverage for the same classes of regressions
+  that recently appeared on Linux: non-canonical host route/state reporting,
+  partial helper apply rollback, helper-loss cleanup, and operator-facing
+  status freshness under verification load.
 
 ## Python/macOS and Swift parity note
 

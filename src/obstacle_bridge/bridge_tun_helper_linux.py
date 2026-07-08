@@ -300,9 +300,42 @@ class LinuxTunHelperBackend:
             out.append(route_spec)
         return self._dedupe_route_specs(out)
 
+    @staticmethod
+    def _policy_rule_present(rule_dump: str, *, pref: int, route_spec: str, table: str) -> bool:
+        prefix = f"{int(pref)}:"
+        normalized_route = str(route_spec).strip().lower()
+        expects_default_render = normalized_route in {"0.0.0.0/0", "::/0", "::0/0", "default"}
+        route_candidates = {str(route_spec).strip()}
+        with contextlib.suppress(ValueError):
+            network = ipaddress.ip_network(str(route_spec).strip(), strict=False)
+            if network.num_addresses == 1:
+                route_candidates.add(str(network.network_address))
+        table_token = f"lookup {str(table).strip()}"
+        for line in str(rule_dump or "").splitlines():
+            normalized = " ".join(str(line or "").split())
+            if not normalized.startswith(prefix):
+                continue
+            if expects_default_render and " to " not in normalized and table_token in normalized:
+                return True
+            if not any(f"to {candidate}" in normalized for candidate in route_candidates if candidate):
+                continue
+            if table_token not in normalized:
+                continue
+            return True
+        return False
+
     def _policy_rule_add(self, family_flag: str, pref: int, route_spec: str, table: str) -> str:
         spec = f"to {route_spec} lookup {table}"
-        self._run_ip(family_flag, "rule", "add", "pref", str(pref), "to", route_spec, "lookup", table)
+        existing = self._run_ip(family_flag, "rule", "show", check=False)
+        if self._policy_rule_present(existing.stdout, pref=pref, route_spec=route_spec, table=table):
+            return spec
+        try:
+            self._run_ip(family_flag, "rule", "add", "pref", str(pref), "to", route_spec, "lookup", table)
+        except subprocess.CalledProcessError:
+            existing = self._run_ip(family_flag, "rule", "show", check=False)
+            if self._policy_rule_present(existing.stdout, pref=pref, route_spec=route_spec, table=table):
+                return spec
+            raise
         return spec
 
     def _delete_policy_rules(self, family_flag: str, table_id: int, stored_specs: list[str]) -> None:

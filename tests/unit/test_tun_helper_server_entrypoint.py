@@ -132,6 +132,7 @@ class TunHelperServerEntrypointTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(applied["applied"])
                 self.assertEqual(snapshot["backend"], "linux-python-memory")
                 self.assertEqual(snapshot["apply_calls"], 1)
+                self.assertEqual(snapshot["active_authenticated_clients"], 1)
                 self.assertTrue(snapshot["network_applied"])
             finally:
                 stop_event.set()

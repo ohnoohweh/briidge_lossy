@@ -18,6 +18,7 @@ DEFAULT_TUNNEL_GATEWAY6 = "fd20:106::2"
 DEFAULT_INCLUDED_ROUTES6 = ["::/0"]
 DEFAULT_EXCLUDED_ROUTES6 = ["::1/128"]
 DEFAULT_DNS_SERVERS = ["1.1.1.1"]
+DEFAULT_GLOBAL_CONNECTIVITY_HOST = "google.de"
 DEFAULT_TUNNEL_MTU = 1600
 DEFAULT_TUN_ROUTING_LOG = "CRITICAL"
 DEFAULT_ENABLE_TCPMSS = False
@@ -213,6 +214,7 @@ class TunRoutingSettings:
     included_routes6: list[str] = field(default_factory=lambda: list(DEFAULT_INCLUDED_ROUTES6))
     excluded_routes6: list[str] = field(default_factory=lambda: list(DEFAULT_EXCLUDED_ROUTES6))
     dns_servers: list[str] = field(default_factory=lambda: list(DEFAULT_DNS_SERVERS))
+    global_connectivity_host: str = DEFAULT_GLOBAL_CONNECTIVITY_HOST
     mtu: int = DEFAULT_TUNNEL_MTU
     log_TUN_routing: str = DEFAULT_TUN_ROUTING_LOG
     enable_tcpmss: bool = DEFAULT_ENABLE_TCPMSS
@@ -238,6 +240,7 @@ class TunRoutingSettings:
         g.add_argument("--included-routes6", nargs="*", default=list(DEFAULT_INCLUDED_ROUTES6), help="IPv6 routes included in tunnel routing")
         g.add_argument("--excluded-routes6", nargs="*", default=list(DEFAULT_EXCLUDED_ROUTES6), help="IPv6 routes excluded from tunnel routing")
         g.add_argument("--dns-servers", nargs="*", default=list(DEFAULT_DNS_SERVERS), help="DNS servers applied to tunnel routing")
+        g.add_argument("--global-connectivity-host", default=DEFAULT_GLOBAL_CONNECTIVITY_HOST, help="Hostname used by Admin Web to verify tunnel global connectivity")
         g.add_argument("--mtu", type=int, default=DEFAULT_TUNNEL_MTU, help="Tunnel MTU")
         g.add_argument("--log-TUN-routing", dest="log_TUN_routing", default=DEFAULT_TUN_ROUTING_LOG, help="Log level for TUN routing hooks and helpers")
         g.add_argument("--enable-tcpmss", action="store_true", default=DEFAULT_ENABLE_TCPMSS, help="Enable TCPMSS clamp rules in generated TUN hook env")
@@ -283,6 +286,7 @@ class TunRoutingSettings:
             included_routes6=_clean_list(values.get("included_routes6"), default=list(current.included_routes6)),
             excluded_routes6=_clean_list(values.get("excluded_routes6"), default=list(current.excluded_routes6)),
             dns_servers=_clean_list(values.get("dns_servers"), default=list(current.dns_servers)),
+            global_connectivity_host=_mapping_text_value(values, "global_connectivity_host", current.global_connectivity_host),
             mtu=int(values.get("mtu") or current.mtu),
             log_TUN_routing=_mapping_text_value(values, "log_TUN_routing", current.log_TUN_routing),
             enable_tcpmss=_clean_bool(values.get("enable_tcpmss"), default=current.enable_tcpmss),

@@ -374,6 +374,42 @@
           <section class="section-block card">
             <div class="section-header">
               <div>
+                <h2>TUN Verification</h2>
+                <p>Checks that the interface is configured, reaches the tunnel peer, and reaches the configured global host</p>
+              </div>
+            </div>
+            <div class="table-card card">
+              <div class="table-wrap tun-route-wrap">
+                <table class="conn-table tun-route-table">
+                  <tbody>
+                    <tr>
+                      <td>TUN Config</td>
+                      <td id="tunVerificationConfigSummary">pending</td>
+                      <td id="tunVerificationConfigDetail" class="mono tun-route-value">n/a</td>
+                    </tr>
+                    <tr>
+                      <td>TUN Connectivity</td>
+                      <td id="tunVerificationPeerSummary">pending</td>
+                      <td id="tunVerificationPeerDetail" class="mono tun-route-value">n/a</td>
+                    </tr>
+                    <tr>
+                      <td>TUN Global Connectivity</td>
+                      <td id="tunVerificationGlobalSummary">pending</td>
+                      <td id="tunVerificationGlobalDetail" class="mono tun-route-value">n/a</td>
+                    </tr>
+                    <tr>
+                      <td>Global Host</td>
+                      <td id="tunVerificationGlobalHost" colspan="2" class="mono tun-route-value">n/a</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <section class="section-block card">
+            <div class="section-header">
+              <div>
                 <h2>TUN Helper</h2>
                 <p>Helper-mode execution state for the local TUN backend</p>
               </div>

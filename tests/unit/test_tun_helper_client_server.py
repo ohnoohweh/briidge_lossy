@@ -176,6 +176,21 @@ class TunHelperClientServerTests(unittest.IsolatedAsyncioTestCase):
 
         await client.close()
 
+    async def test_server_stops_after_authenticated_client_disconnects(self) -> None:
+        client = TunHelperClient(socket_path=self.socket_path, session_token="secret")
+        await client.connect()
+        await client.open_tun({"ifname": "obtun0", "mtu": 1600})
+        await client.apply_network({"ifname": "obtun0", "mtu": 1600})
+        await client.close()
+
+        for _ in range(20):
+            if self.backend.stopped:
+                break
+            await asyncio.sleep(0.5)
+
+        self.assertTrue(self.backend.stopped)
+        self.assertFalse(os.path.exists(self.socket_path))
+
 
 if __name__ == "__main__":
     unittest.main()

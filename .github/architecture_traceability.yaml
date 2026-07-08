@@ -245,6 +245,7 @@ ARC-CMP-004:
     - tests/unit/test_tun_helper_client_server.py::test_client_server_handshake_open_snapshot_and_packet_loop
     - tests/unit/test_tun_helper_client_server.py::test_client_apply_and_remove_network_round_trip
     - tests/unit/test_tun_helper_client_server.py::test_client_apply_failure_keeps_connection_open_for_snapshot
+    - tests/unit/test_tun_helper_client_server.py::test_server_stops_after_authenticated_client_disconnects
     - tests/unit/test_tun_helper_server_entrypoint.py::test_build_arg_parser_reads_entrypoint_args
     - tests/unit/test_tun_helper_server_entrypoint.py::test_resolve_helper_launch_args_supports_compact_config_file
     - tests/unit/test_tun_helper_server_entrypoint.py::test_backend_factory_rejects_unknown_backend
@@ -257,7 +258,11 @@ ARC-CMP-004:
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_dns_with_resolvectl
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_skips_dns_when_resolvectl_is_unavailable
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_records_failure_and_rolls_back_partial_state
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_allows_test_injected_failure_and_rolls_back_partial_state
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_excluded_routes_and_full_tunnel_policy
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_reuses_matching_existing_policy_rules_on_restart
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_reuses_matching_existing_host_policy_rules_without_prefix_in_rule_dump
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_reuses_existing_default_policy_rules_rendered_without_to_clause
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_server_firewall_rules
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_server_firewall_rules_for_remote_server_catalog
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_network_payload_carries_listener_hook_env
@@ -278,6 +283,7 @@ ARC-CMP-004:
     - tests/unit/test_runner_tun_helper.py::test_runner_rejects_helper_mode_on_unsupported_platform
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_uses_sudo_for_native_backend_when_unprivileged
     - tests/unit/test_runner_tun_helper.py::test_runner_status_reports_post_start_helper_disconnect
+    - tests/unit/test_runner_tun_helper.py::test_runner_reaps_stale_helper_with_no_other_authenticated_clients
     - tests/unit/test_runner_tun_helper.py::test_runner_status_reports_helper_recovery_warning_when_cached_runtime_may_need_cleanup
     - tests/unit/test_runner_tun_helper.py::test_runner_request_tun_helper_repair_uses_linux_native_snapshot_cleanup
     - tests/unit/test_runner_tun_helper.py::test_runner_request_tun_helper_repair_reports_remaining_stale_state_when_cleanup_incomplete
@@ -292,6 +298,8 @@ ARC-CMP-004:
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_refreshes_helper_snapshot_after_apply_failure
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_dedicated_shared_tun_view
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_preserves_tun_runtime_health_warning
+    - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_verification_checks
+    - tests/unit/test_admin_web_payloads.py::test_cached_ping_verification_returns_pending_and_schedules_background_refresh_on_admin_thread
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_ui_binds_tun_helper_fields
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_psk
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_cert

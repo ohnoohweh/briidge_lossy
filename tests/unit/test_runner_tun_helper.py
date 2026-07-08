@@ -272,6 +272,52 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status["tun_helper"]["runtime"]["ifname"], "obtun0")
         self.assertFalse(status["tun_helper"].get("recovery"))
 
+    async def test_runner_reaps_stale_helper_with_no_other_authenticated_clients(self):
+        args = self._helper_args()
+        runner = Runner(args)
+
+        runtime_dir = tempfile.mkdtemp(prefix="obstaclebridge-reaper-")
+        self.addCleanup(lambda: shutil.rmtree(runtime_dir, ignore_errors=True))
+        planned_socket = os.path.join(runtime_dir, "planned.sock")
+        stale_socket = os.path.join(runtime_dir, "stale.sock")
+        stale_config = os.path.join(runtime_dir, "tun-helper-launch-stale.json")
+        with open(stale_socket, "wb"):
+            pass
+        with open(stale_config, "w", encoding="utf-8") as handle:
+            json.dump({"socket_path": stale_socket, "session_token": "stale-token"}, handle)
+
+        class _FakeReaperClient:
+            instances: list["_FakeReaperClient"] = []
+
+            def __init__(self, *, socket_path: str, session_token: str, response_timeout_s: float = 1.0, logger=None) -> None:
+                self.socket_path = socket_path
+                self.session_token = session_token
+                self.response_timeout_s = response_timeout_s
+                self.logger = logger
+                self.calls: list[tuple[str, dict]] = []
+                _FakeReaperClient.instances.append(self)
+
+            async def connect(self) -> None:
+                return None
+
+            async def snapshot(self) -> dict:
+                return {"active_authenticated_clients": 1}
+
+            async def request(self, op: str, payload: dict | None = None):
+                self.calls.append((op, dict(payload or {})))
+                return mock.Mock(op="STOP_OK", payload={"stopping": True})
+
+            async def close(self) -> None:
+                return None
+
+        with mock.patch.object(bridge_runner, "TunHelperClient", _FakeReaperClient):
+            await runner._reap_stale_tun_helper_processes(planned_socket)
+
+        self.assertEqual(len(_FakeReaperClient.instances), 1)
+        self.assertEqual(_FakeReaperClient.instances[0].socket_path, stale_socket)
+        self.assertEqual(_FakeReaperClient.instances[0].calls, [("STOP", {})])
+        self.assertFalse(os.path.exists(stale_config))
+
     def test_runner_status_reports_helper_recovery_warning_when_cached_runtime_may_need_cleanup(self):
         args = self._helper_args()
         args.tun_helper_backend = "linux-native"

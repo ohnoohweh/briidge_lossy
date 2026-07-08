@@ -641,6 +641,7 @@ REQ-LIFE-010:
     - tests/unit/test_tun_helper_client_server.py::test_client_server_handshake_open_snapshot_and_packet_loop
     - tests/unit/test_tun_helper_client_server.py::test_client_apply_and_remove_network_round_trip
     - tests/unit/test_tun_helper_client_server.py::test_client_apply_failure_keeps_connection_open_for_snapshot
+    - tests/unit/test_tun_helper_client_server.py::test_server_stops_after_authenticated_client_disconnects
     - tests/unit/test_tun_helper_server_entrypoint.py::test_resolve_helper_launch_args_supports_compact_config_file
     - tests/unit/test_tun_helper_server_entrypoint.py::test_backend_factory_accepts_darwin_native_backend
     - tests/unit/test_tun_helper_macos_backend.py::test_open_write_read_and_stop_wraps_utun_frames
@@ -658,7 +659,11 @@ REQ-LIFE-010:
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_dns_with_resolvectl
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_skips_dns_when_resolvectl_is_unavailable
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_records_failure_and_rolls_back_partial_state
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_allows_test_injected_failure_and_rolls_back_partial_state
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_excluded_routes_and_full_tunnel_policy
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_reuses_matching_existing_policy_rules_on_restart
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_reuses_matching_existing_host_policy_rules_without_prefix_in_rule_dump
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_reuses_existing_default_policy_rules_rendered_without_to_clause
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_server_firewall_rules
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_server_firewall_rules_for_remote_server_catalog
     - tests/unit/test_tun_helper_linux_backend.py::test_repair_runtime_snapshot_replays_cleanup_without_live_helper_process
@@ -675,6 +680,7 @@ REQ-LIFE-010:
     - tests/unit/test_runner_tun_helper.py::test_tun_helper_socket_ready_timeout_extends_for_sudo_prompt
     - tests/unit/test_runner_tun_helper.py::test_tun_helper_socket_ready_timeout_stays_short_without_sudo
     - tests/unit/test_runner_tun_helper.py::test_runner_status_reports_post_start_helper_disconnect
+    - tests/unit/test_runner_tun_helper.py::test_runner_reaps_stale_helper_with_no_other_authenticated_clients
     - tests/unit/test_runner_tun_helper.py::test_runner_status_reports_helper_recovery_warning_when_cached_runtime_may_need_cleanup
     - tests/unit/test_runner_tun_helper.py::test_runner_request_tun_helper_repair_uses_linux_native_snapshot_cleanup
     - tests/unit/test_runner_tun_helper.py::test_runner_request_tun_helper_repair_reports_remaining_stale_state_when_cleanup_incomplete
@@ -693,6 +699,8 @@ REQ-LIFE-010:
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_stop_skips_runtime_listener_on_stopped_hook
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_dedicated_shared_tun_view
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_preserves_tun_runtime_health_warning
+    - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_verification_checks
+    - tests/unit/test_admin_web_payloads.py::test_cached_ping_verification_returns_pending_and_schedules_background_refresh_on_admin_thread
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_ui_binds_tun_helper_fields
     - tests/unit/test_admin_web_payloads.py::test_tun_helper_repair_endpoint_returns_runner_payload
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
@@ -1080,7 +1088,9 @@ REQ-ADM-006:
     # The dedicated TUN page also pins shared-drop totals plus ChannelMux flow
     # and drop-diagnostic rendering for shared-TUN services.
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_dedicated_shared_tun_view
+    - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_verification_checks
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_effective_overlay_peer_excluded_routes
+    - tests/unit/test_admin_web_payloads.py::test_cached_ping_verification_returns_pending_and_schedules_background_refresh_on_admin_thread
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_frontend_uses_dedicated_tab_and_api
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_ui_payload_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_security_advisor_payload_matches_python

@@ -433,6 +433,193 @@ class LinuxTunHelperBackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(("-4", "route", "del", "38.180.143.5/32"), command_only)
         self.assertIn(("-6", "route", "del", "2001:db8::5/128"), command_only)
 
+    async def test_apply_network_reuses_matching_existing_policy_rules_on_restart(self) -> None:
+        backend = LinuxTunHelperBackend()
+        commands: list[tuple[tuple[str, ...], bool]] = []
+
+        def _fake_run(args, check, capture_output, text):
+            self.assertEqual(args[0], "ip")
+            cmd = tuple(args[1:])
+            commands.append((cmd, bool(check)))
+            stdout = ""
+            if cmd == ("-4", "route", "show", "default"):
+                stdout = "default via 172.20.10.1 dev wlp0s20f3 src 172.20.10.4\n"
+            elif cmd == ("-6", "route", "show", "default"):
+                stdout = "default via fe80::1 dev wlp0s20f3\n"
+            elif cmd == ("-4", "route", "show", "dev", "wlp0s20f3", "proto", "kernel", "scope", "link"):
+                stdout = "172.20.10.0/28 proto kernel scope link src 172.20.10.4\n"
+            elif cmd == ("-6", "route", "show", "dev", "wlp0s20f3", "proto", "kernel"):
+                stdout = "fe80::/64 proto kernel metric 1024 pref medium\n"
+            elif cmd == ("-4", "route", "show", "dev", "obtun14", "proto", "kernel", "scope", "link"):
+                stdout = "198.18.65.0/24 proto kernel scope link src 198.18.65.2\n"
+            elif cmd == ("-6", "route", "show", "dev", "obtun14", "proto", "kernel"):
+                stdout = "fd20:165::/64 proto kernel metric 256 pref medium\n"
+            elif cmd == ("-4", "rule", "show"):
+                stdout = "10000: from all to 172.20.10.0/28 lookup main\n"
+            elif cmd == ("-6", "rule", "show"):
+                stdout = "11000: from all to fe80::/64 lookup main\n"
+            return types.SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+        payload = {
+            "ifname": "obtun14",
+            "tun_routing": {
+                "tunnel_address": "198.18.65.2",
+                "tunnel_prefix": 24,
+                "tunnel_gateway": "198.18.65.1",
+                "included_routes": ["0.0.0.0/0"],
+                "tunnel_address6": "fd20:165::2",
+                "tunnel_prefix6": 64,
+                "tunnel_gateway6": "fd20:165::1",
+                "included_routes6": ["::/0"],
+            },
+        }
+
+        with mock.patch.object(helper_linux.subprocess, "run", side_effect=_fake_run):
+            applied = await backend.apply_network(payload)
+            snapshot = await backend.snapshot()
+
+        self.assertTrue(applied["applied"])
+        self.assertTrue(snapshot["network_applied"])
+        self.assertIn("to 172.20.10.0/28 lookup main", applied["policy_rules4"])
+        self.assertIn("to fe80::/64 lookup main", applied["policy_rules6"])
+        command_only = [cmd for cmd, _check in commands]
+        self.assertNotIn(
+            ("-4", "rule", "add", "pref", "10000", "to", "172.20.10.0/28", "lookup", "main"),
+            command_only,
+        )
+        self.assertNotIn(
+            ("-6", "rule", "add", "pref", "11000", "to", "fe80::/64", "lookup", "main"),
+            command_only,
+        )
+        self.assertIn(
+            ("-4", "rule", "add", "pref", "10002", "to", "0.0.0.0/0", "lookup", str(applied["policy_table4"])),
+            command_only,
+        )
+        self.assertIn(
+            ("-6", "rule", "add", "pref", "11002", "to", "::/0", "lookup", str(applied["policy_table6"])),
+            command_only,
+        )
+
+    async def test_apply_network_reuses_matching_existing_host_policy_rules_without_prefix_in_rule_dump(self) -> None:
+        backend = LinuxTunHelperBackend()
+        commands: list[tuple[tuple[str, ...], bool]] = []
+
+        def _fake_run(args, check, capture_output, text):
+            self.assertEqual(args[0], "ip")
+            cmd = tuple(args[1:])
+            commands.append((cmd, bool(check)))
+            stdout = ""
+            if cmd == ("-4", "route", "show", "default"):
+                stdout = "default via 172.20.10.1 dev wlp0s20f3 src 172.20.10.4\n"
+            elif cmd == ("-6", "route", "show", "default"):
+                stdout = "default via fe80::1 dev wlp0s20f3\n"
+            elif cmd == ("-4", "route", "show", "dev", "wlp0s20f3", "proto", "kernel", "scope", "link"):
+                stdout = "172.20.10.0/28 proto kernel scope link src 172.20.10.4\n"
+            elif cmd == ("-6", "route", "show", "dev", "wlp0s20f3", "proto", "kernel"):
+                stdout = "fe80::/64 proto kernel metric 1024 pref medium\n"
+            elif cmd == ("-4", "route", "show", "dev", "obtun14", "proto", "kernel", "scope", "link"):
+                stdout = "198.18.65.0/24 proto kernel scope link src 198.18.65.2\n"
+            elif cmd == ("-6", "route", "show", "dev", "obtun14", "proto", "kernel"):
+                stdout = "fd20:165::/64 proto kernel metric 256 pref medium\n"
+            elif cmd == ("-4", "rule", "show"):
+                stdout = (
+                    "10000: from all to 172.20.10.0/28 lookup main\n"
+                    "10001: from all to 203.0.113.10 lookup main\n"
+                )
+            elif cmd == ("-6", "rule", "show"):
+                stdout = "11000: from all to fe80::/64 lookup main\n"
+            return types.SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+        payload = {
+            "ifname": "obtun14",
+            "tun_routing": {
+                "tunnel_address": "198.18.65.2",
+                "tunnel_prefix": 24,
+                "tunnel_gateway": "198.18.65.1",
+                "included_routes": ["0.0.0.0/0"],
+                "excluded_routes": ["203.0.113.10/32"],
+                "tunnel_address6": "fd20:165::2",
+                "tunnel_prefix6": 64,
+                "tunnel_gateway6": "fd20:165::1",
+                "included_routes6": ["::/0"],
+            },
+        }
+
+        with mock.patch.object(helper_linux.subprocess, "run", side_effect=_fake_run):
+            applied = await backend.apply_network(payload)
+
+        self.assertTrue(applied["applied"])
+        command_only = [cmd for cmd, _check in commands]
+        self.assertNotIn(
+            ("-4", "rule", "add", "pref", "10001", "to", "203.0.113.10/32", "lookup", "main"),
+            command_only,
+        )
+        self.assertIn(
+            ("-4", "rule", "add", "pref", "10003", "to", "0.0.0.0/0", "lookup", str(applied["policy_table4"])),
+            command_only,
+        )
+
+    async def test_apply_network_reuses_existing_default_policy_rules_rendered_without_to_clause(self) -> None:
+        backend = LinuxTunHelperBackend()
+        commands: list[tuple[tuple[str, ...], bool]] = []
+
+        def _fake_run(args, check, capture_output, text):
+            self.assertEqual(args[0], "ip")
+            cmd = tuple(args[1:])
+            commands.append((cmd, bool(check)))
+            stdout = ""
+            if cmd == ("-4", "route", "show", "default"):
+                stdout = "default via 172.20.10.1 dev wlp0s20f3 src 172.20.10.4\n"
+            elif cmd == ("-6", "route", "show", "default"):
+                stdout = "default via fe80::1 dev wlp0s20f3\n"
+            elif cmd == ("-4", "route", "show", "dev", "wlp0s20f3", "proto", "kernel", "scope", "link"):
+                stdout = "172.20.10.0/28 proto kernel scope link src 172.20.10.4\n"
+            elif cmd == ("-6", "route", "show", "dev", "wlp0s20f3", "proto", "kernel"):
+                stdout = "fe80::/64 proto kernel metric 1024 pref medium\n"
+            elif cmd == ("-4", "route", "show", "dev", "obtun14", "proto", "kernel", "scope", "link"):
+                stdout = "198.18.65.0/24 proto kernel scope link src 198.18.65.2\n"
+            elif cmd == ("-6", "route", "show", "dev", "obtun14", "proto", "kernel"):
+                stdout = "fd20:165::/64 proto kernel metric 256 pref medium\n"
+            elif cmd == ("-4", "rule", "show"):
+                stdout = (
+                    "10000: from all to 172.20.10.0/28 lookup main\n"
+                    "10001: from all lookup 20114\n"
+                )
+            elif cmd == ("-6", "rule", "show"):
+                stdout = (
+                    "11000: from all to fe80::/64 lookup main\n"
+                    "11001: from all lookup 21114\n"
+                )
+            return types.SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+        payload = {
+            "ifname": "obtun14",
+            "tun_routing": {
+                "tunnel_address": "198.18.65.2",
+                "tunnel_prefix": 24,
+                "tunnel_gateway": "198.18.65.1",
+                "included_routes": ["0.0.0.0/0"],
+                "tunnel_address6": "fd20:165::2",
+                "tunnel_prefix6": 64,
+                "tunnel_gateway6": "fd20:165::1",
+                "included_routes6": ["::/0"],
+            },
+        }
+
+        with mock.patch.object(helper_linux.subprocess, "run", side_effect=_fake_run):
+            applied = await backend.apply_network(payload)
+
+        self.assertTrue(applied["applied"])
+        command_only = [cmd for cmd, _check in commands]
+        self.assertNotIn(
+            ("-4", "rule", "add", "pref", "10001", "to", "0.0.0.0/0", "lookup", str(applied["policy_table4"])),
+            command_only,
+        )
+        self.assertNotIn(
+            ("-6", "rule", "add", "pref", "11001", "to", "::/0", "lookup", str(applied["policy_table6"])),
+            command_only,
+        )
+
     async def test_apply_and_remove_network_programs_server_firewall_rules(self) -> None:
         backend = LinuxTunHelperBackend()
         commands: list[tuple[tuple[str, ...], bool]] = []

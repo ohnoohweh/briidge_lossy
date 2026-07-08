@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import sys
+import threading
 import time
 import unittest
 from unittest import mock
@@ -825,6 +826,116 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["included_routes6"], ["::/0"])
         self.assertEqual(payload["excluded_routes6"], ["::1/128", "::ffff:38.180.143.5/128"])
 
+    def test_build_tun_routing_payload_exposes_verification_checks(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+            included_routes=["0.0.0.0/0"],
+            excluded_routes=["127.0.0.0/8"],
+            included_routes6=["::/0"],
+            excluded_routes6=["::1/128"],
+            tunnel_address="192.168.106.2",
+            tunnel_prefix=24,
+            tunnel_gateway="192.168.106.1",
+            tunnel_address6="fd20:106::2",
+            tunnel_prefix6=64,
+            tunnel_gateway6="fd20:106::1",
+            dns_servers=["1.1.1.1"],
+            global_connectivity_host="google.de",
+            mtu=1600,
+            log_TUN_routing="CRITICAL",
+            enable_tcpmss=False,
+            enable_tun_tcpdump=False,
+            tun_tcpdump_pcap_path="",
+            shared_tun_disable_outgoing_normalization=False,
+            shared_tun_disable_inflow_filter=False,
+            shared_tun_disable_outflow_filter=False,
+            disable_channelmux_inflow_throttle=False,
+            shared_tun_disable_scoped_throttle=False,
+        )
+        ui = AdminWebUI(args, _RunnerStub())
+
+        with mock.patch.object(
+            AdminWebUI,
+            "_probe_tun_interface_addresses",
+            return_value={"ok": True, "ipv4": ["192.168.106.2/24"], "ipv6": ["fd20:106::2/64"], "detail": ""},
+        ), mock.patch.object(
+            AdminWebUI,
+            "_cached_ping_verification",
+            side_effect=[
+                {
+                    "label": "TUN connectivity verified",
+                    "ok": True,
+                    "state": "verified",
+                    "summary": "TUN connectivity verified",
+                    "detail": "peer reachable",
+                    "target": "192.168.106.1",
+                },
+                {
+                    "label": "TUN global connectivity verified",
+                    "ok": True,
+                    "state": "verified",
+                    "summary": "TUN global connectivity verified",
+                    "detail": "global reachable",
+                    "target": "google.de",
+                },
+            ],
+        ):
+            payload = ui._build_tun_routing_payload()
+
+        self.assertEqual(payload["verification"]["global_connectivity_host"], "google.de")
+        self.assertTrue(payload["verification"]["tun_config"]["ok"])
+        self.assertEqual(payload["verification"]["tun_config"]["summary"], "TUN config verified")
+        self.assertEqual(payload["verification"]["tun_connectivity"]["target"], "192.168.106.1")
+        self.assertEqual(payload["verification"]["tun_global_connectivity"]["target"], "google.de")
+
+    def test_cached_ping_verification_returns_pending_and_schedules_background_refresh_on_admin_thread(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+        )
+        ui = AdminWebUI(args, _RunnerStub())
+        ui._server_thread = threading.current_thread()
+
+        scheduled: list[tuple[tuple[str, str, str, int], str, str, str, int]] = []
+
+        def _fake_schedule(cache_key, *, label, target, ifname, wait_seconds):
+            scheduled.append((cache_key, label, target, ifname, wait_seconds))
+
+        with mock.patch("obstacle_bridge.bridge_webadmin.shutil.which", return_value="/usr/bin/ping"), \
+             mock.patch.object(ui, "_schedule_ping_verification_refresh", side_effect=_fake_schedule), \
+             mock.patch.object(ui, "_ping_verification") as ping_mock:
+            result = ui._cached_ping_verification(
+                label="TUN global connectivity verified",
+                target="google.de",
+                ifname="obtun0",
+                wait_seconds=2,
+            )
+
+        self.assertEqual(result["state"], "pending")
+        self.assertEqual(result["target"], "google.de")
+        self.assertEqual(len(scheduled), 1)
+        self.assertEqual(scheduled[0][0], ("TUN global connectivity verified", "google.de", "obtun0", 2))
+        ping_mock.assert_not_called()
+
     def test_tun_routing_ui_binds_tun_helper_fields(self):
         app_js = self._canonical_webadmin_paths()[0].read_text(encoding="utf-8")
 
@@ -839,6 +950,10 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn("setText('tunHelperLastRepair'", app_js)
         self.assertIn("tunRoutingHealthWarning", app_js)
         self.assertIn("summarizeTunRuntimeHealth", app_js)
+        self.assertIn("setText('tunVerificationConfigSummary'", app_js)
+        self.assertIn("setText('tunVerificationPeerSummary'", app_js)
+        self.assertIn("setText('tunVerificationGlobalSummary'", app_js)
+        self.assertIn("setText('tunVerificationGlobalHost'", app_js)
         self.assertIn("apiFetch('/api/tun-helper/repair'", app_js)
         self.assertIn("Remaining findings:", app_js)
         self.assertIn("document.getElementById('tunHelperRepairBtn')", app_js)
@@ -922,6 +1037,10 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn('id="tunRoutingConnectionsBody"', index_html)
         self.assertIn('id="tunRoutingSharedBody"', index_html)
         self.assertIn('id="tunRoutingSharedDrops"', index_html)
+        self.assertIn('id="tunVerificationConfigSummary"', index_html)
+        self.assertIn('id="tunVerificationPeerSummary"', index_html)
+        self.assertIn('id="tunVerificationGlobalSummary"', index_html)
+        self.assertIn('id="tunVerificationGlobalHost"', index_html)
         self.assertIn('id="tunRoutingIncludedRoutes"', index_html)
         self.assertIn('id="tunRoutingExcludedRoutes"', index_html)
         self.assertIn('id="tunRoutingIncludedRoutes6"', index_html)
@@ -935,6 +1054,8 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn("setText('tunRoutingExcludedRoutes', fmtTunRoutingRouteList(j.excluded_routes));", app_js)
         self.assertIn("setText('tunRoutingIncludedRoutes6', fmtTunRoutingRouteList(j.included_routes6));", app_js)
         self.assertIn("setText('tunRoutingExcludedRoutes6', fmtTunRoutingRouteList(j.excluded_routes6));", app_js)
+        self.assertIn("const verification = j.verification || {};", app_js)
+        self.assertIn("setText('tunVerificationGlobalHost', String(verification.global_connectivity_host || 'n/a'));", app_js)
         self.assertIn("function fmtTunFlowSummary(stats) {", app_js)
         self.assertIn("function fmtDropDiagnostics(shared) {", app_js)
         self.assertIn("<th>ChannelMux Flow</th>", index_html)

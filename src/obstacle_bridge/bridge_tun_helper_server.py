@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import signal
+import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional, Protocol
 
@@ -46,6 +47,8 @@ class _HelperConnectionState:
 
 
 class TunHelperServer:
+    AUTHENTICATED_CLIENT_IDLE_TIMEOUT_S = 5.0
+
     def __init__(
         self,
         *,
@@ -59,7 +62,10 @@ class TunHelperServer:
         self._server: Optional[asyncio.AbstractServer] = None
         self._socket_path = ""
         self._active_writers: set[asyncio.StreamWriter] = set()
+        self._authenticated_writers: set[asyncio.StreamWriter] = set()
         self._closed = False
+        self._watchdog_task: Optional[asyncio.Task] = None
+        self._last_authenticated_client_at = time.monotonic()
         self._backend.set_packet_sink(self.emit_packet)
 
     @staticmethod
@@ -112,9 +118,18 @@ class TunHelperServer:
             os.unlink(self._socket_path)
         self._server = await asyncio.start_unix_server(self._handle_client, path=self._socket_path)
         self._apply_socket_permissions()
+        if self._watchdog_task is None:
+            self._watchdog_task = asyncio.create_task(self._authenticated_client_watchdog())
 
     async def stop(self) -> None:
         self._closed = True
+        current = asyncio.current_task()
+        watchdog = self._watchdog_task
+        self._watchdog_task = None
+        if watchdog is not None and watchdog is not current:
+            watchdog.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await watchdog
         if self._server is not None:
             self._server.close()
             with contextlib.suppress(Exception):
@@ -127,6 +142,26 @@ class TunHelperServer:
         if self._socket_path:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(self._socket_path)
+
+    def _mark_authenticated_client_activity(self) -> None:
+        self._last_authenticated_client_at = time.monotonic()
+
+    async def _authenticated_client_watchdog(self) -> None:
+        while not self._closed:
+            await asyncio.sleep(0.5)
+            if self._closed:
+                return
+            if self._authenticated_writers:
+                self._mark_authenticated_client_activity()
+                continue
+            if (time.monotonic() - self._last_authenticated_client_at) < self.AUTHENTICATED_CLIENT_IDLE_TIMEOUT_S:
+                continue
+            self._log.warning(
+                "[TUN/HELPER] no authenticated client for %.1fs; stopping helper and releasing resources",
+                self.AUTHENTICATED_CLIENT_IDLE_TIMEOUT_S,
+            )
+            asyncio.get_running_loop().create_task(self.stop())
+            return
 
     async def emit_packet(self, packet: bytes) -> None:
         if not self._active_writers:
@@ -141,6 +176,7 @@ class TunHelperServer:
                 dead.append(writer)
         for writer in dead:
             self._active_writers.discard(writer)
+            self._authenticated_writers.discard(writer)
             await self._close_writer(writer)
 
     async def _send_event(self, writer: asyncio.StreamWriter, text: str) -> None:
@@ -180,6 +216,8 @@ class TunHelperServer:
                 )
                 return
             state.authenticated = True
+            self._authenticated_writers.add(writer)
+            self._mark_authenticated_client_activity()
             await self._send_response(
                 writer,
                 op="HELLO_OK",
@@ -193,6 +231,7 @@ class TunHelperServer:
                 payload={"code": "not_authenticated", "detail": "HELLO required before helper commands"},
             )
             return
+        self._mark_authenticated_client_activity()
         async def _run_backend_call(reply_op: str, awaitable: Any, *, code: str) -> bool:
             try:
                 reply = await _maybe_await(awaitable)
@@ -216,7 +255,12 @@ class TunHelperServer:
             await _run_backend_call("REMOVE_NETWORK_OK", self._backend.remove_network(payload), code="remove_network_failed")
             return
         if op == "SNAPSHOT":
-            await _run_backend_call("SNAPSHOT_OK", self._backend.snapshot(), code="snapshot_failed")
+            async def _snapshot_with_server_state() -> dict[str, Any]:
+                reply = dict(await _maybe_await(self._backend.snapshot()) or {})
+                reply["active_authenticated_clients"] = int(len(self._authenticated_writers))
+                return reply
+
+            await _run_backend_call("SNAPSHOT_OK", _snapshot_with_server_state(), code="snapshot_failed")
             return
         if op == "STOP":
             await self._send_response(writer, op="STOP_OK", payload={"stopping": True})
@@ -268,6 +312,7 @@ class TunHelperServer:
                                 payload={"code": "not_authenticated", "detail": "HELLO required before helper packet writes"},
                             )
                             continue
+                        self._mark_authenticated_client_activity()
                         await _maybe_await(self._backend.write_packet(bytes(payload)))
                     else:
                         await self._send_response(
@@ -277,6 +322,9 @@ class TunHelperServer:
                         )
         finally:
             self._active_writers.discard(writer)
+            self._authenticated_writers.discard(writer)
+            if not self._authenticated_writers:
+                self._last_authenticated_client_at = time.monotonic()
             await self._close_writer(writer)
 
 

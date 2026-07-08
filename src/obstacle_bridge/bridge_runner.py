@@ -467,6 +467,7 @@ class Runner:
         self._tun_helper_socket_path = settings.resolved_socket_path()
         self._tun_helper_backend = None
         try:
+            await self._reap_stale_tun_helper_processes(self._tun_helper_socket_path)
             self._tun_helper_lifecycle_phase = "launching_process"
             self._tun_helper_process = await self._await_with_async_diag(
                 "tun_helper.process.start",
@@ -505,6 +506,53 @@ class Runner:
             self._tun_helper_process = None
             self._tun_helper_backend = None
             raise
+
+    async def _reap_stale_tun_helper_processes(self, planned_socket_path: str) -> None:
+        socket_path = str(planned_socket_path or "").strip()
+        if not socket_path:
+            return
+        runtime_dir = pathlib.Path(socket_path).expanduser().resolve().parent
+        if not runtime_dir.is_dir():
+            return
+        for config_path in runtime_dir.glob("tun-helper-launch-*.json"):
+            helper_socket = ""
+            helper_token = ""
+            try:
+                with open(config_path, "r", encoding="utf-8") as handle:
+                    payload = json.load(handle)
+                if not isinstance(payload, dict):
+                    continue
+                helper_socket = str(payload.get("socket_path") or "").strip()
+                helper_token = str(payload.get("session_token") or "").strip()
+            except Exception:
+                continue
+            if not helper_socket or not helper_token or helper_socket == socket_path:
+                continue
+            if not os.path.exists(helper_socket):
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(config_path)
+                continue
+            client = TunHelperClient(
+                socket_path=helper_socket,
+                session_token=helper_token,
+                response_timeout_s=0.5,
+                logger=logging.getLogger("tun_helper_reaper"),
+            )
+            try:
+                await client.connect()
+                snapshot = await client.snapshot()
+                active_clients = int(snapshot.get("active_authenticated_clients") or 0)
+                if active_clients > 1:
+                    continue
+                with contextlib.suppress(Exception):
+                    await client.request("STOP", {})
+            except Exception:
+                continue
+            finally:
+                with contextlib.suppress(Exception):
+                    await client.close()
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(config_path)
 
     async def _stop_tun_helper(self) -> None:
         if self._tun_helper_settings.mode == "helper":

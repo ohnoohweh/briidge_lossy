@@ -1463,6 +1463,8 @@ Optional operations follow-up:
 
 Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot. In that report, `python` means the Python CLI/runtime product across supported host operating systems, including macOS Python; `macos` means the macOS Swift app product.
 
+The current Python-side TUN helper focus includes Linux-native lifecycle hardening, non-canonical policy-rule reuse, and non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global `ping` checks refresh in the background.
+
 ### Current coverage snapshot
 Current snapshot from `python3 scripts/report_product_traceability.py`:
 
