@@ -603,8 +603,9 @@ REQ-LIFE-009:
 REQ-LIFE-010:
   # macOS elevated scripts preserve CI identity across sudo so hosted-runner
   # diagnostics remain scoped to the CI privilege boundary, including the
-  # inline case where hosted macOS leaves the TUN row empty after privileged
-  # setup but the Admin diagnostics endpoint remains responsive.
+  # inline case where hosted macOS leaves the TUN row empty and the Swift
+  # packaged-XPC case where hosted macOS leaves the helper service disabled
+  # after privileged setup but the Admin diagnostics endpoint remains responsive.
   integration_tests:
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_over_myudp_packet_carry
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_reports_helper_death_during_partial_cleanup

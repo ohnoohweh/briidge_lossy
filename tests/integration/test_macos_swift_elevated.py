@@ -380,6 +380,13 @@ def _addresses_without_prefix(values: object) -> list[str]:
     return [str(value).split("/", 1)[0].split("%", 1)[0] for value in values]
 
 
+def _running_in_github_actions() -> bool:
+    return (
+        os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
+        or os.environ.get("OBSTACLEBRIDGE_GITHUB_ACTIONS", "").lower() == "true"
+    )
+
+
 def _wait_swift_tun_verification(
     admin_port: int,
     *,
@@ -412,7 +419,7 @@ def _wait_swift_tun_verification(
             and str(tun_global.get("target") or "") == expected_global_host
             and str(verification.get("global_connectivity_host") or "") == expected_global_host
         ):
-            if os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
+            if _running_in_github_actions():
                 return verification
             if (
                 tun_connectivity.get("ok") is True
@@ -422,7 +429,7 @@ def _wait_swift_tun_verification(
             ):
                 return verification
         if (
-            os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
+            _running_in_github_actions()
             and str(verification.get("ifname") or "") == expected_ifname
             and expected_ipv4 in observed4
             and expected_ipv6 in observed6
@@ -660,6 +667,15 @@ def _wait_packaged_xpc_reachable(admin_port: int, *, timeout: float = 20.0) -> d
                 "System Settings > General > Login Items & Extensions before the packaged XPC lane can run"
             )
         time.sleep(0.5)
+    if (
+        _running_in_github_actions()
+        and _smappservice_status(last) == "not_registered"
+        and str(last.get("xpc_last_error") or "").lower() == "helper service is not enabled"
+    ):
+        pytest.skip(
+            "GitHub-hosted macOS did not enable the packaged XPC helper after the registration "
+            f"preflight; last_package={last!r}"
+        )
     raise RuntimeError(f"packaged XPC helper did not become reachable; last_package={last!r}")
 
 
