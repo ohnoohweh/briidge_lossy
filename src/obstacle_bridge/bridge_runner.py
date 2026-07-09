@@ -12,6 +12,8 @@ import tempfile
 import threading
 from typing import Mapping
 
+from .bridge_tun_helper_client import _open_local_helper_connection
+
 _bridge = export_bridge_globals(globals())
 
 class RunnerMuxAggregate:
@@ -483,6 +485,7 @@ class Runner:
             self._tun_helper_client = TunHelperClient(
                 socket_path=self._tun_helper_socket_path,
                 session_token=self._tun_helper_session_token,
+                response_timeout_s=self._tun_helper_response_timeout_s(),
                 logger=logging.getLogger("tun_helper_client"),
             )
             self._tun_helper_lifecycle_phase = "connecting_client"
@@ -511,7 +514,7 @@ class Runner:
         socket_path = str(planned_socket_path or "").strip()
         if not socket_path:
             return
-        runtime_dir = pathlib.Path(socket_path).expanduser().resolve().parent
+        runtime_dir = pathlib.Path(self._tun_helper_settings.resolved_runtime_dir()).expanduser().resolve()
         if not runtime_dir.is_dir():
             return
         for config_path in runtime_dir.glob("tun-helper-launch-*.json"):
@@ -528,7 +531,7 @@ class Runner:
                 continue
             if not helper_socket or not helper_token or helper_socket == socket_path:
                 continue
-            if not os.path.exists(helper_socket):
+            if not self._helper_endpoint_candidate_exists(helper_socket):
                 with contextlib.suppress(FileNotFoundError):
                     os.unlink(config_path)
                 continue
@@ -553,6 +556,15 @@ class Runner:
                     await client.close()
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(config_path)
+
+    @staticmethod
+    def _helper_endpoint_candidate_exists(socket_path: str) -> bool:
+        helper_socket = str(socket_path or "").strip()
+        if not helper_socket:
+            return False
+        if is_local_tcp_endpoint(helper_socket) or is_windows_pipe_path(helper_socket):
+            return True
+        return os.path.exists(helper_socket)
 
     async def _stop_tun_helper(self) -> None:
         if self._tun_helper_settings.mode == "helper":
@@ -691,6 +703,11 @@ class Runner:
             and callable(geteuid)
             and int(geteuid()) != 0
         )
+        needs_windows_helper_privilege = bool(
+            sys.platform.startswith("win")
+            and backend_name in {"windows-native", "windows_native", "wintun-native", "wintun_native"}
+            and not _is_windows_admin()
+        )
         if needs_linux_helper_privilege and not _linux_native_tun_helper_can_launch_without_sudo(sys.executable):
             sudo_path = shutil.which("sudo")
             if not sudo_path:
@@ -723,6 +740,18 @@ class Runner:
             )
             self.log.warning("[RUNNER] launching elevated macOS TUN helper subprocess for native helper backend")
             exec_argv = _sudo_tun_helper_exec_argv(module_argv)
+        elif needs_windows_helper_privilege:
+            print(
+                "ObstacleBridge helper mode needs elevated privileges to create/configure the local Windows TUN device. "
+                "A UAC prompt may now appear for the helper subprocess only.",
+                file=sys.stderr,
+                flush=True,
+            )
+            self.log.warning("[RUNNER] launching elevated Windows TUN helper subprocess for windows-native helper backend")
+            return _launch_windows_elevated_helper_process(
+                module_argv,
+                env_updates={"PYTHONPATH": str(env.get("PYTHONPATH") or "")},
+            )
         return await asyncio.create_subprocess_exec(
             *exec_argv,
             stdin=asyncio.subprocess.DEVNULL,
@@ -744,7 +773,7 @@ class Runner:
         socket_path = str(self._tun_helper_socket_path or "").strip()
         if not socket_path:
             raise RuntimeError("tun helper socket path is not prepared before helper launch config write")
-        runtime_dir = pathlib.Path(socket_path).expanduser().resolve().parent
+        runtime_dir = pathlib.Path(self._tun_helper_settings.resolved_runtime_dir()).expanduser().resolve()
         runtime_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         fd, path = tempfile.mkstemp(prefix="tun-helper-launch-", suffix=".json", dir=str(runtime_dir))
         try:
@@ -772,6 +801,16 @@ class Runner:
             proc = self._tun_helper_process
             if proc is not None and proc.returncode is not None:
                 raise RuntimeError(f"tun helper process exited early with code {proc.returncode}")
+            if str(self._tun_helper_socket_path or "").startswith("\\\\.\\pipe\\") or is_local_tcp_endpoint(self._tun_helper_socket_path):
+                try:
+                    probe_reader, probe_writer = await _open_local_helper_connection(self._tun_helper_socket_path)
+                except (FileNotFoundError, ConnectionError, OSError, TimeoutError):
+                    pass
+                else:
+                    probe_writer.close()
+                    with contextlib.suppress(Exception):
+                        await probe_writer.wait_closed()
+                    return
             if os.path.exists(self._tun_helper_socket_path):
                 return
             await asyncio.sleep(0.02)
@@ -797,7 +836,16 @@ class Runner:
             return 30.0
         if needs_darwin_helper_privilege:
             return 30.0
+        if sys.platform.startswith("win") and backend_name in {"windows-native", "windows_native", "wintun-native", "wintun_native"} and not _is_windows_admin():
+            return 30.0
         return 2.0
+
+    def _tun_helper_response_timeout_s(self) -> float:
+        settings = self._tun_helper_settings
+        backend_name = str(getattr(settings, "helper_backend", "") or DEFAULT_TUN_HELPER_BACKEND).strip().lower()
+        if sys.platform.startswith("win") and backend_name in {"windows-native", "windows_native", "wintun-native", "wintun_native"}:
+            return 20.0
+        return 1.0
 
     async def _stop_tun_helper_process(self) -> None:
         proc = self._tun_helper_process
@@ -810,6 +858,10 @@ class Runner:
         if self._tun_helper_client is not None:
             with contextlib.suppress(Exception):
                 await self._tun_helper_client.request("STOP", {})
+            request_shutdown = getattr(proc, "request_shutdown", None)
+            if callable(request_shutdown):
+                with contextlib.suppress(Exception):
+                    request_shutdown()
         try:
             await asyncio.wait_for(proc.wait(), timeout=1.0)
             self._cleanup_tun_helper_launch_config()
@@ -1166,15 +1218,21 @@ class Runner:
             return {"ok": False, "reason": "helper_still_running", "repaired": [], "failed": []}
         if not bool(recovery.get("needs_manual_cleanup")):
             return {"ok": False, "reason": "no_stale_helper_state_detected", "repaired": [], "failed": []}
-        if str(helper.get("backend") or "").strip().lower() != "linux-native":
-            return {"ok": False, "reason": "repair_supported_only_for_linux_native_helper", "repaired": [], "failed": []}
+        backend_name = str(helper.get("backend") or "").strip().lower()
+        repair_backend = None
+        if backend_name == "linux-native":
+            repair_backend = LinuxTunHelperBackend
+        elif backend_name == "windows-native":
+            repair_backend = WindowsTunHelperBackend
+        if repair_backend is None:
+            return {"ok": False, "reason": "repair_unsupported_for_helper_backend", "repaired": [], "failed": []}
 
-        result = LinuxTunHelperBackend.repair_runtime_snapshot(runtime)
-        verification = LinuxTunHelperBackend.verify_runtime_snapshot_repaired(runtime)
+        result = repair_backend.repair_runtime_snapshot(runtime)
+        verification = repair_backend.verify_runtime_snapshot_repaired(runtime)
         if bool(result.get("ok")):
             repaired_runtime = dict(result.get("runtime") or {})
             repaired_runtime["ifname"] = str(runtime.get("ifname") or repaired_runtime.get("ifname") or "")
-            repaired_runtime["backend"] = str(runtime.get("backend") or repaired_runtime.get("backend") or "linux-native")
+            repaired_runtime["backend"] = str(runtime.get("backend") or repaired_runtime.get("backend") or backend_name)
             self._tun_helper_runtime_snapshot = repaired_runtime
         status = self._tun_helper_snapshot()
         status_helper = dict(status.get("tun_helper") or {})
@@ -2496,7 +2554,9 @@ from .bridge_proxy_server import (
     ProxyCredentials,
 )
 from .bridge_tun_helper_client import TunHelperClient
+from .bridge_tun_helper_local_transport import is_local_tcp_endpoint, is_windows_pipe_path
 from .bridge_tun_helper_linux import LinuxTunHelperBackend, LinuxTunHelperInMemoryBackend
+from .bridge_tun_helper_windows import WindowsTunHelperBackend
 from .bridge_tun_helper_settings import (
     DEFAULT_TUN_HELPER_BACKEND,
     TUN_EXECUTION_SECTION,
@@ -3408,13 +3468,30 @@ def _linux_native_tun_helper_can_launch_without_sudo(executable: str) -> bool:
     if {"cap_net_admin", "cap_sys_admin"} & file_caps:
         return True
     return False
-    preserve_names = list(dict.fromkeys(preserve_names))
-    return [
-        "sudo",
-        "-E",
-        f"--preserve-env={','.join(preserve_names)}",
-        *module_argv,
-    ]
+
+
+class _WindowsElevatedHelperProcess:
+    def __init__(self, *, pid: int = 0) -> None:
+        self.pid = int(pid)
+        self.returncode = None
+        self._wait_event = asyncio.Event()
+
+    async def wait(self) -> int:
+        await self._wait_event.wait()
+        return 0 if self.returncode is None else int(self.returncode)
+
+    def request_shutdown(self) -> None:
+        if self.returncode is None:
+            self.returncode = 0
+        self._wait_event.set()
+
+    def terminate(self) -> None:
+        self.request_shutdown()
+
+    def kill(self) -> None:
+        if self.returncode is None:
+            self.returncode = -9
+        self._wait_event.set()
 
 
 def _maybe_reexec_with_sudo_tun_privileges(
@@ -3497,16 +3574,14 @@ def _powershell_single_quoted(text: str) -> str:
     return "'" + str(text).replace("'", "''") + "'"
 
 
-def _windows_tun_elevation_shell_execute(
-    argv: Optional[List[str]] = None,
+def _windows_python_shell_execute(
+    exec_argv: list[str],
+    *,
+    env_updates: Optional[Mapping[str, str]] = None,
 ) -> tuple[str, str]:
-    exec_argv = _windows_tun_elevation_exec_argv(argv)
-    script_lines = [
-        "$env:OBSTACLEBRIDGE_WINDOWS_TUN_ELEVATED = '1'",
-    ]
-    wintun_dir = str(os.environ.get("WINTUN_DIR", "") or "").strip()
-    if wintun_dir:
-        script_lines.append(f"$env:WINTUN_DIR = {_powershell_single_quoted(wintun_dir)}")
+    script_lines: list[str] = []
+    for key, value in dict(env_updates or {}).items():
+        script_lines.append(f"$env:{key} = {_powershell_single_quoted(value)}")
     arg_list = ", ".join(_powershell_single_quoted(part) for part in exec_argv)
     script_lines.append(f"& {_powershell_single_quoted(sys.executable)} @({arg_list})")
     script = "\n".join(script_lines)
@@ -3515,6 +3590,55 @@ def _windows_tun_elevation_shell_execute(
         "powershell.exe",
         f"-NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}",
     )
+
+
+def _windows_tun_elevation_shell_execute(
+    argv: Optional[List[str]] = None,
+) -> tuple[str, str]:
+    exec_argv = _windows_tun_elevation_exec_argv(argv)
+    env_updates = {
+        "OBSTACLEBRIDGE_WINDOWS_TUN_ELEVATED": "1",
+    }
+    wintun_dir = str(os.environ.get("WINTUN_DIR", "") or "").strip()
+    if wintun_dir:
+        env_updates["WINTUN_DIR"] = wintun_dir
+    return _windows_python_shell_execute(exec_argv, env_updates=env_updates)
+
+
+def _windows_tun_helper_shell_execute(
+    module_argv: list[str],
+    *,
+    env_updates: Optional[Mapping[str, str]] = None,
+) -> tuple[str, str]:
+    merged_env = {
+        "OBSTACLEBRIDGE_WINDOWS_TUN_HELPER_ELEVATED": "1",
+    }
+    merged_env.update({str(key): str(value) for key, value in dict(env_updates or {}).items() if str(value)})
+    wintun_dir = str(os.environ.get("WINTUN_DIR", "") or "").strip()
+    if wintun_dir and "WINTUN_DIR" not in merged_env:
+        merged_env["WINTUN_DIR"] = wintun_dir
+    return _windows_python_shell_execute(module_argv, env_updates=merged_env)
+
+
+def _launch_windows_elevated_helper_process(
+    module_argv: list[str],
+    *,
+    env_updates: Optional[Mapping[str, str]] = None,
+) -> _WindowsElevatedHelperProcess:
+    shell32 = getattr(getattr(ctypes, "windll", None), "shell32", None)
+    if shell32 is None:
+        raise RuntimeError(
+            "Windows helper mode with the windows-native backend needs Administrator privileges, but shell32 is not available "
+            "to request a UAC elevation prompt for the helper subprocess."
+        )
+    executable, params = _windows_tun_helper_shell_execute(module_argv, env_updates=env_updates)
+    rc = int(shell32.ShellExecuteW(None, "runas", executable, params, os.getcwd(), 1))
+    if rc <= 32:
+        raise RuntimeError(
+            "Windows helper mode with the windows-native backend needs Administrator privileges, but the helper elevation request "
+            f"failed or was cancelled (ShellExecuteW rc={rc})."
+        )
+    return _WindowsElevatedHelperProcess()
 
 
 def _maybe_reexec_with_windows_tun_privileges(

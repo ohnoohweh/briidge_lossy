@@ -4028,7 +4028,7 @@ class ChannelMux:
                 self._tun_helper_open_tasks.pop(_dev_id, None)
         task.add_done_callback(_clear_done)
 
-    def _tun_helper_apply_network_for_device(self, dev: "ChannelMux.TunDevice") -> None:
+    def _tun_helper_apply_network_for_device(self, dev: "ChannelMux.TunDevice", *, client_override: Any = None) -> None:
         settings = self._tun_helper_settings
         if not self._tun_helper_manages_device(dev):
             return
@@ -4044,7 +4044,7 @@ class ChannelMux:
             dev.helper_network_applied = True
             self._schedule_tun_runtime_health_check(dev, reason="helper_apply_network")
             return
-        client = self._tun_helper_client
+        client = client_override if client_override is not None else self._tun_helper_client
         if client is None:
             self.log.warning("[TUN/HELPER] helper client is not available for network apply if=%s", dev.ifname)
             return
@@ -4118,6 +4118,7 @@ class ChannelMux:
 
     async def _tun_helper_open_device_async(self, client: Any, dev: "ChannelMux.TunDevice") -> None:
         try:
+            self.log.info("[TUN/HELPER] helper open start if=%s mtu=%s", dev.ifname, dev.mtu)
             opened = await client.open_tun({"ifname": dev.ifname, "mtu": dev.mtu})
             if isinstance(opened, dict):
                 opened_ifname = str(opened.get("ifname") or "")
@@ -4126,15 +4127,30 @@ class ChannelMux:
                 opened_mtu = opened.get("mtu")
                 if opened_mtu is not None:
                     dev.mtu = int(opened_mtu)
-            self._tun_helper_apply_network_for_device(dev)
+            self.log.info("[TUN/HELPER] helper open complete if=%s mtu=%s opened=%r", dev.ifname, dev.mtu, opened)
+            if self._tun_helper_backend is None and self._tun_helper_manages_device(dev) and bool(getattr(self._tun_helper_settings, "helper_apply_network", False)):
+                dev.helper_network_applied = True
+                self.log.info("[TUN/HELPER] helper apply inline after open if=%s", dev.ifname)
+                await self._tun_helper_apply_network_async(client, dev)
+            else:
+                self._tun_helper_apply_network_for_device(dev, client_override=client)
+        except asyncio.CancelledError:
+            self.log.warning("[TUN/HELPER] helper open cancelled if=%s mtu=%s", dev.ifname, dev.mtu)
+            raise
         except Exception as exc:
             self.log.warning("[TUN/HELPER] helper open failed if=%s mtu=%s err=%r", dev.ifname, dev.mtu, exc)
 
     async def _tun_helper_apply_network_async(self, client: Any, dev: "ChannelMux.TunDevice") -> None:
         try:
+            self.log.info("[TUN/HELPER] helper apply_network start if=%s payload=%r", dev.ifname, self._tun_helper_network_payload(dev))
             await client.apply_network(self._tun_helper_network_payload(dev))
             with contextlib.suppress(Exception):
                 await client.snapshot()
+            self.log.info("[TUN/HELPER] helper apply_network complete if=%s", dev.ifname)
+        except asyncio.CancelledError:
+            dev.helper_network_applied = False
+            self.log.warning("[TUN/HELPER] helper apply_network cancelled if=%s", dev.ifname)
+            raise
         except Exception as exc:
             dev.helper_network_applied = False
             with contextlib.suppress(Exception):

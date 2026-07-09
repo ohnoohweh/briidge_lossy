@@ -7,6 +7,8 @@ import tempfile
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
+from .bridge_tun_helper_local_transport import allocate_local_tcp_endpoint, is_local_tcp_endpoint
+
 
 TUN_EXECUTION_SECTION = "tun_execution"
 DEFAULT_TUN_EXECUTION_MODE = "inline"
@@ -15,6 +17,16 @@ DEFAULT_TUN_HELPER_SOCKET = ""
 DEFAULT_TUN_HELPER_APPLY_NETWORK = True
 DEFAULT_TUN_HELPER_LOG_LEVEL = "INFO"
 _TUN_EXECUTION_MODES = ("inline", "helper")
+
+
+def _is_windows_helper_backend(name: str) -> bool:
+    normalized = str(name or "").strip().lower()
+    return normalized in {"windows-native", "windows_native", "wintun-native", "wintun_native"}
+
+
+def _is_windows_pipe_path(path: str) -> bool:
+    text = str(path or "").strip()
+    return text.startswith("\\\\.\\pipe\\")
 
 
 def _clean_bool(value: Any, *, default: bool) -> bool:
@@ -29,6 +41,20 @@ def _clean_bool(value: Any, *, default: bool) -> bool:
         if lowered in {"0", "false", "no", "off"}:
             return False
     return bool(value)
+
+
+def _runtime_user_fragment() -> str:
+    getuid = getattr(os, "getuid", None)
+    if callable(getuid):
+        try:
+            return str(int(getuid()))
+        except Exception:
+            pass
+    for env_name in ("USERNAME", "USER", "LOGNAME"):
+        value = str(os.environ.get(env_name) or "").strip()
+        if value:
+            return value
+    return "nouid"
 
 
 def _text_value(
@@ -67,7 +93,7 @@ class TunExecutionSettings:
         group.add_argument(
             "--tun-helper-backend",
             default=DEFAULT_TUN_HELPER_BACKEND,
-            help="Helper backend identifier for helper mode. Values include linux-native, linux-python, and darwin-native.",
+            help="Helper backend identifier for helper mode. Values include linux-native, linux-python, darwin-native, and windows-native.",
         )
         group.add_argument(
             "--tun-helper-socket",
@@ -133,26 +159,47 @@ class TunExecutionSettings:
         target = str(platform or sys.platform or "")
         if self.mode != "helper":
             return True
-        return target.startswith("linux") or target.startswith("darwin")
+        if target.startswith("linux") or target.startswith("darwin"):
+            return True
+        if target.startswith("win"):
+            return _is_windows_helper_backend(self.helper_backend)
+        return False
 
     def ensure_supported_platform(self, *, platform: Optional[str] = None) -> None:
         if self.helper_mode_supported(platform=platform):
             return
         target = str(platform or sys.platform or "")
         raise RuntimeError(
-            f"tun_execution.mode=helper is currently supported only on Linux and macOS; current platform is {target!r}."
+            f"tun_execution.mode=helper is currently supported on Linux/macOS, and on Windows only for the windows-native backend; current platform is {target!r} with backend {self.helper_backend!r}."
         )
 
     def resolved_socket_path(self) -> str:
         explicit = str(self.helper_socket or "").strip()
         if explicit:
             return explicit
+        if sys.platform.startswith("win") and _is_windows_helper_backend(self.helper_backend):
+            return allocate_local_tcp_endpoint()
         socket_name = f"tun-helper-{os.getpid()}.sock"
         runtime_dir = str(os.environ.get("XDG_RUNTIME_DIR") or "").strip()
         if runtime_dir:
+            if "/" in runtime_dir:
+                return f"{runtime_dir.rstrip('/')}/obstaclebridge/{socket_name}"
             return os.path.join(runtime_dir, "obstaclebridge", socket_name)
         return os.path.join(
             tempfile.gettempdir(),
-            f"obstaclebridge-{os.getuid()}",
+            f"obstaclebridge-{_runtime_user_fragment()}",
             socket_name,
         )
+
+    def resolved_runtime_dir(self) -> str:
+        explicit = str(self.helper_socket or "").strip()
+        if explicit and not _is_windows_pipe_path(explicit) and not is_local_tcp_endpoint(explicit):
+            return os.path.dirname(explicit) or tempfile.gettempdir()
+        if sys.platform.startswith("win") and _is_windows_helper_backend(self.helper_backend):
+            return os.path.join(tempfile.gettempdir(), "obstaclebridge-win-helper")
+        runtime_dir = str(os.environ.get("XDG_RUNTIME_DIR") or "").strip()
+        if runtime_dir:
+            if "/" in runtime_dir:
+                return f"{runtime_dir.rstrip('/')}/obstaclebridge"
+            return os.path.join(runtime_dir, "obstaclebridge")
+        return os.path.join(tempfile.gettempdir(), f"obstaclebridge-{_runtime_user_fragment()}")

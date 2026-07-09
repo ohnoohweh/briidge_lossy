@@ -1375,9 +1375,452 @@ behavior rather than adding a second local helper process.
 
 ### Deliberately deferred
 
-- release notarization/stapling proof for the shipping Swift/macOS helper
-  artifact
-- Windows helper/service design
-- richer helper logging transport and reconnect counters
 - any helper awareness of shared-TUN peer ownership beyond pure host-local
-  packet I/O
+
+### Windows support workpackages
+
+- Requirements & gap analysis: produce a short spec listing Windows-specific
+  API gaps, required permissions, and UX differences; acceptance = maintainer
+  sign-off on the spec.
+- Research Windows TUN backends: evaluate Wintun, TAP-Windows, and alternatives,
+  document pros/cons, and confirm whether the existing Wintun path remains the
+  only supported helper backend or whether a real fallback is justified;
+  acceptance = backend decision and rationale recorded. Progress: repo review
+  now shows only a real Wintun-backed implementation and test surface; no TAP-
+  Windows or other Windows TUN backend is currently implemented.
+- Privilege elevation & security model: define required privileges (driver
+  install, helper launch, optional service), elevation UX (existing UAC
+  relaunch vs helper-only elevation), and least-privilege checklist;
+  acceptance = checklist and reviewer approval. Progress: current repo review
+  confirms that inline Windows TUN already uses whole-runtime UAC relaunch in
+  `bridge_runner.py`; helper work should narrow that to helper-only elevation.
+  Additional progress: the helper settings/runtime surface now recognizes
+  `windows-native` as the only Windows helper backend candidate and uses a
+  Windows-specific default endpoint shape (`\\.\pipe\...`) plus a separate
+  filesystem runtime directory for helper launch metadata.
+- Windows TUN helper core (driver interfacing): adapt the existing inline
+  `src/obstacle_bridge/bridge_tun_windows.py` Wintun implementation into a
+  helper backend rather than re-implementing Windows TUN from scratch;
+  acceptance = helper-backed packet round-trip tests plus parity with the
+  current inline packet I/O behavior. Progress: `src/obstacle_bridge/
+  bridge_tun_helper_windows.py` now exists and reuses the inline Wintun path
+  for helper-side open/read/write/stop; helper-owned network apply/remove is
+  still intentionally unsupported in that backend for now.
+- Windows service & CLI wrappers: implement service install/uninstall/start/stop
+  only if helper-subprocess launch proves insufficient; otherwise document the
+  helper-only UAC launch flow and any later service hardening plan; acceptance
+  = documented operator flow and a validated smoke test for the chosen launch
+  model.
+- Integrate Windows backend with existing API/CLI: provide adapter exposing the
+  same helper control protocol and ensure existing helpers can select the
+  Windows backend; acceptance = existing integration tests run against the
+  Windows helper adapter without unnecessary protocol churn. Progress: current
+  helper server only supports Unix-domain-socket Linux/macOS backends, so the
+  Windows integration slice is concretely a new backend registration plus a
+  Windows local IPC transport. Additional progress: the client/server code now
+  has explicit local-transport wrapper seams instead of calling Unix-socket
+  asyncio APIs directly, and those wrappers fail with a clear Windows
+  "transport not implemented yet" error until a real Windows transport lands.
+- Testing & CI for Windows: extend the existing Windows elevated lanes to cover
+  helper mode, not just inline Wintun mode; acceptance = helper-mode Windows
+  elevated coverage added alongside the already existing Windows CI/runtime
+  paths.
+- Docs & examples: update `docs/TUN_HELPER_DESIGN.md` and add Windows install
+  and troubleshooting notes; acceptance = reviewer sign-off on documentation.
+- Packaging & installer: produce an installer (MSI/NSIS) or packaging notes to
+  install driver and service, including code-signing guidance; acceptance = a
+  build artifact and an install verification step documented.
+- Release validation & telemetry: create a Windows release checklist and
+  optional non-PHI telemetry/error-reporting guidance; acceptance = checklist
+  reviewed and a Windows test machine verification step completed.
+
+Note: this project follows the `.codex/skills/obstaclebridge-project` SKILL.md
+workflow; progress against each Windows workpackage will be appended to this
+document as work progresses and after each tracked step completes.
+
+## Windows — Requirements & Gap Analysis (completed)
+
+Summary
+- Goal: provide the same narrow privileged helper contract on Windows as on
+  Linux/macOS: helper-owned TUN open/read/write, helper-owned network apply/
+  remove, narrow IPC control, and aligned Admin snapshot visibility.
+- The repository already ships a working inline Windows Wintun path plus
+  Windows-specific elevated test coverage. The remaining Windows work is helper
+  parity and operator convenience, not first-time Windows TUN enablement.
+
+Key Windows-specific requirements
+- TUN backend: a maintained, signed kernel driver (Wintun preferred) with a
+  stable userspace API for open/read/write semantics equivalent to Linux/macOS
+  TUN behavior.
+- Reuse requirement: the helper design should reuse the delivered inline
+  Windows Wintun loader/adapter behavior where practical, especially the
+  current ctypes-based `wintun.dll` discovery and session I/O path.
+- IPC: secure local IPC suitable for Windows (Named Pipes or AF_UNIX where
+  available) with peer validation and session-token auth.
+- Driver install and signing: an install-time admin flow (MSI/NSIS) to install
+  the TUN driver and, if later required, a hardened helper package or service;
+  code-signing and driver-signing guidance are required for production builds.
+- Privilege model: least-privilege helper process that owns the driver-facing
+  TUN session and any helper-owned host-network mutations; installer or UAC
+  elevation performs privileged actions depending on the chosen launch model.
+- Network apply primitives: native Windows APIs or PowerShell scripts to apply
+  addresses, routes, DNS, and firewall rules in a robust, idempotent manner.
+- Diagnostics and Admin parity: helper must export the same snapshot fields
+  (connected, pid, last_failure, packet counters) and preserve rollback on
+  partial apply failures.
+
+Gaps vs current repo
+- Inline Windows TUN implementation is present in `src/obstacle_bridge/bridge_tun_windows.py`.
+  That module attempts to import an optional Python `wintun` or `pywintun` wrapper
+  and falls back to a robust ctypes-based loader for `wintun.dll`. A runnable
+  ctypes example exists at `scripts/wintun_example.py` and `README.md` documents
+  runtime and `WINTUN_DIR` usage.
+- Helper-backed IPC for Windows (Named Pipe server/client) is not yet
+  implemented. The current helper IPC work uses Unix domain sockets on POSIX
+  platforms; a Windows Named Pipe adapter is still a gap if we choose helper
+  mode rather than inline runtime ownership.
+- Installer/packaging and driver-signing workflows for Windows drivers/services
+  remain to be defined for production releases (MSI/NSIS, code-signing,
+  attestation). Development/test paths rely on manual Wintun driver install or
+  the proposed convenience download for `wintun.dll`.
+- Windows elevated integration tests are already present in the repo (see
+  pytest marker `windows_elevated` and `pyproject.toml`), and CI exercises
+  elevated Windows test paths in the project's pipelines; confirm CI job links
+  when formalizing the Windows CI acceptance criteria.
+
+Risks & constraints
+- Driver signing: test/dev builds may need special handling; production builds
+  require signed driver bundles and possibly Microsoft attestation.
+- IPC semantics differ: rely on Named Pipe security (SDDL) or explicit PID
+  checks; `SO_PEERCRED`-style checks are not available.
+- Elevated operations already have an inline UAC-elevation story in the
+  current Windows runtime; helper design should prefer helper-only elevation
+  over introducing a mandatory Windows service unless testing shows that
+  subprocess elevation is not sufficient.
+
+Recommended minimal viable approach
+1. Keep Wintun as the primary and already-delivered Windows TUN backend.
+  Evaluate a fallback only if a concrete deployment need appears; do not add a
+  second Windows backend merely for symmetry.
+2. Introduce a Windows helper backend that reuses the existing
+  `src/obstacle_bridge/bridge_tun_windows.py` Wintun loading and packet I/O
+  semantics behind the helper control protocol.
+3. Add a Windows local IPC transport for helper mode, with Named Pipes as the
+  primary plan, and keep `ChannelMux`, `Runner`, and Admin helper status as
+  close as possible to the existing Linux/macOS helper contracts.
+4. Reuse the current Windows UAC/elevation model to elevate only the helper
+  path first. Treat a Windows service or dedicated installer flow as a later
+  hardening/packaging step rather than the first implementation requirement.
+5. Extend existing Windows elevated tests to cover helper mode and preserve the
+  current inline Wintun path as the baseline fallback while helper mode
+  matures.
+
+Acceptance criteria for this step (Requirements & gap analysis)
+- A written spec (this section) recorded in `docs/TUN_HELPER_DESIGN.md`.
+- Decision: existing inline Wintun backend remains the baseline Windows TUN
+  implementation, and helper work should reuse that path rather than replacing
+  it.
+- Documented IPC plan: Named Pipes with SDDL + session-token auth.
+- High-level implementation plan for a Windows helper backend, IPC transport,
+  and elevation model recorded here.
+- Maintainer review or explicit sign-off requested (next action: create PR
+  with this document and request review).
+
+Next steps
+- Define the Windows helper elevation and IPC plan around the already shipped
+  Wintun runtime path.  
+
+## Windows — Backend research and decision (completed)
+
+Summary
+- The repository's actual Windows TUN implementation is Wintun-only today.
+- The shipped Windows path already has runtime integration, elevation support,
+  documentation, and elevated integration coverage around Wintun.
+- There is no current code, test, packaging, or operator surface for
+  TAP-Windows or any second Windows TUN backend.
+
+Repo-grounded findings
+- `src/obstacle_bridge/bridge_tun_windows.py` is the active Windows TUN module.
+  It supports optional `wintun` / `pywintun` Python wrappers and a direct
+  ctypes fallback to `wintun.dll`.
+- `src/obstacle_bridge/bridge_runner.py` already carries Windows-specific UAC
+  relaunch handling and preserves `WINTUN_DIR` into the elevated path.
+- `README.md` documents the Wintun runtime path, DLL discovery, `WINTUN_DIR`
+  usage, manual download/install instructions, and the `scripts/wintun_example.py`
+  smoke path.
+- `tests/integration/test_windows_elevated.py` already exercises elevated
+  Windows TUN lanes, and the pytest marker set in `pyproject.toml` already
+  reserves `windows_elevated` for this runtime path.
+- The repo search surface for Windows TUN code currently exposes Wintun only;
+  no implemented TAP-Windows backend, helper adapter, or alternate Windows TUN
+  packet path was found.
+
+Backend decision
+- Keep Wintun as the only supported Windows TUN backend for the helper design
+  until a concrete deployment blocker justifies a second backend.
+- Do not add TAP-Windows merely as a speculative fallback. That would widen
+  the test matrix, operator instructions, and failure surface without current
+  repo evidence that Wintun is insufficient for the project's supported path.
+- Future fallback consideration is acceptable only if it comes with a concrete
+  failing host class, packaging constraint, or driver-policy restriction that
+  the current Wintun path cannot satisfy.
+
+Implications for helper work
+- Windows helper mode should wrap and reuse the current Wintun path rather than
+  abstracting over multiple Windows drivers.
+- Helper IPC, elevation, and Admin/runtime parity are now the real Windows
+  design gaps; backend multiplicity is not.
+- The convenience download flow should target Wintun release layout directly,
+  because that is already the runtime's documented and tested DLL shape.
+
+## Windows — helper IPC and elevation plan
+
+Summary
+- Windows helper mode should reuse the existing Wintun inline runtime path,
+  but move adapter ownership and optional helper-owned network mutations behind
+  the same helper protocol shape already used on Linux/macOS.
+- The current Windows privilege path elevates the whole runtime through UAC.
+  The helper design should reduce that to helper-only elevation first, without
+  introducing a mandatory Windows service in the first implementation slice.
+
+Current repo anchors
+- `src/obstacle_bridge/bridge_runner.py` already contains the Windows UAC
+  relaunch path. It re-executes `python -m obstacle_bridge.bridge_runner` via
+  `ShellExecuteW(..., "runas", ...)`, sets
+  `OBSTACLEBRIDGE_WINDOWS_TUN_ELEVATED=1`, and preserves `WINTUN_DIR` into the
+  elevated process.
+- `src/obstacle_bridge/bridge_tun_helper_server.py` currently starts only a
+  Unix-domain-socket helper server via `asyncio.start_unix_server(...)` and
+  only registers Linux and Darwin backends in `_backend_from_name(...)`.
+- `src/obstacle_bridge/bridge_tun_windows.py` already exposes the Wintun open,
+  read, write, and close semantics that the future Windows helper backend
+  should wrap rather than duplicate.
+
+Proposed first Windows helper launch model
+1. Keep the main `python -m obstacle_bridge` runtime unprivileged.
+2. When `tun_execution.mode=helper` selects a Windows backend and privilege is
+   needed, `Runner` launches only the helper entrypoint with UAC elevation.
+3. The elevated helper process receives a compact launch config, just as the
+   Linux/macOS helper path already does, including backend name, auth token,
+   and any helper log level.
+4. The helper process opens the Wintun adapter, serves helper protocol
+   requests, and optionally owns helper-side network apply/remove work.
+5. `ChannelMux` continues to treat the helper as a packet/control transport and
+   does not gain Windows-specific routing or driver logic.
+
+IPC plan
+- Primary transport: Windows Named Pipes.
+- Rationale: it is the Windows-native local privileged IPC mechanism, works
+  well with service or elevated-subprocess models later, and fits the existing
+  framed helper protocol without needing packet-shape changes.
+- Security model: use a pipe ACL/SDDL that limits access to the launching user
+  and elevated helper context, plus the existing helper session token.
+- Protocol model: preserve the current helper frame kinds and command set
+  (`HELLO`, `OPEN_TUN`, `APPLY_NETWORK`, `REMOVE_NETWORK`, `SNAPSHOT`,
+  `STOP`, and packet frames) so Windows adds a transport/backend pair rather
+  than forking helper semantics.
+
+Backend plan
+- Add a Windows helper backend class that reuses the logic in
+  `src/obstacle_bridge/bridge_tun_windows.py` for:
+  - Wintun DLL discovery
+  - optional wrapper import fallback order
+  - adapter/session creation
+  - packet read/write loops
+  - adapter/session shutdown
+- The helper backend should expose the same snapshot/counter concepts as the
+  Linux and Darwin helper backends so Admin/runtime status remains aligned.
+
+Current progress
+- `src/obstacle_bridge/bridge_tun_helper_windows.py` now implements the first
+  Windows helper backend slice. That backend now owns Windows-side TUN network
+  apply/remove for interface addresses, included routes, excluded underlay
+  bypass routes, and DNS server assignment, with rollback + failure snapshots
+  on partial apply errors.
+- `src/obstacle_bridge/bridge_tun_helper_server.py` now recognizes
+  `windows-native` in `_backend_from_name(...)` and no longer imports the
+  Darwin backend eagerly at module import time, which keeps the helper server
+  importable on Windows.
+- `src/obstacle_bridge/bridge_tun_helper_client.py` and
+  `src/obstacle_bridge/bridge_tun_helper_server.py` now route local transport
+  startup through explicit wrapper functions instead of embedding direct
+  `asyncio.open_unix_connection(...)` / `asyncio.start_unix_server(...)`
+  calls at every use site. That seam is now used by a first Windows Named Pipe
+  implementation built on stdlib `multiprocessing.connection` (`AF_PIPE`), so
+  the existing framed helper protocol can now perform real Windows local
+  client/server round-trips without changing helper message semantics.
+- `src/obstacle_bridge/bridge_tun_helper_settings.py` now treats
+  `windows-native` as the only Windows helper backend candidate, returns a
+  Named-Pipe-style default helper endpoint on Windows, and separates helper
+  launch metadata storage from the transport endpoint so the runner no longer
+  assumes that every helper endpoint is also a filesystem path.
+- `src/obstacle_bridge/bridge_runner.py` now derives helper launch-config and
+  stale-reaping directories from that runtime-dir abstraction instead of from
+  the helper endpoint string directly.
+- `src/obstacle_bridge/bridge_runner.py` now also probes Windows Named Pipe
+  endpoints for helper readiness instead of waiting for a filesystem socket
+  path that never appears on Windows.
+- `src/obstacle_bridge/bridge_runner.py` now launches the `windows-native`
+  helper backend through the existing Windows PowerShell + `ShellExecuteW`
+  elevation path instead of relaunching the whole runtime. The elevated helper
+  launch preserves `WINTUN_DIR`, passes the compact helper launch config, and
+  keeps the unprivileged runtime connected over the helper transport.
+- `src/obstacle_bridge/bridge_runner.py` stale-helper reaping is now pipe-aware
+  on Windows: `\\.\pipe\...` helper endpoints are treated as live candidates
+  that should be probed through `TunHelperClient`, instead of being discarded
+  immediately by filesystem existence checks.
+- Focused unit coverage now exists in
+  `tests/unit/test_tun_helper_windows_backend.py`, and backend-factory coverage
+  includes `windows-native` in `tests/unit/test_tun_helper_server_entrypoint.py`.
+  Windows backend tests now cover helper-owned address/route/DNS apply-remove,
+  rollback on DNS failure, and interface-resolution failure recording.
+- Focused transport-wrapper coverage now exists in
+  `tests/unit/test_tun_helper_transport_windows.py`; that coverage now includes
+  a real Windows Named Pipe round-trip using `TunHelperServer` and
+  `TunHelperClient`, and the nearby helper tests now choose a Windows pipe
+  endpoint on Windows instead of assuming Unix socket paths.
+- Focused settings/runtime-dir coverage now also exists in
+  `tests/unit/test_tun_helper_settings.py` and `tests/unit/test_runner_tun_helper.py`
+  for the `windows-native` backend gate, Named Pipe endpoint naming, and the
+  separate helper runtime directory used for launch metadata.
+- Focused Windows helper-launch coverage now also exists in
+  `tests/unit/test_runner_tun_helper.py` and `tests/unit/test_runner_events.py`
+  for helper-only Windows UAC launch wiring, launch-config payload contents,
+  and reuse of the existing PowerShell-encoded elevation path.
+- Focused Windows stale-helper reaping coverage now also exists in
+  `tests/unit/test_runner_tun_helper.py` for pipe-style helper endpoints and
+  the runner's pipe-aware endpoint-candidate check.
+- A first elevated Windows helper-mode integration lane now exists in
+  `tests/integration/test_windows_elevated.py`. One lane brings up
+  `tun_execution.mode=helper` with `--tun-helper-backend windows-native`,
+  waits for helper runtime state through `/api/status`, verifies helper-owned
+  IPv4 address + route application without out-of-band PowerShell route setup,
+  and checks helper packet counters after a TUN-carried UDP datagram. A
+  second lane kills the live helper process on the elevated path and verifies
+  that runtime status preserves the cached helper snapshot, flips helper
+  connectivity state, and raises the stale-network manual-cleanup warning when
+  helper-owned Windows route/address state may remain after helper loss. A
+  third elevated lane now posts `/api/tun-helper/repair` after helper death
+  and proves that runner-driven Windows-native repair clears the warning, drops
+  the cached helper-owned IPv4 address + included route + DNS servers from
+  runtime status, and removes that route/address/DNS state from the real
+  WinTun adapter on the host.
+- Windows helper-owned network lifecycle now also includes a first firewall
+  ownership slice keyed off `listener_hook_env.WAN_IF`: the
+  `windows-native` backend creates per-family inbound/outbound Windows
+  Defender Firewall rules scoped to the helper-owned tunnel subnet, tracks
+  them in the runtime snapshot, removes them during normal teardown, and
+  includes them in dead-helper repair plus post-repair verification. Focused
+  unit coverage in `tests/unit/test_tun_helper_windows_backend.py` now proves
+  apply/remove rule ownership and cached-snapshot firewall cleanup/verification
+  alongside the existing route/address/DNS behavior.
+- Windows warning-only recovery is no longer the whole story: the runner can
+  now replay Windows helper-owned route/address/DNS/firewall cleanup from the cached
+  dead-helper runtime snapshot through `request_tun_helper_repair()`, using
+  `WindowsTunHelperBackend.repair_runtime_snapshot(...)` plus a focused
+  PowerShell-backed verification pass to distinguish stale state that was
+  cleared from state that may still remain. Focused unit coverage now exists in
+  `tests/unit/test_tun_helper_windows_backend.py` and
+  `tests/unit/test_runner_tun_helper.py` for that Windows-native repair path.
+- Current limitation is narrower now: Windows helper transport exists, but
+  first real elevated Windows execution still exposes one remaining live helper
+  bring-up gap. The runtime now survives helper launch, helper-only UAC, Named
+  Pipe readiness, `OPENv5` framing, and portable helper-path snapshotting on
+  Windows, but the `windows-native` helper can still reach `OPEN_TUN` without
+  consistently driving the subsequent live `APPLY_NETWORK` step on a real
+  elevated WinTun adapter. Helper-owned route/address/DNS/firewall cleanup and
+  repair logic remain unit-covered, while the live elevated helper lanes stay
+  blocked on that post-open apply sequencing issue.
+- Current limitation is otherwise narrower now: Windows helper transport exists, but
+  the elevated helper subprocess is not observable through a native child
+  handle yet, Windows stale-helper recovery still depends on launch-config
+  probing rather than process enumeration, and higher-fidelity route policy
+  parity is still missing.
+
+Elevation plan
+- First implementation target: helper-only elevated subprocess.
+- Reuse the current Windows ShellExecute/UAC machinery conceptually, but scope
+  it to the helper module launch rather than the whole runtime relaunch.
+- Preserve `WINTUN_DIR` and any future local `.wintun` convenience-download
+  path into the helper environment so the elevated helper resolves the same DLL
+  selection as the unelevated parent intended.
+- Defer a dedicated Windows service until a concrete operational reason exists
+  such as persistence, service-manager recovery, or packaging policy.
+
+Acceptance criteria for this design step
+- The design explicitly chooses Named Pipes as the first Windows helper IPC
+  transport.
+- The design explicitly chooses helper-only UAC elevation as the first Windows
+  privilege model.
+- The design explicitly reuses `bridge_tun_windows.py` as the helper backend's
+  Wintun implementation seam.
+- The design records that the current Windows helper gaps are transport,
+  backend registration, and helper launch wiring rather than missing Windows
+  TUN packet I/O.
+
+### Wintun convenience download (proposal)
+
+Problem statement
+- The repo currently documents a direct ctypes path to `wintun.dll` and
+  supports a working inline Windows runtime, but still expects the user to
+  obtain the Wintun package manually. That is workable for maintainers but
+  burdensome for new users and testers.
+
+Proposal
+- When `WINTUN_DIR` is not set and a usable `wintun.dll` cannot be found via
+  the normal autodetect paths, the runtime should offer to download a
+  Wintun release archive from https://www.wintun.net/, extract the suitable
+  `wintun.dll` for the running Python architecture, and place it under a
+  project-local, git-ignored folder such as `.wintun/bin/<arch>/wintun.dll`.
+
+Behavioral details
+- Detection: on Windows startup only, attempt normal autodetect. If no DLL
+  found and running in an interactive session, prompt the user to accept an
+  automated download. The prompt should explain the need for driver install and
+  that the runtime will not auto-install the driver (admin actions still
+  required for driver install or device creation).
+- Download source: identify the best-release archive URL from `https://www.wintun.net/`
+  (or the official release mirror documented there). Prefer the latest stable
+  release and download only the small binary archive containing `bin\<arch>\wintun.dll`.
+- Extraction: create `.wintun/` under the project working directory (or
+  another configurable but git-ignored path), extract `wintun.dll` into
+  `.wintun/bin/amd64/wintun.dll` (or `x86` when running 32-bit Python).
+- Security: show the remote URL to the user before download. If the release
+  page lists checksums or signatures, attempt to verify; otherwise advise the
+  user to verify manually. Provide an opt-out env var `OB_NO_WINTUN_AUTO
+  = 1` to suppress automatic download attempts for air-gapped or security
+  conscious environments.
+- Ownership and gitignore: add `.wintun/` to the project's `.gitignore` (or
+  document the recommended entry) so extracted binaries are not committed.
+- CLI-only mode / non-interactive: when running non-interactively or when the
+  env var opt-out is set, skip the download and surface a clear error that
+  instructs how to obtain Wintun manually or enable the automatic download.
+
+Implementation notes
+- The download/verification code belongs in the Windows runtime startup path
+  (near the existing Wintun autodetect code). Keep the extraction code simple
+  and deterministic; avoid unpacking arbitrary archives into the repo root.
+- Prefer the built-in `zipfile` module to extract the minimal files, or use
+  `requests` and `shutil` to stream-and-extract safely.
+- Record the extracted release version and source URL in a small
+  `.wintun/README` or metadata file for auditability.
+
+Acceptance criteria
+- The runtime auto-downloads the appropriate `wintun.dll` when `WINTUN_DIR`
+  is not set and the user accepts the prompt (or `OB_ENABLE_WINTUN_AUTO=1`
+  is set non-interactively).
+- The extracted DLL is placed under `.wintun/bin/<arch>/wintun.dll` and the
+  folder is added to `.gitignore` (or documented if repo maintainers prefer
+  not to edit `.gitignore` automatically).
+- The code exposes the opt-out env var and documents the manual-install
+  alternative in `README.md` and `docs/TUN_HELPER_DESIGN.md`.
+- A short integration smoke test demonstrates `scripts/wintun_example.py`
+  running successfully when the DLL was auto-downloaded.
+
+Notes
+- This convenience flow is intended to simplify developer and tester setup;
+  it does not replace the need for an administrator to install or approve
+  driver packages for production deployments. The helper/service design and
+  installer tasks remain the authoritative production path for driver/service
+  installation and signing.
+

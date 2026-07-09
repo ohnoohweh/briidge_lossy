@@ -3,7 +3,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import sys
 from typing import Any, Optional
+
+from .bridge_tun_helper_local_transport import (
+    is_local_tcp_endpoint,
+    is_windows_pipe_path,
+    open_local_tcp_connection,
+    open_windows_pipe_connection,
+)
 
 from .bridge_tun_helper_protocol import (
     TunHelperControlMessage,
@@ -13,6 +21,21 @@ from .bridge_tun_helper_protocol import (
     encode_frame,
     try_decode_frame,
 )
+
+
+async def _open_local_helper_connection(socket_path: str) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    if is_local_tcp_endpoint(socket_path):
+        return await open_local_tcp_connection(socket_path)
+    if sys.platform == "win32" and is_windows_pipe_path(socket_path):
+        return await open_windows_pipe_connection(socket_path)
+    opener = getattr(asyncio, "open_unix_connection", None)
+    if callable(opener):
+        return await opener(socket_path)
+    if sys.platform == "win32":
+        raise RuntimeError(
+            "Windows helper transport is not implemented yet: current helper client supports only Unix-domain sockets."
+        )
+    raise RuntimeError("Local helper client transport is unavailable on this platform.")
 
 
 class TunHelperClient:
@@ -42,7 +65,7 @@ class TunHelperClient:
     async def connect(self) -> None:
         if self._reader is not None and self._writer is not None:
             return
-        self._reader, self._writer = await asyncio.open_unix_connection(self._socket_path)
+        self._reader, self._writer = await _open_local_helper_connection(self._socket_path)
         self._reader_task = asyncio.create_task(self._read_loop())
         hello = await self.request("HELLO", {"token": self._session_token})
         if hello.op != "HELLO_OK":
@@ -71,21 +94,28 @@ class TunHelperClient:
             raise ConnectionError("TUN helper client is not connected")
         async with self._request_lock:
             self._raise_if_read_failed()
+            self._log.info("[TUN/HELPER/CLIENT] request start op=%s payload_keys=%s", op, sorted((payload or {}).keys()))
             self._writer.write(
                 encode_control_frame(
                     TunHelperFrameKind.CONTROL_REQUEST,
                     TunHelperControlMessage(op=str(op), payload=payload or {}),
                 )
             )
+            self._log.info("[TUN/HELPER/CLIENT] request drain start op=%s", op)
             await self._writer.drain()
+            self._log.info("[TUN/HELPER/CLIENT] request drain done op=%s", op)
             try:
                 message = await asyncio.wait_for(
                     self._response_queue.get(),
                     timeout=self._response_timeout_s,
                 )
+            except asyncio.CancelledError:
+                self._log.warning("[TUN/HELPER/CLIENT] request cancelled op=%s", op)
+                raise
             except asyncio.TimeoutError as exc:
                 self._raise_if_read_failed()
                 raise ConnectionError(f"TUN helper request timed out waiting for response to {op}") from exc
+            self._log.info("[TUN/HELPER/CLIENT] request response op=%s reply=%s", op, message.op)
             if message.op == "ERROR":
                 raise RuntimeError(str((message.payload or {}).get("detail") or "helper request failed"))
             return message

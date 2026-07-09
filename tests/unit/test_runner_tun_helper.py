@@ -107,8 +107,73 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch.object(bridge_runner.sys, "platform", "win32"), \
              mock.patch.object(bridge_runner.Runner, "build_sessions_from_overlay", return_value=[]):
-            with self.assertRaisesRegex(RuntimeError, "currently supported only on Linux and macOS"):
+            with self.assertRaisesRegex(RuntimeError, "supported on Linux/macOS, and on Windows only for the windows-native backend"):
                 await runner.start()
+
+    async def test_runner_allows_windows_native_helper_mode_past_platform_gate(self):
+        args = self._helper_args()
+        args.tun_helper_backend = "windows-native"
+        runner = Runner(args)
+
+        async def _fake_launch() -> object:
+            return mock.Mock(returncode=None, pid=12345)
+
+        with mock.patch.object(bridge_runner.sys, "platform", "win32"), \
+             mock.patch.object(bridge_runner.Runner, "build_sessions_from_overlay", return_value=[]), \
+             mock.patch.object(bridge_runner.Runner, "_launch_tun_helper_process", side_effect=_fake_launch), \
+             mock.patch.object(bridge_runner.Runner, "_stop_tun_helper_process", new=mock.AsyncMock()), \
+             mock.patch.object(bridge_runner.Runner, "_reap_stale_tun_helper_processes", new=mock.AsyncMock()), \
+             mock.patch.object(
+                 bridge_runner.Runner,
+                 "_wait_for_tun_helper_socket_ready",
+                 new=mock.AsyncMock(side_effect=RuntimeError("expected helper readiness failure")),
+             ):
+            with self.assertRaisesRegex(RuntimeError, "expected helper readiness failure"):
+                await runner.start()
+
+    def test_windows_native_helper_uses_longer_control_timeout(self):
+        args = self._helper_args()
+        args.tun_helper_backend = "windows-native"
+        runner = Runner(args)
+
+        with mock.patch.object(bridge_runner.sys, "platform", "win32"):
+            self.assertEqual(runner._tun_helper_response_timeout_s(), 20.0)
+
+    async def test_launch_tun_helper_process_uses_shell_execute_for_windows_native_backend_when_not_admin(self):
+        args = self._helper_args()
+        args.tun_helper_backend = "windows-native"
+        runner = Runner(args)
+        runner._tun_helper_socket_path = r"\\.\pipe\obstaclebridge-helper-test"
+        runner._tun_helper_session_token = "secret-token"
+
+        shell32 = mock.Mock()
+        shell32.ShellExecuteW.return_value = 42
+
+        with mock.patch.dict(bridge_runner.os.environ, {"WINTUN_DIR": r"C:\Users\me\wintun\bin\amd64"}, clear=False), \
+             mock.patch.object(bridge_runner.sys, "platform", "win32"), \
+             mock.patch.object(bridge_runner, "_is_windows_admin", return_value=False), \
+             mock.patch.object(bridge_runner.ctypes, "windll", mock.Mock(shell32=shell32), create=True), \
+             mock.patch.object(bridge_runner.asyncio, "create_subprocess_exec", new=mock.AsyncMock()) as create_exec:
+            proc = await runner._launch_tun_helper_process()
+
+        self.assertEqual(proc.returncode, None)
+        self.assertEqual(proc.pid, 0)
+        create_exec.assert_not_awaited()
+        shell32.ShellExecuteW.assert_called_once()
+        self.assertEqual(shell32.ShellExecuteW.call_args.args[1], "runas")
+        self.assertEqual(shell32.ShellExecuteW.call_args.args[2], "powershell.exe")
+        encoded = shell32.ShellExecuteW.call_args.args[3].split()[-1]
+        script = bridge_runner.base64.b64decode(encoded).decode("utf-16le")
+        self.assertIn("$env:OBSTACLEBRIDGE_WINDOWS_TUN_HELPER_ELEVATED = '1'", script)
+        self.assertIn("$env:WINTUN_DIR = 'C:\\Users\\me\\wintun\\bin\\amd64'", script)
+        self.assertIn("$env:PYTHONPATH = ", script)
+        self.assertIn("obstacle_bridge.bridge_tun_helper_server", script)
+        with open(runner._tun_helper_config_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        self.assertEqual(payload["backend"], "windows-native")
+        self.assertEqual(payload["socket_path"], r"\\.\pipe\obstaclebridge-helper-test")
+        self.assertEqual(payload["session_token"], "secret-token")
+        runner._cleanup_tun_helper_launch_config()
 
     async def test_launch_tun_helper_process_uses_sudo_for_native_backend_when_unprivileged(self):
         args = self._helper_args()
@@ -119,7 +184,7 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
 
         fake_proc = mock.Mock()
         with mock.patch.object(bridge_runner.sys, "platform", "linux"), \
-             mock.patch.object(bridge_runner.os, "geteuid", return_value=1000), \
+               mock.patch.object(bridge_runner.os, "geteuid", return_value=1000, create=True), \
              mock.patch.object(bridge_runner, "_linux_native_tun_helper_can_launch_without_sudo", return_value=False), \
              mock.patch.object(bridge_runner.shutil, "which", return_value="/usr/bin/sudo"), \
              mock.patch.object(bridge_runner.asyncio, "create_subprocess_exec", new=mock.AsyncMock(return_value=fake_proc)) as create_exec:
@@ -149,7 +214,7 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
 
         fake_proc = mock.Mock()
         with mock.patch.object(bridge_runner.sys, "platform", "linux"), \
-             mock.patch.object(bridge_runner.os, "geteuid", return_value=1000), \
+               mock.patch.object(bridge_runner.os, "geteuid", return_value=1000, create=True), \
              mock.patch.object(bridge_runner, "_linux_native_tun_helper_can_launch_without_sudo", return_value=True), \
              mock.patch.object(bridge_runner.asyncio, "create_subprocess_exec", new=mock.AsyncMock(return_value=fake_proc)) as create_exec:
             proc = await runner._launch_tun_helper_process()
@@ -170,7 +235,7 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
 
         fake_proc = mock.Mock()
         with mock.patch.object(bridge_runner.sys, "platform", "darwin"), \
-             mock.patch.object(bridge_runner.os, "geteuid", return_value=501), \
+               mock.patch.object(bridge_runner.os, "geteuid", return_value=501, create=True), \
              mock.patch.object(bridge_runner.shutil, "which", return_value="/usr/bin/sudo"), \
              mock.patch.object(bridge_runner.asyncio, "create_subprocess_exec", new=mock.AsyncMock(return_value=fake_proc)) as create_exec:
             proc = await runner._launch_tun_helper_process()
@@ -318,6 +383,57 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(_FakeReaperClient.instances[0].calls, [("STOP", {})])
         self.assertFalse(os.path.exists(stale_config))
 
+    async def test_runner_reaps_stale_windows_pipe_helper_with_no_other_authenticated_clients(self):
+        args = self._helper_args()
+        args.tun_helper_backend = "windows-native"
+        runner = Runner(args)
+
+        runtime_dir = tempfile.mkdtemp(prefix="obstaclebridge-reaper-win-")
+        self.addCleanup(lambda: shutil.rmtree(runtime_dir, ignore_errors=True))
+        planned_socket = r"\\.\pipe\obstaclebridge-planned"
+        stale_socket = r"\\.\pipe\obstaclebridge-stale"
+        stale_config = os.path.join(runtime_dir, "tun-helper-launch-stale.json")
+        with open(stale_config, "w", encoding="utf-8") as handle:
+            json.dump({"socket_path": stale_socket, "session_token": "stale-token"}, handle)
+
+        class _FakeReaperClient:
+            instances: list["_FakeReaperClient"] = []
+
+            def __init__(self, *, socket_path: str, session_token: str, response_timeout_s: float = 1.0, logger=None) -> None:
+                self.socket_path = socket_path
+                self.session_token = session_token
+                self.response_timeout_s = response_timeout_s
+                self.logger = logger
+                self.calls: list[tuple[str, dict]] = []
+                _FakeReaperClient.instances.append(self)
+
+            async def connect(self) -> None:
+                return None
+
+            async def snapshot(self) -> dict:
+                return {"active_authenticated_clients": 1}
+
+            async def request(self, op: str, payload: dict | None = None):
+                self.calls.append((op, dict(payload or {})))
+                return mock.Mock(op="STOP_OK", payload={"stopping": True})
+
+            async def close(self) -> None:
+                return None
+
+        with mock.patch.object(type(runner._tun_helper_settings), "resolved_runtime_dir", return_value=runtime_dir), \
+             mock.patch.object(bridge_runner, "TunHelperClient", _FakeReaperClient):
+            await runner._reap_stale_tun_helper_processes(planned_socket)
+
+        self.assertEqual(len(_FakeReaperClient.instances), 1)
+        self.assertEqual(_FakeReaperClient.instances[0].socket_path, stale_socket)
+        self.assertEqual(_FakeReaperClient.instances[0].calls, [("STOP", {})])
+        self.assertFalse(os.path.exists(stale_config))
+
+    def test_helper_endpoint_candidate_exists_accepts_windows_pipe_without_filesystem_entry(self):
+        self.assertTrue(bridge_runner.Runner._helper_endpoint_candidate_exists(r"\\.\pipe\obstaclebridge-test"))
+        self.assertTrue(bridge_runner.Runner._helper_endpoint_candidate_exists("tcp://127.0.0.1:42310"))
+        self.assertFalse(bridge_runner.Runner._helper_endpoint_candidate_exists(""))
+
     def test_runner_status_reports_helper_recovery_warning_when_cached_runtime_may_need_cleanup(self):
         args = self._helper_args()
         args.tun_helper_backend = "linux-native"
@@ -455,6 +571,62 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(last_repair["verified_state"], "stale_state_may_remain")
         self.assertEqual(last_repair["verification"]["remaining"][0]["step"], "ipv4_addr")
         self.assertIn("may still remain", last_repair["summary"].lower())
+
+    def test_runner_request_tun_helper_repair_uses_windows_native_snapshot_cleanup(self):
+        args = self._helper_args()
+        args.tun_helper_backend = "windows-native"
+        runner = Runner(args)
+        runner._tun_helper_last_error = "TUN helper connection closed"
+        runner._tun_helper_runtime_snapshot = {
+            "backend": "windows-native",
+            "ifname": "obtunw0",
+            "ifindex": 55,
+            "network_applied": True,
+            "applied_ipv4_cidr": "198.18.40.1/24",
+            "applied_ipv4_routes": ["198.18.41.0/24"],
+        }
+        runner._tun_helper_process = mock.Mock(pid=1234, returncode=92)
+        runner._tun_helper_client = None
+
+        with mock.patch.object(
+            bridge_runner.WindowsTunHelperBackend,
+            "repair_runtime_snapshot",
+            return_value={
+                "ok": True,
+                "repaired": ["included_routes", "ipv4_addr"],
+                "failed": [],
+                "runtime": {"backend": "windows-native", "ifname": "obtunw0", "ifindex": 55, "network_applied": False, "applied_ipv4_routes": []},
+            },
+        ) as repair_runtime_snapshot, \
+             mock.patch.object(
+                 bridge_runner.WindowsTunHelperBackend,
+                 "verify_runtime_snapshot_repaired",
+                 return_value={
+                     "ok": True,
+                     "checked": ["included_routes", "ipv4_addr"],
+                     "remaining": [],
+                     "skipped": [],
+                     "stale_state_remaining": False,
+                     "summary": "Post-repair verification did not find remaining helper-owned host state.",
+                 },
+             ) as verify_runtime_snapshot_repaired:
+            result = runner.request_tun_helper_repair()
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["cleanup_ok"])
+        self.assertEqual(result["repaired"], ["included_routes", "ipv4_addr"])
+        repair_runtime_snapshot.assert_called_once()
+        verify_runtime_snapshot_repaired.assert_called_once()
+        self.assertEqual(runner._tun_helper_runtime_snapshot["ifname"], "obtunw0")
+        self.assertEqual(runner._tun_helper_runtime_snapshot["backend"], "windows-native")
+        helper_status = runner._tun_helper_snapshot()
+        self.assertFalse(helper_status.get("recovery"))
+        last_repair = dict(helper_status.get("last_repair") or {})
+        self.assertTrue(last_repair["attempted"])
+        self.assertTrue(last_repair["ok"])
+        self.assertTrue(last_repair["cleanup_ok"])
+        self.assertFalse(last_repair["stale_state_remaining"])
+        self.assertEqual(last_repair["verified_state"], "stale_state_cleared")
 
     async def test_runner_stop_keeps_helper_available_until_mux_stop_finishes(self):
         args = self._helper_args()

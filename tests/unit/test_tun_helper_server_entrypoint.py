@@ -4,12 +4,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import tempfile
 import unittest
+import uuid
 from unittest import mock
 
 from obstacle_bridge.bridge_tun_helper_client import TunHelperClient
-from obstacle_bridge.bridge_tun_helper_macos import DarwinTunHelperBackend
+from obstacle_bridge.bridge_tun_helper_windows import WindowsTunHelperBackend
 from obstacle_bridge.bridge_tun_helper_server import (
     TunHelperServer,
     _backend_from_name,
@@ -17,6 +19,12 @@ from obstacle_bridge.bridge_tun_helper_server import (
     build_arg_parser,
     run_helper_server,
 )
+
+
+def _test_helper_endpoint(tmp_dir: str) -> str:
+    if sys.platform == "win32":
+        return f"\\\\.\\pipe\\obstaclebridge-test-{uuid.uuid4().hex}"
+    return os.path.join(tmp_dir, "tun-helper.sock")
 
 
 class TunHelperServerEntrypointTests(unittest.IsolatedAsyncioTestCase):
@@ -67,9 +75,16 @@ class TunHelperServerEntrypointTests(unittest.IsolatedAsyncioTestCase):
             _backend_from_name("mystery-backend")
 
     def test_backend_factory_accepts_darwin_native_backend(self) -> None:
-        self.assertIsInstance(_backend_from_name("darwin-native"), DarwinTunHelperBackend)
+        if not sys.platform.startswith("darwin"):
+            self.skipTest("darwin-native backend import is validated on macOS hosts")
+        self.assertEqual(_backend_from_name("darwin-native").__class__.__name__, "DarwinTunHelperBackend")
+
+    def test_backend_factory_accepts_windows_native_backend(self) -> None:
+        self.assertIsInstance(_backend_from_name("windows-native"), WindowsTunHelperBackend)
 
     async def test_server_start_chowns_socket_back_to_invoking_user_when_sudo_env_is_present(self) -> None:
+        if sys.platform == "win32":
+            self.skipTest("Unix-socket helper permission test is not applicable on Windows")
         with tempfile.TemporaryDirectory() as tmp:
             socket_path = os.path.join(tmp, "tun-helper.sock")
 
@@ -91,8 +106,8 @@ class TunHelperServerEntrypointTests(unittest.IsolatedAsyncioTestCase):
             server = TunHelperServer(backend=backend, session_token="secret")
 
             with mock.patch.dict(os.environ, {"SUDO_UID": "1000", "SUDO_GID": "1001"}, clear=False), \
-                 mock.patch("obstacle_bridge.bridge_tun_helper_server.asyncio.start_unix_server", side_effect=_fake_start_unix_server), \
-                 mock.patch("obstacle_bridge.bridge_tun_helper_server.os.chown") as chown, \
+                  mock.patch("obstacle_bridge.bridge_tun_helper_server._start_local_helper_server", side_effect=_fake_start_unix_server), \
+                  mock.patch("obstacle_bridge.bridge_tun_helper_server.os.chown", create=True) as chown, \
                  mock.patch("obstacle_bridge.bridge_tun_helper_server.os.chmod") as chmod:
                 await server.start(socket_path)
                 await server.stop()
@@ -102,7 +117,7 @@ class TunHelperServerEntrypointTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_helper_server_starts_socket_and_serves_client(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            socket_path = os.path.join(tmp, "tun-helper.sock")
+            socket_path = _test_helper_endpoint(tmp)
             stop_event = asyncio.Event()
             task = asyncio.create_task(
                 run_helper_server(
@@ -114,11 +129,14 @@ class TunHelperServerEntrypointTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
             try:
-                for _ in range(50):
-                    if os.path.exists(socket_path):
-                        break
-                    await asyncio.sleep(0.01)
-                self.assertTrue(os.path.exists(socket_path))
+                if not socket_path.startswith("\\\\.\\pipe\\"):
+                    for _ in range(50):
+                        if os.path.exists(socket_path):
+                            break
+                        await asyncio.sleep(0.01)
+                    self.assertTrue(os.path.exists(socket_path))
+                else:
+                    await asyncio.sleep(0.05)
 
                 client = TunHelperClient(socket_path=socket_path, session_token="secret")
                 await client.connect()
@@ -137,7 +155,8 @@ class TunHelperServerEntrypointTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 stop_event.set()
                 await asyncio.wait_for(task, timeout=1.0)
-                self.assertFalse(os.path.exists(socket_path))
+                if not socket_path.startswith("\\\\.\\pipe\\"):
+                    self.assertFalse(os.path.exists(socket_path))
 
 
 if __name__ == "__main__":

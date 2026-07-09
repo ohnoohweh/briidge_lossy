@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
 import asyncio
 import os
+import sys
 import tempfile
 import unittest
+import uuid
 
 from obstacle_bridge.bridge_tun_helper_client import TunHelperClient
 from obstacle_bridge.bridge_tun_helper_server import TunHelperServer
+
+
+def _test_helper_endpoint(tmp_dir: str) -> str:
+    if sys.platform == "win32":
+        return f"\\\\.\\pipe\\obstaclebridge-test-{uuid.uuid4().hex}"
+    return os.path.join(tmp_dir, "tun-helper.sock")
 
 
 class _FakeHelperBackend:
@@ -71,7 +79,7 @@ class _FakeHelperBackend:
 class TunHelperClientServerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.socket_path = os.path.join(self._tmp.name, "tun-helper.sock")
+        self.socket_path = _test_helper_endpoint(self._tmp.name)
         self.backend = _FakeHelperBackend()
         self.server = TunHelperServer(backend=self.backend, session_token="secret")
         await self.server.start(self.socket_path)
@@ -189,7 +197,8 @@ class TunHelperClientServerTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.5)
 
         self.assertTrue(self.backend.stopped)
-        self.assertFalse(os.path.exists(self.socket_path))
+        if not self.socket_path.startswith("\\\\.\\pipe\\"):
+            self.assertFalse(os.path.exists(self.socket_path))
 
 
 if __name__ == "__main__":

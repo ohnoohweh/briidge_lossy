@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import signal
+import sys
 import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional, Protocol
@@ -21,8 +22,29 @@ from .bridge_tun_helper_protocol import (
     try_decode_frame,
 )
 from .bridge_tun_helper_linux import LinuxTunHelperBackend, LinuxTunHelperInMemoryBackend
-from .bridge_tun_helper_macos import DarwinTunHelperBackend
+from .bridge_tun_helper_local_transport import (
+    is_local_tcp_endpoint,
+    is_windows_pipe_path,
+    start_local_tcp_server,
+    start_windows_pipe_server,
+)
+from .bridge_tun_helper_windows import WindowsTunHelperBackend
 from .bridge_tun_helper_settings import DEFAULT_TUN_HELPER_BACKEND
+
+
+async def _start_local_helper_server(handler: Callable[[asyncio.StreamReader, asyncio.StreamWriter], Awaitable[None]], socket_path: str) -> asyncio.AbstractServer:
+    if is_local_tcp_endpoint(socket_path):
+        return await start_local_tcp_server(handler, socket_path)
+    if sys.platform == "win32" and is_windows_pipe_path(socket_path):
+        return await start_windows_pipe_server(handler, socket_path)
+    starter = getattr(asyncio, "start_unix_server", None)
+    if callable(starter):
+        return await starter(handler, path=socket_path)
+    if sys.platform == "win32":
+        raise RuntimeError(
+            "Windows helper transport is not implemented yet: current helper server supports only Unix-domain sockets."
+        )
+    raise RuntimeError("Local helper server transport is unavailable on this platform.")
 
 
 class TunHelperBackend(Protocol):
@@ -63,6 +85,7 @@ class TunHelperServer:
         self._socket_path = ""
         self._active_writers: set[asyncio.StreamWriter] = set()
         self._authenticated_writers: set[asyncio.StreamWriter] = set()
+        self._writer_locks: dict[asyncio.StreamWriter, asyncio.Lock] = {}
         self._closed = False
         self._watchdog_task: Optional[asyncio.Task] = None
         self._last_authenticated_client_at = time.monotonic()
@@ -99,6 +122,8 @@ class TunHelperServer:
     def _apply_socket_permissions(self) -> None:
         if not self._socket_path:
             return
+        if is_windows_pipe_path(self._socket_path) or is_local_tcp_endpoint(self._socket_path):
+            return
         uid, gid = self._socket_owner_ids()
         if uid is not None or gid is not None:
             with contextlib.suppress(Exception):
@@ -111,12 +136,13 @@ class TunHelperServer:
         if self._server is not None:
             return
         self._socket_path = str(socket_path or "")
-        parent = os.path.dirname(self._socket_path)
-        if parent:
-            os.makedirs(parent, mode=0o700, exist_ok=True)
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(self._socket_path)
-        self._server = await asyncio.start_unix_server(self._handle_client, path=self._socket_path)
+        if not is_windows_pipe_path(self._socket_path) and not is_local_tcp_endpoint(self._socket_path):
+            parent = os.path.dirname(self._socket_path)
+            if parent:
+                os.makedirs(parent, mode=0o700, exist_ok=True)
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(self._socket_path)
+        self._server = await _start_local_helper_server(self._handle_client, self._socket_path)
         self._apply_socket_permissions()
         if self._watchdog_task is None:
             self._watchdog_task = asyncio.create_task(self._authenticated_client_watchdog())
@@ -139,7 +165,7 @@ class TunHelperServer:
             await self._close_writer(writer)
         self._active_writers.clear()
         await self._backend.stop()
-        if self._socket_path:
+        if self._socket_path and not is_windows_pipe_path(self._socket_path) and not is_local_tcp_endpoint(self._socket_path):
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(self._socket_path)
 
@@ -170,18 +196,26 @@ class TunHelperServer:
         dead: list[asyncio.StreamWriter] = []
         for writer in list(self._active_writers):
             try:
-                writer.write(frame)
-                await writer.drain()
+                await self._write_frame(writer, frame)
             except Exception:
                 dead.append(writer)
         for writer in dead:
             self._active_writers.discard(writer)
             self._authenticated_writers.discard(writer)
+            self._writer_locks.pop(writer, None)
             await self._close_writer(writer)
 
     async def _send_event(self, writer: asyncio.StreamWriter, text: str) -> None:
-        writer.write(encode_frame(TunHelperFrameKind.EVENT, str(text).encode("utf-8")))
-        await writer.drain()
+        await self._write_frame(writer, encode_frame(TunHelperFrameKind.EVENT, str(text).encode("utf-8")))
+
+    async def _write_frame(self, writer: asyncio.StreamWriter, frame: bytes) -> None:
+        lock = self._writer_locks.get(writer)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._writer_locks[writer] = lock
+        async with lock:
+            writer.write(frame)
+            await writer.drain()
 
     async def _send_response(
         self,
@@ -190,13 +224,13 @@ class TunHelperServer:
         op: str,
         payload: Optional[dict[str, Any]] = None,
     ) -> None:
-        writer.write(
+        await self._write_frame(
+            writer,
             encode_control_frame(
                 TunHelperFrameKind.CONTROL_RESPONSE,
                 TunHelperControlMessage(op=op, payload=payload or {}),
-            )
+            ),
         )
-        await writer.drain()
 
     async def _handle_control(
         self,
@@ -280,6 +314,7 @@ class TunHelperServer:
     ) -> None:
         state = _HelperConnectionState()
         self._active_writers.add(writer)
+        self._writer_locks.setdefault(writer, asyncio.Lock())
         buffer = b""
         try:
             while not self._closed:
@@ -323,6 +358,7 @@ class TunHelperServer:
         finally:
             self._active_writers.discard(writer)
             self._authenticated_writers.discard(writer)
+            self._writer_locks.pop(writer, None)
             if not self._authenticated_writers:
                 self._last_authenticated_client_at = time.monotonic()
             await self._close_writer(writer)
@@ -336,7 +372,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--backend",
         default=DEFAULT_TUN_HELPER_BACKEND,
-        help="Helper backend identifier. Supported values include linux-native, linux-python, and darwin-native.",
+        help="Helper backend identifier. Supported values include linux-native, linux-python, darwin-native, and windows-native.",
     )
     parser.add_argument(
         "--log-tun-helper",
@@ -383,7 +419,11 @@ def _backend_from_name(name: str) -> TunHelperBackend:
     if normalized in {"linux-native", "linux_native", "linux-real"}:
         return LinuxTunHelperBackend()
     if normalized in {"darwin-native", "darwin_native", "macos-native", "macos_native"}:
+        from .bridge_tun_helper_macos import DarwinTunHelperBackend
+
         return DarwinTunHelperBackend()
+    if normalized in {"windows-native", "windows_native", "wintun-native", "wintun_native"}:
+        return WindowsTunHelperBackend()
     raise ValueError(f"unsupported tun helper backend: {name}")
 
 

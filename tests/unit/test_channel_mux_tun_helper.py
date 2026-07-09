@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import tempfile
 import unittest
+import uuid
 from unittest.mock import AsyncMock, patch
 
 from obstacle_bridge.bridge import ChannelMux, build_runtime_args_from_config
@@ -13,6 +15,12 @@ from obstacle_bridge.bridge_tun_helper_linux import LinuxTunHelperInMemoryBacken
 from obstacle_bridge.bridge_tun_helper_server import TunHelperServer
 from obstacle_bridge.bridge_tun_helper_settings import TunExecutionSettings
 from tests.unit.test_channel_mux_listener_mode import _FakeSession
+
+
+def _test_helper_endpoint(tmp_dir: str) -> str:
+    if sys.platform == "win32":
+        return f"\\\\.\\pipe\\obstaclebridge-test-{uuid.uuid4().hex}"
+    return os.path.join(tmp_dir, "tun-helper.sock")
 
 
 class ChannelMuxTunHelperTests(unittest.IsolatedAsyncioTestCase):
@@ -348,7 +356,7 @@ class ChannelMuxTunHelperTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_helper_mode_uses_client_when_backend_is_external(self):
         with tempfile.TemporaryDirectory() as tmp:
-            socket_path = os.path.join(tmp, "tun-helper.sock")
+            socket_path = _test_helper_endpoint(tmp)
             backend = LinuxTunHelperInMemoryBackend()
             server = TunHelperServer(backend=backend, session_token="secret")
             await server.start(socket_path)
@@ -399,7 +407,7 @@ class ChannelMuxTunHelperTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_helper_mode_stop_awaits_external_helper_remove_network(self):
         with tempfile.TemporaryDirectory() as tmp:
-            socket_path = os.path.join(tmp, "tun-helper.sock")
+            socket_path = _test_helper_endpoint(tmp)
             backend = LinuxTunHelperInMemoryBackend()
             server = TunHelperServer(backend=backend, session_token="secret")
             await server.start(socket_path)
@@ -466,7 +474,7 @@ class ChannelMuxTunHelperTests(unittest.IsolatedAsyncioTestCase):
                 return payload
 
         with tempfile.TemporaryDirectory() as tmp:
-            socket_path = os.path.join(tmp, "tun-helper.sock")
+            socket_path = _test_helper_endpoint(tmp)
             backend = _FailingBackend()
             server = TunHelperServer(backend=backend, session_token="secret")
             await server.start(socket_path)
@@ -501,7 +509,7 @@ class ChannelMuxTunHelperTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_helper_mode_refreshes_helper_snapshot_after_apply_success(self):
         with tempfile.TemporaryDirectory() as tmp:
-            socket_path = os.path.join(tmp, "tun-helper.sock")
+            socket_path = _test_helper_endpoint(tmp)
             backend = LinuxTunHelperInMemoryBackend()
             server = TunHelperServer(backend=backend, session_token="secret")
             await server.start(socket_path)
@@ -543,7 +551,7 @@ class ChannelMuxTunHelperTests(unittest.IsolatedAsyncioTestCase):
                 return opened
 
         with tempfile.TemporaryDirectory() as tmp:
-            socket_path = os.path.join(tmp, "tun-helper.sock")
+            socket_path = _test_helper_endpoint(tmp)
             backend = _RenamingBackend()
             server = TunHelperServer(backend=backend, session_token="secret")
             await server.start(socket_path)
