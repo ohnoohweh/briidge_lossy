@@ -624,6 +624,9 @@ REQ-LIFE-010:
     - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_death_reports_and_cleans_routes
     - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved
     - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_installed_signed_app_admin_helper_actions
+    - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_helper_native_applies_network_and_carries_packets
+    - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_helper_native_reports_helper_death_warning
+    - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_helper_native_repairs_stale_network_state
   unit_tests:
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_flat_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_sectioned_config
@@ -645,7 +648,11 @@ REQ-LIFE-010:
     - tests/unit/test_tun_helper_settings.py::test_from_mapping_reads_sectioned_config
     - tests/unit/test_tun_helper_settings.py::test_from_mapping_accepts_cli_dest_names
     - tests/unit/test_tun_helper_settings.py::test_helper_mode_supported_on_linux_and_macos
+    - tests/unit/test_tun_helper_settings.py::test_register_cli_accepts_windows_native_backend_value
+    - tests/unit/test_tun_helper_settings.py::test_helper_mode_supported_on_windows_for_windows_native_backend
     - tests/unit/test_tun_helper_settings.py::test_ensure_supported_platform_raises_for_unsupported_helper_mode
+    - tests/unit/test_tun_helper_settings.py::test_resolved_socket_path_defaults_to_loopback_tcp_for_windows_native_backend
+    - tests/unit/test_tun_helper_settings.py::test_resolved_runtime_dir_is_separate_from_windows_pipe_endpoint
     - tests/unit/test_tun_helper_protocol.py::test_control_frame_round_trip
     - tests/unit/test_tun_helper_protocol.py::test_decode_control_payload_rejects_unknown_version
     - tests/unit/test_tun_helper_protocol.py::test_try_decode_frame_returns_none_for_incomplete_payload
@@ -663,6 +670,7 @@ REQ-LIFE-010:
     - tests/unit/test_tun_helper_macos_backend.py::test_apply_server_network_uses_server_macos_hook_env
     - tests/unit/test_tun_helper_server_entrypoint.py::test_build_arg_parser_reads_entrypoint_args
     - tests/unit/test_tun_helper_server_entrypoint.py::test_backend_factory_rejects_unknown_backend
+    - tests/unit/test_tun_helper_server_entrypoint.py::test_backend_factory_accepts_windows_native_backend
     - tests/unit/test_tun_helper_server_entrypoint.py::test_server_start_chowns_socket_back_to_invoking_user_when_sudo_env_is_present
     - tests/unit/test_tun_helper_server_entrypoint.py::test_run_helper_server_starts_socket_and_serves_client
     - tests/unit/test_tun_helper_linux_backend.py::test_open_write_read_and_stop_round_trip
@@ -681,10 +689,21 @@ REQ-LIFE-010:
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_server_firewall_rules_for_remote_server_catalog
     - tests/unit/test_tun_helper_linux_backend.py::test_repair_runtime_snapshot_replays_cleanup_without_live_helper_process
     - tests/unit/test_tun_helper_linux_backend.py::test_verify_runtime_snapshot_repaired_reports_remaining_and_skipped_state
+    - tests/unit/test_tun_helper_windows_backend.py::test_open_write_read_and_stop_wraps_existing_wintun_adapter_path
+    - tests/unit/test_tun_helper_windows_backend.py::test_apply_and_remove_network_programs_addresses_routes_and_dns
+    - tests/unit/test_tun_helper_windows_backend.py::test_apply_network_rolls_back_partial_state_when_dns_apply_fails
+    - tests/unit/test_tun_helper_windows_backend.py::test_apply_network_reports_interface_lookup_failure
+    - tests/unit/test_tun_helper_windows_backend.py::test_repair_runtime_snapshot_replays_cleanup_without_live_helper_process
+    - tests/unit/test_tun_helper_windows_backend.py::test_verify_runtime_snapshot_repaired_reports_remaining_and_skipped_state
+    - tests/unit/test_tun_helper_transport_windows.py::test_client_server_round_trip_over_windows_named_pipe
+    - tests/unit/test_tun_helper_transport_windows.py::test_client_can_apply_network_after_open_over_windows_named_pipe
     - tests/unit/test_tun_helper_client_server.py::test_client_rejects_wrong_session_token
     - tests/unit/test_tun_helper_client_server.py::test_client_reports_connection_closed_after_server_stop
     - tests/unit/test_runner_tun_helper.py::test_runner_starts_tun_helper_and_exposes_status_snapshot
     - tests/unit/test_runner_tun_helper.py::test_runner_rejects_helper_mode_on_unsupported_platform
+    - tests/unit/test_runner_tun_helper.py::test_runner_allows_windows_native_helper_mode_past_platform_gate
+    - tests/unit/test_runner_tun_helper.py::test_windows_native_helper_uses_longer_control_timeout
+    - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_uses_shell_execute_for_windows_native_backend_when_not_admin
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_network_payload_carries_listener_hook_env
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_uses_sudo_for_native_backend_when_unprivileged
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_skips_sudo_when_python_has_linux_capability
@@ -694,9 +713,12 @@ REQ-LIFE-010:
     - tests/unit/test_runner_tun_helper.py::test_tun_helper_socket_ready_timeout_stays_short_without_sudo
     - tests/unit/test_runner_tun_helper.py::test_runner_status_reports_post_start_helper_disconnect
     - tests/unit/test_runner_tun_helper.py::test_runner_reaps_stale_helper_with_no_other_authenticated_clients
+    - tests/unit/test_runner_tun_helper.py::test_runner_reaps_stale_windows_pipe_helper_with_no_other_authenticated_clients
+    - tests/unit/test_runner_tun_helper.py::test_helper_endpoint_candidate_exists_accepts_windows_pipe_without_filesystem_entry
     - tests/unit/test_runner_tun_helper.py::test_runner_status_reports_helper_recovery_warning_when_cached_runtime_may_need_cleanup
     - tests/unit/test_runner_tun_helper.py::test_runner_request_tun_helper_repair_uses_linux_native_snapshot_cleanup
     - tests/unit/test_runner_tun_helper.py::test_runner_request_tun_helper_repair_reports_remaining_stale_state_when_cleanup_incomplete
+    - tests/unit/test_runner_tun_helper.py::test_runner_request_tun_helper_repair_uses_windows_native_snapshot_cleanup
     - tests/unit/test_runner_tun_helper.py::test_runner_stop_keeps_helper_available_until_mux_stop_finishes
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_opens_and_writes_through_backend
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_registers_reader_and_delivers_packets

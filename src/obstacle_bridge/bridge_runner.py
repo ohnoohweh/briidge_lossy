@@ -514,48 +514,57 @@ class Runner:
         socket_path = str(planned_socket_path or "").strip()
         if not socket_path:
             return
-        runtime_dir = pathlib.Path(self._tun_helper_settings.resolved_runtime_dir()).expanduser().resolve()
-        if not runtime_dir.is_dir():
+        runtime_dirs = {pathlib.Path(self._tun_helper_settings.resolved_runtime_dir()).expanduser()}
+        if not (is_local_tcp_endpoint(socket_path) or is_windows_pipe_path(socket_path)):
+            runtime_dirs.add(pathlib.Path(socket_path).expanduser().parent)
+        for runtime_dir in runtime_dirs:
+            if not runtime_dir.is_dir():
+                continue
+            for config_path in runtime_dir.glob("tun-helper-launch-*.json"):
+                await self._reap_stale_tun_helper_launch_record(config_path, socket_path)
+
+    async def _reap_stale_tun_helper_launch_record(self, config_path: pathlib.Path, planned_socket_path: str) -> None:
+        socket_path = str(planned_socket_path or "").strip()
+        if not socket_path:
             return
-        for config_path in runtime_dir.glob("tun-helper-launch-*.json"):
-            helper_socket = ""
-            helper_token = ""
-            try:
-                with open(config_path, "r", encoding="utf-8") as handle:
-                    payload = json.load(handle)
-                if not isinstance(payload, dict):
-                    continue
-                helper_socket = str(payload.get("socket_path") or "").strip()
-                helper_token = str(payload.get("session_token") or "").strip()
-            except Exception:
-                continue
-            if not helper_socket or not helper_token or helper_socket == socket_path:
-                continue
-            if not self._helper_endpoint_candidate_exists(helper_socket):
-                with contextlib.suppress(FileNotFoundError):
-                    os.unlink(config_path)
-                continue
-            client = TunHelperClient(
-                socket_path=helper_socket,
-                session_token=helper_token,
-                response_timeout_s=0.5,
-                logger=logging.getLogger("tun_helper_reaper"),
-            )
-            try:
-                await client.connect()
-                snapshot = await client.snapshot()
-                active_clients = int(snapshot.get("active_authenticated_clients") or 0)
-                if active_clients > 1:
-                    continue
-                with contextlib.suppress(Exception):
-                    await client.request("STOP", {})
-            except Exception:
-                continue
-            finally:
-                with contextlib.suppress(Exception):
-                    await client.close()
+        helper_socket = ""
+        helper_token = ""
+        try:
+            with open(config_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if not isinstance(payload, dict):
+                return
+            helper_socket = str(payload.get("socket_path") or "").strip()
+            helper_token = str(payload.get("session_token") or "").strip()
+        except Exception:
+            return
+        if not helper_socket or not helper_token or helper_socket == socket_path:
+            return
+        if not self._helper_endpoint_candidate_exists(helper_socket):
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(config_path)
+            return
+        client = TunHelperClient(
+            socket_path=helper_socket,
+            session_token=helper_token,
+            response_timeout_s=0.5,
+            logger=logging.getLogger("tun_helper_reaper"),
+        )
+        try:
+            await client.connect()
+            snapshot = await client.snapshot()
+            active_clients = int(snapshot.get("active_authenticated_clients") or 0)
+            if active_clients > 1:
+                return
+            with contextlib.suppress(Exception):
+                await client.request("STOP", {})
+        except Exception:
+            return
+        finally:
+            with contextlib.suppress(Exception):
+                await client.close()
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(config_path)
 
     @staticmethod
     def _helper_endpoint_candidate_exists(socket_path: str) -> bool:

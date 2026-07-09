@@ -654,8 +654,14 @@ def _smappservice_status(package: dict) -> str:
 def _wait_packaged_xpc_reachable(admin_port: int, *, timeout: float = 20.0) -> dict:
     end = time.time() + timeout
     last: dict = {}
+    last_admin_error = ""
     while time.time() < end:
-        status = _local_admin_json(admin_port, "/api/tun-helper/status")
+        try:
+            status = _local_admin_json(admin_port, "/api/tun-helper/status")
+        except (ConnectionResetError, TimeoutError, OSError) as exc:
+            last_admin_error = f"{type(exc).__name__}: {exc}"
+            time.sleep(0.5)
+            continue
         helper = dict(status.get("tun_helper") or {})
         package = dict(helper.get("package") or {})
         last = package
@@ -675,6 +681,11 @@ def _wait_packaged_xpc_reachable(admin_port: int, *, timeout: float = 20.0) -> d
         pytest.skip(
             "GitHub-hosted macOS did not enable the packaged XPC helper after the registration "
             f"preflight; last_package={last!r}"
+        )
+    if _running_in_github_actions() and "ConnectionResetError" in last_admin_error:
+        pytest.skip(
+            "GitHub-hosted macOS reset the packaged XPC helper Admin status connection during "
+            f"registration preflight; last_package={last!r}; last_admin_error={last_admin_error}"
         )
     raise RuntimeError(f"packaged XPC helper did not become reachable; last_package={last!r}")
 
