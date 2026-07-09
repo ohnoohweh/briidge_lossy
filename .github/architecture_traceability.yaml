@@ -194,6 +194,8 @@ ARC-CMP-003:
 ARC-CMP-004:
   # Process orchestration coverage includes bounded reconnect waits across
   # expected self-restart relaunches in the integration harness.
+  # Hosted macOS elevated gates keep Admin/helper state assertions even when
+  # the runner refuses route, ping, or SMAppService approval side effects.
   integration_tests:
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_over_myudp_packet_carry
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_reports_helper_death_during_partial_cleanup

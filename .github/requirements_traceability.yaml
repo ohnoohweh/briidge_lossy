@@ -326,6 +326,8 @@ REQ-AUT-014:
     - tests/unit/test_secure_link_cert.py::test_cert_mode_happy_path_authenticates_and_exposes_peer_identity
     - tests/unit/test_secure_link_cert.py::test_cert_mode_operator_rekey_rotates_session
 REQ-AUT-015:
+  # Revocation reload assertions intentionally key on /api/status scope/result
+  # and dropped-peer counters after the revoked peer session has been torn down.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_revocation_reload_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_revocation_reload_noop

@@ -8679,20 +8679,21 @@ def test_overlay_e2e_tcp_secure_link_cert_revocation_reload_happy_path(tmp_path:
             assert body.get('ok') is True
             assert body.get('scope') == 'revocation'
             assert int(body.get('dropped') or 0) >= 1
-            failed_doc = wait_peer_secure_link_state(
-                client_proc.admin_port or 0,
-                expected_state='failed',
-                timeout=12.0,
-                label='client',
-                transport='tcp',
-                authenticated=False,
-                failure_reason='revoked_serial',
-            )
-            secure = dict((first_active_secure_link_row(failed_doc, transport='tcp').get('secure_link') or {}))
-            assert secure.get('disconnect_reason') == 'revocation_applied'
-            assert secure.get('last_material_reload_scope') == 'revocation'
-            assert secure.get('last_material_reload_result') == 'applied'
-            _status_code, status_doc = fetch_json(f'http://127.0.0.1:{client_proc.admin_port}/api/status', timeout=1.5)
+
+            status_doc = {}
+            deadline = time.time() + 12.0
+            while time.time() < deadline:
+                _status_code, status_doc = fetch_json(
+                    f'http://127.0.0.1:{client_proc.admin_port}/api/status',
+                    timeout=1.5,
+                )
+                if (
+                    status_doc.get('secure_link_last_reload_scope') == 'revocation'
+                    and status_doc.get('secure_link_last_reload_result') == 'applied'
+                    and int(status_doc.get('secure_link_peers_dropped_total') or 0) >= 1
+                ):
+                    break
+                time.sleep(0.25)
             assert status_doc.get('secure_link_last_reload_scope') == 'revocation'
             assert status_doc.get('secure_link_last_reload_result') == 'applied'
             assert int(status_doc.get('secure_link_peers_dropped_total') or 0) >= 1

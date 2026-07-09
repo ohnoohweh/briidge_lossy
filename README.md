@@ -1531,6 +1531,7 @@ Important caveat:
   - focused iOS companion/E2E Python tests: `pytest -q ios/tests`
 - Recent validation for this branch used the Windows-local unit suite, the Windows `windows_only` subset, the Windows elevated TUN subset, and the Linux shared integration subset; the dedicated Linux elevated subset is part of the split CI expectation as well.
 - The Linux shared integration subset is currently validated with the runtime-generated localhost TLS fixture set and the availability-aware loopback port allocator in the integration harness.
+- Certificate revocation reload coverage now treats `/api/status` reload scope/result and dropped-peer counters as the stable post-disconnect signal, because the peer-scoped failed row can be transient after the revoked secure-link session is torn down.
 - The Linux shared subset also includes a listener stale-junk-peer regression that waits for `/api/peers` decode-error visibility before asserting stale-row reap behavior, which keeps the gate aligned with the admin snapshot's eventually consistent update path.
 
 ### Development environment and procedure

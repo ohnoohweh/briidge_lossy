@@ -2074,8 +2074,7 @@ class SecureLinkPskSession(ISession):
                 mux_chans.update(secure_mux_by_peer.get(int(row.get("peer_id", 0) or 0), set()))
                 row["mux_chans"] = sorted(mux_chans)
         if (
-            not self._client_mode
-            and self._last_auth_fail_code
+            self._last_auth_fail_code
             and not any(
                 str((row.get("secure_link") or {}).get("state") or "").strip().lower() == "failed"
                 for row in out
