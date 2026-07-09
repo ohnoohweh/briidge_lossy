@@ -363,6 +363,8 @@ ARC-CMP-004:
     - tests/unit/test_launcher_entrypoint.py::test_launcher_starts_bridge_before_public_detection
     - tests/unit/test_launcher_entrypoint.py::test_discover_public_network_host_uses_fallback_services
     - tests/unit/test_launcher_entrypoint.py::test_discover_public_network_host_returns_none_when_services_fail
+    - tests/unit/test_launcher_entrypoint.py::test_restart_countdown_server_serves_html_and_api
+    - tests/unit/test_launcher_entrypoint.py::test_show_restart_countdown_starts_and_closes_placeholder
     - tests/unit/test_config_bootstrap_cli.py::test_parse_args_explicit_missing_config_uses_defaults
     - tests/unit/test_config_bootstrap_cli.py::test_parse_args_empty_config_is_treated_as_first_start
     - tests/unit/test_config_bootstrap_cli.py::test_parse_args_invalid_json_config_raises_clear_error

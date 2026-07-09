@@ -8,6 +8,9 @@ to ``bridge.py``.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import email.utils
+import html
 import importlib.util
 import ipaddress
 import json
@@ -18,6 +21,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -240,6 +244,256 @@ def _format_url(host: str, port: int, path: str) -> str:
     return f"http://{host}:{port}{path}"
 
 
+def _make_listener_socket(host: str, port: int) -> socket.socket:
+    infos = socket.getaddrinfo(
+        host,
+        port,
+        family=socket.AF_UNSPEC,
+        type=socket.SOCK_STREAM,
+        proto=socket.IPPROTO_TCP,
+        flags=socket.AI_PASSIVE,
+    )
+    if not infos:
+        raise OSError(f"getaddrinfo() returned no results for {host}:{port}")
+    last_error = None
+    for family, socktype, proto, _canonname, sockaddr in infos:
+        listener = None
+        try:
+            listener = socket.socket(family, socktype, proto)
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if family == socket.AF_INET6 and hasattr(socket, "IPV6_V6ONLY"):
+                with contextlib.suppress(OSError):
+                    listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            listener.bind(sockaddr)
+            listener.listen(socket.SOMAXCONN)
+            listener.settimeout(0.5)
+            return listener
+        except Exception as exc:
+            last_error = exc
+            if listener is not None:
+                with contextlib.suppress(Exception):
+                    listener.close()
+    if last_error is not None:
+        raise last_error
+    raise OSError(f"Could not create listener for {host}:{port}")
+
+
+def _http_date_now() -> str:
+    return email.utils.formatdate(usegmt=True)
+
+
+def _build_restart_placeholder_page(
+    *,
+    bind: str,
+    port: int,
+    path: str,
+    restart_after_seconds: float,
+) -> str:
+    countdown = max(0.0, float(restart_after_seconds))
+    countdown_display = f"{countdown:.1f}"
+    location = html.escape(_format_url(_clickable_host(bind), port, path), quote=True)
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="2">
+  <title>ObstacleBridge restarting</title>
+  <style>
+    :root {{
+      color-scheme: light dark;
+      font-family: \"Iosevka Aile\", \"IBM Plex Sans\", sans-serif;
+    }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at top, rgba(255, 180, 120, 0.18), transparent 36%),
+        linear-gradient(160deg, #172033 0%, #0b1220 100%);
+      color: #f4f7fb;
+    }}
+    main {{
+      width: min(34rem, calc(100vw - 2rem));
+      padding: 1.5rem;
+      border-radius: 18px;
+      background: rgba(11, 18, 32, 0.82);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+    }}
+    h1 {{
+      margin: 0 0 0.75rem;
+      font-size: 1.5rem;
+    }}
+    p {{
+      margin: 0.5rem 0;
+      line-height: 1.5;
+    }}
+    .countdown {{
+      font-size: 2.5rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }}
+    code {{
+      font-family: \"Iosevka Term\", \"IBM Plex Mono\", monospace;
+      word-break: break-all;
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>ObstacleBridge is restarting</h1>
+    <p>The runtime requested a delayed restart after a disconnect timeout.</p>
+    <p class="countdown"><span id="countdown">{countdown_display}</span>s</p>
+    <p>WebAdmin should return automatically at <code>{location}</code>.</p>
+  </main>
+  <script>
+    (() => {{
+      const deadline = Date.now() + {int(round(countdown * 1000.0))};
+      const node = document.getElementById("countdown");
+      const tick = () => {{
+        const remaining = Math.max(0, (deadline - Date.now()) / 1000);
+        node.textContent = remaining.toFixed(1);
+      }};
+      tick();
+      setInterval(tick, 100);
+    }})();
+  </script>
+</body>
+</html>
+"""
+
+
+class _RestartCountdownServer:
+    def __init__(self, notice: Dict[str, Any], restart_after_seconds: float) -> None:
+        self.bind = str(notice["bind"])
+        self.port = int(notice["port"])
+        self.path = str(notice["path"])
+        self._deadline_monotonic = time.monotonic() + max(0.0, float(restart_after_seconds))
+        self._listener: Optional[socket.socket] = None
+        self._thread: Optional[threading.Thread] = None
+        self._stop = threading.Event()
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._listener = _make_listener_socket(self.bind, self.port)
+        self._thread = threading.Thread(
+            target=self._serve,
+            name="ObstacleBridgeRestartCountdown",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def close(self) -> None:
+        self._stop.set()
+        listener = self._listener
+        self._listener = None
+        if listener is not None:
+            with contextlib.suppress(Exception):
+                listener.close()
+        if self._thread is not None:
+            self._thread.join(timeout=1.5)
+            self._thread = None
+
+    def _seconds_remaining(self) -> float:
+        return max(0.0, self._deadline_monotonic - time.monotonic())
+
+    def _serve(self) -> None:
+        listener = self._listener
+        if listener is None:
+            return
+        while not self._stop.is_set():
+            try:
+                conn, _addr = listener.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            with conn:
+                conn.settimeout(1.0)
+                self._handle_connection(conn)
+
+    def _handle_connection(self, conn: socket.socket) -> None:
+        try:
+            request = conn.recv(4096)
+        except OSError:
+            return
+        if not request:
+            return
+        first_line = request.split(b"\r\n", 1)[0].decode("iso-8859-1", "replace")
+        parts = first_line.split()
+        method = parts[0].upper() if parts else ""
+        request_path = parts[1] if len(parts) > 1 else self.path
+        if method not in {"GET", "HEAD"}:
+            self._send_response(
+                conn,
+                status="405 Method Not Allowed",
+                content_type="text/plain; charset=utf-8",
+                body=b"method not allowed\n",
+            )
+            return
+        if request_path.startswith("/api/"):
+            payload = json.dumps(
+                {
+                    "ok": True,
+                    "restart_pending": True,
+                    "restart_in_seconds": round(self._seconds_remaining(), 3),
+                    "admin_web_url": _format_url(_clickable_host(self.bind), self.port, self.path),
+                }
+            ).encode("utf-8")
+            self._send_response(
+                conn,
+                status="200 OK",
+                content_type="application/json; charset=utf-8",
+                body=payload,
+                head_only=(method == "HEAD"),
+            )
+            return
+        body = _build_restart_placeholder_page(
+            bind=self.bind,
+            port=self.port,
+            path=self.path,
+            restart_after_seconds=self._seconds_remaining(),
+        ).encode("utf-8")
+        self._send_response(
+            conn,
+            status="200 OK",
+            content_type="text/html; charset=utf-8",
+            body=body,
+            head_only=(method == "HEAD"),
+        )
+
+    def _send_response(
+        self,
+        conn: socket.socket,
+        *,
+        status: str,
+        content_type: str,
+        body: bytes,
+        head_only: bool = False,
+    ) -> None:
+        headers = [
+            f"HTTP/1.1 {status}",
+            f"Date: {_http_date_now()}",
+            "Connection: close",
+            "Cache-Control: no-store, max-age=0",
+            "Pragma: no-cache",
+            f"Content-Type: {content_type}",
+            f"Content-Length: {len(body)}",
+            "",
+            "",
+        ]
+        response = "\r\n".join(headers).encode("iso-8859-1")
+        try:
+            conn.sendall(response)
+            if not head_only:
+                conn.sendall(body)
+        except OSError:
+            return
+
+
 def _discover_public_network_host() -> Tuple[Optional[str], Optional[str]]:
     for service_url in PUBLIC_IP_DISCOVERY_SERVICES:
         request = urllib.request.Request(
@@ -402,6 +656,27 @@ def _run_process_once(
     return int(process.wait())
 
 
+def _show_restart_countdown(notice: Optional[Dict[str, Any]], interval_seconds: float) -> None:
+    if not notice or interval_seconds <= 0:
+        time.sleep(interval_seconds)
+        return
+    placeholder = _RestartCountdownServer(notice, interval_seconds)
+    try:
+        placeholder.start()
+    except OSError as exc:
+        print(
+            f"Restart holding page could not bind {notice['bind']}:{notice['port']}: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        time.sleep(interval_seconds)
+        return
+    try:
+        time.sleep(interval_seconds)
+    finally:
+        placeholder.close()
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = _build_parser()
     args, forward_args = parser.parse_known_args(argv)
@@ -430,7 +705,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             if rc == 75:
                 continue
             if rc == 77:
-                time.sleep(args.interval)
+                _show_restart_countdown(startup_notice, args.interval)
                 continue
             return rc
     finally:

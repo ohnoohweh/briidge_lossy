@@ -1166,6 +1166,7 @@ python -m obstacle_bridge --config ObstacleBridge.cfg
 
 Launcher options: `--interval` (seconds between restarts when the process exits with code 77), `--no-redirect`, and `--command`.
 Any unknown launcher options are forwarded to `bridge.py`.
+During delayed restart windows (`exit code 77`), the launcher now temporarily serves a small holding page on the configured WebAdmin bind/port so operators still get a response with a countdown until the supervised runtime starts again.
 When the default redirected mode is active and startup fails early, the launcher now replays the hidden child stderr tail so issues such as an inaccessible `--log-file` path are still shown to the operator.
 
 #### Current secure-link quick start

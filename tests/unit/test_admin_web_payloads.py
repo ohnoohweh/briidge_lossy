@@ -1428,6 +1428,8 @@ class AdminWebPayloadTests(unittest.TestCase):
         app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
         self.assertIn("renderMetric('frames_passed_total', fmtInteger(secureLink.frames_passed_total))", app_js)
         self.assertIn("renderMetric('frames_dropped_total', fmtInteger(secureLink.frames_dropped_total))", app_js)
+        self.assertIn("renderMetric('Next Address Attempt', fmtUptime(row.next_address_attempt_in_seconds))", app_js)
+        self.assertIn("renderMetric('Restart In', fmtUptime(row.restart_in_seconds))", app_js)
         self.assertEqual(peer["compress_layer"]["algorithm"], "zlib")
         self.assertEqual(peer["compress_layer"]["compress_applied_total"], 7)
 
@@ -1525,6 +1527,63 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIsNone(peer["transmit_delay_sample_ms"])
         self.assertIsNone(peer["transmit_delay_est_ms"])
         self.assertIsNone(peer["last_incoming_age_seconds"])
+
+    def test_runner_peer_snapshot_exposes_connecting_reconnect_and_restart_timers(self):
+        class _Mux:
+            def snapshot_connections(self):
+                return {"udp": [], "tcp": [], "tun": [], "counts": {}}
+
+        class _Session:
+            def __init__(self):
+                self._last_rx_wall_ns = time.monotonic_ns()
+
+            def get_metrics(self):
+                return bridge_runner.SessionMetrics(
+                    rtt_est_ms=None,
+                    transmit_delay_sample_ms=None,
+                    transmit_delay_est_ms=None,
+                    inflight=0,
+                )
+
+            def get_overlay_peers_snapshot(self):
+                return [
+                    {
+                        "peer_id": 1,
+                        "connected": False,
+                        "state": "connecting",
+                        "peer": ("127.0.0.1", 1234),
+                        "last_incoming_age_seconds": None,
+                    }
+                ]
+
+            def get_connecting_timer_snapshot(self):
+                return {"next_address_attempt_in_seconds": 12.5}
+
+            def get_secure_link_status_snapshot(self):
+                return {"state": "connecting", "recovery_enabled": False}
+
+            def is_connected(self):
+                return False
+
+        runner = bridge_runner.Runner.__new__(bridge_runner.Runner)
+        runner.args = argparse.Namespace(client_restart_if_disconnected=20.0, tcp_peer="127.0.0.1", tcp_peer_port=1234)
+        session = _Session()
+        runner._sessions = [session]
+        runner._muxes = [_Mux()]
+        runner._session_labels = ["tcp"]
+        runner._peer_traffic_rate_state = {}
+        runner._session_obj = session
+        runner._restart_requested = threading.Event()
+        runner._stop = threading.Event()
+        runner._last_disconnected_monotonic = time.monotonic() - 5.0
+
+        payload = runner.get_peer_connections_snapshot()
+        peer = payload["peers"][0]
+        self.assertEqual(peer["state"], "connecting")
+        self.assertAlmostEqual(peer["next_address_attempt_in_seconds"], 12.5, places=2)
+        self.assertIsNotNone(peer["restart_in_seconds"])
+        self.assertGreater(peer["restart_in_seconds"], 14.0)
+        self.assertLess(peer["restart_in_seconds"], 16.0)
 
     def test_build_peers_payload_includes_cert_identity_and_trust_fields(self):
         args = argparse.Namespace(

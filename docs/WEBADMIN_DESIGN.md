@@ -59,6 +59,7 @@ Current peer-row diagnostics include:
 - peer-local RTT estimates where the transport exposes them
 - peer-scoped decode/unidentified-frame counters where the transport exposes them
 - peer-local `last_incoming_age_seconds`, which reports how long it has been since the runtime last observed an incoming transport message from that peer
+- during `connecting` phases, countdown-style timing for the next overlay address/reconnect attempt and the runner's pending auto-restart threshold when that watchdog is enabled
 
 Design intent for `last_incoming_age_seconds`:
 
@@ -67,6 +68,7 @@ Design intent for `last_incoming_age_seconds`:
 - preserve peer scoping, so multi-client listeners can reason about each overlay peer independently rather than only through listener-global status
 
 The WebAdmin page renders this field as `Last Incoming` in the peer details view.
+For connecting peer rows, the page also renders `Next Address Attempt` and `Restart In` when those timers are active.
 
 It does not own:
 
@@ -208,6 +210,47 @@ WebAdmin exposes a small set of direct process actions:
 Those actions are HTTP API operations, not UI-only behavior.
 
 Their design intent is that the operator can change runtime state without editing config files by hand or restarting the process unless the action explicitly requires it.
+
+### Restart as recovery, and the current coupling
+
+In the current Python runtime, operator-triggered restart is still a valid recovery tool for real data-plane problems.
+
+Typical reasons include:
+
+- recovering UDP/TCP transport state after a bad timeout or reconnect edge
+- recovering TUN-related runtime state after the packet path has become unhealthy
+- forcing a clean rebuild of the in-process runtime graph when a lighter reconnect or reload action is not sufficient
+
+The current architecture keeps WebAdmin, overlay transports, and TUN/runtime ownership in the same supervised process.
+
+That means a restart intended to recover UDP/TCP/TUN behavior also restarts WebAdmin itself.
+The operator benefit is that one restart request can reset the whole runtime consistently.
+The operator cost is that the admin UI disappears during the restart window unless an outer supervisor provides a temporary response.
+
+Architectural alternative:
+
+- separate WebAdmin from the rest of the runtime in the same spirit as `tun_helper`
+
+Under that model, WebAdmin would become a smaller companion process or service boundary while the transport/TUN runtime remains restartable on its own.
+
+Potential advantages:
+
+- WebAdmin could stay reachable while the transport/runtime process restarts
+- restart progress and recovery state could be reported from outside the failing process
+- the admin/control plane would be less tightly coupled to data-plane recovery behavior
+
+Potential costs:
+
+- a new local IPC/control boundary would be required between WebAdmin and the runtime
+- auth, session handling, and operator-action authorization would have to cross that boundary safely
+- runtime snapshots, logs, and live update feeds would need an explicit export contract instead of direct in-process access
+- process supervision becomes more complex because WebAdmin and the runtime can now fail independently
+
+Current direction:
+
+- the delivered implementation still uses the single-process model for WebAdmin plus runtime
+- restart remains primarily a whole-runtime recovery action, not a WebAdmin-only lifecycle event
+- the separated-WebAdmin option remains a plausible future architectural step if keeping admin availability during runtime restart becomes important enough to justify the extra boundary
 
 ## Design considerations
 

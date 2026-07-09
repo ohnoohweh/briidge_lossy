@@ -556,6 +556,7 @@ REQ-LIFE-005:
     - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
   unit_tests:
     - tests/unit/test_launcher_entrypoint.py::test_launcher_waits_interval_for_code_77
+    - tests/unit/test_launcher_entrypoint.py::test_show_restart_countdown_starts_and_closes_placeholder
 
 REQ-LIFE-006:
   integration_tests:
@@ -594,6 +595,7 @@ REQ-LIFE-008:
     - tests/unit/test_launcher_entrypoint.py::test_discover_local_network_host_prefers_private_ipv4
     - tests/unit/test_launcher_entrypoint.py::test_discover_public_network_host_uses_fallback_services
     - tests/unit/test_launcher_entrypoint.py::test_discover_public_network_host_returns_none_when_services_fail
+    - tests/unit/test_launcher_entrypoint.py::test_restart_countdown_server_serves_html_and_api
 
 REQ-LIFE-009:
   unit_tests:

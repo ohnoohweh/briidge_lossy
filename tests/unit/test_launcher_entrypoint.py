@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 import json
+import urllib.request
 import urllib.error
 from types import SimpleNamespace
 
@@ -62,22 +63,23 @@ def test_launcher_restarts_for_code_75(monkeypatch) -> None:
 
 
 def test_launcher_waits_interval_for_code_77(monkeypatch) -> None:
-    sleep_calls = []
+    restart_windows = []
     rcs = [77, 0]
+    monkeypatch.chdir("/")
 
     def _fake_run(cmd, **kwargs):
         return SimpleNamespace(returncode=rcs.pop(0))
 
-    def _fake_sleep(sec):
-        sleep_calls.append(sec)
+    def _fake_show_restart_countdown(notice, sec):
+        restart_windows.append((notice, sec))
 
     monkeypatch.setattr(launcher.subprocess, "run", _fake_run)
-    monkeypatch.setattr(launcher.time, "sleep", _fake_sleep)
+    monkeypatch.setattr(launcher, "_show_restart_countdown", _fake_show_restart_countdown)
 
     rc = launcher.main(["--no-redirect", "--interval", "9"])
 
     assert rc == 0
-    assert sleep_calls == [9]
+    assert restart_windows == [({"bind": "127.0.0.1", "port": 18080, "path": "/"}, 9)]
 
 
 def test_launcher_appends_unknown_args_to_custom_command(monkeypatch) -> None:
@@ -411,3 +413,50 @@ def test_discover_public_network_host_returns_none_when_services_fail(monkeypatc
     )
 
     assert launcher._discover_public_network_host() == (None, None)
+
+
+def test_restart_countdown_server_serves_html_and_api(tmp_path) -> None:
+    notice = {"bind": "127.0.0.1", "port": 18181, "path": "/"}
+    server = launcher._RestartCountdownServer(notice, 2.5)
+    server.start()
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:18181/", timeout=2.0) as response:
+            body = response.read().decode("utf-8")
+            assert response.status == 200
+            assert "ObstacleBridge is restarting" in body
+            assert "WebAdmin should return automatically" in body
+
+        with urllib.request.urlopen("http://127.0.0.1:18181/api/status", timeout=2.0) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 200
+            assert payload["restart_pending"] is True
+            assert payload["admin_web_url"] == "http://127.0.0.1:18181/"
+            assert 0.0 <= float(payload["restart_in_seconds"]) <= 2.5
+    finally:
+        server.close()
+
+
+def test_show_restart_countdown_starts_and_closes_placeholder(monkeypatch) -> None:
+    events = []
+
+    class _FakeCountdownServer:
+        def __init__(self, notice, interval_seconds):
+            events.append(("init", notice, interval_seconds))
+
+        def start(self):
+            events.append(("start",))
+
+        def close(self):
+            events.append(("close",))
+
+    monkeypatch.setattr(launcher, "_RestartCountdownServer", _FakeCountdownServer)
+    monkeypatch.setattr(launcher.time, "sleep", lambda seconds: events.append(("sleep", seconds)))
+
+    launcher._show_restart_countdown({"bind": "127.0.0.1", "port": 18080, "path": "/"}, 7)
+
+    assert events == [
+        ("init", {"bind": "127.0.0.1", "port": 18080, "path": "/"}, 7),
+        ("start",),
+        ("sleep", 7),
+        ("close",),
+    ]

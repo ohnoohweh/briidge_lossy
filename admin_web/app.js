@@ -2807,6 +2807,8 @@ function renderPeerTable(rows) {
     if (!isListeningPeer && isConnectingPeer) {
       connectionLines.push([
         renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds)),
+        renderMetric('Next Address Attempt', fmtUptime(row.next_address_attempt_in_seconds)),
+        renderMetric('Restart In', fmtUptime(row.restart_in_seconds)),
       ]);
     }
     if (!isListeningPeer && !isConnectingPeer) {

@@ -1708,6 +1708,66 @@ class Runner:
                 return value
         return None
 
+    def _session_connecting_timer_snapshot(self, session: Any) -> dict:
+        candidates = []
+        for candidate in (session, self._unwrap_snapshot_session(session), getattr(session, "inner_session", None)):
+            if candidate is None:
+                continue
+            if any(candidate is existing for existing in candidates):
+                continue
+            candidates.append(candidate)
+        for candidate in candidates:
+            getter = getattr(candidate, "get_connecting_timer_snapshot", None)
+            if callable(getter):
+                with contextlib.suppress(Exception):
+                    snap = dict(getter() or {})
+                    if snap:
+                        return snap
+        return {"next_address_attempt_in_seconds": None}
+
+    def _client_restart_watchdog_timer_snapshot(self, session: Any) -> dict:
+        timeout_s = float(getattr(self.args, "client_restart_if_disconnected", 0.0) or 0.0)
+        if timeout_s <= 0:
+            return {"restart_in_seconds": None}
+        if not _has_configured_overlay_peer(self.args):
+            return {"restart_in_seconds": None}
+        restart_requested = getattr(self, "_restart_requested", None)
+        if restart_requested is not None and bool(restart_requested.is_set()):
+            return {"restart_in_seconds": None}
+        stop_evt = getattr(self, "_stop", None)
+        if stop_evt is not None and bool(stop_evt.is_set()):
+            return {"restart_in_seconds": None}
+        session_obj = getattr(self, "_session_obj", None)
+        if session_obj is not None:
+            real_session_obj = self._unwrap_snapshot_session(session_obj)
+            real_session = self._unwrap_snapshot_session(session)
+            if session is not session_obj and real_session is not session_obj and real_session is not real_session_obj:
+                return {"restart_in_seconds": None}
+        secure_link_status = {}
+        get_secure_link_status = getattr(session, "get_secure_link_status_snapshot", None)
+        if callable(get_secure_link_status):
+            with contextlib.suppress(Exception):
+                secure_link_status = dict(get_secure_link_status() or {})
+        if (
+            str(secure_link_status.get("state") or "").strip().lower() == "failed"
+            and str(secure_link_status.get("failure_reason") or "").strip().lower() == "revoked_serial"
+        ):
+            return {"restart_in_seconds": None}
+        if (
+            bool(secure_link_status.get("recovery_enabled"))
+            and (
+                secure_link_status.get("next_recovery_reconnect_unix_ts") is not None
+                or str(secure_link_status.get("last_event") or "").strip().lower()
+                in {"recovery_reconnect_scheduled", "recovery_reconnect_started"}
+            )
+        ):
+            return {"restart_in_seconds": None}
+        disconnected_since = getattr(self, "_last_disconnected_monotonic", None)
+        if disconnected_since is None:
+            return {"restart_in_seconds": timeout_s}
+        remaining = max(0.0, timeout_s - (time.monotonic() - float(disconnected_since)))
+        return {"restart_in_seconds": remaining}
+
     @staticmethod
     def _session_decode_errors(session: Any) -> int:
         candidates = [
@@ -1978,6 +2038,12 @@ class Runner:
 
                     row_connected = bool(p.get("connected", session.is_connected()))
                     row_state = str(p.get("state") or ("connected" if row_connected else "connecting"))
+                    connecting_timers = self._session_connecting_timer_snapshot(row_session)
+                    restart_timer = (
+                        self._client_restart_watchdog_timer_snapshot(row_session)
+                        if row_state.strip().lower() == "connecting"
+                        else {"restart_in_seconds": None}
+                    )
                     peers.append({
                         "id": f"{idx}:{p.get('peer_id', 0)}",
                         "transport": label,
@@ -2013,6 +2079,14 @@ class Runner:
                         "myudp": self._session_retransmit_stats(row_session),
                         "secure_link": dict(p.get("secure_link") or RunnerMuxAggregate._default_secure_link_snapshot()),
                         "compress_layer": dict(self._session_compress_layer_snapshot(session, peer_id=p.get("peer_id"))),
+                        "next_address_attempt_in_seconds": self._first_non_null(
+                            p.get("next_address_attempt_in_seconds"),
+                            connecting_timers.get("next_address_attempt_in_seconds"),
+                        ),
+                        "restart_in_seconds": self._first_non_null(
+                            p.get("restart_in_seconds"),
+                            restart_timer.get("restart_in_seconds"),
+                        ),
                     })
                 continue
 
@@ -2033,10 +2107,17 @@ class Runner:
                 pp = getattr(real_session, "peer_proto", None) or getattr(session, "peer_proto", None)
                 if pp is not None:
                     decode_errors = int(getattr(pp, "unidentified_frames", 0) or 0)
+            row_state = "connected" if bool(session.is_connected()) else "connecting"
+            connecting_timers = self._session_connecting_timer_snapshot(real_session)
+            restart_timer = (
+                self._client_restart_watchdog_timer_snapshot(real_session)
+                if row_state == "connecting"
+                else {"restart_in_seconds": None}
+            )
             peers.append({
                 "id": idx,
                 "transport": label,
-                "state": "connected" if bool(session.is_connected()) else "connecting",
+                "state": row_state,
                 "connected": bool(session.is_connected()),
                 "listen": listen_endpoint,
                 "peer": peer_label,
@@ -2057,6 +2138,8 @@ class Runner:
                 },
                 "throttle": peer_throttle or {"applicable": False, "active": False, "reason": "no_local_ingress"},
                 "myudp": self._session_retransmit_stats(session),
+                "next_address_attempt_in_seconds": connecting_timers.get("next_address_attempt_in_seconds"),
+                "restart_in_seconds": restart_timer.get("restart_in_seconds"),
                 "secure_link": dict(
                     getattr(
                         session,

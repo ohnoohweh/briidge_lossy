@@ -173,6 +173,7 @@ class TcpStreamSession(ISession):
         # reconnect
         self._connecting_task: Optional[asyncio.Task] = None
         self._reconnect_task: Optional[asyncio.Task] = None
+        self._next_reconnect_attempt_monotonic: Optional[float] = None
         self._reconnect_retry_delay_s: float = max(
             0.0,
             float(int(getattr(self._args, "overlay_reconnect_retry_delay_ms", 30000) or 0)) / 1000.0,
@@ -196,6 +197,15 @@ class TcpStreamSession(ISession):
     def set_on_app_from_peer_bytes(self, cb): self._on_app_from_peer_bytes = cb
     def set_on_transport_epoch_change(self, cb): self._on_transport_epoch_change = cb
     def set_app_payload_passthrough(self, enabled: bool) -> None: self._app_payload_passthrough = bool(enabled)
+
+    def get_connecting_timer_snapshot(self) -> dict:
+        remaining = None
+        deadline = self._next_reconnect_attempt_monotonic
+        if deadline is not None:
+            remaining = max(0.0, float(deadline) - time.monotonic())
+        return {
+            "next_address_attempt_in_seconds": remaining,
+        }
 
     # ---- ISession: lifecycle ----
     async def start(self) -> None:
@@ -394,6 +404,7 @@ class TcpStreamSession(ISession):
                 "last_incoming_age_seconds": _monotonic_age_seconds_from_ns(
                     int(getattr(self._rtt, "_last_rx_wall_ns", 0) or 0)
                 ),
+                **self.get_connecting_timer_snapshot(),
             }]
 
         rows = [{
@@ -651,6 +662,7 @@ class TcpStreamSession(ISession):
     def _ensure_connect_once(self) -> None:
         if self._connecting_task is not None or not self._peer_tuple or not self._run_flag:
             return
+        self._next_reconnect_attempt_monotonic = None
         host, port = self._peer_tuple
         async def _connect():
             await self._connect_to(host, port)
@@ -667,6 +679,7 @@ class TcpStreamSession(ISession):
             delay = self._reconnect_retry_delay_s
             try:
                 while self._run_flag:
+                    self._next_reconnect_attempt_monotonic = None
                     # If TCP writer exists, exit (RTT runtime will flip overlay state)
                     if self._writer is not None:
                         return
@@ -674,10 +687,12 @@ class TcpStreamSession(ISession):
                     if self._writer is not None:
                         return
                     try:
+                        self._next_reconnect_attempt_monotonic = time.monotonic() + delay
                         await asyncio.sleep(delay)
                     except asyncio.CancelledError:
                         return
             finally:
+                self._next_reconnect_attempt_monotonic = None
                 if self._reconnect_task is asyncio.current_task():
                     self._reconnect_task = None
         self._reconnect_task = self._loop.create_task(_reconnect())
