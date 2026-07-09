@@ -898,6 +898,35 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["verification"]["tun_connectivity"]["target"], "192.168.106.1")
         self.assertEqual(payload["verification"]["tun_global_connectivity"]["target"], "google.de")
 
+    def test_tun_verification_parses_darwin_ifconfig_addresses(self):
+        ifconfig_output = """utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1600
+        inet 192.168.106.3 --> 192.168.106.1 netmask 0xffffff00
+        inet6 fe80::1%utun4 prefixlen 64 scopeid 0x1
+        inet6 fd20:106::3 prefixlen 64
+        """
+
+        with mock.patch("obstacle_bridge.bridge_webadmin.sys.platform", "darwin"), \
+             mock.patch("obstacle_bridge.bridge_webadmin.shutil.which", return_value="/sbin/ifconfig"), \
+             mock.patch("obstacle_bridge.bridge_webadmin.subprocess.run") as run_mock:
+            run_mock.return_value = mock.Mock(returncode=0, stdout=ifconfig_output, stderr="")
+            observed = AdminWebUI._probe_tun_interface_addresses("utun4")
+
+        self.assertEqual(observed["ipv4"], ["192.168.106.3"])
+        self.assertEqual(observed["ipv6"], ["fe80::1", "fd20:106::3"])
+        run_mock.assert_called_once()
+
+    def test_ping_verification_uses_macos_ping_without_linux_family_flag(self):
+        with mock.patch("obstacle_bridge.bridge_webadmin.sys.platform", "darwin"):
+            argv = AdminWebUI._ping_command(
+                ping_bin="/sbin/ping",
+                target="192.168.106.1",
+                ifname="utun4",
+                wait_seconds=1,
+            )
+
+        self.assertEqual(argv, ["/sbin/ping", "-c", "1", "-W", "1", "-b", "utun4", "192.168.106.1"])
+        self.assertNotIn("-4", argv)
+
     def test_cached_ping_verification_returns_pending_and_schedules_background_refresh_on_admin_thread(self):
         args = argparse.Namespace(
             admin_web=True,
@@ -957,6 +986,8 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn("apiFetch('/api/tun-helper/repair'", app_js)
         self.assertIn("Remaining findings:", app_js)
         self.assertIn("document.getElementById('tunHelperRepairBtn')", app_js)
+        self.assertIn("helperBackend === 'linux-native'", app_js)
+        self.assertIn("helperRecovery.repair_supported !== false", app_js)
 
     def test_tun_helper_repair_endpoint_returns_runner_payload(self):
         args = argparse.Namespace(

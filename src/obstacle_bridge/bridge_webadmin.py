@@ -4,6 +4,7 @@ import concurrent.futures
 import copy
 import shutil
 import subprocess
+import sys
 import threading
 
 from ._bridge_import import export_bridge_globals
@@ -612,6 +613,8 @@ class AdminWebUI:
         text_ifname = str(ifname or "").strip()
         if not text_ifname:
             return {"ok": False, "ipv4": [], "ipv6": [], "detail": "TUN interface name unavailable."}
+        if sys.platform == "darwin":
+            return AdminWebUI._probe_tun_interface_addresses_darwin(text_ifname)
         ip_bin = shutil.which("ip")
         if not ip_bin:
             return {"ok": False, "ipv4": [], "ipv6": [], "detail": "ip command unavailable."}
@@ -648,6 +651,56 @@ class AdminWebUI:
             "ipv6": ipv6,
             "detail": str(result.stderr or "").strip(),
         }
+
+    @staticmethod
+    def _probe_tun_interface_addresses_darwin(ifname: str) -> dict[str, Any]:
+        ifconfig_bin = shutil.which("ifconfig")
+        if not ifconfig_bin:
+            return {"ok": False, "ipv4": [], "ipv6": [], "detail": "ifconfig command unavailable."}
+        try:
+            result = subprocess.run(
+                [ifconfig_bin, str(ifname)],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=1.0,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "ipv4": [],
+                "ipv6": [],
+                "detail": f"Interface probe failed: {type(exc).__name__}: {exc}",
+            }
+        ipv4: list[str] = []
+        ipv6: list[str] = []
+        for line in str(result.stdout or "").splitlines():
+            stripped = str(line or "").strip()
+            if stripped.startswith("inet "):
+                parts = stripped.split()
+                if len(parts) >= 2:
+                    ipv4.append(str(parts[1]))
+            elif stripped.startswith("inet6 "):
+                parts = stripped.split()
+                if len(parts) >= 2:
+                    ipv6.append(str(parts[1]).split("%", 1)[0])
+        return {
+            "ok": int(result.returncode or 0) == 0,
+            "ipv4": ipv4,
+            "ipv6": ipv6,
+            "detail": str(result.stderr or "").strip(),
+        }
+
+    @staticmethod
+    def _ping_command(*, ping_bin: str, target: str, ifname: str, wait_seconds: int) -> list[str]:
+        wait = str(max(1, int(wait_seconds)))
+        if sys.platform == "darwin":
+            if ":" in str(target):
+                ping6_bin = shutil.which("ping6") or ping_bin
+                return [ping6_bin, "-c", "1", "-W", wait, "-I", str(ifname), str(target)]
+            return [ping_bin, "-c", "1", "-W", wait, "-b", str(ifname), str(target)]
+        family_flag = "-6" if ":" in str(target) else "-4"
+        return [ping_bin, family_flag, "-c", "1", "-W", wait, "-I", str(ifname), str(target)]
 
     @staticmethod
     def _verification_result(*, label: str, ok: bool, summary: str, detail: str, target: str = "", state: str = "verified") -> dict[str, Any]:
@@ -694,7 +747,12 @@ class AdminWebUI:
             )
         try:
             result = subprocess.run(
-                [ping_bin, "-4", "-c", "1", "-W", str(max(1, int(wait_seconds))), "-I", text_ifname, text_target],
+                AdminWebUI._ping_command(
+                    ping_bin=ping_bin,
+                    target=text_target,
+                    ifname=text_ifname,
+                    wait_seconds=wait_seconds,
+                ),
                 check=False,
                 capture_output=True,
                 text=True,

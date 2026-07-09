@@ -142,6 +142,55 @@ class ChannelMuxTunHelperTests(unittest.IsolatedAsyncioTestCase):
         mux._close_tun_device(dev)
         await asyncio.sleep(0)
 
+    async def test_helper_mode_accepts_darwin_ifconfig_addresses_for_runtime_health(self):
+        args = build_runtime_args_from_config(
+            {
+                "TUN_routing": {
+                    "tunnel_address": "192.168.106.3",
+                    "tunnel_prefix": 24,
+                    "tunnel_address6": "fd20:106::3",
+                    "tunnel_prefix6": 64,
+                },
+                "tun_execution": {
+                    "mode": "helper",
+                    "helper_backend": "darwin-native",
+                },
+            }
+        )
+        args._tun_helper_settings = TunExecutionSettings.from_mapping(vars(args))
+        args._tun_helper_backend = LinuxTunHelperInMemoryBackend()
+        args._tun_helper_client = None
+        session = _FakeSession(connected=True)
+        mux = ChannelMux.from_args(session, asyncio.get_running_loop(), args)
+        svc_key = ("local", 0, 20)
+        spec = ChannelMux.ServiceSpec(
+            svc_id=20,
+            l_proto="tun",
+            l_bind="utun4",
+            l_port=1600,
+            r_proto="tun",
+            r_host="obtun0",
+            r_port=1600,
+        )
+        mux._local_services[svc_key] = spec
+        dev = mux._open_tun_device("utun4", 1600, svc_key=svc_key)
+        mux._svc_tun_devices[svc_key] = dev
+        ifconfig_output = """utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1600
+        inet 192.168.106.3 --> 192.168.106.1 netmask 0xffffff00
+        inet6 fd20:106::3 prefixlen 64
+        """
+
+        with patch("obstacle_bridge.bridge_channelmux.sys.platform", "darwin"), \
+             patch("obstacle_bridge.bridge_channelmux.subprocess.run") as run_mock, \
+             patch.object(mux.log, "critical") as critical:
+            run_mock.return_value = type("Result", (), {"stdout": ifconfig_output})()
+            await mux._run_tun_runtime_health_check(dev, reason="unit-test", delay_s=0)
+
+        self.assertFalse(mux._tun_runtime_health_by_service.get(svc_key))
+        critical.assert_not_called()
+        mux._close_tun_device(dev)
+        await asyncio.sleep(0)
+
     async def test_helper_mode_network_payload_merges_auto_excluded_overlay_routes(self):
         args = build_runtime_args_from_config(
             {

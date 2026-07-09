@@ -71,6 +71,23 @@ def _with_option_value(args: list[str], option: str, value: str) -> list[str]:
     return _strip_option_and_values(args, option) + [option, value]
 
 
+def _macos_tun_lifecycle_hooks(script_name: str) -> dict:
+    return {
+        "listener": {
+            "on_created": {
+                "argv": {
+                    "darwin": [f"./scripts/{script_name}", "up", "{ifname}"],
+                },
+            },
+            "on_stopped": {
+                "argv": {
+                    "darwin": [f"./scripts/{script_name}", "down", "{ifname}"],
+                },
+            },
+        },
+    }
+
+
 def _tun_name(tag: str, side: str) -> str:
     return f"ob{tag}{side}"[:15]
 
@@ -188,6 +205,18 @@ def _dns_servers_for_service(service_name: str) -> list[str]:
     return lines
 
 
+def _wait_dns_servers(service_name: str, expected: list[str], *, timeout: float = 12.0) -> None:
+    end = time.time() + timeout
+    while time.time() < end:
+        if _dns_servers_for_service(service_name) == list(expected):
+            return
+        time.sleep(0.2)
+    raise RuntimeError(
+        f"DNS servers for {service_name!r} did not become {expected!r}; "
+        f"current={_dns_servers_for_service(service_name)!r}"
+    )
+
+
 def _wait_route_interface(host: str, ifname: str, *, inet6: bool = False, timeout: float = 12.0) -> None:
     end = time.time() + timeout
     last = ""
@@ -303,12 +332,15 @@ def _start_tun_bridge_pair(
     mtu: int,
     server_extra_args: Optional[list[str]] = None,
     client_extra_args: Optional[list[str]] = None,
+    server_lifecycle_hooks: Optional[dict] = None,
+    client_lifecycle_hooks: Optional[dict] = None,
 ) -> TunBridgePair:
     materialized = overlay_e2e.materialize_case_ports(base_case, case_index)
     client_spec = json.dumps(
         {
             "listen": {"protocol": "tun", "ifname": client_ifname, "mtu": int(mtu)},
             "target": {"protocol": "tun", "ifname": server_ifname, "mtu": int(mtu)},
+            **({"lifecycle_hooks": client_lifecycle_hooks} if client_lifecycle_hooks is not None else {}),
         },
         separators=(",", ":"),
     )
@@ -316,6 +348,7 @@ def _start_tun_bridge_pair(
         {
             "listen": {"protocol": "tun", "ifname": server_ifname, "mtu": int(mtu)},
             "target": {"protocol": "tun", "ifname": client_ifname, "mtu": int(mtu)},
+            **({"lifecycle_hooks": server_lifecycle_hooks} if server_lifecycle_hooks is not None else {}),
         },
         separators=(",", ":"),
     )
@@ -501,6 +534,202 @@ def _wait_tun_helper_disconnected_runtime(
             return status
         time.sleep(0.2)
     raise RuntimeError(f"helper runtime did not report disconnect for {expected_ifname!r}; last={last!r}")
+
+
+def _addresses_without_prefix(values: object) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return [str(value).split("/", 1)[0].split("%", 1)[0] for value in values]
+
+
+def _wait_tun_status_row(
+    admin_port: int,
+    *,
+    expected_ipv4: str,
+    timeout: float = 20.0,
+) -> dict:
+    end = time.time() + timeout
+    last: dict = {}
+    while time.time() < end:
+        payload = _local_admin_json(admin_port, "/api/tun-routing/status", timeout=5.0)
+        last = payload
+        for row in list(payload.get("tun") or []):
+            local = dict(row.get("local") or {})
+            ifname = str(local.get("ifname") or "")
+            if not ifname.startswith("utun"):
+                continue
+            verification = dict(payload.get("verification") or {})
+            if str(verification.get("ifname") or "") != ifname:
+                continue
+            observed = dict(verification.get("observed_addresses") or {})
+            if expected_ipv4 in _addresses_without_prefix(observed.get("ipv4")):
+                return row
+        time.sleep(0.2)
+    raise RuntimeError(f"TUN status row for IPv4 {expected_ipv4!r} did not appear; last={last!r}")
+
+
+def _wait_tun_status_stat(
+    admin_port: int,
+    ifname: str,
+    stat_name: str,
+    before_value: int,
+    *,
+    timeout: float = 12.0,
+) -> dict:
+    end = time.time() + timeout
+    last: dict = {}
+    while time.time() < end:
+        payload = _local_admin_json(admin_port, "/api/tun-routing/status", timeout=5.0)
+        last = payload
+        for row in list(payload.get("tun") or []):
+            local = dict(row.get("local") or {})
+            if str(local.get("ifname") or "") != str(ifname):
+                continue
+            stats = dict(row.get("stats") or {})
+            if int(stats.get(stat_name) or 0) > int(before_value):
+                return row
+        time.sleep(0.2)
+    raise RuntimeError(
+        f"TUN stat {stat_name} for {ifname} did not increase beyond {before_value}; last={last!r}"
+    )
+
+
+def _wait_tun_admin_verification(
+    admin_port: int,
+    *,
+    expected_ifname: str,
+    expected_ipv4: str,
+    expected_ipv6: str,
+    expected_peer_target: str,
+    expected_global_host: str,
+    timeout: float = 30.0,
+) -> dict:
+    end = time.time() + timeout
+    last: dict = {}
+    while time.time() < end:
+        payload = _local_admin_json(admin_port, "/api/tun-routing/status", timeout=5.0)
+        verification = dict(payload.get("verification") or {})
+        tun_config = dict(verification.get("tun_config") or {})
+        tun_connectivity = dict(verification.get("tun_connectivity") or {})
+        tun_global = dict(verification.get("tun_global_connectivity") or {})
+        observed = dict(verification.get("observed_addresses") or {})
+        observed4 = _addresses_without_prefix(observed.get("ipv4"))
+        observed6 = _addresses_without_prefix(observed.get("ipv6"))
+        last = verification
+        if (
+            str(verification.get("ifname") or "") == expected_ifname
+            and expected_ipv4 in observed4
+            and expected_ipv6 in observed6
+            and tun_config.get("ok") is True
+            and tun_config.get("state") == "verified"
+            and tun_connectivity.get("ok") is True
+            and tun_connectivity.get("state") == "verified"
+            and str(tun_connectivity.get("target") or "") == expected_peer_target
+            and tun_global.get("ok") is True
+            and tun_global.get("state") == "verified"
+            and str(tun_global.get("target") or "") == expected_global_host
+        ):
+            return verification
+        time.sleep(0.5)
+    raise RuntimeError(f"TUN Admin verification did not reach expected state; last={last!r}")
+
+
+def test_macos_elevated_inline_tun_applies_routes_dns_and_reports_verification(tmp_path: Path) -> None:
+    _require_macos_elevated_runtime()
+    _repair_stale_loopback_route()
+    case_tag = "mt500"
+    client_requested_ifname = _tun_name(case_tag, "c")
+    server_requested_ifname = _tun_name(case_tag, "s")
+    route_peer = "1.1.1.1"
+    underlay_if = _route_get_interface(route_peer)
+    underlay_service = _network_service_for_device(underlay_if)
+    original_dns = _dns_servers_for_service(underlay_service) if underlay_service else []
+    inline_args = ["--tun-execution-mode", "inline"]
+    client_routing_args = [
+        "--tunnel-address", "198.18.69.1",
+        "--tunnel-prefix", "24",
+        "--tunnel-gateway", "198.18.69.2",
+        "--tunnel-address6", "fd20:569::1",
+        "--tunnel-prefix6", "64",
+        "--tunnel-gateway6", "fd20:569::2",
+        "--included-routes", "198.18.169.0/24",
+        "--excluded-routes", "127.0.0.0/8",
+        "--included-routes6", "fd20:169::/64",
+        "--excluded-routes6", "::1/128",
+        "--dns-servers", "9.9.9.9", "149.112.112.112",
+        "--global-connectivity-host", "198.18.69.2",
+    ]
+    server_routing_args = [
+        "--tunnel-address", "198.18.69.1",
+        "--tunnel-prefix", "24",
+        "--tunnel-gateway", "198.18.69.2",
+        "--tunnel-address6", "fd20:569::1",
+        "--tunnel-prefix6", "64",
+        "--tunnel-gateway6", "fd20:569::2",
+        "--included-routes", "198.18.69.1/32",
+        "--excluded-routes",
+        "--included-routes6",
+        "--excluded-routes6",
+        "--dns-servers",
+    ]
+    pair = _start_tun_bridge_pair(
+        base_case=overlay_e2e.CASES["case01_udp_over_own_udp_ipv4"],
+        tmp_path=tmp_path,
+        case_index=500,
+        client_ifname=client_requested_ifname,
+        server_ifname=server_requested_ifname,
+        mtu=1400,
+        server_extra_args=inline_args + server_routing_args,
+        client_extra_args=inline_args + client_routing_args,
+        server_lifecycle_hooks=_macos_tun_lifecycle_hooks("server-tun-hook-macos.sh"),
+        client_lifecycle_hooks=_macos_tun_lifecycle_hooks("client-tun-hook-macos.sh"),
+    )
+    client_actual_ifname = ""
+    server_actual_ifname = ""
+    try:
+        client_row = _wait_tun_status_row(pair.client_proc.admin_port or 0, expected_ipv4="198.18.69.1")
+        server_row = _wait_tun_status_row(pair.server_proc.admin_port or 0, expected_ipv4="198.18.69.2")
+        client_actual_ifname = str((client_row.get("local") or {}).get("ifname") or "")
+        server_actual_ifname = str((server_row.get("local") or {}).get("ifname") or "")
+        assert client_actual_ifname.startswith("utun")
+        assert server_actual_ifname.startswith("utun")
+        helper = dict(_local_admin_json(pair.client_proc.admin_port or 0, "/api/status").get("tun_helper") or {})
+        assert helper.get("enabled") is False
+
+        _wait_interface(client_actual_ifname)
+        _wait_interface(server_actual_ifname)
+        _wait_interface_address(client_actual_ifname, "198.18.69.1")
+        _wait_interface_address(client_actual_ifname, "fd20:569::1")
+        _wait_interface_address(server_actual_ifname, "198.18.69.2")
+        _wait_route_interface("198.18.169.10", client_actual_ifname)
+        _wait_route_interface("fd20:169::10", client_actual_ifname, inet6=True)
+        if underlay_service:
+            _wait_dns_servers(underlay_service, ["9.9.9.9", "149.112.112.112"])
+
+        _wait_tun_admin_verification(
+            pair.client_proc.admin_port or 0,
+            expected_ifname=client_actual_ifname,
+            expected_ipv4="198.18.69.1",
+            expected_ipv6="fd20:569::1",
+            expected_peer_target="198.18.69.2",
+            expected_global_host="198.18.69.2",
+        )
+
+        client_before = int((client_row.get("stats") or {}).get("tx_msgs") or 0)
+        server_before = int((server_row.get("stats") or {}).get("rx_msgs") or 0)
+        _send_udp("198.18.69.1", "198.18.69.2", b"darwin-inline-packet-carry-500", port=50100)
+        _wait_tun_status_stat(pair.client_proc.admin_port or 0, client_actual_ifname, "tx_msgs", client_before)
+        _wait_tun_status_stat(pair.server_proc.admin_port or 0, server_actual_ifname, "rx_msgs", server_before)
+    finally:
+        pair.stop()
+        if client_actual_ifname:
+            _wait_interface_absent(client_actual_ifname)
+            _wait_route_not_interface("198.18.169.10", client_actual_ifname)
+            _wait_route_not_interface("fd20:169::10", client_actual_ifname, inet6=True)
+        if server_actual_ifname:
+            _wait_interface_absent(server_actual_ifname)
+        if underlay_service:
+            _wait_dns_servers(underlay_service, original_dns)
 
 
 def test_overlay_e2e_macos_elevated_tun_helper_native_creates_utun_and_applies_hooks(tmp_path: Path) -> None:

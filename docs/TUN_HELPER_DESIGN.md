@@ -2,37 +2,54 @@
 
 ## Goal
 
-Reduce the privilege footprint of desktop TUN operation by moving the host-local
-TUN and route control boundary into a small privileged helper, while keeping the
-main ObstacleBridge runtime unprivileged.
+Keep desktop TUN privilege boundaries narrow and behaviorally aligned across
+the supported implementations. Linux/Python, macOS/Python, and macOS/Swift now
+all have a helper-owned TUN and host-network boundary for the covered paths,
+while the main ObstacleBridge runtime remains responsible for overlay
+transport, mux policy, SecureLink, Admin Web, proxy serving, and configuration.
 
-This document describes a Linux-first design because Linux offers the simplest
-deployment path for a narrow helper. The same Python helper split should also
-support macOS by adding a Darwin backend that owns `utun` and runs the existing
-macOS TUN hook scripts, while the packaging and privilege mechanism remain
-platform-specific.
+This document now records the implemented cross-platform helper contract rather
+than a Linux-first proposal. Linux owns `/dev/net/tun` and host-network state
+through its native helper backend; macOS/Python owns Darwin `utun` and
+route/DNS lifecycle through the `darwin-native` helper plus existing hook
+scripts; macOS/Swift owns the same boundary through its Apple-native package,
+`SMAppService`, and XPC helper transport. iOS intentionally stays outside this
+desktop helper split because Network Extension is already the platform-owned
+privileged packet boundary there.
 
 ## Why
 
-Today the Python desktop runtime is a single process:
+The helper split is now the desktop model for reducing privilege while keeping
+operator behavior consistent across implementations. The runtime still owns the
+large, fast-changing application surface:
 
 - overlay transport sessions
-- SecureLink
-- ChannelMux
-- Admin Web
+- SecureLink and compression
+- ChannelMux policy decisions
+- Admin Web and live status APIs
 - proxy provider
 - lifecycle/config orchestration
+- peer authentication state
+
+The privileged side is intentionally small and host-local:
+
 - local TUN device open/read/write
-- route and hook execution
+- interface address and MTU configuration
+- route/DNS/firewall or hook execution
+- helper runtime diagnostics and cleanup state
 
-When local TUN startup needs elevation, the current entrypoint relaunches the
-entire Python runtime with elevated privilege. That works, but it means the
-whole process owns more privilege than it really needs.
+This split matters even after the first working helper paths have landed. It
+keeps network privilege away from the overlay and Admin runtime, gives Linux,
+macOS Python, and macOS Swift the same operator-visible status concepts, and
+makes abnormal lifecycle cases explicit: helper disconnect, helper death,
+partial apply failure, cleanup attempted/ok state, and stale-state repair
+guidance. Platform mechanisms differ, but the reason for the split is the same:
+the broad runtime should stay unprivileged, while the narrow helper owns only
+the host packet and network-control boundary.
 
-The desired end state is:
-
-- unprivileged main process owns overlay, mux, admin, proxy, and policy
-- privileged helper owns only local TUN and host-network operations
+The legacy whole-process `sudo` path remains useful as an inline fallback while
+helper mode matures, but it is no longer the target architecture for covered
+desktop TUN paths.
 
 ## Scope
 
@@ -544,8 +561,10 @@ explicit opt-in.
 
 The helper effort has moved beyond the original protocol experiment on Linux
 and macOS: the native Linux backend owns real privileged TUN and host-network
-work for the covered paths, and the native Darwin backend now owns the Python
-macOS helper API surface with mocked unit coverage.
+work for the covered paths, the native Darwin backend owns Python/macOS `utun`
+and hook lifecycle on a live elevated path, and Swift/macOS now exposes the same
+helper boundary through an Apple-native package/XPC shape with a loopback
+fallback for unapproved or unreachable helper packages.
 
 ### Completed milestones
 
@@ -568,67 +587,63 @@ macOS helper API surface with mocked unit coverage.
     `utun` open/read/write, utun frame adaptation, Darwin hook apply/remove,
     server backend selection, and helper-subprocess-only macOS sudo launch
     wiring under focused unit coverage
+12. Swift/macOS helper packaging parity is implemented through the
+    Apple-native app package, launch-daemon plist, `SMAppService` lifecycle
+    controls, XPC command transport, packaged-helper packet carry, helper-loss
+    reporting, and stale-package repair coverage; iOS stays on its existing
+    Network Extension packet boundary rather than adding a separate helper
+    process
 
 ### Remaining milestones
 
-12. decide how much of the existing whole-process `sudo` relaunch remains as
+1. decide how much of the existing whole-process `sudo` relaunch remains as
    the default inline fallback as helper mode matures
-13. add broader adverse elevated coverage for post-start helper loss and
-    partial cleanup failure paths
-14. add elevated/live macOS tests or probes for `darwin-native` helper
-    subprocess launch, real `utun` packet carry, helper-side Darwin hook
-    route/DNS effects, status reporting, and teardown cleanup
+2. continue hardening operator recovery after post-start helper loss and
+   partial cleanup failure paths
 
-## Open parity activities for macOS Python and macOS Swift
+## Parity activities for macOS Python and macOS Swift
 
 Recent Linux-native changes expanded the practical helper contract beyond basic
 packet I/O and route apply/remove. To keep macOS Python and macOS Swift aligned
-with that behavior, the following work remains open.
+with that behavior, both macOS implementations need the same operator-visible
+semantics even when the cleanup mechanism differs.
 
-### Python/macOS parity backlog
+### Python/macOS parity status
 
-1. Add elevated/live `darwin-native` coverage for parent-loss behavior so the
-  helper proves the same abnormal-exit cleanup expectations as Linux: helper
-  self-stop after authenticated client loss, kernel/interface teardown, and
-  hook-driven route/DNS cleanup verification.
-2. Mirror Linux helper observability in the Darwin runtime snapshot where it is
-  meaningful: authenticated-client count, structured `last_failure`, last
-  apply/remove payloads, and enough cleanup state to support post-failure
-  diagnosis without attaching to the helper process.
-3. Define whether Python/macOS needs the same startup stale-helper reaping flow
-  as Linux for helper sockets and orphan processes, or whether launchd/macOS
-  process semantics make a narrower cleanup path sufficient. The answer should
-  be explicit and tested rather than implicit.
-4. Prove that the Admin Web TUN verification model remains valid on macOS:
-  observed-address verification, peer gateway verification, and configurable
-  global-connectivity verification should all report consistently when the
-  Darwin helper backend is active.
-5. Review the Darwin hook scripts for idempotent cleanup behavior equivalent to
-  the Linux-native backend's replay and repair expectations, especially for
-  repeated apply/remove, partial failure rollback, and helper death after
-  network state was already applied.
+Python/macOS now has live elevated `darwin-native` coverage for real `utun`
+creation, packet carriage, route/DNS apply/remove, helper-death reporting, and
+hook-driven cleanup verification. Its runtime snapshot mirrors the Linux helper
+fields that are meaningful on Darwin: structured `last_failure`, last
+apply/remove payloads, packet counters, cleanup attempted/ok state, and
+operator-facing recovery warnings when helper-owned route or DNS state may
+still need manual inspection.
 
-### Swift/macOS parity backlog
+The remaining Python/macOS parity work is narrower than the Linux backend
+because Darwin cleanup is hook-driven rather than Linux snapshot-replay driven:
+keep the Darwin hook scripts idempotent across repeated apply/remove and
+partial failure, and only add automated repair UX if Darwin later grows
+persistent helper-owned state that survives helper death in a way the current
+normal shutdown hooks cannot clean up.
 
-1. Keep the Swift privileged-helper design aligned with the now-proven Linux
-  and Python/macOS responsibility split: unprivileged app/runtime owner,
-  narrow privileged tunnel helper, and helper-owned host interface, route,
-  DNS, and cleanup lifecycle.
-2. Carry over the same abnormal-lifecycle requirements into the Swift helper
-  design: authenticated session binding, parent/client-loss shutdown, orphan
-  cleanup expectations, and operator-visible stale-state diagnostics.
-3. Match the observable status model exposed by Python helper mode so the same
-  Admin/TUN concepts exist across products: helper connected state, backend or
-  packaging mode, packet counters, structured last failure, cleanup outcome,
-  and verification results for config, peer connectivity, and global
-  connectivity.
-4. Preserve configurability rather than platform-specific hard-coding for the
-  global connectivity target and any future verification probes so parity does
-  not drift into separate platform policies.
-5. Add Swift/macOS test and probe coverage for the same classes of regressions
-  that recently appeared on Linux: non-canonical host route/state reporting,
-  partial helper apply rollback, helper-loss cleanup, and operator-facing
-  status freshness under verification load.
+### Swift/macOS parity status
+
+Swift/macOS follows the same responsibility split: the app/runtime owns overlay,
+ChannelMux, SecureLink, config, Admin UI, and policy; the helper boundary owns
+the host interface, route/DNS hook execution, packet I/O, and cleanup lifecycle.
+The Admin/runtime status model uses the same concepts as Python helper mode:
+helper connected state, backend/package transport, packet counters, structured
+last failure, cleanup outcome, selected IPC transport, and stale-state recovery
+warnings.
+
+Swift/macOS now also mirrors the Linux recovery contract at the UI/API boundary:
+if a packaged XPC helper is lost after network state was applied, the
+`tun_helper.recovery` object reports `needs_manual_cleanup`,
+`stale_network_possible`, `helper_owned_network_state_may_remain`, and a Darwin
+route/DNS repair hint. Automated stale-state repair remains intentionally
+Linux-native only because the Linux backend can replay cleanup from a runtime
+snapshot; Swift/macOS exposes `/api/tun-helper/repair` with the same
+`repair_supported_only_for_linux_native_helper` reason and the WebAdmin repair
+button is gated to `linux-native`.
 
 ## Python/macOS and Swift parity note
 
@@ -649,7 +664,9 @@ Current parity situation:
 - macOS Swift already has a related privileged-host-runner discussion and
   partial helper direction in `docs/MACOSAPP_DESIGN.md`
 - iOS already has a platform-owned privileged packet boundary through
-  `NEPacketTunnelProvider`
+  `NEPacketTunnelProvider`; because the whole iOS packet-tunnel stack already
+  runs inside that privileged extension boundary, the desktop helper split does
+  not reduce iOS privilege or add useful isolation
 
 As helper mode becomes product behavior, Python/Linux, Python/macOS, and
 Swift/macOS should share the same responsibility split:
@@ -665,6 +682,16 @@ moving toward `SMAppService` plus XPC. The protocol concepts and observable
 state should stay aligned so Admin Web and runtime status mean the same thing
 across products.
 
+For iOS, parity should stay behavioral rather than structural: the iOS app and
+Network Extension should continue to match routing, packet-carry, cleanup, and
+Admin/status semantics where applicable, but should not grow a second local TUN
+helper process merely to mirror the desktop implementation shape. The iOS
+`/api/tun-routing/status` payload therefore mirrors the desktop verification
+fields while using platform-safe Network.framework probes: Network Extension
+settings verify local TUN config, the configured overlay peer endpoint verifies
+peer reachability, and `google.de:443` verifies global reachability by default
+instead of ICMP `ping`.
+
 ## Current working model
 
 The current working model is:
@@ -678,14 +705,17 @@ The current working model is:
 5. main runtime still owns all mux and overlay semantics
 6. helper visibility is exposed in runtime snapshots and on the TUN page
 7. Linux native helper mode now proves actual privileged TUN and route
-   lifecycle ownership; macOS helper mode now has unit-covered Darwin backend
-   and helper-side hook execution, with elevated/live proof still remaining
+   lifecycle ownership; macOS helper mode now has a unit-covered Darwin backend
+   plus elevated/live proof for privileged helper launch, real `utun`
+   creation, packet carry, Darwin hook route/DNS effects, helper-death
+   reporting, and cleanup
 
 This means the branch now answers "can the Linux product run with a reduced
 helper-owned host-network boundary?" for the covered Linux paths, and "can
 Python/macOS use the same helper boundary without relaunching the whole runtime
-through sudo?" at the backend and runner wiring level. The next macOS question
-is live elevated proof on a real host.
+through sudo?" on a real elevated host. The next macOS parity question is how
+the Swift app should package and expose the same split through an Apple-native
+privileged helper.
 
 ## Concrete Implementation State
 
@@ -1068,23 +1098,31 @@ claims that were previously still open:
 - helper death during partial cleanup after earlier remove steps have already
   run and before helper-owned firewall teardown completes
 
-Current elevated integration coverage also includes a first real helper-backed
-macOS lane in `tests/integration/test_macos_elevated.py`:
+Current elevated integration coverage also includes real Python/macOS inline
+and helper-backed lanes in `tests/integration/test_macos_elevated.py`:
 
+- inline mode with `tun_execution.mode=inline`
 - helper mode with `tun_execution.mode=helper`
 - `darwin-native` helper backend selection
+- real Darwin `utun` creation in the inline runtime and in the helper
+  subprocess
+- inline invocation of `scripts/client-tun-hook-macos.sh` and
+  `scripts/server-tun-hook-macos.sh` through service lifecycle hooks
 - helper subprocess elevation through the same Python helper entrypoint used by
   normal macOS helper mode
-- real Darwin `utun` creation inside the helper subprocess
 - helper-owned invocation of `scripts/client-tun-hook-macos.sh` and
   `scripts/server-tun-hook-macos.sh` for apply/remove lifecycle ownership
+- Admin Web TUN config, peer connectivity, and global connectivity verification
+  on the inline path
 - Admin Web helper runtime status reporting for the created `utun` interfaces
-- live packet-carry proof across the helper-backed overlay path
+- live packet-carry proof across the inline and helper-backed overlay paths
+  while inline stats and helper packet counters advance
 - live route and DNS apply/remove proof on a real elevated Darwin path
 - post-start helper-death proof that preserves the last helper runtime snapshot
   and raises the manual-cleanup warning when helper-owned route or DNS state
   may still remain
-- teardown cleanup that verifies the helper-owned `utun` interfaces disappear
+- teardown cleanup that verifies helper-owned `utun` interfaces and helper-
+  managed routes disappear
 
 Remaining work is now broader hardening rather than an uncovered first-lane
 elevated helper scenario on either Linux or macOS. The main uncovered areas
@@ -1099,8 +1137,9 @@ The first elevated case should stay:
 - single helper-backed TUN interface
 
 The first elevated/live Python/macOS helper proof now mirrors that narrow
-shape with a single-peer helper-backed `utun` lane and helper-side invocation
-of the Darwin hook scripts.
+shape with single-peer helper-backed `utun` lanes, helper-side invocation of
+the Darwin hook scripts, packet-carry proof, route/DNS verification, and
+helper-loss cleanup reporting.
 
 ## Open TODOs
 
@@ -1118,10 +1157,226 @@ These are the actionable next steps for the helper effort.
   into explicit repair UX if Darwin later grows persistent helper-owned state
   that can survive helper process death
 
+### Swift/macOS parity action items
+
+This section tracks Swift/macOS parity separately from the Python/macOS helper.
+The current Swift work now includes the contract, host-runner integration
+slice, packaged helper skeleton, XPC command path, Admin activation surface,
+and elevated packet-carry coverage that becomes a required packaged-XPC pass
+once the test host has approved the bundled helper. Functional Swift/macOS
+helper parity is now covered for local signed app activation, register,
+unregister, stale-version repair guidance, packaged-XPC packet carry, route/DNS
+effects, and helper-loss cleanup. Release notarization remains a distribution
+pipeline concern rather than an uncovered helper behavior.
+
+Done in this branch:
+
+- `ObstacleBridgeTunHelperContract.swift` defines the Swift helper
+  command/request model and Python-shaped runtime snapshot fields.
+- The macOS host runner publishes a Python-shaped `tun_helper` status block
+  with backend, lifecycle, realized interface, MTU, hook result, failure, and
+  packet counters for the current privileged host-runner TUN path.
+- The host runner no longer owns the `utun` adapter directly. It talks through
+  `ObstacleBridgeTunHelperClienting`, an in-process macOS helper client
+  wrapper, and a helper-client factory seam so the backend can later be swapped
+  for a real XPC helper without reshaping overlay or ChannelMux code.
+- The delivered helper boundary keeps app/runtime ownership of overlay,
+  ChannelMux, SecureLink, config, Admin UI, and policy, while the helper-side
+  client boundary owns `utun`, MTU/link setup, route/DNS apply/remove, packet
+  I/O, and cleanup.
+- A small in-process command server, command transport protocol, loopback
+  transport, XPC-shaped envelope transport, packet/event envelope model, and
+  loopback helper client exercise the same `OPEN_TUN`, `APPLY_NETWORK`,
+  `REMOVE_NETWORK`, `WRITE_PACKET`, `SNAPSHOT`, and `STOP` shape that the
+  future XPC connection should carry.
+- Swift names the same frame kinds used by the Python helper protocol:
+  `CONTROL_REQUEST`, `CONTROL_RESPONSE`, `PACKET_FROM_HELPER`,
+  `PACKET_TO_HELPER`, and `EVENT`.
+- Packets read from `utun` travel through a `PACKET_FROM_HELPER` envelope
+  before they are handed back to the host runtime.
+- Runtime packet writes travel through a `PACKET_TO_HELPER` transport path
+  before reaching the backend write operation.
+- Helper events travel through an `EVENT` envelope before the in-process path
+  forwards them to the host-runner event sink.
+- Runtime-originated XPC-shaped command and packet envelopes carry monotonic
+  `seq` numbers, and the transport rejects command or packet responses that do
+  not echo the expected sequence.
+- The loopback helper client serializes helper operations and blocks network
+  apply or runtime packet writes until `OPEN_TUN` has produced an actual helper
+  interface name, leaving structured failure diagnostics when callers violate
+  that ordering.
+- Swift probes cover fake-helper open/apply/write/remove/stop ordering,
+  packet-counter state, command/packet/event envelopes, sequence mismatch
+  rejection, pre-open apply/write gating, and direct parity between the Swift
+  helper runtime snapshot and Python `DarwinTunHelperBackend.local_snapshot()`
+  for shared fields.
+- Build wiring includes the shared helper contract in the macOS host-runner
+  and app builds, with Xcode/source-list tests guarding that inclusion.
+- The first helper package skeleton is present: the macOS app build compiles a
+  standalone `ObstacleBridgeTunHelper` executable, bundles it under
+  `Contents/Library/LaunchServices`, writes a LaunchDaemon plist skeleton under
+  `Contents/Library/LaunchDaemons`, and exposes app-side package status plus
+  register/start/stop lifecycle results. The app-side lifecycle now uses
+  `SMAppService.daemon(plistName:)` for real register/unregister calls when
+  the bundled helper and plist are present, reports the current
+  `SMAppService` status, exposes approval-required state, and provides an
+  app-callable action that opens System Settings Login Items when admin
+  approval is needed.
+- The first real XPC transport slice is present: the helper plist declares an
+  XPC Mach service, the helper executable runs an `NSXPCListener` by default,
+  the app side can ping the service after registration, package status reports
+  XPC reachability, and a shared `ObstacleBridgeNSXPCTunHelperCommandTransport`
+  maps the delivered command/packet envelope contract onto `NSXPCConnection`.
+  The XPC service now delegates `OPEN_TUN`, `APPLY_NETWORK`,
+  `REMOVE_NETWORK`, `PACKET_TO_HELPER`/`WRITE_PACKET`, `SNAPSHOT`, and `STOP`
+  envelopes to the shared `ObstacleBridgeTunHelperCommandServer` and a
+  helper-owned backend instead of returning a command stub. Focused Swift
+  probes instantiate the service with a fake backend and prove XPC-shaped
+  command dispatch, packet writes, sequence echoing, and error responses.
+- The macOS host runner now selects the real
+  `ObstacleBridgeNSXPCTunHelperCommandTransport` when package status reports
+  the helper XPC service as reachable, while retaining the in-process loopback
+  transport as the development fallback. Helper status includes the selected
+  transport kind (`xpc`, `loopback`, or the last known value) so Admin/runtime
+  snapshots show whether the packaged helper path or fallback path is in use.
+- Helper-to-runtime callbacks are now part of the XPC contract. The host-side
+  XPC connection exports `ObstacleBridgeTunHelperXPCClientCallbacks`, the
+  helper-side connection declares that callback interface, and helper backend
+  packet/event sinks forward `PACKET_FROM_HELPER` and `EVENT` envelopes back
+  to the runtime packet and event sinks. The host runner advances the
+  runtime-side `packets_to_runtime` counter when packets arrive through the
+  XPC callback path, preserving the Python counter direction.
+- Privileged `utun` open/write/snapshot/stop ownership now follows the XPC
+  path when the packaged helper is reachable: the host runner selects
+  `ObstacleBridgeNSXPCTunHelperCommandTransport` before the loopback fallback,
+  sends `OPEN_TUN`, `PACKET_TO_HELPER`/`WRITE_PACKET`, `SNAPSHOT`, and `STOP`
+  requests over XPC, and receives the helper backend's runtime payload,
+  including the realized kernel interface name. The helper-side XPC service
+  constructs the real macOS backend (`ObstacleBridgeInProcessMacOSTunHelperClient`)
+  inside the helper process, so the production fd owner is the helper rather
+  than the host runner whenever XPC helper mode is active. The loopback backend
+  remains only as the development fallback for uninstalled or unreachable
+  helper packages.
+- Darwin route/DNS hook ownership now follows the helper boundary too. The
+  host runner still renders the existing lifecycle hook argv and the filtered
+  Python-parity environment, but no longer launches the hook process itself.
+  Instead it sends `APPLY_NETWORK` / `REMOVE_NETWORK` to the helper client; the
+  helper backend runs the bundled Darwin hook script, merges the helper-owned
+  environment, emits a `macos_tun_hook_completed` event, and records hook
+  success or structured failure diagnostics in the helper runtime snapshot.
+  Focused Swift probes use harmless temporary hook scripts to prove helper-side
+  hook execution, environment propagation, remove-state clearing, event
+  emission, and nonzero-exit failure reporting.
+- Swift/macOS helper status now carries the Python-shaped runtime and
+  operational diagnostics needed for functional parity: apply/remove counters,
+  last apply/remove payloads, actual interface name, runtime MTU, packet
+  counters in both directions, hook action/argv/env, structured last failure,
+  stopped state, and cleanup attempted/ok flags. The host-runner `tun_helper`
+  status also lifts the most important fields to the top level, reports the
+  selected transport, exposes XPC disconnect reason/detail when the packaged
+  helper becomes unreachable, publishes a cleanup summary based on the last
+  helper runtime snapshot, and emits the Python/Linux-shaped `recovery` warning
+  object when helper-owned route or DNS state may still need manual cleanup.
+  Because automated snapshot repair exists only for `linux-native`, the Swift
+  Admin repair endpoint returns `repair_supported_only_for_linux_native_helper`
+  and the shared WebAdmin repair button remains Linux-gated while still showing
+  macOS recovery guidance.
+- Helper approval and activation are now actionable through the macOS Admin API
+  rather than only visible in raw status JSON. `GET /api/tun-helper/status`
+  returns the host-runner `tun_helper` package/runtime view, and
+  `POST /api/tun-helper/action` accepts `status`, `register`, `start`, `stop`,
+  and `open_approval_settings`. Each action returns the SMAppService/package
+  result plus a fresh `tun_helper` snapshot, so Admin/macOS callers can expose
+  approval-required state, XPC reachability, registration failures, and
+  System Settings approval handoff without taking ownership of the privileged
+  TUN operations. The app/runtime side still owns overlay, ChannelMux,
+  SecureLink, config, Admin UI, and policy; the helper package exposes only
+  the narrow TUN and host-network surface.
+- The macOS helper package now self-validates the bundled helper before
+  registration. Package status runs the bundled `ObstacleBridgeTunHelper
+  --status-json` path for an explicit app bundle, reports
+  `bundled_helper_version`, `bundled_helper_status_ok`,
+  `helper_version_matches_expected`, and `helper_package_valid`, and blocks
+  install support when the helper's reported version does not match
+  `expected_helper_version`. Stale or mismatched helper packages report
+  `lifecycle_phase=helper_version_mismatch`, `repair_action=stop_then_register`,
+  and operator guidance to unregister/stop the helper, replace or rebuild the
+  bundle, and register again. Focused Swift/macOS tests cover both the real
+  built app bundle's matching helper self-report and a synthetic stale-helper
+  bundle.
+- The first live/elevated Swift/macOS helper lane is now covered by
+  `tests/integration/test_macos_swift_elevated.py` and
+  `scripts/run_macos_swift_elevated_tests.sh`. That lane builds the macOS app
+  bundle, launches `ObstacleBridgeHostRunner` from inside the bundle so the
+  bundled Darwin hook scripts are used, pairs it with a Python
+  `darwin-native` helper peer, creates a real Swift-owned `utun`, applies the
+  client Darwin hook, verifies Admin helper runtime status including actual
+  interface name and MTU, sends a packet through the Swift TUN path, observes
+  Swift `packets_to_runtime` and Python peer `packets_from_runtime` movement,
+  and verifies helper-owned interface teardown.
+- The elevated Swift/macOS lane now also includes
+  `test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved`.
+  It drives the Admin helper registration action, waits for packaged XPC
+  reachability, requires the runtime helper transport to be `xpc`, and then
+  proves the same live packet-carry path through the packaged helper. If macOS
+  reports `SMAppService` `requires_approval`, the test skips with an explicit
+  System Settings approval reason instead of silently falling back to the
+  loopback helper.
+- Swift route/DNS apply/remove effects beyond the first narrow address lane are
+  now covered by
+  `test_macos_swift_elevated_helper_applies_routes_and_dns_live`. The test
+  runs the built app bundle on a real elevated Darwin host, forces the
+  non-packaged loopback helper transport so stale or approved XPC package state
+  cannot change the lane being tested, verifies helper-propagated
+  `INCLUDED_ROUTES`, `INCLUDED_ROUTES6`, `DNS1`, and `DNS2`, checks live IPv4
+  and IPv6 routes through the created `utun`, checks DNS application through
+  `networksetup`, asserts the Swift `/api/tun-routing/status` Admin
+  verification payload for local config, peer TUN reachability, and global
+  connectivity parity with the Linux/Python status payload, and then verifies
+  route and DNS restoration after teardown.
+- Swift packaged-helper death reporting plus interface/route cleanup is now
+  covered by
+  `test_macos_swift_elevated_packaged_xpc_helper_death_reports_and_cleans_routes`.
+  The host runner now exposes the packaged helper's XPC PID and runtime state
+  in the helper package snapshot, detects the `xpc_runtime_lost` condition when
+  launchd restarts a helper with an empty runtime after the old helper was
+  killed, and reports `helper_disconnect` plus cleanup-needed state. The live
+  elevated test kills the real packaged helper process, verifies the helper-
+  owned `utun` and included route disappear, and asserts the Admin helper
+  snapshot reports the lost packaged-helper runtime.
+- Live signed helper activation from an installed macOS app is now covered by
+  `test_macos_swift_elevated_installed_signed_app_admin_helper_actions`. The
+  test copies the built app bundle into
+  `/Applications/ObstacleBridgeSMAppServiceActivationTest.app`, ad-hoc signs
+  the installed bundle, launches `ObstacleBridgeHostRunner` from that installed
+  app path, and exercises `/api/tun-helper/status` plus `stop`, `register`,
+  `start`, and `unregister` Admin helper actions. It verifies the package
+  snapshot points at the installed app, is accepted by `SMAppService`, reports
+  a valid bundled helper and launch-daemon plist, and proves registered,
+  running, and XPC-reachable state when the host has approved the helper. The
+  same live lane then installs a locally signed stale helper package at the
+  same `/Applications` path, verifies `helper_version_mismatch`,
+  `repair_action=stop_then_register`, and the operator repair hint, runs the
+  unregister step, replaces the bundle with the valid signed app, and proves
+  register plus XPC reachability again. If a fresh host reports
+  `requires_approval`, the same test asserts the approval-required fields and
+  skips with the exact System Settings action instead of treating an unapproved
+  helper as a runtime failure.
+
+No functional Swift/macOS parity work packages remain open in this helper
+design. Future release work can still add separate notarization/stapling proof
+for the shipping artifact, but the helper behavior itself is now covered by
+local signed live tests and focused Swift source/package probes.
+
+iOS remains intentionally out of this desktop helper split. The iOS Network
+Extension already runs as the platform-owned privileged packet boundary, so iOS
+parity work should focus on matching packet, routing, cleanup, and status
+behavior rather than adding a second local helper process.
+
 ### Deliberately deferred
 
-- Swift/macOS packaging parity for the helper split through the Apple-native
-  helper direction in `docs/MACOSAPP_DESIGN.md`
+- release notarization/stapling proof for the shipping Swift/macOS helper
+  artifact
 - Windows helper/service design
 - richer helper logging transport and reconnect counters
 - any helper awareness of shared-TUN peer ownership beyond pure host-local

@@ -381,7 +381,7 @@ route_spec_probe_host_v4() {
   local route_spec="$1"
   case "$route_spec" in
     "0.0.0.0/1")
-      printf '%s' "1.1.1.1"
+      printf '%s' "1.0.0.1"
       ;;
     "128.0.0.0/1")
       printf '%s' "142.251.20.94"

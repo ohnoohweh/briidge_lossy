@@ -198,6 +198,8 @@ def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route(
     assert 'printf \'%s\\n\' "0.0.0.0/1"' in script
     assert 'printf \'%s\\n\' "128.0.0.0/1"' in script
     assert 'route_spec_probe_host_v4() {' in script
+    assert 'printf \'%s\' "1.0.0.1"' in script
+    assert 'printf \'%s\' "1.1.1.1"' not in script
     assert 'route -n get "$probe"' in script
     assert 'failed to install IPv4 split full-tunnel routes via $IFNAME; keeping underlay defaults' in script
     assert 'expand_included_routes_v6() {' in script

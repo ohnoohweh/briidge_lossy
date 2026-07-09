@@ -214,6 +214,8 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "native/ObstacleBridgeShared/ObstacleBridgeOverlayChannelCore.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeChannelMuxUdpRuntime.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTunRuntime.swift" in patched
+    assert "native/ObstacleBridgeShared/ObstacleBridgeTunHelperContract.swift" in patched
+    assert "native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeAdminAPI.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeChannelMuxCodec.swift" in patched
@@ -244,6 +246,8 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "ObstacleBridgeHostRunner.swift in Sources" in patched
     assert "ObstacleBridgeGeneratedBuildStamp.swift in Sources" in patched
     assert "ObstacleBridgeMacOSTunAdapter.swift in Sources" in patched
+    assert "ObstacleBridgeTunHelperContract.swift in Sources" in patched
+    assert "ObstacleBridgeTunHelperXPCTransport.swift in Sources" in patched
     assert "SWIFT_VERSION = 5.0;" in patched
     assert 'CODE_SIGN_ENTITLEMENTS = "../../../../native/ObstacleBridgeApp/ObstacleBridge.entitlements";' in patched
     assert 'export EXPANDED_CODE_SIGN_IDENTITY=-' in patched

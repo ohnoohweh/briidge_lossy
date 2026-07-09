@@ -607,10 +607,16 @@ REQ-LIFE-010:
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_reports_post_start_helper_loss
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_programs_excluded_routes_and_full_tunnel_policy
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_programs_server_firewall_lifecycle
+    - tests/integration/test_macos_elevated.py::test_macos_elevated_inline_tun_applies_routes_dns_and_reports_verification
     - tests/integration/test_macos_elevated.py::test_macos_elevated_darwin_native_helper_applies_routes_and_dns_live
     - tests/integration/test_macos_elevated.py::test_overlay_e2e_macos_elevated_tun_helper_native_creates_utun_and_applies_hooks
     - tests/integration/test_macos_elevated.py::test_overlay_e2e_macos_elevated_tun_helper_native_reports_helper_death_cleanup
     - tests/integration/test_macos_elevated.py::test_overlay_e2e_macos_elevated_tun_helper_native_reports_helper_death_with_route_dns_warning
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_host_runner_creates_utun_and_carries_packets
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_helper_applies_routes_and_dns_live
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_death_reports_and_cleans_routes
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_installed_signed_app_admin_helper_actions
   unit_tests:
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_flat_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_sectioned_config
@@ -706,6 +712,7 @@ REQ-LIFE-010:
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
     - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_restart_reloads_runtime_config_from_disk
     - ios/tests/test_ios_e2e_app_runner.py::test_e2e_runner_runtime_config_reports_webadmin_url_and_started_state
+    - ios/tests/test_m3_native_sources.py::test_ios_packet_tunnel_tun_routing_verification_source_exists
 
 REQ-LIFE-011:
   integration_tests:
@@ -800,7 +807,12 @@ REQ-MUX-006:
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_disconnect_cleanup_rebinds_peer
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_myudp_channel_open
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_ws_secure_link_channel_open
+    - tests/integration/test_macos_elevated.py::test_macos_elevated_inline_tun_applies_routes_dns_and_reports_verification
     - tests/integration/test_macos_elevated.py::test_overlay_e2e_macos_elevated_tun_helper_native_creates_utun_and_applies_hooks
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_host_runner_creates_utun_and_carries_packets
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_helper_applies_routes_and_dns_live
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_death_reports_and_cleans_routes
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_opens_channel_and_sends_data
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_device_keeps_symmetric_channel_aliases_routable
@@ -842,8 +854,13 @@ REQ-MUX-009:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_structured_remote_servers_udp_forwarding
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_two_clients_routes_and_rejects_spoof
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_disconnect_cleanup_rebinds_peer
+    - tests/integration/test_macos_elevated.py::test_macos_elevated_inline_tun_applies_routes_dns_and_reports_verification
     - tests/integration/test_macos_elevated.py::test_macos_elevated_darwin_native_helper_applies_routes_and_dns_live
     - tests/integration/test_macos_elevated.py::test_overlay_e2e_macos_elevated_tun_helper_native_creates_utun_and_applies_hooks
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_host_runner_creates_utun_and_carries_packets
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_helper_applies_routes_and_dns_live
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_death_reports_and_cleans_routes
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_parse_remote_servers_accepts_structured_specs
     - tests/unit/test_channel_mux_listener_mode.py::test_channel_mux_default_system_egress_auth_is_platform_scoped
@@ -934,6 +951,7 @@ REQ-MUX-010:
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_can_fallback_to_remote_peer_addr
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_applies_tun_routing_override
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists
+    - ios/tests/test_m3_native_sources.py::test_ios_packet_tunnel_tun_routing_verification_source_exists
 
 REQ-MYU-001:
   integration_tests:

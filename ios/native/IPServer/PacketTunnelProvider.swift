@@ -1323,6 +1323,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             payload["included_routes6"] = Self.ipv6RouteCIDRList(effectivePacketTunnelSettingsState["included_routes6"])
             payload["excluded_routes6"] = Self.ipv6RouteCIDRList(effectivePacketTunnelSettingsState["excluded_routes6"])
         }
+        payload["verification"] = adminTunRoutingVerificationPayload(payload: payload)
         return payload
     }
 
@@ -1854,6 +1855,212 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             return NSNull()
         }
         return ["host": host, "port": port]
+    }
+
+    private func adminTunRoutingVerificationPayload(payload: [String: Any]) -> [String: Any] {
+        let runtimeConfig = adminRuntimeConfigPayload() ?? [:]
+        let tunRouting = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig)
+        let expected4 = (tunRouting?.tunnelAddress ?? PacketTunnelProvider.defaultTunnelAddress)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let expected6 = (tunRouting?.tunnelAddress6 ?? PacketTunnelProvider.defaultTunnelAddress6)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let observed = Self.iOSTunObservedAddresses(from: effectivePacketTunnelSettingsState)
+        let observed4 = observed["ipv4"] as? [String] ?? []
+        let observed6 = observed["ipv6"] as? [String] ?? []
+        let configOK = packetPumpRunning
+            && !effectivePacketTunnelSettingsState.isEmpty
+            && (expected4.isEmpty || observed4.contains(expected4))
+            && (expected6.isEmpty || observed6.contains(expected6))
+        let configDetail: String
+        if effectivePacketTunnelSettingsState.isEmpty {
+            configDetail = "Network Extension tunnel settings are not applied yet."
+        } else {
+            configDetail = "Observed Network Extension addresses: IPv4 \(observed4.isEmpty ? "-" : observed4.joined(separator: ", ")), IPv6 \(observed6.isEmpty ? "-" : observed6.joined(separator: ", "))."
+        }
+        let globalHost = (ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["global_connectivity_host"])
+            ?? ObstacleBridgeRuntimeConfig.stringValue(from: (runtimeConfig["TUN_routing"] as? [String: Any])?["global_connectivity_host"])
+            ?? "google.de")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let peerProbe = Self.iOSTunPeerProbeEndpoint(runtimeConfig: runtimeConfig)
+        return [
+            "ifname": "NEPacketTunnelFlow",
+            "observed_addresses": observed,
+            "global_connectivity_host": globalHost,
+            "tun_config": Self.iOSVerificationResult(
+                label: "TUN config verified",
+                ok: configOK,
+                state: configOK ? "verified" : "failed",
+                summary: "TUN config verified\(configOK ? "" : ": failed")",
+                detail: configDetail,
+                method: "network_extension_settings"
+            ),
+            "tun_connectivity": Self.iOSEndpointReachabilityVerification(
+                label: "TUN peer connectivity verified",
+                host: peerProbe.host,
+                port: peerProbe.port,
+                transport: peerProbe.transport,
+                timeoutSeconds: 2.0
+            ),
+            "tun_global_connectivity": Self.iOSEndpointReachabilityVerification(
+                label: "TUN global connectivity verified",
+                host: globalHost,
+                port: 443,
+                transport: "tcp",
+                timeoutSeconds: 2.5
+            ),
+        ]
+    }
+
+    private static func iOSTunObservedAddresses(from settings: [String: Any]) -> [String: Any] {
+        var ipv4: [String] = []
+        var ipv6: [String] = []
+        if let address = settings["tunnel_address"] as? String,
+           !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            ipv4.append(address)
+        }
+        if let address = settings["tunnel_address6"] as? String,
+           !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            ipv6.append(address)
+        }
+        return [
+            "ok": !settings.isEmpty,
+            "ipv4": ipv4,
+            "ipv6": ipv6,
+            "detail": settings.isEmpty ? "Network Extension tunnel settings are not applied yet." : "",
+        ]
+    }
+
+    private static func iOSTunPeerProbeEndpoint(runtimeConfig: [String: Any]) -> (transport: String, host: String, port: Int) {
+        let transport = (ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let host = (ObstacleBridgeRuntimeConfig.peerHost(for: transport, payload: runtimeConfig) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let port: Int
+        switch transport {
+        case "tcp":
+            port = ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["tcp_peer_port"]) ?? 0
+        case "ws":
+            port = ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["ws_peer_port"]) ?? 0
+        case "quic":
+            port = ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["quic_peer_port"]) ?? 0
+        default:
+            port = ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["udp_peer_port"]) ?? 0
+        }
+        return (transport: transport, host: host, port: port)
+    }
+
+    private static func iOSVerificationResult(
+        label: String,
+        ok: Bool,
+        state: String,
+        summary: String,
+        detail: String,
+        target: String = "",
+        method: String,
+        port: Int? = nil
+    ) -> [String: Any] {
+        var payload: [String: Any] = [
+            "label": label,
+            "ok": ok,
+            "state": state,
+            "summary": summary,
+            "detail": detail,
+            "target": target,
+            "method": method,
+            "checked_at_unix_ts": Date().timeIntervalSince1970,
+        ]
+        if let port {
+            payload["port"] = port
+        }
+        return payload
+    }
+
+    private static func iOSEndpointReachabilityVerification(
+        label: String,
+        host: String,
+        port: Int,
+        transport: String,
+        timeoutSeconds: TimeInterval
+    ) -> [String: Any] {
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedTransport = transport.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmedHost.isEmpty, port > 0, port <= 65535 else {
+            return iOSVerificationResult(
+                label: label,
+                ok: false,
+                state: "skipped",
+                summary: "\(label): skipped",
+                detail: "Reachability target is not configured.",
+                target: trimmedHost,
+                method: "network_framework_endpoint",
+                port: port > 0 ? port : nil
+            )
+        }
+        guard let endpointPort = NWEndpoint.Port(rawValue: UInt16(port)) else {
+            return iOSVerificationResult(
+                label: label,
+                ok: false,
+                state: "skipped",
+                summary: "\(label): skipped",
+                detail: "Reachability target port is invalid.",
+                target: trimmedHost,
+                method: "network_framework_endpoint",
+                port: port
+            )
+        }
+        let usesUDP = normalizedTransport == "myudp" || normalizedTransport == "udp" || normalizedTransport == "quic"
+        let parameters = usesUDP ? NWParameters.udp : NWParameters.tcp
+        let method = usesUDP ? "network_framework_udp_path" : "network_framework_tcp_connect"
+        let semaphore = DispatchSemaphore(value: 0)
+        let connection = NWConnection(host: NWEndpoint.Host(trimmedHost), port: endpointPort, using: parameters)
+        let lock = NSLock()
+        var ready = false
+        var detail = ""
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                lock.lock()
+                ready = true
+                detail = usesUDP
+                    ? "Network.framework reported a ready UDP path to \(trimmedHost):\(port)."
+                    : "Network.framework connected to \(trimmedHost):\(port)."
+                lock.unlock()
+                semaphore.signal()
+            case .failed(let error):
+                lock.lock()
+                ready = false
+                detail = error.localizedDescription
+                lock.unlock()
+                semaphore.signal()
+            case .waiting(let error):
+                lock.lock()
+                if detail.isEmpty {
+                    detail = error.localizedDescription
+                }
+                lock.unlock()
+            default:
+                break
+            }
+        }
+        connection.start(queue: DispatchQueue.global(qos: .utility))
+        let timeoutMilliseconds = max(1, Int((timeoutSeconds * 1000.0).rounded()))
+        let timedOut = semaphore.wait(timeout: .now() + .milliseconds(timeoutMilliseconds)) == .timedOut
+        connection.cancel()
+        lock.lock()
+        let ok = ready && !timedOut
+        let finalDetail = timedOut ? "Reachability probe timed out after \(timeoutSeconds)s." : detail
+        lock.unlock()
+        return iOSVerificationResult(
+            label: label,
+            ok: ok,
+            state: ok ? "verified" : "failed",
+            summary: "\(label): \(ok ? "verified" : "failed")",
+            detail: finalDetail.isEmpty ? (ok ? "Reachability probe succeeded." : "Reachability probe failed.") : finalDetail,
+            target: trimmedHost,
+            method: method,
+            port: port
+        )
     }
 
     private static func packetTunnelSettingsSnapshot(_ configuration: ObstacleBridgePacketTunnelConfiguration) -> [String: Any] {

@@ -1437,6 +1437,32 @@ class ChannelMux:
             "stdout4": "",
             "stdout6": "",
         }
+        if sys.platform == "darwin" and str(ifname or "").strip():
+            result = subprocess.run(
+                ["ifconfig", str(ifname)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=2.0,
+            )
+            stdout = str(getattr(result, "stdout", "") or "")
+            out["stdout4"] = stdout
+            out["stdout6"] = stdout
+            ipv4: list[str] = []
+            ipv6: list[str] = []
+            for line in stdout.splitlines():
+                row = str(line or "").strip()
+                if row.startswith("inet "):
+                    parts = row.split()
+                    if len(parts) >= 2:
+                        ipv4.append(str(parts[1]))
+                elif row.startswith("inet6 "):
+                    parts = row.split()
+                    if len(parts) >= 2:
+                        ipv6.append(str(parts[1]).split("%", 1)[0])
+            out["ipv4"] = ipv4
+            out["ipv6"] = ipv6
+            return out
         if not sys.platform.startswith("linux") or not str(ifname or "").strip():
             return out
         for family_flag, key, field in (

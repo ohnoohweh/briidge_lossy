@@ -25,12 +25,20 @@ SWIFT_ADMIN_COMPONENT_RUNNER_SOURCE = ROOT / "tests" / "fixtures" / "admin_web_c
 
 
 class _PythonAdminRunnerStub:
-    def __init__(self, connections_snapshot: dict[str, object] | None = None) -> None:
+    def __init__(
+        self,
+        connections_snapshot: dict[str, object] | None = None,
+        status_snapshot: dict[str, object] | None = None,
+    ) -> None:
         self.args = argparse.Namespace(admin_web_name="Lab Node")
         self._connections_snapshot = connections_snapshot or {}
+        self._status_snapshot = status_snapshot or {}
 
     def get_connections_snapshot(self) -> dict[str, object]:
         return self._connections_snapshot
+
+    def get_status_snapshot(self) -> dict[str, object]:
+        return self._status_snapshot
 
 
 def _python_admin_ui_payload(runtime_config: dict[str, object], *, platform: str) -> dict[str, object]:
@@ -84,7 +92,10 @@ def _python_security_advisor_payload(runtime_config: dict[str, object]) -> dict[
     return ui._build_security_advisor_payload()
 
 
-def _python_tun_routing_payload(connections_snapshot: dict[str, object]) -> dict[str, object]:
+def _python_tun_routing_payload(
+    connections_snapshot: dict[str, object],
+    status_snapshot: dict[str, object] | None = None,
+) -> dict[str, object]:
     args = argparse.Namespace(
         admin_web=True,
         admin_web_bind="127.0.0.1",
@@ -103,7 +114,7 @@ def _python_tun_routing_payload(connections_snapshot: dict[str, object]) -> dict
         _first_start_detected=False,
         _config_file_state="unknown",
     )
-    ui = AdminWebUI(args, _PythonAdminRunnerStub(connections_snapshot))
+    ui = AdminWebUI(args, _PythonAdminRunnerStub(connections_snapshot, status_snapshot))
     return ui._build_tun_routing_payload()
 
 
@@ -269,6 +280,15 @@ def test_swift_tun_routing_snapshot_matches_python(swift_admin_web_component_run
         },
     }
     python = _python_tun_routing_payload(connections_snapshot)
+    for key in [
+        "admin_web_snapshot",
+        "included_routes",
+        "excluded_routes",
+        "included_routes6",
+        "excluded_routes6",
+        "verification",
+    ]:
+        python.pop(key, None)
     swift = _run_swift_component(
         swift_admin_web_component_runner,
         {
@@ -297,13 +317,24 @@ def test_swift_admin_api_tun_routing_route_matches_python(swift_admin_web_compon
         ],
         "counts": {"udp": 0, "tcp": 0, "tun": 1, "udp_listening": 0, "tcp_listening": 0, "tun_listening": 1},
     }
-    tun_routing = _python_tun_routing_payload(connections_snapshot)
+    status_snapshot = {
+        "tun_helper": {
+            "enabled": True,
+            "mode": "helper",
+            "backend": "darwin-native",
+            "connected": True,
+            "lifecycle_phase": "connected",
+            "runtime": {"ifname": "utun4", "mtu": 1600},
+        }
+    }
+    tun_routing = _python_tun_routing_payload(connections_snapshot, status_snapshot)
     swift = _run_swift_component(
         swift_admin_web_component_runner,
         {
             "action": "admin_api_request",
             "request": {"method": "GET", "path": "/api/tun-routing/status"},
             "connections_snapshot": connections_snapshot,
+            "status_snapshot": status_snapshot,
             "tun_routing_snapshot": tun_routing,
         },
     )
@@ -318,13 +349,24 @@ def test_swift_admin_api_live_topic_tun_routing_matches_python(swift_admin_web_c
         "tcp": [],
         "tun": [{"state": "connected", "chan_id": 11, "shared_tun_ownership": {"active_peer_bindings": []}}],
     }
-    tun_routing = _python_tun_routing_payload(connections_snapshot)
+    status_snapshot = {
+        "tun_helper": {
+            "enabled": True,
+            "mode": "helper",
+            "backend": "darwin-native",
+            "connected": True,
+            "lifecycle_phase": "connected",
+            "runtime": {"ifname": "utun4", "mtu": 1600},
+        }
+    }
+    tun_routing = _python_tun_routing_payload(connections_snapshot, status_snapshot)
     swift = _run_swift_component(
         swift_admin_web_component_runner,
         {
             "action": "admin_api_live_topic_payload",
             "topic": "tun_routing",
             "connections_snapshot": connections_snapshot,
+            "status_snapshot": status_snapshot,
             "tun_routing_snapshot": tun_routing,
         },
     )

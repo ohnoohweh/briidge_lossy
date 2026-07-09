@@ -104,6 +104,13 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert 'schemaItem(key: "ws_bind"' in runtime_config
     assert 'schemaItem(key: "ws_own_port"' in runtime_config
     assert 'schemaItem(key: "ws_path"' in runtime_config
+    assert '"tun_execution"' in runtime_config
+    assert 'schemaItem(key: "tun_execution_mode", description: "Desktop local TUN execution topology: inline current-process ownership or helper-backed ownership.", defaultValue: "inline", choices: ["inline", "helper"])' in runtime_config
+    assert 'schemaItem(key: "tun_helper_backend", description: "Helper backend identifier for helper mode. Values include linux-native, linux-python, and darwin-native.", defaultValue: "linux-native")' in runtime_config
+    assert 'schemaItem(key: "tun_helper_apply_network", description: "Whether the helper should own privileged address/route/DNS/firewall apply-remove work.", defaultValue: true)' in runtime_config
+    assert 'private static let tunExecutionCompatibilityAliases = [' in runtime_config
+    assert '"mode": "tun_execution_mode"' in runtime_config
+    assert '"helper_backend": "tun_helper_backend"' in runtime_config
     assert '"proxy_provider"' in runtime_config
     assert 'schemaItem(key: "proxy_provider_enabled", description: "Enable the explicit HTTP CONNECT and SOCKS5 proxy provider."' in runtime_config
     assert 'schemaItem(key: "proxy_provider_http_port", description: "Local HTTP/CONNECT proxy listener port."' in runtime_config
@@ -397,6 +404,23 @@ def test_admin_api_source_exists() -> None:
     assert '"admin_api_request"' in runtime
 
 
+def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
+    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+
+    assert 'payload["verification"] = adminTunRoutingVerificationPayload(payload: payload)' in provider
+    assert "private func adminTunRoutingVerificationPayload(payload: [String: Any]) -> [String: Any]" in provider
+    assert '"ifname": "NEPacketTunnelFlow"' in provider
+    assert '"tun_config": Self.iOSVerificationResult(' in provider
+    assert '"tun_connectivity": Self.iOSEndpointReachabilityVerification(' in provider
+    assert '"tun_global_connectivity": Self.iOSEndpointReachabilityVerification(' in provider
+    assert '?? "google.de")' in provider
+    assert "port: 443" in provider
+    assert 'method: "network_extension_settings"' in provider
+    assert 'let method = usesUDP ? "network_framework_udp_path" : "network_framework_tcp_connect"' in provider
+    assert "NWConnection(host: NWEndpoint.Host(trimmedHost), port: endpointPort, using: parameters)" in provider
+    assert "DispatchSemaphore(value: 0)" in provider
+
+
 def test_macos_swift_host_runner_source_exists() -> None:
     wrapper = (APP_NATIVE_DIR / "ObstacleBridgeHostRunnerMain.swift").read_text(encoding="utf-8")
     runtime = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
@@ -455,6 +479,7 @@ def test_macos_app_main_source_exists() -> None:
     control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
     runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     macos_tun = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunAdapter.swift").read_text(encoding="utf-8")
+    tun_helper_contract = (SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperContract.swift").read_text(encoding="utf-8")
 
     assert "@main" in app_main
     assert "WKWebView" in app_main
@@ -485,6 +510,13 @@ def test_macos_app_main_source_exists() -> None:
     assert "ObstacleBridge.app" in build_script
     assert "ObstacleBridgeMacAppMain.swift" in build_script
     assert "ObstacleBridgeMacOSTunAdapter.swift" in build_script
+    assert "ObstacleBridgeTunHelperContract.swift" in build_script
+    assert "ObstacleBridgeTunHelperXPCTransport.swift" in build_script
+    assert "ObstacleBridgeMacOSTunHelperService.swift" in build_script
+    assert "ObstacleBridgeTunPrivilegedHelperMain.swift" in build_script
+    assert "ObstacleBridgeTunHelper" in build_script
+    assert "Library/LaunchServices" in build_script
+    assert "Library/LaunchDaemons" in build_script
     assert 'cp "${BINARY_PATH}" "${APP_MACOS_DIR}/ObstacleBridgeHostRunner"' in build_script
     assert "codesign" in build_script
     assert 'APP_ENTITLEMENTS="${OBSTACLEBRIDGE_CODESIGN_ENTITLEMENTS:-}"' in build_script
@@ -492,6 +524,8 @@ def test_macos_app_main_source_exists() -> None:
     assert 'OBSTACLEBRIDGE_SWIFT_FAILURE_INJECTION' in build_script
     assert 'SWIFT_EXTRA_FLAGS+=("-DOBSTACLEBRIDGE_FAILURE_INJECTION")' in build_script
     assert "tunServiceSpec: tunService?.toChannelMuxServiceSpec()" in runner
+    assert 'case openTun = "OPEN_TUN"' in tun_helper_contract
+    assert "iOSUsesNetworkExtensionBoundary = true" in tun_helper_contract
 
 
 def test_websocket_payload_codec_source_exists() -> None:

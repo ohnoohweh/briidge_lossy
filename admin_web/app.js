@@ -3139,8 +3139,15 @@ function applyTunRoutingDoc(j) {
   setText('tunHelperLastRepair', helperLastRepairText);
   const helperRepairBtn = document.getElementById('tunHelperRepairBtn');
   if (helperRepairBtn instanceof HTMLButtonElement) {
-    helperRepairBtn.classList.toggle('hidden', !(helperRecovery && helperRecovery.needs_manual_cleanup));
-    helperRepairBtn.disabled = !(helperRecovery && helperRecovery.needs_manual_cleanup);
+    const helperBackend = String(helper.backend || runtime.backend || '').toLowerCase();
+    const helperRepairAvailable = Boolean(
+      helperRecovery &&
+      helperRecovery.needs_manual_cleanup &&
+      helperBackend === 'linux-native' &&
+      helperRecovery.repair_supported !== false
+    );
+    helperRepairBtn.classList.toggle('hidden', !helperRepairAvailable);
+    helperRepairBtn.disabled = !helperRepairAvailable;
   }
 }
 
