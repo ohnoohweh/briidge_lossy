@@ -35,7 +35,9 @@ pytestmark = [
 
 
 def _running_in_github_actions() -> bool:
-    return os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
+    return os.environ.get("GITHUB_ACTIONS", "").lower() == "true" or os.environ.get(
+        "OBSTACLEBRIDGE_GITHUB_ACTIONS", ""
+    ).lower() == "true"
 
 
 def _require_macos_elevated_runtime() -> None:
@@ -572,10 +574,10 @@ def _wait_tun_status_row(
             ifname = str(local.get("ifname") or "")
             if not ifname.startswith("utun"):
                 continue
+            last_matching_row = row
             verification = dict(payload.get("verification") or {})
             if str(verification.get("ifname") or "") != ifname:
                 continue
-            last_matching_row = row
             observed = dict(verification.get("observed_addresses") or {})
             if expected_ipv4 in _addresses_without_prefix(observed.get("ipv4")):
                 return row

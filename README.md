@@ -1533,6 +1533,7 @@ Important caveat:
 - The Linux shared integration subset is currently validated with the runtime-generated localhost TLS fixture set and the availability-aware loopback port allocator in the integration harness.
 - Certificate revocation reload coverage now treats `/api/status` reload scope/result and dropped-peer counters as the stable post-disconnect signal, because the peer-scoped failed row can be transient after the revoked secure-link session is torn down.
 - The Linux shared subset also includes a listener stale-junk-peer regression that waits for `/api/peers` decode-error visibility before asserting stale-row reap behavior, which keeps the gate aligned with the admin snapshot's eventually consistent update path.
+- macOS elevated scripts preserve the GitHub Actions marker through sudo so hosted-runner diagnostic branches remain active after privilege escalation.
 
 ### Development environment and procedure
 - Feature development is done on Fedora 42.

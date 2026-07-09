@@ -1211,7 +1211,19 @@ class Runner:
         }
 
     def get_status_snapshot(self) -> dict:
-        payload = dict(self.stats.snapshot_status())
+        try:
+            payload = dict(self.stats.snapshot_status())
+        except Exception as exc:
+            self.log.warning("[RUNNER] stats snapshot failed; returning minimal status: %r", exc)
+            connected = False
+            sess = self._session_obj
+            if sess is not None:
+                with contextlib.suppress(Exception):
+                    connected = bool(sess.is_connected())
+            payload = {
+                "peer_state": STATE_CONNECTED if connected else STATE_DISCONNECTED,
+                "stats_snapshot_error": type(exc).__name__,
+            }
         summaries: list[dict] = []
         compress_summaries: list[dict] = []
         for session in self._sessions:

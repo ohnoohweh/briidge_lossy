@@ -11,10 +11,14 @@ else
 fi
 
 if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-  exec sudo env OBSTACLEBRIDGE_RUN_MACOS_ELEVATED=1 "$0" "$@"
+  exec sudo env \
+    OBSTACLEBRIDGE_RUN_MACOS_ELEVATED=1 \
+    OBSTACLEBRIDGE_GITHUB_ACTIONS="${GITHUB_ACTIONS:-}" \
+    "$0" "$@"
 fi
 
 export OBSTACLEBRIDGE_RUN_MACOS_ELEVATED=1
+export GITHUB_ACTIONS="${GITHUB_ACTIONS:-${OBSTACLEBRIDGE_GITHUB_ACTIONS:-}}"
 
 restore_artifact_ownership() {
   if [[ -n "${SUDO_UID:-}" && -n "${SUDO_GID:-}" ]]; then

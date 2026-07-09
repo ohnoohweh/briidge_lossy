@@ -601,6 +601,8 @@ REQ-LIFE-009:
     - tests/unit/test_launcher_entrypoint.py::test_launcher_continues_when_dependency_install_declined
 
 REQ-LIFE-010:
+  # macOS elevated scripts preserve CI identity across sudo so hosted-runner
+  # diagnostics remain scoped to the CI privilege boundary.
   integration_tests:
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_over_myudp_packet_carry
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_reports_helper_death_during_partial_cleanup
