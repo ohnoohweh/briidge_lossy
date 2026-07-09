@@ -367,6 +367,14 @@ class AdminWebUI:
                 age_sec = max(0.0, time.monotonic() - float(updated_monotonic))
         if not payload:
             payload = {"ok": False}
+            if str(topic) == "status":
+                sess = getattr(self.runner, "_session_obj", None)
+                if sess is not None:
+                    with contextlib.suppress(Exception):
+                        payload = {
+                            "ok": True,
+                            "peer_state": "CONNECTED" if bool(sess.is_connected()) else "DISCONNECTED",
+                        }
         async_diag_fn = getattr(self.runner, "get_async_diagnostics_snapshot", None)
         if callable(async_diag_fn):
             with contextlib.suppress(Exception):

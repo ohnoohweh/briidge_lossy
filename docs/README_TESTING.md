@@ -69,6 +69,7 @@ Representative anchors for those areas:
   - [ios/tests/test_m3_native_sources.py](../ios/tests/test_m3_native_sources.py)
   - [ios/tests/test_macos_swift_host_runner.py](../ios/tests/test_macos_swift_host_runner.py)
 - current Admin Web payload coverage includes Python peer-metric fallback parity for connected rows while preserving null transport metrics on passive listener rows
+- current Admin Web resilience coverage pins the minimal live-session status fallback used when stats snapshotting fails before a cached status payload exists
 - current TUN / Routing Admin Web coverage also pins shared-TUN diagnostics so the page continues to expose ChannelMux interface-facing flow counters, shared-drop totals, per-reason drop summaries, and latest-drop context without inventing a second backend-only diagnostic path
 - current TUN / Routing Admin Web coverage also pins helper lifecycle visibility and runtime health warnings so the page surfaces helper startup/recovery degradation and local TUN address-missing faults instead of failing silently
 - current TUN / Routing Admin Web coverage also pins the non-blocking verification path so peer/global `ping` checks return `pending` or cached results while background refresh runs off the admin snapshot thread, keeping the TUN page responsive under live verification
