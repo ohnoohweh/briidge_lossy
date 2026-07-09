@@ -195,7 +195,8 @@ ARC-CMP-004:
   # Process orchestration coverage includes bounded reconnect waits across
   # expected self-restart relaunches in the integration harness.
   # Hosted macOS elevated gates keep Admin/helper state assertions even when
-  # the runner refuses route, ping, or SMAppService approval side effects.
+  # the runner refuses route, ping, SMAppService approval, or inline TUN-row
+  # publication side effects.
   # The macOS elevated scripts preserve CI identity through sudo so those
   # hosted-runner branches remain active after privilege escalation.
   integration_tests:
