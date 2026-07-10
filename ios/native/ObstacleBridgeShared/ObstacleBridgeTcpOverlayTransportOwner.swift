@@ -54,6 +54,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private var reconnectAttempts = 0
     private var reconnectScheduled = false
     private var reconnectWorkItem: DispatchWorkItem?
+    private var nextReconnectAttemptDeadlineNS: UInt64?
     private var secureLinkHandshakePrimed = false
     private var startupMuxFramesSent = false
     private lazy var tcpTransportOwner = ObstacleBridgeChannelMuxTCPTransportOwner(
@@ -173,6 +174,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         started = false
         overlayConnected = false
         reconnectScheduled = false
+        nextReconnectAttemptDeadlineNS = nil
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
         overlayListener?.cancel()
@@ -232,6 +234,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
                 "reconnect_retry_delay_ms": reconnectRetryDelayMS,
                 "reconnect_attempts": reconnectAttempts,
                 "reconnect_scheduled": reconnectScheduled,
+                "next_address_attempt_in_seconds": nextAddressAttemptInSeconds() ?? NSNull(),
+                "restart_in_seconds": NSNull(),
                 "mux_instance_id": muxInstanceID,
                 "mux_connection_seq": muxConnectionSeq,
                 "server_tcp_channels": tcpTransportOwner.serverConnectionCount,
@@ -374,6 +378,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             return
         }
         reconnectScheduled = false
+        nextReconnectAttemptDeadlineNS = nil
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
         reconnectAttempts += 1
@@ -488,6 +493,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         case .ready:
             overlayConnected = true
             reconnectScheduled = false
+            nextReconnectAttemptDeadlineNS = nil
             eventSink?("tcp_overlay_connected", [
                 "peer_host": peerHost,
                 "peer_port": peerPort,
@@ -534,12 +540,25 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
                 return
             }
             self.reconnectScheduled = false
+            self.nextReconnectAttemptDeadlineNS = nil
             self.reconnectWorkItem = nil
             self.connectOverlay()
         }
         reconnectWorkItem = workItem
         reconnectScheduled = true
+        nextReconnectAttemptDeadlineNS = DispatchTime.now().uptimeNanoseconds + UInt64(reconnectRetryDelayMS) * 1_000_000
         queue.asyncAfter(deadline: .now() + .milliseconds(reconnectRetryDelayMS), execute: workItem)
+    }
+
+    private func nextAddressAttemptInSeconds() -> Double? {
+        guard reconnectScheduled, let deadline = nextReconnectAttemptDeadlineNS else {
+            return nil
+        }
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard deadline > now else {
+            return 0.0
+        }
+        return Double(deadline - now) / 1_000_000_000.0
     }
 
     private func receiveFromOverlay() {

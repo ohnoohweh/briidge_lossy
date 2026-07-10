@@ -1054,6 +1054,16 @@ final class ObstacleBridgeHostRunner {
                 from: transportRuntime,
                 preferredKind: transport
             ),
+            "next_address_attempt_in_seconds": ObstacleBridgeAdminSnapshotSupport.peerMetric(
+                "next_address_attempt_in_seconds",
+                from: transportRuntime,
+                preferredKind: transport
+            ),
+            "restart_in_seconds": ObstacleBridgeAdminSnapshotSupport.peerMetric(
+                "restart_in_seconds",
+                from: transportRuntime,
+                preferredKind: transport
+            ),
             "traffic": trafficSnapshot(peerID: "1", rxBytes: trafficTotals.rxBytes, txBytes: trafficTotals.txBytes),
             "open_connections": [
                 "udp": counts["udp"] ?? 0,

@@ -557,6 +557,7 @@ REQ-LIFE-005:
   unit_tests:
     - tests/unit/test_launcher_entrypoint.py::test_launcher_waits_interval_for_code_77
     - tests/unit/test_launcher_entrypoint.py::test_show_restart_countdown_starts_and_closes_placeholder
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_peer_status_reports_python_reconnect_timer_fields
 
 REQ-LIFE-006:
   integration_tests:
@@ -1136,6 +1137,7 @@ REQ-ADM-006:
     - tests/unit/test_ws_multi_peer.py::test_server_peer_snapshot_includes_last_incoming_age_seconds
     - tests/unit/test_ws_multi_peer.py::test_client_peer_snapshot_includes_last_incoming_age_seconds
     - tests/unit/test_admin_web_payloads.py::test_meta_payload_suppresses_runtime_dependency_warnings_on_ios
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_peer_status_reports_python_reconnect_timer_fields
     # The dedicated TUN page also pins shared-drop totals plus ChannelMux flow
     # and drop-diagnostic rendering for shared-TUN services.
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_dedicated_shared_tun_view

@@ -49,6 +49,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private var reconnectAttempts = 0
     private var reconnectScheduled = false
     private var reconnectWorkItem: DispatchWorkItem?
+    private var nextReconnectAttemptDeadlineNS: UInt64?
     private var secureLinkHandshakePrimed = false
     private var startupMuxFramesSent = false
     private var connectedURI = ""
@@ -174,6 +175,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: currentTunPeerID())
         overlayConnected = false
         reconnectScheduled = false
+        nextReconnectAttemptDeadlineNS = nil
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
         websocketTask?.cancel(with: .goingAway, reason: nil)
@@ -235,6 +237,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 "reconnect_retry_delay_ms": reconnectRetryDelayMS,
                 "reconnect_attempts": reconnectAttempts,
                 "reconnect_scheduled": reconnectScheduled,
+                "next_address_attempt_in_seconds": nextAddressAttemptInSeconds() ?? NSNull(),
+                "restart_in_seconds": NSNull(),
                 "mux_instance_id": muxInstanceID,
                 "mux_connection_seq": muxConnectionSeq,
                 "server_tcp_channels": tcpTransportOwner.serverConnectionCount,
@@ -391,6 +395,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             guard self.started, self.websocketTask === webSocketTask else { return }
             self.overlayConnected = true
             self.reconnectScheduled = false
+            self.nextReconnectAttemptDeadlineNS = nil
             self.eventSink?("ws_overlay_connected", [
                 "peer_host": self.peerHost,
                 "peer_port": self.peerPort,
@@ -435,6 +440,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private func connectOverlay() {
         guard started else { return }
         reconnectScheduled = false
+        nextReconnectAttemptDeadlineNS = nil
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
         reconnectAttempts += 1
@@ -477,12 +483,25 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.reconnectScheduled = false
+            self.nextReconnectAttemptDeadlineNS = nil
             self.reconnectWorkItem = nil
             self.connectOverlay()
         }
         reconnectWorkItem = workItem
         reconnectScheduled = true
+        nextReconnectAttemptDeadlineNS = DispatchTime.now().uptimeNanoseconds + UInt64(reconnectRetryDelayMS) * 1_000_000
         queue.asyncAfter(deadline: .now() + .milliseconds(reconnectRetryDelayMS), execute: workItem)
+    }
+
+    private func nextAddressAttemptInSeconds() -> Double? {
+        guard reconnectScheduled, let deadline = nextReconnectAttemptDeadlineNS else {
+            return nil
+        }
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard deadline > now else {
+            return 0.0
+        }
+        return Double(deadline - now) / 1_000_000_000.0
     }
 
     private func receiveFromOverlay() {

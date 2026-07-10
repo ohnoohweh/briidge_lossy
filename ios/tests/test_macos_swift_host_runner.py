@@ -619,6 +619,24 @@ def test_macos_swift_host_runner_peer_status_aggregates_connection_traffic_like_
     assert '"traffic": trafficSnapshot(peerID: "1", rxBytes: trafficTotals.rxBytes, txBytes: trafficTotals.txBytes)' in source
 
 
+def test_macos_swift_host_runner_peer_status_reports_python_reconnect_timer_fields() -> None:
+    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    transport_sources = [
+        (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8"),
+        (SHARED_NATIVE_DIR / "ObstacleBridgeQuicOverlayTransportOwner.swift").read_text(encoding="utf-8"),
+        (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8"),
+    ]
+
+    assert '"next_address_attempt_in_seconds": ObstacleBridgeAdminSnapshotSupport.peerMetric(' in host_runner
+    assert '"restart_in_seconds": ObstacleBridgeAdminSnapshotSupport.peerMetric(' in host_runner
+    for source in transport_sources:
+        assert "private var nextReconnectAttemptDeadlineNS: UInt64?" in source
+        assert '"next_address_attempt_in_seconds": nextAddressAttemptInSeconds() ?? NSNull()' in source
+        assert '"restart_in_seconds": NSNull()' in source
+        assert "private func nextAddressAttemptInSeconds() -> Double?" in source
+        assert "DispatchTime.now().uptimeNanoseconds + UInt64(reconnectRetryDelayMS) * 1_000_000" in source
+
+
 def test_macos_swift_host_runner_keeps_secure_link_connection_time_stable() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
 
