@@ -3,6 +3,12 @@ import Network
 import NetworkExtension
 import Darwin
 
+#if OB_IPSERVER_SWIFT_SMOKE || OB_IPSERVER_SWIFT_PROBE
+private enum ObstacleBridgeGeneratedBuildStamp {
+    static let providerBuildTimestampUTC = "unknown"
+}
+#endif
+
 private enum PacketTunnelProviderOnboardingError: LocalizedError {
     case invalidArgument(String)
 
@@ -1489,6 +1495,23 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         return false
     }
 
+    private func buildSummary() -> [String: Any] {
+        let timestamp = ObstacleBridgeGeneratedBuildStamp.providerBuildTimestampUTC
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let available = !timestamp.isEmpty && timestamp != "unknown"
+        return [
+            "commit": "unknown",
+            "source": "embedded-build-info",
+            "repo_root": "",
+            "tainted": false,
+            "tracked_changes": 0,
+            "untracked_changes": 0,
+            "available": available,
+            "diff_sha": "",
+            "build_timestamp_utc": timestamp,
+        ]
+    }
+
     private func adminStatusSnapshotUncached(bridgeSnapshot: [String: Any]? = nil) -> [String: Any] {
         let bridgeSnapshot = bridgeSnapshot ?? adminBridgeSnapshot()
         let packetProcessingActive = adminPacketProcessingActive(bridgeSnapshot: bridgeSnapshot)
@@ -1512,6 +1535,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 "bridge_state": ObstacleBridgePacketFlowBridge.bridgeStateSnapshot(),
                 "shared_overlay_bootstrap_state": sharedOverlayBootstrapState,
                 "proxy_provider": proxyProviderSnapshot(),
+                "build": buildSummary(),
             ]
         )
         if !bridgeSnapshot.isEmpty {
@@ -1693,6 +1717,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 ],
                 "secure_link": adminSecureLinkSnapshot(state: packetPumpRunning ? "connected" : "idle"),
                 "proxy_provider": proxyProviderSnapshot(),
+                "build": buildSummary(),
             ]
         )
     }

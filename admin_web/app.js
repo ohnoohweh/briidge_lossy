@@ -1694,8 +1694,12 @@ async function restart() {
 function fmtBuildBadge(build) {
   if (!build || !build.available) return 'build unknown';
   const commit = String(build.commit || 'unknown');
+  const buildTimestampUTC = String(build.build_timestamp_utc || '').trim();
   const tracked = Number(build.tracked_changes || 0);
   const untracked = Number(build.untracked_changes || 0);
+  if ((commit === 'unknown' || !commit) && buildTimestampUTC) {
+    return `build ${buildTimestampUTC}`;
+  }
   if (build.tainted) {
     return `commit ${commit} tainted (${tracked} tracked, ${untracked} untracked)`;
   }

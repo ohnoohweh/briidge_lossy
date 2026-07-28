@@ -246,6 +246,7 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "build/generated/ObstacleBridgeGeneratedBuildStamp.swift" in patched
     assert "ObstacleBridgeHostRunner.swift in Sources" in patched
     assert "ObstacleBridgeGeneratedBuildStamp.swift in Sources" in patched
+    assert "ObstacleBridgeGeneratedBuildStamp.swift in IPServer Sources" in patched
     assert "ObstacleBridgeMacOSTunAdapter.swift in Sources" in patched
     assert "ObstacleBridgeTunHelperContract.swift in Sources" in patched
     assert "ObstacleBridgeTunHelperXPCTransport.swift in Sources" in patched

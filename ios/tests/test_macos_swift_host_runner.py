@@ -585,12 +585,16 @@ def test_macos_swift_host_runner_serves_admin_from_snapshot_cache() -> None:
     assert "func adminTunRoutingSnapshot() -> [String: Any] {\n        refreshAdminSnapshotCache(sync: true)\n        return tunRoutingSnapshotWithVerification(cachedTunRoutingOrBuild())\n    }" in source
     assert "private func tunRoutingVerificationPayload(payload: [String: Any]) -> [String: Any]" in source
     assert '"tun_config": configCheck' in source
-    assert '"tun_connectivity": Self.macOSPingVerification(' in source
-    assert '"tun_global_connectivity": Self.macOSPingVerification(' in source
+    assert '"tun_connectivity": macOSInternalTunVerification(' in source
+    assert '"tun_global_connectivity": macOSInternalTunVerification(' in source
     assert 'target: peerTarget' in source
     assert 'target: globalHost' in source
-    assert '? ["-c", "1", "-W", wait, "-I", trimmedIfname, trimmedTarget]' in source
-    assert ': ["-c", "1", "-W", wait, "-b", trimmedIfname, trimmedTarget]' in source
+    assert 'private func macOSInternalTunVerification(probeKind: String, target: String, ifname: String, timeoutSeconds: TimeInterval) -> [String: Any]' in source
+    assert '"method": "internal_icmp_echo"' in source
+    assert '"resolved_target": resolvedTarget' in source
+    assert '"last_success_ago_s": NSNull()' in source
+    assert "let payload = ObstacleBridgeTunPing.probePayload(" in source
+    assert "currentOverlayOwner()?.owner.sendLocalTunPacket(packet)" in source
     assert 'tunRouting["tun_helper"] = status["tun_helper"] ?? macOSTunHelperStatusSnapshot()' in source
     assert 'payload["tun_helper"] = snapshotUncached()["tun_helper"] ?? macOSTunHelperStatusSnapshot()' in source
 

@@ -153,6 +153,12 @@ APP_GENERATED_SWIFT_SOURCE = (
     "../../../../build/generated/ObstacleBridgeGeneratedBuildStamp.swift",
 )
 
+IPSERVER_GENERATED_SWIFT_SOURCE = (
+    "71C200000000000000000008",
+    APP_GENERATED_SWIFT_SOURCE[1],
+    APP_GENERATED_SWIFT_SOURCE[2],
+)
+
 
 def insert_before(text: str, marker: str, addition: str) -> str:
     if addition in text:
@@ -341,6 +347,37 @@ def add_app_generated_swift_source(text: str) -> str:
 
     body = match.group("body")
     entry = f"\t\t\t\t{build_id} /* {name} in Sources */,\n"
+    if entry not in body:
+        body += entry
+
+    return text[:match.start()] + match.group("head") + body + match.group("tail") + text[match.end():]
+
+
+def add_ipserver_generated_swift_source(text: str) -> str:
+    build_id, file_id, name = IPSERVER_GENERATED_SWIFT_SOURCE
+    text = insert_before(
+        text,
+        "/* End PBXBuildFile section */\n",
+        f"\t\t{build_id} /* {name} in IPServer Sources */ = {{isa = PBXBuildFile; fileRef = {file_id} /* {name} */; }};\n",
+    )
+
+    match = re.search(
+        r"(?P<head>\t\t71C200000000000000000080 /\* Sources \*/ = \{\n"
+        r"\t\t\tisa = PBXSourcesBuildPhase;\n"
+        r"\t\t\tbuildActionMask = 2147483647;\n"
+        r"\t\t\tfiles = \(\n)"
+        r"(?P<body>.*?)"
+        r"(?P<tail>\t\t\t\);\n"
+        r"\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
+        r"\t\t\};)",
+        text,
+        flags=re.DOTALL,
+    )
+    if not match:
+        raise ValueError("IPServer Sources build phase block not found")
+
+    body = match.group("body")
+    entry = f"\t\t\t\t{build_id} /* {name} in IPServer Sources */,\n"
     if entry not in body:
         body += entry
 
@@ -835,6 +872,7 @@ def patch_ipserver_target(text: str) -> str:
             "\t\t};\n",
         )
     text = add_ipserver_shared_swift_sources(text)
+    text = add_ipserver_generated_swift_source(text)
     text = insert_before(
         text,
         "/* Begin PBXVariantGroup section */\n",

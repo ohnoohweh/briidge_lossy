@@ -407,6 +407,11 @@ def test_admin_api_source_exists() -> None:
 def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
 
+    assert 'private enum ObstacleBridgeGeneratedBuildStamp {' in provider
+    assert 'static let providerBuildTimestampUTC = "unknown"' in provider
+    assert 'private func buildSummary() -> [String: Any]' in provider
+    assert '"source": "embedded-build-info"' in provider
+    assert '"build_timestamp_utc": timestamp' in provider
     assert 'private func adminSnapshotCachingEnabled() -> Bool' in provider
     assert 'ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_snapshot_cache_enabled"]) ?? false' in provider
     assert "func adminStatusSnapshot() -> [String: Any] {\n        guard adminSnapshotCachingEnabled() else {\n            return adminStatusSnapshotUncached()\n        }" in provider
@@ -436,6 +441,10 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert '"Packet processing is not active yet."' in provider
     assert "guard adminPacketProcessingActive() else {" in provider
     assert 'return bridge.probeTunConnectivity(' in provider
+
+    app_js = (ROOT / "admin_web" / "app.js").read_text(encoding="utf-8")
+    assert "const buildTimestampUTC = String(build.build_timestamp_utc || '').trim();" in app_js
+    assert "return `build ${buildTimestampUTC}`;" in app_js
     assert '"method": "internal_icmp_echo"' in provider
     assert "ObstacleBridgeTunPing.parseEchoReply(packet)" in provider
     assert "ObstacleBridgeTunPing.buildIPv4EchoRequest(" in provider
