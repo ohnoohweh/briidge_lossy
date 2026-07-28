@@ -1375,8 +1375,9 @@ final class ObstacleBridgeHostRunner {
         let connections = connections ?? connectionsSnapshotUncached()
         let counts = connections["counts"] as? [String: Any] ?? [:]
         let transport = Self.stringValue(from: bootstrapState["transport"]) ?? (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp")
-        let peerEndpoint = peerEndpointSnapshot()
+        let configuredPeerEndpoint = peerEndpointSnapshot()
         let transportRuntime = suppliedTransportRuntime ?? transportRuntimeSnapshot()
+        let resolvedPeer = resolvedPeerSnapshot(transport: transport, transportRuntime: transportRuntime)
         let myudpRuntime = transportRuntime["myudp"] as? [String: Any] ?? [:]
         let protocolStats = ObstacleBridgeAdminSnapshotSupport.selectedProtocolStats(
             from: transportRuntime,
@@ -1397,7 +1398,11 @@ final class ObstacleBridgeHostRunner {
             "transport": transport,
             "state": stateText,
             "listen": NSNull(),
-            "peer": peerEndpoint,
+            "peer": resolvedPeer ?? configuredPeerEndpoint,
+            "resolved_peer": resolvedPeer ?? NSNull(),
+            "resolved_peer_host": resolvedPeer?["host"] ?? NSNull(),
+            "resolved_peer_port": resolvedPeer?["port"] ?? NSNull(),
+            "resolved_peer_family": resolvedPeer?["family"] ?? NSNull(),
             "decode_errors": 0,
             "inflight": protocolStats["inflight"] ?? 0,
             "last_incoming_age_seconds": ObstacleBridgeAdminSnapshotSupport.peerLastIncomingAgeSeconds(
@@ -1525,6 +1530,41 @@ final class ObstacleBridgeHostRunner {
             return ["host": hostString, "port": port]
         }
         return NSNull()
+    }
+
+    private func resolvedPeerSnapshot(transport: String, transportRuntime: [String: Any]) -> [String: Any]? {
+        let selectedRuntime = ObstacleBridgeAdminSnapshotSupport.selectedTransportRuntime(
+            from: transportRuntime,
+            preferredKind: transport
+        )
+        let host =
+            Self.stringValue(from: selectedRuntime["overlay_peer_host"])
+            ?? Self.stringValue(from: selectedRuntime["resolved_peer_host"])
+            ?? Self.stringValue(from: transportRuntime["overlay_peer_host"])
+            ?? Self.stringValue(from: transportRuntime["resolved_peer_host"])
+            ?? ""
+        guard !host.isEmpty else {
+            return nil
+        }
+        let port =
+            Self.intValue(from: selectedRuntime["overlay_peer_port"])
+            ?? Self.intValue(from: selectedRuntime["resolved_peer_port"])
+            ?? Self.intValue(from: transportRuntime["overlay_peer_port"])
+            ?? Self.intValue(from: transportRuntime["resolved_peer_port"])
+        let family =
+            Self.stringValue(from: selectedRuntime["overlay_peer_family"])
+            ?? Self.stringValue(from: selectedRuntime["resolved_peer_family"])
+            ?? Self.stringValue(from: transportRuntime["overlay_peer_family"])
+            ?? Self.stringValue(from: transportRuntime["resolved_peer_family"])
+            ?? ""
+        var snapshot: [String: Any] = [
+            "host": host,
+            "port": port ?? NSNull(),
+        ]
+        if !family.isEmpty {
+            snapshot["family"] = family
+        }
+        return snapshot
     }
 
     private func transportRuntimeSnapshot() -> [String: Any] {

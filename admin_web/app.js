@@ -40,7 +40,7 @@ function fmtText(value) {
     const ifname = typeof value.ifname === 'string' ? value.ifname.trim() : '';
     const port = value.port == null || value.port === '' ? '' : String(value.port).trim();
     if (host || bind) {
-      return port ? `${host || bind}:${port}` : (host || bind);
+      return fmtHostPort(host || bind, port);
     }
     if (ifname) {
       return port ? `${ifname}:${port}` : ifname;
@@ -52,6 +52,15 @@ function fmtText(value) {
     }
   }
   return String(value);
+}
+
+function fmtHostPort(host, port) {
+  const hostText = String(host || '').trim();
+  const portText = port == null ? '' : String(port).trim();
+  if (!hostText) return portText || 'n/a';
+  if (!portText) return hostText;
+  const bracketedHost = hostText.includes(':') && !hostText.startsWith('[') ? `[${hostText}]` : hostText;
+  return `${bracketedHost}:${portText}`;
 }
 
 function fmtBool(value) {
@@ -1095,18 +1104,18 @@ function setPercentWidth(id, pct) {
 
 function fmtEndpoint(ep) {
   if (!ep) return 'n/a';
-  if (Array.isArray(ep) && ep.length >= 2) return `${ep[0]}:${ep[1]}`;
+  if (Array.isArray(ep) && ep.length >= 2) return fmtHostPort(ep[0], ep[1]);
   if (typeof ep === 'object' && ep.ifname != null) {
     const mtu = ep.mtu != null ? ` mtu ${ep.mtu}` : '';
     return `${ep.ifname}${mtu}`;
   }
-  if (typeof ep === 'object' && ep.host != null && ep.port != null) return `${ep.host}:${ep.port}`;
+  if (typeof ep === 'object' && ep.host != null && ep.port != null) return fmtHostPort(ep.host, ep.port);
   return String(ep);
 }
 
 function fmtDestination(dest) {
   if (!dest) return 'n/a';
-  if (dest.host != null && dest.port != null) return `${dest.host}:${dest.port}`;
+  if (dest.host != null && dest.port != null) return fmtHostPort(dest.host, dest.port);
   return fmtEndpoint(dest);
 }
 

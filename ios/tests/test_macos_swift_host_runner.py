@@ -587,6 +587,11 @@ def test_macos_swift_host_runner_serves_admin_from_snapshot_cache() -> None:
     assert '"tun_config": configCheck' in source
     assert '"tun_connectivity": macOSInternalTunVerification(' in source
     assert '"tun_global_connectivity": macOSInternalTunVerification(' in source
+    assert 'let resolvedPeer = resolvedPeerSnapshot(transport: transport, transportRuntime: transportRuntime)' in source
+    assert '"peer": resolvedPeer ?? configuredPeerEndpoint' in source
+    assert '"resolved_peer": resolvedPeer ?? NSNull()' in source
+    assert '"resolved_peer_family": resolvedPeer?["family"] ?? NSNull()' in source
+    assert "private func resolvedPeerSnapshot(transport: String, transportRuntime: [String: Any]) -> [String: Any]?" in source
     assert 'target: peerTarget' in source
     assert 'target: globalHost' in source
     assert 'private func macOSInternalTunVerification(probeKind: String, target: String, ifname: String, timeoutSeconds: TimeInterval) -> [String: Any]' in source
@@ -2807,6 +2812,9 @@ def test_macos_swift_host_runner_myudp_remote_tcp_admin_web_handles_multiple_con
         assert peer_row["transport"] == "myudp"
         assert peer_row["runtime"]["kind"] == "myudp"
         assert peer_row["peer"]["host"] == "127.0.0.1"
+        assert peer_row["peer"] == peer_row["resolved_peer"]
+        assert peer_row["resolved_peer"]["host"] == "127.0.0.1"
+        assert peer_row["resolved_peer_family"] == "ipv4"
         assert int(peer_row["open_connections"]["tcp"]) >= 1
         assert isinstance(root_html, str) and ("ObstacleBridge" in root_html or "Admin Web" in root_html)
         assert isinstance(app_js, str) and "async function loadStatus()" in app_js
@@ -5208,6 +5216,8 @@ def test_macos_swift_host_runner_remote_tcp_admin_web_handles_multiple_connectio
         assert peer_row["transport"] == "tcp"
         assert peer_row["runtime"]["kind"] == "tcp"
         assert peer_row["peer"]["host"] == "127.0.0.1"
+        if peer_row["resolved_peer"] is not None:
+            assert peer_row["resolved_peer"]["host"] == "127.0.0.1"
         assert int(peer_row["open_connections"]["tcp"]) >= 1
         assert isinstance(root_html, str) and ("ObstacleBridge" in root_html or "Admin Web" in root_html)
         assert isinstance(app_js, str) and "async function loadStatus()" in app_js
@@ -5593,6 +5603,9 @@ def test_macos_swift_host_runner_bootstraps_quic_stack_and_serves_status(tmp_pat
         assert peer_row["transport"] == "quic"
         assert peer_row["runtime"]["kind"] == "quic"
         assert peer_row["peer"]["host"] in {"::1", "127.0.0.1"}
+        assert peer_row["peer"] == peer_row["resolved_peer"]
+        assert peer_row["resolved_peer"]["host"] in {"::1", "127.0.0.1"}
+        assert peer_row["resolved_peer_family"] in {"ipv4", "ipv6"}
         assert status["transport_runtime"]["kind"] == "quic"
         assert status["transport_runtime"]["quic"]["overlay_alpn"] == "hq-29"
         assert meta["transport_runtime"]["quic"]["overlay_insecure"] is True

@@ -1630,8 +1630,9 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         let state = adminTransportConnectedState(bridgeSnapshot: bridgeSnapshot) ? "connected" : "connecting"
         let runtimeConfig = adminRuntimeConfigPayload()
         let transport = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig?["overlay_transport"]) ?? "myudp"
-        let endpoint = adminPeerEndpoint(runtimeConfig: runtimeConfig)
+        let configuredEndpoint = adminPeerEndpoint(runtimeConfig: runtimeConfig)
         let transportRuntime = adminTransportRuntimeSnapshot(bridgeSnapshot: bridgeSnapshot)
+        let resolvedPeer = adminResolvedPeerSnapshot(transport: transport, transportRuntime: transportRuntime)
         let myudpRuntime = transportRuntime["myudp"] as? [String: Any] ?? [:]
         let protocolStats = ObstacleBridgeAdminSnapshotSupport.selectedProtocolStats(
             from: transportRuntime,
@@ -1643,7 +1644,11 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "transport": transport,
             "state": state,
             "listen": NSNull(),
-            "peer": endpoint,
+            "peer": resolvedPeer ?? configuredEndpoint,
+            "resolved_peer": resolvedPeer ?? NSNull(),
+            "resolved_peer_host": resolvedPeer?["host"] ?? NSNull(),
+            "resolved_peer_port": resolvedPeer?["port"] ?? NSNull(),
+            "resolved_peer_family": resolvedPeer?["family"] ?? NSNull(),
             "decode_errors": 0,
             "inflight": protocolStats["inflight"] ?? 0,
             "last_incoming_age_seconds": ObstacleBridgeAdminSnapshotSupport.peerLastIncomingAgeSeconds(
@@ -2191,6 +2196,41 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             return NSNull()
         }
         return ["host": host, "port": port]
+    }
+
+    private func adminResolvedPeerSnapshot(transport: String, transportRuntime: [String: Any]) -> [String: Any]? {
+        let selectedRuntime = ObstacleBridgeAdminSnapshotSupport.selectedTransportRuntime(
+            from: transportRuntime,
+            preferredKind: transport
+        )
+        let host =
+            ObstacleBridgeRuntimeConfig.stringValue(from: selectedRuntime["overlay_peer_host"])
+            ?? ObstacleBridgeRuntimeConfig.stringValue(from: selectedRuntime["resolved_peer_host"])
+            ?? ObstacleBridgeRuntimeConfig.stringValue(from: transportRuntime["overlay_peer_host"])
+            ?? ObstacleBridgeRuntimeConfig.stringValue(from: transportRuntime["resolved_peer_host"])
+            ?? ""
+        guard !host.isEmpty else {
+            return nil
+        }
+        let port =
+            ObstacleBridgeRuntimeConfig.intValue(from: selectedRuntime["overlay_peer_port"])
+            ?? ObstacleBridgeRuntimeConfig.intValue(from: selectedRuntime["resolved_peer_port"])
+            ?? ObstacleBridgeRuntimeConfig.intValue(from: transportRuntime["overlay_peer_port"])
+            ?? ObstacleBridgeRuntimeConfig.intValue(from: transportRuntime["resolved_peer_port"])
+        let family =
+            ObstacleBridgeRuntimeConfig.stringValue(from: selectedRuntime["overlay_peer_family"])
+            ?? ObstacleBridgeRuntimeConfig.stringValue(from: selectedRuntime["resolved_peer_family"])
+            ?? ObstacleBridgeRuntimeConfig.stringValue(from: transportRuntime["overlay_peer_family"])
+            ?? ObstacleBridgeRuntimeConfig.stringValue(from: transportRuntime["resolved_peer_family"])
+            ?? ""
+        var snapshot: [String: Any] = [
+            "host": host,
+            "port": port ?? NSNull(),
+        ]
+        if !family.isEmpty {
+            snapshot["family"] = family
+        }
+        return snapshot
     }
 
     private func adminTunRoutingVerificationPayload(payload: [String: Any]) -> [String: Any] {

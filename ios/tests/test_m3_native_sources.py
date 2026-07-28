@@ -419,6 +419,13 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert "func adminTunRoutingSnapshot() -> [String: Any] {\n        guard adminSnapshotCachingEnabled() else {\n            return adminTunRoutingSnapshotUncached()\n        }" in provider
     assert "func adminPeersSnapshot() -> [[String: Any]] {\n        guard adminSnapshotCachingEnabled() else {\n            return adminPeersSnapshotUncached()\n        }" in provider
     assert "func adminMetaSnapshot() -> [String: Any] {\n        guard adminSnapshotCachingEnabled() else {\n            return adminMetaSnapshotUncached()\n        }" in provider
+    assert 'let resolvedPeer = adminResolvedPeerSnapshot(transport: transport, transportRuntime: transportRuntime)' in provider
+    assert '"peer": resolvedPeer ?? configuredEndpoint' in provider
+    assert '"resolved_peer": resolvedPeer ?? NSNull()' in provider
+    assert '"resolved_peer_family": resolvedPeer?["family"] ?? NSNull()' in provider
+    assert "private func adminResolvedPeerSnapshot(transport: String, transportRuntime: [String: Any]) -> [String: Any]?" in provider
+    assert 'ObstacleBridgeRuntimeConfig.stringValue(from: selectedRuntime["overlay_peer_host"])' in provider
+    assert 'ObstacleBridgeRuntimeConfig.stringValue(from: selectedRuntime["resolved_peer_host"])' in provider
     assert 'private let adminSnapshotRefreshQueue = DispatchQueue(label: "PacketTunnelProvider.AdminSnapshotRefresh", qos: .utility)' in provider
     assert "let timer = DispatchSource.makeTimerSource(queue: adminSnapshotRefreshQueue)" in provider
     assert "private func adminPacketProcessingActive(bridgeSnapshot: [String: Any]? = nil) -> Bool" in provider
@@ -445,6 +452,10 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     app_js = (ROOT / "admin_web" / "app.js").read_text(encoding="utf-8")
     assert "const buildTimestampUTC = String(build.build_timestamp_utc || '').trim();" in app_js
     assert "return `build ${buildTimestampUTC}`;" in app_js
+    assert "function fmtHostPort(host, port) {" in app_js
+    assert "const bracketedHost = hostText.includes(':') && !hostText.startsWith('[') ? `[${hostText}]` : hostText;" in app_js
+    assert "if (Array.isArray(ep) && ep.length >= 2) return fmtHostPort(ep[0], ep[1]);" in app_js
+    assert "if (dest.host != null && dest.port != null) return fmtHostPort(dest.host, dest.port);" in app_js
     assert '"method": "internal_icmp_echo"' in provider
     assert "ObstacleBridgeTunPing.parseEchoReply(packet)" in provider
     assert "ObstacleBridgeTunPing.buildIPv4EchoRequest(" in provider
