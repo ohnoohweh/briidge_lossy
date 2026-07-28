@@ -122,6 +122,26 @@ function fmtAgeSeconds(sec) {
   return fmtUptime(sec);
 }
 
+function fmtTunVerificationValue(check) {
+  const valueMs = Number(check?.value_ms);
+  if (Number.isFinite(valueMs) && valueMs >= 0) {
+    return `${valueMs.toFixed(valueMs >= 10 ? 0 : 1)} ms`;
+  }
+  return 'n/a';
+}
+
+function fmtTunVerificationDetail(check) {
+  const valueMs = Number(check?.value_ms);
+  if (Number.isFinite(valueMs) && valueMs >= 0) {
+    return String(check?.detail || check?.state || 'verified');
+  }
+  const lastSuccessAge = Number(check?.last_success_ago_s);
+  if (Number.isFinite(lastSuccessAge) && lastSuccessAge >= 0) {
+    return `last success ${fmtAgeSeconds(lastSuccessAge)} ago`;
+  }
+  return String(check?.detail || check?.state || 'n/a');
+}
+
 const APP_BASE_TITLE = 'ObstacleBridge';
 
 const authState = {
@@ -3087,10 +3107,10 @@ function applyTunRoutingDoc(j) {
   const globalVerification = verification.tun_global_connectivity || {};
   setText('tunVerificationConfigSummary', String(configVerification.summary || 'pending'));
   setText('tunVerificationConfigDetail', String(configVerification.detail || 'n/a'));
-  setText('tunVerificationPeerSummary', String(peerVerification.summary || 'pending'));
-  setText('tunVerificationPeerDetail', String(peerVerification.detail || 'n/a'));
-  setText('tunVerificationGlobalSummary', String(globalVerification.summary || 'pending'));
-  setText('tunVerificationGlobalDetail', String(globalVerification.detail || 'n/a'));
+  setText('tunVerificationPeerSummary', fmtTunVerificationValue(peerVerification));
+  setText('tunVerificationPeerDetail', fmtTunVerificationDetail(peerVerification));
+  setText('tunVerificationGlobalSummary', fmtTunVerificationValue(globalVerification));
+  setText('tunVerificationGlobalDetail', fmtTunVerificationDetail(globalVerification));
   setText('tunVerificationGlobalHost', String(verification.global_connectivity_host || 'n/a'));
   const tunRoutingHealthWarning = document.getElementById('tunRoutingHealthWarning');
   if (tunRoutingHealthWarning) {

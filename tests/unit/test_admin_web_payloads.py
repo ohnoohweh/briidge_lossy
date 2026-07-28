@@ -26,6 +26,20 @@ class _RunnerStub:
             secure_link_psk="bridge-secret",
         )
         self.restart_requested = False
+        self.tun_probe_result = {
+            "label": "TUN connectivity verified",
+            "ok": True,
+            "state": "verified",
+            "summary": "TUN connectivity verified: verified",
+            "detail": "ICMP echo reply received from 192.168.106.1.",
+            "target": "192.168.106.1",
+            "resolved_target": "192.168.106.1",
+            "method": "internal_icmp_echo",
+            "checked_at_unix_ts": 1700000000.0,
+            "value_ms": 12.4,
+            "last_success_ago_s": 0.0,
+            "last_success_rtt_ms": 12.4,
+        }
         self.tun_helper_repair_response = {
             "ok": True,
             "cleanup_ok": True,
@@ -101,6 +115,12 @@ class _RunnerStub:
                 row["readonly"] = True
             rows.append(row)
         return {"misc": rows}
+
+    async def probe_tun_connectivity_verification(self, *, ifname: str, target: str, timeout_seconds: float, probe_kind: str):
+        result = dict(self.tun_probe_result)
+        result["target"] = str(target or result.get("target") or "")
+        result["label"] = "TUN global connectivity verified" if str(probe_kind) == "global" else "TUN connectivity verified"
+        return result
 
     def update_config(self, updates):
         for key, value in updates.items():
@@ -870,23 +890,29 @@ class AdminWebPayloadTests(unittest.TestCase):
             return_value={"ok": True, "ipv4": ["192.168.106.2/24"], "ipv6": ["fd20:106::2/64"], "detail": ""},
         ), mock.patch.object(
             AdminWebUI,
-            "_cached_ping_verification",
+            "_cached_probe_verification",
             side_effect=[
                 {
                     "label": "TUN connectivity verified",
                     "ok": True,
                     "state": "verified",
-                    "summary": "TUN connectivity verified",
-                    "detail": "peer reachable",
+                    "summary": "TUN connectivity verified: verified",
+                    "detail": "ICMP echo reply received from 192.168.106.1.",
                     "target": "192.168.106.1",
+                    "value_ms": 18.5,
+                    "last_success_ago_s": 0.0,
+                    "last_success_rtt_ms": 18.5,
                 },
                 {
                     "label": "TUN global connectivity verified",
                     "ok": True,
                     "state": "verified",
-                    "summary": "TUN global connectivity verified",
-                    "detail": "global reachable",
+                    "summary": "TUN global connectivity verified: verified",
+                    "detail": "ICMP echo reply received from 142.250.185.227.",
                     "target": "google.de",
+                    "value_ms": 25.0,
+                    "last_success_ago_s": 0.0,
+                    "last_success_rtt_ms": 25.0,
                 },
             ],
         ):
@@ -896,7 +922,9 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertTrue(payload["verification"]["tun_config"]["ok"])
         self.assertEqual(payload["verification"]["tun_config"]["summary"], "TUN config verified")
         self.assertEqual(payload["verification"]["tun_connectivity"]["target"], "192.168.106.1")
+        self.assertEqual(payload["verification"]["tun_connectivity"]["value_ms"], 18.5)
         self.assertEqual(payload["verification"]["tun_global_connectivity"]["target"], "google.de")
+        self.assertEqual(payload["verification"]["tun_global_connectivity"]["value_ms"], 25.0)
 
     def test_tun_verification_parses_darwin_ifconfig_addresses(self):
         ifconfig_output = """utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1600
@@ -915,19 +943,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(observed["ipv6"], ["fe80::1", "fd20:106::3"])
         run_mock.assert_called_once()
 
-    def test_ping_verification_uses_macos_ping_without_linux_family_flag(self):
-        with mock.patch("obstacle_bridge.bridge_webadmin.sys.platform", "darwin"):
-            argv = AdminWebUI._ping_command(
-                ping_bin="/sbin/ping",
-                target="192.168.106.1",
-                ifname="utun4",
-                wait_seconds=1,
-            )
-
-        self.assertEqual(argv, ["/sbin/ping", "-c", "1", "-W", "1", "-b", "utun4", "192.168.106.1"])
-        self.assertNotIn("-4", argv)
-
-    def test_cached_ping_verification_returns_pending_and_schedules_background_refresh_on_admin_thread(self):
+    def test_cached_probe_verification_returns_pending_and_schedules_background_refresh_on_admin_thread(self):
         args = argparse.Namespace(
             admin_web=True,
             admin_web_bind="127.0.0.1",
@@ -944,26 +960,56 @@ class AdminWebPayloadTests(unittest.TestCase):
         ui = AdminWebUI(args, _RunnerStub())
         ui._server_thread = threading.current_thread()
 
-        scheduled: list[tuple[tuple[str, str, str, int], str, str, str, int]] = []
+        scheduled: list[tuple[tuple[str, str, str, int, str], str, str, str, int, str]] = []
 
-        def _fake_schedule(cache_key, *, label, target, ifname, wait_seconds):
-            scheduled.append((cache_key, label, target, ifname, wait_seconds))
+        def _fake_schedule(cache_key, *, label, target, ifname, wait_seconds, probe_kind):
+            scheduled.append((cache_key, label, target, ifname, wait_seconds, probe_kind))
 
-        with mock.patch("obstacle_bridge.bridge_webadmin.shutil.which", return_value="/usr/bin/ping"), \
-             mock.patch.object(ui, "_schedule_ping_verification_refresh", side_effect=_fake_schedule), \
-             mock.patch.object(ui, "_ping_verification") as ping_mock:
-            result = ui._cached_ping_verification(
+        with mock.patch.object(ui, "_schedule_probe_verification_refresh", side_effect=_fake_schedule), \
+             mock.patch.object(ui, "_probe_verification") as probe_mock:
+            result = ui._cached_probe_verification(
                 label="TUN global connectivity verified",
                 target="google.de",
                 ifname="obtun0",
                 wait_seconds=2,
+                probe_kind="global",
             )
 
         self.assertEqual(result["state"], "pending")
         self.assertEqual(result["target"], "google.de")
         self.assertEqual(len(scheduled), 1)
-        self.assertEqual(scheduled[0][0], ("TUN global connectivity verified", "google.de", "obtun0", 2))
-        ping_mock.assert_not_called()
+        self.assertEqual(scheduled[0][0], ("TUN global connectivity verified", "google.de", "obtun0", 2, "global"))
+        probe_mock.assert_not_called()
+
+    def test_probe_verification_calls_runner_internal_probe(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+        )
+        runner = _RunnerStub()
+        ui = AdminWebUI(args, runner)
+
+        result = ui._probe_verification(
+            label="TUN connectivity verified",
+            target="192.168.106.1",
+            ifname="obtun0",
+            wait_seconds=1,
+            probe_kind="peer",
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["method"], "internal_icmp_echo")
+        self.assertEqual(result["value_ms"], 12.4)
+        self.assertEqual(result["last_success_rtt_ms"], 12.4)
 
     def test_tun_routing_ui_binds_tun_helper_fields(self):
         app_js = self._canonical_webadmin_paths()[0].read_text(encoding="utf-8")
@@ -983,6 +1029,9 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn("setText('tunVerificationPeerSummary'", app_js)
         self.assertIn("setText('tunVerificationGlobalSummary'", app_js)
         self.assertIn("setText('tunVerificationGlobalHost'", app_js)
+        self.assertIn("fmtTunVerificationValue", app_js)
+        self.assertIn("fmtTunVerificationDetail", app_js)
+        self.assertIn("last success", app_js)
         self.assertIn("apiFetch('/api/tun-helper/repair'", app_js)
         self.assertIn("Remaining findings:", app_js)
         self.assertIn("document.getElementById('tunHelperRepairBtn')", app_js)

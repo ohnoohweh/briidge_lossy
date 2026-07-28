@@ -349,6 +349,13 @@ class AdminWebUI:
 
         runner_loop.call_soon_threadsafe(_invoke)
 
+    def _call_runner_coro(self, coro, *, timeout: float = 1.0):
+        runner_loop = self._runner_loop
+        if runner_loop is None:
+            return asyncio.run(coro)
+        fut = asyncio.run_coroutine_threadsafe(coro, runner_loop)
+        return fut.result(timeout=timeout)
+
     def _cache_snapshot(self, topic: str, payload: dict) -> None:
         with self._snapshot_cache_lock:
             self._snapshot_cache[str(topic)] = {
@@ -700,17 +707,6 @@ class AdminWebUI:
         }
 
     @staticmethod
-    def _ping_command(*, ping_bin: str, target: str, ifname: str, wait_seconds: int) -> list[str]:
-        wait = str(max(1, int(wait_seconds)))
-        if sys.platform == "darwin":
-            if ":" in str(target):
-                ping6_bin = shutil.which("ping6") or ping_bin
-                return [ping6_bin, "-c", "1", "-W", wait, "-I", str(ifname), str(target)]
-            return [ping_bin, "-c", "1", "-W", wait, "-b", str(ifname), str(target)]
-        family_flag = "-6" if ":" in str(target) else "-4"
-        return [ping_bin, family_flag, "-c", "1", "-W", wait, "-I", str(ifname), str(target)]
-
-    @staticmethod
     def _verification_result(*, label: str, ok: bool, summary: str, detail: str, target: str = "", state: str = "verified") -> dict[str, Any]:
         return {
             "label": label,
@@ -723,79 +719,85 @@ class AdminWebUI:
         }
 
     @staticmethod
-    def _ping_verification(*, label: str, target: str, ifname: str, wait_seconds: int = 2) -> dict[str, Any]:
+    def _decorate_probe_result(result: dict[str, Any], *, label: str, target: str) -> dict[str, Any]:
+        doc = dict(result or {})
+        doc.setdefault("label", str(label or ""))
+        doc.setdefault("target", str(target or ""))
+        doc.setdefault("method", "internal_icmp_echo")
+        doc.setdefault("checked_at_unix_ts", float(time.time()))
+        doc.setdefault("value_ms", None)
+        doc.setdefault("last_success_ago_s", None)
+        doc.setdefault("last_success_rtt_ms", doc.get("value_ms"))
+        return doc
+
+    def _probe_verification(self, *, label: str, target: str, ifname: str, wait_seconds: int = 2, probe_kind: str) -> dict[str, Any]:
         text_target = str(target or "").strip()
         text_ifname = str(ifname or "").strip()
         if not text_target:
-            return AdminWebUI._verification_result(
+            return self._decorate_probe_result(AdminWebUI._verification_result(
                 label=label,
                 ok=False,
                 state="skipped",
                 summary=f"{label}: skipped",
                 detail="Verification target is not configured.",
-            )
+            ), label=label, target=text_target)
         if not text_ifname:
-            return AdminWebUI._verification_result(
+            return self._decorate_probe_result(AdminWebUI._verification_result(
                 label=label,
                 ok=False,
                 state="skipped",
                 summary=f"{label}: skipped",
                 detail="TUN interface name unavailable.",
                 target=text_target,
-            )
-        ping_bin = shutil.which("ping")
-        if not ping_bin:
-            return AdminWebUI._verification_result(
-                label=label,
-                ok=False,
-                state="skipped",
-                summary=f"{label}: skipped",
-                detail="ping command unavailable.",
-                target=text_target,
-            )
+            ), label=label, target=text_target)
         try:
-            result = subprocess.run(
-                AdminWebUI._ping_command(
-                    ping_bin=ping_bin,
-                    target=text_target,
+            result = self._call_runner_coro(
+                self.runner.probe_tun_connectivity_verification(
                     ifname=text_ifname,
-                    wait_seconds=wait_seconds,
+                    target=text_target,
+                    timeout_seconds=float(wait_seconds),
+                    probe_kind=str(probe_kind or ""),
                 ),
-                check=False,
-                capture_output=True,
-                text=True,
                 timeout=max(1.0, float(wait_seconds) + 1.0),
             )
-        except Exception as exc:
-            return AdminWebUI._verification_result(
+        except concurrent.futures.TimeoutError:
+            return self._decorate_probe_result(AdminWebUI._verification_result(
                 label=label,
                 ok=False,
                 state="failed",
                 summary=f"{label}: failed",
-                detail=f"Ping failed: {type(exc).__name__}: {exc}",
+                detail="Runner probe timed out.",
                 target=text_target,
-            )
-        stdout = str(result.stdout or "").strip()
-        stderr = str(result.stderr or "").strip()
-        ok = int(result.returncode or 0) == 0
-        detail = stdout or stderr or ("Ping succeeded." if ok else "Ping failed.")
-        return AdminWebUI._verification_result(
-            label=label,
-            ok=ok,
-            state="verified" if ok else "failed",
-            summary=f"{label}: {'verified' if ok else 'failed'}",
-            detail=detail,
-            target=text_target,
-        )
+            ), label=label, target=text_target)
+        except Exception as exc:
+            return self._decorate_probe_result(AdminWebUI._verification_result(
+                label=label,
+                ok=False,
+                state="failed",
+                summary=f"{label}: failed",
+                detail=f"Internal probe failed: {type(exc).__name__}: {exc}",
+                target=text_target,
+            ), label=label, target=text_target)
+        return self._decorate_probe_result(dict(result or {}), label=label, target=text_target)
 
-    def _schedule_ping_verification_refresh(self, cache_key: tuple[str, str, str, int], *, label: str, target: str, ifname: str, wait_seconds: int) -> None:
+    def _schedule_probe_verification_refresh(
+        self,
+        cache_key: tuple[str, str, str, int, str],
+        *,
+        label: str,
+        target: str,
+        ifname: str,
+        wait_seconds: int,
+        probe_kind: str,
+    ) -> None:
         def _worker() -> None:
             try:
-                result = self._ping_verification(
+                result = self._probe_verification(
                     label=label,
                     target=target,
                     ifname=ifname,
                     wait_seconds=wait_seconds,
+                    probe_kind=probe_kind,
                 )
             finally:
                 with self._verification_cache_lock:
@@ -808,7 +810,7 @@ class AdminWebUI:
 
         worker = threading.Thread(
             target=_worker,
-            name=f"ObstacleBridgeAdminPing:{label}",
+            name=f"ObstacleBridgeAdminTunProbe:{label}",
             daemon=True,
         )
         worker.start()
@@ -821,24 +823,34 @@ class AdminWebUI:
         decorated["refresh_in_flight"] = bool(refresh_in_flight)
         return decorated
 
-    def _cached_ping_verification(self, *, label: str, target: str, ifname: str, wait_seconds: int = 2) -> dict[str, Any]:
+    def _cached_probe_verification(
+        self,
+        *,
+        label: str,
+        target: str,
+        ifname: str,
+        wait_seconds: int = 2,
+        probe_kind: str,
+    ) -> dict[str, Any]:
         text_target = str(target or "").strip()
         text_ifname = str(ifname or "").strip()
-        if not text_target or not text_ifname or not shutil.which("ping"):
-            return self._ping_verification(
+        if not text_target or not text_ifname:
+            return self._probe_verification(
                 label=label,
                 target=text_target,
                 ifname=text_ifname,
                 wait_seconds=wait_seconds,
+                probe_kind=probe_kind,
             )
         if self._server_thread is None or threading.current_thread() is not self._server_thread:
-            return self._ping_verification(
+            return self._probe_verification(
                 label=label,
                 target=text_target,
                 ifname=text_ifname,
                 wait_seconds=wait_seconds,
+                probe_kind=probe_kind,
             )
-        cache_key = (str(label), text_target, text_ifname, int(wait_seconds))
+        cache_key = (str(label), text_target, text_ifname, int(wait_seconds), str(probe_kind or ""))
         now = float(time.monotonic())
         with self._verification_cache_lock:
             cached_entry = self._verification_cache.get(cache_key) or {}
@@ -854,12 +866,13 @@ class AdminWebUI:
                 )
             if not refresh_in_flight:
                 self._verification_refreshing.add(cache_key)
-                self._schedule_ping_verification_refresh(
+                self._schedule_probe_verification_refresh(
                     cache_key,
                     label=label,
                     target=text_target,
                     ifname=text_ifname,
                     wait_seconds=wait_seconds,
+                    probe_kind=probe_kind,
                 )
                 refresh_in_flight = True
             if cached_result:
@@ -928,17 +941,19 @@ class AdminWebUI:
             },
             "global_connectivity_host": global_host,
             "tun_config": config_check,
-            "tun_connectivity": self._cached_ping_verification(
+            "tun_connectivity": self._cached_probe_verification(
                 label="TUN connectivity verified",
                 target=peer_target,
                 ifname=ifname,
                 wait_seconds=1,
+                probe_kind="peer",
             ),
-            "tun_global_connectivity": self._cached_ping_verification(
+            "tun_global_connectivity": self._cached_probe_verification(
                 label="TUN global connectivity verified",
                 target=global_host,
                 ifname=ifname,
                 wait_seconds=2,
+                probe_kind="global",
             ),
         }
 

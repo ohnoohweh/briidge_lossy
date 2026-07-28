@@ -687,10 +687,237 @@ Network Extension should continue to match routing, packet-carry, cleanup, and
 Admin/status semantics where applicable, but should not grow a second local TUN
 helper process merely to mirror the desktop implementation shape. The iOS
 `/api/tun-routing/status` payload therefore mirrors the desktop verification
-fields while using platform-safe Network.framework probes: Network Extension
-settings verify local TUN config, the configured overlay peer endpoint verifies
-peer reachability, and `google.de:443` verifies global reachability by default
-instead of ICMP `ping`.
+fields, but the current implementation is not yet semantically aligned across
+all runtimes. Today:
+
+- Python/Linux and Python/macOS verify peer/global connectivity with an
+  internally generated ICMP/ICMPv6 echo probe injected through the active TUN
+  path and matched against a corresponding echo reply
+- macOS/Swift host-runner still mirrors the older external-`ping` behavior
+- iOS cannot rely on an external `ping` binary inside `NEPacketTunnelProvider`,
+  so the current provider instead uses a `Network.framework` endpoint probe
+  (`NWConnection` with UDP/TCP parameters) and reports success when that
+  endpoint becomes locally ready
+
+That iOS probe is useful as a coarse path-health hint, but it is not equivalent
+to a real TUN-routed ICMP echo check:
+
+- it does not inject an IP packet into `NEPacketTunnelFlow`
+- it does not prove that the far endpoint generated a response packet
+- for UDP it can report local-path readiness without any application or ICMP
+  responder existing on the far side
+- it uses the overlay peer host/port or `global_connectivity_host:443`, which
+  are endpoint reachability checks rather than packet-level tunnel echo checks
+
+The harmonized design target should therefore be a shared verification contract
+with platform-specific transport mechanisms:
+
+- config verification: confirm that the expected tunnel addresses are present
+- peer connectivity verification: inject a real probe packet through the TUN
+  path and require a corresponding response packet from the peer side
+- global connectivity verification: inject a real probe packet through the TUN
+  path toward a configured Internet target and require a corresponding response
+
+Python now already uses the injected-packet contract. The remaining Apple-side
+parity work is to move iOS, and potentially macOS/Swift host-runner, onto the
+same in-process packet inject/observe path instead of `NWConnection` readiness
+or shelling out to `ping`.
+
+### Intended injected ping frame contract
+
+To make the iOS implementation behaviorally match desktop verification, the
+probe should be specified as a real ICMP echo packet written into the tunnel
+packet flow and matched against a corresponding echo reply read back from that
+same flow.
+
+#### IPv4 echo request
+
+- IPv4 header:
+  - version `4`, IHL `5`
+  - DSCP/ECN `0`
+  - total length `20 + 8 + payload_length`
+  - identification: probe-local monotonic or random value
+  - flags/fragment offset `0`
+  - TTL `64`
+  - protocol `1` (`ICMP`)
+  - source address: active tunnel IPv4 address
+  - destination address: selected probe target IPv4 address
+  - header checksum: computed after all fields are filled
+- ICMP payload:
+  - type `8` (`echo request`)
+  - code `0`
+  - checksum: computed over ICMP header plus payload
+  - identifier: stable ObstacleBridge probe identifier for this runtime
+  - sequence: monotonic per outstanding probe
+  - payload bytes: fixed signature plus nonce/timestamp, for example:
+    - magic: `OBTP`
+    - probe kind: `peer` or `global`
+    - send timestamp / nonce
+
+#### Expected IPv4 echo reply
+
+- IPv4 header:
+  - source/destination reversed from the request
+  - protocol still `1`
+- ICMP payload:
+  - type `0` (`echo reply`)
+  - code `0`
+  - same identifier as the request
+  - same sequence as the request
+  - payload bytes echoed unchanged
+
+The verification should only succeed when the reply matches the outstanding
+request's identifier, sequence, and payload signature. Any unrelated ICMP,
+other packet types, or a timeout without a matching reply should report failure
+or `no response`.
+
+#### IPv6 echo request/reply
+
+If the selected target is IPv6, the same contract should use ICMPv6 instead:
+
+- request type `128`, code `0`
+- reply type `129`, code `0`
+- source address: active tunnel IPv6 address
+- destination address: selected probe target IPv6 address
+- ICMPv6 checksum: computed with the IPv6 pseudo-header
+- identifier / sequence / payload echo rules: same as IPv4
+
+### Impact on harmonization work
+
+The main implementation impact is not in the Admin payload shape; that is
+already close across Python and Swift. The impact is in what each platform
+means by "verified".
+
+- Python now means "an internally generated ICMP echo request was injected
+  through the active TUN path and a matching echo reply was observed"
+- macOS/Swift host-runner currently means "the OS `ping` command reported an
+  echo reply through the chosen interface"
+- iOS currently means "a `Network.framework` endpoint became ready before the
+  timeout", which is materially weaker
+
+If iOS is changed to the injected-packet contract above, the following repo
+surfaces need to stay aligned:
+
+- Admin payload field names and state values:
+  - `tun_config`
+  - `tun_connectivity`
+  - `tun_global_connectivity`
+  - `ok`, `state`, `summary`, `detail`, `target`
+- target selection rules:
+  - peer probe should use the tunnel peer/gateway address, not merely the
+    overlay transport endpoint host/port
+  - global probe should resolve `global_connectivity_host` and probe the chosen
+    IP, while keeping that host configurable rather than hard-coded policy
+- timeout and freshness semantics:
+  - desktop Python currently uses background refresh plus cached/pending states
+  - iOS should keep the same observable freshness/reporting contract even if the
+    packet-generation mechanism is in-process
+- packet-flow plumbing:
+  - iOS must correlate outbound injected probes with inbound replies at the
+    `NEPacketTunnelFlow` boundary
+  - replies must be identified before normal tunnel data handling consumes or
+    obscures the probe outcome
+
+The current likely reason for "no response" reports on iOS is therefore not a
+minor mismatch in output formatting. It is that the present `NWConnection`
+reachability probe does not implement the same responder contract as a desktop
+ICMP echo check, so it cannot be debugged or validated as if it were already a
+packet-level `ping`.
+
+### TODO: cross-platform internal ping parity and remaining UI cleanup
+
+Python now uses an internal packet-level TUN probe implementation. The
+remaining parity work is to move Swift/iOS onto the same injected-packet
+contract and keep the Admin payload/UI semantics identical across runtimes.
+
+#### Implementation TODO
+
+1. Replace the current iOS `NWConnection`-based reachability probe with the
+   same injected-packet contract so iOS and Python share the same success and
+   failure semantics.
+2. Keep the probe contract identical across Python and Swift:
+   - same packet formats
+   - same identifier and sequence matching rules
+   - same payload signature / nonce handling
+   - same timeout and retry policy
+   - same success criteria: matching echo reply observed before timeout
+3. Decide whether macOS/Swift host-runner should also move off external
+   `ping` and onto the same internal probe path, or whether that surface may
+   temporarily remain an implementation outlier while still exposing the same
+   Admin payload contract.
+4. Add an explicit probe manager abstraction rather than embedding packet-build
+   and reply-correlation logic directly into Admin snapshot code.
+5. Ensure probe generation runs off the timeout-sensitive Admin snapshot path;
+   the snapshot should consume cached/latest probe results rather than blocking
+   on packet injection and reply wait.
+6. Add explicit packet-flow interception/correlation points so injected probe
+   replies are recognized before normal tunnel traffic handling loses the
+   ability to match them to the outstanding verification request.
+7. Support both IPv4 and IPv6 probe generation and matching.
+8. Keep the global-connectivity target configurable through
+   `global_connectivity_host`; do not hard-code platform-specific probe policy.
+9. Add unit coverage for:
+    - IPv4 request encoding
+    - IPv6 request encoding
+    - checksum generation
+    - reply matching
+    - timeout/no-response state
+    - stale-reply rejection
+    - concurrent probe bookkeeping
+10. Add integration coverage that proves a successful reply path and a real
+    no-response path on Python and Swift runtimes.
+
+#### Python status in this branch
+
+Python now has the first internal probe slice:
+
+- `ChannelMux` builds ICMP/ICMPv6 echo requests, injects them through the same
+  TUN path used by inline and helper mode, and intercepts matching echo replies
+  before normal local-TUN delivery.
+- `Runner` exposes that probe path to Admin Web as an async runtime call.
+- Admin Web keeps the existing cached/pending refresh contract, but the
+  background refresh now uses the internal probe instead of shelling out to
+  `ping`.
+- The payload now carries `value_ms`, `last_success_ago_s`, and
+  `last_success_rtt_ms` so the UI can show measured RTT or `n/a` plus freshness.
+
+#### UI / Admin payload TODO
+
+The current Admin payload is too implementation-shaped. The user-facing TUN
+page should emphasize the measured value and freshness, not the probe
+mechanism.
+
+1. Change the connectivity display so the primary user-visible value is the
+   actual measured round-trip result for the latest successful probe:
+   - example: `12 ms`
+2. If the latest probe failed or timed out, display `n/a` as the value.
+3. When the displayed value is `n/a`, also display how long it has been since
+   the last successful probe:
+   - example: `n/a, last success 37 s ago`
+4. Store and expose per-check timestamps needed for that UI:
+   - `last_checked_at`
+   - `last_success_at`
+   - `last_success_rtt_ms`
+5. Keep `detail` as a secondary diagnostic field for operator drill-down, not
+   the primary value shown in the table/card.
+6. Keep the same three verification rows:
+   - TUN config
+   - peer connectivity
+   - global connectivity
+7. Keep the UI semantics identical across Python and Swift so the same TUN page
+   language means the same thing regardless of runtime.
+8. Prefer one normalized Admin payload shape for both implementations, for
+   example:
+   - `value_ms`: latest successful round-trip measurement or `null`
+   - `last_success_ago_s`: elapsed seconds since the last successful probe or
+     `null`
+   - `state`: `verified`, `failed`, `pending`, or `skipped`
+   - `target`
+   - `detail`
+
+Until the Swift/iOS side lands, Python and Apple runtimes should still be
+treated as having different probe implementations with different evidentiary
+strength even if the Admin payload field names look similar.
 
 ## Current working model
 
@@ -1823,4 +2050,3 @@ Notes
   driver packages for production deployments. The helper/service design and
   installer tasks remain the authoritative production path for driver/service
   installation and signing.
-

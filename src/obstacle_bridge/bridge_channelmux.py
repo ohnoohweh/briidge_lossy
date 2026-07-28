@@ -19,6 +19,15 @@ else:
 
 from .bridge_tun_routing import TunRoutingSettings, auto_overlay_peer_excluded_routes
 from .bridge_proxy_common import open_http_connect_tunnel, resolve_proxy_endpoint
+from .bridge_tun_ping import (
+    PROBE_KIND_GLOBAL,
+    PROBE_KIND_PEER,
+    PROBE_MAGIC,
+    build_ipv4_echo_request,
+    build_ipv6_echo_request,
+    parse_echo_reply,
+    probe_payload,
+)
 
 class _ChanCtr:
     msgs_in: int = 0
@@ -209,6 +218,7 @@ class ChannelMux:
     TUN_STREAM_OVERLAY_RX_IDLE_NS_MIN = 500_000_000
     STREAM_OVERLAY_TCP_READ_CAP = 2048
     SHARED_TUN_RECENT_DROP_LIMIT = 16
+    TUN_PROBE_TIMEOUT_S = 2.0
 
     @staticmethod
     def _proto_name_to_code(name: "ChannelMux.ProtoName") -> int:
@@ -802,6 +812,11 @@ class ChannelMux:
         self._tun_helper_devices: dict[int, ChannelMux.TunDevice] = {}
         self._tun_runtime_health_by_service: dict[ChannelMux.ServiceKey, dict[str, Any]] = {}
         self._tun_runtime_health_tasks: dict[int, asyncio.Task] = {}
+        self._tun_probe_tasks: dict[tuple[str, str, str], asyncio.Task] = {}
+        self._tun_probe_history: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._tun_probe_waiters: dict[tuple[int, int, int, bytes], asyncio.Future] = {}
+        self._tun_probe_sequence: int = 1
+        self._tun_probe_identifier: int = random.getrandbits(16)
 
         # Overlay state gate
         self._overlay_connected: bool = self.session.is_connected()
@@ -4896,6 +4911,331 @@ class ChannelMux:
         for state in self._local_ingress_scope_states(scope_key, now_ns=now_ns):
             state["curr_bytes"] = int(state.get("curr_bytes", 0) or 0) + max(0, int(packet_len))
 
+    def _tun_probe_cache_key(self, *, probe_kind: str, ifname: str, target: str) -> tuple[str, str, str]:
+        return (str(probe_kind or "").strip().lower(), str(ifname or "").strip(), str(target or "").strip())
+
+    def _tun_probe_label(self, probe_kind: str) -> str:
+        kind = str(probe_kind or "").strip().lower()
+        if kind == "peer":
+            return "TUN connectivity verified"
+        if kind == "global":
+            return "TUN global connectivity verified"
+        return "TUN connectivity verification"
+
+    def _tun_probe_kind_code(self, probe_kind: str) -> int:
+        return PROBE_KIND_GLOBAL if str(probe_kind or "").strip().lower() == "global" else PROBE_KIND_PEER
+
+    def _tun_probe_result(
+        self,
+        *,
+        probe_kind: str,
+        target: str,
+        ok: bool,
+        state: str,
+        summary: str,
+        detail: str,
+        resolved_target: str = "",
+        value_ms: Optional[float] = None,
+        last_success_ago_s: Optional[float] = None,
+        last_success_rtt_ms: Optional[float] = None,
+    ) -> dict[str, Any]:
+        result = {
+            "label": self._tun_probe_label(probe_kind),
+            "ok": bool(ok),
+            "state": str(state or ""),
+            "summary": str(summary or ""),
+            "detail": str(detail or ""),
+            "target": str(target or ""),
+            "resolved_target": str(resolved_target or ""),
+            "method": "internal_icmp_echo",
+            "checked_at_unix_ts": float(time.time()),
+            "value_ms": None if value_ms is None else float(value_ms),
+            "last_success_ago_s": None if last_success_ago_s is None else float(last_success_ago_s),
+            "last_success_rtt_ms": None if last_success_rtt_ms is None else float(last_success_rtt_ms),
+        }
+        if result["value_ms"] is not None:
+            result["last_success_rtt_ms"] = result["value_ms"]
+        return result
+
+    def _find_tun_device_by_ifname(self, ifname: str) -> Optional["ChannelMux.TunDevice"]:
+        text_ifname = str(ifname or "").strip()
+        if not text_ifname:
+            return None
+        seen: set[int] = set()
+        for dev in list(self._tun_by_chan.values()) + list(self._svc_tun_devices.values()):
+            if dev is None or id(dev) in seen:
+                continue
+            seen.add(id(dev))
+            if str(getattr(dev, "ifname", "") or "").strip() == text_ifname:
+                return dev
+        return None
+
+    async def _resolve_tun_probe_target(self, target: str, *, family: int) -> str:
+        infos = await self.loop.getaddrinfo(
+            str(target or "").strip(),
+            None,
+            family=family,
+            type=socket.SOCK_RAW,
+            proto=socket.IPPROTO_ICMPV6 if family == socket.AF_INET6 else socket.IPPROTO_ICMP,
+        )
+        for entry in infos:
+            sockaddr = entry[4] if len(entry) >= 5 else None
+            if isinstance(sockaddr, tuple) and sockaddr:
+                value = str(sockaddr[0] or "").strip()
+                if value:
+                    return value
+        raise RuntimeError(f"unable to resolve {target!r} for family={family}")
+
+    def _source_address_for_probe_family(self, family: int) -> str:
+        if family == socket.AF_INET6:
+            return str(self._tun_routing_config().tunnel_address6 or "").strip()
+        return str(self._tun_routing_config().tunnel_address or "").strip()
+
+    def _allocate_tun_probe_identity(self) -> tuple[int, int]:
+        sequence = int(self._tun_probe_sequence) & 0xFFFF
+        if sequence <= 0:
+            sequence = 1
+        self._tun_probe_sequence = ((sequence + 1) & 0xFFFF) or 1
+        return int(self._tun_probe_identifier) & 0xFFFF, sequence
+
+    def _record_tun_probe_success(
+        self,
+        cache_key: tuple[str, str, str],
+        *,
+        rtt_ms: float,
+    ) -> dict[str, Any]:
+        history = {
+            "last_success_monotonic": float(time.monotonic()),
+            "last_success_rtt_ms": float(rtt_ms),
+        }
+        self._tun_probe_history[cache_key] = history
+        return history
+
+    def _tun_probe_history_snapshot(self, cache_key: tuple[str, str, str]) -> tuple[Optional[float], Optional[float]]:
+        history = dict(self._tun_probe_history.get(cache_key) or {})
+        last_success_monotonic = history.get("last_success_monotonic")
+        last_success_rtt_ms = history.get("last_success_rtt_ms")
+        if last_success_monotonic is None:
+            return None, None
+        return max(0.0, float(time.monotonic()) - float(last_success_monotonic)), (
+            None if last_success_rtt_ms is None else float(last_success_rtt_ms)
+        )
+
+    def _observe_tun_probe_reply(self, dev: "ChannelMux.TunDevice", data: bytes) -> bool:
+        parsed = parse_echo_reply(data)
+        if not isinstance(parsed, dict):
+            return False
+        payload = bytes(parsed.get("payload") or b"")
+        if len(payload) < len(PROBE_MAGIC) + 9 or not payload.startswith(PROBE_MAGIC):
+            return False
+        nonce = payload[5:13]
+        waiter_key = (
+            int(parsed.get("family") or 0),
+            int(parsed.get("identifier") or 0),
+            int(parsed.get("sequence") or 0),
+            bytes(nonce),
+        )
+        future = self._tun_probe_waiters.get(waiter_key)
+        if future is None:
+            return False
+        self._tun_probe_waiters.pop(waiter_key, None)
+        if not future.done():
+            future.set_result(
+                {
+                    "ifname": str(getattr(dev, "ifname", "") or ""),
+                    "reply_source_ip": str(parsed.get("source_ip") or ""),
+                    "reply_destination_ip": str(parsed.get("destination_ip") or ""),
+                    "payload": payload,
+                    "received_monotonic_ns": time.monotonic_ns(),
+                }
+            )
+        return True
+
+    async def _probe_tun_connectivity_once(
+        self,
+        *,
+        probe_kind: str,
+        ifname: str,
+        target: str,
+        timeout_s: float,
+    ) -> dict[str, Any]:
+        cache_key = self._tun_probe_cache_key(probe_kind=probe_kind, ifname=ifname, target=target)
+        label = self._tun_probe_label(probe_kind)
+        text_target = str(target or "").strip()
+        text_ifname = str(ifname or "").strip()
+        if not text_target:
+            return self._tun_probe_result(
+                probe_kind=probe_kind,
+                target=text_target,
+                ok=False,
+                state="skipped",
+                summary=f"{label}: skipped",
+                detail="Verification target is not configured.",
+            )
+        if not text_ifname:
+            return self._tun_probe_result(
+                probe_kind=probe_kind,
+                target=text_target,
+                ok=False,
+                state="skipped",
+                summary=f"{label}: skipped",
+                detail="TUN interface name unavailable.",
+            )
+        dev = self._find_tun_device_by_ifname(text_ifname)
+        if dev is None:
+            return self._tun_probe_result(
+                probe_kind=probe_kind,
+                target=text_target,
+                ok=False,
+                state="skipped",
+                summary=f"{label}: skipped",
+                detail=f"TUN interface {text_ifname} is not active on this runtime.",
+            )
+        candidate_families: list[int] = []
+        configured_v4 = str(self._tun_routing_config().tunnel_address or "").strip()
+        configured_v6 = str(self._tun_routing_config().tunnel_address6 or "").strip()
+        if configured_v4:
+            candidate_families.append(socket.AF_INET)
+        if configured_v6:
+            candidate_families.append(socket.AF_INET6)
+        if not candidate_families:
+            candidate_families.append(socket.AF_INET)
+        last_error = "target resolution failed"
+        resolved_target = ""
+        family = candidate_families[0]
+        for candidate_family in candidate_families:
+            try:
+                resolved_target = await self._resolve_tun_probe_target(text_target, family=candidate_family)
+                family = candidate_family
+                break
+            except Exception as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+        if not resolved_target:
+            last_success_ago_s, last_success_rtt_ms = self._tun_probe_history_snapshot(cache_key)
+            return self._tun_probe_result(
+                probe_kind=probe_kind,
+                target=text_target,
+                ok=False,
+                state="failed",
+                summary=f"{label}: failed",
+                detail=f"Probe target resolution failed: {last_error}",
+                last_success_ago_s=last_success_ago_s,
+                last_success_rtt_ms=last_success_rtt_ms,
+            )
+        source_ip = self._source_address_for_probe_family(family)
+        if not source_ip:
+            last_success_ago_s, last_success_rtt_ms = self._tun_probe_history_snapshot(cache_key)
+            return self._tun_probe_result(
+                probe_kind=probe_kind,
+                target=text_target,
+                ok=False,
+                state="skipped",
+                summary=f"{label}: skipped",
+                detail=f"No configured tunnel source address is available for {resolved_target}.",
+                resolved_target=resolved_target,
+                last_success_ago_s=last_success_ago_s,
+                last_success_rtt_ms=last_success_rtt_ms,
+            )
+        sent_monotonic_ns = time.monotonic_ns()
+        nonce = secrets.token_bytes(8)
+        payload = probe_payload(
+            probe_kind=self._tun_probe_kind_code(probe_kind),
+            nonce=nonce,
+            sent_monotonic_ns=sent_monotonic_ns,
+        )
+        identifier, sequence = self._allocate_tun_probe_identity()
+        if family == socket.AF_INET6:
+            packet = build_ipv6_echo_request(
+                source_ip=source_ip,
+                destination_ip=resolved_target,
+                identifier=identifier,
+                sequence=sequence,
+                payload=payload,
+            )
+        else:
+            packet = build_ipv4_echo_request(
+                source_ip=source_ip,
+                destination_ip=resolved_target,
+                identifier=identifier,
+                sequence=sequence,
+                payload=payload,
+            )
+        future = self.loop.create_future()
+        waiter_key = (family, identifier, sequence, bytes(nonce))
+        self._tun_probe_waiters[waiter_key] = future
+        try:
+            self._on_local_tun_packet(dev, packet)
+            reply = await asyncio.wait_for(future, timeout=max(0.1, float(timeout_s or self.TUN_PROBE_TIMEOUT_S)))
+        except asyncio.TimeoutError:
+            last_success_ago_s, last_success_rtt_ms = self._tun_probe_history_snapshot(cache_key)
+            return self._tun_probe_result(
+                probe_kind=probe_kind,
+                target=text_target,
+                ok=False,
+                state="failed",
+                summary=f"{label}: failed",
+                detail=f"No ICMP echo reply received from {resolved_target} within {float(timeout_s or self.TUN_PROBE_TIMEOUT_S):.1f}s.",
+                resolved_target=resolved_target,
+                last_success_ago_s=last_success_ago_s,
+                last_success_rtt_ms=last_success_rtt_ms,
+            )
+        except Exception as exc:
+            last_success_ago_s, last_success_rtt_ms = self._tun_probe_history_snapshot(cache_key)
+            return self._tun_probe_result(
+                probe_kind=probe_kind,
+                target=text_target,
+                ok=False,
+                state="failed",
+                summary=f"{label}: failed",
+                detail=f"Internal probe failed: {type(exc).__name__}: {exc}",
+                resolved_target=resolved_target,
+                last_success_ago_s=last_success_ago_s,
+                last_success_rtt_ms=last_success_rtt_ms,
+            )
+        finally:
+            self._tun_probe_waiters.pop(waiter_key, None)
+        received_monotonic_ns = int(reply.get("received_monotonic_ns") or time.monotonic_ns())
+        rtt_ms = max(0.0, (received_monotonic_ns - sent_monotonic_ns) / 1_000_000.0)
+        self._record_tun_probe_success(cache_key, rtt_ms=rtt_ms)
+        return self._tun_probe_result(
+            probe_kind=probe_kind,
+            target=text_target,
+            ok=True,
+            state="verified",
+            summary=f"{label}: verified",
+            detail=f"ICMP echo reply received from {resolved_target}.",
+            resolved_target=resolved_target,
+            value_ms=rtt_ms,
+            last_success_ago_s=0.0,
+            last_success_rtt_ms=rtt_ms,
+        )
+
+    async def probe_tun_connectivity(
+        self,
+        *,
+        ifname: str,
+        target: str,
+        timeout_s: float,
+        probe_kind: str,
+    ) -> dict[str, Any]:
+        cache_key = self._tun_probe_cache_key(probe_kind=probe_kind, ifname=ifname, target=target)
+        task = self._tun_probe_tasks.get(cache_key)
+        if task is None or task.done():
+            task = self.loop.create_task(
+                self._probe_tun_connectivity_once(
+                    probe_kind=probe_kind,
+                    ifname=ifname,
+                    target=target,
+                    timeout_s=timeout_s,
+                )
+            )
+            self._tun_probe_tasks[cache_key] = task
+        try:
+            return dict(await task)
+        finally:
+            if task.done() and self._tun_probe_tasks.get(cache_key) is task:
+                self._tun_probe_tasks.pop(cache_key, None)
+
     def _on_local_tun_packet(self, dev: "ChannelMux.TunDevice", packet: bytes) -> None:
         self._record_sync_diag("ChannelMux._on_local_tun_packet", phase="started")
         try:
@@ -5176,6 +5516,9 @@ class ChannelMux:
                     None if parsed is None else parsed.get("source_ip"),
                     None if parsed is None else parsed.get("destination_ip"),
                 )
+                return
+            if self._observe_tun_probe_reply(dev, data):
+                self.log.debug("[TUN] chan=%s consumed internal probe reply if=%s", chan, dev.ifname)
                 return
             self._log_tun_packet_debug(stage="to_local_tun", packet=data, ifname=dev.ifname, chan=chan)
             self._log_tun_flow_sample(

@@ -1277,6 +1277,57 @@ class Runner:
             "status": self._tun_helper_snapshot(),
         }
 
+    async def probe_tun_connectivity_verification(
+        self,
+        *,
+        ifname: str,
+        target: str,
+        timeout_seconds: float,
+        probe_kind: str,
+    ) -> dict[str, Any]:
+        text_ifname = str(ifname or "").strip()
+        text_target = str(target or "").strip()
+        for mux in self._muxes:
+            prober = getattr(mux, "probe_tun_connectivity", None)
+            if not callable(prober):
+                continue
+            try:
+                result = await prober(
+                    ifname=text_ifname,
+                    target=text_target,
+                    timeout_s=float(timeout_seconds),
+                    probe_kind=str(probe_kind or ""),
+                )
+            except Exception as exc:
+                return {
+                    "label": "TUN connectivity verification",
+                    "ok": False,
+                    "state": "failed",
+                    "summary": "TUN connectivity verification: failed",
+                    "detail": f"Runner probe dispatch failed: {type(exc).__name__}: {exc}",
+                    "target": text_target,
+                    "method": "internal_icmp_echo",
+                    "checked_at_unix_ts": float(time.time()),
+                    "value_ms": None,
+                    "last_success_ago_s": None,
+                    "last_success_rtt_ms": None,
+                }
+            if isinstance(result, dict) and str(result.get("state") or "") != "skipped":
+                return dict(result)
+        return {
+            "label": "TUN connectivity verification",
+            "ok": False,
+            "state": "skipped",
+            "summary": "TUN connectivity verification: skipped",
+            "detail": "No active mux exposed the requested TUN interface for verification.",
+            "target": text_target,
+            "method": "internal_icmp_echo",
+            "checked_at_unix_ts": float(time.time()),
+            "value_ms": None,
+            "last_success_ago_s": None,
+            "last_success_rtt_ms": None,
+        }
+
     def get_status_snapshot(self) -> dict:
         try:
             payload = dict(self.stats.snapshot_status())
