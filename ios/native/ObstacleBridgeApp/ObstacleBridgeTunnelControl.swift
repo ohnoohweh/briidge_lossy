@@ -13,6 +13,8 @@ final class ObstacleBridgeTunnelControl: NSObject {
     }
     private static let webAdminBind = "127.0.0.1"
     private static let webAdminPort = 18080
+    private static let remoteAdminName = "WebAdmin iphone"
+    private static let remoteAdminPort = 13081
     private static let queue = DispatchQueue(label: "com.obstaclebridge.tunnel-control", qos: .utility)
     private static let statusDefaultsKey = "ObstacleBridgeTunnelControlStatus"
     private static let appGroupIdentifier = "group.com.obstaclebridge.shared"
@@ -657,7 +659,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
             .appendingPathComponent("ObstacleBridge.cfg", isDirectory: false)
         if let data = try? Data(contentsOf: configURL),
            let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            return payload
+            return applyingRemoteAdminDefaultsToGroupedPayload(payload)
         }
         return loadSharedRuntimeConfigJSON() ?? [:]
 #else
@@ -676,7 +678,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
         else {
             return [:]
         }
-        return payload
+        return applyingRemoteAdminDefaultsToGroupedPayload(payload)
 #endif
     }
 
@@ -695,7 +697,51 @@ final class ObstacleBridgeTunnelControl: NSObject {
         else {
             return nil
         }
-        return payload
+        return applyingRemoteAdminDefaultsToGroupedPayload(payload)
+    }
+
+    private class func applyingRemoteAdminDefaultsToGroupedPayload(_ payload: [String: Any]) -> [String: Any] {
+        var grouped = payload
+        let adminSection = (grouped["admin_web"] as? [String: Any]) ?? [:]
+        let adminEnabled = (adminSection["admin_web"] as? Bool) ?? true
+        let remotePublishEnabled = (adminSection["admin_web_remote_publish"] as? Bool) ?? true
+        guard adminEnabled, remotePublishEnabled else {
+            return grouped
+        }
+
+        let adminPort = (adminSection["admin_web_port"] as? NSNumber)?.intValue ?? webAdminPort
+        let publishedPort = (adminSection["admin_web_remote_port"] as? NSNumber)?.intValue ?? remoteAdminPort
+        let targetHost = adminTargetHost(from: adminSection["admin_web_bind"])
+        var channelMux = (grouped["channel_mux"] as? [String: Any]) ?? [:]
+        var remoteServers = channelMux["remote_servers"] as? [[String: Any]] ?? []
+        let hasExisting = remoteServers.contains { spec in
+            guard let target = spec["target"] as? [String: Any] else {
+                return false
+            }
+            let targetProtocol = String(describing: target["protocol"] ?? "").lowercased()
+            let targetPort = (target["port"] as? NSNumber)?.intValue ?? Int(String(describing: target["port"] ?? "")) ?? 0
+            let host = String(describing: target["host"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return targetProtocol == "tcp" && targetPort == adminPort && [targetHost, "127.0.0.1", "localhost"].contains(host)
+        }
+        if !hasExisting {
+            let serviceNameRaw = String(describing: adminSection["admin_web_remote_name"] ?? remoteAdminName).trimmingCharacters(in: .whitespacesAndNewlines)
+            remoteServers.append([
+                "name": serviceNameRaw.isEmpty ? remoteAdminName : serviceNameRaw,
+                "listen": [
+                    "protocol": "tcp",
+                    "bind": "0.0.0.0",
+                    "port": publishedPort,
+                ],
+                "target": [
+                    "protocol": "tcp",
+                    "host": targetHost,
+                    "port": adminPort,
+                ],
+            ])
+        }
+        channelMux["remote_servers"] = remoteServers
+        grouped["channel_mux"] = channelMux
+        return grouped
     }
 
     private class func harvestSharedLogsInternal() -> [String: Any] {
@@ -1958,6 +2004,9 @@ final class ObstacleBridgeTunnelControl: NSObject {
             "admin_web_bind": webAdminBind,
             "admin_web_port": webAdminPort,
             "admin_web_path": "/",
+            "admin_snapshot_cache_enabled": false,
+            "admin_web_remote_publish": true,
+            "admin_web_remote_port": remoteAdminPort,
             "log": "DEBUG",
             "file_level": "DEBUG",
             "console_level": "INFO",
@@ -1982,7 +2031,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
                 flattened[key] = value
             }
         }
-        return flattened
+        return applyingRemoteAdminDefaults(to: flattened)
     }
 
     private class func appRuntimeRootURL() -> URL? {
@@ -2008,6 +2057,57 @@ final class ObstacleBridgeTunnelControl: NSObject {
         config["admin_web_port"] = webAdminPort
         config["admin_web_path"] = "/"
         return config
+    }
+
+    private class func adminTargetHost(from bindValue: Any?) -> String {
+        let bindHost = String(describing: bindValue ?? webAdminBind).trimmingCharacters(in: .whitespacesAndNewlines)
+        if bindHost.isEmpty {
+            return webAdminBind
+        }
+        if ["0.0.0.0", "::", "*", "localhost"].contains(bindHost) {
+            return "127.0.0.1"
+        }
+        return bindHost
+    }
+
+    private class func applyingRemoteAdminDefaults(to payload: [String: Any]) -> [String: Any] {
+        let adminEnabled = (payload["admin_web"] as? Bool) ?? true
+        let remotePublishEnabled = (payload["admin_web_remote_publish"] as? Bool) ?? true
+        guard adminEnabled, remotePublishEnabled else {
+            return payload
+        }
+        let adminPort = (payload["admin_web_port"] as? NSNumber)?.intValue ?? webAdminPort
+        let targetHost = adminTargetHost(from: payload["admin_web_bind"])
+        var out = payload
+        var remoteServers = out["remote_servers"] as? [[String: Any]] ?? []
+        let hasExisting = remoteServers.contains { spec in
+            guard let target = spec["target"] as? [String: Any] else {
+                return false
+            }
+            let targetProtocol = String(describing: target["protocol"] ?? "").lowercased()
+            let targetPort = (target["port"] as? NSNumber)?.intValue ?? Int(String(describing: target["port"] ?? "")) ?? 0
+            let host = String(describing: target["host"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return targetProtocol == "tcp" && targetPort == adminPort && [targetHost, "127.0.0.1", "localhost"].contains(host)
+        }
+        if !hasExisting {
+            let publishedPort = (payload["admin_web_remote_port"] as? NSNumber)?.intValue ?? remoteAdminPort
+            let serviceNameRaw = String(describing: payload["admin_web_remote_name"] ?? remoteAdminName).trimmingCharacters(in: .whitespacesAndNewlines)
+            remoteServers.append([
+                "name": serviceNameRaw.isEmpty ? remoteAdminName : serviceNameRaw,
+                "listen": [
+                    "protocol": "tcp",
+                    "bind": "0.0.0.0",
+                    "port": publishedPort,
+                ],
+                "target": [
+                    "protocol": "tcp",
+                    "host": targetHost,
+                    "port": adminPort,
+                ],
+            ])
+        }
+        out["remote_servers"] = remoteServers
+        return out
     }
 
     private class func statusText(_ status: NEVPNStatus?) -> String {

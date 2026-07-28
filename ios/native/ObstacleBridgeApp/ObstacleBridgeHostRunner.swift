@@ -171,6 +171,10 @@ final class ObstacleBridgeHostRunner {
     private var macOSTunChannelConnectedHookFired = false
     private var macOSOverlayUnderlayGatewayV4 = ""
     private var macOSOverlayUnderlayInterfaceV4 = ""
+    private let tunProbeIdentifier = UInt16.random(in: 1...UInt16.max)
+    private var tunProbeSequence: UInt16 = 1
+    private var tunProbeWaiters: [TunProbeWaiterKey: TunProbeWaiterState] = [:]
+    private var tunProbeHistory: [String: TunProbeHistory] = [:]
     private var clientRestartWatchdog: DispatchSourceTimer?
     private var adminSnapshotTimer: DispatchSourceTimer?
     private var cachedStatusSnapshot: [String: Any] = [:]
@@ -219,6 +223,30 @@ final class ObstacleBridgeHostRunner {
     private struct ActiveOverlayOwner {
         let transport: String
         let owner: ObstacleBridgeOverlayTransportOwning
+    }
+
+    private struct TunProbeWaiterKey: Hashable {
+        let family: Int32
+        let identifier: UInt16
+        let sequence: UInt16
+        let nonce: Data
+    }
+
+    private final class TunProbeWaiterState {
+        let semaphore = DispatchSemaphore(value: 0)
+        var reply: TunProbeReply?
+    }
+
+    private struct TunProbeReply {
+        let sourceIP: String
+        let destinationIP: String
+        let payload: Data
+        let receivedMonotonicNS: UInt64
+    }
+
+    private struct TunProbeHistory {
+        let lastSuccessMonotonic: TimeInterval
+        let lastSuccessRTTMS: Double
     }
 
     init(
@@ -776,17 +804,17 @@ final class ObstacleBridgeHostRunner {
             "observed_addresses": observed,
             "global_connectivity_host": globalHost,
             "tun_config": configCheck,
-            "tun_connectivity": Self.macOSPingVerification(
-                label: "TUN connectivity verified",
+            "tun_connectivity": macOSInternalTunVerification(
+                probeKind: "peer",
                 target: peerTarget,
                 ifname: ifname,
-                waitSeconds: 1
+                timeoutSeconds: 1.0
             ),
-            "tun_global_connectivity": Self.macOSPingVerification(
-                label: "TUN global connectivity verified",
+            "tun_global_connectivity": macOSInternalTunVerification(
+                probeKind: "global",
                 target: globalHost,
                 ifname: ifname,
-                waitSeconds: 2
+                timeoutSeconds: 2.0
             ),
         ]
     }
@@ -825,6 +853,44 @@ final class ObstacleBridgeHostRunner {
         ]
     }
 
+    private func tunProbeResult(
+        probeKind: String,
+        target: String,
+        ok: Bool,
+        state: String,
+        summary: String,
+        detail: String,
+        resolvedTarget: String = "",
+        valueMS: Double? = nil,
+        lastSuccessAgoS: Double? = nil,
+        lastSuccessRTTMS: Double? = nil
+    ) -> [String: Any] {
+        var result: [String: Any] = [
+            "label": tunProbeLabel(probeKind),
+            "ok": ok,
+            "state": state,
+            "summary": summary,
+            "detail": detail,
+            "target": target,
+            "resolved_target": resolvedTarget,
+            "method": "internal_icmp_echo",
+            "checked_at_unix_ts": Date().timeIntervalSince1970,
+            "value_ms": NSNull(),
+            "last_success_ago_s": NSNull(),
+            "last_success_rtt_ms": NSNull(),
+        ]
+        if let valueMS {
+            result["value_ms"] = valueMS
+            result["last_success_rtt_ms"] = valueMS
+        } else if let lastSuccessRTTMS {
+            result["last_success_rtt_ms"] = lastSuccessRTTMS
+        }
+        if let lastSuccessAgoS {
+            result["last_success_ago_s"] = lastSuccessAgoS
+        }
+        return result
+    }
+
     private static func macOSTunInterfaceAddresses(ifname: String) -> [String: Any] {
         let trimmed = ifname.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -857,53 +923,347 @@ final class ObstacleBridgeHostRunner {
         ]
     }
 
-    private static func macOSPingVerification(label: String, target: String, ifname: String, waitSeconds: Int) -> [String: Any] {
+    private func macOSInternalTunVerification(probeKind: String, target: String, ifname: String, timeoutSeconds: TimeInterval) -> [String: Any] {
+        let label = tunProbeLabel(probeKind)
         let trimmedTarget = target.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedIfname = ifname.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedTarget.isEmpty else {
-            return verificationResult(
-                label: label,
+        let cacheKey = tunProbeCacheKey(probeKind: probeKind, ifname: trimmedIfname, target: trimmedTarget)
+        if trimmedTarget.isEmpty {
+            return tunProbeResult(
+                probeKind: probeKind,
+                target: trimmedTarget,
                 ok: false,
                 state: "skipped",
                 summary: "\(label): skipped",
                 detail: "Verification target is not configured."
             )
         }
-        guard !trimmedIfname.isEmpty else {
-            return verificationResult(
-                label: label,
+        if trimmedIfname.isEmpty {
+            return tunProbeResult(
+                probeKind: probeKind,
+                target: trimmedTarget,
                 ok: false,
                 state: "skipped",
                 summary: "\(label): skipped",
-                detail: "TUN interface name unavailable.",
-                target: trimmedTarget
+                detail: "TUN interface name unavailable."
             )
         }
-        let wait = String(max(1, waitSeconds))
-        let executable = trimmedTarget.contains(":") ? "/sbin/ping6" : "/sbin/ping"
-        let arguments = trimmedTarget.contains(":")
-            ? ["-c", "1", "-W", wait, "-I", trimmedIfname, trimmedTarget]
-            : ["-c", "1", "-W", wait, "-b", trimmedIfname, trimmedTarget]
-        guard let result = runProcess(executable: executable, arguments: arguments, timeoutSeconds: Double(max(1, waitSeconds) + 1)) else {
-            return verificationResult(
-                label: label,
+        let actualIfname = withServiceStateQueue {
+            macOSTunHelperClient?.actualIfname.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+        if actualIfname != trimmedIfname {
+            return tunProbeResult(
+                probeKind: probeKind,
+                target: trimmedTarget,
+                ok: false,
+                state: "skipped",
+                summary: "\(label): skipped",
+                detail: "TUN interface \(trimmedIfname) is not active on this runtime."
+            )
+        }
+        guard currentOverlayOwner() != nil else {
+            let history = tunProbeHistorySnapshot(cacheKey: cacheKey)
+            return tunProbeResult(
+                probeKind: probeKind,
+                target: trimmedTarget,
                 ok: false,
                 state: "failed",
                 summary: "\(label): failed",
-                detail: "Ping failed to start.",
-                target: trimmedTarget
+                detail: "No active overlay owner is available for the TUN probe.",
+                lastSuccessAgoS: history.lastSuccessAgoS,
+                lastSuccessRTTMS: history.lastSuccessRTTMS
             )
         }
-        let ok = result.status == 0
-        let detail = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return verificationResult(
-            label: label,
-            ok: ok,
-            state: ok ? "verified" : "failed",
-            summary: "\(label): \(ok ? "verified" : "failed")",
-            detail: detail.isEmpty ? (ok ? "Ping succeeded." : "Ping failed.") : detail,
-            target: trimmedTarget
+        let candidateFamilies = sourceProbeFamilies()
+        let resolved = resolveTunProbeTarget(trimmedTarget, candidateFamilies: candidateFamilies)
+        guard let resolvedTarget = resolved.target else {
+            let history = tunProbeHistorySnapshot(cacheKey: cacheKey)
+            return tunProbeResult(
+                probeKind: probeKind,
+                target: trimmedTarget,
+                ok: false,
+                state: "failed",
+                summary: "\(label): failed",
+                detail: "Probe target resolution failed: \(resolved.error)",
+                lastSuccessAgoS: history.lastSuccessAgoS,
+                lastSuccessRTTMS: history.lastSuccessRTTMS
+            )
+        }
+        let family = resolved.family
+        let sourceIP = sourceAddressForProbeFamily(family)
+        guard !sourceIP.isEmpty else {
+            let history = tunProbeHistorySnapshot(cacheKey: cacheKey)
+            return tunProbeResult(
+                probeKind: probeKind,
+                target: trimmedTarget,
+                ok: false,
+                state: "skipped",
+                summary: "\(label): skipped",
+                detail: "No configured tunnel source address is available for \(resolvedTarget).",
+                resolvedTarget: resolvedTarget,
+                lastSuccessAgoS: history.lastSuccessAgoS,
+                lastSuccessRTTMS: history.lastSuccessRTTMS
+            )
+        }
+        let sentMonotonicNS = DispatchTime.now().uptimeNanoseconds
+        let nonce = Self.randomProbeNonce()
+        let kindCode = tunProbeKindCode(probeKind)
+        let payload = ObstacleBridgeTunPing.probePayload(
+            probeKind: kindCode,
+            nonce: nonce,
+            sentMonotonicNS: sentMonotonicNS
         )
+        let identity = allocateTunProbeIdentity()
+        let packet: Data?
+        if family == AF_INET6 {
+            packet = ObstacleBridgeTunPing.buildIPv6EchoRequest(
+                sourceIP: sourceIP,
+                destinationIP: resolvedTarget,
+                identifier: identity.identifier,
+                sequence: identity.sequence,
+                payload: payload
+            )
+        } else {
+            packet = ObstacleBridgeTunPing.buildIPv4EchoRequest(
+                sourceIP: sourceIP,
+                destinationIP: resolvedTarget,
+                identifier: identity.identifier,
+                sequence: identity.sequence,
+                payload: payload
+            )
+        }
+        guard let packet else {
+            let history = tunProbeHistorySnapshot(cacheKey: cacheKey)
+            return tunProbeResult(
+                probeKind: probeKind,
+                target: trimmedTarget,
+                ok: false,
+                state: "failed",
+                summary: "\(label): failed",
+                detail: "Internal probe failed: unable to build ICMP echo request.",
+                resolvedTarget: resolvedTarget,
+                lastSuccessAgoS: history.lastSuccessAgoS,
+                lastSuccessRTTMS: history.lastSuccessRTTMS
+            )
+        }
+        let waiter = TunProbeWaiterState()
+        let waiterKey = TunProbeWaiterKey(
+            family: family,
+            identifier: identity.identifier,
+            sequence: identity.sequence,
+            nonce: nonce
+        )
+        withServiceStateQueue {
+            tunProbeWaiters[waiterKey] = waiter
+        }
+        currentOverlayOwner()?.owner.sendLocalTunPacket(packet)
+        let timedOut = waiter.semaphore.wait(timeout: .now() + max(0.1, timeoutSeconds)) == .timedOut
+        _ = withServiceStateQueue {
+            tunProbeWaiters.removeValue(forKey: waiterKey)
+        }
+        if timedOut || waiter.reply == nil {
+            let history = tunProbeHistorySnapshot(cacheKey: cacheKey)
+            return tunProbeResult(
+                probeKind: probeKind,
+                target: trimmedTarget,
+                ok: false,
+                state: "failed",
+                summary: "\(label): failed",
+                detail: String(format: "No ICMP echo reply received from %@ within %.1fs.", resolvedTarget, timeoutSeconds),
+                resolvedTarget: resolvedTarget,
+                lastSuccessAgoS: history.lastSuccessAgoS,
+                lastSuccessRTTMS: history.lastSuccessRTTMS
+            )
+        }
+        let receivedMonotonicNS = waiter.reply?.receivedMonotonicNS ?? DispatchTime.now().uptimeNanoseconds
+        let rttMS = max(0.0, Double(receivedMonotonicNS &- sentMonotonicNS) / 1_000_000.0)
+        recordTunProbeSuccess(cacheKey: cacheKey, rttMS: rttMS)
+        return tunProbeResult(
+            probeKind: probeKind,
+            target: trimmedTarget,
+            ok: true,
+            state: "verified",
+            summary: "\(label): verified",
+            detail: "ICMP echo reply received from \(resolvedTarget).",
+            resolvedTarget: resolvedTarget,
+            valueMS: rttMS,
+            lastSuccessAgoS: 0.0,
+            lastSuccessRTTMS: rttMS
+        )
+    }
+
+    private func tunProbeCacheKey(probeKind: String, ifname: String, target: String) -> String {
+        "\(probeKind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())|\(ifname)|\(target)"
+    }
+
+    private func tunProbeLabel(_ probeKind: String) -> String {
+        switch probeKind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "peer":
+            return "TUN connectivity verified"
+        case "global":
+            return "TUN global connectivity verified"
+        default:
+            return "TUN connectivity verification"
+        }
+    }
+
+    private func tunProbeKindCode(_ probeKind: String) -> UInt8 {
+        probeKind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global"
+            ? ObstacleBridgeTunPing.probeKindGlobal
+            : ObstacleBridgeTunPing.probeKindPeer
+    }
+
+    private func sourceProbeFamilies() -> [Int32] {
+        var families: [Int32] = []
+        let tunRouting = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig)
+        if !(tunRouting?.tunnelAddress ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            families.append(AF_INET)
+        }
+        if !(tunRouting?.tunnelAddress6 ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            families.append(AF_INET6)
+        }
+        if families.isEmpty {
+            families.append(AF_INET)
+        }
+        return families
+    }
+
+    private func sourceAddressForProbeFamily(_ family: Int32) -> String {
+        let tunRouting = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig)
+        if family == AF_INET6 {
+            return (tunRouting?.tunnelAddress6 ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return (tunRouting?.tunnelAddress ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func allocateTunProbeIdentity() -> (identifier: UInt16, sequence: UInt16) {
+        let sequence = withServiceStateQueue { () -> UInt16 in
+            let current = (tunProbeSequence == 0) ? 1 : tunProbeSequence
+            tunProbeSequence = (current &+ 1)
+            if tunProbeSequence == 0 {
+                tunProbeSequence = 1
+            }
+            return current
+        }
+        return (tunProbeIdentifier, sequence)
+    }
+
+    private func recordTunProbeSuccess(cacheKey: String, rttMS: Double) {
+        withServiceStateQueue {
+            tunProbeHistory[cacheKey] = TunProbeHistory(
+                lastSuccessMonotonic: ProcessInfo.processInfo.systemUptime,
+                lastSuccessRTTMS: rttMS
+            )
+        }
+    }
+
+    private func tunProbeHistorySnapshot(cacheKey: String) -> (lastSuccessAgoS: Double?, lastSuccessRTTMS: Double?) {
+        withServiceStateQueue {
+            guard let history = tunProbeHistory[cacheKey] else {
+                return (nil, nil)
+            }
+            return (
+                max(0.0, ProcessInfo.processInfo.systemUptime - history.lastSuccessMonotonic),
+                history.lastSuccessRTTMS
+            )
+        }
+    }
+
+    private func observeTunProbeReply(_ packet: Data) {
+        guard let parsed = ObstacleBridgeTunPing.parseEchoReply(packet) else {
+            return
+        }
+        let payload = parsed.payload
+        let minimumPayloadLength = ObstacleBridgeTunPing.probeMagic.count + 1 + 8 + 8
+        guard payload.count >= minimumPayloadLength,
+              payload.prefix(ObstacleBridgeTunPing.probeMagic.count) == ObstacleBridgeTunPing.probeMagic else {
+            return
+        }
+        let nonce = payload.subdata(in: 5..<13)
+        let key = TunProbeWaiterKey(
+            family: parsed.family,
+            identifier: parsed.identifier,
+            sequence: parsed.sequence,
+            nonce: nonce
+        )
+        withServiceStateQueue {
+            guard let waiter = tunProbeWaiters.removeValue(forKey: key) else {
+                return
+            }
+            waiter.reply = TunProbeReply(
+                sourceIP: parsed.sourceIP,
+                destinationIP: parsed.destinationIP,
+                payload: payload,
+                receivedMonotonicNS: DispatchTime.now().uptimeNanoseconds
+            )
+            waiter.semaphore.signal()
+        }
+    }
+
+    private func resolveTunProbeTarget(_ target: String, candidateFamilies: [Int32]) -> (target: String?, family: Int32, error: String) {
+        var lastError = "target resolution failed"
+        for family in candidateFamilies {
+            if let directFamily = ObstacleBridgeTunPing.ipFamily(target), directFamily == family {
+                return (target, family, "")
+            }
+            if let resolved = Self.resolveHost(target, family: family) {
+                return (resolved, family, "")
+            }
+            lastError = "unable to resolve \(target) for family=\(family)"
+        }
+        return (nil, candidateFamilies.first ?? AF_INET, lastError)
+    }
+
+    private static func resolveHost(_ host: String, family: Int32) -> String? {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        var hints = addrinfo(
+            ai_flags: AI_ADDRCONFIG,
+            ai_family: family,
+            ai_socktype: SOCK_RAW,
+            ai_protocol: family == AF_INET6 ? IPPROTO_ICMPV6 : IPPROTO_ICMP,
+            ai_addrlen: 0,
+            ai_canonname: nil,
+            ai_addr: nil,
+            ai_next: nil
+        )
+        var result: UnsafeMutablePointer<addrinfo>?
+        let status = getaddrinfo(trimmed, nil, &hints, &result)
+        guard status == 0, let result else {
+            return nil
+        }
+        defer { freeaddrinfo(result) }
+        var cursor: UnsafeMutablePointer<addrinfo>? = result
+        while let info = cursor?.pointee {
+            if info.ai_family == AF_INET,
+               let addr = info.ai_addr?.withMemoryRebound(to: sockaddr_in.self, capacity: 1, { $0.pointee }) {
+                var copy = addr.sin_addr
+                var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                if inet_ntop(AF_INET, &copy, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil {
+                    return String(cString: buffer)
+                }
+            } else if info.ai_family == AF_INET6,
+                      let addr6 = info.ai_addr?.withMemoryRebound(to: sockaddr_in6.self, capacity: 1, { $0.pointee }) {
+                var copy = addr6.sin6_addr
+                var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+                if inet_ntop(AF_INET6, &copy, &buffer, socklen_t(INET6_ADDRSTRLEN)) != nil {
+                    return String(cString: buffer)
+                }
+            }
+            cursor = info.ai_next
+        }
+        return nil
+    }
+
+    private static func randomProbeNonce() -> Data {
+        var bytes = [UInt8](repeating: 0, count: 8)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        if status == errSecSuccess {
+            return Data(bytes)
+        }
+        return Data((0..<8).map { _ in UInt8.random(in: 0...255) })
     }
 
     private static func runProcess(executable: String, arguments: [String], timeoutSeconds: TimeInterval) -> (status: Int32, output: String)? {
@@ -2991,6 +3351,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func deliverRemoteTunPacketToLocalAdapter(_ packet: Data) {
+        observeTunProbeReply(packet)
         guard let helperClient = macOSTunHelperClient else { return }
         do {
             try helperClient.writePacket(packet)

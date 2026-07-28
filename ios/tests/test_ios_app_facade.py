@@ -33,9 +33,16 @@ def test_app_default_facade_reports_extension_as_runtime_owner(tmp_path: Path, m
     assert snapshot["runtime_owner"] == "IPServer Network Extension"
     assert snapshot["active_profile_id"] is None
     assert snapshot["config"]["admin_web"]["admin_web"] is True
+    assert snapshot["config"]["admin_web"]["admin_snapshot_cache_enabled"] is False
     assert snapshot["config"]["iOS_TUN_connector"]["packetflow_connector"] == "swift_udp"
     assert snapshot["config"]["channel_mux"]["own_servers"] == []
-    assert snapshot["config"]["channel_mux"]["remote_servers"] == []
+    assert snapshot["config"]["channel_mux"]["remote_servers"] == [
+        {
+            "name": "WebAdmin iphone",
+            "listen": {"protocol": "tcp", "bind": "0.0.0.0", "port": 13081},
+            "target": {"protocol": "tcp", "host": "127.0.0.1", "port": 18080},
+        }
+    ]
 
 
 def test_load_grouped_runtime_config_preserves_saved_transport_fields(tmp_path: Path) -> None:
@@ -142,6 +149,59 @@ def test_startup_artifacts_seed_documents_config_logs_and_web_files(tmp_path: Pa
     assert config_payload["iOS_TUN_connector"]["packetflow_connector"] == "swift_udp"
     assert config_payload["channel_mux"]["own_servers"] == []
     assert config_payload["channel_mux"]["remote_servers"] == []
+
+
+def test_load_grouped_runtime_config_adds_default_remote_admin_forwarder(tmp_path: Path) -> None:
+    root = tmp_path / "Documents"
+    (root / "config").mkdir(parents=True, exist_ok=True)
+    (root / "config" / "ObstacleBridge.cfg").write_text(
+        json.dumps(
+            {
+                "admin_web": {
+                    "admin_web": True,
+                    "admin_web_bind": "127.0.0.1",
+                    "admin_web_port": 18090,
+                },
+                "channel_mux": {
+                    "remote_servers": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = _load_grouped_runtime_config(root)
+
+    assert config["channel_mux"]["remote_servers"] == [
+        {
+            "name": "WebAdmin iphone",
+            "listen": {"protocol": "tcp", "bind": "0.0.0.0", "port": 13081},
+            "target": {"protocol": "tcp", "host": "127.0.0.1", "port": 18090},
+        }
+    ]
+
+
+def test_load_grouped_runtime_config_respects_remote_admin_publish_disable(tmp_path: Path) -> None:
+    root = tmp_path / "Documents"
+    (root / "config").mkdir(parents=True, exist_ok=True)
+    (root / "config" / "ObstacleBridge.cfg").write_text(
+        json.dumps(
+            {
+                "admin_web": {
+                    "admin_web": True,
+                    "admin_web_remote_publish": False,
+                },
+                "channel_mux": {
+                    "remote_servers": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = _load_grouped_runtime_config(root)
+
+    assert config["channel_mux"]["remote_servers"] == []
 
 
 def test_resolve_toga_webview_class_uses_widget_module_fallback(monkeypatch) -> None:

@@ -1527,7 +1527,7 @@ Important caveat:
 - Windows runs the Windows-specific non-elevated integration subset with `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"`
 - Windows runs the elevated TUN subset separately with `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`, including inline WinTun channel-open coverage plus `windows-native` helper-mode route/address/DNS apply, packet carry, helper-death warning, and Admin-triggered stale-state repair coverage when Administrator rights and a usable `wintun.dll` are available
 - The iOS E2E testing set is tracked separately from the bridge.py shared gate:
-  - host-side iOS E2E/runtime contract coverage: `pytest -q tests/integration/test_ios_e2e.py`
+  - host-side iOS E2E/runtime contract coverage: `pytest -q tests/integration/test_ios_e2e.py`, including the myUDP packet-tunnel remote-admin regression that exercises forwarded `/api/status`, `/api/live`, and WebAdmin asset reachability without stalling the iOS bridge queue behind TUN verification waits
   - opt-in simulator coverage for the standalone Briefcase E2E app: `OBSTACLEBRIDGE_RUN_IOS_SIMULATOR=1 pytest -q tests/integration/test_ios_simulator_e2e.py -m ios_simulator`
   - focused iOS companion/E2E Python tests: `pytest -q ios/tests`
 - Recent validation for this branch used the Windows-local unit suite, the Windows `windows_only` subset, the Windows elevated TUN subset, and the Linux shared integration subset; the dedicated Linux elevated subset is part of the split CI expectation as well.

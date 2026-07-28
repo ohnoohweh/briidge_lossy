@@ -407,18 +407,39 @@ def test_admin_api_source_exists() -> None:
 def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
 
+    assert 'private func adminSnapshotCachingEnabled() -> Bool' in provider
+    assert 'ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_snapshot_cache_enabled"]) ?? false' in provider
+    assert "func adminStatusSnapshot() -> [String: Any] {\n        guard adminSnapshotCachingEnabled() else {\n            return adminStatusSnapshotUncached()\n        }" in provider
+    assert "func adminConnectionsSnapshot() -> [String: Any] {\n        guard adminSnapshotCachingEnabled() else {\n            return adminConnectionsSnapshotUncached()\n        }" in provider
+    assert "func adminTunRoutingSnapshot() -> [String: Any] {\n        guard adminSnapshotCachingEnabled() else {\n            return adminTunRoutingSnapshotUncached()\n        }" in provider
+    assert "func adminPeersSnapshot() -> [[String: Any]] {\n        guard adminSnapshotCachingEnabled() else {\n            return adminPeersSnapshotUncached()\n        }" in provider
+    assert "func adminMetaSnapshot() -> [String: Any] {\n        guard adminSnapshotCachingEnabled() else {\n            return adminMetaSnapshotUncached()\n        }" in provider
+    assert 'private let adminSnapshotRefreshQueue = DispatchQueue(label: "PacketTunnelProvider.AdminSnapshotRefresh", qos: .utility)' in provider
+    assert "let timer = DispatchSource.makeTimerSource(queue: adminSnapshotRefreshQueue)" in provider
+    assert "private func adminPacketProcessingActive(bridgeSnapshot: [String: Any]? = nil) -> Bool" in provider
+    assert 'if let active = snapshot["active"] as? Bool {' in provider
     assert 'payload["verification"] = adminTunRoutingVerificationPayload(payload: payload)' in provider
     assert "private func adminTunRoutingVerificationPayload(payload: [String: Any]) -> [String: Any]" in provider
+    assert 'private let adminTunVerificationRefreshQueue = DispatchQueue(label: "PacketTunnelProvider.AdminTunVerificationRefresh", qos: .utility)' in provider
+    assert "private func startAdminTunVerificationPublisher()" in provider
+    assert "private func refreshAdminTunVerificationCache(sync: Bool = false)" in provider
+    assert 'state: "pending"' in provider
+    assert 'if !adminPacketProcessingActive() {' in provider
+    assert 'state: "skipped"' in provider
     assert '"ifname": "NEPacketTunnelFlow"' in provider
     assert '"tun_config": Self.iOSVerificationResult(' in provider
-    assert '"tun_connectivity": Self.iOSEndpointReachabilityVerification(' in provider
-    assert '"tun_global_connectivity": Self.iOSEndpointReachabilityVerification(' in provider
+    assert '"tun_connectivity": cachedTunConnectivityVerificationOrProbe(' in provider
+    assert '"tun_global_connectivity": cachedTunConnectivityVerificationOrProbe(' in provider
     assert '?? "google.de")' in provider
-    assert "port: 443" in provider
     assert 'method: "network_extension_settings"' in provider
-    assert 'let method = usesUDP ? "network_framework_udp_path" : "network_framework_tcp_connect"' in provider
-    assert "NWConnection(host: NWEndpoint.Host(trimmedHost), port: endpointPort, using: parameters)" in provider
-    assert "DispatchSemaphore(value: 0)" in provider
+    assert "} else if addressesPresent && !adminPacketProcessingActive() {" in provider
+    assert '"Packet processing is not active yet."' in provider
+    assert "guard adminPacketProcessingActive() else {" in provider
+    assert 'return bridge.probeTunConnectivity(' in provider
+    assert '"method": "internal_icmp_echo"' in provider
+    assert "ObstacleBridgeTunPing.parseEchoReply(packet)" in provider
+    assert "ObstacleBridgeTunPing.buildIPv4EchoRequest(" in provider
+    assert "ObstacleBridgeTunPing.buildIPv6EchoRequest(" in provider
 
 
 def test_macos_swift_host_runner_source_exists() -> None:
@@ -495,6 +516,9 @@ def test_macos_app_main_source_exists() -> None:
     assert "let root = base" in control
     assert "#if os(macOS)" in control
     assert "return loadSharedRuntimeConfigJSON() ?? [:]" in control
+    assert 'remoteAdminPort = 13081' in control
+    assert 'remoteAdminName = "WebAdmin iphone"' in control
+    assert '"admin_snapshot_cache_enabled": false' in control
     assert 'privilegedHostRunnerExecutableName = "ObstacleBridgeHostRunner"' in control
     assert "do shell script" in control
     assert "with administrator privileges" in control
@@ -826,6 +850,9 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "provider_response" in control
     assert 'let runtimeConfig = ObstacleBridgeTunnelControl.loadRuntimeConfigJSON()' in control
     assert 'payload["runtime_config"] = runtimeConfig' in control
+    assert "applyingRemoteAdminDefaultsToGroupedPayload" in control
+    assert "admin_web_remote_publish" in control
+    assert 'channelMux["remote_servers"] = remoteServers' in control
     assert "runtimeConfigForProviderConfiguration(" not in control
     assert "swiftUDPRuntimeConfig(payload: payload)" not in control
     assert "tunnelProtocol.username" in control
