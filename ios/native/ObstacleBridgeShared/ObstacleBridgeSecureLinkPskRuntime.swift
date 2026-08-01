@@ -100,7 +100,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
 
     func statusSnapshot() -> StatusSnapshot {
         expireHandshakeIfNeeded()
-        StatusSnapshot(
+        return StatusSnapshot(
             clientMode: clientMode,
             authenticated: authenticated,
             peerConfirmedAuthenticated: peerConfirmedAuthenticated,
