@@ -23,7 +23,6 @@ final class ObstacleBridgeSecureLinkPskRuntime {
 
     private static let firstDataCounter: UInt64 = 1
     private static let maxDataCounter: UInt64 = UInt64.max
-    private static let serverProofPrefix = Data("obstaclebridge-securelink-server-proof-v1|".utf8)
     private static let handshakeTimeoutSeconds: TimeInterval = 60.0
 
     struct OutboundSnapshot {
@@ -416,12 +415,12 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     }
 
     private func serverProof(sessionID: UInt64, clientNonce: Data, serverNonce: Data) -> Data {
-        let message = Self.serverProofPrefix + sessionID.bigEndianData + clientNonce + serverNonce
-        let authenticationCode = HMAC<SHA256>.authenticationCode(
-            for: message,
-            using: SymmetricKey(data: psk)
+        ObstacleBridgeSecureLinkPskCodec.serverProof(
+            psk: psk,
+            sessionID: sessionID,
+            clientNonce: clientNonce,
+            serverNonce: serverNonce
         )
-        return Data(authenticationCode)
     }
 
     private func seal(payload: Data, key: Data, counter: UInt64, aad: Data) throws -> Data {
