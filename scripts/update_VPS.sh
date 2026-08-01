@@ -16,7 +16,8 @@ RSYNC_EXCLUDES=(
 
 copy_path() {
   local rel_path="$1"
-  rsync -az --delete "${RSYNC_EXCLUDES[@]}" -e "${RSYNC_SSH[*]}" \
+  echo "Syncing ${SOURCE_DIR}/${rel_path} -> ${USER_NAME}@${HOST}:${DEST_DIR}/"
+  rsync -avz --delete "${RSYNC_EXCLUDES[@]}" -e "${RSYNC_SSH[*]}" \
     "${SOURCE_DIR}/${rel_path}" "${USER_NAME}@${HOST}:${DEST_DIR}/"
 }
 
