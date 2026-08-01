@@ -1881,15 +1881,19 @@ final class ObstacleBridgeHostRunner {
             lastEvent = "authenticated"
             disconnectReason = ""
         } else if snapshot.authFailCode != 0 {
-            state = "auth_failed"
+            state = "failed"
             lastEvent = "auth_failed"
             disconnectReason = "auth_failed"
+        } else if defaultState == "listening" {
+            state = "listening"
+            lastEvent = "bootstrap"
+            disconnectReason = ""
         } else if snapshot.sessionID != 0 {
             state = "handshaking"
             lastEvent = "handshake_started"
             disconnectReason = ""
         } else {
-            state = defaultState
+            state = "waiting_transport"
             lastEvent = "bootstrap"
             disconnectReason = ""
         }

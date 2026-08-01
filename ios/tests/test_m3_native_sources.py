@@ -694,6 +694,21 @@ def test_secure_link_psk_transport_adapter_source_exists() -> None:
     assert "beginClientHandshake(" in runtime
 
 
+def test_swift_secure_link_admin_snapshots_use_python_state_vocabulary() -> None:
+    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+
+    assert 'secureState = "failed"' in provider
+    assert 'secureState = "waiting_transport"' in provider
+    assert 'secureState = "listening"' in provider
+    assert 'secureState = "auth_failed"' not in provider
+
+    assert 'state = "failed"' in host_runner
+    assert 'state = "waiting_transport"' in host_runner
+    assert 'state = "listening"' in host_runner
+    assert 'state = "auth_failed"' not in host_runner
+
+
 def test_overlay_layer_transport_adapter_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
 

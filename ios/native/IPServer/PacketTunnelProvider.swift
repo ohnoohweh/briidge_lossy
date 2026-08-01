@@ -2537,15 +2537,19 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             lastEvent = "authenticated"
             disconnectReason = ""
         } else if snapshot.authFailCode != 0 {
-            secureState = "auth_failed"
+            secureState = "failed"
             lastEvent = "auth_failed"
             disconnectReason = "auth_failed"
+        } else if state == "listening" {
+            secureState = "listening"
+            lastEvent = "bootstrap"
+            disconnectReason = ""
         } else if snapshot.sessionID != 0 {
             secureState = "handshaking"
             lastEvent = "handshake_started"
             disconnectReason = ""
         } else {
-            secureState = state
+            secureState = "waiting_transport"
             lastEvent = "bootstrap"
             disconnectReason = ""
         }
