@@ -257,6 +257,7 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
+        await asyncio.sleep(0)
 
         self.assertTrue(client.is_connected())
         self.assertTrue(server.is_connected())
@@ -288,6 +289,56 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
             client._hdr_bytes(client._SL_TYPE_DATA, session_id, counter),
         )
         self.assertEqual(plaintext, b"")
+
+    async def test_client_local_secure_link_auth_times_out_without_peer_confirmation(self):
+        client_inner = FakeInnerSession(connected=True)
+        client = SecureLinkPskSession(
+            client_inner,
+            _args(
+                tcp_peer='127.0.0.1',
+                secure_link_retry_backoff_initial_ms=500,
+                secure_link_retry_backoff_max_ms=500,
+            ),
+            'tcp',
+        )
+        client._HANDSHAKE_TIMEOUT_S = 0.02
+        client._HANDSHAKE_WATCHDOG_INTERVAL_S = 0.005
+
+        await client.start()
+        try:
+            client_inner.emit_state(True)
+            await asyncio.sleep(0)
+
+            state = client._peer_states[0]
+            session_id = int(state.session_id)
+            server_nonce = b"\x33" * 32
+            proof = client._server_proof(session_id, state.client_nonce, server_nonce)
+            client._on_inner_payload(
+                client._build_frame(
+                    client._SL_TYPE_SERVER_HELLO,
+                    session_id,
+                    0,
+                    server_nonce + bytes([client._SL_CAP_PSK_V1]) + proof,
+                )
+            )
+            await asyncio.sleep(0)
+
+            secure_link = client.get_overlay_peers_snapshot()[0]["secure_link"]
+            self.assertEqual(secure_link["state"], "handshaking")
+            self.assertFalse(secure_link["authenticated"])
+            self.assertEqual(int(secure_link["session_id"] or 0), session_id)
+
+            await asyncio.sleep(0.05)
+
+            status_after = client.get_secure_link_status_snapshot()
+            self.assertEqual(status_after["state"], "failed")
+            self.assertFalse(status_after["authenticated"])
+            self.assertEqual(int(status_after["failure_code"] or 0), client._SL_AUTH_FAIL_LIFECYCLE)
+            self.assertIn("timed out", str(status_after["failure_detail"] or ""))
+            self.assertGreater(float(status_after["retry_backoff_sec"] or 0.0), 0.0)
+            self.assertEqual(float(status_after["recovery_reconnect_sec"] or 0.0), 0.0)
+        finally:
+            await client.stop()
 
     async def test_wrong_psk_prevents_authenticated_session(self):
         client_inner = FakeInnerSession()
@@ -393,6 +444,9 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
             client_inner.emit_state(True)
             await asyncio.sleep(0)
             await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
 
             self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
             state = client._peer_states[0]
@@ -449,6 +503,7 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
             client_inner.emit_state(True)
             await asyncio.sleep(0)
             await asyncio.sleep(0)
+            await asyncio.sleep(0)
 
             state = client._peer_states[0]
             state.tx_counter = client._SL_MAX_DATA_COUNTER + 1
@@ -492,6 +547,7 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
+        await asyncio.sleep(0)
 
         self.assertEqual(self._count_frame_type(client_inner.sent, client._SL_TYPE_CLIENT_HELLO), 1)
         client_inner.emit_state(False)
@@ -523,6 +579,7 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
+        await asyncio.sleep(0)
 
         old_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
         self.assertEqual(self._count_frame_type(client_inner.sent, client._SL_TYPE_CLIENT_HELLO), 1)
@@ -551,6 +608,7 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
 
         server_inner.emit_state(True)
         client_inner.emit_state(True)
+        await asyncio.sleep(0)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
@@ -586,6 +644,7 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
+        await asyncio.sleep(0)
 
         old_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
         self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
@@ -618,6 +677,7 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
+        await asyncio.sleep(0)
 
         self.assertEqual(client_states, [True])
         self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
@@ -643,6 +703,7 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
 
         server_inner.emit_state(True)
         client_inner.emit_state(True)
+        await asyncio.sleep(0)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
@@ -687,6 +748,7 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
+        await asyncio.sleep(0)
 
         self.assertEqual(client_states, [True])
         self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
@@ -706,6 +768,7 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         await server.start()
         server_inner.emit_state(True)
         client_inner.emit_state(True)
+        await asyncio.sleep(0)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
@@ -917,6 +980,8 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         try:
             server_inner.emit_state(True)
             client_inner.emit_state(True)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
             await asyncio.sleep(0)
             await asyncio.sleep(0)
 

@@ -342,3 +342,111 @@ def test_ios_secure_link_transport_adapter_reconnect_edge_reprimes_after_authent
         "second_emitted_frames": 1,
         "second_authenticated": False,
     }
+
+
+def test_ios_secure_link_transport_adapter_times_out_unconfirmed_handshake_and_restarts(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "SecureLinkTransportHandshakeTimeoutProbe.swift"
+    binary_path = tmp_path / "secure-link-transport-handshake-timeout-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            enum ProbeError: Error {
+                case badState(String)
+            }
+
+            @main
+            struct SecureLinkTransportHandshakeTimeoutProbe {
+                static func main() throws {
+                    var now: TimeInterval = 10
+                    var clientSessionIDs: [UInt64] = [0x0102030405060708, 0x0102030405060709]
+                    let client = ObstacleBridgeSecureLinkPskTransportAdapter(
+                        runtime: ObstacleBridgeSecureLinkPskRuntime(
+                            clientMode: true,
+                            psk: "shared-psk",
+                            randomBytes: { count in Data(repeating: 0x11, count: count) },
+                            sessionIDProvider: {
+                                if clientSessionIDs.isEmpty {
+                                    return 0x0102030405060710
+                                }
+                                return clientSessionIDs.removeFirst()
+                            },
+                            timeProvider: { now }
+                        )
+                    )
+
+                    let primed = try client.handleTransportConnected()
+                    guard let clientHello = primed.emittedFrames.first,
+                          let parsedHello = ObstacleBridgeSecureLinkPskCodec.parseFrame(clientHello),
+                          parsedHello.slType == ObstacleBridgeSecureLinkPskRuntime.typeClientHello
+                    else {
+                        throw ProbeError.badState("missing initial client hello")
+                    }
+
+                    let clientNonce = parsedHello.payload.prefix(32)
+                    let serverNonce = Data(repeating: 0x22, count: 32)
+                    let proof = ObstacleBridgeSecureLinkPskCodec.serverProof(
+                        psk: Data("shared-psk".utf8),
+                        sessionID: parsedHello.sessionID,
+                        clientNonce: Data(clientNonce),
+                        serverNonce: serverNonce
+                    )
+                    let serverHello = ObstacleBridgeSecureLinkPskCodec.buildFrame(
+                        slType: ObstacleBridgeSecureLinkPskRuntime.typeServerHello,
+                        sessionID: parsedHello.sessionID,
+                        counter: 0,
+                        payload: serverNonce + Data([UInt8(ObstacleBridgeSecureLinkPskRuntime.capabilityPSKV1)]) + proof
+                    )
+
+                    let localAuth = client.handleInboundFrame(serverHello)
+                    let localStatus = client.statusSnapshot()
+                    guard localStatus.authenticated, !localStatus.peerConfirmedAuthenticated else {
+                        throw ProbeError.badState("client did not enter local-only auth phase")
+                    }
+                    now += 61
+                    let timedOutStatus = client.statusSnapshot()
+                    let reprobe = try client.handleTransportConnected()
+                    guard let secondHello = reprobe.emittedFrames.first,
+                          let parsedSecondHello = ObstacleBridgeSecureLinkPskCodec.parseFrame(secondHello),
+                          parsedSecondHello.slType == ObstacleBridgeSecureLinkPskRuntime.typeClientHello
+                    else {
+                        throw ProbeError.badState("missing restarted client hello")
+                    }
+
+                    let payload: [String: Any] = [
+                        "local_auth_frames": localAuth.emittedFrames.count,
+                        "timed_out_authenticated": timedOutStatus.authenticated,
+                        "timed_out_peer_confirmed": timedOutStatus.peerConfirmedAuthenticated,
+                        "timed_out_auth_fail_code": timedOutStatus.authFailCode,
+                        "first_session_id": String(parsedHello.sessionID),
+                        "second_session_id": String(parsedSecondHello.sessionID),
+                        "reprobe_frames": reprobe.emittedFrames.count,
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_secure_link_transport_probe(source_path, binary_path)
+    completed = subprocess.run([str(binary_path)], capture_output=True, text=True, check=False, timeout=30)
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+    payload = json.loads(completed.stdout)
+
+    assert payload == {
+        "first_session_id": "72623859790382856",
+        "local_auth_frames": 1,
+        "reprobe_frames": 1,
+        "second_session_id": "72623859790382857",
+        "timed_out_auth_fail_code": 5,
+        "timed_out_authenticated": False,
+        "timed_out_peer_confirmed": False,
+    }

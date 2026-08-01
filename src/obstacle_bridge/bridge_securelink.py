@@ -197,7 +197,10 @@ class _SecureLinkPeerState:
     c2s_key: Optional[bytes] = None
     s2c_key: Optional[bytes] = None
     authenticated: bool = False
+    peer_confirmed_authenticated: bool = False
     client_handshake_proof_sent: bool = False
+    handshake_started_unix_ts: Optional[float] = None
+    pending_started_unix_ts: Optional[float] = None
     tx_counter: int = 1
     rx_counter: int = 0
     pending_session_id: int = 0
@@ -276,6 +279,8 @@ class SecureLinkPskSession(ISession):
     _SL_HDR = struct.Struct(">BBBBQQ")
     _SL_FIRST_DATA_COUNTER = 1
     _SL_MAX_DATA_COUNTER = (1 << 64) - 1
+    _HANDSHAKE_TIMEOUT_S = 60.0
+    _HANDSHAKE_WATCHDOG_INTERVAL_S = 0.25
 
     @staticmethod
     def register_cli(p: argparse.ArgumentParser) -> None:
@@ -467,6 +472,7 @@ class SecureLinkPskSession(ISession):
         self._client_retry_task: Optional[asyncio.Task] = None
         self._client_recovery_task: Optional[asyncio.Task] = None
         self._client_rekey_task: Optional[asyncio.Task] = None
+        self._handshake_watchdog_task: Optional[asyncio.Task] = None
         self._client_retry_consecutive_failures: int = 0
         self._client_retry_not_before_mono: float = 0.0
         self._client_retry_not_before_unix_ts: Optional[float] = None
@@ -951,12 +957,14 @@ class SecureLinkPskSession(ISession):
         elif int(session_id or 0) > 0:
             state.session_id = int(session_id)
         was_authenticated = bool(
-            state.authenticated
+            state.peer_confirmed_authenticated
             or int(state.authenticated_sessions_total or 0) > 0
             or (self._client_mode and int(self._authenticated_sessions_total or 0) > 0)
         )
         state.authenticated = False
+        state.peer_confirmed_authenticated = False
         state.client_handshake_proof_sent = False
+        state.handshake_started_unix_ts = None
         state.client_nonce = b""
         state.server_nonce = b""
         state.c2s_key = None
@@ -1101,6 +1109,25 @@ class SecureLinkPskSession(ISession):
         self._last_secure_link_event = str(event or "")
         self._last_secure_link_event_unix_ts = ts
 
+    def _record_local_client_auth_progress(self, state: _SecureLinkPeerState, *, session_id: int) -> None:
+        now = time.time()
+        state.authenticated = True
+        state.peer_confirmed_authenticated = False
+        state.auth_fail_code = 0
+        state.auth_fail_reason = ""
+        state.auth_fail_detail = ""
+        state.auth_fail_unix_ts = None
+        state.last_event = "handshake_local_authenticated"
+        state.last_event_unix_ts = now
+        if state.handshake_started_unix_ts is None:
+            state.handshake_started_unix_ts = now
+        self._last_auth_fail_code = 0
+        self._last_auth_fail_reason = ""
+        self._last_auth_fail_detail = ""
+        self._last_auth_fail_unix_ts = None
+        self._last_auth_fail_session_id = None
+        self._record_secure_link_event("handshake_local_authenticated", now)
+
     def _record_authenticated_session(
         self,
         state: _SecureLinkPeerState,
@@ -1113,11 +1140,14 @@ class SecureLinkPskSession(ISession):
         now = time.time()
         self._preserve_connected_during_epoch_restart = False
         state.authenticated = True
+        state.peer_confirmed_authenticated = True
         state.consecutive_failures = 0
         state.auth_fail_code = 0
         state.auth_fail_reason = ""
         state.auth_fail_detail = ""
         state.auth_fail_unix_ts = None
+        state.handshake_started_unix_ts = None
+        state.pending_started_unix_ts = None
         state.last_event = str(event)
         state.last_event_unix_ts = now
         state.last_authenticated_unix_ts = now
@@ -1169,6 +1199,91 @@ class SecureLinkPskSession(ISession):
             int(self._authenticated_sessions_total or 0),
             int(self._rekeys_completed_total or 0),
         )
+
+    def _mark_peer_confirmed_authenticated(
+        self,
+        state: _SecureLinkPeerState,
+        *,
+        session_id: int,
+        peer_id: Optional[int],
+        event: str,
+    ) -> None:
+        if state.peer_confirmed_authenticated:
+            return
+        self._record_authenticated_session(
+            state,
+            session_id=session_id,
+            peer_id=peer_id,
+            event=event,
+            rekey_completed=False,
+        )
+        self._refresh_connected_state()
+
+    def _mark_handshake_timeout(
+        self,
+        peer_id: Optional[int],
+        *,
+        session_id: int,
+        phase: str,
+    ) -> None:
+        self._mark_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
+        state = self._peer_states.get(self._peer_key(peer_id))
+        if state is None:
+            return
+        now = time.time()
+        state.auth_fail_reason = "lifecycle"
+        state.auth_fail_detail = (
+            "secure-link peer confirmation timed out"
+            if phase == "handshake"
+            else "secure-link re-authentication timed out"
+        )
+        state.last_event = f"{phase}_timeout"
+        state.last_event_unix_ts = now
+        state.handshake_started_unix_ts = None
+        state.pending_started_unix_ts = None
+        self._last_auth_fail_reason = state.auth_fail_reason
+        self._last_auth_fail_detail = state.auth_fail_detail
+        self._last_auth_fail_unix_ts = state.auth_fail_unix_ts or now
+        self._record_secure_link_event(state.last_event, now)
+
+    def _expire_stale_handshakes(self) -> None:
+        timeout_s = max(0.0, float(self._HANDSHAKE_TIMEOUT_S))
+        if timeout_s <= 0.0:
+            return
+        now = time.time()
+        for key, state in list(self._peer_states.items()):
+            if int(state.auth_fail_code or 0) > 0:
+                continue
+            if (
+                not state.peer_confirmed_authenticated
+                and int(state.session_id or 0) > 0
+                and state.handshake_started_unix_ts is not None
+                and (now - float(state.handshake_started_unix_ts)) >= timeout_s
+            ):
+                self._mark_handshake_timeout(
+                    None if self._client_mode else int(key),
+                    session_id=int(state.session_id or 0),
+                    phase="handshake",
+                )
+                continue
+            if (
+                int(state.pending_session_id or 0) > 0
+                and state.pending_started_unix_ts is not None
+                and (now - float(state.pending_started_unix_ts)) >= timeout_s
+            ):
+                self._mark_handshake_timeout(
+                    None if self._client_mode else int(key),
+                    session_id=int(state.pending_session_id or 0),
+                    phase="rekey",
+                )
+
+    async def _handshake_watchdog(self) -> None:
+        try:
+            while self._started:
+                self._expire_stale_handshakes()
+                await asyncio.sleep(self._HANDSHAKE_WATCHDOG_INTERVAL_S)
+        except asyncio.CancelledError:
+            return
 
     def _cancel_client_retry_task(self, *, clear_schedule: bool) -> None:
         task = self._client_retry_task
@@ -1456,6 +1571,7 @@ class SecureLinkPskSession(ISession):
         state.pending_c2s_key = None
         state.pending_s2c_key = None
         state.pending_local_ephemeral_private = None
+        state.pending_started_unix_ts = None
 
     def _promote_pending_rekey(self, state: _SecureLinkPeerState) -> bool:
         if int(state.pending_session_id or 0) <= 0:
@@ -1468,6 +1584,7 @@ class SecureLinkPskSession(ISession):
         if state.pending_local_ephemeral_private is not None:
             state.local_ephemeral_private = state.pending_local_ephemeral_private
         state.authenticated = True
+        state.peer_confirmed_authenticated = True
         state.client_handshake_proof_sent = False
         state.tx_counter = 1
         state.rx_counter = 0
@@ -1475,6 +1592,7 @@ class SecureLinkPskSession(ISession):
         state.auth_fail_reason = ""
         state.auth_fail_detail = ""
         state.auth_fail_unix_ts = None
+        state.handshake_started_unix_ts = None
         self._clear_pending_rekey(state)
         return True
 
@@ -1490,6 +1608,7 @@ class SecureLinkPskSession(ISession):
         state.last_event_unix_ts = time.time()
         self._record_secure_link_event("rekey_started", state.last_event_unix_ts)
         state.pending_session_id = pending_session_id
+        state.pending_started_unix_ts = state.last_event_unix_ts
         state.pending_server_nonce = b""
         state.pending_c2s_key = None
         state.pending_s2c_key = None
@@ -1796,11 +1915,18 @@ class SecureLinkPskSession(ISession):
         except Exception:
             pass
         self._started = True
+        self._handshake_watchdog_task = asyncio.create_task(self._handshake_watchdog())
         await self._inner.start()
 
     async def stop(self) -> None:
+        if self._handshake_watchdog_task is not None:
+            self._handshake_watchdog_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._handshake_watchdog_task
+            self._handshake_watchdog_task = None
         self._cancel_client_retry_task(clear_schedule=True)
         self._cancel_client_rekey_task(clear_schedule=True)
+        self._started = False
         self._clear_all_states()
         await self._inner.stop()
 
@@ -1891,6 +2017,7 @@ class SecureLinkPskSession(ISession):
         return [row for idx, row in enumerate(rows) if idx not in suppress]
 
     def get_overlay_peers_snapshot(self) -> list[dict]:
+        self._expire_stale_handshakes()
         getter = getattr(self._inner, "get_overlay_peers_snapshot", None)
         rows = list(getter() or []) if callable(getter) else []
         out: list[dict] = []
@@ -1949,7 +2076,7 @@ class SecureLinkPskSession(ISession):
                 session_id = int(self._last_auth_fail_session_id or 0) or None
             elif state is None:
                 secure_state = "handshaking" if inner_is_connected else "waiting_transport"
-            elif state.authenticated:
+            elif state.peer_confirmed_authenticated:
                 secure_state = "authenticated"
                 authenticated = True
                 session_id = int(state.session_id or 0) or None
@@ -2166,6 +2293,7 @@ class SecureLinkPskSession(ISession):
         return out
 
     def get_secure_link_status_snapshot(self) -> dict:
+        self._expire_stale_handshakes()
         any_failed = False
         failure_code = None
         failure_reason = None
@@ -2177,7 +2305,7 @@ class SecureLinkPskSession(ISession):
         for state in self._peer_states.values():
             if primary_state is None:
                 primary_state = state
-            if state.authenticated:
+            if state.peer_confirmed_authenticated:
                 authenticated_peers += 1
             elif state.auth_fail_code:
                 any_failed = True
@@ -2325,6 +2453,7 @@ class SecureLinkPskSession(ISession):
         self._inherit_peer_counters(state, self._peer_states.get(0))
         state.last_event = "handshake_started"
         state.last_event_unix_ts = time.time()
+        state.handshake_started_unix_ts = state.last_event_unix_ts
         self._peer_states[0] = state
         self._record_secure_link_event("handshake_started", state.last_event_unix_ts)
         if self._is_cert_mode():
@@ -2353,7 +2482,7 @@ class SecureLinkPskSession(ISession):
                     self._last_transport_epoch_change_unix_ts is not None
                     and (time.time() - float(self._last_transport_epoch_change_unix_ts)) <= 2.0
                     and any(
-                        not state.authenticated
+                        not state.peer_confirmed_authenticated
                         and int(state.session_id or 0) > 0
                         and int(state.handshake_attempts_total or 0) > 0
                         and not int(state.auth_fail_code or 0)
@@ -2394,7 +2523,7 @@ class SecureLinkPskSession(ISession):
             self._client_mode
             and bool(getattr(self._inner, "is_connected", lambda: False)())
             and any(
-                state.authenticated
+                state.peer_confirmed_authenticated
                 or int(state.authenticated_sessions_total or 0) > 0
                 for state in self._peer_states.values()
             )
@@ -2403,7 +2532,7 @@ class SecureLinkPskSession(ISession):
             self._client_mode
             and not client_has_authenticated_history
             and any(
-                not state.authenticated
+                not state.peer_confirmed_authenticated
                 and int(state.session_id or 0) > 0
                 and int(state.handshake_attempts_total or 0) > 0
                 and int(state.authenticated_sessions_total or 0) <= 0
@@ -2447,7 +2576,7 @@ class SecureLinkPskSession(ISession):
             and bool(getattr(self._inner, "is_connected", lambda: False)())
             and state is not None
             and (
-                state.authenticated
+                state.peer_confirmed_authenticated
                 or int(state.authenticated_sessions_total or 0) > 0
             )
         )
@@ -2648,6 +2777,7 @@ class SecureLinkPskSession(ISession):
             handshake_attempts_total=int(self._handshake_attempts_total or 0),
         )
         self._inherit_peer_counters(state, previous_state)
+        state.handshake_started_unix_ts = time.time()
         if previous_state is not None and int(previous_state.auth_fail_code or 0) > 0 and not previous_state.authenticated:
             state.auth_fail_code = int(previous_state.auth_fail_code or 0)
             state.auth_fail_reason = str(previous_state.auth_fail_reason or "")
@@ -2755,14 +2885,7 @@ class SecureLinkPskSession(ISession):
         state.server_nonce = server_nonce
         state.c2s_key = c2s_key
         state.s2c_key = s2c_key
-        self._record_authenticated_session(
-            state,
-            session_id=session_id,
-            peer_id=None,
-            event="authenticated",
-            rekey_completed=False,
-        )
-        self._refresh_connected_state()
+        self._record_local_client_auth_progress(state, session_id=session_id)
         self._send_client_handshake_proof(state)
 
     def _handle_rekey_hello(self, peer_id: Optional[int], session_id: int, body: bytes) -> None:
@@ -3032,6 +3155,13 @@ class SecureLinkPskSession(ISession):
             )
             self._refresh_connected_state()
             newly_authenticated = True
+        elif not state.peer_confirmed_authenticated:
+            self._mark_peer_confirmed_authenticated(
+                state,
+                session_id=session_id,
+                peer_id=peer_id,
+                event="authenticated",
+            )
         if newly_authenticated and not self._client_mode:
             self._send_server_handshake_ack(state, peer_id=peer_id)
         if not plaintext:

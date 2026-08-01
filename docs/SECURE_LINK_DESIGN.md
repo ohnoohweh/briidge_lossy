@@ -956,6 +956,20 @@ Evidence:
   - mark the session as failed and observable in admin/API state
 - define reconnect throttling so persistent auth failures do not create noisy loops
 
+Observed field case that now drives the Phase 1 hardening contract:
+
+- two clients behind the same public NAT can progress differently during PSK handshake churn, for example when one Linux peer was previously healthy, an iPhone peer then connected from the same public IP, and later one side reported the session as authenticated while the other still exposed the same peer slot as handshaking
+- the concrete bad state was "local client verified `server_hello` and derived keys" without yet receiving any protected peer-confirmation traffic back, while the responder had not promoted that session to authenticated
+- in that state, the failure was not only cosmetic in admin/UI state:
+  - the client application could believe the secure-link session was authenticated
+  - the server still treated the peer as unauthenticated or handshaking
+  - TUN and UDP forwarding could appear broken because the overlay had not actually reached a mutually authenticated protected-data phase
+- operationally, a handshaking state lasting longer than the one-minute reauthentication window is unacceptable and must be treated as a failure rather than as a tolerated steady state
+- accepted outcomes for PSK mode are intentionally strict:
+  - both sides peer-confirm and report authenticated
+  - both sides fail closed and retry or reconnect when the PSK or handshake lifecycle is wrong
+  - one-sided "authenticated here, handshaking there" must not persist
+
 Current Phase 1 runtime decision:
 
 - malformed secure-link frames are treated as `decode` failures
@@ -964,6 +978,10 @@ Current Phase 1 runtime decision:
 - listener/server-side mux routing state for the failed peer is dropped so stale channels cannot continue to route through an unauthenticated peer slot
 - the failure remains observable through `/api/status` and `/api/peers` until a later healthy authenticated session replaces it
 - client-side sessions that had already authenticated and then fail closed schedule a lower-transport reconnect, defaulting to a 30 second delay, so availability can recover through a fresh transport epoch and a fresh secure-link handshake instead of reusing the failed cryptographic session
+- client-side verification of `server_hello` is treated as local handshake progress only, not as final authenticated state
+- a secure-link session is reported as authenticated only after peer-confirmed protected traffic proves that both sides derived and accepted the same keys
+- if a handshake remains locally progressed but not peer-confirmed for 60 seconds, the runtime converts that state into a lifecycle failure instead of letting it linger indefinitely
+- the timeout path is fail-closed and observable through the admin/API surface, and the client-side recovery path can restart the lower transport rather than preserving a half-authenticated session
 
 Acceptance criteria:
 
@@ -971,6 +989,8 @@ Acceptance criteria:
 - no failure path can silently accept plaintext when secure-link is required
 - admin/API state and logs expose a stable machine reason plus human-readable detail
 - repeated auth failures remain observable without destabilizing the surrounding runner state machine
+- no peer can remain in an unbounded locally-authenticated-but-not-peer-confirmed handshake state
+- handshake observability must distinguish "local proof accepted" from "peer-confirmed authenticated" so operators can diagnose lower-level UDP/TUN impact correctly
 
 Current Phase 1 runtime decision:
 
@@ -979,6 +999,7 @@ Current Phase 1 runtime decision:
 - authenticated-session failure recovery is distinct from wrong-secret retry: initial PSK mismatch stays on the bounded handshake retry path, while a post-authentication secure-link failure schedules lower-transport reconnect recovery through `secure_link_recover_after_failure` and `secure_link_recover_delay_seconds`
 - the current admin/API surface exposes `recovery_enabled`, `recovery_delay_sec`, `recovery_reconnect_sec`, and `next_recovery_reconnect_unix_ts` so operators can see when a failed client-side secure-link session is waiting for reconnect recovery
 - the current admin/API surface also exposes stronger operational diagnostics such as `failure_session_id`, `handshake_attempts_total`, `last_event`, `last_event_unix_ts`, `last_authenticated_unix_ts`, `authenticated_sessions_total`, and `rekeys_completed_total`
+- the current PSK runtime and iOS parity runtime both implement the peer-confirmation rule and the 60 second unconfirmed-handshake timeout for the Phase 1 secure-link state machine
 
 Current status:
 
@@ -998,6 +1019,7 @@ Evidence:
     - malformed/out-of-order fail-closed tests
     - wrong-PSK retry/backoff tests
     - authenticated failure recovery reconnect tests
+    - `test_client_local_secure_link_auth_times_out_without_peer_confirmation`
     - operational diagnostics assertions
   - [test_admin_web_payloads.py](/home/ohnoohweh/quic_br/tests/unit/test_admin_web_payloads.py)
 - integration evidence:

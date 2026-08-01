@@ -1266,6 +1266,7 @@ API fallback for details not fully surfaced in WebAdmin yet:
   - `failure_code=1`
   - `failure_reason=bad_psk`
   - repeated client-side retries show increasing `consecutive_failures`, a bounded `retry_backoff_sec`, a populated `next_retry_unix_ts`, a populated `failure_session_id`, increasing `handshake_attempts_total`, and `last_event=retry_scheduled`
+- if a client has only locally verified `server_hello` but has not yet received peer-confirmed protected traffic, the session remains `handshaking` rather than surfacing as authenticated; if that unconfirmed state lasts 60 seconds, the runtime fails it closed as a lifecycle error instead of leaving a one-sided authenticated/handshaking split in place
 - if an already-authenticated client-side secure-link session later fails closed, the client schedules lower-transport reconnect recovery that survives runner reset/epoch cleanup and reports `recovery_enabled`, `recovery_delay_sec`, `recovery_reconnect_sec`, `next_recovery_reconnect_unix_ts`, and recovery scheduling/starting `last_event` values; cert local-identity reloads use the same reconnect/re-authentication boundary instead of continuing on the superseded transport epoch
 
 Current WebAdmin gap to close in a future update:
@@ -1473,9 +1474,9 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `50` | `805` |
+| Python CLI/runtime, including macOS Python | `51` | `809` |
 | macOS Swift app | `1` | `54` |
-| iOS app/extension | `24` | `150` |
+| iOS app/extension | `24` | `153` |
 
 #### Requirement traceability
 
@@ -1483,7 +1484,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `82/89 = 92.1%` | `86/89 = 96.6%` | `86/89 = 96.6%` |
 | macOS Swift app | `2/89 = 2.2%` | `6/89 = 6.7%` | `8/89 = 9.0%` |
-| iOS app/extension | `8/89 = 9.0%` | `11/89 = 12.4%` | `16/89 = 18.0%` |
+| iOS app/extension | `10/89 = 11.2%` | `11/89 = 12.4%` | `17/89 = 19.1%` |
 
 #### Architecture traceability
 
@@ -1491,7 +1492,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `7/7 = 100.0%` | `7/7 = 100.0%` | `7/7 = 100.0%` |
 | macOS Swift app | `1/7 = 14.3%` | `3/7 = 42.9%` | `3/7 = 42.9%` |
-| iOS app/extension | `4/7 = 57.1%` | `4/7 = 57.1%` | `5/7 = 71.4%` |
+| iOS app/extension | `4/7 = 57.1%` | `5/7 = 71.4%` | `5/7 = 71.4%` |
 
 The supporting manifests remain shared:
 
