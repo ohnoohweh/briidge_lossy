@@ -931,7 +931,12 @@ class AdminWebUI:
                     f"Observed IPv4: {', '.join(observed4) or '-'}; observed IPv6: {', '.join(observed6) or '-'}"
                 ),
             )
-        peer_target = str(tun_cfg.tunnel_gateway or tun_cfg._local_gateway4() or "").strip()
+        peer_target = ""
+        virtual_probe_source4 = str(getattr(tun_cfg, "global_connectivity_source_ipv4", "") or "").strip()
+        if virtual_probe_source4:
+            peer_target = str(tun_cfg.tunnel_address or "").strip()
+        if not peer_target:
+            peer_target = str(tun_cfg.tunnel_gateway or tun_cfg._local_gateway4() or "").strip()
         global_host = str(tun_cfg.global_connectivity_host or "").strip()
         return {
             "ifname": ifname,

@@ -91,6 +91,62 @@ Current design rules that should be preserved:
 
 The proposed provider-client feature should extend that model, not bypass it.
 
+## Shared-TUN Verification Note
+
+The server-side TUN verification path has two operator-visible modes.
+
+### Default server-local probe
+
+When no dedicated virtual probe source is configured, Linux `server_shared`
+services keep the earlier server-local behavior:
+
+- source IP: the server-local TUN address such as `192.168.106.1`
+- destination IP: the local verification target such as `192.168.106.1`
+  or the resolved global target such as `google.de`
+- emission point: raw IPv4 packet sent through the local TUN ifname such as
+  `obtun0`
+- expected capture result on the server: the request and matching reply are
+  visible on `obtun0`
+- reply handling: replies addressed to the server-local TUN IP are consumed by
+  the outstanding verification waiter and dropped locally rather than being
+  forwarded to peers, because shared-TUN peers own `>= 192.168.106.2`
+
+### Virtual shared-TUN peer probe
+
+When `TUN_routing.global_connectivity_source_ipv4` is configured, the runtime
+does not treat that address as a cosmetic source override. It creates a local
+synthetic shared-TUN peer, currently exposed as `__local_probe__`, and routes
+verification traffic through the shared-TUN dispatcher as if that peer were
+connected on its own ChannelMux TUN channel.
+
+Example:
+
+- server local TUN address: `192.168.106.1`
+- synthetic local probe peer: `192.168.106.31`
+
+Under that model:
+
+- the synthetic peer owns `192.168.106.31` in shared-TUN ownership state
+- the dispatcher may route local packets back to that synthetic peer just as it
+  routes packets to real peers
+- the synthetic peer injects probe requests into the shared-TUN inbound path
+  and those requests are then written to the real local TUN device
+- requests from `192.168.106.31` therefore become visible on `obtun0`
+- replies destined to `192.168.106.31` are routed back by shared-TUN to the
+  synthetic peer endpoint instead of being forwarded to a remote overlay peer
+- the synthetic peer endpoint evaluates matching ICMP replies and consumes them
+  locally
+
+This gives the server two proofs using the same virtual-peer model:
+
+- local stack proof: `192.168.106.31 -> 192.168.106.1`
+- external reachability proof: `192.168.106.31 -> google.de`
+
+The important architectural point is that the probe source is not a special
+exception that bypasses shared-TUN dispatch. It behaves as a local virtual peer
+behind the dispatcher whose only application payload today is ICMP probe
+generation and reply evaluation.
+
 Related design anchors:
 
 - [CHANNELMUX_DESIGN.md](CHANNELMUX_DESIGN.md)

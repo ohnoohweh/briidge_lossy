@@ -285,6 +285,72 @@ def _resolve_cli_peer(
     )
 
 
+def _resolve_cli_peer_candidates(
+    args: argparse.Namespace,
+    *,
+    peer_attr: str = "peer",
+    peer_port_attr: str = "peer_port",
+    resolve_attr: str,
+    bind_host: Optional[str] = None,
+    socktype: int = 0,
+) -> List[Tuple[str, int, int]]:
+    peer = getattr(args, peer_attr, None)
+    if not peer and peer_attr != "peer":
+        peer = getattr(args, "peer", None)
+    if not peer:
+        return []
+    peer_port = getattr(args, peer_port_attr, None)
+    if (peer_port is None) and peer_port_attr != "peer_port":
+        peer_port = getattr(args, "peer_port", 443)
+    port = int(peer_port if peer_port is not None else 443)
+    resolve_mode = _peer_resolve_mode(args, resolve_attr)
+    configured_hosts = _split_configured_peer_hosts(str(peer))
+    if not configured_hosts:
+        return []
+    strict_family = len(configured_hosts) == 1
+    if strict_family:
+        candidates = _resolve_peer_candidates(
+            configured_hosts[0],
+            port,
+            resolve_mode=resolve_mode,
+            socktype=socktype,
+            strict_family=True,
+        )
+    else:
+        candidates = []
+        for candidate_host in configured_hosts:
+            try:
+                candidates.extend(
+                    _resolve_peer_candidates(
+                        candidate_host,
+                        port,
+                        resolve_mode=resolve_mode,
+                        socktype=socktype,
+                        strict_family=False,
+                    )
+                )
+            except RuntimeError:
+                continue
+        if not candidates:
+            raise RuntimeError(f"Could not resolve overlay peer {peer!r}")
+    deduped: List[Tuple[str, int, int]] = []
+    for candidate in candidates:
+        if candidate not in deduped:
+            deduped.append(candidate)
+    deduped.sort(key=lambda item: _family_preference_rank(item[2], resolve_mode))
+    bind_family = _bind_family_constraint(bind_host)
+    if bind_family is not None:
+        matching = [item for item in deduped if item[2] == bind_family]
+        if matching:
+            deduped = matching
+        else:
+            fam_name = "IPv6" if bind_family == socket.AF_INET6 else "IPv4"
+            raise RuntimeError(
+                f"overlay peer {peer!r} resolved, but no {fam_name} address is compatible with bind {bind_host!r}"
+            )
+    return deduped
+
+
 def _overlay_cli_attrs(transport: str) -> Tuple[str, str, str, str]:
     transport = (transport or "myudp").strip().lower()
     if transport == "myudp":

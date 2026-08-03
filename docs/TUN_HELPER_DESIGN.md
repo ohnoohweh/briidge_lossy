@@ -777,6 +777,37 @@ request's identifier, sequence, and payload signature. Any unrelated ICMP,
 other packet types, or a timeout without a matching reply should report failure
 or `no response`.
 
+#### Linux shared-TUN server local-probe injection
+
+For Linux `server_shared` TUN services with exactly one active peer binding, the
+server-side Python probe path now uses a kernel-visible IPv4 injection path for
+IPv4 targets instead of the older direct ChannelMux-local injection:
+
+- the probe still reuses the ObstacleBridge raw ICMP packet builder
+- the request source stays the server-local tunnel address, for example
+  `192.168.106.1`, unless `global_connectivity_source_ipv4` overrides the IPv4
+  source for the Admin Web global probe
+- the packet is emitted through a raw socket bound to the active TUN ifname,
+  for example `obtun0`
+- this makes the request visible on `obtun0` packet captures before the helper
+  forwards it into the shared-TUN / ChannelMux path
+- the matching reply to the server-local tunnel address is consumed by the
+  outstanding probe waiter and dropped locally instead of being forwarded back
+  into shared-TUN peer routing
+
+This Linux shared-TUN server path intentionally covers more of the local stack
+than the generic internal-injection path:
+
+`kernel-visible probe emission -> obtun0 -> TUN helper -> shared TUN -> ChannelMux -> peer -> Internet`
+
+Other runtimes, non-shared TUN services, and non-IPv4 targets continue to use
+the existing internal injected-probe contract until they gain an equivalent
+kernel-visible path.
+
+When operators need the server-side global probe to use a different IPv4 source
+inside the tunnel fabric, `TUN_routing.global_connectivity_source_ipv4` may
+provide that explicit source address, for example `192.168.108.31`.
+
 #### IPv6 echo request/reply
 
 If the selected target is IPv6, the same contract should use ICMPv6 instead:

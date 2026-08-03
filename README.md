@@ -1474,9 +1474,9 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `51` | `809` |
+| Python CLI/runtime, including macOS Python | `53` | `827` |
 | macOS Swift app | `1` | `54` |
-| iOS app/extension | `24` | `153` |
+| iOS app/extension | `24` | `155` |
 
 #### Requirement traceability
 
@@ -1511,8 +1511,8 @@ This section is intentionally narrower than product coverage. It shows the evide
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `119` | `119` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `4` | `0` | `4` |
 | Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `54` | `0` | `54` |
-| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `23` | `23` |
-| Total parity-oriented evidence | Sum of the lanes above | `58` | `142` | `200` |
+| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `25` | `25` |
+| Total parity-oriented evidence | Sum of the lanes above | `58` | `144` | `202` |
 
 Important caveat:
 

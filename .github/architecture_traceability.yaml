@@ -173,6 +173,8 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_service_snapshot_reports_inactive_when_not_backpressured
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_drop_snapshot_tracks_reasons_and_bounds_recent_entries
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_allows_rebind_after_peer_disconnect
+    - tests/unit/test_channel_mux_listener_mode.py::test_peer_probe_uses_virtual_probe_source_for_server_local_tun_verification
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_runtime_snapshot_exposes_local_virtual_probe_owner
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_scoped_tun_throttle_sequence_preserves_unrelated_scope_budget
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_scope_ids_preserve_broadcast_unicast_isolation
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_applies_tun_routing_override
@@ -229,6 +231,7 @@ ARC-CMP-004:
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv6_literal_when_available
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_falls_back_to_ipv4_when_ipv6_candidate_fails
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_honors_bind_family_constraint
+    - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_wraps_peer_rotation_after_repeated_idle_timeout
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_accepts_channel_mux_egress_alias
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_tun_execution_section
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_tun_execution_cli_metadata
@@ -453,6 +456,8 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_tun_routing_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_peers_payload_preserves_throttle_summary
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_preserves_throttle_summary
+    - tests/unit/test_swift_layer_readiness_parity.py::test_swift_overlay_transport_owners_publish_layered_readiness
+    - tests/unit/test_swift_layer_readiness_parity.py::test_swift_admin_surfaces_consume_layered_readiness
     - ios/tests/test_m3_native_sources.py::test_macos_swift_host_runner_source_exists
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists
     - ios/tests/test_m3_native_sources.py::test_ios_packet_tunnel_tun_routing_verification_source_exists
@@ -500,6 +505,7 @@ ARC-CMP-006:
     - tests/unit/test_secure_link_cert.py::test_revocation_reload_drops_existing_authenticated_peer
     - tests/unit/test_secure_link_cert.py::test_local_identity_reload_failure_is_atomic
     - tests/unit/test_secure_link_cert.py::test_local_identity_reload_applies_and_reauthenticates
+    - tests/unit/test_connection_snapshots.py::test_connected_peer_snapshot_exposes_transport_connected_since_without_secure_link
     - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path

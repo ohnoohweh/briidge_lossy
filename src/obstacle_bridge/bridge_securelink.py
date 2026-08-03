@@ -895,6 +895,9 @@ class SecureLinkPskSession(ISession):
             return True
         return bool(self._preserve_connected_during_epoch_restart)
 
+    def _compute_app_ready(self) -> bool:
+        return any(state.authenticated for state in self._peer_states.values())
+
     @classmethod
     def _auth_fail_reason(cls, code: int) -> Optional[str]:
         return {
@@ -1039,7 +1042,7 @@ class SecureLinkPskSession(ISession):
         self._refresh_connected_state()
 
     def _refresh_connected_state(self) -> None:
-        connected = self._compute_connected()
+        connected = self._compute_app_ready()
         if connected:
             self._connected_evt.set()
         else:
@@ -1940,7 +1943,35 @@ class SecureLinkPskSession(ISession):
             return False
 
     def is_connected(self) -> bool:
-        return self._compute_connected()
+        return self._compute_app_ready()
+
+    def get_connection_layers_snapshot(self) -> list[dict[str, object]]:
+        layers = []
+        getter = getattr(self._inner, "get_connection_layers_snapshot", None)
+        if callable(getter):
+            with contextlib.suppress(Exception):
+                layers = list(getter() or [])
+        status = self.get_secure_link_status_snapshot()
+        layers.append(
+            {
+                "layer": "secure_link",
+                "transport": self._transport_name,
+                "state": str(status.get("state") or ""),
+                "epoch": int(self._last_authenticated_session_id or 0),
+                "connected": bool(self._compute_connected()),
+                "app_ready": bool(self._compute_app_ready()),
+                "preserve_connected_during_epoch_restart": bool(self._preserve_connected_during_epoch_restart),
+            }
+        )
+        return layers
+
+    def get_transport_connected_since_unix_ts(self, peer_id: Optional[int] = None) -> Optional[float]:
+        getter = getattr(self._inner, "get_transport_connected_since_unix_ts", None)
+        if callable(getter):
+            with contextlib.suppress(Exception):
+                value = getter(peer_id=peer_id)
+                return float(value) if value is not None else None
+        return None
 
     def request_reconnect(self) -> bool:
         trigger = getattr(self._inner, "request_reconnect", None)

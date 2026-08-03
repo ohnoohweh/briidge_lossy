@@ -926,6 +926,82 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["verification"]["tun_global_connectivity"]["target"], "google.de")
         self.assertEqual(payload["verification"]["tun_global_connectivity"]["value_ms"], 25.0)
 
+    def test_build_tun_routing_payload_uses_server_tun_address_for_virtual_probe_local_check(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+            included_routes=[],
+            excluded_routes=["127.0.0.0/8"],
+            included_routes6=[],
+            excluded_routes6=["::1/128"],
+            tunnel_address="192.168.106.1",
+            tunnel_prefix=24,
+            tunnel_gateway="",
+            tunnel_address6="fd20:106::1",
+            tunnel_prefix6=64,
+            tunnel_gateway6="",
+            dns_servers=[],
+            global_connectivity_host="google.de",
+            global_connectivity_source_ipv4="192.168.106.31",
+            mtu=1600,
+            log_TUN_routing="CRITICAL",
+            enable_tcpmss=False,
+            enable_tun_tcpdump=False,
+            tun_tcpdump_pcap_path="",
+            shared_tun_disable_outgoing_normalization=False,
+            shared_tun_disable_inflow_filter=False,
+            shared_tun_disable_outflow_filter=False,
+            disable_channelmux_inflow_throttle=False,
+            shared_tun_disable_scoped_throttle=False,
+        )
+        ui = AdminWebUI(args, _RunnerStub())
+
+        captured_targets = []
+
+        def _fake_cached_probe_verification(*, label: str, target: str, ifname: str, wait_seconds: int = 2, probe_kind: str):
+            captured_targets.append((label, target, probe_kind))
+            return {
+                "label": label,
+                "ok": True,
+                "state": "verified",
+                "summary": f"{label}: verified",
+                "detail": f"ICMP echo reply received from {target}.",
+                "target": target,
+                "value_ms": 5.0,
+                "last_success_ago_s": 0.0,
+                "last_success_rtt_ms": 5.0,
+            }
+
+        with mock.patch.object(
+            AdminWebUI,
+            "_probe_tun_interface_addresses",
+            return_value={"ok": True, "ipv4": ["192.168.106.1/24"], "ipv6": ["fd20:106::1/64"], "detail": ""},
+        ), mock.patch.object(
+            AdminWebUI,
+            "_cached_probe_verification",
+            side_effect=_fake_cached_probe_verification,
+        ):
+            payload = ui._build_tun_routing_payload()
+
+        self.assertEqual(payload["verification"]["tun_connectivity"]["target"], "192.168.106.1")
+        self.assertEqual(payload["verification"]["tun_global_connectivity"]["target"], "google.de")
+        self.assertEqual(
+            captured_targets,
+            [
+                ("TUN connectivity verified", "192.168.106.1", "peer"),
+                ("TUN global connectivity verified", "google.de", "global"),
+            ],
+        )
+
     def test_tun_verification_parses_darwin_ifconfig_addresses(self):
         ifconfig_output = """utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1600
         inet 192.168.106.3 --> 192.168.106.1 netmask 0xffffff00
@@ -1479,6 +1555,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn("renderMetric('frames_dropped_total', fmtInteger(secureLink.frames_dropped_total))", app_js)
         self.assertIn("renderMetric('Next Address Attempt', fmtUptime(row.next_address_attempt_in_seconds))", app_js)
         self.assertIn("renderMetric('Restart In', fmtUptime(row.restart_in_seconds))", app_js)
+        self.assertIn("fmtUptimeFromUnixTs(secureLink.connected_since_unix_ts ?? row.connected_since_unix_ts)", app_js)
         self.assertEqual(peer["compress_layer"]["algorithm"], "zlib")
         self.assertEqual(peer["compress_layer"]["compress_applied_total"], 7)
 

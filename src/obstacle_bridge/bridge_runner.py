@@ -1089,13 +1089,51 @@ class Runner:
             await _run_stop_step(f"session.stop[{idx}]", session.stop(), timeout_s=5.0)
         self.log.info("[RUNNER] stop leaving reason=%s", stop_reason)
 
+    @staticmethod
+    def _session_connection_layers_snapshot(session: Optional[ISession]) -> list[dict]:
+        if session is None:
+            return []
+        getter = getattr(session, "get_connection_layers_snapshot", None)
+        if callable(getter):
+            with contextlib.suppress(Exception):
+                layers = list(getter() or [])
+                return [dict(layer) for layer in layers if isinstance(layer, dict)]
+        connected = False
+        with contextlib.suppress(Exception):
+            connected = bool(session.is_connected())
+        return [{
+            "layer": "session",
+            "transport": "",
+            "state": "connected" if connected else "disconnected",
+            "epoch": 0,
+            "connected": connected,
+            "app_ready": connected,
+        }]
+
+    @classmethod
+    def _session_app_ready(cls, session: Optional[ISession]) -> bool:
+        layers = cls._session_connection_layers_snapshot(session)
+        if layers:
+            return bool(layers[-1].get("app_ready"))
+        return False
+
+    @staticmethod
+    def _session_transport_connected_since_unix_ts(session: Optional[ISession], *, peer_id: Optional[int] = None) -> Optional[float]:
+        if session is None:
+            return None
+        getter = getattr(session, "get_transport_connected_since_unix_ts", None)
+        if callable(getter):
+            with contextlib.suppress(Exception):
+                value = getter(peer_id=peer_id)
+                return float(value) if value is not None else None
+        return None
 
     # ---- overlay state propagation (unchanged behavior) -----------------------
     def _on_state_change(self, transport_name: str, session: ISession, connected: bool):
         self.log.debug(f"[SERVER] _on_state_change transport={transport_name} connected={connected}")
 
         now_mono = time.monotonic()
-        aggregate_connected = any(s.is_connected() for s in self._sessions) if self._sessions else connected
+        aggregate_connected = any(self._session_app_ready(s) for s in self._sessions) if self._sessions else self._session_app_ready(session)
         if aggregate_connected:
             self._last_connected_monotonic = now_mono
             self._last_disconnected_monotonic = None
@@ -1113,7 +1151,7 @@ class Runner:
             mux = None
         if mux:
             try:
-                asyncio.get_running_loop().create_task(mux.on_overlay_state(connected))
+                asyncio.get_running_loop().create_task(mux.on_overlay_state(self._session_app_ready(session)))
             except RuntimeError:
                 pass
         # Reset overlay epoch state on disconnect so reconnect starts clean.
@@ -1337,11 +1375,18 @@ class Runner:
             sess = self._session_obj
             if sess is not None:
                 with contextlib.suppress(Exception):
-                    connected = bool(sess.is_connected())
+                    connected = bool(self._session_app_ready(sess))
             payload = {
                 "peer_state": STATE_CONNECTED if connected else STATE_DISCONNECTED,
                 "stats_snapshot_error": type(exc).__name__,
             }
+        payload["connection_layers"] = [
+            {
+                "transport": str(label),
+                "layers": self._session_connection_layers_snapshot(session),
+            }
+            for label, session in zip(self._session_labels, self._sessions)
+        ]
         summaries: list[dict] = []
         compress_summaries: list[dict] = []
         for session in self._sessions:
@@ -2089,6 +2134,13 @@ class Runner:
 
                     row_connected = bool(p.get("connected", session.is_connected()))
                     row_state = str(p.get("state") or ("connected" if row_connected else "connecting"))
+                    secure_link_snapshot = dict(p.get("secure_link") or RunnerMuxAggregate._default_secure_link_snapshot())
+                    connected_since_unix_ts = self._first_non_null(
+                        p.get("connected_since_unix_ts"),
+                        secure_link_snapshot.get("connected_since_unix_ts"),
+                        self._session_transport_connected_since_unix_ts(row_session, peer_id=p.get("peer_id")),
+                        self._session_transport_connected_since_unix_ts(session, peer_id=p.get("peer_id")),
+                    )
                     connecting_timers = self._session_connecting_timer_snapshot(row_session)
                     restart_timer = (
                         self._client_restart_watchdog_timer_snapshot(row_session)
@@ -2111,6 +2163,7 @@ class Runner:
                             p.get("transmit_delay_est_ms"),
                             row_metrics.transmit_delay_est_ms,
                         ),
+                        "connected_since_unix_ts": connected_since_unix_ts,
                         "last_incoming_age_seconds": self._first_non_null(
                             p.get("last_incoming_age_seconds"),
                             self._session_last_incoming_age_seconds(row_session),
@@ -2128,7 +2181,7 @@ class Runner:
                         },
                         "throttle": p_throttle or {"applicable": False, "active": False, "reason": "no_local_ingress"},
                         "myudp": self._session_retransmit_stats(row_session),
-                        "secure_link": dict(p.get("secure_link") or RunnerMuxAggregate._default_secure_link_snapshot()),
+                        "secure_link": secure_link_snapshot,
                         "compress_layer": dict(self._session_compress_layer_snapshot(session, peer_id=p.get("peer_id"))),
                         "next_address_attempt_in_seconds": self._first_non_null(
                             p.get("next_address_attempt_in_seconds"),
@@ -2175,6 +2228,7 @@ class Runner:
                 "rtt_est_ms": m.rtt_est_ms,
                 "transmit_delay_sample_ms": m.transmit_delay_sample_ms,
                 "transmit_delay_est_ms": m.transmit_delay_est_ms,
+                "connected_since_unix_ts": self._session_transport_connected_since_unix_ts(session),
                 "last_incoming_age_seconds": self._session_last_incoming_age_seconds(real_session),
                 "inflight": m.inflight,
                 "decode_errors": decode_errors,

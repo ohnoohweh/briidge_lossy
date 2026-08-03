@@ -269,6 +269,7 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
                     "fd20:107::2": "linux-client",
                     "fd20:107::4": "ios-client",
                 },
+                "local_virtual_peers": [],
                 "active_peer_bindings": [
                     {
                         "peer_id": 7,
@@ -278,6 +279,7 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
                         "ipv4": ["192.168.107.2"],
                         "ipv6": ["fd20:107::2"],
                         "address_count": 2,
+                        "local_virtual": False,
                         "throttle_prev_window_bytes": 0,
                         "throttle_curr_window_bytes": 0,
                         "throttle_drop_count": 0,
@@ -674,6 +676,74 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(peer["secure_link"]["state"], "authenticated")
         self.assertTrue(peer["secure_link"]["authenticated"])
         self.assertEqual(peer["secure_link"]["connected_since_unix_ts"], 1700000000.0)
+        self.assertEqual(peer["connected_since_unix_ts"], 1700000000.0)
+
+    def test_connected_peer_snapshot_exposes_transport_connected_since_without_secure_link(self):
+        class _PlainSession:
+            def __init__(self):
+                self._metrics = SessionMetrics(
+                    rtt_est_ms=42.0,
+                    transmit_delay_sample_ms=11.0,
+                    transmit_delay_est_ms=12.0,
+                    inflight=3,
+                )
+                self.last_peer_id = None
+
+            def get_metrics(self):
+                return self._metrics
+
+            def is_connected(self):
+                return True
+
+            def get_overlay_peers_snapshot(self):
+                return [
+                    {
+                        "peer_id": 7,
+                        "connected": True,
+                        "state": "connected",
+                        "peer": "198.51.100.7:4433",
+                        "mux_chans": [101],
+                    }
+                ]
+
+            def get_transport_connected_since_unix_ts(self, peer_id=None):
+                self.last_peer_id = peer_id
+                return 1700000000.0
+
+        class _MuxWithOnePeer:
+            def snapshot_connections(self):
+                return {
+                    "udp": [
+                        {
+                            "chan_id": 101,
+                            "state": "connected",
+                            "stats": {"rx_bytes": 12, "tx_bytes": 34},
+                        }
+                    ],
+                    "tcp": [],
+                    "tun": [],
+                    "counts": {
+                        "udp": 1,
+                        "tcp": 0,
+                        "tun": 0,
+                        "udp_listening": 0,
+                        "tcp_listening": 0,
+                        "tun_listening": 0,
+                    },
+                }
+
+        args = argparse.Namespace(no_dashboard=True, overlay_transport="myudp")
+        session = _PlainSession()
+        runner = Runner(args)
+        runner._sessions = [session]
+        runner._muxes = [_MuxWithOnePeer()]
+        runner._session_labels = ["myudp"]
+
+        out = runner.get_peer_connections_snapshot()
+        peer = out["peers"][0]
+
+        self.assertEqual(peer["connected_since_unix_ts"], 1700000000.0)
+        self.assertEqual(session.last_peer_id, 7)
 
     def test_listener_snapshot_shows_invalid_myudp_sender_as_connecting_peer(self):
         class _EmptyMux:

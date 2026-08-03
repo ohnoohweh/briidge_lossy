@@ -1667,6 +1667,10 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             ),
             "traffic": traffic,
             "open_connections": openConnections,
+            "connection_layers": ObstacleBridgeAdminSnapshotSupport.connectionLayers(
+                from: transportRuntime,
+                preferredKind: transport
+            ),
             "secure_link": adminSecureLinkSnapshot(state: state),
             "compress_layer": adminCompressLayerSnapshot() ?? NSNull(),
             "throttle": ObstacleBridgeAdminSnapshotSupport.peerThrottleSnapshot(peerID: 1, connectionsSnapshot: connections),
@@ -1687,14 +1691,18 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         }
         let transport = ObstacleBridgeRuntimeConfig.stringValue(from: adminRuntimeConfigPayload()?["overlay_transport"]) ?? "myudp"
         let transportRuntime = bridgeSnapshot["transport_runtime"] as? [String: Any] ?? [:]
+        let layeredReady = ObstacleBridgeAdminSnapshotSupport.appReady(
+            from: transportRuntime,
+            preferredKind: transport
+        )
         if transport != "myudp" {
-            return adminBoolValue(transportRuntime["overlay_connected"])
+            return layeredReady
         }
         let myudpRuntime = bridgeSnapshot["myudp_runtime"] as? [String: Any] ?? transportRuntime
         return ObstacleBridgeAdminSnapshotSupport.transportConnected(
             lastRttOKNSValue: myudpRuntime["last_rtt_ok_ns"],
             lastRxWallNSValue: myudpRuntime["last_rx_wall_ns"],
-            fallbackConnected: adminBoolValue(myudpRuntime["connected"])
+            fallbackConnected: layeredReady || adminBoolValue(myudpRuntime["connected"])
         )
     }
 
@@ -2967,6 +2975,7 @@ private final class SwiftSimpleUDPPeerBridge {
                 self.tcpOverlayTransportOwner = ObstacleBridgeTcpOverlayTransportOwner(
                     peerHost: settings.peerHost,
                     peerPort: settings.peerPort,
+                    peerResolveFamily: settings.peerResolveFamily,
                     bindHost: ObstacleBridgeRuntimeConfig.stringValue(from: settings.runtimeConfig["tcp_bind"]) ?? "0.0.0.0",
                     bindPort: ObstacleBridgeRuntimeConfig.intValue(from: settings.runtimeConfig["tcp_own_port"]) ?? 0,
                     overlayRuntime: runtime,
@@ -3008,6 +3017,7 @@ private final class SwiftSimpleUDPPeerBridge {
                 self.wsOverlayTransportOwner = ObstacleBridgeWebSocketOverlayTransportOwner(
                     peerHost: settings.peerHost,
                     peerPort: settings.peerPort,
+                    peerResolveFamily: settings.peerResolveFamily,
                     useTLS: ObstacleBridgeRuntimeConfig.boolValue(from: settings.runtimeConfig["ws_tls"]) ?? (settings.peerPort == 443),
                     wsPath: ObstacleBridgeRuntimeConfig.stringValue(from: settings.runtimeConfig["ws_path"]) ?? "/",
                     wsSubprotocol: ObstacleBridgeRuntimeConfig.stringValue(from: settings.runtimeConfig["ws_subprotocol"]),

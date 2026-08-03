@@ -65,6 +65,7 @@ REQ-OVL-007:
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_immediately_rotates_after_unreachable_ipv6_send_error
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_resolves_multi_host_peer_with_family_preference
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_rotates_to_next_peer_candidate_after_idle_timeout
+    - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_wraps_peer_rotation_after_repeated_idle_timeout
     - tests/unit/test_peer_resolution.py::test_udp_session_prefer_ipv6_keeps_candidate_on_immediate_send_error
     - tests/unit/test_peer_resolution.py::test_send_port_prefer_ipv6_allows_ipv4_mapped_destination_on_ipv6_socket
     - tests/unit/test_peer_resolution.py::test_resolve_prefer_ipv6_keeps_native_ipv4_literal_until_ipv6_socket_send_mapping
@@ -988,6 +989,8 @@ REQ-MUX-010:
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_applies_tun_routing_override
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists
     - ios/tests/test_m3_native_sources.py::test_ios_packet_tunnel_tun_routing_verification_source_exists
+    - tests/unit/test_channel_mux_listener_mode.py::test_peer_probe_uses_virtual_probe_source_for_server_local_tun_verification
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_runtime_snapshot_exposes_local_virtual_probe_owner
 
 REQ-MYU-001:
   integration_tests:
@@ -1157,6 +1160,9 @@ REQ-ADM-006:
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_tun_routing_matches_python
     - ios/tests/test_m3_native_sources.py::test_macos_swift_host_runner_source_exists
     - ios/tests/test_macos_swift_host_runner.py::test_swift_stream_transports_report_throttle_metrics_like_python
+    - tests/unit/test_connection_snapshots.py::test_connected_peer_snapshot_exposes_transport_connected_since_without_secure_link
+    - tests/unit/test_swift_layer_readiness_parity.py::test_swift_overlay_transport_owners_publish_layered_readiness
+    - tests/unit/test_swift_layer_readiness_parity.py::test_swift_admin_surfaces_consume_layered_readiness
 
 REQ-ADM-007:
   integration_tests:

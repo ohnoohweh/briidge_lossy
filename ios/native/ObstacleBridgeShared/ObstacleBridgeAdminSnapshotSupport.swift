@@ -148,6 +148,22 @@ enum ObstacleBridgeAdminSnapshotSupport {
             ?? [:]
     }
 
+    static func connectionLayers(from transportRuntime: [String: Any], preferredKind: String? = nil) -> [[String: Any]] {
+        let selected = selectedTransportRuntime(from: transportRuntime, preferredKind: preferredKind)
+        return selected["connection_layers"] as? [[String: Any]] ?? []
+    }
+
+    static func appReady(from transportRuntime: [String: Any], preferredKind: String? = nil) -> Bool {
+        let layers = connectionLayers(from: transportRuntime, preferredKind: preferredKind)
+        if let last = layers.last, let ready = last["app_ready"] as? Bool {
+            return ready
+        }
+        let selected = selectedTransportRuntime(from: transportRuntime, preferredKind: preferredKind)
+        return (selected["app_ready"] as? Bool)
+            ?? (selected["overlay_connected"] as? Bool)
+            ?? false
+    }
+
     static func peerMetric(_ key: String, from transportRuntime: [String: Any], preferredKind: String? = nil) -> Any {
         let selected = selectedTransportRuntime(from: transportRuntime, preferredKind: preferredKind)
         if let value = nonNullValue(selected[key]) {

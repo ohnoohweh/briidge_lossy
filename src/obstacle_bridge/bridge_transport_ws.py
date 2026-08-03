@@ -39,6 +39,7 @@ from .bridge_transport_common import (
     StreamRTT,
     StreamRTTRuntime,
     _listener_family_for_host,
+    _resolve_cli_peer_candidates,
     _resolve_cli_peer,
     _split_configured_peer_hosts,
     _strip_brackets,
@@ -325,7 +326,7 @@ class WebSocketSession(ISession):
         self._listen_host, self._listen_port = _strip_brackets(self._args.ws_bind), int(self._args.ws_own_port)
         self._peer_name_host = _strip_brackets(getattr(self._args, "ws_peer", None) or "")
         self._peer_name_port = int(getattr(self._args, "ws_peer_port", 0) or 0)
-        peer_info = _resolve_cli_peer(
+        self._peer_candidates: List[Tuple[str, int, int]] = _resolve_cli_peer_candidates(
             self._args,
             peer_attr="ws_peer",
             peer_port_attr="ws_peer_port",
@@ -333,6 +334,8 @@ class WebSocketSession(ISession):
             bind_host=self._listen_host,
             socktype=socket.SOCK_STREAM,
         )
+        self._peer_candidate_index: int = 0
+        peer_info = self._peer_candidates[0] if self._peer_candidates else None
         self._peer_tuple: Optional[Tuple[str, int]] = (
             (peer_info[0], peer_info[1]) if peer_info is not None else None
         )
@@ -613,6 +616,18 @@ class WebSocketSession(ISession):
         if not self._peer_tuple:
             return bool(self._server_peers)
         return self._rtt.is_connected()
+
+    def get_connection_layers_snapshot(self) -> list[dict[str, object]]:
+        connected = bool(self.is_connected())
+        state = "connected" if connected else ("connecting" if self._peer_tuple else "listening")
+        return [{
+            "layer": "transport",
+            "transport": "ws",
+            "state": state,
+            "epoch": int(getattr(self, "connection_epoch", 0) or 0),
+            "connected": connected,
+            "app_ready": connected,
+        }]
 
     def get_metrics(self) -> SessionMetrics:
         try:
@@ -1658,7 +1673,7 @@ class WebSocketSession(ISession):
         if self._connecting_task is not None or not self._peer_tuple or not self._run_flag:
             return
         self._next_reconnect_attempt_monotonic = None
-        host, port = self._peer_tuple
+        host, port = self._current_peer_endpoint()
         async def _connect(): await self._connect_to(host, port)
         self._connecting_task = self._loop.create_task(_connect())  # type: ignore
 
@@ -1668,7 +1683,6 @@ class WebSocketSession(ISession):
         if self._reconnect_task is not None and not self._reconnect_task.done():
             return
         self._reconnect_task = None
-        host, port = self._peer_tuple
         async def _reconnect():
             delay = self._reconnect_retry_delay_s
             try:
@@ -1677,9 +1691,11 @@ class WebSocketSession(ISession):
                     # If TCP writer exists, exit (RTT runtime will flip overlay state)
                     if self._ws is not None:
                         return
+                    host, port = self._current_peer_endpoint()
                     await self._connect_to(host, port)
                     if self._ws is not None:
                         return
+                    self._advance_peer_candidate()
                     try:
                         self._next_reconnect_attempt_monotonic = time.monotonic() + delay
                         await asyncio.sleep(delay)
@@ -1707,6 +1723,22 @@ class WebSocketSession(ISession):
         self._schedule_overlay_disconnect()
         self._start_reconnect_loop()
         return True
+
+    def _current_peer_endpoint(self) -> Tuple[str, int]:
+        if self._peer_candidates:
+            host, port, _family = self._peer_candidates[self._peer_candidate_index]
+            self._peer_tuple = (host, port)
+            return host, port
+        if self._peer_tuple is None:
+            raise RuntimeError("overlay peer requires a non-empty host name")
+        return self._peer_tuple
+
+    def _advance_peer_candidate(self) -> None:
+        if len(self._peer_candidates) <= 1:
+            return
+        self._peer_candidate_index = (self._peer_candidate_index + 1) % len(self._peer_candidates)
+        host, port, _family = self._peer_candidates[self._peer_candidate_index]
+        self._peer_tuple = (host, port)
 
     async def _on_accept(self, ws) -> None:
         if not self._peer_tuple:
@@ -2039,6 +2071,8 @@ class WebSocketSession(ISession):
                 )
                 self._record_connection_failure(failure_reason, failure_detail)
                 self._log.warning(f"[WS-SESSION] ({self._probe_id}) connect failed to {uri}: {e!r}")
+                if self._run_flag and self._ws is None:
+                    self._start_reconnect_loop()
             finally:
                 self._connecting_task = None
 

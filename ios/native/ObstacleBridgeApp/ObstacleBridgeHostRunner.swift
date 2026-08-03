@@ -94,6 +94,8 @@ private protocol ObstacleBridgeOverlayTransportOwning: AnyObject {
     func stop()
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]])
     func transportSnapshot() -> [String: Any]
+    func connectionLayersSnapshot() -> [[String: Any]]
+    func appReady() -> Bool
     func sendLocalTunPacket(_ packet: Data)
     func acceptLocalTCPConnection(
         _ connection: NWConnection,
@@ -1385,6 +1387,10 @@ final class ObstacleBridgeHostRunner {
         )
         let trafficTotals = peerTrafficTotals(from: connections)
         let overlayConnected = overlayCurrentlyConnected() ?? false
+        let connectionLayers = ObstacleBridgeAdminSnapshotSupport.connectionLayers(
+            from: transportRuntime,
+            preferredKind: transport
+        )
         let stateText: String
         if overlayConnected {
             stateText = "connected"
@@ -1435,6 +1441,7 @@ final class ObstacleBridgeHostRunner {
                 "tcp": counts["tcp"] ?? 0,
                 "tun": counts["tun"] ?? 0,
             ],
+            "connection_layers": connectionLayers,
             "secure_link": secureLinkSnapshot(defaultState: stateText),
             "compress_layer": compressLayerSnapshot(peerID: 1) ?? [
                 "enabled": Self.boolValue(from: runtimeConfig["compress_layer"]) ?? false,
@@ -2649,6 +2656,7 @@ final class ObstacleBridgeHostRunner {
         }
         let peerHost = Self.stringValue(from: runtimeConfig["ws_peer"]) ?? ""
         let peerPort = Self.intValue(from: runtimeConfig["ws_peer_port"]) ?? 0
+        let peerResolveFamily = Self.stringValue(from: runtimeConfig["ws_peer_resolve_family"]) ?? "prefer-ipv6"
         guard !peerHost.isEmpty, peerPort > 0 else {
             return
         }
@@ -2662,6 +2670,7 @@ final class ObstacleBridgeHostRunner {
         let owner = ObstacleBridgeWebSocketOverlayTransportOwner(
             peerHost: peerHost,
             peerPort: peerPort,
+            peerResolveFamily: peerResolveFamily,
             useTLS: useTLS,
             wsPath: wsPath,
             wsSubprotocol: wsSubprotocol,
@@ -2705,6 +2714,7 @@ final class ObstacleBridgeHostRunner {
         }
         let peerHost = Self.stringValue(from: runtimeConfig["tcp_peer"]) ?? ""
         let peerPort = Self.intValue(from: runtimeConfig["tcp_peer_port"]) ?? 0
+        let peerResolveFamily = Self.stringValue(from: runtimeConfig["tcp_peer_resolve_family"]) ?? "prefer-ipv6"
         let bindHost = Self.stringValue(from: runtimeConfig["tcp_bind"]) ?? "0.0.0.0"
         let bindPort = Self.intValue(from: runtimeConfig["tcp_own_port"]) ?? 0
         guard (!peerHost.isEmpty && peerPort > 0) || bindPort > 0 else {
@@ -2717,6 +2727,7 @@ final class ObstacleBridgeHostRunner {
         let owner = ObstacleBridgeTcpOverlayTransportOwner(
             peerHost: peerHost,
             peerPort: peerPort,
+            peerResolveFamily: peerResolveFamily,
             bindHost: bindHost,
             bindPort: bindPort,
             overlayRuntime: runtime,
@@ -3432,7 +3443,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func overlayCurrentlyConnected() -> Bool? {
-        currentOverlayOwner()?.owner.transportSnapshot()["overlay_connected"] as? Bool
+        currentOverlayOwner()?.owner.appReady()
     }
 
     private func overlayTransportName() -> String {

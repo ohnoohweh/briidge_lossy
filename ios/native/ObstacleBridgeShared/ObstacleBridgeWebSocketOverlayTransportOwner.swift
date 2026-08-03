@@ -4,10 +4,12 @@ import Network
 final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWebSocketDelegate, URLSessionTaskDelegate {
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
+    private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
     private static let queueSpecificKey = DispatchSpecificKey<Int>()
 
     private let peerHost: String
     private let peerPort: Int
+    private let peerResolveFamily: String
     private let useTLS: Bool
     private let wsPath: String
     private let wsSubprotocol: String?
@@ -53,6 +55,11 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private var secureLinkHandshakePrimed = false
     private var startupMuxFramesSent = false
     private var connectedURI = ""
+    private var resolvedPeerHost = ""
+    private var resolvedPeerPort = 0
+    private var resolvedPeerFamily = ""
+    private var resolvedPeerCandidateIndex = 0
+    private var resolvedPeerCandidates: [ResolvedAddress] = []
     private var pendingOutboundMessages: [URLSessionWebSocketTask.Message] = []
     private var outboundSendInFlight = false
     private var overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
@@ -84,7 +91,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             self?.handleTCPTransportEvent(event)
         },
         overlayConnectedProvider: { [weak self] in
-            self?.overlayConnected ?? false
+            self?.appReady() ?? false
         },
         activateClientOnReady: true
     )
@@ -92,6 +99,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     init(
         peerHost: String,
         peerPort: Int,
+        peerResolveFamily: String = "prefer-ipv6",
         useTLS: Bool = false,
         wsPath: String = "/",
         wsSubprotocol: String? = nil,
@@ -118,6 +126,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     ) {
         self.peerHost = peerHost
         self.peerPort = peerPort
+        self.peerResolveFamily = peerResolveFamily
         self.useTLS = useTLS
         self.wsPath = wsPath.isEmpty ? "/" : wsPath
         self.wsSubprotocol = wsSubprotocol?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -226,10 +235,18 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     func transportSnapshot() -> [String: Any] {
         withOwnerQueue {
             let protocolStats = overlayProtocolStats()
+            let connectionLayers = connectionLayersSnapshot()
             return [
                 "overlay_connected": overlayConnected,
+                "app_ready": ObstacleBridgeOverlayLayerTransportAdapter.appReady(from: connectionLayers),
+                "connection_layers": connectionLayers,
                 "overlay_host": peerHost,
                 "overlay_port": peerPort,
+                "overlay_peer_host": resolvedPeerHost,
+                "overlay_peer_port": resolvedPeerPort,
+                "overlay_peer_family": resolvedPeerFamily,
+                "overlay_peer_candidate_index": resolvedPeerCandidateIndex,
+                "overlay_peer_candidate_count": resolvedPeerCandidates.count,
                 "uri": connectedURI,
                 "payload_mode": overlayRuntime.configuredPayloadMode,
                 "ws_path": wsPath,
@@ -256,6 +273,27 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         }
     }
 
+    func connectionLayersSnapshot() -> [[String: Any]] {
+        withOwnerQueue {
+            if let overlayLayerTransportAdapter {
+                return overlayLayerTransportAdapter.connectionLayersSnapshot(
+                    transport: "ws",
+                    transportConnected: overlayConnected
+                )
+            }
+            return ObstacleBridgeOverlayLayerTransportAdapter.connectionLayersSnapshot(
+                transport: "ws",
+                transportConnected: overlayConnected,
+                compressionEnabled: false,
+                secureLinkStatus: nil
+            )
+        }
+    }
+
+    func appReady() -> Bool {
+        ObstacleBridgeOverlayLayerTransportAdapter.appReady(from: connectionLayersSnapshot())
+    }
+
     private func withOwnerQueue<T>(_ body: () -> T) -> T {
         if DispatchQueue.getSpecific(key: Self.queueSpecificKey) != nil {
             return body()
@@ -272,7 +310,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 tunServiceSpec: tunServiceSpec,
                 tunIfname: tunIfname,
                 tunMTU: tunMTU,
-                overlayConnected: overlayConnected,
+                overlayConnected: appReady(),
                 bufferedFrames: overlayWaitingCount(),
                 backpressure: overlayBackpressureSnapshot(),
                 activeTunChanIDs: &activeTunChanIDs,
@@ -345,7 +383,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             queue: queue,
             runtime: udpRuntime,
             startedProvider: { [weak self] in self?.started ?? false },
-            overlayConnectedProvider: { [weak self] in self?.overlayConnected ?? false },
+            overlayConnectedProvider: { [weak self] in self?.appReady() ?? false },
             handleSnapshot: { [weak self] event in
                 guard let self else { return }
                 self.udpServerConnections[event.chanID] = connection
@@ -397,8 +435,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             self.reconnectScheduled = false
             self.nextReconnectAttemptDeadlineNS = nil
             self.eventSink?("ws_overlay_connected", [
-                "peer_host": self.peerHost,
-                "peer_port": self.peerPort,
+                "peer_host": self.resolvedPeerHost,
+                "peer_port": self.resolvedPeerPort,
                 "uri": self.connectedURI,
             ])
             self.pendingOutboundMessages.removeAll(keepingCapacity: false)
@@ -445,9 +483,10 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         reconnectWorkItem = nil
         reconnectAttempts += 1
         do {
+            let resolved = try currentResolvedPeer()
             let plan = overlayRuntime.buildConnectPlan(
-                host: peerHost,
-                port: peerPort,
+                host: resolved.host,
+                port: resolved.port,
                 peerNameHost: nil,
                 peerNamePort: nil,
                 useTLS: useTLS,
@@ -455,6 +494,9 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 wsSubprotocol: wsSubprotocol,
                 proxyActive: false
             )
+            resolvedPeerHost = resolved.host
+            resolvedPeerPort = resolved.port
+            resolvedPeerFamily = ObstacleBridgePeerAddressResolver.familyName(resolved.family)
             connectedURI = plan.uri
             guard let url = URL(string: plan.uri) else {
                 throw URLError(.badURL)
@@ -479,6 +521,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
 
     private func scheduleReconnect() {
         guard started, !peerHost.isEmpty, peerPort > 0 else { return }
+        advancePeerCandidate()
         reconnectWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -502,6 +545,38 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             return 0.0
         }
         return Double(deadline - now) / 1_000_000_000.0
+    }
+
+    private func resolvePeerCandidates() throws -> [ResolvedAddress] {
+        let mode = ObstacleBridgePeerAddressResolver.ResolveMode(rawValue: peerResolveFamily)
+        return try ObstacleBridgePeerAddressResolver.resolvePeerCandidates(
+            host: peerHost,
+            port: peerPort,
+            mode: mode,
+            strictFamily: false,
+            errorDomain: "ObstacleBridge.WebSocketOverlay"
+        )
+    }
+
+    private func currentResolvedPeer() throws -> ResolvedAddress {
+        if resolvedPeerCandidates.isEmpty {
+            resolvedPeerCandidates = try resolvePeerCandidates()
+            resolvedPeerCandidateIndex = 0
+        }
+        guard !resolvedPeerCandidates.isEmpty else {
+            throw NSError(domain: "ObstacleBridge.WebSocketOverlay", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "failed to resolve WebSocket peer \(peerHost):\(peerPort)"
+            ])
+        }
+        if resolvedPeerCandidateIndex >= resolvedPeerCandidates.count {
+            resolvedPeerCandidateIndex = 0
+        }
+        return resolvedPeerCandidates[resolvedPeerCandidateIndex]
+    }
+
+    private func advancePeerCandidate() {
+        guard resolvedPeerCandidates.count > 1 else { return }
+        resolvedPeerCandidateIndex = (resolvedPeerCandidateIndex + 1) % resolvedPeerCandidates.count
     }
 
     private func receiveFromOverlay() {
@@ -564,6 +639,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             for delivered in snapshot.deliveredPayloads {
                 handleOverlayPayload(delivered)
             }
+            maybeSendStartupMuxFrames()
             return
         }
         handleOverlayPayload(payload)
@@ -598,13 +674,13 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     }
 
     private func maybeSendStartupMuxFrames() {
-        guard overlayConnected, !startupMuxFramesSent else { return }
+        guard appReady(), !startupMuxFramesSent else { return }
         startupMuxFramesSent = true
         sendMuxFrames(startupMuxFrames)
     }
 
     private func currentTunPeerID() -> Int? {
-        1
+        appReady() ? 1 : nil
     }
 
     private func shouldLogTunDebug(counter: Int) -> Bool {
@@ -946,7 +1022,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             tunServiceSpec: tunServiceSpec,
             tunIfname: tunIfname,
             tunMTU: tunMTU,
-            overlayConnected: overlayConnected,
+            overlayConnected: appReady(),
             bufferedFrames: 0,
             currentTunPeerID: currentTunPeerID(),
             activeTunChanIDs: &activeTunChanIDs,

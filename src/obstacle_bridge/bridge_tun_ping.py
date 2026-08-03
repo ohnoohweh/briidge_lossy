@@ -133,6 +133,61 @@ def parse_echo_reply(packet: bytes) -> dict[str, object] | None:
     return None
 
 
+def parse_echo_request(packet: bytes) -> dict[str, object] | None:
+    data = bytes(packet or b"")
+    if not data:
+        return None
+    version = int((data[0] >> 4) & 0x0F)
+    if version == 4:
+        if len(data) < 28:
+            return None
+        ihl = int(data[0] & 0x0F) * 4
+        if ihl < 20 or len(data) < ihl + 8 or int(data[9]) != 1:
+            return None
+        payload = data[ihl:]
+        if payload[0] != 8 or payload[1] != 0 or len(payload) < 8:
+            return None
+        return {
+            "family": socket.AF_INET,
+            "source_ip": str(ipaddress.IPv4Address(data[12:16])),
+            "destination_ip": str(ipaddress.IPv4Address(data[16:20])),
+            "identifier": int.from_bytes(payload[4:6], "big"),
+            "sequence": int.from_bytes(payload[6:8], "big"),
+            "payload": bytes(payload[8:]),
+        }
+    if version == 6:
+        if len(data) < 48 or int(data[6]) != 58:
+            return None
+        payload = data[40:]
+        if payload[0] != 128 or payload[1] != 0 or len(payload) < 8:
+            return None
+        return {
+            "family": socket.AF_INET6,
+            "source_ip": str(ipaddress.IPv6Address(data[8:24])),
+            "destination_ip": str(ipaddress.IPv6Address(data[24:40])),
+            "identifier": int.from_bytes(payload[4:6], "big"),
+            "sequence": int.from_bytes(payload[6:8], "big"),
+            "payload": bytes(payload[8:]),
+        }
+    return None
+
+
+def parse_internal_probe_packet(packet: bytes) -> dict[str, object] | None:
+    for parser, direction in ((parse_echo_request, "request"), (parse_echo_reply, "reply")):
+        parsed = parser(packet)
+        if not isinstance(parsed, dict):
+            continue
+        payload = bytes(parsed.get("payload") or b"")
+        if len(payload) < len(PROBE_MAGIC) + 9 or not payload.startswith(PROBE_MAGIC):
+            continue
+        doc = dict(parsed)
+        doc["direction"] = direction
+        doc["probe_kind"] = int(payload[len(PROBE_MAGIC)])
+        doc["nonce"] = bytes(payload[5:13])
+        return doc
+    return None
+
+
 def ip_family(value: str) -> int | None:
     text = str(value or "").strip()
     if not text:

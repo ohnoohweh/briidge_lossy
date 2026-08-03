@@ -157,6 +157,56 @@ def test_udp_session_prefer_ipv6_keeps_candidate_on_immediate_send_error() -> No
     assert fake_runtime.sent_initial is True
 
 
+def test_udp_session_rotation_wraps_back_to_first_candidate() -> None:
+    args = argparse.Namespace(
+        max_inflight=32,
+        udp_bind="::",
+        udp_own_port=4433,
+        udp_peer="192.0.2.10,198.51.100.20",
+        udp_peer_port=4433,
+        udp_peer_resolve_family="prefer-ipv6",
+    )
+    session = UdpSession(args)
+    session._listener_mode = False
+    session._peer_candidates = [
+        ("192.0.2.10", 4433, socket.AF_INET),
+        ("198.51.100.20", 4433, socket.AF_INET),
+    ]
+    session._peer_candidate_index = 1
+
+    class _FakeRuntime:
+        def __init__(self) -> None:
+            self._conn_evt = type("_Evt", (), {"clear": lambda self: None})()
+            self._conn_state = True
+            self._next_probe_due_ns = 456
+            self.sent_initial = False
+
+        def _send_idle_probe(self, initial: bool = False) -> None:
+            self.sent_initial = bool(initial)
+
+    class _FakeSendPort:
+        def __init__(self) -> None:
+            self.peer_addr = ("198.51.100.20", 4433)
+
+        def set_peer(self, addr) -> None:
+            self.peer_addr = addr
+
+    fake_runtime = _FakeRuntime()
+    fake_send_port = _FakeSendPort()
+    session._proto = type("_Proto", (), {"send_port": fake_send_port, "_proto_rt": fake_runtime})()
+
+    learned = []
+    session._on_peer_set = lambda host, port: learned.append((host, port))
+
+    assert session._rotate_to_next_peer_candidate() is True
+    assert session._peer_candidate_index == 0
+    assert fake_send_port.peer_addr == ("192.0.2.10", 4433)
+    assert learned == [("192.0.2.10", 4433)]
+    assert fake_runtime._conn_state is False
+    assert fake_runtime._next_probe_due_ns == 0
+    assert fake_runtime.sent_initial is True
+
+
 class _FakeSocket:
     family = socket.AF_INET6
 

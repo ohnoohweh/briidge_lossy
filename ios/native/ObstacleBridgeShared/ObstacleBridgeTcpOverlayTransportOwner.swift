@@ -4,10 +4,12 @@ import Network
 final class ObstacleBridgeTcpOverlayTransportOwner {
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
+    private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
     private static let queueSpecificKey = DispatchSpecificKey<Int>()
 
     private let peerHost: String
     private let peerPort: Int
+    private let peerResolveFamily: String
     private let bindHost: String
     private let bindPort: Int
     private let overlayRuntime: ObstacleBridgeTcpOverlayRuntime
@@ -55,6 +57,11 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private var reconnectScheduled = false
     private var reconnectWorkItem: DispatchWorkItem?
     private var nextReconnectAttemptDeadlineNS: UInt64?
+    private var peerCandidates: [ResolvedAddress] = []
+    private var peerCandidateIndex = 0
+    private var resolvedPeerHost = ""
+    private var resolvedPeerPort = 0
+    private var resolvedPeerFamily = ""
     private var secureLinkHandshakePrimed = false
     private var startupMuxFramesSent = false
     private lazy var tcpTransportOwner = ObstacleBridgeChannelMuxTCPTransportOwner(
@@ -76,7 +83,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             self?.handleTCPTransportEvent(event)
         },
         overlayConnectedProvider: { [weak self] in
-            self?.overlayConnected ?? false
+            self?.appReady() ?? false
         },
         activateClientOnReady: true
     )
@@ -84,6 +91,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     init(
         peerHost: String,
         peerPort: Int,
+        peerResolveFamily: String = "prefer-ipv6",
         bindHost: String = "0.0.0.0",
         bindPort: Int = 0,
         overlayRuntime: ObstacleBridgeTcpOverlayRuntime,
@@ -109,6 +117,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     ) {
         self.peerHost = peerHost
         self.peerPort = peerPort
+        self.peerResolveFamily = peerResolveFamily
         self.bindHost = bindHost
         self.bindPort = max(0, bindPort)
         self.overlayRuntime = overlayRuntime
@@ -222,15 +231,44 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         }
     }
 
+    func connectionLayersSnapshot() -> [[String: Any]] {
+        withOwnerQueue {
+            if let overlayLayerTransportAdapter {
+                return overlayLayerTransportAdapter.connectionLayersSnapshot(
+                    transport: "tcp",
+                    transportConnected: overlayConnected
+                )
+            }
+            return ObstacleBridgeOverlayLayerTransportAdapter.connectionLayersSnapshot(
+                transport: "tcp",
+                transportConnected: overlayConnected,
+                compressionEnabled: false,
+                secureLinkStatus: nil
+            )
+        }
+    }
+
+    func appReady() -> Bool {
+        ObstacleBridgeOverlayLayerTransportAdapter.appReady(from: connectionLayersSnapshot())
+    }
+
     func transportSnapshot() -> [String: Any] {
         withOwnerQueue {
             let protocolStats = overlayProtocolStats()
+            let connectionLayers = connectionLayersSnapshot()
             return [
                 "overlay_connected": overlayConnected,
+                "app_ready": ObstacleBridgeOverlayLayerTransportAdapter.appReady(from: connectionLayers),
+                "connection_layers": connectionLayers,
                 "overlay_bind_host": bindHost,
                 "overlay_bind_port": bindPort,
                 "overlay_host": peerHost,
                 "overlay_port": peerPort,
+                "overlay_peer_host": resolvedPeerHost,
+                "overlay_peer_port": resolvedPeerPort,
+                "overlay_peer_family": resolvedPeerFamily,
+                "overlay_peer_candidate_index": peerCandidateIndex,
+                "overlay_peer_candidate_count": peerCandidates.count,
                 "reconnect_retry_delay_ms": reconnectRetryDelayMS,
                 "reconnect_attempts": reconnectAttempts,
                 "reconnect_scheduled": reconnectScheduled,
@@ -268,7 +306,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
                 tunServiceSpec: tunServiceSpec,
                 tunIfname: tunIfname,
                 tunMTU: tunMTU,
-                overlayConnected: overlayConnected,
+                overlayConnected: appReady(),
                 bufferedFrames: overlayWaitingCount(),
                 backpressure: overlayBackpressureSnapshot(),
                 activeTunChanIDs: &activeTunChanIDs,
@@ -324,7 +362,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             queue: queue,
             runtime: udpRuntime,
             startedProvider: { [weak self] in self?.started ?? false },
-            overlayConnectedProvider: { [weak self] in self?.overlayConnected ?? false },
+            overlayConnectedProvider: { [weak self] in self?.appReady() ?? false },
             handleSnapshot: { [weak self] event in
                 guard let self else { return }
                 self.udpServerConnections[event.chanID] = connection
@@ -373,8 +411,12 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         guard started else {
             return
         }
-        guard let port = NWEndpoint.Port(rawValue: UInt16(peerPort)) else {
-            eventSink?("tcp_overlay_invalid_peer_port", ["port": peerPort])
+        let resolved: ResolvedAddress
+        do {
+            resolved = try currentResolvedPeer()
+        } catch {
+            eventSink?("tcp_overlay_connect_failed", ["error": error.localizedDescription])
+            scheduleReconnect()
             return
         }
         reconnectScheduled = false
@@ -382,7 +424,15 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
         reconnectAttempts += 1
-        let connection = NWConnection(host: NWEndpoint.Host(peerHost), port: port, using: .tcp)
+        resolvedPeerHost = resolved.host
+        resolvedPeerPort = resolved.port
+        resolvedPeerFamily = ObstacleBridgePeerAddressResolver.familyName(resolved.family)
+        guard let port = NWEndpoint.Port(rawValue: UInt16(resolved.port)) else {
+            eventSink?("tcp_overlay_invalid_peer_port", ["port": resolved.port])
+            scheduleReconnect()
+            return
+        }
+        let connection = NWConnection(host: NWEndpoint.Host(resolved.host), port: port, using: .tcp)
         overlayConnection = connection
         connection.stateUpdateHandler = { [weak self] state in
             self?.queue.async {
@@ -495,10 +545,10 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             reconnectScheduled = false
             nextReconnectAttemptDeadlineNS = nil
             eventSink?("tcp_overlay_connected", [
-                "peer_host": peerHost,
-                "peer_port": peerPort,
+                "peer_host": resolvedPeerHost,
+                "peer_port": resolvedPeerPort,
             ])
-            let snapshot = overlayRuntime.connect(host: peerHost, port: peerPort, socketPresent: true)
+            let snapshot = overlayRuntime.connect(host: resolvedPeerHost, port: resolvedPeerPort, socketPresent: true)
             for payload in snapshot.flushedBuffers {
                 sendRawOverlayWire(payload)
             }
@@ -534,6 +584,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         guard started, !peerHost.isEmpty, peerPort > 0 else {
             return
         }
+        advancePeerCandidate()
         reconnectWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else {
@@ -559,6 +610,41 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             return 0.0
         }
         return Double(deadline - now) / 1_000_000_000.0
+    }
+
+    private func resolvePeerCandidates() throws -> [ResolvedAddress] {
+        let mode = ObstacleBridgePeerAddressResolver.ResolveMode(rawValue: peerResolveFamily)
+        let candidates = try ObstacleBridgePeerAddressResolver.resolvePeerCandidates(
+            host: peerHost,
+            port: peerPort,
+            mode: mode,
+            strictFamily: false,
+            errorDomain: "ObstacleBridge.TcpOverlay"
+        )
+        let bindConstraint = ObstacleBridgePeerAddressResolver.bindFamilyConstraint(bindHost)
+        let filtered = candidates.filter { bindConstraint == nil || $0.family == bindConstraint }
+        return filtered.isEmpty ? candidates : filtered
+    }
+
+    private func currentResolvedPeer() throws -> ResolvedAddress {
+        if peerCandidates.isEmpty {
+            peerCandidates = try resolvePeerCandidates()
+            peerCandidateIndex = 0
+        }
+        guard !peerCandidates.isEmpty else {
+            throw NSError(domain: "ObstacleBridge.TcpOverlay", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "failed to resolve TCP peer \(peerHost):\(peerPort)"
+            ])
+        }
+        if peerCandidateIndex >= peerCandidates.count {
+            peerCandidateIndex = 0
+        }
+        return peerCandidates[peerCandidateIndex]
+    }
+
+    private func advancePeerCandidate() {
+        guard peerCandidates.count > 1 else { return }
+        peerCandidateIndex = (peerCandidateIndex + 1) % peerCandidates.count
     }
 
     private func receiveFromOverlay() {
@@ -602,6 +688,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             for delivered in snapshot.deliveredPayloads {
                 handleOverlayPayload(delivered)
             }
+            maybeSendStartupMuxFrames()
             return
         }
         handleOverlayPayload(payload)
@@ -632,7 +719,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     private func maybeSendStartupMuxFrames() {
-        guard overlayConnected, !startupMuxFramesSent, !startupMuxFrames.isEmpty else {
+        guard appReady(), !startupMuxFramesSent, !startupMuxFrames.isEmpty else {
             return
         }
         startupMuxFramesSent = true
@@ -643,7 +730,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         if let overlayPeerID {
             return overlayPeerID
         }
-        if !peerHost.isEmpty, peerPort > 0, overlayConnected {
+        if !peerHost.isEmpty, peerPort > 0, appReady() {
             return 1
         }
         return nil
@@ -674,7 +761,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             tunServiceSpec: tunServiceSpec,
             tunIfname: tunIfname,
             tunMTU: tunMTU,
-            overlayConnected: overlayConnected,
+            overlayConnected: appReady(),
             bufferedFrames: 0,
             currentTunPeerID: currentTunPeerID(),
             activeTunChanIDs: &activeTunChanIDs,
