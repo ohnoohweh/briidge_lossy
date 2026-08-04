@@ -48,6 +48,8 @@ This first delivered slice can:
 - provide DSM service lifecycle scripts
 - seed a persistent config file under the Synology package var directory
 - start the runtime again after DSM service start or reboot
+- prepare a dedicated helper interpreter copy under the Synology package var
+  directory and point helper-mode launches at that copy
 
 This is intentionally a first wrapper, not the finished Synology product.
 
@@ -55,8 +57,9 @@ Current limitations of the delivered wrapper:
 
 - it assumes a working `python3` interpreter already exists on the NAS
 - it assumes Python dependencies are already installed for that interpreter
-- it does not yet provide a Synology-native privileged helper for TUN-specific
-  ownership or host-network operations
+- it currently prototypes the privileged-helper lane through a dedicated helper
+  Python interpreter with best-effort `CAP_NET_ADMIN`, not yet through a
+  narrow native Synology helper binary
 
 ## Target state
 
@@ -136,6 +139,258 @@ For Synology deployment, we should continue to assume:
 That leads to a preference for packaging a ready-to-run Python environment, or
 at least a deterministic dependency-install strategy, rather than assuming
 interactive setup after installation.
+
+## Privilege boundary on Synology
+
+The current manual Synology workflow is an important clue about the real
+privilege model:
+
+- when starting from SSH, the working path uses `sudo`
+- that means the tested runtime shape is not merely "Python on DSM"
+- it is "Python on DSM with elevated privilege for the parts that need it"
+
+This matters because a normal DSM package service is not automatically the same
+thing as an interactive `sudo` shell.
+
+The current first-pass SPK wrapper runs as the Synology package user. That is
+good enough for:
+
+- package-managed file layout
+- DSM start/stop/autostart
+- WebAdmin lifecycle
+- non-privileged runtime paths
+
+It is not yet a proven solution for runtime responsibilities that require
+elevated capability, especially:
+
+- local TUN creation/ownership
+- route changes
+- firewall/NAT changes
+- other host-network mutations that currently work from the SSH `sudo` path
+
+### What the SPK cannot do yet
+
+The current wrapper should not be described as "the SPK can just do what the
+SSH + sudo launch does."
+
+Today it cannot assume that DSM package startup will:
+
+- prompt for a password like interactive `sudo`
+- inherit root privilege merely because the package is installed
+- safely run the whole ObstacleBridge Python process as root by default
+
+So if ObstacleBridge needs elevated operations on Synology, the package must
+gain an explicit privilege design rather than relying on the current
+package-user service shape.
+
+### Likely Synology-compatible approaches
+
+There are two realistic directions:
+
+1. run the whole package service with elevated privilege
+2. keep the main package service unprivileged and introduce a narrow
+   privileged helper
+
+The second model is the better architectural match for ObstacleBridge.
+
+Why:
+
+- it mirrors the direction already taken on macOS, Linux helper mode, and
+  Windows helper mode
+- it keeps privilege concentrated in the small subset that actually needs it
+- it avoids turning the whole Python runtime and WebAdmin surface into a
+  permanently privileged process
+
+### Recommended direction
+
+For Synology, the recommended long-term model is:
+
+- DSM starts the normal ObstacleBridge package service
+- that normal service runs as the package user
+- when privileged TUN or host-network work is required, it talks to a
+  dedicated privileged helper
+- that helper owns only the privileged operations such as TUN open/configure,
+  route programming, and firewall changes
+
+In other words, the Synology end state should look much closer to the existing
+helper-oriented privilege split than to "run the whole bridge as root forever."
+
+### Current project status
+
+The repository does not yet implement that Synology-specific privileged helper
+path.
+
+So the current status is:
+
+- manual SSH validation demonstrates that elevated execution is sometimes
+  required
+- the SPK wrapper currently solves packaging and DSM lifecycle only
+- privileged Synology runtime support remains a follow-up design and
+  implementation task
+
+This is the main reason the current SPK wrapper should be understood as a
+first deployment scaffold, not the final productive Synology packaging story.
+
+## DSM-specific privileged helper options
+
+The Synology DSM 7 privilege model adds an important platform constraint for
+ObstacleBridge:
+
+- packages are expected to run with lowered privilege
+- `run-as system` is no longer the normal package model
+- privileged work is expected to use DSM-approved mechanisms such as resource
+  workers where those mechanisms exist
+
+For ObstacleBridge, that means the question is not simply "how do we start the
+SPK at boot?" The harder question is "how do we let the SPK perform TUN and
+host-network operations that currently work through SSH + `sudo`?"
+
+The following options are the realistic design space for a DSM-specific
+privileged helper solution.
+
+### Option 1: official DSM resource workers where available
+
+DSM provides official resource-acquisition mechanisms for certain kinds of
+system integration work.
+
+This is a good fit for things such as:
+
+- package lifecycle integration
+- reverse-proxy or nginx-facing configuration
+- some port and service registration cases
+- container-manager or Docker-oriented package integration
+
+For ObstacleBridge, this is useful but incomplete.
+
+Why:
+
+- these workers are good for DSM-managed integration concerns
+- they do not appear to provide a general-purpose "run arbitrary
+  `CAP_NET_ADMIN` helper for TUN and route manipulation" solution
+
+Conclusion:
+
+- use resource workers where they naturally fit
+- do not expect them alone to solve ObstacleBridge local TUN privilege needs
+
+### Option 2: package-user service plus narrow native helper with Linux capabilities
+
+This is the best architectural fit for ObstacleBridge.
+
+Model:
+
+- DSM starts the main ObstacleBridge package service as the package user
+- the main service remains the Python-first runtime and WebAdmin owner
+- when privileged operations are required, the runtime talks over a local
+  authenticated socket to a tiny helper binary
+- that helper binary carries only the minimum Linux capabilities needed, most
+  likely centered on `CAP_NET_ADMIN`
+
+Why this matches the project well:
+
+- it mirrors the helper split already used or planned on Linux, macOS, and
+  Windows
+- it keeps the privileged surface much smaller than the full runtime
+- it avoids running the whole Python stack permanently with elevated privilege
+- it preserves the current ObstacleBridge architecture rather than replacing it
+
+Likely privileged responsibilities for that helper:
+
+- local TUN creation and ownership
+- interface address programming
+- route changes
+- firewall or NAT changes
+- any other host-network mutation currently proven only via SSH + `sudo`
+
+Main validation questions:
+
+- whether DSM allows the helper binary to retain and use the needed file
+  capabilities after package install
+- whether `/dev/net/tun` access is available under that capability model
+- whether DSM security policy or AppArmor blocks some of the needed network
+  operations even when Linux capabilities are present
+
+Conclusion:
+
+- this should be the first real privileged-helper direction to prototype on a
+  NAS
+
+### Option 3: whole package or service running as root-like privileged code
+
+This is the most direct mental model from the SSH workflow, but it is the
+least attractive product direction.
+
+Why it is unattractive:
+
+- DSM 7 intentionally moved away from broad package privilege
+- whole-runtime root execution gives far more privilege to the Python runtime,
+  WebAdmin surface, and package code than ObstacleBridge should need
+- Synology documents special handling for root-privilege package installation,
+  including signing or development-token style exceptions, which is not a
+  normal third-party package story
+
+This may still be useful for:
+
+- lab testing
+- development appliances
+- strictly controlled internal deployments
+
+Conclusion:
+
+- do not treat this as the preferred production design
+- keep it only as an exceptional or temporary path
+
+### Option 4: SPK control plane plus separately installed root daemon
+
+This is the fallback if DSM packaging policy prevents capability-bearing helper
+delivery inside the normal SPK path.
+
+Model:
+
+- the SPK installs and runs the normal unprivileged package service
+- a separate root-owned daemon is installed or enabled outside the normal SPK
+  privilege model
+- the SPK talks to that daemon locally for privileged work
+
+Benefits:
+
+- still allows a narrow privileged helper model
+- can work even if DSM package policy is stricter than expected
+
+Costs:
+
+- worse operator experience
+- less self-contained than a normal SPK
+- more fragile across DSM updates and appliance migrations
+- less elegant than a package-contained helper design
+
+Conclusion:
+
+- keep this as the fallback if the preferred capability-bearing helper model is
+  blocked in practice
+
+## Recommended DSM privilege path
+
+The recommended order for ObstacleBridge is:
+
+1. use official DSM resource workers where they fit naturally
+2. prototype a narrow native privileged helper binary that the SPK-owned Python
+   runtime can call locally
+3. validate that helper on real DSM hardware for `/dev/net/tun`, route, and
+   firewall behavior
+4. fall back to a separately installed root daemon only if the DSM package path
+   blocks the helper-capability model
+5. avoid whole-runtime root execution except for development or tightly
+   controlled internal deployments
+
+This keeps the Synology design aligned with the existing ObstacleBridge helper
+direction:
+
+- normal runtime stays unprivileged
+- privileged code is isolated
+- the helper owns only TUN and host-network responsibilities
+- the SPK remains the installer, service manager, and operator-facing control
+  surface
 
 ## Likely SPK contents
 
@@ -230,6 +485,9 @@ Remaining work inside phase 2:
 - validate the package on a real DSM system
 - confirm whether package-user execution is sufficient or whether some runtime
   modes require an explicit elevated helper design on Synology
+- define the Synology privilege boundary for TUN and host-network operations,
+  most likely through a dedicated privileged helper rather than whole-runtime
+  root execution
 
 ### Phase 3: hardening
 

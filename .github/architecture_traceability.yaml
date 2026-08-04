@@ -293,10 +293,12 @@ ARC-CMP-004:
     - tests/unit/test_runner_tun_helper.py::test_runner_starts_tun_helper_and_exposes_status_snapshot
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_uses_sudo_for_native_backend_when_unprivileged
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_skips_sudo_when_python_has_linux_capability
+    - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_uses_override_helper_executable
     - tests/unit/test_runner_tun_helper.py::test_linux_native_tun_helper_can_launch_without_sudo_when_file_capabilities_present
     - tests/unit/test_runner_tun_helper.py::test_linux_native_tun_helper_requires_sudo_without_effective_or_file_capabilities
     - tests/unit/test_runner_tun_helper.py::test_tun_helper_socket_ready_timeout_extends_for_sudo_prompt
     - tests/unit/test_runner_tun_helper.py::test_tun_helper_socket_ready_timeout_stays_short_without_sudo
+    - tests/unit/test_runner_tun_helper.py::test_tun_helper_socket_ready_timeout_checks_override_helper_executable
     - tests/unit/test_runner_tun_helper.py::test_runner_rejects_helper_mode_on_unsupported_platform
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_uses_sudo_for_native_backend_when_unprivileged
     - tests/unit/test_runner_tun_helper.py::test_runner_status_reports_post_start_helper_disconnect

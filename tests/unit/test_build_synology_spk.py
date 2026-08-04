@@ -41,3 +41,4 @@ def test_build_spk_emits_info_and_payload_archive(tmp_path: pathlib.Path):
             assert "src/obstacle_bridge/bridge.py" in payload_names
             assert "admin_web/app.js" in payload_names
             assert "share/defaults/ObstacleBridge.cfg" in payload_names
+            assert "bin/prepare_synology_helper_venv.sh" in payload_names

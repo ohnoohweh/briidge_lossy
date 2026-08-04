@@ -226,6 +226,27 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("--config-path", cmd)
         runner._cleanup_tun_helper_launch_config()
 
+    async def test_launch_tun_helper_process_uses_override_helper_executable(self):
+        args = self._helper_args()
+        args.tun_helper_backend = "linux-native"
+        runner = Runner(args)
+        runner._tun_helper_socket_path = "/tmp/obstaclebridge-helper.sock"
+        runner._tun_helper_session_token = "secret-token"
+
+        fake_proc = mock.Mock()
+        with mock.patch.dict(bridge_runner.os.environ, {"OBSTACLEBRIDGE_TUN_HELPER_EXECUTABLE": "/opt/ob/helper-python/bin/python3"}, clear=False), \
+             mock.patch.object(bridge_runner.sys, "platform", "linux"), \
+             mock.patch.object(bridge_runner.os, "geteuid", return_value=1000, create=True), \
+             mock.patch.object(bridge_runner, "_linux_native_tun_helper_can_launch_without_sudo", return_value=True) as can_launch, \
+             mock.patch.object(bridge_runner.asyncio, "create_subprocess_exec", new=mock.AsyncMock(return_value=fake_proc)) as create_exec:
+            proc = await runner._launch_tun_helper_process()
+
+        self.assertIs(proc, fake_proc)
+        can_launch.assert_called_once_with("/opt/ob/helper-python/bin/python3")
+        cmd = list(create_exec.await_args.args)
+        self.assertEqual(cmd[:3], ["/opt/ob/helper-python/bin/python3", "-m", "obstacle_bridge.bridge_tun_helper_server"])
+        runner._cleanup_tun_helper_launch_config()
+
     async def test_launch_tun_helper_process_uses_sudo_for_darwin_native_backend_when_unprivileged(self):
         args = self._helper_args()
         args.tun_helper_backend = "darwin-native"
@@ -285,6 +306,18 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
              mock.patch.object(bridge_runner.os, "geteuid", return_value=1000), \
              mock.patch.object(bridge_runner, "_linux_native_tun_helper_can_launch_without_sudo", return_value=True):
             self.assertEqual(runner._tun_helper_socket_ready_timeout_s(), 2.0)
+
+    def test_tun_helper_socket_ready_timeout_checks_override_helper_executable(self):
+        args = self._helper_args()
+        args.tun_helper_backend = "linux-native"
+        runner = Runner(args)
+
+        with mock.patch.dict(bridge_runner.os.environ, {"OBSTACLEBRIDGE_TUN_HELPER_EXECUTABLE": "/opt/ob/helper-python/bin/python3"}, clear=False), \
+             mock.patch.object(bridge_runner.sys, "platform", "linux"), \
+             mock.patch.object(bridge_runner.os, "geteuid", return_value=1000), \
+             mock.patch.object(bridge_runner, "_linux_native_tun_helper_can_launch_without_sudo", return_value=True) as can_launch:
+            self.assertEqual(runner._tun_helper_socket_ready_timeout_s(), 2.0)
+        can_launch.assert_called_once_with("/opt/ob/helper-python/bin/python3")
 
     def test_tun_helper_socket_ready_timeout_extends_for_darwin_sudo_prompt(self):
         args = self._helper_args()

@@ -20,6 +20,8 @@ REQ-RUN-002:
   unit_tests:
     - tests/unit/test_build_synology_spk.py::test_render_info_contains_required_synology_fields
     - tests/unit/test_build_synology_spk.py::test_build_spk_emits_info_and_payload_archive
+    - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_uses_override_helper_executable
+    - tests/unit/test_runner_tun_helper.py::test_tun_helper_socket_ready_timeout_checks_override_helper_executable
 
 REQ-OVL-002:
   integration_tests:

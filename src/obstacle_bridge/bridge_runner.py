@@ -690,8 +690,9 @@ class Runner:
         existing_pythonpath = str(env.get("PYTHONPATH") or "").strip()
         env["PYTHONPATH"] = repo_src if not existing_pythonpath else os.pathsep.join([repo_src, existing_pythonpath])
         self._tun_helper_config_path = self._write_tun_helper_launch_config()
+        helper_executable = self._tun_helper_executable()
         module_argv = [
-            sys.executable,
+            helper_executable,
             "-m",
             "obstacle_bridge.bridge_tun_helper_server",
             "--config-path",
@@ -717,7 +718,7 @@ class Runner:
             and backend_name in {"windows-native", "windows_native", "wintun-native", "wintun_native"}
             and not _is_windows_admin()
         )
-        if needs_linux_helper_privilege and not _linux_native_tun_helper_can_launch_without_sudo(sys.executable):
+        if needs_linux_helper_privilege and not _linux_native_tun_helper_can_launch_without_sudo(helper_executable):
             sudo_path = shutil.which("sudo")
             if not sudo_path:
                 raise RuntimeError(
@@ -828,6 +829,7 @@ class Runner:
     def _tun_helper_socket_ready_timeout_s(self) -> float:
         settings = self._tun_helper_settings
         backend_name = str(getattr(settings, "helper_backend", "") or DEFAULT_TUN_HELPER_BACKEND).strip().lower()
+        helper_executable = self._tun_helper_executable()
         geteuid = getattr(os, "geteuid", None)
         needs_linux_helper_privilege = bool(
             sys.platform.startswith("linux")
@@ -841,13 +843,17 @@ class Runner:
             and callable(geteuid)
             and int(geteuid()) != 0
         )
-        if needs_linux_helper_privilege and not _linux_native_tun_helper_can_launch_without_sudo(sys.executable):
+        if needs_linux_helper_privilege and not _linux_native_tun_helper_can_launch_without_sudo(helper_executable):
             return 30.0
         if needs_darwin_helper_privilege:
             return 30.0
         if sys.platform.startswith("win") and backend_name in {"windows-native", "windows_native", "wintun-native", "wintun_native"} and not _is_windows_admin():
             return 30.0
         return 2.0
+
+    def _tun_helper_executable(self) -> str:
+        override = str(os.environ.get("OBSTACLEBRIDGE_TUN_HELPER_EXECUTABLE") or "").strip()
+        return override or sys.executable
 
     def _tun_helper_response_timeout_s(self) -> float:
         settings = self._tun_helper_settings
