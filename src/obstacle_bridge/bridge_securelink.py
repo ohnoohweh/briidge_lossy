@@ -211,6 +211,7 @@ class _SecureLinkPeerState:
     auth_fail_code: int = 0
     auth_fail_reason: str = ""
     auth_fail_detail: str = ""
+    auth_fail_context: str = ""
     auth_fail_unix_ts: Optional[float] = None
     consecutive_failures: int = 0
     handshake_attempts_total: int = 0
@@ -247,9 +248,54 @@ class _SecureLinkPeerState:
     trust_enforced_unix_ts: Optional[float] = None
     disconnect_reason: str = ""
     disconnect_detail: str = ""
+    last_inbound_sl_type: int = 0
+    last_inbound_session_id: int = 0
+    last_inbound_counter: int = 0
+    last_outbound_sl_type: int = 0
+    last_outbound_session_id: int = 0
+    last_outbound_counter: int = 0
+    server_hello_received: bool = False
+    server_hello_validated: bool = False
+    sticky_auth_fail_code: int = 0
+    sticky_auth_fail_reason: str = ""
+    client_telemetry_source: str = ""
+    client_telemetry_impl_rev: str = ""
+    client_telemetry_received_unix_ts: Optional[float] = None
+    client_telemetry_current_attempt_session_id: Optional[int] = None
+    client_telemetry_local_authenticated: bool = False
+    client_telemetry_peer_confirmed_authenticated: bool = False
+    client_telemetry_server_hello_received: bool = False
+    client_telemetry_server_hello_validated: bool = False
+    client_telemetry_handshake_proof_session_id: Optional[int] = None
+    client_telemetry_handshake_proof_counter: Optional[int] = None
+    client_telemetry_handshake_proof_sent: bool = False
+    client_telemetry_handshake_telemetry_build_succeeded: bool = False
+    client_telemetry_handshake_telemetry_payload_bytes: Optional[int] = None
+    client_telemetry_handshake_telemetry_payload_sha256_prefix: str = ""
+    client_telemetry_handshake_telemetry_build_error: str = ""
+    client_telemetry_handshake_proof_emit_session_id: Optional[int] = None
+    client_telemetry_handshake_proof_emit_counter: Optional[int] = None
+    client_telemetry_handshake_proof_emit_payload_bytes: Optional[int] = None
+    client_telemetry_handshake_proof_emit_payload_sha256_prefix: str = ""
+    client_telemetry_tx_counter: Optional[int] = None
+    client_telemetry_observed_session_id: Optional[int] = None
+    client_telemetry_observed_counter: Optional[int] = None
+    client_telemetry_last_inbound_sl_type: int = 0
+    client_telemetry_last_inbound_session_id: int = 0
+    client_telemetry_last_inbound_counter: int = 0
+    client_telemetry_last_outbound_sl_type: int = 0
+    client_telemetry_last_outbound_session_id: int = 0
+    client_telemetry_last_outbound_counter: int = 0
+    client_telemetry_parse_status: str = ""
+    client_telemetry_parse_detail: str = ""
+    client_telemetry_payload_len: Optional[int] = None
+    client_telemetry_payload_sha256_prefix: str = ""
+    client_telemetry_payload_preview: str = ""
 
 
 class SecureLinkPskSession(ISession):
+    _SL_IPHONE_FOCUS_LOG_REV = "bridge_securelink.py:iphone-focus-r2"
+
     _SL_VERSION = 1
     _SL_TYPE_CLIENT_HELLO = 1
     _SL_TYPE_SERVER_HELLO = 2
@@ -259,6 +305,7 @@ class SecureLinkPskSession(ISession):
     _SL_TYPE_REKEY_REPLY = 6
     _SL_TYPE_REKEY_COMMIT = 7
     _SL_TYPE_REKEY_DONE = 8
+    _SL_TYPE_CLIENT_PLAINTEXT_TELEMETRY = 9
     _SL_CAP_PSK_V1 = 1
     _SL_CAP_CERT_V1 = 2
     _SL_AUTH_FAIL_BAD_PSK = 1
@@ -268,6 +315,9 @@ class SecureLinkPskSession(ISession):
     _SL_AUTH_FAIL_LIFECYCLE = 5
     _SL_AUTH_FAIL_UNKNOWN_ROOT = 6
     _SL_AUTH_FAIL_BAD_SIGNATURE = 7
+    _SL_CLIENT_TELEMETRY_KIND = "secure_link_client_telemetry_v1"
+    _SL_CLIENT_PLAINTEXT_TELEMETRY_KIND = "secure_link_client_plaintext_telemetry_v1"
+    _SL_CLIENT_TELEMETRY_MAX_BYTES = 2048
     _SL_AUTH_FAIL_BAD_IDENTITY_PROOF = 8
     _SL_AUTH_FAIL_WRONG_ROLE = 9
     _SL_AUTH_FAIL_EXPIRED = 10
@@ -451,11 +501,13 @@ class SecureLinkPskSession(ISession):
         self._last_auth_fail_code: int = 0
         self._last_auth_fail_reason: str = ""
         self._last_auth_fail_detail: str = ""
+        self._last_auth_fail_context: str = ""
         self._last_auth_fail_unix_ts: Optional[float] = None
         self._last_auth_fail_session_id: Optional[int] = None
         self._last_terminal_failure_code: int = 0
         self._last_terminal_failure_reason: str = ""
         self._last_terminal_failure_detail: str = ""
+        self._last_terminal_failure_context: str = ""
         self._last_terminal_failure_unix_ts: Optional[float] = None
         self._last_terminal_failure_session_id: Optional[int] = None
         self._last_transport_epoch_change_unix_ts: Optional[float] = None
@@ -465,6 +517,50 @@ class SecureLinkPskSession(ISession):
         self._last_secure_link_event_unix_ts: Optional[float] = None
         self._last_authenticated_unix_ts: Optional[float] = None
         self._last_authenticated_session_id: Optional[int] = None
+        self._last_inbound_sl_type: int = 0
+        self._last_inbound_session_id: int = 0
+        self._last_inbound_counter: int = 0
+        self._last_outbound_sl_type: int = 0
+        self._last_outbound_session_id: int = 0
+        self._last_outbound_counter: int = 0
+        self._server_hello_received: bool = False
+        self._server_hello_validated: bool = False
+        self._last_client_telemetry_source: str = ""
+        self._last_client_telemetry_impl_rev: str = ""
+        self._last_client_telemetry_received_unix_ts: Optional[float] = None
+        self._last_client_telemetry_current_attempt_session_id: Optional[int] = None
+        self._last_client_telemetry_local_authenticated: bool = False
+        self._last_client_telemetry_peer_confirmed_authenticated: bool = False
+        self._last_client_telemetry_server_hello_received: bool = False
+        self._last_client_telemetry_server_hello_validated: bool = False
+        self._last_client_telemetry_handshake_proof_session_id: Optional[int] = None
+        self._last_client_telemetry_handshake_proof_counter: Optional[int] = None
+        self._last_client_telemetry_handshake_proof_sent: bool = False
+        self._last_client_telemetry_handshake_telemetry_build_succeeded: bool = False
+        self._last_client_telemetry_handshake_telemetry_payload_bytes: Optional[int] = None
+        self._last_client_telemetry_handshake_telemetry_payload_sha256_prefix: str = ""
+        self._last_client_telemetry_handshake_telemetry_build_error: str = ""
+        self._last_client_telemetry_handshake_proof_emit_session_id: Optional[int] = None
+        self._last_client_telemetry_handshake_proof_emit_counter: Optional[int] = None
+        self._last_client_telemetry_handshake_proof_emit_payload_bytes: Optional[int] = None
+        self._last_client_telemetry_handshake_proof_emit_payload_sha256_prefix: str = ""
+        self._last_client_telemetry_tx_counter: Optional[int] = None
+        self._last_client_telemetry_observed_session_id: Optional[int] = None
+        self._last_client_telemetry_observed_counter: Optional[int] = None
+        self._last_client_telemetry_last_inbound_sl_type: int = 0
+        self._last_client_telemetry_last_inbound_session_id: int = 0
+        self._last_client_telemetry_last_inbound_counter: int = 0
+        self._last_client_telemetry_last_outbound_sl_type: int = 0
+        self._last_client_telemetry_last_outbound_session_id: int = 0
+        self._last_client_telemetry_last_outbound_counter: int = 0
+        self._last_client_telemetry_parse_status: str = ""
+        self._last_client_telemetry_parse_detail: str = ""
+        self._last_client_telemetry_payload_len: Optional[int] = None
+        self._last_client_telemetry_payload_sha256_prefix: str = ""
+        self._last_client_telemetry_payload_preview: str = ""
+        self._last_client_telemetry_log_fingerprint_by_peer: dict[int, tuple] = {}
+        self._sticky_auth_fail_code: int = 0
+        self._sticky_auth_fail_reason: str = ""
         self._handshake_attempts_total: int = 0
         self._authenticated_sessions_total: int = 0
         self._rekeys_completed_total: int = 0
@@ -594,6 +690,604 @@ class SecureLinkPskSession(ISession):
         except Exception:
             return None
         return parsed if isinstance(parsed, dict) else None
+
+    def _build_client_telemetry_payload(
+        self,
+        state: _SecureLinkPeerState,
+        *,
+        proof_session_id: int,
+        proof_counter: int,
+    ) -> bytes:
+        payload = {
+            "kind": self._SL_CLIENT_TELEMETRY_KIND,
+            "impl": "python",
+            "current_attempt_session_id": int(state.session_id or 0) or None,
+            "local_authenticated": bool(state.authenticated),
+            "peer_confirmed_authenticated": bool(state.peer_confirmed_authenticated),
+            "server_hello_received": bool(state.server_hello_received),
+            "server_hello_validated": bool(state.server_hello_validated),
+            "client_handshake_proof_session_id": int(proof_session_id or 0) or None,
+            "client_handshake_proof_counter": int(proof_counter or 0) or None,
+            "last_inbound_sl_type": int(state.last_inbound_sl_type or 0) or None,
+            "last_inbound_session_id": int(state.last_inbound_session_id or 0) or None,
+            "last_inbound_counter": int(state.last_inbound_counter or 0) or None,
+            "last_outbound_sl_type": self._SL_TYPE_DATA,
+            "last_outbound_session_id": int(proof_session_id or 0) or None,
+            "last_outbound_counter": int(proof_counter or 0) or None,
+        }
+        return self._json_payload(payload)
+
+    @staticmethod
+    def _telemetry_payload_preview(payload: bytes, *, limit: int = 64) -> str:
+        try:
+            text = bytes(payload or b"").decode("utf-8", errors="backslashreplace")
+        except Exception:
+            return ""
+        text = text.replace("\r", "\\r").replace("\n", "\\n")
+        return text[:limit]
+
+    def _remember_client_telemetry_state(self, state: Optional[_SecureLinkPeerState]) -> None:
+        if state is None:
+            return
+        self._last_client_telemetry_source = str(state.client_telemetry_source or "")
+        self._last_client_telemetry_impl_rev = str(state.client_telemetry_impl_rev or "")
+        self._last_client_telemetry_received_unix_ts = state.client_telemetry_received_unix_ts
+        self._last_client_telemetry_current_attempt_session_id = state.client_telemetry_current_attempt_session_id
+        self._last_client_telemetry_local_authenticated = bool(state.client_telemetry_local_authenticated)
+        self._last_client_telemetry_peer_confirmed_authenticated = bool(state.client_telemetry_peer_confirmed_authenticated)
+        self._last_client_telemetry_server_hello_received = bool(state.client_telemetry_server_hello_received)
+        self._last_client_telemetry_server_hello_validated = bool(state.client_telemetry_server_hello_validated)
+        self._last_client_telemetry_handshake_proof_session_id = state.client_telemetry_handshake_proof_session_id
+        self._last_client_telemetry_handshake_proof_counter = state.client_telemetry_handshake_proof_counter
+        self._last_client_telemetry_handshake_proof_sent = bool(state.client_telemetry_handshake_proof_sent)
+        self._last_client_telemetry_handshake_telemetry_build_succeeded = bool(
+            state.client_telemetry_handshake_telemetry_build_succeeded
+        )
+        self._last_client_telemetry_handshake_telemetry_payload_bytes = state.client_telemetry_handshake_telemetry_payload_bytes
+        self._last_client_telemetry_handshake_telemetry_payload_sha256_prefix = str(
+            state.client_telemetry_handshake_telemetry_payload_sha256_prefix or ""
+        )
+        self._last_client_telemetry_handshake_telemetry_build_error = str(
+            state.client_telemetry_handshake_telemetry_build_error or ""
+        )
+        self._last_client_telemetry_handshake_proof_emit_session_id = (
+            state.client_telemetry_handshake_proof_emit_session_id
+        )
+        self._last_client_telemetry_handshake_proof_emit_counter = (
+            state.client_telemetry_handshake_proof_emit_counter
+        )
+        self._last_client_telemetry_handshake_proof_emit_payload_bytes = (
+            state.client_telemetry_handshake_proof_emit_payload_bytes
+        )
+        self._last_client_telemetry_handshake_proof_emit_payload_sha256_prefix = str(
+            state.client_telemetry_handshake_proof_emit_payload_sha256_prefix or ""
+        )
+        self._last_client_telemetry_tx_counter = state.client_telemetry_tx_counter
+        self._last_client_telemetry_observed_session_id = state.client_telemetry_observed_session_id
+        self._last_client_telemetry_observed_counter = state.client_telemetry_observed_counter
+        self._last_client_telemetry_last_inbound_sl_type = int(state.client_telemetry_last_inbound_sl_type or 0)
+        self._last_client_telemetry_last_inbound_session_id = int(state.client_telemetry_last_inbound_session_id or 0)
+        self._last_client_telemetry_last_inbound_counter = int(state.client_telemetry_last_inbound_counter or 0)
+        self._last_client_telemetry_last_outbound_sl_type = int(state.client_telemetry_last_outbound_sl_type or 0)
+        self._last_client_telemetry_last_outbound_session_id = int(state.client_telemetry_last_outbound_session_id or 0)
+        self._last_client_telemetry_last_outbound_counter = int(state.client_telemetry_last_outbound_counter or 0)
+        self._last_client_telemetry_parse_status = str(state.client_telemetry_parse_status or "")
+        self._last_client_telemetry_parse_detail = str(state.client_telemetry_parse_detail or "")
+        self._last_client_telemetry_payload_len = state.client_telemetry_payload_len
+        self._last_client_telemetry_payload_sha256_prefix = str(state.client_telemetry_payload_sha256_prefix or "")
+        self._last_client_telemetry_payload_preview = str(state.client_telemetry_payload_preview or "")
+
+    @staticmethod
+    def _server_state_log_summary(
+        state: Optional[_SecureLinkPeerState],
+        *,
+        peer_id: Optional[int],
+    ) -> dict:
+        if state is None:
+            return {
+                "peer_id": None if peer_id is None else int(peer_id),
+                "session_id": 0,
+                "pending_session_id": 0,
+                "authenticated": False,
+                "peer_confirmed_authenticated": False,
+                "auth_fail_code": 0,
+                "auth_fail_context": "",
+                "last_event": "",
+                "last_inbound_sl_type": 0,
+                "last_inbound_session_id": 0,
+                "last_inbound_counter": 0,
+                "last_outbound_sl_type": 0,
+                "last_outbound_session_id": 0,
+                "last_outbound_counter": 0,
+            }
+        return {
+            "peer_id": None if peer_id is None else int(peer_id),
+            "session_id": int(state.session_id or 0),
+            "pending_session_id": int(state.pending_session_id or 0),
+            "authenticated": bool(state.authenticated),
+            "peer_confirmed_authenticated": bool(state.peer_confirmed_authenticated),
+            "auth_fail_code": int(state.auth_fail_code or 0),
+            "auth_fail_context": str(state.auth_fail_context or ""),
+            "last_event": str(state.last_event or ""),
+            "last_inbound_sl_type": int(state.last_inbound_sl_type or 0),
+            "last_inbound_session_id": int(state.last_inbound_session_id or 0),
+            "last_inbound_counter": int(state.last_inbound_counter or 0),
+            "last_outbound_sl_type": int(state.last_outbound_sl_type or 0),
+            "last_outbound_session_id": int(state.last_outbound_session_id or 0),
+            "last_outbound_counter": int(state.last_outbound_counter or 0),
+        }
+
+    @staticmethod
+    def _client_telemetry_log_summary(state: Optional[_SecureLinkPeerState]) -> dict:
+        if state is None:
+            return {
+                "source": "",
+                "impl_rev": "",
+                "parse_status": "",
+                "parse_detail": "",
+                "current_attempt_session_id": 0,
+                "local_authenticated": False,
+                "peer_confirmed_authenticated": False,
+                "server_hello_received": False,
+                "server_hello_validated": False,
+                "handshake_proof_session_id": 0,
+                "handshake_proof_counter": 0,
+                "handshake_proof_sent": False,
+                "handshake_telemetry_build_succeeded": False,
+                "handshake_telemetry_payload_bytes": None,
+                "handshake_telemetry_payload_sha256_prefix": "",
+                "handshake_telemetry_build_error": "",
+                "handshake_proof_emit_session_id": 0,
+                "handshake_proof_emit_counter": 0,
+                "handshake_proof_emit_payload_bytes": None,
+                "handshake_proof_emit_payload_sha256_prefix": "",
+                "tx_counter": 0,
+                "observed_session_id": 0,
+                "observed_counter": 0,
+                "last_inbound_sl_type": 0,
+                "last_inbound_session_id": 0,
+                "last_inbound_counter": 0,
+                "last_outbound_sl_type": 0,
+                "last_outbound_session_id": 0,
+                "last_outbound_counter": 0,
+                "payload_len": None,
+                "payload_sha256_prefix": "",
+            }
+        return {
+            "source": str(state.client_telemetry_source or ""),
+            "impl_rev": str(state.client_telemetry_impl_rev or ""),
+            "parse_status": str(state.client_telemetry_parse_status or ""),
+            "parse_detail": str(state.client_telemetry_parse_detail or ""),
+            "current_attempt_session_id": int(state.client_telemetry_current_attempt_session_id or 0),
+            "local_authenticated": bool(state.client_telemetry_local_authenticated),
+            "peer_confirmed_authenticated": bool(state.client_telemetry_peer_confirmed_authenticated),
+            "server_hello_received": bool(state.client_telemetry_server_hello_received),
+            "server_hello_validated": bool(state.client_telemetry_server_hello_validated),
+            "handshake_proof_session_id": int(state.client_telemetry_handshake_proof_session_id or 0),
+            "handshake_proof_counter": int(state.client_telemetry_handshake_proof_counter or 0),
+            "handshake_proof_sent": bool(state.client_telemetry_handshake_proof_sent),
+            "handshake_telemetry_build_succeeded": bool(state.client_telemetry_handshake_telemetry_build_succeeded),
+            "handshake_telemetry_payload_bytes": state.client_telemetry_handshake_telemetry_payload_bytes,
+            "handshake_telemetry_payload_sha256_prefix": str(
+                state.client_telemetry_handshake_telemetry_payload_sha256_prefix or ""
+            ),
+            "handshake_telemetry_build_error": str(state.client_telemetry_handshake_telemetry_build_error or ""),
+            "handshake_proof_emit_session_id": int(state.client_telemetry_handshake_proof_emit_session_id or 0),
+            "handshake_proof_emit_counter": int(state.client_telemetry_handshake_proof_emit_counter or 0),
+            "handshake_proof_emit_payload_bytes": state.client_telemetry_handshake_proof_emit_payload_bytes,
+            "handshake_proof_emit_payload_sha256_prefix": str(
+                state.client_telemetry_handshake_proof_emit_payload_sha256_prefix or ""
+            ),
+            "tx_counter": int(state.client_telemetry_tx_counter or 0),
+            "observed_session_id": int(state.client_telemetry_observed_session_id or 0),
+            "observed_counter": int(state.client_telemetry_observed_counter or 0),
+            "last_inbound_sl_type": int(state.client_telemetry_last_inbound_sl_type or 0),
+            "last_inbound_session_id": int(state.client_telemetry_last_inbound_session_id or 0),
+            "last_inbound_counter": int(state.client_telemetry_last_inbound_counter or 0),
+            "last_outbound_sl_type": int(state.client_telemetry_last_outbound_sl_type or 0),
+            "last_outbound_session_id": int(state.client_telemetry_last_outbound_session_id or 0),
+            "last_outbound_counter": int(state.client_telemetry_last_outbound_counter or 0),
+            "payload_len": state.client_telemetry_payload_len,
+            "payload_sha256_prefix": str(state.client_telemetry_payload_sha256_prefix or ""),
+        }
+
+    def _log_server_handshake_trace(
+        self,
+        event: str,
+        *,
+        peer_id: Optional[int],
+        session_id: int,
+        counter: int = 0,
+        sl_type: Optional[int] = None,
+        state: Optional[_SecureLinkPeerState] = None,
+        note: str = "",
+        body_len: Optional[int] = None,
+    ) -> None:
+        if self._client_mode:
+            return
+        try:
+            self._log.info(
+                "[SECURE-LINK] trace event=%s peer_id=%s session_id=%s counter=%s sl_type=%s note=%s server=%s client=%s body_len=%s",
+                str(event or ""),
+                None if peer_id is None else int(self._peer_key(peer_id)),
+                int(session_id or 0),
+                int(counter or 0),
+                None if sl_type is None else int(sl_type),
+                str(note or ""),
+                self._server_state_log_summary(state, peer_id=peer_id),
+                self._client_telemetry_log_summary(state),
+                None if body_len is None else int(body_len),
+            )
+        except Exception:
+            pass
+
+    def _log_iphone_focus_marker(
+        self,
+        event: str,
+        *,
+        peer_id: Optional[int],
+        session_id: int,
+        counter: int = 0,
+        state: Optional[_SecureLinkPeerState] = None,
+        note: str = "",
+    ) -> None:
+        if self._client_mode or peer_id is None:
+            return
+        try:
+            self._log.info(
+                "[SECURE-LINK][IPHONE-FOCUS] rev=%s event=%s peer_id=%s session_id=%s counter=%s note=%s state_session_id=%s state_pending_session_id=%s authenticated=%s peer_confirmed=%s auth_fail_code=%s auth_fail_context=%s last_in_type=%s last_in_session=%s last_in_counter=%s last_out_type=%s last_out_session=%s last_out_counter=%s telemetry_source=%s telemetry_attempt_session_id=%s",
+                self._SL_IPHONE_FOCUS_LOG_REV,
+                str(event or ""),
+                int(self._peer_key(peer_id)),
+                int(session_id or 0),
+                int(counter or 0),
+                str(note or ""),
+                0 if state is None else int(state.session_id or 0),
+                0 if state is None else int(state.pending_session_id or 0),
+                False if state is None else bool(state.authenticated),
+                False if state is None else bool(state.peer_confirmed_authenticated),
+                0 if state is None else int(state.auth_fail_code or 0),
+                "" if state is None else str(state.auth_fail_context or ""),
+                0 if state is None else int(state.last_inbound_sl_type or 0),
+                0 if state is None else int(state.last_inbound_session_id or 0),
+                0 if state is None else int(state.last_inbound_counter or 0),
+                0 if state is None else int(state.last_outbound_sl_type or 0),
+                0 if state is None else int(state.last_outbound_session_id or 0),
+                0 if state is None else int(state.last_outbound_counter or 0),
+                "" if state is None else str(state.client_telemetry_source or ""),
+                0 if state is None else int(state.client_telemetry_current_attempt_session_id or 0),
+            )
+        except Exception:
+            pass
+
+    def _maybe_log_client_telemetry_update(
+        self,
+        state: Optional[_SecureLinkPeerState],
+        *,
+        peer_id: Optional[int],
+        reason: str,
+    ) -> None:
+        if state is None or self._client_mode:
+            return
+        peer_key = self._peer_key(peer_id)
+        summary = self._client_telemetry_log_summary(state)
+        fingerprint = tuple(sorted(summary.items()))
+        previous = self._last_client_telemetry_log_fingerprint_by_peer.get(int(peer_key))
+        if previous == fingerprint:
+            return
+        self._last_client_telemetry_log_fingerprint_by_peer[int(peer_key)] = fingerprint
+        self._log.info(
+            "[SECURE-LINK] client telemetry update peer_id=%s reason=%s client=%s server=%s",
+            int(peer_key),
+            str(reason or ""),
+            summary,
+            self._server_state_log_summary(state, peer_id=peer_id),
+        )
+
+    def _capture_client_telemetry(
+        self,
+        state: _SecureLinkPeerState,
+        payload: bytes,
+        *,
+        peer_id: Optional[int],
+        observed_session_id: int,
+        observed_counter: int,
+        expected_kind: Optional[str] = None,
+        parse_status: str = "captured",
+    ) -> bool:
+        payload_bytes = bytes(payload or b"")
+        state.client_telemetry_payload_len = len(payload_bytes)
+        state.client_telemetry_payload_sha256_prefix = (
+            hashlib.sha256(payload_bytes).hexdigest()[:16] if payload_bytes else ""
+        )
+        state.client_telemetry_payload_preview = self._telemetry_payload_preview(payload_bytes)
+        if not payload_bytes:
+            state.client_telemetry_parse_status = "empty_payload"
+            state.client_telemetry_parse_detail = "proof plaintext was empty"
+            self._remember_client_telemetry_state(state)
+            self._maybe_log_client_telemetry_update(state, peer_id=peer_id, reason="empty_payload")
+            return False
+        if len(payload_bytes) > self._SL_CLIENT_TELEMETRY_MAX_BYTES:
+            state.client_telemetry_parse_status = "too_large"
+            state.client_telemetry_parse_detail = (
+                f"payload exceeds {self._SL_CLIENT_TELEMETRY_MAX_BYTES} bytes"
+            )
+            self._remember_client_telemetry_state(state)
+            self._maybe_log_client_telemetry_update(state, peer_id=peer_id, reason="too_large")
+            return False
+        parsed = self._parse_json_payload(payload_bytes)
+        if not isinstance(parsed, dict):
+            state.client_telemetry_parse_status = "not_json"
+            state.client_telemetry_parse_detail = "proof plaintext was not a JSON object"
+            self._remember_client_telemetry_state(state)
+            self._maybe_log_client_telemetry_update(state, peer_id=peer_id, reason="not_json")
+            return False
+        if str(parsed.get("kind") or "") != str(expected_kind or self._SL_CLIENT_TELEMETRY_KIND):
+            state.client_telemetry_parse_status = "wrong_kind"
+            state.client_telemetry_parse_detail = str(parsed.get("kind") or "")
+            self._remember_client_telemetry_state(state)
+            self._maybe_log_client_telemetry_update(state, peer_id=peer_id, reason="wrong_kind")
+            return False
+        state.client_telemetry_parse_status = str(parse_status or "captured")
+        state.client_telemetry_parse_detail = ""
+        state.client_telemetry_source = str(parsed.get("impl") or "")
+        state.client_telemetry_impl_rev = str(parsed.get("impl_rev") or "")
+        state.client_telemetry_received_unix_ts = time.time()
+        state.client_telemetry_current_attempt_session_id = int(parsed.get("current_attempt_session_id") or 0) or None
+        state.client_telemetry_local_authenticated = bool(parsed.get("local_authenticated"))
+        state.client_telemetry_peer_confirmed_authenticated = bool(parsed.get("peer_confirmed_authenticated"))
+        state.client_telemetry_server_hello_received = bool(parsed.get("server_hello_received"))
+        state.client_telemetry_server_hello_validated = bool(parsed.get("server_hello_validated"))
+        state.client_telemetry_handshake_proof_session_id = int(parsed.get("client_handshake_proof_session_id") or 0) or None
+        state.client_telemetry_handshake_proof_counter = int(parsed.get("client_handshake_proof_counter") or 0) or None
+        state.client_telemetry_handshake_proof_sent = bool(parsed.get("client_handshake_proof_sent"))
+        state.client_telemetry_handshake_telemetry_build_succeeded = bool(
+            parsed.get("client_handshake_telemetry_build_succeeded")
+        )
+        state.client_telemetry_handshake_telemetry_payload_bytes = (
+            int(parsed.get("client_handshake_telemetry_payload_bytes") or 0) or None
+        )
+        state.client_telemetry_handshake_telemetry_payload_sha256_prefix = str(
+            parsed.get("client_handshake_telemetry_payload_sha256_prefix") or ""
+        )
+        state.client_telemetry_handshake_telemetry_build_error = str(
+            parsed.get("client_handshake_telemetry_build_error") or ""
+        )
+        state.client_telemetry_handshake_proof_emit_session_id = (
+            int(parsed.get("client_handshake_proof_emit_session_id") or 0) or None
+        )
+        state.client_telemetry_handshake_proof_emit_counter = (
+            int(parsed.get("client_handshake_proof_emit_counter") or 0) or None
+        )
+        state.client_telemetry_handshake_proof_emit_payload_bytes = (
+            int(parsed.get("client_handshake_proof_emit_payload_bytes") or 0) or None
+        )
+        state.client_telemetry_handshake_proof_emit_payload_sha256_prefix = str(
+            parsed.get("client_handshake_proof_emit_payload_sha256_prefix") or ""
+        )
+        state.client_telemetry_tx_counter = int(parsed.get("tx_counter") or 0) or None
+        state.client_telemetry_observed_session_id = int(observed_session_id or 0) or None
+        state.client_telemetry_observed_counter = int(observed_counter or 0) or None
+        state.client_telemetry_last_inbound_sl_type = int(parsed.get("last_inbound_sl_type") or 0)
+        state.client_telemetry_last_inbound_session_id = int(parsed.get("last_inbound_session_id") or 0)
+        state.client_telemetry_last_inbound_counter = int(parsed.get("last_inbound_counter") or 0)
+        state.client_telemetry_last_outbound_sl_type = int(parsed.get("last_outbound_sl_type") or 0)
+        state.client_telemetry_last_outbound_session_id = int(parsed.get("last_outbound_session_id") or 0)
+        state.client_telemetry_last_outbound_counter = int(parsed.get("last_outbound_counter") or 0)
+        if state.client_telemetry_handshake_proof_session_id is None:
+            state.client_telemetry_handshake_proof_session_id = int(observed_session_id or 0) or None
+        if state.client_telemetry_handshake_proof_counter is None:
+            state.client_telemetry_handshake_proof_counter = int(observed_counter or 0) or None
+        self._remember_client_telemetry_state(state)
+        self._maybe_log_client_telemetry_update(
+            state,
+            peer_id=peer_id,
+            reason=str(parse_status or "captured"),
+        )
+        return True
+
+    def _capture_client_plaintext_telemetry(
+        self,
+        peer_id: Optional[int],
+        session_id: int,
+        payload: bytes,
+    ) -> bool:
+        key = self._peer_key(peer_id)
+        previous_state = self._peer_states.get(key)
+        state = previous_state
+        if state is None or int(state.session_id or 0) != int(session_id or 0):
+            state = self._maybe_reassociate_server_peer_for_session(peer_id, session_id)
+            if state is not None:
+                key = self._peer_key(peer_id)
+        if state is None:
+            state = _SecureLinkPeerState(
+                session_id=int(session_id or 0),
+                client_nonce=b"",
+            )
+            if previous_state is not None:
+                state.auth_fail_code = int(previous_state.auth_fail_code or 0)
+                state.auth_fail_reason = str(previous_state.auth_fail_reason or "")
+                state.auth_fail_detail = str(previous_state.auth_fail_detail or "")
+                state.auth_fail_context = str(previous_state.auth_fail_context or "")
+                state.auth_fail_unix_ts = previous_state.auth_fail_unix_ts
+                state.sticky_auth_fail_code = int(previous_state.sticky_auth_fail_code or 0)
+                state.sticky_auth_fail_reason = str(previous_state.sticky_auth_fail_reason or "")
+                state.last_failure_session_id = previous_state.last_failure_session_id
+                state.last_event = str(previous_state.last_event or "")
+                state.last_event_unix_ts = previous_state.last_event_unix_ts
+                state.last_inbound_sl_type = int(previous_state.last_inbound_sl_type or 0)
+                state.last_inbound_session_id = int(previous_state.last_inbound_session_id or 0)
+                state.last_inbound_counter = int(previous_state.last_inbound_counter or 0)
+                state.last_outbound_sl_type = int(previous_state.last_outbound_sl_type or 0)
+                state.last_outbound_session_id = int(previous_state.last_outbound_session_id or 0)
+                state.last_outbound_counter = int(previous_state.last_outbound_counter or 0)
+            self._peer_states[key] = state
+        return self._capture_client_telemetry(
+            state,
+            payload,
+            peer_id=peer_id,
+            observed_session_id=int(session_id or 0),
+            observed_counter=0,
+            expected_kind=self._SL_CLIENT_PLAINTEXT_TELEMETRY_KIND,
+            parse_status="captured_plaintext",
+        )
+
+    def _client_telemetry_snapshot(self, state: Optional[_SecureLinkPeerState]) -> dict:
+        source = state
+        if source is None:
+            class _Fallback:
+                pass
+            fallback = _Fallback()
+            fallback.client_telemetry_source = self._last_client_telemetry_source
+            fallback.client_telemetry_impl_rev = self._last_client_telemetry_impl_rev
+            fallback.client_telemetry_received_unix_ts = self._last_client_telemetry_received_unix_ts
+            fallback.client_telemetry_current_attempt_session_id = self._last_client_telemetry_current_attempt_session_id
+            fallback.client_telemetry_local_authenticated = self._last_client_telemetry_local_authenticated
+            fallback.client_telemetry_peer_confirmed_authenticated = self._last_client_telemetry_peer_confirmed_authenticated
+            fallback.client_telemetry_server_hello_received = self._last_client_telemetry_server_hello_received
+            fallback.client_telemetry_server_hello_validated = self._last_client_telemetry_server_hello_validated
+            fallback.client_telemetry_handshake_proof_session_id = self._last_client_telemetry_handshake_proof_session_id
+            fallback.client_telemetry_handshake_proof_counter = self._last_client_telemetry_handshake_proof_counter
+            fallback.client_telemetry_handshake_proof_sent = self._last_client_telemetry_handshake_proof_sent
+            fallback.client_telemetry_handshake_telemetry_build_succeeded = (
+                self._last_client_telemetry_handshake_telemetry_build_succeeded
+            )
+            fallback.client_telemetry_handshake_telemetry_payload_bytes = (
+                self._last_client_telemetry_handshake_telemetry_payload_bytes
+            )
+            fallback.client_telemetry_handshake_telemetry_payload_sha256_prefix = (
+                self._last_client_telemetry_handshake_telemetry_payload_sha256_prefix
+            )
+            fallback.client_telemetry_handshake_telemetry_build_error = (
+                self._last_client_telemetry_handshake_telemetry_build_error
+            )
+            fallback.client_telemetry_handshake_proof_emit_session_id = (
+                self._last_client_telemetry_handshake_proof_emit_session_id
+            )
+            fallback.client_telemetry_handshake_proof_emit_counter = (
+                self._last_client_telemetry_handshake_proof_emit_counter
+            )
+            fallback.client_telemetry_handshake_proof_emit_payload_bytes = (
+                self._last_client_telemetry_handshake_proof_emit_payload_bytes
+            )
+            fallback.client_telemetry_handshake_proof_emit_payload_sha256_prefix = (
+                self._last_client_telemetry_handshake_proof_emit_payload_sha256_prefix
+            )
+            fallback.client_telemetry_tx_counter = self._last_client_telemetry_tx_counter
+            fallback.client_telemetry_observed_session_id = self._last_client_telemetry_observed_session_id
+            fallback.client_telemetry_observed_counter = self._last_client_telemetry_observed_counter
+            fallback.client_telemetry_last_inbound_sl_type = self._last_client_telemetry_last_inbound_sl_type
+            fallback.client_telemetry_last_inbound_session_id = self._last_client_telemetry_last_inbound_session_id
+            fallback.client_telemetry_last_inbound_counter = self._last_client_telemetry_last_inbound_counter
+            fallback.client_telemetry_last_outbound_sl_type = self._last_client_telemetry_last_outbound_sl_type
+            fallback.client_telemetry_last_outbound_session_id = self._last_client_telemetry_last_outbound_session_id
+            fallback.client_telemetry_last_outbound_counter = self._last_client_telemetry_last_outbound_counter
+            fallback.client_telemetry_parse_status = self._last_client_telemetry_parse_status
+            fallback.client_telemetry_parse_detail = self._last_client_telemetry_parse_detail
+            fallback.client_telemetry_payload_len = self._last_client_telemetry_payload_len
+            fallback.client_telemetry_payload_sha256_prefix = self._last_client_telemetry_payload_sha256_prefix
+            fallback.client_telemetry_payload_preview = self._last_client_telemetry_payload_preview
+            source = fallback
+        if source is None:
+            return {
+                "client_telemetry_source": "",
+                "client_telemetry_impl_rev": "",
+                "client_telemetry_received_unix_ts": None,
+                "client_telemetry_current_attempt_session_id": None,
+                "client_telemetry_local_authenticated": False,
+                "client_telemetry_peer_confirmed_authenticated": False,
+                "client_telemetry_server_hello_received": False,
+                "client_telemetry_server_hello_validated": False,
+                "client_telemetry_handshake_proof_session_id": None,
+                "client_telemetry_handshake_proof_counter": None,
+                "client_telemetry_handshake_proof_sent": False,
+                "client_telemetry_handshake_telemetry_build_succeeded": False,
+                "client_telemetry_handshake_telemetry_payload_bytes": None,
+                "client_telemetry_handshake_telemetry_payload_sha256_prefix": "",
+                "client_telemetry_handshake_telemetry_build_error": "",
+                "client_telemetry_handshake_proof_emit_session_id": None,
+                "client_telemetry_handshake_proof_emit_counter": None,
+                "client_telemetry_handshake_proof_emit_payload_bytes": None,
+                "client_telemetry_handshake_proof_emit_payload_sha256_prefix": "",
+                "client_telemetry_tx_counter": None,
+                "client_telemetry_last_inbound_sl_type": None,
+                "client_telemetry_last_inbound_session_id": None,
+                "client_telemetry_last_inbound_counter": None,
+                "client_telemetry_last_outbound_sl_type": None,
+                "client_telemetry_last_outbound_session_id": None,
+                "client_telemetry_last_outbound_counter": None,
+                "client_telemetry_parse_status": "",
+                "client_telemetry_parse_detail": "",
+                "client_telemetry_payload_len": None,
+                "client_telemetry_payload_sha256_prefix": "",
+                "client_telemetry_payload_preview": "",
+                "client_telemetry_attempt_matches_server_session": None,
+                "client_telemetry_proof_matches_observed_frame": None,
+            }
+        observed_session_id = int(source.client_telemetry_observed_session_id or 0) or None
+        observed_counter = int(source.client_telemetry_observed_counter or 0) or None
+        proof_session_id = int(source.client_telemetry_handshake_proof_session_id or 0) or None
+        proof_counter = int(source.client_telemetry_handshake_proof_counter or 0) or None
+        current_attempt_session_id = int(source.client_telemetry_current_attempt_session_id or 0) or None
+        return {
+            "client_telemetry_source": str(source.client_telemetry_source or ""),
+            "client_telemetry_impl_rev": str(source.client_telemetry_impl_rev or ""),
+            "client_telemetry_received_unix_ts": source.client_telemetry_received_unix_ts,
+            "client_telemetry_current_attempt_session_id": current_attempt_session_id,
+            "client_telemetry_local_authenticated": bool(source.client_telemetry_local_authenticated),
+            "client_telemetry_peer_confirmed_authenticated": bool(source.client_telemetry_peer_confirmed_authenticated),
+            "client_telemetry_server_hello_received": bool(source.client_telemetry_server_hello_received),
+            "client_telemetry_server_hello_validated": bool(source.client_telemetry_server_hello_validated),
+            "client_telemetry_handshake_proof_session_id": proof_session_id,
+            "client_telemetry_handshake_proof_counter": proof_counter,
+            "client_telemetry_handshake_proof_sent": bool(source.client_telemetry_handshake_proof_sent),
+            "client_telemetry_handshake_telemetry_build_succeeded": bool(
+                source.client_telemetry_handshake_telemetry_build_succeeded
+            ),
+            "client_telemetry_handshake_telemetry_payload_bytes": (
+                source.client_telemetry_handshake_telemetry_payload_bytes
+            ),
+            "client_telemetry_handshake_telemetry_payload_sha256_prefix": str(
+                source.client_telemetry_handshake_telemetry_payload_sha256_prefix or ""
+            ),
+            "client_telemetry_handshake_telemetry_build_error": str(
+                source.client_telemetry_handshake_telemetry_build_error or ""
+            ),
+            "client_telemetry_handshake_proof_emit_session_id": (
+                int(source.client_telemetry_handshake_proof_emit_session_id or 0) or None
+            ),
+            "client_telemetry_handshake_proof_emit_counter": (
+                int(source.client_telemetry_handshake_proof_emit_counter or 0) or None
+            ),
+            "client_telemetry_handshake_proof_emit_payload_bytes": (
+                source.client_telemetry_handshake_proof_emit_payload_bytes
+            ),
+            "client_telemetry_handshake_proof_emit_payload_sha256_prefix": str(
+                source.client_telemetry_handshake_proof_emit_payload_sha256_prefix or ""
+            ),
+            "client_telemetry_tx_counter": int(source.client_telemetry_tx_counter or 0) or None,
+            "client_telemetry_last_inbound_sl_type": int(source.client_telemetry_last_inbound_sl_type or 0) or None,
+            "client_telemetry_last_inbound_session_id": int(source.client_telemetry_last_inbound_session_id or 0) or None,
+            "client_telemetry_last_inbound_counter": int(source.client_telemetry_last_inbound_counter or 0) or None,
+            "client_telemetry_last_outbound_sl_type": int(source.client_telemetry_last_outbound_sl_type or 0) or None,
+            "client_telemetry_last_outbound_session_id": int(source.client_telemetry_last_outbound_session_id or 0) or None,
+            "client_telemetry_last_outbound_counter": int(source.client_telemetry_last_outbound_counter or 0) or None,
+            "client_telemetry_parse_status": str(source.client_telemetry_parse_status or ""),
+            "client_telemetry_parse_detail": str(source.client_telemetry_parse_detail or ""),
+            "client_telemetry_payload_len": source.client_telemetry_payload_len,
+            "client_telemetry_payload_sha256_prefix": str(source.client_telemetry_payload_sha256_prefix or ""),
+            "client_telemetry_payload_preview": str(source.client_telemetry_payload_preview or ""),
+            "client_telemetry_attempt_matches_server_session": (
+                current_attempt_session_id == observed_session_id
+                if current_attempt_session_id is not None and observed_session_id is not None
+                else None
+            ),
+            "client_telemetry_proof_matches_observed_frame": (
+                proof_session_id == observed_session_id and proof_counter == observed_counter
+                if proof_session_id is not None and observed_session_id is not None and proof_counter is not None and observed_counter is not None
+                else None
+            ),
+        }
 
     def _cert_capability(self) -> int:
         return self._SL_CAP_CERT_V1
@@ -884,11 +1578,364 @@ class SecureLinkPskSession(ISession):
         return int(peer_id) if peer_id is not None else 1
 
     @staticmethod
+    def _state_debug_summary(state: Optional[_SecureLinkPeerState]) -> dict:
+        if state is None:
+            return {
+                "session_id": 0,
+                "pending_session_id": 0,
+                "authenticated": False,
+                "peer_confirmed_authenticated": False,
+                "has_c2s_key": False,
+                "has_s2c_key": False,
+                "telemetry_source": "",
+                "telemetry_attempt_session_id": 0,
+            }
+        return {
+            "session_id": int(state.session_id or 0),
+            "pending_session_id": int(state.pending_session_id or 0),
+            "authenticated": bool(state.authenticated),
+            "peer_confirmed_authenticated": bool(state.peer_confirmed_authenticated),
+            "has_c2s_key": bool(state.c2s_key),
+            "has_s2c_key": bool(state.s2c_key),
+            "telemetry_source": str(state.client_telemetry_source or ""),
+            "telemetry_attempt_session_id": int(state.client_telemetry_current_attempt_session_id or 0),
+        }
+
+    @classmethod
+    def _server_peer_placeholder_reject_reason(
+        cls,
+        current: Optional[_SecureLinkPeerState],
+        *,
+        session_id: int,
+    ) -> str:
+        if current is None:
+            return "replaceable"
+        if int(current.session_id or 0) == int(session_id):
+            return "same_session"
+        if current.authenticated:
+            return "authenticated_state"
+        if current.peer_confirmed_authenticated:
+            return "peer_confirmed_state"
+        if int(current.authenticated_sessions_total or 0) > 0:
+            return "historically_authenticated_state"
+        if current.c2s_key or current.s2c_key:
+            return "replaceable_transient_handshake_state"
+        if int(current.pending_session_id or 0) > 0:
+            return "replaceable_pending_handshake_state"
+        return "replaceable"
+
+    @staticmethod
+    def _can_replace_server_peer_placeholder(
+        current: Optional[_SecureLinkPeerState],
+        *,
+        session_id: int,
+    ) -> bool:
+        if current is None:
+            return True
+        if int(current.session_id or 0) == int(session_id):
+            return False
+        if current.authenticated or current.peer_confirmed_authenticated:
+            return False
+        if int(current.authenticated_sessions_total or 0) > 0:
+            return False
+        return True
+
+    @staticmethod
+    def _merge_client_telemetry_state(
+        dst: _SecureLinkPeerState,
+        src: Optional[_SecureLinkPeerState],
+    ) -> None:
+        if src is None:
+            return
+        dst.client_telemetry_source = str(src.client_telemetry_source or dst.client_telemetry_source or "")
+        dst.client_telemetry_impl_rev = str(src.client_telemetry_impl_rev or dst.client_telemetry_impl_rev or "")
+        dst.client_telemetry_received_unix_ts = (
+            src.client_telemetry_received_unix_ts
+            if src.client_telemetry_received_unix_ts is not None
+            else dst.client_telemetry_received_unix_ts
+        )
+        dst.client_telemetry_current_attempt_session_id = (
+            int(src.client_telemetry_current_attempt_session_id or 0)
+            or int(dst.client_telemetry_current_attempt_session_id or 0)
+        )
+        dst.client_telemetry_local_authenticated = bool(
+            src.client_telemetry_local_authenticated or dst.client_telemetry_local_authenticated
+        )
+        dst.client_telemetry_peer_confirmed_authenticated = bool(
+            src.client_telemetry_peer_confirmed_authenticated or dst.client_telemetry_peer_confirmed_authenticated
+        )
+        dst.client_telemetry_server_hello_received = bool(
+            src.client_telemetry_server_hello_received or dst.client_telemetry_server_hello_received
+        )
+        dst.client_telemetry_server_hello_validated = bool(
+            src.client_telemetry_server_hello_validated or dst.client_telemetry_server_hello_validated
+        )
+        dst.client_telemetry_handshake_proof_session_id = (
+            int(src.client_telemetry_handshake_proof_session_id or 0)
+            or int(dst.client_telemetry_handshake_proof_session_id or 0)
+        )
+        dst.client_telemetry_handshake_proof_counter = (
+            int(src.client_telemetry_handshake_proof_counter or 0)
+            or int(dst.client_telemetry_handshake_proof_counter or 0)
+        )
+        dst.client_telemetry_handshake_proof_sent = bool(
+            src.client_telemetry_handshake_proof_sent or dst.client_telemetry_handshake_proof_sent
+        )
+        dst.client_telemetry_handshake_telemetry_build_succeeded = bool(
+            src.client_telemetry_handshake_telemetry_build_succeeded
+            or dst.client_telemetry_handshake_telemetry_build_succeeded
+        )
+        dst.client_telemetry_handshake_telemetry_payload_bytes = (
+            src.client_telemetry_handshake_telemetry_payload_bytes
+            if src.client_telemetry_handshake_telemetry_payload_bytes is not None
+            else dst.client_telemetry_handshake_telemetry_payload_bytes
+        )
+        dst.client_telemetry_handshake_telemetry_payload_sha256_prefix = str(
+            src.client_telemetry_handshake_telemetry_payload_sha256_prefix
+            or dst.client_telemetry_handshake_telemetry_payload_sha256_prefix
+            or ""
+        )
+        dst.client_telemetry_handshake_telemetry_build_error = str(
+            src.client_telemetry_handshake_telemetry_build_error
+            or dst.client_telemetry_handshake_telemetry_build_error
+            or ""
+        )
+        dst.client_telemetry_handshake_proof_emit_session_id = (
+            int(src.client_telemetry_handshake_proof_emit_session_id or 0)
+            or int(dst.client_telemetry_handshake_proof_emit_session_id or 0)
+        )
+        dst.client_telemetry_handshake_proof_emit_counter = (
+            int(src.client_telemetry_handshake_proof_emit_counter or 0)
+            or int(dst.client_telemetry_handshake_proof_emit_counter or 0)
+        )
+        dst.client_telemetry_handshake_proof_emit_payload_bytes = (
+            src.client_telemetry_handshake_proof_emit_payload_bytes
+            if src.client_telemetry_handshake_proof_emit_payload_bytes is not None
+            else dst.client_telemetry_handshake_proof_emit_payload_bytes
+        )
+        dst.client_telemetry_handshake_proof_emit_payload_sha256_prefix = str(
+            src.client_telemetry_handshake_proof_emit_payload_sha256_prefix
+            or dst.client_telemetry_handshake_proof_emit_payload_sha256_prefix
+            or ""
+        )
+        dst.client_telemetry_tx_counter = (
+            int(src.client_telemetry_tx_counter or 0)
+            or int(dst.client_telemetry_tx_counter or 0)
+        )
+        dst.client_telemetry_observed_session_id = (
+            int(src.client_telemetry_observed_session_id or 0)
+            or int(dst.client_telemetry_observed_session_id or 0)
+        )
+        dst.client_telemetry_observed_counter = (
+            int(src.client_telemetry_observed_counter or 0)
+            or int(dst.client_telemetry_observed_counter or 0)
+        )
+        dst.client_telemetry_last_inbound_sl_type = (
+            int(src.client_telemetry_last_inbound_sl_type or 0)
+            or int(dst.client_telemetry_last_inbound_sl_type or 0)
+        )
+        dst.client_telemetry_last_inbound_session_id = (
+            int(src.client_telemetry_last_inbound_session_id or 0)
+            or int(dst.client_telemetry_last_inbound_session_id or 0)
+        )
+        dst.client_telemetry_last_inbound_counter = (
+            int(src.client_telemetry_last_inbound_counter or 0)
+            or int(dst.client_telemetry_last_inbound_counter or 0)
+        )
+        dst.client_telemetry_last_outbound_sl_type = (
+            int(src.client_telemetry_last_outbound_sl_type or 0)
+            or int(dst.client_telemetry_last_outbound_sl_type or 0)
+        )
+        dst.client_telemetry_last_outbound_session_id = (
+            int(src.client_telemetry_last_outbound_session_id or 0)
+            or int(dst.client_telemetry_last_outbound_session_id or 0)
+        )
+        dst.client_telemetry_last_outbound_counter = (
+            int(src.client_telemetry_last_outbound_counter or 0)
+            or int(dst.client_telemetry_last_outbound_counter or 0)
+        )
+        dst.client_telemetry_parse_status = str(src.client_telemetry_parse_status or dst.client_telemetry_parse_status or "")
+        dst.client_telemetry_parse_detail = str(src.client_telemetry_parse_detail or dst.client_telemetry_parse_detail or "")
+        dst.client_telemetry_payload_len = (
+            src.client_telemetry_payload_len
+            if src.client_telemetry_payload_len is not None
+            else dst.client_telemetry_payload_len
+        )
+        dst.client_telemetry_payload_sha256_prefix = str(
+            src.client_telemetry_payload_sha256_prefix or dst.client_telemetry_payload_sha256_prefix or ""
+        )
+        dst.client_telemetry_payload_preview = str(
+            src.client_telemetry_payload_preview or dst.client_telemetry_payload_preview or ""
+        )
+
+    def _maybe_reassociate_server_peer_for_session(self, peer_id: Optional[int], session_id: int) -> Optional[_SecureLinkPeerState]:
+        if self._client_mode or peer_id is None or int(session_id or 0) <= 0:
+            return None
+        new_key = self._peer_key(peer_id)
+        current = self._peer_states.get(new_key)
+        try:
+            self._log.info(
+                "[SECURE-LINK] reassociate lookup peer_id=%s session_id=%s current=%s known_peers=%s",
+                int(new_key),
+                int(session_id),
+                self._state_debug_summary(current),
+                sorted(int(k) for k in self._peer_states.keys()),
+            )
+        except Exception:
+            pass
+        if current is not None and (
+            int(current.session_id or 0) == int(session_id)
+            or int(current.pending_session_id or 0) == int(session_id)
+        ):
+            try:
+                self._log.info(
+                    "[SECURE-LINK] reassociate short-circuit peer_id=%s session_id=%s reason=already_bound current=%s",
+                    int(new_key),
+                    int(session_id),
+                    self._state_debug_summary(current),
+                )
+            except Exception:
+                pass
+            return current
+        for old_key, state in list(self._peer_states.items()):
+            if int(old_key) == int(new_key):
+                continue
+            if (
+                int(state.session_id or 0) != int(session_id)
+                and int(state.pending_session_id or 0) != int(session_id)
+            ):
+                continue
+            reject_reason = self._server_peer_placeholder_reject_reason(current, session_id=int(session_id))
+            if not self._can_replace_server_peer_placeholder(current, session_id=int(session_id)):
+                try:
+                    self._log.warning(
+                        "[SECURE-LINK] reassociate refused new_peer_id=%s old_peer_id=%s session_id=%s reason=%s current=%s matched=%s",
+                        int(new_key),
+                        int(old_key),
+                        int(session_id),
+                        str(reject_reason),
+                        self._state_debug_summary(current),
+                        self._state_debug_summary(state),
+                    )
+                except Exception:
+                    pass
+                return current
+            self._merge_client_telemetry_state(state, current)
+            self._peer_states[new_key] = state
+            self._peer_states.pop(old_key, None)
+            moved_channel_pairs: list[tuple[tuple[int, int], int]] = []
+            for pair_key, mux_chan in list(self._server_peer_chan_to_mux.items()):
+                try:
+                    mapped_peer_id, peer_chan = pair_key
+                except Exception:
+                    continue
+                if int(mapped_peer_id) != int(old_key):
+                    continue
+                moved_channel_pairs.append(((int(new_key), int(peer_chan)), int(mux_chan)))
+                self._server_peer_chan_to_mux.pop(pair_key, None)
+            for new_pair_key, mux_chan in moved_channel_pairs:
+                self._server_peer_chan_to_mux[new_pair_key] = mux_chan
+                self._server_chan_to_peer[int(mux_chan)] = new_pair_key
+            try:
+                self._log.info(
+                    "[SECURE-LINK] reassociated server peer old_peer_id=%s new_peer_id=%s session_id=%s old=%s merged_current=%s",
+                    int(old_key),
+                    int(new_key),
+                    int(session_id),
+                    self._state_debug_summary(state),
+                    self._state_debug_summary(current),
+                )
+            except Exception:
+                pass
+            return state
+        try:
+            self._log.warning(
+                "[SECURE-LINK] reassociate miss peer_id=%s session_id=%s current=%s candidates=%s",
+                int(new_key),
+                int(session_id),
+                self._state_debug_summary(current),
+                [
+                    {
+                        "peer_id": int(old_key),
+                        **self._state_debug_summary(state),
+                    }
+                    for old_key, state in sorted(self._peer_states.items(), key=lambda item: int(item[0]))
+                    if int(old_key) != int(new_key)
+                ],
+            )
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
     def _inherit_peer_counters(dst: _SecureLinkPeerState, src: Optional[_SecureLinkPeerState]) -> None:
         if src is None:
             return
         dst.frames_passed_total = int(src.frames_passed_total or 0)
         dst.frames_dropped_total = int(src.frames_dropped_total or 0)
+        dst.sticky_auth_fail_code = int(src.sticky_auth_fail_code or 0)
+        dst.sticky_auth_fail_reason = str(src.sticky_auth_fail_reason or "")
+        dst.auth_fail_context = str(src.auth_fail_context or "")
+        dst.last_outbound_sl_type = int(src.last_outbound_sl_type or 0)
+        dst.last_outbound_session_id = int(src.last_outbound_session_id or 0)
+        dst.last_outbound_counter = int(src.last_outbound_counter or 0)
+
+    def _reset_runtime_debug_transient(self) -> None:
+        self._last_inbound_sl_type = 0
+        self._last_inbound_session_id = 0
+        self._last_inbound_counter = 0
+        self._last_outbound_sl_type = 0
+        self._last_outbound_session_id = 0
+        self._last_outbound_counter = 0
+        self._server_hello_received = False
+        self._server_hello_validated = False
+
+    def _record_inbound_debug(
+        self,
+        *,
+        peer_id: Optional[int],
+        sl_type: int,
+        session_id: int,
+        counter: int,
+    ) -> None:
+        self._last_inbound_sl_type = int(sl_type or 0)
+        self._last_inbound_session_id = int(session_id or 0)
+        self._last_inbound_counter = int(counter or 0)
+        state = self._peer_states.get(self._peer_key(peer_id))
+        if state is None:
+            return
+        state.last_inbound_sl_type = int(sl_type or 0)
+        state.last_inbound_session_id = int(session_id or 0)
+        state.last_inbound_counter = int(counter or 0)
+
+    def _record_outbound_debug(
+        self,
+        *,
+        peer_id: Optional[int],
+        sl_type: int,
+        session_id: int,
+        counter: int,
+    ) -> None:
+        self._last_outbound_sl_type = int(sl_type or 0)
+        self._last_outbound_session_id = int(session_id or 0)
+        self._last_outbound_counter = int(counter or 0)
+        state = self._peer_states.get(self._peer_key(peer_id))
+        if state is None:
+            return
+        state.last_outbound_sl_type = int(sl_type or 0)
+        state.last_outbound_session_id = int(session_id or 0)
+        state.last_outbound_counter = int(counter or 0)
+
+    @staticmethod
+    def _handshake_age_seconds(state: Optional[_SecureLinkPeerState], *, display_authenticated: bool) -> Optional[float]:
+        if state is None:
+            return None
+        if display_authenticated or int(state.auth_fail_code or 0) > 0 or int(state.session_id or 0) <= 0:
+            return None
+        started = state.handshake_started_unix_ts
+        if started is None:
+            return None
+        return max(0.0, time.time() - float(started))
 
     def _compute_connected(self) -> bool:
         if any(state.authenticated for state in self._peer_states.values()):
@@ -938,7 +1985,7 @@ class SecureLinkPskSession(ISession):
             cls._SL_AUTH_FAIL_UNSUPPORTED_ALGORITHM: "peer certificate uses an unsupported algorithm",
         }.get(int(code or 0))
 
-    def _mark_auth_fail(self, peer_id: Optional[int], session_id: int, code: int) -> None:
+    def _mark_auth_fail(self, peer_id: Optional[int], session_id: int, code: int, *, context: str = "") -> None:
         key = self._peer_key(peer_id)
         state = self._peer_states.get(key)
         if (
@@ -980,7 +2027,12 @@ class SecureLinkPskSession(ISession):
         state.auth_fail_code = int(code or 0)
         state.auth_fail_reason = str(self._auth_fail_reason(code) or "")
         state.auth_fail_detail = str(self._auth_fail_detail(code) or "")
+        state.auth_fail_context = str(context or "")
         state.auth_fail_unix_ts = time.time()
+        state.server_hello_received = False
+        state.server_hello_validated = False
+        state.sticky_auth_fail_code = int(code or 0)
+        state.sticky_auth_fail_reason = state.auth_fail_reason
         state.last_failure_session_id = int(state.session_id or 0) or None
         state.last_event = "auth_failed"
         state.last_event_unix_ts = state.auth_fail_unix_ts
@@ -995,8 +2047,11 @@ class SecureLinkPskSession(ISession):
         self._last_auth_fail_code = state.auth_fail_code
         self._last_auth_fail_reason = state.auth_fail_reason
         self._last_auth_fail_detail = state.auth_fail_detail
+        self._last_auth_fail_context = state.auth_fail_context
         self._last_auth_fail_unix_ts = state.auth_fail_unix_ts
         self._last_auth_fail_session_id = int(state.session_id or 0) or None
+        self._sticky_auth_fail_code = int(code or 0)
+        self._sticky_auth_fail_reason = state.auth_fail_reason
         if not self._client_mode and peer_id is not None:
             self._server_unregister_peer_channels(int(peer_id))
         self._record_secure_link_event("auth_failed", state.auth_fail_unix_ts)
@@ -1064,6 +2119,7 @@ class SecureLinkPskSession(ISession):
         self._server_chan_to_peer.clear()
         self._server_peer_chan_to_mux.clear()
         self._server_next_mux_chan = 1
+        self._reset_runtime_debug_transient()
         self._refresh_connected_state()
 
     def _has_pending_client_recovery(self) -> bool:
@@ -1183,9 +2239,11 @@ class SecureLinkPskSession(ISession):
         self._last_auth_fail_detail = ""
         self._last_auth_fail_unix_ts = None
         self._last_auth_fail_session_id = None
+        self._last_auth_fail_context = ""
         self._last_terminal_failure_code = 0
         self._last_terminal_failure_reason = ""
         self._last_terminal_failure_detail = ""
+        self._last_terminal_failure_context = ""
         self._last_terminal_failure_unix_ts = None
         self._last_terminal_failure_session_id = None
         self._record_secure_link_event(event, now)
@@ -1720,6 +2778,7 @@ class SecureLinkPskSession(ISession):
             self._last_terminal_failure_code = int(auth_fail_code or 0)
             self._last_terminal_failure_reason = state.auth_fail_reason or self._auth_fail_reason(auth_fail_code)
             self._last_terminal_failure_detail = state.auth_fail_detail or self._auth_fail_detail(auth_fail_code)
+            self._last_terminal_failure_context = str(state.auth_fail_context or "")
             self._last_terminal_failure_unix_ts = state.auth_fail_unix_ts or now
             self._last_terminal_failure_session_id = int(state.last_failure_session_id or session_id or 0) or None
         self._trust_enforced_unix_ts = now
@@ -1776,6 +2835,7 @@ class SecureLinkPskSession(ISession):
         self._last_terminal_failure_code = 0
         self._last_terminal_failure_reason = ""
         self._last_terminal_failure_detail = ""
+        self._last_terminal_failure_context = ""
         self._last_terminal_failure_unix_ts = None
         self._last_terminal_failure_session_id = None
         changed_detail = []
@@ -2135,12 +3195,30 @@ class SecureLinkPskSession(ISession):
             else:
                 secure_state = "handshaking" if inner_is_connected else "waiting_transport"
                 session_id = int(state.session_id or 0) or None
+            local_authenticated = bool(state is not None and state.authenticated)
+            peer_confirmed_authenticated = bool(state is not None and state.peer_confirmed_authenticated)
+            auth_fail_code = int(state.auth_fail_code or 0) if state is not None else 0
+            handshake_age_sec = self._handshake_age_seconds(state, display_authenticated=authenticated)
+            last_inbound_sl_type = int(state.last_inbound_sl_type or 0) if state is not None else int(self._last_inbound_sl_type or 0)
+            last_inbound_session_id = int(state.last_inbound_session_id or 0) if state is not None else int(self._last_inbound_session_id or 0)
+            last_inbound_counter = int(state.last_inbound_counter or 0) if state is not None else int(self._last_inbound_counter or 0)
+            last_outbound_sl_type = int(state.last_outbound_sl_type or 0) if state is not None else int(self._last_outbound_sl_type or 0)
+            last_outbound_session_id = int(state.last_outbound_session_id or 0) if state is not None else int(self._last_outbound_session_id or 0)
+            last_outbound_counter = int(state.last_outbound_counter or 0) if state is not None else int(self._last_outbound_counter or 0)
+            server_hello_received = bool(state.server_hello_received) if state is not None else bool(self._server_hello_received)
+            server_hello_validated = bool(state.server_hello_validated) if state is not None else bool(self._server_hello_validated)
+            sticky_auth_fail_code = int(state.sticky_auth_fail_code or 0) if state is not None else int(self._sticky_auth_fail_code or 0)
+            sticky_auth_fail_reason = str(state.sticky_auth_fail_reason or "") if state is not None else str(self._sticky_auth_fail_reason or "")
             r["secure_link"] = {
                 "enabled": True,
                 "mode": self._mode,
                 "state": secure_state,
                 "authenticated": authenticated,
+                "local_authenticated": local_authenticated,
+                "peer_confirmed_authenticated": peer_confirmed_authenticated,
                 "session_id": session_id,
+                "auth_fail_code": auth_fail_code,
+                "auth_fail_context": str(state.auth_fail_context or "") if state is not None else "",
                 "rekey_in_progress": bool(state is not None and int(state.pending_session_id or 0) > 0),
                 "last_rekey_trigger": str(state.last_rekey_trigger or "") if state is not None else "",
                 "rekey_due_unix_ts": state.rekey_due_unix_ts if state is not None else None,
@@ -2149,6 +3227,17 @@ class SecureLinkPskSession(ISession):
                 "failure_detail": failure_detail,
                 "failure_unix_ts": failure_unix_ts,
                 "failure_session_id": state.last_failure_session_id if state is not None else None,
+                "last_inbound_sl_type": last_inbound_sl_type or None,
+                "last_inbound_session_id": last_inbound_session_id or None,
+                "last_inbound_counter": last_inbound_counter or None,
+                "last_outbound_sl_type": last_outbound_sl_type or None,
+                "last_outbound_session_id": last_outbound_session_id or None,
+                "last_outbound_counter": last_outbound_counter or None,
+                "server_hello_received": server_hello_received,
+                "server_hello_validated": server_hello_validated,
+                "sticky_auth_fail_code": sticky_auth_fail_code,
+                "sticky_auth_fail_reason": sticky_auth_fail_reason,
+                "sticky_auth_fail_context": str(state.auth_fail_context or "") if state is not None else str(self._last_auth_fail_context or ""),
                 "consecutive_failures": int(state.consecutive_failures or 0) if state is not None else 0,
                 "retry_backoff_sec": max(0.0, self._client_retry_not_before_mono - time.monotonic()) if self._client_mode and self._client_retry_not_before_mono > 0.0 else 0.0,
                 "next_retry_unix_ts": self._client_retry_not_before_unix_ts if self._client_mode else None,
@@ -2156,6 +3245,7 @@ class SecureLinkPskSession(ISession):
                 "recovery_delay_sec": self._recover_delay_s if self._client_mode else 0.0,
                 "recovery_reconnect_sec": max(0.0, self._client_recovery_not_before_mono - time.monotonic()) if self._client_mode and self._client_recovery_not_before_mono > 0.0 else 0.0,
                 "next_recovery_reconnect_unix_ts": self._client_recovery_not_before_unix_ts if self._client_mode else None,
+                "handshake_age_sec": handshake_age_sec,
                 "handshake_attempts_total": int(state.handshake_attempts_total or 0) if state is not None else 0,
                 "last_event": str(state.last_event or "") if state is not None else "",
                 "last_event_unix_ts": state.last_event_unix_ts if state is not None else None,
@@ -2219,6 +3309,7 @@ class SecureLinkPskSession(ISession):
                     )
                 ),
             }
+            r["secure_link"].update(self._client_telemetry_snapshot(state))
             out.append(r)
         out = self._filter_superseded_myudp_listener_rows(out)
         if not self._client_mode and secure_mux_by_peer:
@@ -2260,7 +3351,11 @@ class SecureLinkPskSession(ISession):
                         "mode": self._mode,
                         "state": "failed",
                         "authenticated": False,
+                        "local_authenticated": False,
+                        "peer_confirmed_authenticated": False,
                         "session_id": int(self._last_auth_fail_session_id or 0) or None,
+                        "auth_fail_code": int(self._last_auth_fail_code or 0),
+                        "auth_fail_context": str(self._last_auth_fail_context or ""),
                         "rekey_in_progress": False,
                         "last_rekey_trigger": self._last_rekey_trigger,
                         "rekey_due_unix_ts": None,
@@ -2269,6 +3364,17 @@ class SecureLinkPskSession(ISession):
                         "failure_detail": self._last_auth_fail_detail or self._auth_fail_detail(self._last_auth_fail_code),
                         "failure_unix_ts": self._last_auth_fail_unix_ts,
                         "failure_session_id": self._last_auth_fail_session_id,
+                        "last_inbound_sl_type": int(self._last_inbound_sl_type or 0) or None,
+                        "last_inbound_session_id": int(self._last_inbound_session_id or 0) or None,
+                        "last_inbound_counter": int(self._last_inbound_counter or 0) or None,
+                        "last_outbound_sl_type": int(self._last_outbound_sl_type or 0) or None,
+                        "last_outbound_session_id": int(self._last_outbound_session_id or 0) or None,
+                        "last_outbound_counter": int(self._last_outbound_counter or 0) or None,
+                        "server_hello_received": bool(self._server_hello_received),
+                        "server_hello_validated": bool(self._server_hello_validated),
+                        "sticky_auth_fail_code": int(self._sticky_auth_fail_code or 0),
+                        "sticky_auth_fail_reason": str(self._sticky_auth_fail_reason or ""),
+                        "sticky_auth_fail_context": str(self._last_auth_fail_context or ""),
                         "consecutive_failures": 0,
                         "retry_backoff_sec": 0.0,
                         "next_retry_unix_ts": None,
@@ -2276,6 +3382,7 @@ class SecureLinkPskSession(ISession):
                         "recovery_delay_sec": 0.0,
                         "recovery_reconnect_sec": 0.0,
                         "next_recovery_reconnect_unix_ts": None,
+                        "handshake_age_sec": None,
                         "handshake_attempts_total": int(self._handshake_attempts_total or 0),
                         "last_event": self._last_secure_link_event,
                         "last_event_unix_ts": self._last_secure_link_event_unix_ts,
@@ -2321,6 +3428,7 @@ class SecureLinkPskSession(ISession):
                     },
                 }
             )
+            out[-1]["secure_link"].update(self._client_telemetry_snapshot(None))
         return out
 
     def get_secure_link_status_snapshot(self) -> dict:
@@ -2329,13 +3437,17 @@ class SecureLinkPskSession(ISession):
         failure_code = None
         failure_reason = None
         failure_detail = None
+        failure_context = None
         failure_unix_ts = None
         any_handshaking = False
         authenticated_peers = 0
+        local_authenticated = False
         primary_state: Optional[_SecureLinkPeerState] = None
         for state in self._peer_states.values():
             if primary_state is None:
                 primary_state = state
+            if state.authenticated:
+                local_authenticated = True
             if state.peer_confirmed_authenticated:
                 authenticated_peers += 1
             elif state.auth_fail_code:
@@ -2343,6 +3455,7 @@ class SecureLinkPskSession(ISession):
                 failure_code = failure_code or int(state.auth_fail_code or 0) or None
                 failure_reason = failure_reason or state.auth_fail_reason or self._auth_fail_reason(state.auth_fail_code)
                 failure_detail = failure_detail or state.auth_fail_detail or self._auth_fail_detail(state.auth_fail_code)
+                failure_context = failure_context or str(state.auth_fail_context or "")
                 failure_unix_ts = failure_unix_ts or state.auth_fail_unix_ts
             else:
                 any_handshaking = True
@@ -2355,12 +3468,14 @@ class SecureLinkPskSession(ISession):
             failure_code = failure_code or int(self._last_terminal_failure_code or 0) or None
             failure_reason = self._last_terminal_failure_reason or self._auth_fail_reason(self._last_terminal_failure_code)
             failure_detail = self._last_terminal_failure_detail or self._auth_fail_detail(self._last_terminal_failure_code)
+            failure_context = self._last_terminal_failure_context or failure_context
             failure_unix_ts = self._last_terminal_failure_unix_ts
         elif self._last_auth_fail_code:
             overall_state = "failed"
             failure_code = failure_code or int(self._last_auth_fail_code or 0) or None
             failure_reason = self._last_auth_fail_reason or self._auth_fail_reason(self._last_auth_fail_code)
             failure_detail = self._last_auth_fail_detail or self._auth_fail_detail(self._last_auth_fail_code)
+            failure_context = self._last_auth_fail_context or failure_context
             failure_unix_ts = self._last_auth_fail_unix_ts
         elif any_handshaking:
             overall_state = "handshaking"
@@ -2368,12 +3483,21 @@ class SecureLinkPskSession(ISession):
             overall_state = "waiting_hello"
         else:
             overall_state = "waiting_transport"
+        handshake_age_sec = self._handshake_age_seconds(primary_state, display_authenticated=authenticated_peers > 0)
         return {
             "enabled": True,
             "mode": self._mode,
             "transport": self._transport_name,
             "state": overall_state,
             "authenticated": authenticated_peers > 0,
+            "local_authenticated": local_authenticated,
+            "peer_confirmed_authenticated": authenticated_peers > 0,
+            "auth_fail_code": int(primary_state.auth_fail_code or 0) if primary_state is not None else int(self._last_auth_fail_code or 0),
+            "auth_fail_context": (
+                str(primary_state.auth_fail_context or "")
+                if primary_state is not None
+                else str(self._last_auth_fail_context or "")
+            ),
             "authenticated_peers": authenticated_peers,
             "rekey_in_progress": any(int(state.pending_session_id or 0) > 0 for state in self._peer_states.values()),
             "last_rekey_trigger": self._last_rekey_trigger,
@@ -2381,6 +3505,7 @@ class SecureLinkPskSession(ISession):
             "failure_code": failure_code,
             "failure_reason": failure_reason,
             "failure_detail": failure_detail,
+            "failure_context": failure_context,
             "failure_unix_ts": failure_unix_ts,
             "failure_session_id": (
                 self._last_terminal_failure_session_id
@@ -2395,11 +3520,47 @@ class SecureLinkPskSession(ISession):
             "recovery_reconnect_sec": max(0.0, self._client_recovery_not_before_mono - time.monotonic()) if self._client_mode and self._client_recovery_not_before_mono > 0.0 else 0.0,
             "next_recovery_reconnect_unix_ts": self._client_recovery_not_before_unix_ts if self._client_mode else None,
             "handshake_attempts_total": int(self._handshake_attempts_total or 0),
+            "handshake_age_sec": handshake_age_sec,
             "last_event": self._last_secure_link_event,
             "last_event_unix_ts": self._last_secure_link_event_unix_ts,
             "last_authenticated_unix_ts": self._last_authenticated_unix_ts,
             "connected_since_unix_ts": primary_state.connected_since_unix_ts if primary_state is not None else None,
             "last_authenticated_session_id": self._last_authenticated_session_id,
+            "last_inbound_sl_type": (
+                int(primary_state.last_inbound_sl_type or 0) if primary_state is not None else int(self._last_inbound_sl_type or 0)
+            ) or None,
+            "last_inbound_session_id": (
+                int(primary_state.last_inbound_session_id or 0) if primary_state is not None else int(self._last_inbound_session_id or 0)
+            ) or None,
+            "last_inbound_counter": (
+                int(primary_state.last_inbound_counter or 0) if primary_state is not None else int(self._last_inbound_counter or 0)
+            ) or None,
+            "last_outbound_sl_type": (
+                int(primary_state.last_outbound_sl_type or 0) if primary_state is not None else int(self._last_outbound_sl_type or 0)
+            ) or None,
+            "last_outbound_session_id": (
+                int(primary_state.last_outbound_session_id or 0) if primary_state is not None else int(self._last_outbound_session_id or 0)
+            ) or None,
+            "last_outbound_counter": (
+                int(primary_state.last_outbound_counter or 0) if primary_state is not None else int(self._last_outbound_counter or 0)
+            ) or None,
+            "server_hello_received": (
+                bool(primary_state.server_hello_received) if primary_state is not None else bool(self._server_hello_received)
+            ),
+            "server_hello_validated": (
+                bool(primary_state.server_hello_validated) if primary_state is not None else bool(self._server_hello_validated)
+            ),
+            "sticky_auth_fail_code": (
+                int(primary_state.sticky_auth_fail_code or 0) if primary_state is not None else int(self._sticky_auth_fail_code or 0)
+            ),
+            "sticky_auth_fail_reason": (
+                str(primary_state.sticky_auth_fail_reason or "") if primary_state is not None else str(self._sticky_auth_fail_reason or "")
+            ),
+            "sticky_auth_fail_context": (
+                str(primary_state.auth_fail_context or "")
+                if primary_state is not None
+                else str(self._last_auth_fail_context or "")
+            ),
             "authenticated_sessions_total": int(self._authenticated_sessions_total or 0),
             "rekeys_completed_total": int(self._rekeys_completed_total or 0),
             "peer_subject_id": str(primary_state.peer_subject_id or "") if primary_state is not None else "",
@@ -2429,7 +3590,7 @@ class SecureLinkPskSession(ISession):
                 or ("peer certificate serial is revoked by the reloaded denylist" if failure_reason == "revoked_serial" else "")
             ),
             "peers_dropped_total": int(self._secure_link_peers_dropped_total or 0),
-        }
+        } | self._client_telemetry_snapshot(primary_state)
 
     def get_secure_link_operational_summary(self) -> dict:
         return {
@@ -2444,7 +3605,7 @@ class SecureLinkPskSession(ISession):
             "secure_link_peers_dropped_total": int(self._secure_link_peers_dropped_total or 0),
         }
 
-    def _send_auth_fail(self, peer_id: Optional[int], session_id: int, code: int) -> None:
+    def _send_auth_fail(self, peer_id: Optional[int], session_id: int, code: int, *, context: str = "") -> None:
         if (
             self._client_mode
             and int(code or 0) == self._SL_AUTH_FAIL_DECODE
@@ -2461,9 +3622,12 @@ class SecureLinkPskSession(ISession):
             )
             self._peer_states[key] = state
         state.frames_dropped_total = int(state.frames_dropped_total or 0) + 1
-        self._mark_auth_fail(peer_id, session_id, code)
+        self._mark_auth_fail(peer_id, session_id, code, context=context)
         try:
-            self._inner.send_app(self._build_frame(self._SL_TYPE_AUTH_FAIL, session_id, 0, bytes([int(code) & 0xFF])), peer_id=peer_id)
+            wire = self._build_frame(self._SL_TYPE_AUTH_FAIL, session_id, 0, bytes([int(code) & 0xFF]))
+            sent = self._inner.send_app(wire, peer_id=peer_id)
+            if sent:
+                self._record_outbound_debug(peer_id=peer_id, sl_type=self._SL_TYPE_AUTH_FAIL, session_id=session_id, counter=0)
         except Exception:
             pass
 
@@ -2475,6 +3639,7 @@ class SecureLinkPskSession(ISession):
         self._last_auth_fail_unix_ts = None
         self._last_auth_fail_session_id = None
         self._handshake_attempts_total += 1
+        self._reset_runtime_debug_transient()
         state = _SecureLinkPeerState(
             session_id=self._new_session_id(),
             client_nonce=secrets.token_bytes(32),
@@ -2498,7 +3663,10 @@ class SecureLinkPskSession(ISession):
             payload = self._build_cert_hello_payload(session_id=state.session_id, eph_public=eph_public)
         else:
             payload = state.client_nonce + bytes([self._SL_CAP_PSK_V1, 0])
-        self._inner.send_app(self._build_frame(self._SL_TYPE_CLIENT_HELLO, state.session_id, 0, payload))
+        wire = self._build_frame(self._SL_TYPE_CLIENT_HELLO, state.session_id, 0, payload)
+        sent = self._inner.send_app(wire)
+        if sent:
+            self._record_outbound_debug(peer_id=None, sl_type=self._SL_TYPE_CLIENT_HELLO, session_id=state.session_id, counter=0)
 
     def _on_inner_state_change(self, connected: bool) -> None:
         if not connected:
@@ -2715,8 +3883,28 @@ class SecureLinkPskSession(ISession):
             self._log.debug("[SECURE-LINK] _handle_client_hello peer_id=%r session_id=%s body_len=%d", peer_id, int(session_id or 0), len(body or b""))
         except Exception:
             pass
+        self._log_server_handshake_trace(
+            "client_hello_received",
+            peer_id=peer_id,
+            session_id=session_id,
+            sl_type=self._SL_TYPE_CLIENT_HELLO,
+            state=self._peer_states.get(self._peer_key(peer_id)),
+            body_len=len(body or b""),
+        )
+        self._log_iphone_focus_marker(
+            "client_hello_received",
+            peer_id=peer_id,
+            session_id=session_id,
+            state=self._peer_states.get(self._peer_key(peer_id)),
+            note="before_server_hello",
+        )
         if self._client_mode or int(session_id or 0) <= 0:
-            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
+            self._send_auth_fail(
+                peer_id,
+                session_id,
+                self._SL_AUTH_FAIL_DECODE,
+                context="handle_client_hello.invalid_mode_or_session",
+            )
             return
         if self._is_cert_mode():
             parsed = self._parse_cert_handshake_payload(body)
@@ -2784,20 +3972,61 @@ class SecureLinkPskSession(ISession):
                 state.last_event_unix_ts = time.time()
             self._peer_states[key] = state
             self._record_secure_link_event("server_hello_sent", state.last_event_unix_ts)
-            self._inner.send_app(self._build_frame(self._SL_TYPE_SERVER_HELLO, session_id, 0, payload), peer_id=peer_id)
+            wire = self._build_frame(self._SL_TYPE_SERVER_HELLO, session_id, 0, payload)
+            sent = self._inner.send_app(wire, peer_id=peer_id)
+            if sent:
+                self._record_outbound_debug(peer_id=peer_id, sl_type=self._SL_TYPE_SERVER_HELLO, session_id=session_id, counter=0)
+                self._log_server_handshake_trace(
+                    "server_hello_sent",
+                    peer_id=peer_id,
+                    session_id=session_id,
+                    sl_type=self._SL_TYPE_SERVER_HELLO,
+                    state=previous_state,
+                    note="reused_pending_handshake",
+                    body_len=len(payload),
+                )
+                self._log_iphone_focus_marker(
+                    "server_hello_sent",
+                    peer_id=peer_id,
+                    session_id=session_id,
+                    state=previous_state,
+                    note="reused_pending_handshake",
+                )
             return
         if len(body) < 34:
-            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
+            self._send_auth_fail(
+                peer_id,
+                session_id,
+                self._SL_AUTH_FAIL_DECODE,
+                context="handle_client_hello.body_too_short",
+            )
             return
         client_nonce = body[:32]
         capability = int(body[32])
         if capability != self._SL_CAP_PSK_V1:
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_UNSUPPORTED)
             return
-        server_nonce = secrets.token_bytes(32)
-        c2s_key, s2c_key = self._derive_keys(session_id, client_nonce, server_nonce)
         key = self._peer_key(peer_id)
         previous_state = self._peer_states.get(key)
+        if (
+            previous_state is not None
+            and not previous_state.authenticated
+            and int(previous_state.auth_fail_code or 0) == 0
+            and int(previous_state.session_id or 0) == int(session_id)
+            and bytes(previous_state.client_nonce or b"") == bytes(client_nonce)
+            and len(bytes(previous_state.server_nonce or b"")) == 32
+            and previous_state.c2s_key
+            and previous_state.s2c_key
+        ):
+            proof = self._server_proof(session_id, client_nonce, bytes(previous_state.server_nonce))
+            payload = bytes(previous_state.server_nonce) + bytes([self._SL_CAP_PSK_V1]) + proof
+            wire = self._build_frame(self._SL_TYPE_SERVER_HELLO, session_id, 0, payload)
+            sent = self._inner.send_app(wire, peer_id=peer_id)
+            if sent:
+                self._record_outbound_debug(peer_id=peer_id, sl_type=self._SL_TYPE_SERVER_HELLO, session_id=session_id, counter=0)
+            return
+        server_nonce = secrets.token_bytes(32)
+        c2s_key, s2c_key = self._derive_keys(session_id, client_nonce, server_nonce)
         self._handshake_attempts_total += 1
         state = _SecureLinkPeerState(
             session_id=session_id,
@@ -2824,7 +4053,26 @@ class SecureLinkPskSession(ISession):
         self._record_secure_link_event("server_hello_sent", state.last_event_unix_ts)
         proof = self._server_proof(session_id, client_nonce, server_nonce)
         payload = server_nonce + bytes([self._SL_CAP_PSK_V1]) + proof
-        self._inner.send_app(self._build_frame(self._SL_TYPE_SERVER_HELLO, session_id, 0, payload), peer_id=peer_id)
+        wire = self._build_frame(self._SL_TYPE_SERVER_HELLO, session_id, 0, payload)
+        sent = self._inner.send_app(wire, peer_id=peer_id)
+        if sent:
+            self._record_outbound_debug(peer_id=peer_id, sl_type=self._SL_TYPE_SERVER_HELLO, session_id=session_id, counter=0)
+            self._log_server_handshake_trace(
+                "server_hello_sent",
+                peer_id=peer_id,
+                session_id=session_id,
+                sl_type=self._SL_TYPE_SERVER_HELLO,
+                state=state,
+                note="new_handshake_state",
+                body_len=len(payload),
+            )
+            self._log_iphone_focus_marker(
+                "server_hello_sent",
+                peer_id=peer_id,
+                session_id=session_id,
+                state=state,
+                note="new_handshake_state",
+            )
 
     def _handle_server_hello(self, session_id: int, body: bytes) -> None:
         try:
@@ -2832,7 +4080,12 @@ class SecureLinkPskSession(ISession):
         except Exception:
             pass
         if not self._client_mode or int(session_id or 0) <= 0:
-            self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
+            self._send_auth_fail(
+                None,
+                session_id,
+                self._SL_AUTH_FAIL_DECODE,
+                context="handle_server_hello.invalid_mode_or_session",
+            )
             return
         state = self._peer_states.get(0)
         if state is None or int(state.session_id) != int(session_id):
@@ -2843,8 +4096,15 @@ class SecureLinkPskSession(ISession):
             )
             if recent_transport_epoch_change:
                 return
-            self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
+            self._send_auth_fail(
+                None,
+                session_id,
+                self._SL_AUTH_FAIL_DECODE,
+                context="handle_server_hello.session_mismatch",
+            )
             return
+        self._server_hello_received = True
+        state.server_hello_received = True
         if self._is_cert_mode():
             parsed = self._parse_cert_handshake_payload(body)
             if parsed is None:
@@ -2871,7 +4131,7 @@ class SecureLinkPskSession(ISession):
                 self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_BAD_IDENTITY_PROOF)
                 return
             if state.local_ephemeral_private is None:
-                self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
+                self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_LIFECYCLE, context="handle_server_hello.proof_send")
                 return
             try:
                 remote_eph_public = x25519.X25519PublicKey.from_public_bytes(parsed["ephemeral_pub"])
@@ -2889,6 +4149,8 @@ class SecureLinkPskSession(ISession):
             state.server_nonce = parsed["ephemeral_pub"]
             state.c2s_key = c2s_key
             state.s2c_key = s2c_key
+            self._server_hello_validated = True
+            state.server_hello_validated = True
             self._apply_peer_identity(state, remote_identity)
             self._record_authenticated_session(
                 state,
@@ -2900,7 +4162,12 @@ class SecureLinkPskSession(ISession):
             self._refresh_connected_state()
             return
         if len(body) < 65:
-            self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
+            self._send_auth_fail(
+                None,
+                session_id,
+                self._SL_AUTH_FAIL_DECODE,
+                context="handle_server_hello.body_too_short",
+            )
             return
         server_nonce = body[:32]
         capability = int(body[32])
@@ -2916,12 +4183,19 @@ class SecureLinkPskSession(ISession):
         state.server_nonce = server_nonce
         state.c2s_key = c2s_key
         state.s2c_key = s2c_key
+        self._server_hello_validated = True
+        state.server_hello_validated = True
         self._record_local_client_auth_progress(state, session_id=session_id)
         self._send_client_handshake_proof(state)
 
     def _handle_rekey_hello(self, peer_id: Optional[int], session_id: int, body: bytes) -> None:
         if self._client_mode or int(session_id or 0) <= 0:
-            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
+            self._send_auth_fail(
+                peer_id,
+                session_id,
+                self._SL_AUTH_FAIL_DECODE,
+                context="handle_rekey_hello.invalid_mode_or_session",
+            )
             return
         key = self._peer_key(peer_id)
         state = self._peer_states.get(key)
@@ -2931,10 +4205,15 @@ class SecureLinkPskSession(ISession):
             or not state.c2s_key
             or not state.s2c_key
         ):
-            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
+            self._send_auth_fail(
+                peer_id,
+                session_id,
+                self._SL_AUTH_FAIL_DECODE,
+                context="handle_rekey_hello.missing_active_state",
+            )
             return
         if int(state.pending_session_id or 0) > 0 and int(state.pending_session_id or 0) != int(session_id):
-            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_LIFECYCLE, context="handle_rekey_hello.pending_session_mismatch")
             return
         if self._is_cert_mode():
             parsed = self._parse_json_payload(body)
@@ -2950,7 +4229,7 @@ class SecureLinkPskSession(ISession):
                 return
             remote_identity = state.peer_public_key
             if not isinstance(remote_identity, ed25519.Ed25519PublicKey):
-                self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
+                self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_LIFECYCLE, context="handle_rekey_hello.remote_identity_missing")
                 return
             try:
                 remote_identity.verify(proof, self._cert_rekey_hello_input(session_id, client_eph_public))
@@ -2985,7 +4264,10 @@ class SecureLinkPskSession(ISession):
                 "ephemeral_pub_b64": base64.b64encode(server_eph_public).decode("ascii"),
                 "proof_b64": base64.b64encode(server_proof).decode("ascii"),
             })
-            self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_REPLY, session_id, 0, payload), peer_id=peer_id)
+            wire = self._build_frame(self._SL_TYPE_REKEY_REPLY, session_id, 0, payload)
+            sent = self._inner.send_app(wire, peer_id=peer_id)
+            if sent:
+                self._record_outbound_debug(peer_id=peer_id, sl_type=self._SL_TYPE_REKEY_REPLY, session_id=session_id, counter=0)
             return
         if len(body) < 34:
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
@@ -3005,7 +4287,10 @@ class SecureLinkPskSession(ISession):
         state.last_rekey_trigger = "remote"
         proof = self._server_proof(session_id, client_nonce, server_nonce)
         payload = server_nonce + bytes([self._SL_CAP_PSK_V1]) + proof
-        self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_REPLY, session_id, 0, payload), peer_id=peer_id)
+        wire = self._build_frame(self._SL_TYPE_REKEY_REPLY, session_id, 0, payload)
+        sent = self._inner.send_app(wire, peer_id=peer_id)
+        if sent:
+            self._record_outbound_debug(peer_id=peer_id, sl_type=self._SL_TYPE_REKEY_REPLY, session_id=session_id, counter=0)
 
     def _handle_rekey_reply(self, session_id: int, body: bytes) -> None:
         if not self._client_mode or int(session_id or 0) <= 0:
@@ -3028,12 +4313,12 @@ class SecureLinkPskSession(ISession):
                 self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_MALFORMED_CERTIFICATE)
                 return
             if state.pending_local_ephemeral_private is None or self._local_identity is None:
-                self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
+                self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_LIFECYCLE, context="handle_rekey_reply.pending_local_identity_missing")
                 return
             # Proof is validated against the already-authenticated peer identity stored on state.
             remote_identity = state.peer_public_key
             if not isinstance(remote_identity, ed25519.Ed25519PublicKey):
-                self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
+                self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_LIFECYCLE, context="handle_rekey_reply.remote_identity_missing")
                 return
             try:
                 remote_identity.verify(
@@ -3057,7 +4342,10 @@ class SecureLinkPskSession(ISession):
             commit = self._local_identity.private_key.sign(
                 self._cert_rekey_commit_input(session_id, state.pending_client_nonce, server_eph_public)
             )
-            self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_COMMIT, session_id, 0, commit))
+            wire = self._build_frame(self._SL_TYPE_REKEY_COMMIT, session_id, 0, commit)
+            sent = self._inner.send_app(wire)
+            if sent:
+                self._record_outbound_debug(peer_id=None, sl_type=self._SL_TYPE_REKEY_COMMIT, session_id=session_id, counter=0)
             return
         if len(body) < 65:
             self._send_auth_fail(None, session_id, self._SL_AUTH_FAIL_DECODE)
@@ -3077,7 +4365,10 @@ class SecureLinkPskSession(ISession):
         state.pending_c2s_key = c2s_key
         state.pending_s2c_key = s2c_key
         commit = self._client_rekey_commit_proof(session_id, state.pending_client_nonce, server_nonce)
-        self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_COMMIT, session_id, 0, commit))
+        wire = self._build_frame(self._SL_TYPE_REKEY_COMMIT, session_id, 0, commit)
+        sent = self._inner.send_app(wire)
+        if sent:
+            self._record_outbound_debug(peer_id=None, sl_type=self._SL_TYPE_REKEY_COMMIT, session_id=session_id, counter=0)
         self._client_rekey_hold_after_commit = True
 
     def _handle_rekey_commit(self, peer_id: Optional[int], session_id: int, body: bytes) -> None:
@@ -3092,7 +4383,7 @@ class SecureLinkPskSession(ISession):
         if self._is_cert_mode():
             remote_identity = state.peer_public_key
             if not isinstance(remote_identity, ed25519.Ed25519PublicKey):
-                self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
+                self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_LIFECYCLE, context="handle_rekey_commit.pending_session_mismatch")
                 return
             try:
                 remote_identity.verify(bytes(body or b""), self._cert_rekey_commit_input(session_id, state.pending_client_nonce, state.pending_server_nonce))
@@ -3107,7 +4398,10 @@ class SecureLinkPskSession(ISession):
                 event="rekey_completed",
                 rekey_completed=True,
             )
-            self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_DONE, session_id, 0, b""), peer_id=peer_id)
+            wire = self._build_frame(self._SL_TYPE_REKEY_DONE, session_id, 0, b"")
+            sent = self._inner.send_app(wire, peer_id=peer_id)
+            if sent:
+                self._record_outbound_debug(peer_id=peer_id, sl_type=self._SL_TYPE_REKEY_DONE, session_id=session_id, counter=0)
             self._refresh_connected_state()
             return
         expected = self._client_rekey_commit_proof(session_id, state.pending_client_nonce, state.pending_server_nonce)
@@ -3122,7 +4416,10 @@ class SecureLinkPskSession(ISession):
             event="rekey_completed",
             rekey_completed=True,
         )
-        self._inner.send_app(self._build_frame(self._SL_TYPE_REKEY_DONE, session_id, 0, b""), peer_id=peer_id)
+        wire = self._build_frame(self._SL_TYPE_REKEY_DONE, session_id, 0, b"")
+        sent = self._inner.send_app(wire, peer_id=peer_id)
+        if sent:
+            self._record_outbound_debug(peer_id=peer_id, sl_type=self._SL_TYPE_REKEY_DONE, session_id=session_id, counter=0)
         self._refresh_connected_state()
 
     def _handle_rekey_done(self, session_id: int) -> None:
@@ -3155,26 +4452,112 @@ class SecureLinkPskSession(ISession):
     def _handle_data(self, peer_id: Optional[int], session_id: int, counter: int, body: bytes, aad: bytes) -> None:
         key = self._peer_key(peer_id)
         state = self._peer_states.get(key)
+        if state is None:
+            state = self._maybe_reassociate_server_peer_for_session(peer_id, session_id)
+        self._log_server_handshake_trace(
+            "data_frame_received",
+            peer_id=peer_id,
+            session_id=session_id,
+            counter=counter,
+            sl_type=self._SL_TYPE_DATA,
+            state=state,
+            note="pre_validation",
+            body_len=len(body or b""),
+        )
+        self._log_iphone_focus_marker(
+            "data_frame_received",
+            peer_id=peer_id,
+            session_id=session_id,
+            counter=counter,
+            state=state,
+            note="pre_validation",
+        )
         if state is None or int(state.session_id) != int(session_id):
-            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
+            try:
+                self._log.warning(
+                    "[SECURE-LINK] data session mismatch peer_id=%s session_id=%s counter=%s current=%s peers=%s",
+                    int(key),
+                    int(session_id),
+                    int(counter or 0),
+                    self._state_debug_summary(state),
+                    [
+                        {
+                            "peer_id": int(existing_key),
+                            **self._state_debug_summary(existing_state),
+                        }
+                        for existing_key, existing_state in sorted(self._peer_states.items(), key=lambda item: int(item[0]))
+                    ],
+                )
+            except Exception:
+                pass
+            self._log_server_handshake_trace(
+                "data_session_mismatch",
+                peer_id=peer_id,
+                session_id=session_id,
+                counter=counter,
+                sl_type=self._SL_TYPE_DATA,
+                state=state,
+                note="reject_before_decrypt",
+                body_len=len(body or b""),
+            )
+            self._log_iphone_focus_marker(
+                "data_session_mismatch",
+                peer_id=peer_id,
+                session_id=session_id,
+                counter=counter,
+                state=state,
+                note="reject_before_decrypt",
+            )
+            self._send_auth_fail(
+                peer_id,
+                session_id,
+                self._SL_AUTH_FAIL_DECODE,
+                context="handle_data.session_mismatch",
+            )
             return
         if int(session_id or 0) <= 0 or int(counter or 0) < self._SL_FIRST_DATA_COUNTER or int(counter) > self._SL_MAX_DATA_COUNTER:
-            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
+            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_LIFECYCLE, context="handle_data.counter_range")
             return
         if counter <= int(state.rx_counter):
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_REPLAY)
             return
         inbound_key = state.s2c_key if self._client_mode else state.c2s_key
         if not inbound_key:
-            self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_DECODE)
+            self._log_server_handshake_trace(
+                "data_missing_inbound_key",
+                peer_id=peer_id,
+                session_id=session_id,
+                counter=counter,
+                sl_type=self._SL_TYPE_DATA,
+                state=state,
+                note="reject_before_decrypt",
+                body_len=len(body or b""),
+            )
+            self._send_auth_fail(
+                peer_id,
+                session_id,
+                self._SL_AUTH_FAIL_DECODE,
+                context="handle_data.missing_inbound_key",
+            )
             return
         try:
             plaintext = ChaCha20Poly1305(inbound_key).decrypt(self._nonce(counter), body, aad)
         except Exception:
+            self._log_server_handshake_trace(
+                "data_decrypt_failed",
+                peer_id=peer_id,
+                session_id=session_id,
+                counter=counter,
+                sl_type=self._SL_TYPE_DATA,
+                state=state,
+                note="bad_psk_or_wrong_key",
+                body_len=len(body or b""),
+            )
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_BAD_PSK)
             return
         state.rx_counter = counter
         state.frames_passed_total = int(state.frames_passed_total or 0) + 1
+        was_peer_confirmed = bool(state.peer_confirmed_authenticated)
         newly_authenticated = False
         if not state.authenticated:
             self._record_authenticated_session(
@@ -3195,6 +4578,24 @@ class SecureLinkPskSession(ISession):
             )
         if newly_authenticated and not self._client_mode:
             self._send_server_handshake_ack(state, peer_id=peer_id)
+        if not self._client_mode and not was_peer_confirmed and self._capture_client_telemetry(
+            state,
+            plaintext,
+            peer_id=peer_id,
+            observed_session_id=session_id,
+            observed_counter=counter,
+        ):
+            self._log_server_handshake_trace(
+                "data_client_telemetry_captured",
+                peer_id=peer_id,
+                session_id=session_id,
+                counter=counter,
+                sl_type=self._SL_TYPE_DATA,
+                state=state,
+                note="post_decrypt",
+                body_len=len(plaintext),
+            )
+            return
         if not plaintext:
             return
         if not self._client_mode and peer_id is not None:
@@ -3211,6 +4612,23 @@ class SecureLinkPskSession(ISession):
             self._send_auth_fail(peer_id, 0, self._SL_AUTH_FAIL_DECODE)
             return
         sl_type, session_id, counter, body = parsed
+        if not self._client_mode:
+            self._log_iphone_focus_marker(
+                "inner_payload_parsed",
+                peer_id=peer_id,
+                session_id=session_id,
+                counter=counter,
+                state=self._peer_states.get(self._peer_key(peer_id)),
+                note=f"sl_type={int(sl_type or 0)} body_len={len(body or b'')}",
+            )
+        if not self._client_mode and sl_type != self._SL_TYPE_CLIENT_HELLO:
+            self._maybe_reassociate_server_peer_for_session(peer_id, session_id)
+        self._record_inbound_debug(
+            peer_id=peer_id,
+            sl_type=sl_type,
+            session_id=session_id,
+            counter=counter,
+        )
         try:
             self._log.debug(
                 "[SECURE-LINK/RX] parsed type=%s session_id=%s counter=%s peer_id=%r body_len=%d",
@@ -3221,7 +4639,8 @@ class SecureLinkPskSession(ISession):
         aad = self._hdr_bytes(sl_type, session_id, counter)
         state = self._peer_states.get(self._peer_key(peer_id))
         if (
-            state is not None
+            sl_type != self._SL_TYPE_CLIENT_PLAINTEXT_TELEMETRY
+            and state is not None
             and int(session_id or 0) > 0
             and int(state.session_id or 0) == int(session_id)
             and int(state.auth_fail_code or 0) > 0
@@ -3253,6 +4672,27 @@ class SecureLinkPskSession(ISession):
                         return
             code = int(body[0]) if body else self._SL_AUTH_FAIL_DECODE
             self._mark_auth_fail(peer_id, session_id, code)
+            return
+        if sl_type == self._SL_TYPE_CLIENT_PLAINTEXT_TELEMETRY:
+            self._log_server_handshake_trace(
+                "plaintext_telemetry_received",
+                peer_id=peer_id,
+                session_id=session_id,
+                counter=counter,
+                sl_type=sl_type,
+                state=self._peer_states.get(self._peer_key(peer_id)),
+                note="pre_capture",
+                body_len=len(body or b""),
+            )
+            self._log_iphone_focus_marker(
+                "plaintext_telemetry_received",
+                peer_id=peer_id,
+                session_id=session_id,
+                counter=counter,
+                state=self._peer_states.get(self._peer_key(peer_id)),
+                note="pre_capture",
+            )
+            self._capture_client_plaintext_telemetry(peer_id, session_id, body)
             return
         if sl_type == self._SL_TYPE_REKEY_HELLO:
             self._handle_rekey_hello(peer_id, session_id, body)
@@ -3287,7 +4727,7 @@ class SecureLinkPskSession(ISession):
             return 0
         counter = int(state.tx_counter)
         if counter < self._SL_FIRST_DATA_COUNTER or counter > self._SL_MAX_DATA_COUNTER:
-            self._send_auth_fail(peer_id, int(state.session_id or 0), self._SL_AUTH_FAIL_LIFECYCLE)
+            self._send_auth_fail(peer_id, int(state.session_id or 0), self._SL_AUTH_FAIL_LIFECYCLE, context="send_app.counter_range")
             return 0
         aad = self._hdr_bytes(self._SL_TYPE_DATA, state.session_id, counter)
         ciphertext = ChaCha20Poly1305(outbound_key).encrypt(self._nonce(counter), routed_payload, aad)
@@ -3295,6 +4735,7 @@ class SecureLinkPskSession(ISession):
         wire = aad + ciphertext
         sent = self._inner.send_app(wire, peer_id=peer_id)
         if sent:
+            self._record_outbound_debug(peer_id=peer_id, sl_type=self._SL_TYPE_DATA, session_id=int(state.session_id or 0), counter=counter)
             self._maybe_trigger_rekey(state)
         return len(payload) if sent else 0
 
@@ -3306,13 +4747,19 @@ class SecureLinkPskSession(ISession):
             return
         counter = int(state.tx_counter or 0)
         if counter < self._SL_FIRST_DATA_COUNTER or counter > self._SL_MAX_DATA_COUNTER:
-            self._send_auth_fail(None, int(state.session_id or 0), self._SL_AUTH_FAIL_LIFECYCLE)
+            self._send_auth_fail(None, int(state.session_id or 0), self._SL_AUTH_FAIL_LIFECYCLE, context="send_client_handshake_proof.counter_range")
             return
         aad = self._hdr_bytes(self._SL_TYPE_DATA, state.session_id, counter)
-        ciphertext = ChaCha20Poly1305(outbound_key).encrypt(self._nonce(counter), b"", aad)
+        telemetry = self._build_client_telemetry_payload(
+            state,
+            proof_session_id=int(state.session_id or 0),
+            proof_counter=counter,
+        )
+        ciphertext = ChaCha20Poly1305(outbound_key).encrypt(self._nonce(counter), telemetry, aad)
         wire = aad + ciphertext
         sent = self._inner.send_app(wire)
         if sent:
+            self._record_outbound_debug(peer_id=None, sl_type=self._SL_TYPE_DATA, session_id=int(state.session_id or 0), counter=counter)
             state.tx_counter += 1
             state.client_handshake_proof_sent = True
 
@@ -3324,13 +4771,14 @@ class SecureLinkPskSession(ISession):
             return
         counter = int(state.tx_counter or 0)
         if counter < self._SL_FIRST_DATA_COUNTER or counter > self._SL_MAX_DATA_COUNTER:
-            self._send_auth_fail(peer_id, int(state.session_id or 0), self._SL_AUTH_FAIL_LIFECYCLE)
+            self._send_auth_fail(peer_id, int(state.session_id or 0), self._SL_AUTH_FAIL_LIFECYCLE, context="send_server_handshake_ack.counter_range")
             return
         aad = self._hdr_bytes(self._SL_TYPE_DATA, state.session_id, counter)
         ciphertext = ChaCha20Poly1305(outbound_key).encrypt(self._nonce(counter), b"", aad)
         wire = aad + ciphertext
         sent = self._inner.send_app(wire, peer_id=peer_id)
         if sent:
+            self._record_outbound_debug(peer_id=peer_id, sl_type=self._SL_TYPE_DATA, session_id=int(state.session_id or 0), counter=counter)
             state.tx_counter += 1
 
     def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:

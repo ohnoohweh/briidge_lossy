@@ -34,6 +34,44 @@ PYTHON_APP_STORE_CLEANUP_SCRIPT = (
     "do\n"
     '    rm -rf "$CODESIGNING_FOLDER_PATH/Frameworks/$framework.framework"\n'
     "done\n"
+    "\n"
+    "# Xcode 26 validates generated Python extension frameworks more strictly and\n"
+    "# rejects bundles that do not carry an Info.plist. Briefcase's framework\n"
+    "# conversion occasionally leaves these plists out for device builds, so\n"
+    "# backfill a minimal plist and re-sign the framework in place.\n"
+    'find "$CODESIGNING_FOLDER_PATH/Frameworks" -maxdepth 1 -type d -name "*.framework" | while read -r framework_path\n'
+    "do\n"
+    '    if [ -f "$framework_path/Info.plist" ]; then\n'
+    "        continue\n"
+    "    fi\n"
+    '    framework_name="$(basename "$framework_path" .framework)"\n'
+    '    framework_bundle_id="$(echo "$PRODUCT_BUNDLE_IDENTIFIER.python.$framework_name" | tr "_" "-")"\n'
+    '    cat > "$framework_path/Info.plist" <<EOF\n'
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+    "<plist version=\"1.0\">\n"
+    "<dict>\n"
+    "    <key>CFBundleDevelopmentRegion</key>\n"
+    "    <string>en</string>\n"
+    "    <key>CFBundleExecutable</key>\n"
+    "    <string>$framework_name</string>\n"
+    "    <key>CFBundleIdentifier</key>\n"
+    "    <string>$framework_bundle_id</string>\n"
+    "    <key>CFBundleInfoDictionaryVersion</key>\n"
+    "    <string>6.0</string>\n"
+    "    <key>CFBundleName</key>\n"
+    "    <string>$framework_name</string>\n"
+    "    <key>CFBundlePackageType</key>\n"
+    "    <string>FMWK</string>\n"
+    "    <key>CFBundleShortVersionString</key>\n"
+    "    <string>1.0</string>\n"
+    "    <key>CFBundleVersion</key>\n"
+    "    <string>1</string>\n"
+    "</dict>\n"
+    "</plist>\n"
+    "EOF\n"
+    '    /usr/bin/codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" ${OTHER_CODE_SIGN_FLAGS:-} -o runtime --timestamp=none --preserve-metadata=identifier,entitlements,flags --generate-entitlement-der "$framework_path"\n'
+    "done\n"
 )
 
 MALFORMED_PYTHON_APP_STORE_CLEANUP_SCRIPT = (
@@ -49,6 +87,44 @@ MALFORMED_PYTHON_APP_STORE_CLEANUP_SCRIPT = (
     "    _testsinglephase _xxtestfuzz _remote_debugging xxlimited xxlimited_35 xxsubtype\n"
     "do\n"
     '    rm -rf "$CODESIGNING_FOLDER_PATH/Frameworks/$framework.framework"\n'
+    "done\n"
+    "\n"
+    "# Xcode 26 validates generated Python extension frameworks more strictly and\n"
+    "# rejects bundles that do not carry an Info.plist. Briefcase's framework\n"
+    "# conversion occasionally leaves these plists out for device builds, so\n"
+    "# backfill a minimal plist and re-sign the framework in place.\n"
+    'find "$CODESIGNING_FOLDER_PATH/Frameworks" -maxdepth 1 -type d -name "*.framework" | while read -r framework_path\n'
+    "do\n"
+    '    if [ -f "$framework_path/Info.plist" ]; then\n'
+    "        continue\n"
+    "    fi\n"
+    '    framework_name="$(basename "$framework_path" .framework)"\n'
+    '    framework_bundle_id="$(echo "$PRODUCT_BUNDLE_IDENTIFIER.python.$framework_name" | tr "_" "-")"\n'
+    '    cat > "$framework_path/Info.plist" <<EOF\n'
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+    "<plist version=\"1.0\">\n"
+    "<dict>\n"
+    "    <key>CFBundleDevelopmentRegion</key>\n"
+    "    <string>en</string>\n"
+    "    <key>CFBundleExecutable</key>\n"
+    "    <string>$framework_name</string>\n"
+    "    <key>CFBundleIdentifier</key>\n"
+    "    <string>$framework_bundle_id</string>\n"
+    "    <key>CFBundleInfoDictionaryVersion</key>\n"
+    "    <string>6.0</string>\n"
+    "    <key>CFBundleName</key>\n"
+    "    <string>$framework_name</string>\n"
+    "    <key>CFBundlePackageType</key>\n"
+    "    <string>FMWK</string>\n"
+    "    <key>CFBundleShortVersionString</key>\n"
+    "    <string>1.0</string>\n"
+    "    <key>CFBundleVersion</key>\n"
+    "    <string>1</string>\n"
+    "</dict>\n"
+    "</plist>\n"
+    "EOF\n"
+    '    /usr/bin/codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" ${OTHER_CODE_SIGN_FLAGS:-} -o runtime --timestamp=none --preserve-metadata=identifier,entitlements,flags --generate-entitlement-der "$framework_path"\n'
     "done\n"
 )
 

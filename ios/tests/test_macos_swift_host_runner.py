@@ -437,7 +437,7 @@ def test_macos_swift_host_runner_routes_tun_and_local_accepts_through_active_ove
     assert "activeOwner.owner.acceptLocalUDPConnection(" in source
     assert "activeOwner.owner.acceptLocalTCPConnection(" in source
     assert "currentOverlayOwner()?.owner.sendLocalTunPacket(packet)" in source
-    assert 'currentOverlayOwner()?.owner.transportSnapshot()["overlay_connected"] as? Bool' in source
+    assert "currentOverlayOwner()?.owner.appReady()" in source
 
 
 def test_macos_swift_host_runner_uses_shared_overlay_peer_endpoint_lookup() -> None:
@@ -497,6 +497,7 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     assert "receiveState.reset()" in peer_runtime
     assert "private static let secureLinkHandshakeStaleNS" in udp_owner
     assert "maybeRecoverStaleSecureLinkHandshake(nowNS:" in udp_owner
+    assert "status.serverHelloReceived," in udp_owner
     assert 'resetOverlayTransportEpoch(reason: "secure_link_handshake_stale")' in udp_owner
     assert 'resetOverlayTransportEpoch(reason: "liveness_lost")' in udp_owner
     assert 'resetOverlayTransportEpoch(reason: "peer_candidate_rotated")' in udp_owner
@@ -1892,6 +1893,90 @@ def test_shared_udp_overlay_peer_runtime_requires_rtt_echo_for_connected_state(t
     assert payload["connected"] is False
     assert int(payload["last_rx_wall_ns"]) > 0
     assert int(payload["last_rtt_ok_ns"]) == 0
+
+
+def test_shared_udp_overlay_peer_runtime_reset_receive_epoch_clears_stale_counter_collision(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "UdpOverlayPeerRuntimeResetReceiveEpochProbe.swift"
+    binary_path = tmp_path / "udp-overlay-peer-runtime-reset-receive-epoch-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            enum ProbeError: Error {
+                case badState(String)
+            }
+
+            @main
+            struct UdpOverlayPeerRuntimeResetReceiveEpochProbe {
+                static func makeProtocolFrame(counter: Int, payload: Data, nowNS: UInt64) throws -> Data {
+                    let dataPayload = try ObstacleBridgeUdpOverlayCodec.buildDataPayload(
+                        pktCounter: counter,
+                        frameType: 1,
+                        lenOrOffset: payload.count,
+                        data: payload
+                    )
+                    return try ObstacleBridgeUdpOverlayCodec.buildProtocolFrame(
+                        ptype: ObstacleBridgeUdpOverlayCodec.ptypeData,
+                        payload: dataPayload,
+                        txNS: nowNS,
+                        echoNS: nowNS
+                    )
+                }
+
+                static func main() throws {
+                    let runtime = ObstacleBridgeUdpOverlayPeerRuntime()
+                    let now = DispatchTime.now().uptimeNanoseconds
+                    let stalePayload = Data("stale-fragment".utf8)
+                    let serverHelloPayload = Data("fresh-server-hello".utf8)
+
+                    guard let staleSnapshot = runtime.handleInboundDataFrame(
+                        frame: try makeProtocolFrame(counter: 1, payload: stalePayload, nowNS: now),
+                        nowNS: now,
+                        txNS: now,
+                        echoNS: now,
+                        sendPortPresent: true
+                    ) else {
+                        throw ProbeError.badState("missing stale snapshot")
+                    }
+                    let staleCompleted = staleSnapshot.completedPayloads.map { String(data: $0, encoding: .utf8) ?? "" }
+
+                    runtime.resetReceiveEpoch()
+
+                    guard let freshSnapshot = runtime.handleInboundDataFrame(
+                        frame: try makeProtocolFrame(counter: 1, payload: serverHelloPayload, nowNS: now + 1),
+                        nowNS: now + 1,
+                        txNS: now + 1,
+                        echoNS: now + 1,
+                        sendPortPresent: true
+                    ) else {
+                        throw ProbeError.badState("missing fresh snapshot")
+                    }
+                    let freshCompleted = freshSnapshot.completedPayloads.map { String(data: $0, encoding: .utf8) ?? "" }
+
+                    let payload: [String: Any] = [
+                        "stale_completed": staleCompleted,
+                        "fresh_completed": freshCompleted,
+                        "expected_after_reset": runtime.expected,
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_udp_overlay_peer_probe(source_path, binary_path)
+    completed = subprocess.run([str(binary_path)], capture_output=True, text=True, check=True)
+    payload = json.loads(completed.stdout)
+    assert payload == {
+        "expected_after_reset": 2,
+        "fresh_completed": ["fresh-server-hello"],
+        "stale_completed": ["stale-fragment"],
+    }
 
 
 def test_macos_utun_adapter_frame_codec_probe(tmp_path: Path) -> None:

@@ -224,12 +224,35 @@ class _RunnerStub:
                     "rtt_est_ms": 42.0,
                     "transmit_delay_sample_ms": 101.0,
                     "transmit_delay_est_ms": 123.0,
+                    "connection_layers": [
+                        {"layer": "transport", "state": "connected", "connected": True, "app_ready": True},
+                        {"layer": "secure_link", "state": "authenticated", "connected": True, "app_ready": True},
+                    ],
                     "secure_link": {
                         "enabled": True,
                         "mode": "psk",
                         "state": "authenticated",
                         "authenticated": True,
+                        "local_authenticated": True,
+                        "peer_confirmed_authenticated": True,
+                        "client_handshake_proof_sent": True,
+                        "client_handshake_proof_session_id": 42,
+                        "client_handshake_proof_counter": 1,
+                        "client_handshake_telemetry_build_succeeded": True,
+                        "client_handshake_telemetry_payload_bytes": 312,
+                        "client_handshake_telemetry_payload_sha256_prefix": "abcd1234ef567890",
+                        "client_handshake_telemetry_build_error": "",
+                        "server_ack_seen": True,
+                        "current_attempt_active": False,
+                        "current_attempt_session_id": None,
+                        "last_failure_session_id": None,
+                        "last_failure_unix_ts": None,
+                        "last_failure_client_proof_sent": False,
+                        "last_failure_client_proof_session_id": None,
+                        "last_failure_client_proof_counter": None,
+                        "last_failure_server_ack_seen": False,
                         "session_id": 42,
+                        "auth_fail_code": 0,
                         "rekey_in_progress": False,
                         "last_rekey_trigger": "operator",
                         "rekey_due_unix_ts": None,
@@ -238,6 +261,56 @@ class _RunnerStub:
                         "failure_detail": None,
                         "failure_unix_ts": None,
                         "failure_session_id": None,
+                        "last_inbound_sl_type": 4,
+                        "last_inbound_session_id": 42,
+                        "last_inbound_counter": 17,
+                        "last_outbound_sl_type": 4,
+                        "last_outbound_session_id": 42,
+                        "last_outbound_counter": 18,
+                        "transport_last_tx_age_sec": 0.5,
+                        "transport_last_rx_age_sec": 4.0,
+                        "transport_tx_frames_total": 19,
+                        "transport_rx_frames_total": 1,
+                        "transport_last_tx_bytes": 96,
+                        "transport_last_rx_bytes": 65,
+                        "server_hello_received": True,
+                        "server_hello_validated": True,
+                        "server_hello_validated_session_id": 42,
+                        "server_hello_validated_tx_counter": 1,
+                        "server_hello_validated_c2s_key_sha256_prefix": "1111aaaa2222bbbb",
+                        "server_hello_validated_s2c_key_sha256_prefix": "3333cccc4444dddd",
+                        "client_handshake_proof_emit_session_id": 42,
+                        "client_handshake_proof_emit_counter": 1,
+                        "client_handshake_proof_emit_payload_bytes": 312,
+                        "client_handshake_proof_emit_payload_sha256_prefix": "abcd1234ef567890",
+                        "client_handshake_proof_emit_c2s_key_sha256_prefix": "1111aaaa2222bbbb",
+                        "client_handshake_proof_session_matches_validated_session": True,
+                        "client_handshake_proof_key_matches_validated_key": True,
+                        "client_telemetry_source": "swift",
+                        "client_telemetry_received_unix_ts": 1700000001.0,
+                        "client_telemetry_current_attempt_session_id": 42,
+                        "client_telemetry_local_authenticated": True,
+                        "client_telemetry_peer_confirmed_authenticated": False,
+                        "client_telemetry_server_hello_received": True,
+                        "client_telemetry_server_hello_validated": True,
+                        "client_telemetry_handshake_proof_session_id": 42,
+                        "client_telemetry_handshake_proof_counter": 1,
+                        "client_telemetry_last_inbound_sl_type": 2,
+                        "client_telemetry_last_inbound_session_id": 42,
+                        "client_telemetry_last_inbound_counter": 0,
+                        "client_telemetry_last_outbound_sl_type": 4,
+                        "client_telemetry_last_outbound_session_id": 42,
+                        "client_telemetry_last_outbound_counter": 1,
+                        "client_telemetry_parse_status": "captured",
+                        "client_telemetry_parse_detail": "",
+                        "client_telemetry_payload_len": 312,
+                        "client_telemetry_payload_sha256_prefix": "abcd1234ef567890",
+                        "client_telemetry_payload_preview": "{\"client_handshake_proof_counter\":1,\"client_handshake_proof_session",
+                        "client_telemetry_attempt_matches_server_session": True,
+                        "client_telemetry_proof_matches_observed_frame": True,
+                        "sticky_auth_fail_code": 0,
+                        "sticky_auth_fail_reason": "",
+                        "handshake_age_sec": None,
                         "handshake_attempts_total": 1,
                         "last_event": "authenticated",
                         "last_event_unix_ts": 1700000000.0,
@@ -1530,6 +1603,9 @@ class AdminWebPayloadTests(unittest.TestCase):
         peer = payload["peers"][0]
         self.assertIn("secure_link", peer)
         self.assertIn("compress_layer", peer)
+        self.assertEqual(peer["connection_layers"][-1]["layer"], "secure_link")
+        self.assertEqual(peer["connection_layers"][-1]["state"], "authenticated")
+        self.assertTrue(peer["connection_layers"][-1]["app_ready"])
         self.assertEqual(peer["secure_link"]["state"], "authenticated")
         self.assertEqual(peer["secure_link"]["session_id"], 42)
         self.assertIsNone(peer["secure_link"]["failure_code"])
@@ -1541,6 +1617,61 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(peer["secure_link"]["authenticated_sessions_total"], 1)
         self.assertEqual(peer["secure_link"]["frames_passed_total"], 17)
         self.assertEqual(peer["secure_link"]["frames_dropped_total"], 3)
+        self.assertTrue(peer["secure_link"]["local_authenticated"])
+        self.assertTrue(peer["secure_link"]["peer_confirmed_authenticated"])
+        self.assertTrue(peer["secure_link"]["client_handshake_proof_sent"])
+        self.assertEqual(peer["secure_link"]["client_handshake_proof_session_id"], 42)
+        self.assertEqual(peer["secure_link"]["client_handshake_proof_counter"], 1)
+        self.assertTrue(peer["secure_link"]["client_handshake_telemetry_build_succeeded"])
+        self.assertEqual(peer["secure_link"]["client_handshake_telemetry_payload_bytes"], 312)
+        self.assertEqual(peer["secure_link"]["client_handshake_telemetry_payload_sha256_prefix"], "abcd1234ef567890")
+        self.assertTrue(peer["secure_link"]["server_ack_seen"])
+        self.assertFalse(peer["secure_link"]["current_attempt_active"])
+        self.assertIsNone(peer["secure_link"]["current_attempt_session_id"])
+        self.assertIsNone(peer["secure_link"]["last_failure_session_id"])
+        self.assertIsNone(peer["secure_link"]["last_failure_unix_ts"])
+        self.assertEqual(peer["secure_link"]["auth_fail_code"], 0)
+        self.assertTrue(peer["secure_link"]["server_hello_received"])
+        self.assertTrue(peer["secure_link"]["server_hello_validated"])
+        self.assertEqual(peer["secure_link"]["server_hello_validated_session_id"], 42)
+        self.assertEqual(peer["secure_link"]["server_hello_validated_tx_counter"], 1)
+        self.assertEqual(peer["secure_link"]["server_hello_validated_c2s_key_sha256_prefix"], "1111aaaa2222bbbb")
+        self.assertEqual(peer["secure_link"]["server_hello_validated_s2c_key_sha256_prefix"], "3333cccc4444dddd")
+        self.assertEqual(peer["secure_link"]["client_handshake_proof_emit_session_id"], 42)
+        self.assertEqual(peer["secure_link"]["client_handshake_proof_emit_counter"], 1)
+        self.assertEqual(peer["secure_link"]["client_handshake_proof_emit_payload_bytes"], 312)
+        self.assertEqual(peer["secure_link"]["client_handshake_proof_emit_payload_sha256_prefix"], "abcd1234ef567890")
+        self.assertEqual(peer["secure_link"]["client_handshake_proof_emit_c2s_key_sha256_prefix"], "1111aaaa2222bbbb")
+        self.assertTrue(peer["secure_link"]["client_handshake_proof_session_matches_validated_session"])
+        self.assertTrue(peer["secure_link"]["client_handshake_proof_key_matches_validated_key"])
+        self.assertEqual(peer["secure_link"]["client_telemetry_source"], "swift")
+        self.assertEqual(peer["secure_link"]["client_telemetry_current_attempt_session_id"], 42)
+        self.assertTrue(peer["secure_link"]["client_telemetry_local_authenticated"])
+        self.assertFalse(peer["secure_link"]["client_telemetry_peer_confirmed_authenticated"])
+        self.assertTrue(peer["secure_link"]["client_telemetry_server_hello_received"])
+        self.assertTrue(peer["secure_link"]["client_telemetry_server_hello_validated"])
+        self.assertEqual(peer["secure_link"]["client_telemetry_handshake_proof_session_id"], 42)
+        self.assertEqual(peer["secure_link"]["client_telemetry_handshake_proof_counter"], 1)
+        self.assertEqual(peer["secure_link"]["client_telemetry_parse_status"], "captured")
+        self.assertEqual(peer["secure_link"]["client_telemetry_payload_len"], 312)
+        self.assertEqual(peer["secure_link"]["client_telemetry_payload_sha256_prefix"], "abcd1234ef567890")
+        self.assertTrue(peer["secure_link"]["client_telemetry_attempt_matches_server_session"])
+        self.assertTrue(peer["secure_link"]["client_telemetry_proof_matches_observed_frame"])
+        self.assertEqual(peer["secure_link"]["sticky_auth_fail_code"], 0)
+        self.assertEqual(peer["secure_link"]["sticky_auth_fail_reason"], "")
+        self.assertEqual(peer["secure_link"]["last_inbound_sl_type"], 4)
+        self.assertEqual(peer["secure_link"]["last_inbound_session_id"], 42)
+        self.assertEqual(peer["secure_link"]["last_inbound_counter"], 17)
+        self.assertEqual(peer["secure_link"]["last_outbound_sl_type"], 4)
+        self.assertEqual(peer["secure_link"]["last_outbound_session_id"], 42)
+        self.assertEqual(peer["secure_link"]["last_outbound_counter"], 18)
+        self.assertEqual(peer["secure_link"]["transport_last_tx_age_sec"], 0.5)
+        self.assertEqual(peer["secure_link"]["transport_last_rx_age_sec"], 4.0)
+        self.assertEqual(peer["secure_link"]["transport_tx_frames_total"], 19)
+        self.assertEqual(peer["secure_link"]["transport_rx_frames_total"], 1)
+        self.assertEqual(peer["secure_link"]["transport_last_tx_bytes"], 96)
+        self.assertEqual(peer["secure_link"]["transport_last_rx_bytes"], 65)
+        self.assertIsNone(peer["secure_link"]["handshake_age_sec"])
         self.assertEqual(peer["secure_link"]["connected_since_unix_ts"], 1699999900.0)
         self.assertEqual(peer["rtt_est_ms"], 42.0)
         self.assertEqual(peer["transmit_delay_sample_ms"], 101.0)
@@ -1553,6 +1684,62 @@ class AdminWebPayloadTests(unittest.TestCase):
         app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
         self.assertIn("renderMetric('frames_passed_total', fmtInteger(secureLink.frames_passed_total))", app_js)
         self.assertIn("renderMetric('frames_dropped_total', fmtInteger(secureLink.frames_dropped_total))", app_js)
+        self.assertIn("renderMetric('Local Auth', fmtBool(secureLink.local_authenticated), { pill: true, compact: true })", app_js)
+        self.assertIn("renderMetric('Peer Confirmed', fmtBool(secureLink.peer_confirmed_authenticated), { pill: true, compact: true })", app_js)
+        self.assertIn("renderMetric('Auth Fail Code', fmtInteger(secureLink.auth_fail_code), { compact: true })", app_js)
+        self.assertIn("renderMetric('Handshake Age', fmtAgeSeconds(secureLink.handshake_age_sec))", app_js)
+        self.assertIn("renderMetric('ServerHello Seen', fmtBool(secureLink.server_hello_received), { pill: true, compact: true })", app_js)
+        self.assertIn("renderMetric('ServerHello Valid', fmtBool(secureLink.server_hello_validated), { pill: true, compact: true })", app_js)
+        self.assertIn("renderMetric('Client Proof Sent', fmtBool(secureLink.client_handshake_proof_sent), { pill: true, compact: true })", app_js)
+        self.assertIn("renderMetric('Server Ack Seen', fmtBool(secureLink.server_ack_seen), { pill: true, compact: true })", app_js)
+        self.assertIn("renderMetric('Hello Session', fmtInteger(secureLink.server_hello_validated_session_id), { compact: true })", app_js)
+        self.assertIn("renderMetric('Hello C2S Key SHA', secureLink.server_hello_validated_c2s_key_sha256_prefix || 'n/a')", app_js)
+        self.assertIn("renderMetric('Client Telemetry', secureLink.client_telemetry_source || 'n/a', { compact: true })", app_js)
+        self.assertIn("renderMetric('Telemetry Attempt Match', fmtBool(secureLink.client_telemetry_attempt_matches_server_session), { pill: true, compact: true })", app_js)
+        self.assertIn("renderMetric('Telemetry Proof Match', fmtBool(secureLink.client_telemetry_proof_matches_observed_frame), { pill: true, compact: true })", app_js)
+        self.assertIn("renderMetric('Current Attempt', fmtBool(secureLink.current_attempt_active), { pill: true, compact: true })", app_js)
+        self.assertIn("renderMetric('Current Session', fmtInteger(secureLink.current_attempt_session_id), { compact: true })", app_js)
+        self.assertIn("renderMetric('Last Fail Session', fmtInteger(secureLink.last_failure_session_id), { compact: true })", app_js)
+        self.assertIn("renderMetric('Proof Session', fmtInteger(secureLink.client_handshake_proof_session_id), { compact: true })", app_js)
+        self.assertIn("renderMetric('Proof Counter', fmtInteger(secureLink.client_handshake_proof_counter), { compact: true })", app_js)
+        self.assertIn("renderMetric('Proof Emit Session', fmtInteger(secureLink.client_handshake_proof_emit_session_id), { compact: true })", app_js)
+        self.assertIn("renderMetric('Proof Session Match', fmtBool(secureLink.client_handshake_proof_session_matches_validated_session), { pill: true, compact: true })", app_js)
+        self.assertIn("renderMetric('Proof C2S Key SHA', secureLink.client_handshake_proof_emit_c2s_key_sha256_prefix || 'n/a')", app_js)
+        self.assertIn("renderMetric('Telemetry Build OK', fmtBool(secureLink.client_handshake_telemetry_build_succeeded), { pill: true, compact: true })", app_js)
+        self.assertIn("renderMetric('Telemetry Bytes', fmtInteger(secureLink.client_handshake_telemetry_payload_bytes), { compact: true })", app_js)
+        self.assertIn("renderMetric('Telemetry SHA', secureLink.client_handshake_telemetry_payload_sha256_prefix || 'n/a')", app_js)
+        self.assertIn("renderMetric('Telemetry Session', fmtInteger(secureLink.client_telemetry_handshake_proof_session_id), { compact: true })", app_js)
+        self.assertIn("renderMetric('Telemetry Counter', fmtInteger(secureLink.client_telemetry_handshake_proof_counter), { compact: true })", app_js)
+        self.assertIn("renderMetric('Telemetry Parse', secureLink.client_telemetry_parse_status || 'n/a')", app_js)
+        self.assertIn("renderMetric('Telemetry Payload Bytes', fmtInteger(secureLink.client_telemetry_payload_len), { compact: true })", app_js)
+        self.assertIn("renderMetric('Telemetry Payload SHA', secureLink.client_telemetry_payload_sha256_prefix || 'n/a')", app_js)
+        self.assertIn("renderMetric('Sticky Fail', fmtInteger(secureLink.sticky_auth_fail_code), { compact: true })", app_js)
+        self.assertIn("renderMetric('Last Fail Proof Sent', fmtBool(secureLink.last_failure_client_proof_sent), { pill: true, compact: true })", app_js)
+        self.assertIn("renderMetric('Last Fail Proof Counter', fmtInteger(secureLink.last_failure_client_proof_counter), { compact: true })", app_js)
+        self.assertIn("renderMetric('Last Fail Ack Seen', fmtBool(secureLink.last_failure_server_ack_seen), { pill: true, compact: true })", app_js)
+        self.assertIn("renderMetric('Auth Fail Context', secureLink.auth_fail_context || 'n/a')", app_js)
+        self.assertIn("renderMetric('Sticky Fail Reason', secureLink.sticky_auth_fail_reason || 'n/a')", app_js)
+        self.assertIn("renderMetric('Sticky Fail Context', secureLink.sticky_auth_fail_context || 'n/a')", app_js)
+        self.assertIn("renderMetric('Last Inbound Type', fmtSecureLinkType(secureLink.last_inbound_sl_type), { compact: true })", app_js)
+        self.assertIn("renderMetric('Last Inbound Session', fmtInteger(secureLink.last_inbound_session_id), { compact: true })", app_js)
+        self.assertIn("renderMetric('Last Inbound Counter', fmtInteger(secureLink.last_inbound_counter), { compact: true })", app_js)
+        self.assertIn("renderMetric('Telemetry Last In', fmtSecureLinkType(secureLink.client_telemetry_last_inbound_sl_type), { compact: true })", app_js)
+        self.assertIn("renderMetric('Last Outbound Type', fmtSecureLinkType(secureLink.last_outbound_sl_type), { compact: true })", app_js)
+        self.assertIn("renderMetric('Last Outbound Session', fmtInteger(secureLink.last_outbound_session_id), { compact: true })", app_js)
+        self.assertIn("renderMetric('Last Outbound Counter', fmtInteger(secureLink.last_outbound_counter), { compact: true })", app_js)
+        self.assertIn("renderMetric('Telemetry Last Out', fmtSecureLinkType(secureLink.client_telemetry_last_outbound_sl_type), { compact: true })", app_js)
+        self.assertIn("renderMetric('Transport TX Age', fmtAgeSeconds(secureLink.transport_last_tx_age_sec), { compact: true })", app_js)
+        self.assertIn("renderMetric('Transport RX Age', fmtAgeSeconds(secureLink.transport_last_rx_age_sec), { compact: true })", app_js)
+        self.assertIn("renderMetric('Transport TX Frames', fmtInteger(secureLink.transport_tx_frames_total), { compact: true })", app_js)
+        self.assertIn("renderMetric('Transport RX Frames', fmtInteger(secureLink.transport_rx_frames_total), { compact: true })", app_js)
+        self.assertIn("renderMetric('Transport TX Bytes', fmtBytes(secureLink.transport_last_tx_bytes), { compact: true })", app_js)
+        self.assertIn("renderMetric('Transport RX Bytes', fmtBytes(secureLink.transport_last_rx_bytes), { compact: true })", app_js)
+        self.assertIn("renderMetric('RX Expected', fmtInteger(row.myudp?.receiver_expected), { compact: true })", app_js)
+        self.assertIn("renderMetric('RX Pending', Array.isArray(row.myudp?.receiver_pending) && row.myudp.receiver_pending.length ? row.myudp.receiver_pending.join(', ') : 'none')", app_js)
+        self.assertIn("renderMetric('RX Missing', Array.isArray(row.myudp?.receiver_missing) && row.myudp.receiver_missing.length ? row.myudp.receiver_missing.join(', ') : 'none')", app_js)
+        self.assertIn("renderMetric('Overlay Connected', fmtBool(row.myudp?.overlay_connected), { pill: true, compact: true })", app_js)
+        self.assertIn("renderMetric('Overlay Peer Host', row.myudp?.overlay_peer_host ?? 'n/a')", app_js)
+        self.assertIn("renderMetric('Overlay Peer Family', row.myudp?.overlay_peer_family ?? 'n/a')", app_js)
         self.assertIn("renderMetric('Next Address Attempt', fmtUptime(row.next_address_attempt_in_seconds))", app_js)
         self.assertIn("renderMetric('Restart In', fmtUptime(row.restart_in_seconds))", app_js)
         self.assertIn("fmtUptimeFromUnixTs(secureLink.connected_since_unix_ts ?? row.connected_since_unix_ts)", app_js)

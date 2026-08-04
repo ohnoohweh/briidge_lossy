@@ -33,6 +33,13 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         runtime.handleTransportDisconnected()
     }
 
+    func emitPeriodicClientPlaintextTelemetry() -> [Data] {
+        guard let frame = runtime.emitPeriodicClientPlaintextTelemetry() else {
+            return []
+        }
+        return [frame]
+    }
+
     func handleTransportConnected() throws -> OutboundSnapshot {
         let status = runtime.statusSnapshot()
         guard status.clientMode, !status.authenticated else {
@@ -44,11 +51,13 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
             )
         }
         if status.sessionID != 0, status.authFailCode == 0 {
+            let retry = try runtime.retryClientHandshake()
+            let updatedStatus = runtime.statusSnapshot()
             return OutboundSnapshot(
-                emittedFrames: [],
+                emittedFrames: retry.emittedFrames,
                 queuedPayloads: pendingPayloads.count,
-                authenticated: status.authenticated,
-                sessionID: status.sessionID
+                authenticated: updatedStatus.authenticated,
+                sessionID: updatedStatus.sessionID
             )
         }
 
@@ -66,13 +75,34 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
 
     func handleOutboundPayload(_ payload: Data) throws -> OutboundSnapshot {
         let status = runtime.statusSnapshot()
-        if status.authenticated {
+        let readyForOutbound = status.authenticated
+            && !status.clientRekeyHoldAfterCommit
+            && (!status.clientMode || status.peerConfirmedAuthenticated)
+        if readyForOutbound {
             let snapshot = try runtime.sendApp(payload)
             return OutboundSnapshot(
                 emittedFrames: snapshot.emittedFrames,
                 queuedPayloads: pendingPayloads.count,
                 authenticated: snapshot.authenticated,
                 sessionID: snapshot.sessionID
+            )
+        }
+        if status.clientMode, status.authenticated, !status.peerConfirmedAuthenticated {
+            pendingPayloads.append(payload)
+            return OutboundSnapshot(
+                emittedFrames: [],
+                queuedPayloads: pendingPayloads.count,
+                authenticated: status.authenticated,
+                sessionID: status.sessionID
+            )
+        }
+        if status.authenticated, status.clientRekeyHoldAfterCommit {
+            pendingPayloads.append(payload)
+            return OutboundSnapshot(
+                emittedFrames: [],
+                queuedPayloads: pendingPayloads.count,
+                authenticated: status.authenticated,
+                sessionID: status.sessionID
             )
         }
 
@@ -95,7 +125,11 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         if snapshot.authFailCode != nil {
             pendingPayloads.removeAll()
         }
-        if runtime.statusSnapshot().authenticated, !pendingPayloads.isEmpty {
+        let currentStatus = runtime.statusSnapshot()
+        let readyToFlush = currentStatus.authenticated
+            && !currentStatus.clientRekeyHoldAfterCommit
+            && (!currentStatus.clientMode || currentStatus.peerConfirmedAuthenticated)
+        if readyToFlush, !pendingPayloads.isEmpty {
             do {
                 emittedFrames.append(contentsOf: try flushPendingPayloads())
             } catch {
@@ -113,7 +147,10 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
     }
 
     private func flushPendingPayloads() throws -> [Data] {
-        guard runtime.statusSnapshot().authenticated, !pendingPayloads.isEmpty else {
+        let status = runtime.statusSnapshot()
+        guard status.authenticated,
+              (!status.clientMode || status.peerConfirmedAuthenticated),
+              !pendingPayloads.isEmpty else {
             return []
         }
         let payloads = pendingPayloads

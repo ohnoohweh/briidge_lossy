@@ -258,6 +258,10 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "app_packages/bin" in patched
     assert "_testcapi _testclinic" in patched
     assert "_remote_debugging xxlimited" in patched
+    assert 'find "$CODESIGNING_FOLDER_PATH/Frameworks" -maxdepth 1 -type d -name "*.framework"' in patched
+    assert 'cat > "$framework_path/Info.plist" <<EOF' in patched
+    assert 'CFBundlePackageType' in patched
+    assert '/usr/bin/codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY"' in patched
     assert "Process Python libraries for IPServer" not in patched
     assert "ObstacleBridgePythonBridge.m" not in patched
     assert "IPServer-Bridging-Header.h" not in patched

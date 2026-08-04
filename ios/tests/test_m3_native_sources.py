@@ -88,12 +88,24 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert '"myudp_runtime": selectedTransport == "myudp" ? selectedRuntime : [:]' in provider
     assert 'summary["websocket_runtime"] = "ready"' in provider
     assert 'summary["quic_runtime"] = "ready"' in provider
+    assert 'let rekeyAfterFrames = ObstacleBridgeRuntimeConfig.intValue(from: payload["secure_link_rekey_after_frames"]) ?? 0' in provider
+    assert 'summary["secure_link_rekey_after_frames"] = rekeyAfterFrames' in provider
+    assert '"rekey_in_progress": snapshot.pendingSessionID != 0' in provider
+    assert '"rekeys_completed_total": snapshot.rekeysCompletedTotal' in provider
+    assert '"last_rekey_trigger": snapshot.lastRekeyTrigger' in provider
+    assert '"client_handshake_proof_sent": snapshot.clientHandshakeProofSent' in provider
+    assert '"client_handshake_proof_session_id": snapshot.clientHandshakeProofSessionID == 0 ? NSNull() : snapshot.clientHandshakeProofSessionID' in provider
+    assert '"client_handshake_proof_counter": snapshot.clientHandshakeProofCounter == 0 ? NSNull() : snapshot.clientHandshakeProofCounter' in provider
+    assert '"server_ack_seen": snapshot.serverAckSeen' in provider
+    assert '"current_attempt_active": currentAttemptActive' in provider
+    assert '"last_failure_session_id": snapshot.lastFailureSessionID == 0 ? NSNull() : snapshot.lastFailureSessionID' in provider
     assert "ObstacleBridgeAdminSnapshotSupport.transportRuntimeEnvelope(" in provider
     assert "provider?.recordPacketBridgeEvent(" in provider
     assert "private var peerTrafficRateState:" in provider
     assert "private var secureLinkConnectedSinceUnixTS:" in provider
     assert '"rx_bytes_per_sec": rxRate' in provider
-    assert '"connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTS ?? nowUnixTS)' in provider
+    assert "let connectedSinceUnixTS = snapshot.sessionID == 0 ? nil : (secureLinkConnectedSinceUnixTS ?? nowUnixTS)" in provider
+    assert '"connected_since_unix_ts": connectedSinceUnixTS ?? NSNull()' in provider
     assert '"throttle": ObstacleBridgeAdminSnapshotSupport.peerThrottleSnapshot(peerID: 1, connectionsSnapshot: connections)' in provider
     assert "static func peerThrottleSnapshot(peerID: Int, connectionsSnapshot: [String: Any]) -> [String: Any]" in snapshot_support
     assert 'let budgetBytes = Int(Double(prevWindowBytes) * peerThrottleRatio)' in snapshot_support
@@ -128,6 +140,17 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     assert 'let egress = (section?["egress"] ?? runtimeConfig["proxy_provider_egress"]) as? [String: Any] ?? [' in host_runner
     assert '"mode": "system"' in host_runner
+    assert 'let rekeyAfterFrames = ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["secure_link_rekey_after_frames"]) ?? 0' in host_runner
+    assert 'summary["secure_link_rekey_after_frames"] = rekeyAfterFrames' in host_runner
+    assert '"rekey_in_progress": snapshot.pendingSessionID != 0' in host_runner
+    assert '"rekeys_completed_total": snapshot.rekeysCompletedTotal' in host_runner
+    assert '"last_rekey_trigger": snapshot.lastRekeyTrigger' in host_runner
+    assert '"client_handshake_proof_sent": snapshot.clientHandshakeProofSent' in host_runner
+    assert '"client_handshake_proof_session_id": snapshot.clientHandshakeProofSessionID == 0 ? NSNull() : snapshot.clientHandshakeProofSessionID' in host_runner
+    assert '"client_handshake_proof_counter": snapshot.clientHandshakeProofCounter == 0 ? NSNull() : snapshot.clientHandshakeProofCounter' in host_runner
+    assert '"server_ack_seen": snapshot.serverAckSeen' in host_runner
+    assert '"current_attempt_active": currentAttemptActive' in host_runner
+    assert '"last_failure_session_id": snapshot.lastFailureSessionID == 0 ? NSNull() : snapshot.lastFailureSessionID' in host_runner
 
 
 def test_native_packet_flow_bridge_source_exists() -> None:
@@ -682,6 +705,12 @@ def test_secure_link_psk_runtime_source_exists() -> None:
     assert "typeServerHello" in runtime
     assert "typeAuthFail" in runtime
     assert "typeData" in runtime
+    assert "var lastInboundSLType: Int" in runtime
+    assert "var serverHelloReceived: Bool" in runtime
+    assert "var stickyAuthFailCode: Int" in runtime
+    assert "serverHelloReceived = true" in runtime
+    assert "serverHelloValidated = true" in runtime
+    assert "stickyAuthFailReason = authFailReason(code)" in runtime
 
 
 def test_secure_link_psk_transport_adapter_source_exists() -> None:
@@ -707,12 +736,52 @@ def test_swift_secure_link_admin_snapshots_use_python_state_vocabulary() -> None
     assert 'state = "waiting_transport"' in host_runner
     assert 'state = "listening"' in host_runner
     assert 'state = "auth_failed"' not in host_runner
+    assert '"local_authenticated": localAuthenticated' in provider
+    assert '"peer_confirmed_authenticated": snapshot.peerConfirmedAuthenticated' in provider
+    assert '"auth_fail_code": snapshot.authFailCode' in provider
+    assert '"auth_fail_context": snapshot.authFailContext' in provider
+    assert '"connection_layers": ObstacleBridgeAdminSnapshotSupport.connectionLayers(' in provider
+    assert '"handshake_age_sec": handshakeAgeSec' in provider
+    assert '"server_hello_received": snapshot.serverHelloReceived' in provider
+    assert '"server_hello_validated": snapshot.serverHelloValidated' in provider
+    assert '"connection_layers": connectionLayers' in host_runner
+    assert "currentOverlayOwner()?.owner.appReady()" in host_runner
+    assert '"sticky_auth_fail_code": snapshot.stickyAuthFailCode' in provider
+    assert '"sticky_auth_fail_reason": snapshot.stickyAuthFailReason' in provider
+    assert '"sticky_auth_fail_context": snapshot.stickyAuthFailContext' in provider
+    assert '"last_inbound_sl_type": snapshot.lastInboundSLType == 0 ? NSNull() : snapshot.lastInboundSLType' in provider
+    assert '"last_outbound_sl_type": snapshot.lastOutboundSLType == 0 ? NSNull() : snapshot.lastOutboundSLType' in provider
+    assert 'secureLink["transport_last_tx_age_sec"] = myudpRuntime["secure_link_transport_last_tx_age_sec"] ?? NSNull()' in provider
+    assert 'secureLink["transport_rx_frames_total"] = myudpRuntime["secure_link_transport_rx_frames_total"] ?? 0' in provider
+    assert 'lastEvent = "local_authenticated_waiting_peer_confirm"' in provider
+    assert "emitPeriodicClientPlaintextTelemetry()" in provider or "emitPeriodicClientPlaintextTelemetry()" in (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    assert '"local_authenticated": localAuthenticated' in host_runner
+    assert '"peer_confirmed_authenticated": snapshot.peerConfirmedAuthenticated' in host_runner
+    assert '"auth_fail_code": snapshot.authFailCode' in host_runner
+    assert '"auth_fail_context": snapshot.authFailContext' in host_runner
+    assert '"handshake_age_sec": handshakeAgeSec' in host_runner
+    assert '"server_hello_received": snapshot.serverHelloReceived' in host_runner
+    assert '"server_hello_validated": snapshot.serverHelloValidated' in host_runner
+    assert '"sticky_auth_fail_code": snapshot.stickyAuthFailCode' in host_runner
+    assert '"sticky_auth_fail_reason": snapshot.stickyAuthFailReason' in host_runner
+    assert '"sticky_auth_fail_context": snapshot.stickyAuthFailContext' in host_runner
+    assert '"last_inbound_sl_type": snapshot.lastInboundSLType == 0 ? NSNull() : snapshot.lastInboundSLType' in host_runner
+    assert '"last_outbound_sl_type": snapshot.lastOutboundSLType == 0 ? NSNull() : snapshot.lastOutboundSLType' in host_runner
+    assert 'secureLink["transport_last_tx_age_sec"] = myudpRuntime["secure_link_transport_last_tx_age_sec"] ?? NSNull()' in host_runner
+    assert 'secureLink["transport_rx_frames_total"] = myudpRuntime["secure_link_transport_rx_frames_total"] ?? 0' in host_runner
+    assert 'lastEvent = "local_authenticated_waiting_peer_confirm"' in host_runner
 
 
 def test_overlay_layer_transport_adapter_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
+    secure_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift").read_text(encoding="utf-8")
+    secure_adapter = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskTransportAdapter.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeOverlayLayerTransportAdapter" in runtime
+    assert "func emitPeriodicClientPlaintextTelemetry() -> OutboundSnapshot" in runtime
+    assert "func emitPeriodicClientPlaintextTelemetry() -> [Data]" in secure_adapter
+    assert 'private static let clientPlaintextTelemetryKind = "secure_link_client_plaintext_telemetry_v1"' in secure_runtime
+    assert "static let typeClientPlaintextTelemetry = 9" in secure_runtime
     assert "handleOutboundPayload(" in runtime
     assert "handleInboundFrame(" in runtime
     assert "ObstacleBridgeCompressLayerRuntime" in runtime
@@ -925,6 +994,10 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "ObstacleBridgeAdminSnapshotSupport.selectedProtocolStats(" in host_runner
     assert 'ObstacleBridgeAdminSnapshotSupport.peerMetric(\n                "rtt_est_ms"' in host_runner
     assert '"confirmed_total": myudpProtocolStats["confirmed_total"] ?? 0' in host_runner
+    assert '"receiver_expected": myudpProtocolStats["receiver_expected"] ?? 1' in host_runner
+    assert '"receiver_pending": myudpProtocolStats["receiver_pending"] ?? []' in host_runner
+    assert '"receiver_missing": myudpProtocolStats["receiver_missing"] ?? []' in host_runner
+    assert '"overlay_connected": myudpRuntime["overlay_connected"] ?? false' in host_runner
     assert "let tunService = ownServerSpecs.first { $0.listenProtocol == \"tun\" && $0.targetProtocol == \"tun\" }" in host_runner
     assert "tunIfname: tunService?.listenBind" in host_runner
     assert "tunPacketSink: { [weak self] packet in" in host_runner
@@ -953,3 +1026,6 @@ def test_ios_packet_tunnel_provider_owns_restart_without_app_process() -> None:
     udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
     assert "let protocolStats = overlayRuntime.protocolStatsSnapshot()" in udp_owner
     assert 'snapshot["protocol_stats"] = protocolStats' in udp_owner
+    udp_peer_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift").read_text(encoding="utf-8")
+    assert '"receiver_expected": receiveState.expected' in udp_peer_runtime
+    assert "status.serverHelloReceived," in udp_owner

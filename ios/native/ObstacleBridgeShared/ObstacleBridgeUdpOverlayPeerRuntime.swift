@@ -173,7 +173,7 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
 
     func resetTransportEpoch() {
         resetSender()
-        receiveState.reset()
+        resetReceiveEpoch()
         establishedNS = 0
         lastRxTxNS = 0
         lastRxWallNS = 0
@@ -182,6 +182,18 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
         rttEstMS = 0
         transmitDelayEstMS = 0
         lastSentLastInOrder = 0
+        lastControlSentNS = 0
+    }
+
+    func resetReceiveEpoch() {
+        receiveState.reset()
+        lastSentLastInOrder = 0
+        lastControlSentNS = 0
+    }
+
+    func clearReceiveMessageStateRetainingExpected() {
+        receiveState.clearMessageStateRetainingExpected()
+        lastSentLastInOrder = receiveState.expected == 1 ? 0 : receiveState.expected - 1
         lastControlSentNS = 0
     }
 
@@ -199,6 +211,22 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
         peerMissedCount = 0
         lastSendNS = 0
         nextCounter = 1
+        transmitDelayEstMS = 0
+    }
+
+    func dropSenderStateRetainingCounter() {
+        sendBuffer.removeAll()
+        sendMeta.removeAll()
+        sendTXNS.removeAll()
+        sendPathStartNS.removeAll()
+        lastRetxNS.removeAll()
+        sendAttempts.removeAll()
+        peerReportedMissing.removeAll()
+        waitQueue.removeAll()
+        waitQueueStartNS.removeAll()
+        lastAckPeer = 0
+        peerMissedCount = 0
+        lastSendNS = 0
         transmitDelayEstMS = 0
     }
 
@@ -570,6 +598,9 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
             "repeated_once": repeatedOnceTotal,
             "repeated_multiple": repeatedMultipleTotal,
             "confirmed_total": confirmedTotal,
+            "receiver_expected": receiveState.expected,
+            "receiver_pending": pending,
+            "receiver_missing": missing,
         ]
     }
 

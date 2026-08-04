@@ -214,6 +214,25 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         tunDebugInboundRelays = 0
     }
 
+    func requestReconnect(reason: String = "admin_reconnect") {
+        withOwnerQueue {
+            guard started, !peerHost.isEmpty, peerPort > 0 else { return }
+            reconnectScheduled = false
+            nextReconnectAttemptDeadlineNS = nil
+            reconnectWorkItem?.cancel()
+            reconnectWorkItem = nil
+            tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: currentTunPeerID())
+            overlayConnected = false
+            websocketTask?.cancel(with: .goingAway, reason: nil)
+            websocketTask = nil
+            websocketSession?.invalidateAndCancel()
+            websocketSession = nil
+            resetOverlayTransportEpoch()
+            eventSink?("ws_overlay_reconnect_requested", ["reason": reason])
+            connectOverlay()
+        }
+    }
+
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]]) {
         withOwnerQueue {
             let tcpRows = ObstacleBridgeOverlayConnectionSupport.connectionRows(from: tcpConnectionStates)
@@ -268,6 +287,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 "last_rtt_ok_ns": lastRttOkNS,
                 "rtt_est_ms": rttEstMS ?? NSNull(),
                 "transmit_delay_est_ms": transmitDelayEstMSValue() ?? NSNull(),
+                "connection_layers": connectionLayers,
                 "protocol_stats": protocolStats,
             ]
         }

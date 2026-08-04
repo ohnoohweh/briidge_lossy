@@ -105,6 +105,13 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
             reassembly = nil
         }
 
+        func clearMessageStateRetainingExpected() {
+            pending.removeAll()
+            missing.removeAll()
+            pendingHighest = nil
+            reassembly = nil
+        }
+
         func process(_ packet: ObstacleBridgeUdpOverlayCodec.DataPacket) -> (Bool, [Data]) {
             if packet.pktCounter == 0 {
                 return (false, [])

@@ -195,6 +195,19 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         startupMuxFramesSent = false
     }
 
+    func requestReconnect(reason: String = "admin_reconnect") {
+        withOwnerQueue {
+            guard started else { return }
+            reconnectScheduled = false
+            nextReconnectAttemptDeadlineNS = nil
+            reconnectWorkItem?.cancel()
+            reconnectWorkItem = nil
+            eventSink?("quic_overlay_reconnect_requested", ["reason": reason])
+            handleDisconnected(schedule: false)
+            connectOverlay()
+        }
+    }
+
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]]) {
         withOwnerQueue {
             let tunRows = ObstacleBridgeOverlayChannelCore.tunRows(
@@ -246,6 +259,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
                 "last_rx_wall_ns": lastOverlayRxWallNS,
                 "rtt_est_ms": ObstacleBridgeAdminSnapshotSupport.peerMetric("rtt_est_ms", from: ["protocol_stats": protocolStats]),
                 "transmit_delay_est_ms": protocolStats["transmit_delay_est_ms"] ?? 0.0,
+                "connection_layers": connectionLayers,
                 "protocol_stats": protocolStats,
             ]
         }

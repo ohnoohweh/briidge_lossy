@@ -68,6 +68,21 @@ function fmtBool(value) {
   return value ? 'yes' : 'no';
 }
 
+function fmtSecureLinkType(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n <= 0) return 'n/a';
+  if (n === 1) return 'client_hello';
+  if (n === 2) return 'server_hello';
+  if (n === 3) return 'auth_fail';
+  if (n === 4) return 'data';
+  if (n === 5) return 'rekey_hello';
+  if (n === 6) return 'rekey_reply';
+  if (n === 7) return 'rekey_commit';
+  if (n === 8) return 'rekey_done';
+  if (n === 9) return 'client_plaintext_telemetry';
+  return fmtInteger(n);
+}
+
 function fmtUnixTs(value) {
   if (value == null || Number.isNaN(value)) return 'n/a';
   return String(value);
@@ -2877,6 +2892,16 @@ function renderPeerTable(rows) {
           renderMetric('myUDP Repeated Once', fmtMyUdpPercent(row, row.myudp?.repeated_once)),
           renderMetric('myUDP Repeated Multiple', fmtMyUdpPercent(row, row.myudp?.repeated_multiple)),
         ],
+        [
+          renderMetric('RX Expected', fmtInteger(row.myudp?.receiver_expected), { compact: true }),
+          renderMetric('RX Pending', Array.isArray(row.myudp?.receiver_pending) && row.myudp.receiver_pending.length ? row.myudp.receiver_pending.join(', ') : 'none'),
+          renderMetric('RX Missing', Array.isArray(row.myudp?.receiver_missing) && row.myudp.receiver_missing.length ? row.myudp.receiver_missing.join(', ') : 'none'),
+        ],
+        [
+          renderMetric('Overlay Connected', fmtBool(row.myudp?.overlay_connected), { pill: true, compact: true }),
+          renderMetric('Overlay Peer Host', row.myudp?.overlay_peer_host ?? 'n/a'),
+          renderMetric('Overlay Peer Family', row.myudp?.overlay_peer_family ?? 'n/a'),
+        ],
       ])
       : renderMetricStack([
         [
@@ -2893,6 +2918,130 @@ function renderPeerTable(rows) {
           renderMetric('Rekey in progress', secureLink.rekey_in_progress, { pill: true, compact: true }),
           `<button class="btn btn-secondary secure-link-rekey-btn" type="button" data-peer-id="${escapeHtml(fmtText(row.id))}">Rekey Request</button>`,
         ] : []),
+      ]);
+      securityLines.push([
+        renderMetric('Local Auth', fmtBool(secureLink.local_authenticated), { pill: true, compact: true }),
+        renderMetric('Peer Confirmed', fmtBool(secureLink.peer_confirmed_authenticated), { pill: true, compact: true }),
+        renderMetric('Auth Fail Code', fmtInteger(secureLink.auth_fail_code), { compact: true }),
+        renderMetric('Auth Fail Context', secureLink.auth_fail_context || 'n/a'),
+      ]);
+      securityLines.push([
+        renderMetric('Handshake Age', fmtAgeSeconds(secureLink.handshake_age_sec)),
+        renderMetric('Sticky Fail Context', secureLink.sticky_auth_fail_context || 'n/a'),
+      ]);
+      securityLines.push([
+        renderMetric('ServerHello Seen', fmtBool(secureLink.server_hello_received), { pill: true, compact: true }),
+        renderMetric('ServerHello Valid', fmtBool(secureLink.server_hello_validated), { pill: true, compact: true }),
+        renderMetric('Client Proof Sent', fmtBool(secureLink.client_handshake_proof_sent), { pill: true, compact: true }),
+        renderMetric('Server Ack Seen', fmtBool(secureLink.server_ack_seen), { pill: true, compact: true }),
+      ]);
+      securityLines.push([
+        renderMetric('Hello Session', fmtInteger(secureLink.server_hello_validated_session_id), { compact: true }),
+        renderMetric('Hello TX Counter', fmtInteger(secureLink.server_hello_validated_tx_counter), { compact: true }),
+        renderMetric('Hello C2S Key SHA', secureLink.server_hello_validated_c2s_key_sha256_prefix || 'n/a'),
+        renderMetric('Hello S2C Key SHA', secureLink.server_hello_validated_s2c_key_sha256_prefix || 'n/a'),
+      ]);
+      securityLines.push([
+        renderMetric('Client Telemetry', secureLink.client_telemetry_source || 'n/a', { compact: true }),
+        renderMetric('Telemetry Age', fmtAgeSeconds(secureLink.client_telemetry_received_unix_ts ? ((Date.now() / 1000) - Number(secureLink.client_telemetry_received_unix_ts || 0)) : null), { compact: true }),
+        renderMetric('Telemetry Attempt Match', fmtBool(secureLink.client_telemetry_attempt_matches_server_session), { pill: true, compact: true }),
+        renderMetric('Telemetry Proof Match', fmtBool(secureLink.client_telemetry_proof_matches_observed_frame), { pill: true, compact: true }),
+      ]);
+      securityLines.push([
+        renderMetric('Current Attempt', fmtBool(secureLink.current_attempt_active), { pill: true, compact: true }),
+        renderMetric('Current Session', fmtInteger(secureLink.current_attempt_session_id), { compact: true }),
+        renderMetric('Last Fail Session', fmtInteger(secureLink.last_failure_session_id), { compact: true }),
+        renderMetric('Last Fail Age', fmtAgeSeconds(secureLink.last_failure_unix_ts ? ((Date.now() / 1000) - Number(secureLink.last_failure_unix_ts || 0)) : null), { compact: true }),
+      ]);
+      securityLines.push([
+        renderMetric('Proof Session', fmtInteger(secureLink.client_handshake_proof_session_id), { compact: true }),
+        renderMetric('Proof Counter', fmtInteger(secureLink.client_handshake_proof_counter), { compact: true }),
+        renderMetric('Sticky Fail', fmtInteger(secureLink.sticky_auth_fail_code), { compact: true }),
+        renderMetric('Sticky Fail Reason', secureLink.sticky_auth_fail_reason || 'n/a'),
+      ]);
+      securityLines.push([
+        renderMetric('Proof Emit Session', fmtInteger(secureLink.client_handshake_proof_emit_session_id), { compact: true }),
+        renderMetric('Proof Emit Counter', fmtInteger(secureLink.client_handshake_proof_emit_counter), { compact: true }),
+        renderMetric('Proof Session Match', fmtBool(secureLink.client_handshake_proof_session_matches_validated_session), { pill: true, compact: true }),
+        renderMetric('Proof Key Match', fmtBool(secureLink.client_handshake_proof_key_matches_validated_key), { pill: true, compact: true }),
+      ]);
+      securityLines.push([
+        renderMetric('Proof Payload Bytes', fmtInteger(secureLink.client_handshake_proof_emit_payload_bytes), { compact: true }),
+        renderMetric('Proof Payload SHA', secureLink.client_handshake_proof_emit_payload_sha256_prefix || 'n/a'),
+        renderMetric('Proof C2S Key SHA', secureLink.client_handshake_proof_emit_c2s_key_sha256_prefix || 'n/a'),
+      ]);
+      securityLines.push([
+        renderMetric('Telemetry Build OK', fmtBool(secureLink.client_handshake_telemetry_build_succeeded), { pill: true, compact: true }),
+        renderMetric('Telemetry Bytes', fmtInteger(secureLink.client_handshake_telemetry_payload_bytes), { compact: true }),
+        renderMetric('Telemetry SHA', secureLink.client_handshake_telemetry_payload_sha256_prefix || 'n/a'),
+        renderMetric('Telemetry Build Error', secureLink.client_handshake_telemetry_build_error || 'n/a'),
+      ]);
+      securityLines.push([
+        renderMetric('Plaintext Impl Rev', secureLink.client_plaintext_telemetry_impl_rev || 'n/a'),
+        renderMetric('Plaintext Build OK', fmtBool(secureLink.client_plaintext_telemetry_build_succeeded), { pill: true, compact: true }),
+        renderMetric('Plaintext Bytes', fmtInteger(secureLink.client_plaintext_telemetry_payload_bytes), { compact: true }),
+        renderMetric('Plaintext Session', fmtInteger(secureLink.client_plaintext_telemetry_frame_session_id), { compact: true }),
+      ]);
+      securityLines.push([
+        renderMetric('Plaintext SHA', secureLink.client_plaintext_telemetry_payload_sha256_prefix || 'n/a'),
+        renderMetric('Plaintext Build Error', secureLink.client_plaintext_telemetry_build_error || 'n/a'),
+      ]);
+      securityLines.push([
+        renderMetric('Telemetry Session', fmtInteger(secureLink.client_telemetry_handshake_proof_session_id), { compact: true }),
+        renderMetric('Telemetry Counter', fmtInteger(secureLink.client_telemetry_handshake_proof_counter), { compact: true }),
+        renderMetric('Telemetry Local Auth', fmtBool(secureLink.client_telemetry_local_authenticated), { pill: true, compact: true }),
+        renderMetric('Telemetry Peer Confirmed', fmtBool(secureLink.client_telemetry_peer_confirmed_authenticated), { pill: true, compact: true }),
+      ]);
+      securityLines.push([
+        renderMetric('Telemetry Parse', secureLink.client_telemetry_parse_status || 'n/a'),
+        renderMetric('Telemetry Parse Detail', secureLink.client_telemetry_parse_detail || 'n/a'),
+        renderMetric('Telemetry Payload Bytes', fmtInteger(secureLink.client_telemetry_payload_len), { compact: true }),
+        renderMetric('Telemetry Payload SHA', secureLink.client_telemetry_payload_sha256_prefix || 'n/a'),
+      ]);
+      securityLines.push([
+        renderMetric('Telemetry Payload Preview', secureLink.client_telemetry_payload_preview || 'n/a'),
+      ]);
+      securityLines.push([
+        renderMetric('Telemetry Hello Seen', fmtBool(secureLink.client_telemetry_server_hello_received), { pill: true, compact: true }),
+        renderMetric('Telemetry Hello Valid', fmtBool(secureLink.client_telemetry_server_hello_validated), { pill: true, compact: true }),
+        renderMetric('Last Fail Proof Sent', fmtBool(secureLink.last_failure_client_proof_sent), { pill: true, compact: true }),
+        renderMetric('Last Fail Ack Seen', fmtBool(secureLink.last_failure_server_ack_seen), { pill: true, compact: true }),
+      ]);
+      securityLines.push([
+        renderMetric('Last Fail Proof Session', fmtInteger(secureLink.last_failure_client_proof_session_id), { compact: true }),
+        renderMetric('Last Fail Proof Counter', fmtInteger(secureLink.last_failure_client_proof_counter), { compact: true }),
+        renderMetric('Last Fail Session', fmtInteger(secureLink.last_failure_session_id), { compact: true }),
+        renderMetric('Sticky Fail', fmtInteger(secureLink.sticky_auth_fail_code), { compact: true }),
+      ]);
+      securityLines.push([
+        renderMetric('Last Inbound Type', fmtSecureLinkType(secureLink.last_inbound_sl_type), { compact: true }),
+        renderMetric('Last Inbound Session', fmtInteger(secureLink.last_inbound_session_id), { compact: true }),
+        renderMetric('Last Inbound Counter', fmtInteger(secureLink.last_inbound_counter), { compact: true }),
+      ]);
+      securityLines.push([
+        renderMetric('Last Outbound Type', fmtSecureLinkType(secureLink.last_outbound_sl_type), { compact: true }),
+        renderMetric('Last Outbound Session', fmtInteger(secureLink.last_outbound_session_id), { compact: true }),
+        renderMetric('Last Outbound Counter', fmtInteger(secureLink.last_outbound_counter), { compact: true }),
+      ]);
+      securityLines.push([
+        renderMetric('Telemetry Last In', fmtSecureLinkType(secureLink.client_telemetry_last_inbound_sl_type), { compact: true }),
+        renderMetric('Telemetry Last In Session', fmtInteger(secureLink.client_telemetry_last_inbound_session_id), { compact: true }),
+        renderMetric('Telemetry Last In Counter', fmtInteger(secureLink.client_telemetry_last_inbound_counter), { compact: true }),
+      ]);
+      securityLines.push([
+        renderMetric('Telemetry Last Out', fmtSecureLinkType(secureLink.client_telemetry_last_outbound_sl_type), { compact: true }),
+        renderMetric('Telemetry Last Out Session', fmtInteger(secureLink.client_telemetry_last_outbound_session_id), { compact: true }),
+        renderMetric('Telemetry Last Out Counter', fmtInteger(secureLink.client_telemetry_last_outbound_counter), { compact: true }),
+      ]);
+      securityLines.push([
+        renderMetric('Transport TX Age', fmtAgeSeconds(secureLink.transport_last_tx_age_sec), { compact: true }),
+        renderMetric('Transport RX Age', fmtAgeSeconds(secureLink.transport_last_rx_age_sec), { compact: true }),
+        renderMetric('Transport TX Frames', fmtInteger(secureLink.transport_tx_frames_total), { compact: true }),
+        renderMetric('Transport RX Frames', fmtInteger(secureLink.transport_rx_frames_total), { compact: true }),
+      ]);
+      securityLines.push([
+        renderMetric('Transport TX Bytes', fmtBytes(secureLink.transport_last_tx_bytes), { compact: true }),
+        renderMetric('Transport RX Bytes', fmtBytes(secureLink.transport_last_rx_bytes), { compact: true }),
       ]);
       if (isCertMode) {
         securityLines.push([

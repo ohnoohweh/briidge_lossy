@@ -28,6 +28,13 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         return (last["app_ready"] as? Bool) ?? false
     }
 
+    private static func epochValue(_ value: UInt64) -> Any {
+        if value <= UInt64(Int64.max) {
+            return NSNumber(value: Int64(value))
+        }
+        return String(value)
+    }
+
     static func connectionLayersSnapshot(
         transport: String,
         transportConnected: Bool,
@@ -40,7 +47,7 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
             "layer": "transport",
             "transport": transport,
             "state": transportConnected ? "connected" : "disconnected",
-            "epoch": Int(transportEpoch),
+            "epoch": epochValue(transportEpoch),
             "connected": transportConnected,
             "app_ready": transportConnected,
         ]]
@@ -49,7 +56,7 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
                 "layer": "compression",
                 "transport": transport,
                 "state": "enabled",
-                "epoch": Int(transportEpoch),
+                "epoch": epochValue(transportEpoch),
                 "connected": transportConnected,
                 "app_ready": transportConnected,
                 "enabled": true,
@@ -57,6 +64,7 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         }
         if let secureLinkStatus {
             let appReady = secureLinkStatus.authenticated
+                && (!secureLinkStatus.clientMode || secureLinkStatus.peerConfirmedAuthenticated)
             let connected = appReady || preserveConnectedDuringEpochRestart
             let state: String
             if appReady {
@@ -72,7 +80,7 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
                 "layer": "secure_link",
                 "transport": transport,
                 "state": state,
-                "epoch": Int(secureLinkStatus.sessionID),
+                "epoch": epochValue(secureLinkStatus.sessionID),
                 "connected": connected,
                 "app_ready": appReady,
                 "preserve_connected_during_epoch_restart": preserveConnectedDuringEpochRestart,
@@ -111,6 +119,13 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         }
         let snapshot = try secureLinkAdapter.handleTransportConnected()
         return OutboundSnapshot(emittedFrames: snapshot.emittedFrames)
+    }
+
+    func emitPeriodicClientPlaintextTelemetry() -> OutboundSnapshot {
+        guard let secureLinkAdapter else {
+            return OutboundSnapshot(emittedFrames: [])
+        }
+        return OutboundSnapshot(emittedFrames: secureLinkAdapter.emitPeriodicClientPlaintextTelemetry())
     }
 
     func handleOutboundPayload(_ payload: Data) throws -> OutboundSnapshot {

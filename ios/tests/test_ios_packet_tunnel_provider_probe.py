@@ -229,6 +229,20 @@ def _overlay_secure_link_server_config(
                 "ws_own_port": int(peer_port),
             }
         )
+    elif transport == "tcp":
+        config.update(
+            {
+                "tcp_bind": "127.0.0.1",
+                "tcp_own_port": int(peer_port),
+            }
+        )
+    elif transport == "myudp":
+        config.update(
+            {
+                "udp_bind": "127.0.0.1",
+                "udp_own_port": int(peer_port),
+            }
+        )
     elif transport == "quic":
         assert cert_dir is not None
         config.update(
@@ -2676,7 +2690,6 @@ def test_ios_packet_tunnel_provider_probe_secure_link_overlay_runtime_bootstraps
                             }}) else {{
                                 throw ProbeError.timeout("secure_link_authenticated")
                             }}
-
                             let snapshot = bridge.bridgeSnapshot()
                             let secureLink = bridge.secureLinkStatus()
                             let connections = bridge.adminConnectionsSnapshot(runtimeConfig: runtimeOverrides)
@@ -2708,6 +2721,12 @@ def test_ios_packet_tunnel_provider_probe_secure_link_overlay_runtime_bootstraps
         payload = json.loads(completed.stdout)
         transport_runtime = payload["bridge_snapshot"]["transport_runtime"]
         assert transport_runtime["overlay_connected"] is True
+        connection_layers = transport_runtime["connection_layers"]
+        assert isinstance(connection_layers, list)
+        assert connection_layers
+        assert connection_layers[-1]["layer"] == "secure_link"
+        assert connection_layers[-1]["state"] == "authenticated"
+        assert connection_layers[-1]["app_ready"] is True
         if expected_transport == "ws":
             assert transport_runtime["ws_path"] == "/"
             assert transport_runtime["ws_tls"] is False
@@ -2716,6 +2735,195 @@ def test_ios_packet_tunnel_provider_probe_secure_link_overlay_runtime_bootstraps
             assert transport_runtime["overlay_insecure"] is True
         assert payload["secure_link"]["configured"] is True
         assert payload["secure_link"]["auth_fail_code"] == 0
+        assert payload["secure_link"]["server_hello_validated"] is True
+        assert payload["secure_link"]["server_hello_validated_session_id"] > 0
+        assert payload["secure_link"]["server_hello_validated_tx_counter"] == 1
+        assert payload["secure_link"]["server_hello_validated_c2s_key_sha256_prefix"]
+        assert payload["secure_link"]["server_hello_validated_s2c_key_sha256_prefix"]
+        assert payload["secure_link"]["client_handshake_proof_emit_session_id"] == payload["secure_link"]["server_hello_validated_session_id"]
+        assert payload["secure_link"]["client_handshake_proof_emit_counter"] == 1
+        assert payload["secure_link"]["client_handshake_proof_emit_payload_bytes"] > 0
+        assert payload["secure_link"]["client_handshake_proof_emit_payload_sha256_prefix"]
+        assert payload["secure_link"]["client_handshake_proof_emit_c2s_key_sha256_prefix"] == payload["secure_link"]["server_hello_validated_c2s_key_sha256_prefix"]
+        assert payload["secure_link"]["client_handshake_proof_session_matches_validated_session"] is True
+        assert payload["secure_link"]["client_handshake_proof_key_matches_validated_key"] is True
+        assert payload["secure_link"]["client_plaintext_telemetry_impl_rev"] == "swift-securelink-telemetry-r1"
+        assert isinstance(payload["secure_link"]["client_plaintext_telemetry_build_succeeded"], bool)
+        assert payload["secure_link"]["client_plaintext_telemetry_payload_bytes"] >= 0
+        assert isinstance(payload["secure_link"]["client_plaintext_telemetry_payload_sha256_prefix"], str)
+        assert isinstance(payload["secure_link"]["client_plaintext_telemetry_build_error"], str)
+        assert payload["secure_link"]["client_plaintext_telemetry_frame_session_id"] >= 0
         assert payload["connections"]["counts"]["tcp"] == 0
+    finally:
+        python_peer.stop()
+
+
+def test_ios_packet_tunnel_provider_probe_myudp_reconnect_reauthenticates_against_python_peer(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "PacketTunnelProviderMyUDPReconnectProbe.swift"
+    binary_path = tmp_path / "packet-tunnel-provider-myudp-reconnect-probe"
+    overlay_port = _unused_tcp_port()
+    admin_port = _unused_tcp_port()
+
+    python_peer = _AsyncBridgeClientThread(
+        _overlay_secure_link_server_config(
+            transport="myudp",
+            peer_port=overlay_port,
+            admin_port=admin_port,
+            cert_dir=None,
+        )
+    )
+    python_peer.start()
+    try:
+        time.sleep(0.5)
+        source_path.write_text(
+            textwrap.dedent(
+                f"""
+                import Foundation
+                import Darwin
+
+                enum ProbeError: Error {{
+                    case invalidArgs
+                    case timeout(String)
+                    case badState(String)
+                }}
+
+                private func waitForCondition(timeout: Double, intervalMicros: useconds_t = 20_000, _ condition: () -> Bool) -> Bool {{
+                    let deadline = Date().timeIntervalSince1970 + timeout
+                    while Date().timeIntervalSince1970 < deadline {{
+                        if condition() {{
+                            return true
+                        }}
+                        usleep(intervalMicros)
+                    }}
+                    return condition()
+                }}
+
+                @main
+                struct PacketTunnelProviderMyUDPReconnectProbeMain {{
+                    static func main() throws {{
+                        guard CommandLine.arguments.count == 2 else {{
+                            throw ProbeError.invalidArgs
+                        }}
+                        guard let overlayPort = Int(CommandLine.arguments[1]) else {{
+                            throw ProbeError.invalidArgs
+                        }}
+
+                        let psk = "probe-own-server-psk"
+                        let adapter = ObstacleBridgeOverlayLayerTransportAdapter(
+                            secureLinkAdapter: ObstacleBridgeSecureLinkPskTransportAdapter(
+                                runtime: ObstacleBridgeSecureLinkPskRuntime(clientMode: true, psk: psk)
+                            )
+                        )
+                        let bridge = try PacketTunnelProviderSwiftUDPBridgeProbe(
+                            runtimeMode: "swift_udp",
+                            bindHost: "127.0.0.1",
+                            bindPort: 0,
+                            peerHost: "127.0.0.1",
+                            peerPort: overlayPort,
+                            mtu: 1400,
+                            tunIfname: "ios-utun",
+                            tunnelAddress: "192.168.106.1",
+                            tcpServiceSpecs: [],
+                            overlayTransport: "myudp",
+                            runtimeConfigOverrides: ["overlay_transport": "myudp"],
+                            overlayLayerTransportAdapter: adapter
+                        )
+                        defer {{ bridge.stop() }}
+
+                        bridge.start()
+
+                        guard waitForCondition(timeout: 8.0, {{
+                            bridge.overlayEstablished()
+                        }}) else {{
+                            throw ProbeError.timeout("overlay_established_initial")
+                        }}
+                        guard waitForCondition(timeout: 8.0, {{
+                            let status = bridge.secureLinkStatus()
+                            return (status["authenticated"] as? Bool ?? false)
+                                && (status["auth_fail_code"] as? Int ?? 0) == 0
+                        }}) else {{
+                            throw ProbeError.timeout("secure_link_authenticated_initial")
+                        }}
+
+                        let firstStatus = bridge.secureLinkStatus()
+                        let firstSessionID = String(describing: firstStatus["session_id"] ?? "0")
+                        bridge.requestReconnect()
+
+                        guard waitForCondition(timeout: 12.0, {{
+                            bridge.overlayEstablished()
+                        }}) else {{
+                            throw ProbeError.timeout("overlay_established_reconnect")
+                        }}
+                        guard waitForCondition(timeout: 12.0, {{
+                            let status = bridge.secureLinkStatus()
+                            return (status["authenticated"] as? Bool ?? false)
+                                && (status["auth_fail_code"] as? Int ?? 0) == 0
+                                && String(describing: status["session_id"] ?? "0") != firstSessionID
+                        }}) else {{
+                            throw ProbeError.timeout("secure_link_authenticated_reconnect")
+                        }}
+
+                        let secondStatus = bridge.secureLinkStatus()
+                        let secondSessionID = String(describing: secondStatus["session_id"] ?? "0")
+
+                        bridge.requestReconnect()
+
+                        guard waitForCondition(timeout: 12.0, {{
+                            bridge.overlayEstablished()
+                        }}) else {{
+                            throw ProbeError.timeout("overlay_established_second_reconnect")
+                        }}
+                        guard waitForCondition(timeout: 12.0, {{
+                            let status = bridge.secureLinkStatus()
+                            return (status["authenticated"] as? Bool ?? false)
+                                && (status["auth_fail_code"] as? Int ?? 0) == 0
+                                && String(describing: status["session_id"] ?? "0") != secondSessionID
+                        }}) else {{
+                            throw ProbeError.timeout("secure_link_authenticated_second_reconnect")
+                        }}
+
+                        let thirdStatus = bridge.secureLinkStatus()
+                        let payload: [String: Any] = [
+                            "first_session_id": firstSessionID,
+                            "second_session_id": secondSessionID,
+                            "second_authenticated": secondStatus["authenticated"] as? Bool ?? false,
+                            "second_auth_fail_code": secondStatus["auth_fail_code"] as? Int ?? -1,
+                            "third_session_id": String(describing: thirdStatus["session_id"] ?? "0"),
+                            "third_authenticated": thirdStatus["authenticated"] as? Bool ?? false,
+                            "third_auth_fail_code": thirdStatus["auth_fail_code"] as? Int ?? -1,
+                        ]
+                        let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                        FileHandle.standardOutput.write(data)
+                    }}
+                }}
+                """
+            ),
+            encoding="utf-8",
+        )
+        _compile_swift_packet_tunnel_provider_probe(source_path, binary_path)
+        completed = subprocess.run(
+            [str(binary_path), str(overlay_port)],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=50,
+        )
+        if completed.returncode != 0:
+            raise AssertionError(
+                "myudp reconnect probe failed with exit code "
+                f"{completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+            )
+        payload = json.loads(completed.stdout)
+        assert payload["first_session_id"] != "0"
+        assert payload["second_session_id"] != "0"
+        assert payload["second_session_id"] != payload["first_session_id"]
+        assert payload["second_authenticated"] is True
+        assert payload["second_auth_fail_code"] == 0
+        assert payload["third_session_id"] != "0"
+        assert payload["third_session_id"] != payload["second_session_id"]
+        assert payload["third_authenticated"] is True
+        assert payload["third_auth_fail_code"] == 0
     finally:
         python_peer.stop()

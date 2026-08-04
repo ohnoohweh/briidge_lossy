@@ -1107,13 +1107,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
 
             if settings.secureLinkMode == "psk" {
+                let rekeyAfterFrames = ObstacleBridgeRuntimeConfig.intValue(from: payload["secure_link_rekey_after_frames"]) ?? 0
                 sharedSecureLinkPskTransportAdapter = ObstacleBridgeSecureLinkPskTransportAdapter(
                     runtime: ObstacleBridgeSecureLinkPskRuntime(
                         clientMode: settings.peerHost != nil,
-                        psk: settings.secureLinkPSK
+                        psk: settings.secureLinkPSK,
+                        rekeyAfterFrames: rekeyAfterFrames
                     )
                 )
                 summary["secure_link_runtime"] = "ready"
+                summary["secure_link_rekey_after_frames"] = rekeyAfterFrames
             }
 
             if sharedCompressLayerRuntime != nil || sharedSecureLinkPskTransportAdapter != nil {
@@ -1639,6 +1642,22 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             preferredKind: transport
         )
         let myudpProtocolStats = myudpRuntime["protocol_stats"] as? [String: Any] ?? [:]
+        var secureLink = adminSecureLinkSnapshot(state: state)
+        if transport == "myudp" {
+            secureLink["transport_last_tx_age_sec"] = myudpRuntime["secure_link_transport_last_tx_age_sec"] ?? NSNull()
+            secureLink["transport_last_rx_age_sec"] = myudpRuntime["secure_link_transport_last_rx_age_sec"] ?? NSNull()
+            secureLink["transport_tx_frames_total"] = myudpRuntime["secure_link_transport_tx_frames_total"] ?? 0
+            secureLink["transport_rx_frames_total"] = myudpRuntime["secure_link_transport_rx_frames_total"] ?? 0
+            secureLink["transport_last_tx_bytes"] = myudpRuntime["secure_link_transport_last_tx_bytes"] ?? NSNull()
+            secureLink["transport_last_rx_bytes"] = myudpRuntime["secure_link_transport_last_rx_bytes"] ?? NSNull()
+        } else {
+            secureLink["transport_last_tx_age_sec"] = NSNull()
+            secureLink["transport_last_rx_age_sec"] = NSNull()
+            secureLink["transport_tx_frames_total"] = 0
+            secureLink["transport_rx_frames_total"] = 0
+            secureLink["transport_last_tx_bytes"] = NSNull()
+            secureLink["transport_last_rx_bytes"] = NSNull()
+        }
         return [[
             "id": 1,
             "transport": transport,
@@ -1671,7 +1690,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 from: transportRuntime,
                 preferredKind: transport
             ),
-            "secure_link": adminSecureLinkSnapshot(state: state),
+            "secure_link": secureLink,
             "compress_layer": adminCompressLayerSnapshot() ?? NSNull(),
             "throttle": ObstacleBridgeAdminSnapshotSupport.peerThrottleSnapshot(peerID: 1, connectionsSnapshot: connections),
             "runtime": transportRuntime,
@@ -1681,6 +1700,13 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 "repeated_once": myudpProtocolStats["repeated_once"] ?? 0,
                 "repeated_multiple": myudpProtocolStats["repeated_multiple"] ?? 0,
                 "confirmed_total": myudpProtocolStats["confirmed_total"] ?? 0,
+                "receiver_expected": myudpProtocolStats["receiver_expected"] ?? 1,
+                "receiver_pending": myudpProtocolStats["receiver_pending"] ?? [],
+                "receiver_missing": myudpProtocolStats["receiver_missing"] ?? [],
+                "overlay_connected": myudpRuntime["overlay_connected"] ?? false,
+                "overlay_peer_host": myudpRuntime["overlay_peer_host"] ?? NSNull(),
+                "overlay_peer_port": myudpRuntime["overlay_peer_port"] ?? NSNull(),
+                "overlay_peer_family": myudpRuntime["overlay_peer_family"] ?? NSNull(),
             ],
         ]]
     }
@@ -1924,12 +1950,25 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
     }
 
     func adminRequestReconnect() -> [String: Any] {
+        if let bridge = swiftSimpleUDPPeerBridge {
+            bridge.requestReconnect(reason: "admin_reconnect")
+            recordNativeEvent("embedded_runtime_reconnect_via_bridge")
+            updateProviderState("embedded_runtime_reconnect_via_bridge")
+            return [
+                "ok": true,
+                "reconnect_requested": true,
+                "reconnect_supported": true,
+                "restart_embedded": false,
+                "reconnect_mode": "transport_epoch_reset",
+            ]
+        }
         scheduleEmbeddedRuntimeReload(action: "reconnect")
         return [
             "ok": true,
             "reconnect_requested": true,
             "reconnect_supported": true,
             "restart_embedded": true,
+            "reconnect_mode": "embedded_runtime_reload",
         ]
     }
 
@@ -2487,14 +2526,69 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 "mode": mode,
                 "state": state,
                 "authenticated": false,
+                "local_authenticated": false,
+                "peer_confirmed_authenticated": false,
+                "client_handshake_proof_sent": false,
+                "client_handshake_proof_session_id": NSNull(),
+                "client_handshake_proof_counter": NSNull(),
+                "client_handshake_telemetry_build_succeeded": false,
+                "client_handshake_telemetry_payload_bytes": 0,
+                "client_handshake_telemetry_payload_sha256_prefix": "",
+                "client_handshake_telemetry_build_error": "",
+                "server_ack_seen": false,
+                "current_attempt_active": false,
+                "current_attempt_session_id": NSNull(),
+                "last_failure_session_id": NSNull(),
+                "last_failure_unix_ts": NSNull(),
+                "last_failure_client_proof_sent": false,
+                "last_failure_client_proof_session_id": NSNull(),
+                "last_failure_client_proof_counter": NSNull(),
+                "last_failure_server_ack_seen": false,
                 "session_id": NSNull(),
+                "auth_fail_code": 0,
+                "auth_fail_context": "",
+                "last_inbound_sl_type": NSNull(),
+                "last_inbound_session_id": NSNull(),
+                "last_inbound_counter": NSNull(),
+                "last_outbound_sl_type": NSNull(),
+                "last_outbound_session_id": NSNull(),
+                "last_outbound_counter": NSNull(),
+                "transport_last_tx_age_sec": NSNull(),
+                "transport_last_rx_age_sec": NSNull(),
+                "transport_tx_frames_total": 0,
+                "transport_rx_frames_total": 0,
+                "transport_last_tx_bytes": NSNull(),
+                "transport_last_rx_bytes": NSNull(),
+                "server_hello_received": false,
+                "server_hello_validated": false,
+                "server_hello_validated_session_id": NSNull(),
+                "server_hello_validated_tx_counter": NSNull(),
+                "server_hello_validated_c2s_key_sha256_prefix": "",
+                "server_hello_validated_s2c_key_sha256_prefix": "",
+                "client_handshake_proof_emit_session_id": NSNull(),
+                "client_handshake_proof_emit_counter": NSNull(),
+                "client_handshake_proof_emit_payload_bytes": 0,
+                "client_handshake_proof_emit_payload_sha256_prefix": "",
+                "client_handshake_proof_emit_c2s_key_sha256_prefix": "",
+                "client_handshake_proof_session_matches_validated_session": false,
+                "client_handshake_proof_key_matches_validated_key": false,
+                "client_telemetry_parse_status": "",
+                "client_telemetry_parse_detail": "",
+                "client_telemetry_payload_len": NSNull(),
+                "client_telemetry_payload_sha256_prefix": "",
+                "client_telemetry_payload_preview": "",
+                "sticky_auth_fail_code": 0,
+                "sticky_auth_fail_reason": "",
+                "sticky_auth_fail_context": "",
                 "rekey_in_progress": false,
                 "last_event": "bootstrap",
                 "last_event_unix_ts": NSNull(),
+                "handshake_age_sec": NSNull(),
                 "last_authenticated_unix_ts": NSNull(),
                 "connected_since_unix_ts": NSNull(),
                 "authenticated_sessions_total": 0,
                 "rekeys_completed_total": 0,
+                "last_rekey_trigger": "",
                 "frames_passed_total": 0,
                 "frames_dropped_total": 0,
                 "peer_subject_id": "",
@@ -2520,6 +2614,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         let snapshot = adapter.statusSnapshot()
         let nowUnixTS = Int(Date().timeIntervalSince1970)
         let displayAuthenticated = snapshot.peerConfirmedAuthenticated
+        let localAuthenticated = snapshot.authenticated
         let previousSessionID = secureLinkLastSessionID
         if snapshot.sessionID == 0 {
             secureLinkConnectedSinceUnixTS = nil
@@ -2552,6 +2647,10 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             secureState = "listening"
             lastEvent = "bootstrap"
             disconnectReason = ""
+        } else if localAuthenticated, snapshot.sessionID != 0 {
+            secureState = "handshaking"
+            lastEvent = "local_authenticated_waiting_peer_confirm"
+            disconnectReason = ""
         } else if snapshot.sessionID != 0 {
             secureState = "handshaking"
             lastEvent = "handshake_started"
@@ -2561,20 +2660,81 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             lastEvent = "bootstrap"
             disconnectReason = ""
         }
+        let connectedSinceUnixTS = snapshot.sessionID == 0 ? nil : (secureLinkConnectedSinceUnixTS ?? nowUnixTS)
+        let handshakeAgeSec: Any = (snapshot.sessionID != 0 && !displayAuthenticated && snapshot.authFailCode == 0 && connectedSinceUnixTS != nil)
+            ? max(0, nowUnixTS - (connectedSinceUnixTS ?? nowUnixTS))
+            : NSNull()
+        let currentAttemptActive = snapshot.sessionID != 0 && snapshot.authFailCode == 0 && !displayAuthenticated
+        let currentAttemptSessionID: Any = currentAttemptActive ? snapshot.sessionID : NSNull()
 
         return [
             "enabled": true,
             "mode": mode,
             "state": secureState,
             "authenticated": displayAuthenticated,
+            "local_authenticated": localAuthenticated,
+            "peer_confirmed_authenticated": snapshot.peerConfirmedAuthenticated,
+            "client_handshake_proof_sent": snapshot.clientHandshakeProofSent,
+            "client_handshake_proof_session_id": snapshot.clientHandshakeProofSessionID == 0 ? NSNull() : snapshot.clientHandshakeProofSessionID,
+            "client_handshake_proof_counter": snapshot.clientHandshakeProofCounter == 0 ? NSNull() : snapshot.clientHandshakeProofCounter,
+            "client_handshake_telemetry_build_succeeded": snapshot.clientHandshakeTelemetryBuildSucceeded,
+            "client_handshake_telemetry_payload_bytes": snapshot.clientHandshakeTelemetryPayloadBytes,
+            "client_handshake_telemetry_payload_sha256_prefix": snapshot.clientHandshakeTelemetryPayloadSHA256Prefix,
+            "client_handshake_telemetry_build_error": snapshot.clientHandshakeTelemetryBuildError,
+            "client_plaintext_telemetry_impl_rev": snapshot.clientPlaintextTelemetryImplRevision,
+            "client_plaintext_telemetry_build_succeeded": snapshot.clientPlaintextTelemetryBuildSucceeded,
+            "client_plaintext_telemetry_payload_bytes": snapshot.clientPlaintextTelemetryPayloadBytes,
+            "client_plaintext_telemetry_payload_sha256_prefix": snapshot.clientPlaintextTelemetryPayloadSHA256Prefix,
+            "client_plaintext_telemetry_build_error": snapshot.clientPlaintextTelemetryBuildError,
+            "client_plaintext_telemetry_frame_session_id": snapshot.clientPlaintextTelemetryFrameSessionID == 0 ? NSNull() : snapshot.clientPlaintextTelemetryFrameSessionID,
+            "server_ack_seen": snapshot.serverAckSeen,
+            "current_attempt_active": currentAttemptActive,
+            "current_attempt_session_id": currentAttemptSessionID,
+            "last_failure_session_id": snapshot.lastFailureSessionID == 0 ? NSNull() : snapshot.lastFailureSessionID,
+            "last_failure_unix_ts": snapshot.lastFailureUnixTS ?? NSNull(),
+            "last_failure_client_proof_sent": snapshot.lastFailureClientProofSent,
+            "last_failure_client_proof_session_id": snapshot.lastFailureClientProofSessionID == 0 ? NSNull() : snapshot.lastFailureClientProofSessionID,
+            "last_failure_client_proof_counter": snapshot.lastFailureClientProofCounter == 0 ? NSNull() : snapshot.lastFailureClientProofCounter,
+            "last_failure_server_ack_seen": snapshot.lastFailureServerAckSeen,
             "session_id": snapshot.sessionID == 0 ? NSNull() : snapshot.sessionID,
-            "rekey_in_progress": false,
+            "auth_fail_code": snapshot.authFailCode,
+            "auth_fail_context": snapshot.authFailContext,
+            "last_inbound_sl_type": snapshot.lastInboundSLType == 0 ? NSNull() : snapshot.lastInboundSLType,
+            "last_inbound_session_id": snapshot.lastInboundSessionID == 0 ? NSNull() : snapshot.lastInboundSessionID,
+            "last_inbound_counter": snapshot.lastInboundCounter == 0 ? NSNull() : snapshot.lastInboundCounter,
+            "last_outbound_sl_type": snapshot.lastOutboundSLType == 0 ? NSNull() : snapshot.lastOutboundSLType,
+            "last_outbound_session_id": snapshot.lastOutboundSessionID == 0 ? NSNull() : snapshot.lastOutboundSessionID,
+            "last_outbound_counter": snapshot.lastOutboundCounter == 0 ? NSNull() : snapshot.lastOutboundCounter,
+            "server_hello_received": snapshot.serverHelloReceived,
+            "server_hello_validated": snapshot.serverHelloValidated,
+            "server_hello_validated_session_id": snapshot.serverHelloValidatedSessionID == 0 ? NSNull() : snapshot.serverHelloValidatedSessionID,
+            "server_hello_validated_tx_counter": snapshot.serverHelloValidatedTxCounter == 0 ? NSNull() : snapshot.serverHelloValidatedTxCounter,
+            "server_hello_validated_c2s_key_sha256_prefix": snapshot.serverHelloValidatedC2SKeySHA256Prefix,
+            "server_hello_validated_s2c_key_sha256_prefix": snapshot.serverHelloValidatedS2CKeySHA256Prefix,
+            "client_handshake_proof_emit_session_id": snapshot.clientHandshakeProofEmitSessionID == 0 ? NSNull() : snapshot.clientHandshakeProofEmitSessionID,
+            "client_handshake_proof_emit_counter": snapshot.clientHandshakeProofEmitCounter == 0 ? NSNull() : snapshot.clientHandshakeProofEmitCounter,
+            "client_handshake_proof_emit_payload_bytes": snapshot.clientHandshakeProofEmitPayloadBytes,
+            "client_handshake_proof_emit_payload_sha256_prefix": snapshot.clientHandshakeProofEmitPayloadSHA256Prefix,
+            "client_handshake_proof_emit_c2s_key_sha256_prefix": snapshot.clientHandshakeProofEmitC2SKeySHA256Prefix,
+            "client_handshake_proof_session_matches_validated_session": snapshot.clientHandshakeProofSessionMatchesValidatedSession,
+            "client_handshake_proof_key_matches_validated_key": snapshot.clientHandshakeProofKeyMatchesValidatedKey,
+            "client_telemetry_parse_status": "",
+            "client_telemetry_parse_detail": "",
+            "client_telemetry_payload_len": NSNull(),
+            "client_telemetry_payload_sha256_prefix": "",
+            "client_telemetry_payload_preview": "",
+            "sticky_auth_fail_code": snapshot.stickyAuthFailCode,
+            "sticky_auth_fail_reason": snapshot.stickyAuthFailReason,
+            "sticky_auth_fail_context": snapshot.stickyAuthFailContext,
+            "rekey_in_progress": snapshot.pendingSessionID != 0,
             "last_event": lastEvent,
             "last_event_unix_ts": NSNull(),
+            "handshake_age_sec": handshakeAgeSec,
             "last_authenticated_unix_ts": displayAuthenticated ? (secureLinkLastAuthenticatedUnixTS ?? nowUnixTS) : NSNull(),
-            "connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTS ?? nowUnixTS),
+            "connected_since_unix_ts": connectedSinceUnixTS ?? NSNull(),
             "authenticated_sessions_total": displayAuthenticated ? 1 : 0,
-            "rekeys_completed_total": 0,
+            "rekeys_completed_total": snapshot.rekeysCompletedTotal,
+            "last_rekey_trigger": snapshot.lastRekeyTrigger,
             "frames_passed_total": 0,
             "frames_dropped_total": 0,
             "peer_subject_id": "",
@@ -3236,6 +3396,22 @@ private final class SwiftSimpleUDPPeerBridge {
         )
     }
 
+    func requestReconnect(reason: String = "admin_reconnect") {
+        guard settings.runtimeMode == "swift_udp" else {
+            return
+        }
+        udpOverlayTransportOwner?.requestReconnect(reason: reason)
+        tcpOverlayTransportOwner?.requestReconnect(reason: reason)
+        wsOverlayTransportOwner?.requestReconnect(reason: reason)
+        if #available(iOS 15.0, *) {
+            quicOverlayTransportOwner?.requestReconnect(reason: reason)
+        }
+        provider?.recordPacketBridgeEvent(
+            "swift_simple_udp_reconnect_requested",
+            fields: ["reason": reason, "transport": selectedTransport]
+        )
+    }
+
     func snapshot() -> [String: Any] {
         withState {
             let selectedRuntime =
@@ -3325,13 +3501,13 @@ private final class SwiftSimpleUDPPeerBridge {
                 return udpOverlayTransportOwner.overlayConnected
             }
             if let tcpOverlayTransportOwner {
-                return (tcpOverlayTransportOwner.transportSnapshot()["overlay_connected"] as? Bool) ?? false
+                return tcpOverlayTransportOwner.appReady()
             }
             if let wsOverlayTransportOwner {
-                return (wsOverlayTransportOwner.transportSnapshot()["overlay_connected"] as? Bool) ?? false
+                return wsOverlayTransportOwner.appReady()
             }
             if #available(iOS 15.0, *), let quicOverlayTransportOwner {
-                return (quicOverlayTransportOwner.transportSnapshot()["overlay_connected"] as? Bool) ?? false
+                return quicOverlayTransportOwner.appReady()
             }
             return false
         }
@@ -3363,13 +3539,88 @@ private final class SwiftSimpleUDPPeerBridge {
     func secureLinkStatusForProbe() -> [String: Any] {
         withState {
             guard let snapshot = overlayLayerTransportAdapter?.secureLinkStatusSnapshot() else {
-                return ["configured": false, "authenticated": false, "session_id": 0, "auth_fail_code": 0]
+                return [
+                    "configured": false,
+                    "authenticated": false,
+                    "local_authenticated": false,
+                    "peer_confirmed_authenticated": false,
+                    "session_id": 0,
+                    "auth_fail_code": 0,
+                    "auth_fail_context": "",
+                    "last_inbound_sl_type": 0,
+                    "last_inbound_session_id": 0,
+                    "last_inbound_counter": 0,
+                    "last_outbound_sl_type": 0,
+                    "last_outbound_session_id": 0,
+                    "last_outbound_counter": 0,
+                    "client_handshake_telemetry_build_succeeded": false,
+                    "client_handshake_telemetry_payload_bytes": 0,
+                    "client_handshake_telemetry_payload_sha256_prefix": "",
+                    "client_handshake_telemetry_build_error": "",
+                    "client_plaintext_telemetry_impl_rev": "",
+                    "client_plaintext_telemetry_build_succeeded": false,
+                    "client_plaintext_telemetry_payload_bytes": 0,
+                    "client_plaintext_telemetry_payload_sha256_prefix": "",
+                    "client_plaintext_telemetry_build_error": "",
+                    "client_plaintext_telemetry_frame_session_id": 0,
+                    "server_hello_received": false,
+                    "server_hello_validated": false,
+                    "server_hello_validated_session_id": 0,
+                    "server_hello_validated_tx_counter": 0,
+                    "server_hello_validated_c2s_key_sha256_prefix": "",
+                    "server_hello_validated_s2c_key_sha256_prefix": "",
+                    "client_handshake_proof_emit_session_id": 0,
+                    "client_handshake_proof_emit_counter": 0,
+                    "client_handshake_proof_emit_payload_bytes": 0,
+                    "client_handshake_proof_emit_payload_sha256_prefix": "",
+                    "client_handshake_proof_emit_c2s_key_sha256_prefix": "",
+                    "client_handshake_proof_session_matches_validated_session": false,
+                    "client_handshake_proof_key_matches_validated_key": false,
+                    "sticky_auth_fail_code": 0,
+                    "sticky_auth_fail_reason": "",
+                    "sticky_auth_fail_context": "",
+                ]
             }
             return [
                 "configured": true,
                 "authenticated": snapshot.authenticated,
+                "local_authenticated": snapshot.authenticated,
+                "peer_confirmed_authenticated": snapshot.peerConfirmedAuthenticated,
                 "session_id": snapshot.sessionID,
                 "auth_fail_code": snapshot.authFailCode,
+                "auth_fail_context": snapshot.authFailContext,
+                "last_inbound_sl_type": snapshot.lastInboundSLType,
+                "last_inbound_session_id": snapshot.lastInboundSessionID,
+                "last_inbound_counter": snapshot.lastInboundCounter,
+                "last_outbound_sl_type": snapshot.lastOutboundSLType,
+                "last_outbound_session_id": snapshot.lastOutboundSessionID,
+                "last_outbound_counter": snapshot.lastOutboundCounter,
+                "client_handshake_telemetry_build_succeeded": snapshot.clientHandshakeTelemetryBuildSucceeded,
+                "client_handshake_telemetry_payload_bytes": snapshot.clientHandshakeTelemetryPayloadBytes,
+                "client_handshake_telemetry_payload_sha256_prefix": snapshot.clientHandshakeTelemetryPayloadSHA256Prefix,
+                "client_handshake_telemetry_build_error": snapshot.clientHandshakeTelemetryBuildError,
+                "client_plaintext_telemetry_impl_rev": snapshot.clientPlaintextTelemetryImplRevision,
+                "client_plaintext_telemetry_build_succeeded": snapshot.clientPlaintextTelemetryBuildSucceeded,
+                "client_plaintext_telemetry_payload_bytes": snapshot.clientPlaintextTelemetryPayloadBytes,
+                "client_plaintext_telemetry_payload_sha256_prefix": snapshot.clientPlaintextTelemetryPayloadSHA256Prefix,
+                "client_plaintext_telemetry_build_error": snapshot.clientPlaintextTelemetryBuildError,
+                "client_plaintext_telemetry_frame_session_id": snapshot.clientPlaintextTelemetryFrameSessionID,
+                "server_hello_received": snapshot.serverHelloReceived,
+                "server_hello_validated": snapshot.serverHelloValidated,
+                "server_hello_validated_session_id": snapshot.serverHelloValidatedSessionID,
+                "server_hello_validated_tx_counter": snapshot.serverHelloValidatedTxCounter,
+                "server_hello_validated_c2s_key_sha256_prefix": snapshot.serverHelloValidatedC2SKeySHA256Prefix,
+                "server_hello_validated_s2c_key_sha256_prefix": snapshot.serverHelloValidatedS2CKeySHA256Prefix,
+                "client_handshake_proof_emit_session_id": snapshot.clientHandshakeProofEmitSessionID,
+                "client_handshake_proof_emit_counter": snapshot.clientHandshakeProofEmitCounter,
+                "client_handshake_proof_emit_payload_bytes": snapshot.clientHandshakeProofEmitPayloadBytes,
+                "client_handshake_proof_emit_payload_sha256_prefix": snapshot.clientHandshakeProofEmitPayloadSHA256Prefix,
+                "client_handshake_proof_emit_c2s_key_sha256_prefix": snapshot.clientHandshakeProofEmitC2SKeySHA256Prefix,
+                "client_handshake_proof_session_matches_validated_session": snapshot.clientHandshakeProofSessionMatchesValidatedSession,
+                "client_handshake_proof_key_matches_validated_key": snapshot.clientHandshakeProofKeyMatchesValidatedKey,
+                "sticky_auth_fail_code": snapshot.stickyAuthFailCode,
+                "sticky_auth_fail_reason": snapshot.stickyAuthFailReason,
+                "sticky_auth_fail_context": snapshot.stickyAuthFailContext,
             ]
         }
     }
@@ -4455,6 +4706,10 @@ final class PacketTunnelProviderSwiftUDPBridgeProbe {
 
     func secureLinkStatus() -> [String: Any] {
         bridge.secureLinkStatusForProbe()
+    }
+
+    func requestReconnect() {
+        bridge.requestReconnect(reason: "probe_reconnect")
     }
 
     func adminConnectionsSnapshot(runtimeConfig: [String: Any] = [:], packetPumpRunning: Bool = false) -> [String: Any] {
