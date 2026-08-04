@@ -1261,6 +1261,7 @@ API fallback for details not fully surfaced in WebAdmin yet:
 - `/api/peers` shows the peer row with `secure_link.authenticated=true`
 - `/api/status` remains limited to runtime metadata and aggregate secure-link reload/apply summaries
 - connection, traffic, and compression telemetry are exposed through `/api/connections` and peer-scoped `/api/peers` rows
+- the supported admin/API contract is intentionally summary-oriented; detailed per-frame secure-link handshake-debug telemetry is not part of the normal WebAdmin surface
 - if the PSK does not match, the client and server stay disconnected and the failure is reported as:
   - `secure_link.state=failed`
   - `failure_code=1`

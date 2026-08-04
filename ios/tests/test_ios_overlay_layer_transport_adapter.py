@@ -124,18 +124,11 @@ def test_ios_overlay_layer_transport_adapter_wraps_compress_then_secure_link(tmp
                     }
 
                     let clientAuth = client.handleInboundFrame(serverHelloFrame)
-                    guard let clientProofFrame = clientAuth.emittedFrames.first else {
-                        throw ProbeError.badState("missing client proof")
+                    guard clientAuth.emittedFrames.count >= 2 else {
+                        throw ProbeError.badState("missing client proof or flushed payload")
                     }
-                    let serverProof = server.handleInboundFrame(clientProofFrame)
-                    guard let serverAckFrame = serverProof.emittedFrames.first else {
-                        throw ProbeError.badState("missing server ack")
-                    }
-                    let clientAck = client.handleInboundFrame(serverAckFrame)
-                    guard let flushedClientDataFrame = clientAck.emittedFrames.first else {
-                        throw ProbeError.badState("missing flushed client mux")
-                    }
-                    let serverData = server.handleInboundFrame(flushedClientDataFrame)
+                    let serverProof = server.handleInboundFrame(clientAuth.emittedFrames[0])
+                    let serverData = server.handleInboundFrame(clientAuth.emittedFrames[1])
                     guard let deliveredClientMux = serverData.deliveredPayloads.first,
                           let unpackedClientMux = ObstacleBridgeChannelMuxCodec.unpackMux(deliveredClientMux)
                     else {
@@ -156,7 +149,6 @@ def test_ios_overlay_layer_transport_adapter_wraps_compress_then_secure_link(tmp
                     let payload: [String: Any] = [
                         "queued_client_frames": clientQueued.emittedFrames.count,
                         "client_auth_frames": clientAuth.emittedFrames.count,
-                        "client_ack_frames": clientAck.emittedFrames.count,
                         "server_auth_frames": serverProof.emittedFrames.count,
                         "client_compress_applied": clientCompress.statusSnapshot().compressAppliedTotal,
                         "server_decompress_ok": serverCompress.statusSnapshot().decompressOKTotal,
@@ -189,8 +181,7 @@ def test_ios_overlay_layer_transport_adapter_wraps_compress_then_secure_link(tmp
 
     assert payload == {
         "queued_client_frames": 1,
-        "client_ack_frames": 1,
-        "client_auth_frames": 1,
+        "client_auth_frames": 2,
         "server_auth_frames": 1,
         "client_compress_applied": 1,
         "server_decompress_ok": 1,
@@ -204,96 +195,4 @@ def test_ios_overlay_layer_transport_adapter_wraps_compress_then_secure_link(tmp
         "client_received_proto": 0,
         "client_received_mtype": 0,
         "client_received_bytes": 192,
-    }
-
-
-def test_ios_overlay_layer_transport_adapter_marks_client_secure_link_unready_until_peer_confirmed(
-    tmp_path: Path,
-) -> None:
-    source_path = tmp_path / "OverlayLayerTransportAdapterClientReadinessProbe.swift"
-    binary_path = tmp_path / "overlay-layer-transport-adapter-client-readiness-probe"
-    source_path.write_text(
-        textwrap.dedent(
-            r"""
-            import Foundation
-
-            enum ProbeError: Error {
-                case badState(String)
-            }
-
-            @main
-            struct OverlayLayerTransportAdapterClientReadinessProbe {
-                static func main() throws {
-                    let client = ObstacleBridgeOverlayLayerTransportAdapter(
-                        secureLinkAdapter: ObstacleBridgeSecureLinkPskTransportAdapter(
-                            runtime: ObstacleBridgeSecureLinkPskRuntime(
-                                clientMode: true,
-                                psk: "shared-psk",
-                                randomBytes: { count in Data(repeating: 0x11, count: count) },
-                                sessionIDProvider: { 0x0102030405060708 }
-                            )
-                        )
-                    )
-                    let server = ObstacleBridgeOverlayLayerTransportAdapter(
-                        secureLinkAdapter: ObstacleBridgeSecureLinkPskTransportAdapter(
-                            runtime: ObstacleBridgeSecureLinkPskRuntime(
-                                clientMode: false,
-                                psk: "shared-psk",
-                                randomBytes: { count in Data(repeating: 0x22, count: count) },
-                                sessionIDProvider: { 0 }
-                            )
-                        )
-                    )
-
-                    let primed = try client.handleTransportConnected()
-                    guard let clientHello = primed.emittedFrames.first else {
-                        throw ProbeError.badState("missing client hello")
-                    }
-                    let serverHello = server.handleInboundFrame(clientHello)
-                    guard let serverHelloFrame = serverHello.emittedFrames.first else {
-                        throw ProbeError.badState("missing server hello")
-                    }
-
-                    let localAuth = client.handleInboundFrame(serverHelloFrame)
-                    guard localAuth.emittedFrames.count == 1 else {
-                        throw ProbeError.badState("missing client proof")
-                    }
-
-                    let connectionLayers = client.connectionLayersSnapshot(
-                        transport: "myudp",
-                        transportConnected: true
-                    )
-                    guard let secureLinkLayer = connectionLayers.last else {
-                        throw ProbeError.badState("missing secure link layer")
-                    }
-
-                    let payload: [String: Any] = [
-                        "layers_count": connectionLayers.count,
-                        "app_ready": ObstacleBridgeOverlayLayerTransportAdapter.appReady(from: connectionLayers),
-                        "secure_link_state": secureLinkLayer["state"] as? String ?? "",
-                        "secure_link_connected": secureLinkLayer["connected"] as? Bool ?? true,
-                        "secure_link_app_ready": secureLinkLayer["app_ready"] as? Bool ?? true,
-                    ]
-                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
-                    FileHandle.standardOutput.write(data)
-                }
-            }
-            """
-        ),
-        encoding="utf-8",
-    )
-    _compile_swift_overlay_layer_transport_probe(source_path, binary_path)
-    completed = subprocess.run([str(binary_path)], capture_output=True, text=True, check=False, timeout=30)
-    if completed.returncode != 0:
-        raise AssertionError(
-            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
-        )
-    payload = json.loads(completed.stdout)
-
-    assert payload == {
-        "app_ready": False,
-        "layers_count": 2,
-        "secure_link_app_ready": False,
-        "secure_link_connected": False,
-        "secure_link_state": "handshaking",
     }

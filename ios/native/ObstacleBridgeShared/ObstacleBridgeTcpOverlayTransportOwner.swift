@@ -213,27 +213,6 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         resetOverlayTransportEpoch()
     }
 
-    func requestReconnect(reason: String = "admin_reconnect") {
-        withOwnerQueue {
-            guard started, !peerHost.isEmpty, peerPort > 0 else {
-                return
-            }
-            reconnectScheduled = false
-            nextReconnectAttemptDeadlineNS = nil
-            reconnectWorkItem?.cancel()
-            reconnectWorkItem = nil
-            tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: currentTunPeerID())
-            overlayConnected = false
-            overlayConnection?.cancel()
-            overlayConnection = nil
-            overlayPeerID = nil
-            receiveBuffer.removeAll(keepingCapacity: false)
-            resetOverlayTransportEpoch()
-            eventSink?("tcp_overlay_reconnect_requested", ["reason": reason])
-            connectOverlay()
-        }
-    }
-
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]]) {
         withOwnerQueue {
             let tcpRows = ObstacleBridgeOverlayConnectionSupport.connectionRows(from: tcpConnectionStates)
@@ -306,31 +285,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
                 "last_rx_wall_ns": lastOverlayRxWallNS,
                 "rtt_est_ms": ObstacleBridgeAdminSnapshotSupport.peerMetric("rtt_est_ms", from: ["protocol_stats": protocolStats]),
                 "transmit_delay_est_ms": protocolStats["transmit_delay_est_ms"] ?? 0.0,
-                "connection_layers": connectionLayers,
                 "protocol_stats": protocolStats,
             ]
         }
-    }
-
-    func connectionLayersSnapshot() -> [[String: Any]] {
-        withOwnerQueue {
-            if let overlayLayerTransportAdapter {
-                return overlayLayerTransportAdapter.connectionLayersSnapshot(
-                    transport: "tcp",
-                    transportConnected: overlayConnected
-                )
-            }
-            return ObstacleBridgeOverlayLayerTransportAdapter.connectionLayersSnapshot(
-                transport: "tcp",
-                transportConnected: overlayConnected,
-                compressionEnabled: false,
-                secureLinkStatus: nil
-            )
-        }
-    }
-
-    func appReady() -> Bool {
-        ObstacleBridgeOverlayLayerTransportAdapter.appReady(from: connectionLayersSnapshot())
     }
 
     private func withOwnerQueue<T>(_ body: () -> T) -> T {

@@ -86,12 +86,6 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private var started = false
     private var secureLinkHandshakePrimed = false
     private var lastSecureLinkPrimeNS: UInt64 = 0
-    private var secureLinkTransportTXFramesTotal = 0
-    private var secureLinkTransportRXFramesTotal = 0
-    private var secureLinkTransportLastTXNS: UInt64 = 0
-    private var secureLinkTransportLastRXNS: UInt64 = 0
-    private var secureLinkTransportLastTXBytes = 0
-    private var secureLinkTransportLastRXBytes = 0
     private var startupMuxFramesSent = false
     private var currentPeerSelectedAtNS: UInt64 = 0
     private var lastInboundDatagramNS: UInt64 = 0
@@ -179,14 +173,32 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         guard !started else {
             return
         }
-        try rebindSocket(resetPeerSelection: true)
+        let socket = try Self.makeBoundSocket(
+            bindHost: bindHost,
+            bindPort: bindPort,
+            peerHost: configuredPeerHost,
+            peerPort: configuredPeerPort,
+            peerResolveFamily: configuredPeerResolveFamily
+        )
+        socketFD = socket.socketFD
+        socketFamily = socket.socketFamily
+        peerCandidates = socket.peerCandidates
+        peerCandidateIndex = 0
+        fixedPeerAddress = configuredPeerHost == nil ? nil : socket.peerAddress
+        currentPeerAddress = socket.peerAddress
         started = true
         currentPeerSelectedAtNS = monotonicNowNS()
         lastInboundDatagramNS = 0
         lastIdleProbeNS = 0
         lastOverlayConnectedState = false
 
-        installReadSource()
+        let source = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: queue)
+        source.setEventHandler { [weak self] in
+            self?.drainSocket()
+        }
+        readSource = source
+        source.resume()
+
         startOverlayTimers()
         startPeerFallbackTimer()
         if currentPeerAddress != nil {
@@ -228,12 +240,6 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         overlayRuntime.resetTransportEpoch()
         secureLinkHandshakePrimed = false
         lastSecureLinkPrimeNS = 0
-        secureLinkTransportTXFramesTotal = 0
-        secureLinkTransportRXFramesTotal = 0
-        secureLinkTransportLastTXNS = 0
-        secureLinkTransportLastRXNS = 0
-        secureLinkTransportLastTXBytes = 0
-        secureLinkTransportLastRXBytes = 0
         startupMuxFramesSent = false
         currentPeerSelectedAtNS = 0
         lastInboundDatagramNS = 0
@@ -243,66 +249,6 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         if socketFD >= 0 {
             Darwin.close(socketFD)
             socketFD = -1
-        }
-    }
-
-    func requestReconnect(reason: String = "admin_reconnect") {
-        withOwnerQueue {
-            guard started else {
-                return
-            }
-            let preserveTransportEpoch = overlayConnected && currentPeerAddress != nil
-            do {
-                if !preserveTransportEpoch {
-                    try rebindSocket(resetPeerSelection: true)
-                }
-            } catch {
-                eventSink?("udp_overlay_reconnect_rebind_failed", ["reason": reason, "error": error.localizedDescription])
-                return
-            }
-            tcpTransportOwner.stop()
-            for connection in udpServerConnections.values {
-                cancelConnection(connection)
-            }
-            udpServerDrivers.removeAll()
-            for connection in udpClientConnections.values {
-                cancelConnection(connection)
-            }
-            udpClientDrivers.removeAll()
-            udpServerConnections.removeAll()
-            udpClientConnections.removeAll()
-            udpConnectionStates.removeAll()
-            tcpConnectionStates.removeAll()
-            activeTunChanIDs.removeAll()
-            tunStats = ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
-            tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: currentTunPeerID())
-            if preserveTransportEpoch {
-                overlayRuntime.dropSenderStateRetainingCounter()
-                overlayRuntime.clearReceiveMessageStateRetainingExpected()
-                secureLinkHandshakePrimed = false
-                lastSecureLinkPrimeNS = 0
-                secureLinkTransportTXFramesTotal = 0
-                secureLinkTransportRXFramesTotal = 0
-                secureLinkTransportLastTXNS = 0
-                secureLinkTransportLastRXNS = 0
-                secureLinkTransportLastTXBytes = 0
-                secureLinkTransportLastRXBytes = 0
-                startupMuxFramesSent = false
-                overlayLayerTransportAdapter?.handleTransportDisconnected()
-                eventSink?("udp_overlay_secure_link_reset", ["reason": reason])
-            } else {
-                resetOverlayTransportEpoch(reason: reason)
-            }
-            lastOverlayConnectedState = false
-            currentPeerSelectedAtNS = monotonicNowNS()
-            lastInboundDatagramNS = 0
-            lastIdleProbeNS = 0
-            if preserveTransportEpoch {
-                maybePrimeSecureLinkHandshake()
-            } else {
-                sendInitialIdleProbe()
-            }
-            eventSink?("udp_overlay_reconnect_requested", ["reason": reason])
         }
     }
 
@@ -372,18 +318,6 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             snapshot["rtt_est_ms"] = overlayRuntime.rttEstMS
             snapshot["transmit_delay_est_ms"] = overlayRuntime.transmitDelayEstMS
             snapshot["protocol_stats"] = protocolStats
-            let nowNS = monotonicNowNS()
-            snapshot["secure_link_transport_tx_frames_total"] = secureLinkTransportTXFramesTotal
-            snapshot["secure_link_transport_rx_frames_total"] = secureLinkTransportRXFramesTotal
-            snapshot["secure_link_transport_last_tx_age_sec"] = secureLinkTransportLastTXNS == 0 || nowNS < secureLinkTransportLastTXNS
-                ? NSNull()
-                : Double(nowNS - secureLinkTransportLastTXNS) / 1_000_000_000.0
-            snapshot["secure_link_transport_last_rx_age_sec"] = secureLinkTransportLastRXNS == 0 || nowNS < secureLinkTransportLastRXNS
-                ? NSNull()
-                : Double(nowNS - secureLinkTransportLastRXNS) / 1_000_000_000.0
-            snapshot["secure_link_transport_last_tx_bytes"] = secureLinkTransportLastTXBytes == 0 ? NSNull() : secureLinkTransportLastTXBytes
-            snapshot["secure_link_transport_last_rx_bytes"] = secureLinkTransportLastRXBytes == 0 ? NSNull() : secureLinkTransportLastRXBytes
-            snapshot["connection_layers"] = connectionLayersSnapshot()
             return snapshot
         }
     }
@@ -587,7 +521,6 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         }
         let nowNS = monotonicNowNS()
         handleTransportLiveness(nowNS: nowNS)
-        maybeEmitSecureLinkPlaintextTelemetry()
         let snapshot = overlayRuntime.handleControlTimerTick(nowNS: nowNS, sendPortPresent: currentPeerAddress != nil)
         guard snapshot.controlShouldEmit else {
             return
@@ -775,7 +708,6 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         guard let adapter = overlayLayerTransportAdapter,
               let status = adapter.secureLinkStatusSnapshot(),
               status.clientMode,
-              status.serverHelloReceived,
               !status.authenticated,
               status.sessionID != 0,
               status.authFailCode == 0,
@@ -794,12 +726,6 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         overlayRuntime.resetTransportEpoch()
         secureLinkHandshakePrimed = false
         lastSecureLinkPrimeNS = 0
-        secureLinkTransportTXFramesTotal = 0
-        secureLinkTransportRXFramesTotal = 0
-        secureLinkTransportLastTXNS = 0
-        secureLinkTransportLastRXNS = 0
-        secureLinkTransportLastTXBytes = 0
-        secureLinkTransportLastRXBytes = 0
         startupMuxFramesSent = false
         overlayLayerTransportAdapter?.handleTransportDisconnected()
         eventSink?("udp_overlay_transport_epoch_reset", ["reason": reason])
@@ -811,9 +737,6 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         }
         for payload in payloads {
             if let adapter = overlayLayerTransportAdapter {
-                secureLinkTransportRXFramesTotal += 1
-                secureLinkTransportLastRXNS = monotonicNowNS()
-                secureLinkTransportLastRXBytes = payload.count
                 let snapshot = adapter.handleInboundFrame(payload)
                 for emitted in snapshot.emittedFrames {
                     sendOverlayTransportPayload(emitted)
@@ -851,16 +774,6 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             }
         } catch {
             eventSink?("udp_overlay_secure_link_prime_failed", ["error": error.localizedDescription])
-        }
-    }
-
-    private func maybeEmitSecureLinkPlaintextTelemetry() {
-        guard overlayConnected, let adapter = overlayLayerTransportAdapter else {
-            return
-        }
-        let snapshot = adapter.emitPeriodicClientPlaintextTelemetry()
-        for frame in snapshot.emittedFrames {
-            sendOverlayTransportPayload(frame)
         }
     }
 
@@ -1075,9 +988,6 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
 
     private func sendOverlayTransportPayload(_ payload: Data) {
         do {
-            secureLinkTransportTXFramesTotal += 1
-            secureLinkTransportLastTXNS = monotonicNowNS()
-            secureLinkTransportLastTXBytes = payload.count
             let snapshot = try overlayRuntime.sendApplicationPayload(payload, nowNS: monotonicNowNS(), echoNS: currentEchoNS(monotonicNowNS()))
             for frame in snapshot.frames {
                 sendDatagram(frame)
@@ -1231,42 +1141,6 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
 
     private func monotonicNowNS() -> UInt64 {
         DispatchTime.now().uptimeNanoseconds
-    }
-
-    private func installReadSource() {
-        readSource?.cancel()
-        readSource = nil
-        let source = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: queue)
-        source.setEventHandler { [weak self] in
-            self?.drainSocket()
-        }
-        readSource = source
-        source.resume()
-    }
-
-    private func rebindSocket(resetPeerSelection: Bool) throws {
-        readSource?.cancel()
-        readSource = nil
-        if socketFD >= 0 {
-            Darwin.close(socketFD)
-            socketFD = -1
-        }
-        let socket = try Self.makeBoundSocket(
-            bindHost: bindHost,
-            bindPort: bindPort,
-            peerHost: configuredPeerHost,
-            peerPort: configuredPeerPort,
-            peerResolveFamily: configuredPeerResolveFamily
-        )
-        socketFD = socket.socketFD
-        socketFamily = socket.socketFamily
-        peerCandidates = socket.peerCandidates
-        if resetPeerSelection {
-            peerCandidateIndex = 0
-            fixedPeerAddress = configuredPeerHost == nil ? nil : socket.peerAddress
-            currentPeerAddress = socket.peerAddress
-        }
-        installReadSource()
     }
 
     private static func makeBoundSocket(
