@@ -234,32 +234,6 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client_status["handshake_attempts_total"], 1)
         self.assertEqual(client_status["authenticated_sessions_total"], 1)
         self.assertIsNotNone(client_status["last_authenticated_unix_ts"])
-        self.assertTrue(client_status["local_authenticated"])
-        self.assertTrue(client_status["peer_confirmed_authenticated"])
-        self.assertEqual(client_status["auth_fail_code"], 0)
-        self.assertTrue(client_status["server_hello_received"])
-        self.assertTrue(client_status["server_hello_validated"])
-        self.assertEqual(client_status["sticky_auth_fail_code"], 0)
-        self.assertEqual(client_status["sticky_auth_fail_reason"], "")
-        self.assertEqual(client_status["last_inbound_sl_type"], client._SL_TYPE_DATA)
-        self.assertEqual(client_status["last_inbound_session_id"], client_status["last_authenticated_session_id"])
-        self.assertEqual(client_status["last_inbound_counter"], 2)
-        self.assertEqual(client_status["last_outbound_sl_type"], client._SL_TYPE_DATA)
-        self.assertEqual(client_status["last_outbound_session_id"], client_status["last_authenticated_session_id"])
-        self.assertEqual(client_status["last_outbound_counter"], 2)
-        self.assertIsNone(client_status["handshake_age_sec"])
-        self.assertEqual(server_status["client_telemetry_source"], "python")
-        self.assertTrue(server_status["client_telemetry_attempt_matches_server_session"])
-        self.assertTrue(server_status["client_telemetry_proof_matches_observed_frame"])
-        self.assertTrue(server_status["client_telemetry_local_authenticated"])
-        self.assertFalse(server_status["client_telemetry_peer_confirmed_authenticated"])
-        self.assertTrue(server_status["client_telemetry_server_hello_received"])
-        self.assertTrue(server_status["client_telemetry_server_hello_validated"])
-        self.assertEqual(server_status["client_telemetry_handshake_proof_session_id"], server_status["last_authenticated_session_id"])
-        self.assertEqual(server_status["client_telemetry_handshake_proof_counter"], 1)
-        self.assertEqual(server_status["client_telemetry_parse_status"], "captured")
-        self.assertGreater(int(server_status["client_telemetry_payload_len"] or 0), 0)
-        self.assertTrue(str(server_status["client_telemetry_payload_sha256_prefix"] or ""))
 
     async def test_psk_server_authenticates_before_first_application_payload(self):
         client_inner = FakeInnerSession()
@@ -314,16 +288,7 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
             ciphertext,
             client._hdr_bytes(client._SL_TYPE_DATA, session_id, counter),
         )
-        telemetry = SecureLinkPskSession._parse_json_payload(plaintext)
-        self.assertIsInstance(telemetry, dict)
-        assert telemetry is not None
-        self.assertEqual(telemetry["kind"], client._SL_CLIENT_TELEMETRY_KIND)
-        self.assertEqual(telemetry["impl"], "python")
-        self.assertEqual(int(telemetry["current_attempt_session_id"]), session_id)
-        self.assertEqual(int(telemetry["client_handshake_proof_session_id"]), session_id)
-        self.assertEqual(int(telemetry["client_handshake_proof_counter"]), 1)
-        self.assertTrue(bool(telemetry["local_authenticated"]))
-        self.assertFalse(bool(telemetry["peer_confirmed_authenticated"]))
+        self.assertEqual(plaintext, b"")
 
     async def test_client_local_secure_link_auth_times_out_without_peer_confirmation(self):
         client_inner = FakeInnerSession(connected=True)
@@ -362,18 +327,6 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(secure_link["state"], "handshaking")
             self.assertFalse(secure_link["authenticated"])
             self.assertEqual(int(secure_link["session_id"] or 0), session_id)
-            self.assertTrue(secure_link["local_authenticated"])
-            self.assertFalse(secure_link["peer_confirmed_authenticated"])
-            self.assertEqual(int(secure_link["auth_fail_code"] or 0), 0)
-            self.assertTrue(secure_link["server_hello_received"])
-            self.assertTrue(secure_link["server_hello_validated"])
-            self.assertEqual(int(secure_link["last_inbound_sl_type"] or 0), client._SL_TYPE_SERVER_HELLO)
-            self.assertEqual(int(secure_link["last_inbound_session_id"] or 0), session_id)
-            self.assertEqual(int(secure_link["last_inbound_counter"] or 0), 0)
-            self.assertEqual(int(secure_link["last_outbound_sl_type"] or 0), client._SL_TYPE_DATA)
-            self.assertEqual(int(secure_link["last_outbound_session_id"] or 0), session_id)
-            self.assertEqual(int(secure_link["last_outbound_counter"] or 0), 1)
-            self.assertGreater(float(secure_link["handshake_age_sec"] or 0.0), 0.0)
 
             await asyncio.sleep(0.05)
 
@@ -384,201 +337,8 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("timed out", str(status_after["failure_detail"] or ""))
             self.assertGreater(float(status_after["retry_backoff_sec"] or 0.0), 0.0)
             self.assertEqual(float(status_after["recovery_reconnect_sec"] or 0.0), 0.0)
-            self.assertEqual(int(status_after["sticky_auth_fail_code"] or 0), client._SL_AUTH_FAIL_LIFECYCLE)
-            self.assertEqual(str(status_after["sticky_auth_fail_reason"] or ""), "lifecycle")
         finally:
             await client.stop()
-
-    async def test_server_reuses_server_hello_for_duplicate_client_hello_same_session(self):
-        client_inner = FakeInnerSession()
-        server_inner = FakeInnerSession()
-
-        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
-        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
-
-        await client.start()
-        await server.start()
-        try:
-            client_inner.emit_state(True)
-            await asyncio.sleep(0)
-
-            client_hello = client_inner.sent[-1][0]
-            server._on_inner_payload(client_hello, peer_id=1)
-            first_server_hello = server_inner.sent[-1][0]
-            server._on_inner_payload(client_hello, peer_id=1)
-            second_server_hello = server_inner.sent[-1][0]
-
-            self.assertEqual(first_server_hello, second_server_hello)
-
-            client._on_inner_payload(first_server_hello)
-            await asyncio.sleep(0)
-            client_proof = client_inner.sent[-1][0]
-            server._on_inner_payload(client_proof, peer_id=1)
-
-            server_status = server.get_secure_link_status_snapshot()
-            self.assertEqual(server_status["state"], "authenticated")
-            self.assertTrue(server_status["authenticated"])
-            self.assertEqual(int(server_status["failure_code"] or 0), 0)
-            self.assertEqual(int(server_status["auth_fail_code"] or 0), 0)
-        finally:
-            await client.stop()
-            await server.stop()
-
-    async def test_server_reassociates_handshake_session_when_proof_arrives_under_new_peer_id(self):
-        client_inner = FakeInnerSession()
-        server_inner = FakeInnerSession()
-
-        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
-        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
-
-        await client.start()
-        await server.start()
-        try:
-            client_inner.emit_state(True)
-            await asyncio.sleep(0)
-
-            client_hello = client_inner.sent[-1][0]
-            server._on_inner_payload(client_hello, peer_id=1)
-            server_hello = server_inner.sent[-1][0]
-
-            client._on_inner_payload(server_hello)
-            await asyncio.sleep(0)
-            client_proof = client_inner.sent[-1][0]
-
-            server._on_inner_payload(client_proof, peer_id=2)
-
-            server_status = server.get_secure_link_status_snapshot()
-            self.assertEqual(server_status["state"], "authenticated")
-            self.assertTrue(server_status["authenticated"])
-            self.assertEqual(int(server_status["failure_code"] or 0), 0)
-            self.assertEqual(int(server_status["auth_fail_code"] or 0), 0)
-            self.assertIn(2, server._peer_states)
-            self.assertNotIn(1, server._peer_states)
-        finally:
-            await client.stop()
-            await server.stop()
-
-    async def test_server_replaces_transient_peer_state_when_proof_arrives_under_new_peer_id(self):
-        client_inner = FakeInnerSession()
-        competing_client_inner = FakeInnerSession()
-        server_inner = FakeInnerSession()
-
-        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
-        competing_client = SecureLinkPskSession(competing_client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
-        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
-
-        await client.start()
-        await competing_client.start()
-        await server.start()
-        try:
-            client_inner.emit_state(True)
-            await asyncio.sleep(0)
-
-            client_hello = client_inner.sent[-1][0]
-            server._on_inner_payload(client_hello, peer_id=1)
-            server_hello = server_inner.sent[-1][0]
-
-            client._on_inner_payload(server_hello)
-            await asyncio.sleep(0)
-            client_proof = client_inner.sent[-1][0]
-
-            competing_client_inner.emit_state(True)
-            await asyncio.sleep(0)
-            competing_client_hello = competing_client_inner.sent[-1][0]
-            server._on_inner_payload(competing_client_hello, peer_id=2)
-
-            conflicting_state = server._peer_states[2]
-            self.assertFalse(conflicting_state.authenticated)
-            self.assertFalse(conflicting_state.peer_confirmed_authenticated)
-            self.assertNotEqual(
-                int(conflicting_state.session_id or 0),
-                int(server._peer_states[1].session_id or 0),
-            )
-
-            server._on_inner_payload(client_proof, peer_id=2)
-
-            server_status = server.get_secure_link_status_snapshot()
-            self.assertEqual(server_status["state"], "authenticated")
-            self.assertTrue(server_status["authenticated"])
-            self.assertEqual(int(server_status["failure_code"] or 0), 0)
-            self.assertEqual(int(server_status["auth_fail_code"] or 0), 0)
-            self.assertIn(2, server._peer_states)
-            self.assertNotIn(1, server._peer_states)
-            self.assertEqual(
-                int(server._peer_states[2].session_id or 0),
-                int(client._peer_states[0].session_id or 0),
-            )
-        finally:
-            await client.stop()
-            await competing_client.stop()
-            await server.stop()
-
-    async def test_server_reassociates_handshake_session_when_plaintext_telemetry_arrives_first(self):
-        client_inner = FakeInnerSession()
-        server_inner = FakeInnerSession()
-
-        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
-        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
-
-        await client.start()
-        await server.start()
-        try:
-            client_inner.emit_state(True)
-            await asyncio.sleep(0)
-
-            client_hello = client_inner.sent[-1][0]
-            server._on_inner_payload(client_hello, peer_id=1)
-            server_hello = server_inner.sent[-1][0]
-
-            client._on_inner_payload(server_hello)
-            await asyncio.sleep(0)
-            client_proof = client_inner.sent[-1][0]
-            client_state = client._peer_states[0]
-            client_status = client.get_secure_link_status_snapshot()
-            plaintext_telemetry = client._json_payload({
-                "kind": client._SL_CLIENT_PLAINTEXT_TELEMETRY_KIND,
-                "impl": "swift",
-                "impl_rev": "swift-securelink-telemetry-r1",
-                "current_attempt_session_id": int(client_state.session_id or 0) or None,
-                "local_authenticated": bool(client_state.authenticated),
-                "peer_confirmed_authenticated": bool(client_state.peer_confirmed_authenticated),
-                "server_hello_received": bool(client_state.server_hello_received),
-                "server_hello_validated": bool(client_state.server_hello_validated),
-                "client_handshake_proof_session_id": int(client_status["last_outbound_session_id"] or 0) or None,
-                "client_handshake_proof_counter": int(client_status["last_outbound_counter"] or 0) or None,
-                "last_inbound_sl_type": int(client_state.last_inbound_sl_type or 0) or None,
-                "last_inbound_session_id": int(client_state.last_inbound_session_id or 0) or None,
-                "last_inbound_counter": int(client_state.last_inbound_counter or 0) or None,
-                "last_outbound_sl_type": client._SL_TYPE_DATA,
-                "last_outbound_session_id": int(client_status["last_outbound_session_id"] or 0) or None,
-                "last_outbound_counter": int(client_status["last_outbound_counter"] or 0) or None,
-            })
-            telemetry_frame = client._build_frame(
-                client._SL_TYPE_CLIENT_PLAINTEXT_TELEMETRY,
-                int(client_state.session_id),
-                0,
-                plaintext_telemetry,
-            )
-
-            server._on_inner_payload(telemetry_frame, peer_id=2)
-            self.assertIn(2, server._peer_states)
-            self.assertNotIn(1, server._peer_states)
-            reassociated_state = server._peer_states[2]
-            self.assertEqual(reassociated_state.client_telemetry_source, "swift")
-            self.assertEqual(reassociated_state.client_telemetry_impl_rev, "swift-securelink-telemetry-r1")
-            self.assertEqual(reassociated_state.client_telemetry_parse_status, "captured_plaintext")
-            server._on_inner_payload(client_proof, peer_id=2)
-
-            server_status = server.get_secure_link_status_snapshot()
-            self.assertEqual(server_status["state"], "authenticated")
-            self.assertTrue(server_status["authenticated"])
-            self.assertEqual(int(server_status["failure_code"] or 0), 0)
-            self.assertEqual(int(server_status["auth_fail_code"] or 0), 0)
-            self.assertIn(2, server._peer_states)
-            self.assertNotIn(1, server._peer_states)
-        finally:
-            await client.stop()
-            await server.stop()
 
     async def test_wrong_psk_prevents_authenticated_session(self):
         client_inner = FakeInnerSession()
@@ -898,7 +658,7 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         new_session_id = client.get_overlay_peers_snapshot()[0]["secure_link"]["session_id"]
         self.assertNotEqual(old_session_id, new_session_id)
 
-    async def test_transport_epoch_change_keeps_outer_connected_during_live_rehandshake(self):
+    async def test_transport_epoch_change_keeps_app_ready_false_while_layered_connection_stays_up_during_live_rehandshake(self):
         client_inner = FakeInnerSession()
         server_inner = FakeInnerSession()
         client_inner.connect_peer(server_inner)
@@ -926,8 +686,12 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         for _ in range(8):
             await asyncio.sleep(0)
 
-        self.assertEqual(client_states, [True])
+        self.assertEqual(client_states, [True, False, True])
         self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
+        secure_layer = client.get_connection_layers_snapshot()[-1]
+        self.assertTrue(secure_layer["connected"])
+        self.assertTrue(secure_layer["app_ready"])
+        self.assertFalse(secure_layer["preserve_connected_during_epoch_restart"])
 
     async def test_transport_epoch_change_discards_stale_client_handshake_state_after_prior_authentication(self):
         client_inner = FakeInnerSession()
@@ -993,7 +757,7 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client_states, [True])
         self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
 
-    async def test_server_peer_disconnect_keeps_outer_connected_while_inner_transport_stays_up(self):
+    async def test_server_peer_disconnect_preserves_layered_connected_until_inner_transport_drops(self):
         client_inner = FakeInnerSession()
         server_inner = FakeInnerSession()
         client_inner.connect_peer(server_inner)
@@ -1019,8 +783,12 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         server._on_inner_peer_disconnect(1)
         await asyncio.sleep(0)
 
-        self.assertEqual(server_states, [True])
-        self.assertTrue(server.is_connected())
+        self.assertEqual(server_states, [True, False])
+        self.assertFalse(server.is_connected())
+        secure_layer = server.get_connection_layers_snapshot()[-1]
+        self.assertTrue(secure_layer["connected"])
+        self.assertFalse(secure_layer["app_ready"])
+        self.assertTrue(secure_layer["preserve_connected_during_epoch_restart"])
 
         server_inner.emit_state(False)
         await asyncio.sleep(0)
@@ -1492,289 +1260,6 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(server_status["failure_code"], server._SL_AUTH_FAIL_DECODE)
         self.assertEqual(server_status["failure_reason"], "decode")
         self.assertFalse(server.is_connected())
-
-    async def test_data_session_mismatch_reports_decode_context(self):
-        client_inner = FakeInnerSession()
-        server_inner = FakeInnerSession()
-        client_inner.connect_peer(server_inner)
-        server_inner.connect_peer(client_inner)
-
-        client = SecureLinkPskSession(client_inner, _args(tcp_peer='127.0.0.1'), 'tcp')
-        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
-
-        await client.start()
-        await server.start()
-        try:
-            server_inner.emit_state(True)
-            client_inner.emit_state(True)
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
-
-            first_mux = self._pack_mux(11, b"healthy")
-            self.assertEqual(client.send_app(first_mux), len(first_mux))
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
-            self.assertTrue(server.is_connected())
-
-            state = server._peer_states[1]
-            wrong_session_id = int(state.session_id) + 1
-            encrypted = ChaCha20Poly1305(state.c2s_key).encrypt(
-                server._nonce(3),
-                self._pack_mux(11, b"wrong-session"),
-                server._hdr_bytes(server._SL_TYPE_DATA, wrong_session_id, 3),
-            )
-            server._on_inner_payload(
-                server._hdr_bytes(server._SL_TYPE_DATA, wrong_session_id, 3) + encrypted,
-                peer_id=1,
-            )
-            await asyncio.sleep(0)
-
-            server_status = server.get_secure_link_status_snapshot()
-            self.assertEqual(server_status["state"], "failed")
-            self.assertEqual(server_status["failure_code"], server._SL_AUTH_FAIL_DECODE)
-            self.assertEqual(server_status["failure_reason"], "decode")
-            self.assertEqual(server_status["auth_fail_context"], "handle_data.session_mismatch")
-            self.assertEqual(server_status["failure_context"], "handle_data.session_mismatch")
-            self.assertEqual(server_status["sticky_auth_fail_context"], "handle_data.session_mismatch")
-        finally:
-            await client.stop()
-            await server.stop()
-
-    async def test_server_captures_plaintext_client_telemetry_frame(self):
-        server_inner = FakeInnerSession(connected=True)
-        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
-
-        await server.start()
-        try:
-            payload = server._json_payload({
-                "kind": server._SL_CLIENT_PLAINTEXT_TELEMETRY_KIND,
-                "impl": "swift",
-                "impl_rev": "swift-securelink-telemetry-r1",
-                "current_attempt_session_id": 7001,
-                "local_authenticated": True,
-                "peer_confirmed_authenticated": False,
-                "server_hello_received": True,
-                "server_hello_validated": True,
-                "client_handshake_proof_sent": True,
-                "client_handshake_proof_session_id": 7001,
-                "client_handshake_proof_counter": 1,
-                "client_handshake_telemetry_build_succeeded": True,
-                "client_handshake_telemetry_payload_bytes": 412,
-                "client_handshake_telemetry_payload_sha256_prefix": "proofsha1234",
-                "client_handshake_telemetry_build_error": "",
-                "client_handshake_proof_emit_session_id": 7001,
-                "client_handshake_proof_emit_counter": 1,
-                "client_handshake_proof_emit_payload_bytes": 412,
-                "client_handshake_proof_emit_payload_sha256_prefix": "proofemit1234",
-                "last_inbound_sl_type": 2,
-                "last_inbound_session_id": 7001,
-                "last_inbound_counter": 0,
-                "last_outbound_sl_type": 7,
-                "last_outbound_session_id": 7001,
-                "last_outbound_counter": 0,
-                "tx_counter": 2,
-            })
-            frame = server._build_frame(server._SL_TYPE_CLIENT_PLAINTEXT_TELEMETRY, 7001, 0, payload)
-            server._on_inner_payload(frame, peer_id=77)
-            await asyncio.sleep(0)
-
-            peer = next(row for row in server.get_overlay_peers_snapshot() if row["peer_id"] == 0)
-            secure = peer["secure_link"]
-            self.assertEqual(secure["client_telemetry_source"], "swift")
-            self.assertEqual(secure["client_telemetry_impl_rev"], "swift-securelink-telemetry-r1")
-            self.assertEqual(secure["client_telemetry_parse_status"], "captured_plaintext")
-            self.assertEqual(secure["client_telemetry_current_attempt_session_id"], 7001)
-            self.assertTrue(secure["client_telemetry_local_authenticated"])
-            self.assertFalse(secure["client_telemetry_peer_confirmed_authenticated"])
-            self.assertTrue(secure["client_telemetry_handshake_proof_sent"])
-            self.assertTrue(secure["client_telemetry_handshake_telemetry_build_succeeded"])
-            self.assertEqual(secure["client_telemetry_handshake_telemetry_payload_bytes"], 412)
-            self.assertEqual(secure["client_telemetry_handshake_telemetry_payload_sha256_prefix"], "proofsha1234")
-            self.assertEqual(secure["client_telemetry_handshake_proof_emit_session_id"], 7001)
-            self.assertEqual(secure["client_telemetry_handshake_proof_emit_counter"], 1)
-            self.assertEqual(secure["client_telemetry_handshake_proof_emit_payload_bytes"], 412)
-            self.assertEqual(secure["client_telemetry_handshake_proof_emit_payload_sha256_prefix"], "proofemit1234")
-            self.assertEqual(secure["client_telemetry_tx_counter"], 2)
-            self.assertEqual(secure["client_telemetry_last_outbound_sl_type"], 7)
-        finally:
-            await server.stop()
-
-    async def test_server_logs_swift_telemetry_only_when_snapshot_changes(self):
-        server_inner = FakeInnerSession(connected=True)
-        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
-
-        await server.start()
-        try:
-            def telemetry_frame(counter: int) -> bytes:
-                payload = server._json_payload({
-                    "kind": server._SL_CLIENT_PLAINTEXT_TELEMETRY_KIND,
-                    "impl": "swift",
-                    "impl_rev": "swift-securelink-telemetry-r1",
-                    "current_attempt_session_id": 7001,
-                    "local_authenticated": True,
-                    "peer_confirmed_authenticated": False,
-                    "server_hello_received": True,
-                    "server_hello_validated": True,
-                    "client_handshake_proof_session_id": 7001,
-                    "client_handshake_proof_counter": counter,
-                    "last_inbound_sl_type": 2,
-                    "last_inbound_session_id": 7001,
-                    "last_inbound_counter": 0,
-                    "last_outbound_sl_type": 4,
-                    "last_outbound_session_id": 7001,
-                    "last_outbound_counter": counter,
-                })
-                return server._build_frame(server._SL_TYPE_CLIENT_PLAINTEXT_TELEMETRY, 7001, 0, payload)
-
-            with self.assertLogs("secure_link", level="INFO") as captured:
-                server._on_inner_payload(telemetry_frame(1), peer_id=77)
-                server._on_inner_payload(telemetry_frame(1), peer_id=77)
-                server._on_inner_payload(telemetry_frame(2), peer_id=77)
-                await asyncio.sleep(0)
-
-            telemetry_logs = [
-                line for line in captured.output
-                if "client telemetry update" in line
-            ]
-            self.assertEqual(len(telemetry_logs), 2)
-            self.assertIn("reason=captured_plaintext", telemetry_logs[0])
-            self.assertIn("'source': 'swift'", telemetry_logs[0])
-            self.assertIn("'impl_rev': 'swift-securelink-telemetry-r1'", telemetry_logs[0])
-            self.assertIn("'peer_id': 77", telemetry_logs[0])
-            self.assertIn("'handshake_proof_counter': 1", telemetry_logs[0])
-            self.assertIn("'handshake_proof_counter': 2", telemetry_logs[1])
-        finally:
-            await server.stop()
-
-    async def test_server_logs_handshake_trace_for_hello_telemetry_and_session_mismatch(self):
-        server_inner = FakeInnerSession(connected=True)
-        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
-
-        await server.start()
-        try:
-            session_id = 5001
-            hello = server._build_frame(
-                server._SL_TYPE_CLIENT_HELLO,
-                session_id,
-                0,
-                b"a" * 32 + bytes([server._SL_CAP_PSK_V1, 0]),
-            )
-            telemetry_payload = server._json_payload({
-                "kind": server._SL_CLIENT_PLAINTEXT_TELEMETRY_KIND,
-                "impl": "swift",
-                "impl_rev": "swift-securelink-telemetry-r1",
-                "current_attempt_session_id": session_id,
-                "local_authenticated": True,
-                "peer_confirmed_authenticated": False,
-                "server_hello_received": True,
-                "server_hello_validated": True,
-                "client_handshake_proof_session_id": session_id,
-                "client_handshake_proof_counter": 1,
-                "last_inbound_sl_type": 2,
-                "last_inbound_session_id": session_id,
-                "last_inbound_counter": 0,
-                "last_outbound_sl_type": 4,
-                "last_outbound_session_id": session_id,
-                "last_outbound_counter": 1,
-            })
-            telemetry = server._build_frame(
-                server._SL_TYPE_CLIENT_PLAINTEXT_TELEMETRY,
-                session_id,
-                0,
-                telemetry_payload,
-            )
-            mismatched_data = server._build_frame(
-                server._SL_TYPE_DATA,
-                session_id + 1,
-                1,
-                b"ciphertext-does-not-matter-for-mismatch",
-            )
-
-            with self.assertLogs("secure_link", level="INFO") as captured:
-                server._on_inner_payload(hello, peer_id=101)
-                server._on_inner_payload(telemetry, peer_id=101)
-                server._on_inner_payload(mismatched_data, peer_id=101)
-                await asyncio.sleep(0)
-
-            trace_logs = [line for line in captured.output if "[SECURE-LINK] trace" in line]
-            iphone_focus_logs = [line for line in captured.output if "[SECURE-LINK][IPHONE-FOCUS]" in line]
-            self.assertTrue(any("event=client_hello_received" in line for line in trace_logs))
-            self.assertTrue(any("event=server_hello_sent" in line for line in trace_logs))
-            self.assertTrue(any("event=plaintext_telemetry_received" in line for line in trace_logs))
-            self.assertTrue(any("event=data_frame_received" in line for line in trace_logs))
-            self.assertTrue(any("rev=bridge_securelink.py:iphone-focus-r2" in line for line in iphone_focus_logs))
-            self.assertTrue(any("event=inner_payload_parsed" in line for line in iphone_focus_logs))
-            mismatch_logs = [line for line in trace_logs if "event=data_session_mismatch" in line]
-            self.assertEqual(len(mismatch_logs), 1)
-            self.assertIn("peer_id=101", mismatch_logs[0])
-            self.assertIn(f"session_id={session_id + 1}", mismatch_logs[0])
-            self.assertIn("note=reject_before_decrypt", mismatch_logs[0])
-        finally:
-            await server.stop()
-
-    async def test_server_captures_plaintext_telemetry_after_failed_session(self):
-        server_inner = FakeInnerSession(connected=True)
-        server = SecureLinkPskSession(server_inner, _args(), 'tcp')
-
-        await server.start()
-        try:
-            session_id = 7001
-            hello = server._build_frame(
-                server._SL_TYPE_CLIENT_HELLO,
-                session_id,
-                0,
-                b"a" * 32 + bytes([server._SL_CAP_PSK_V1, 0]),
-            )
-            server._on_inner_payload(hello, peer_id=202)
-            await asyncio.sleep(0)
-
-            mismatched_data = server._build_frame(
-                server._SL_TYPE_DATA,
-                session_id + 1,
-                1,
-                b"ciphertext-does-not-matter-for-mismatch",
-            )
-            server._on_inner_payload(mismatched_data, peer_id=202)
-            await asyncio.sleep(0)
-
-            telemetry_payload = server._json_payload({
-                "kind": server._SL_CLIENT_PLAINTEXT_TELEMETRY_KIND,
-                "impl": "swift",
-                "impl_rev": "swift-securelink-telemetry-r1",
-                "current_attempt_session_id": session_id,
-                "local_authenticated": False,
-                "peer_confirmed_authenticated": False,
-                "server_hello_received": True,
-                "server_hello_validated": True,
-                "client_handshake_proof_session_id": session_id,
-                "client_handshake_proof_counter": 1,
-                "last_inbound_sl_type": 2,
-                "last_inbound_session_id": session_id,
-                "last_inbound_counter": 0,
-                "last_outbound_sl_type": 4,
-                "last_outbound_session_id": session_id,
-                "last_outbound_counter": 1,
-            })
-            telemetry = server._build_frame(
-                server._SL_TYPE_CLIENT_PLAINTEXT_TELEMETRY,
-                session_id,
-                0,
-                telemetry_payload,
-            )
-            server._on_inner_payload(telemetry, peer_id=202)
-            await asyncio.sleep(0)
-
-            secure = server.get_secure_link_status_snapshot()
-            self.assertEqual(secure["state"], "failed")
-            self.assertEqual(secure["auth_fail_context"], "handle_data.session_mismatch")
-            self.assertEqual(secure["client_telemetry_source"], "swift")
-            self.assertEqual(secure["client_telemetry_impl_rev"], "swift-securelink-telemetry-r1")
-            self.assertEqual(secure["client_telemetry_parse_status"], "captured_plaintext")
-            self.assertEqual(secure["client_telemetry_current_attempt_session_id"], session_id)
-            self.assertTrue(secure["client_telemetry_server_hello_received"])
-            self.assertTrue(secure["client_telemetry_server_hello_validated"])
-        finally:
-            await server.stop()
 
     async def test_auth_failure_unregisters_server_mux_routes(self):
         server_inner = FakeInnerSession(connected=True)

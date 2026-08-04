@@ -1499,6 +1499,8 @@ The supporting manifests remain shared:
 - product-requirement traceability: [.github/requirements_traceability.yaml](.github/requirements_traceability.yaml)
 - architecture traceability: [.github/architecture_traceability.yaml](.github/architecture_traceability.yaml)
 
+This baseline also includes explicit traceability for the layered reconnect contract where the lower overlay transport can remain connected while SecureLink is still re-handshaking, plus the macOS mixed Swift/Python `myudp` harness alignment with the packaged Swift source set and readiness gates.
+
 This top-level section is intentionally compact and honest. Keep the detailed behavior, rationale, and scenario-level discussion in [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md), and [docs/README_TESTING.md](docs/README_TESTING.md).
 
 ### Python/Swift drift indicator

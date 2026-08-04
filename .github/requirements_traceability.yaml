@@ -231,7 +231,8 @@ REQ-AUT-006:
     - tests/unit/test_secure_link_psk.py::test_data_counter_zero_is_rejected_as_lifecycle_violation
     - tests/unit/test_secure_link_psk.py::test_counter_exhaustion_fails_closed_before_nonce_wrap
     - tests/unit/test_secure_link_psk.py::test_explicit_transport_epoch_reset_forwards_to_inner_and_clears_client_state
-    - tests/unit/test_secure_link_psk.py::test_transport_epoch_change_keeps_outer_connected_during_live_rehandshake
+    - tests/unit/test_secure_link_psk.py::test_transport_epoch_change_keeps_app_ready_false_while_layered_connection_stays_up_during_live_rehandshake
+    - tests/unit/test_secure_link_psk.py::test_server_peer_disconnect_preserves_layered_connected_until_inner_transport_drops
 
 REQ-AUT-007:
   integration_tests:
