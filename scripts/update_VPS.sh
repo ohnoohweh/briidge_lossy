@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# invoke
+# HOST=<ip> PORT=<port> USER_NAME=<user> DEST_DIR='~/quicbr' bash scripts/update_VPS.sh
 
 set -euo pipefail
 

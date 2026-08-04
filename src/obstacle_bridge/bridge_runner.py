@@ -1220,6 +1220,7 @@ class Runner:
         sessions = 0
         transports: list[str] = []
         matched_target = False
+        restart_fallback_labels: list[str] = []
         for idx, session in enumerate(self._sessions):
             sessions += 1
             peer_row_ids = self._session_peer_row_ids(idx, session)
@@ -1227,16 +1228,21 @@ class Runner:
                 if target not in peer_row_ids:
                     continue
                 matched_target = True
+            label = self._session_labels[idx] if idx < len(self._session_labels) else f"session-{idx}"
             method = getattr(session, "request_reconnect", None)
             if not callable(method):
+                if str(label or "").strip().lower() == "myudp":
+                    restart_fallback_labels.append(str(label))
                 continue
             ok = False
             with contextlib.suppress(Exception):
                 ok = bool(method())
             if ok:
                 requested += 1
-                label = self._session_labels[idx] if idx < len(self._session_labels) else f"session-{idx}"
                 transports.append(str(label))
+                continue
+            if str(label or "").strip().lower() == "myudp":
+                restart_fallback_labels.append(str(label))
         if target and not matched_target:
             return {
                 "ok": False,
@@ -1245,6 +1251,23 @@ class Runner:
                 "sessions": sessions,
                 "transports": [],
                 "reason": "unknown_peer_id",
+            }
+        if requested <= 0 and restart_fallback_labels:
+            self.request_restart(reason=f"admin_web:/api/reconnect myudp target={target or 'all'}")
+            embedded = callable(getattr(self, "_embedded_restart_callback", None))
+            return {
+                "ok": True,
+                "target_peer_id": target or None,
+                "requested": 1,
+                "sessions": sessions,
+                "transports": restart_fallback_labels[:1],
+                "reason": "",
+                "reconnect_requested": True,
+                "reconnect_supported": True,
+                "restart_requested": True,
+                "restart_embedded": embedded,
+                "restart_delay_sec": 0,
+                "restart_mode": "immediate",
             }
         return {
             "ok": requested > 0,

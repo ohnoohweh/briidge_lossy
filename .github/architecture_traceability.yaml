@@ -242,6 +242,8 @@ ARC-CMP-004:
     - tests/unit/test_runner_events.py::test_macos_tun_reexec_prints_notice_before_sudo_password_prompt
     - tests/unit/test_runner_events.py::test_main_reexecs_with_windows_tun_privileges_when_local_tun_requires_admin
     - tests/unit/test_runner_events.py::test_main_skips_windows_reexec_when_already_admin
+    - tests/unit/test_build_synology_spk.py::test_render_info_contains_required_synology_fields
+    - tests/unit/test_build_synology_spk.py::test_build_spk_emits_info_and_payload_archive
     - tests/unit/test_tun_helper_settings.py::test_register_cli_parses_defaults
     - tests/unit/test_tun_helper_settings.py::test_from_mapping_reads_sectioned_config
     - tests/unit/test_tun_helper_settings.py::test_from_mapping_accepts_cli_dest_names
@@ -322,6 +324,10 @@ ARC-CMP-004:
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_enables_compress_layer_by_default
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_keeps_passive_compress_decoder_on_listener
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_compress_layer_above_secure_link
+    - tests/unit/test_runner_overlay_transports.py::test_request_overlay_reconnect_targets_matching_peer_id_only
+    - tests/unit/test_runner_overlay_transports.py::test_request_overlay_reconnect_rejects_unknown_peer_id
+    - tests/unit/test_runner_overlay_transports.py::test_request_overlay_reconnect_myudp_target_falls_back_to_runner_restart
+    - tests/unit/test_runner_overlay_transports.py::test_request_overlay_reconnect_myudp_global_falls_back_to_runner_restart
     - tests/unit/test_runner_overlay_transports.py::test_request_secure_link_reload_targets_matching_peer_id_only
     - tests/unit/test_runner_overlay_transports.py::test_request_secure_link_reload_rejects_unknown_peer_id
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_reconnect_edge_reprimes_after_authenticated_failure_like_python

@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+
+if [ -x "${SCRIPT_DIR}/start-stop-status" ]; then
+    "${SCRIPT_DIR}/start-stop-status" stop || true
+fi

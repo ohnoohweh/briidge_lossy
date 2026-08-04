@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+PKG_DIR="${SYNOPKG_PKGDEST:-/var/packages/obstaclebridge/target}"
+VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/obstaclebridge/var}"
+CFG_PATH="${VAR_DIR}/ObstacleBridge.cfg"
+DEFAULT_CFG="${PKG_DIR}/share/defaults/ObstacleBridge.cfg"
+
+mkdir -p "${VAR_DIR}/run" "${VAR_DIR}/log"
+
+if [ ! -f "${CFG_PATH}" ] && [ -f "${DEFAULT_CFG}" ]; then
+    cp "${DEFAULT_CFG}" "${CFG_PATH}"
+fi
